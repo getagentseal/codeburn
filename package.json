@@ -3,9 +3,13 @@
   "version": "0.1.2",
   "description": "See where your AI coding tokens go - by task, tool, model, and project",
   "type": "module",
+  "main": "./dist/cli.js",
   "bin": {
-    "codeburn": "./dist/cli.js"
+    "codeburn": "dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.ts",
