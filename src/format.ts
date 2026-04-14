@@ -1,12 +1,27 @@
 import chalk from 'chalk'
 import type { ProjectSummary } from './types.js'
 
-export function formatCost(cost: number): string {
-  if (cost >= 1) return `$${cost.toFixed(2)}`
-  if (cost >= 0.01) return `$${cost.toFixed(3)}`
-  return `$${cost.toFixed(4)}`
+import { GLOBAL_CURRENCY } from './cli.js'
+
+const rates: Record<string, number> = {
+  USD: 1,
+  INR: 83 // fixed rate for now
 }
 
+export function formatCost(cost: number): string {
+  const rate = rates[GLOBAL_CURRENCY] || 1
+  const converted = cost * rate
+
+  if (GLOBAL_CURRENCY === 'INR') {
+    if (converted >= 1) return `₹${converted.toFixed(2)}`
+    if (converted >= 0.01) return `₹${converted.toFixed(3)}`
+    return `₹${converted.toFixed(4)}`
+  }
+
+  if (converted >= 1) return `$${converted.toFixed(2)}`
+  if (converted >= 0.01) return `$${converted.toFixed(3)}`
+  return `$${converted.toFixed(4)}`
+}
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
