@@ -17,6 +17,7 @@ import type {
 } from './types.js'
 import { classifyTurn, BASH_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
+import { parseCodexSessions } from './codex-parser.js'
 
 function getClaudeDir(): string {
   return process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')
@@ -364,26 +365,46 @@ async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seen
   return projects
 }
 
-export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSummary[]> {
+export type Source = 'all' | 'claude' | 'codex'
+
+export async function parseAllSessions(dateRange?: DateRange, source: Source = 'all'): Promise<ProjectSummary[]> {
   const seenMsgIds = new Set<string>()
   const allDirs: Array<{ path: string; name: string }> = []
 
-  const projectsDir = getProjectsDir()
-  try {
-    const entries = await readdir(projectsDir)
-    for (const dirName of entries) {
-      const dirPath = join(projectsDir, dirName)
-      const dirStat = await stat(dirPath).catch(() => null)
-      if (dirStat?.isDirectory()) allDirs.push({ path: dirPath, name: dirName })
-    }
-  } catch {}
+  if (source !== 'codex') {
+    const projectsDir = getProjectsDir()
+    try {
+      const entries = await readdir(projectsDir)
+      for (const dirName of entries) {
+        const dirPath = join(projectsDir, dirName)
+        const dirStat = await stat(dirPath).catch(() => null)
+        if (dirStat?.isDirectory()) allDirs.push({ path: dirPath, name: dirName })
+      }
+    } catch {}
 
-  const desktopDirs = await findDesktopProjectDirs(getDesktopSessionsDir())
-  for (const dirPath of desktopDirs) {
-    const dirName = basename(dirPath)
-    allDirs.push({ path: dirPath, name: dirName })
+    const desktopDirs = await findDesktopProjectDirs(getDesktopSessionsDir())
+    for (const dirPath of desktopDirs) {
+      const dirName = basename(dirPath)
+      allDirs.push({ path: dirPath, name: dirName })
+    }
   }
 
-  const projects = await scanProjectDirs(allDirs, seenMsgIds, dateRange)
-  return projects.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+  const [claudeProjects, codexProjects] = await Promise.all([
+    source === 'codex' ? Promise.resolve([] as ProjectSummary[]) : scanProjectDirs(allDirs, seenMsgIds, dateRange),
+    source === 'claude' ? Promise.resolve([] as ProjectSummary[]) : parseCodexSessions(dateRange),
+  ])
+
+  const merged = new Map<string, ProjectSummary>()
+  for (const p of [...claudeProjects, ...codexProjects]) {
+    const existing = merged.get(p.project)
+    if (!existing) {
+      merged.set(p.project, p)
+      continue
+    }
+    existing.sessions.push(...p.sessions)
+    existing.totalCostUSD += p.totalCostUSD
+    existing.totalApiCalls += p.totalApiCalls
+  }
+
+  return [...merged.values()].sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }

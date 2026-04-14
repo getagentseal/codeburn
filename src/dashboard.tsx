@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, type Source } from './parser.js'
 import { loadPricing } from './models.js'
 
 type Period = 'today' | 'week' | 'month'
@@ -118,7 +118,7 @@ function fit(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) : s.padEnd(n)
 }
 
-function Overview({ projects, label, width }: { projects: ProjectSummary[]; label: string; width: number }) {
+function Overview({ projects, label, width, source }: { projects: ProjectSummary[]; label: string; width: number; source: Source }) {
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
@@ -134,6 +134,7 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
       <Text wrap="truncate-end">
         <Text bold color={ORANGE}>CodeBurn</Text>
+        {source !== 'all' && <Text dimColor>  [{source === 'claude' ? 'Claude' : 'Codex'}]</Text>}
         <Text dimColor>  {label}</Text>
       </Text>
       <Text wrap="truncate-end">
@@ -398,7 +399,7 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period }: { projects: ProjectSummary[]; period: Period }) {
+function DashboardContent({ projects, period, source }: { projects: ProjectSummary[]; period: Period; source: Source }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout()
 
   if (projects.length === 0) {
@@ -413,7 +414,7 @@ function DashboardContent({ projects, period }: { projects: ProjectSummary[]; pe
 
   return (
     <Box flexDirection="column" width={dashWidth}>
-      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
+      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} source={source} />
 
       <Row wide={wide} width={dashWidth}>
         <DailyActivity projects={projects} days={period === 'month' ? 31 : 14} pw={pw} bw={barWidth} />
@@ -435,9 +436,10 @@ function DashboardContent({ projects, period }: { projects: ProjectSummary[]; pe
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, source }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
+  source: Source
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -450,10 +452,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod }: {
     setLoading(true)
     setPeriod(newPeriod)
     const range = getDateRange(newPeriod)
-    const data = await parseAllSessions(range)
+    const data = await parseAllSessions(range, source)
     setProjects(data)
     setLoading(false)
-  }, [period])
+  }, [period, source])
 
   useInput((input, key) => {
     if (input === 'q') {
@@ -485,37 +487,37 @@ function InteractiveDashboard({ initialProjects, initialPeriod }: {
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} />
+      <DashboardContent projects={projects} period={period} source={source} />
       <StatusBar width={dashWidth} />
     </Box>
   )
 }
 
-function StaticDashboard({ projects, period }: { projects: ProjectSummary[]; period: Period }) {
+function StaticDashboard({ projects, period, source }: { projects: ProjectSummary[]; period: Period; source: Source }) {
   const { dashWidth } = getLayout()
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} />
+      <DashboardContent projects={projects} period={period} source={source} />
     </Box>
   )
 }
 
-export async function renderDashboard(period: Period = 'week'): Promise<void> {
+export async function renderDashboard(period: Period = 'week', source: Source = 'all'): Promise<void> {
   await loadPricing()
   const range = getDateRange(period)
-  const projects = await parseAllSessions(range)
+  const projects = await parseAllSessions(range, source)
 
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
 
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={projects} initialPeriod={period} />
+      <InteractiveDashboard initialProjects={projects} initialPeriod={period} source={source} />
     )
     await waitUntilExit()
   } else {
     const { unmount } = render(
-      <StaticDashboard projects={projects} period={period} />,
+      <StaticDashboard projects={projects} period={period} source={source} />,
       { patchConsole: false }
     )
     unmount()

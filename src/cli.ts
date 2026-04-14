@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, type Source } from './parser.js'
 import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, uninstallMenubar } from './menubar.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
@@ -45,6 +45,12 @@ function toPeriod(s: string): 'today' | 'week' | 'month' {
   return 'week'
 }
 
+function toSource(s: string): Source {
+  if (s === 'claude') return 'claude'
+  if (s === 'codex') return 'codex'
+  return 'all'
+}
+
 const program = new Command()
   .name('codeburn')
   .description('See where your AI coding tokens go - by task, tool, model, and project')
@@ -52,10 +58,27 @@ const program = new Command()
 
 program
   .command('report', { isDefault: true })
-  .description('Interactive usage dashboard')
+  .description('Interactive usage dashboard (Claude + Codex)')
+  .option('-p, --period <period>', 'Starting period: today, week, month', 'week')
+  .option('-s, --source <source>', 'Filter source: all, claude, codex', 'all')
+  .action(async (opts) => {
+    await renderDashboard(toPeriod(opts.period), toSource(opts.source))
+  })
+
+program
+  .command('claude')
+  .description('Interactive usage dashboard (Claude Code only)')
   .option('-p, --period <period>', 'Starting period: today, week, month', 'week')
   .action(async (opts) => {
-    await renderDashboard(toPeriod(opts.period))
+    await renderDashboard(toPeriod(opts.period), 'claude')
+  })
+
+program
+  .command('codex')
+  .description('Interactive usage dashboard (Codex only)')
+  .option('-p, --period <period>', 'Starting period: today, week, month', 'week')
+  .action(async (opts) => {
+    await renderDashboard(toPeriod(opts.period), 'codex')
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
