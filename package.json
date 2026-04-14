@@ -1,6 +1,6 @@
 {
   "name": "codeburn",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "See where your AI coding tokens go - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",

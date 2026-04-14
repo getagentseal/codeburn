@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-04-14
+
+### Added
+- One-shot success rate per activity category. Detects edit/test/fix retry
+  cycles (Edit -> Bash -> Edit) within each turn. Shows 1-shot percentage
+  in the By Activity panel for categories that involve code edits.
+
+### Fixed
+- Turn grouping: tool-result entries (type "user" with no text) no longer
+  split turns. Previously inflated Conversation category by 3-5x at the
+  expense of Coding, Debugging, and other edit-heavy categories.
+
 ## 0.2.0 - 2026-04-14
 
 ### Added
