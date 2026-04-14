@@ -188,6 +188,9 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
 }
 
 function shortProject(project: string): string {
+  // If project name is already normalized (via project-names.ts), use it directly.
+  // Fall back to path extraction for raw encoded directory names.
+  if (!project.startsWith('-')) return project
   const parts = project.replace(/^-/, '').split('-').filter(Boolean)
   if (parts.length <= 2) return parts.join('/')
   return parts.slice(-2).join('/')

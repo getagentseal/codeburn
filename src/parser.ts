@@ -18,6 +18,7 @@ import type {
 } from './types.js'
 import { classifyTurn, BASH_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
+import { normalizeProject } from './project-names.js'
 
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
@@ -306,20 +307,24 @@ async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seen
     const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.startsWith('agent-'))
 
     for (const file of jsonlFiles) {
-      const session = await parseSessionFile(join(dirPath, file), dirName, seenMsgIds, dateRange)
+      const sessionId = basename(file, '.jsonl')
+      // Normalize the project name: extract readable name, apply aliases,
+      // and check session attribution for workspace overrides
+      const normalizedName = normalizeProject(dirName, sessionId)
+      const session = await parseSessionFile(join(dirPath, file), normalizedName, seenMsgIds, dateRange)
       if (session && session.apiCalls > 0) {
-        const existing = projectMap.get(dirName) ?? []
+        const existing = projectMap.get(normalizedName) ?? []
         existing.push(session)
-        projectMap.set(dirName, existing)
+        projectMap.set(normalizedName, existing)
       }
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
+  for (const [name, sessions] of projectMap) {
     projects.push({
-      project: dirName,
-      projectPath: unsanitizePath(dirName),
+      project: name,
+      projectPath: unsanitizePath(name),
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
