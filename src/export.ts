@@ -5,10 +5,11 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { getCostColumnHeader, convertCost } from './currency.js'
 
 function escCsv(s: string): string {
-  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-    return `"${s.replace(/"/g, '""')}"`
+  const sanitized = /^[=+\-@]/.test(s) ? `'${s}` : s
+  if (sanitized.includes(',') || sanitized.includes('"') || sanitized.includes('\n')) {
+    return `"${sanitized.replace(/"/g, '""')}"`
   }
-  return s
+  return sanitized
 }
 
 function buildDailyRows(projects: ProjectSummary[]): Array<Record<string, string | number>> {
