@@ -163,7 +163,7 @@ function createParser(
 
             const tools = (partsByMsg.get(msg.id) ?? [])
               .filter((p) => p.type === 'tool')
-              .map((p) => p.tool ?? '')
+              .map((p) => toolNameMap[p.tool ?? ''] ?? p.tool ?? '')
               .filter(Boolean)
 
             const dedupKey = `opencode:${sessionId}:${msg.id}`

@@ -417,7 +417,7 @@ describe('opencode provider - session parsing', () => {
     expect(call.reasoningTokens).toBe(50)
     expect(call.cacheReadInputTokens).toBe(500)
     expect(call.cacheCreationInputTokens).toBe(300)
-    expect(call.tools).toEqual(['bash', 'edit'])
+    expect(call.tools).toEqual(['Bash', 'Edit'])
     expect(call.userMessage).toBe('fix the login bug')
     expect(call.sessionId).toBe('sess-1')
     expect(call.timestamp).toBe(new Date(1700000001000).toISOString())
@@ -717,6 +717,90 @@ describe('opencode provider - session parsing', () => {
     expect(call.model).toBe('claude-opus-4-6')
     expect(call.inputTokens).toBe(100)
     expect(call.outputTokens).toBe(200)
-    expect(call.tools).toEqual(['bash'])
+    expect(call.tools).toEqual(['Bash'])
+  })
+
+  it('converts seconds-epoch timestamps to milliseconds', async () => {
+    const dbPath = await createTestDb(tmpDir)
+    const db = new Database(dbPath)
+
+    db.prepare(
+      `
+      INSERT INTO session (id, project_id, slug, directory, title, version, time_created)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(
+      'sess-1',
+      'proj-1',
+      'slug-1',
+      '/home/user/myproject',
+      'My Project',
+      '1.0',
+      1700000000000,
+    )
+
+    db.prepare(
+      `
+      INSERT INTO message (id, session_id, time_created, data)
+      VALUES (?, ?, ?, ?)
+    `,
+    ).run(
+      'msg-1',
+      'sess-1',
+      1700000001,
+      JSON.stringify({
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.05,
+        tokens: {
+          input: 100,
+          output: 200,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      }),
+    )
+
+    db.prepare(
+      `
+      INSERT INTO part (id, message_id, session_id, data)
+      VALUES (?, ?, ?, ?)
+    `,
+    ).run(
+      'part-1',
+      'msg-1',
+      'sess-1',
+      JSON.stringify({
+        type: 'tool',
+        callID: 'call-1',
+        tool: 'bash',
+        state: {
+          status: 'completed',
+          input: {},
+          output: 'ok',
+          title: 'bash',
+          metadata: {},
+          time: { start: 1700000001100, end: 1700000001200 },
+        },
+      }),
+    )
+
+    db.close()
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const source = {
+      path: `${dbPath}:sess-1`,
+      project: 'myproject',
+      provider: 'opencode',
+    }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.timestamp).toBe(new Date(1700000001 * 1000).toISOString())
   })
 })
