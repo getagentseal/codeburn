@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.4 - 2026-04-15
+
+### Added
+- Auto-refresh flag. `codeburn report --refresh 60` reloads data at a set
+  interval. Works on `report`, `today`, and `month` commands. Default off.
+- Readable project names. Strips home directory prefix from encoded paths,
+  shows 3 path segments for more context. Home dir sessions display as "home".
+- Responsive dashboard reflows on terminal resize via Ink's useWindowSize
+  hook. Width cap raised from 104 to 160 columns. Contributed by @AleBles.
+- Total downloads and install size badges in README.
+
+### Fixed
+- Agent/subagent session files were excluded, dropping ~46% of API calls.
+  Subagent sessions live in separate subagents/ directories with unique
+  message IDs and are now included. Closes #17.
+- Codex cache hit always showed 100%. OpenAI includes cached tokens inside
+  input_tokens (unlike Anthropic). Normalized to prevent double-counting
+  in cost calculation and cache hit display. Closes #21.
+- CSV formula injection. Cells starting with =, +, -, @ are prefixed with
+  an apostrophe before CSV escaping. Contributed by @serabi.
+- Menubar "Open Full Report" and "Export CSV" actions broken for npm-installed
+  users. Invokes resolved binary directly instead of assuming ~/codeburn
+  checkout. Currency picker used nonexistent `config currency` subcommand.
+  Contributed by @MukundaKatta. Closes #32, #27.
+- Activity panel moved from full-width to half-width row for better space
+  usage on wide terminals.
+
 ## 0.4.1 - 2026-04-14
 
 ### Added
