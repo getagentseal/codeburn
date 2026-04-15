@@ -38,7 +38,7 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`) and/or Codex (`~/.codex/sessions/`)
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), and/or Gemini CLI (`~/.gemini/`)
 
 ## Usage
 
@@ -58,13 +58,14 @@ Arrow keys switch between Today / 7 Days / 30 Days / Month. Press `q` to quit, `
 
 ## Providers
 
-CodeBurn auto-detects which AI coding tools you use. If both Claude Code and Codex have session data on disk, press `p` in the dashboard to toggle between them.
+CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
 ```bash
 codeburn report                    # all providers combined (default)
 codeburn report --provider claude  # Claude Code only
 codeburn report --provider codex   # Codex only
-codeburn today --provider codex    # Codex today
+codeburn report --provider gemini  # Gemini only
+codeburn today --provider gemini   # Gemini today
 codeburn export --provider claude  # export Claude data only
 ```
 
@@ -77,6 +78,7 @@ The `--provider` flag works on all commands: `report`, `today`, `month`, `status
 | Claude Code | `~/.claude/projects/` | Supported |
 | Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
 | Codex (OpenAI) | `~/.codex/sessions/` | Supported |
+| Gemini CLI | `~/.gemini/tmp/<project>/chats/` | Supported |
 | Pi, OpenCode, Amp | -- | Planned (provider plugin system) |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
@@ -184,5 +186,8 @@ MIT
 ## Credits
 
 Inspired by [ccusage](https://github.com/ryoppippi/ccusage). Pricing data from [LiteLLM](https://github.com/BerriAI/litellm). Exchange rates from [Frankfurter](https://www.frankfurter.app/).
+
+Built by [AgentSeal](https://agentseal.org).
+BerriAI/litellm). Exchange rates from [Frankfurter](https://www.frankfurter.app/).
 
 Built by [AgentSeal](https://agentseal.org).
