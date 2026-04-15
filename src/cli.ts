@@ -6,7 +6,7 @@ import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
-import { providers } from './providers/index.js'
+import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { createRequire } from 'node:module'
 
@@ -130,7 +130,7 @@ program
       const weekData = buildPeriodData('7 Days', await parseAllSessions(getDateRange('week').range, pf))
       const monthData = buildPeriodData('Month', await parseAllSessions(getDateRange('month').range, pf))
       const todayProviders: ProviderCost[] = []
-      for (const p of providers) {
+      for (const p of await getAllProviders()) {
         const data = await parseAllSessions(todayRange, p.name)
         const cost = data.reduce((s, proj) => s + proj.totalCostUSD, 0)
         if (cost > 0) todayProviders.push({ name: p.displayName, cost })

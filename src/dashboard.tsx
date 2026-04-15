@@ -6,7 +6,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
-import { providers } from './providers/index.js'
+import { getAllProviders } from './providers/index.js'
 
 type Period = 'today' | 'week' | 'month' | '30days' | '90days'
 
@@ -391,10 +391,15 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   )
 }
 
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  all: 'All',
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
+}
+
 function getProviderDisplayName(name: string): string {
-  if (name === 'all') return 'All'
-  const provider = providers.find(p => p.name === name)
-  return provider?.displayName ?? name
+  return PROVIDER_DISPLAY_NAMES[name] ?? name
 }
 
 function PeriodTabs({ active, providerName, showProvider }: {
@@ -514,7 +519,8 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     let cancelled = false
     async function detect() {
       const found: string[] = []
-      for (const p of providers) {
+      const allProviders = await getAllProviders()
+      for (const p of allProviders) {
         const sessions = await p.discoverSessions()
         if (sessions.length > 0) found.push(p.name)
       }

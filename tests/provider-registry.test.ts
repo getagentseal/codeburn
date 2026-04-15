@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { providers } from '../src/providers/index.js'
+import { providers, getAllProviders } from '../src/providers/index.js'
 
 describe('provider registry', () => {
-  it('has all providers registered', () => {
-    expect(providers.map(p => p.name)).toEqual(['claude', 'codex', 'cursor'])
+  it('has core providers registered synchronously', () => {
+    expect(providers.map(p => p.name)).toEqual(['claude', 'codex'])
+  })
+
+  it('includes cursor after async load', async () => {
+    const all = await getAllProviders()
+    expect(all.map(p => p.name)).toEqual(['claude', 'codex', 'cursor'])
   })
 
   it('claude tool display names are identity', () => {
@@ -33,8 +38,9 @@ describe('provider registry', () => {
     expect(claude.modelDisplayName('claude-sonnet-4-6')).toBe('Sonnet 4.6')
   })
 
-  it('cursor model display names handle auto mode', () => {
-    const cursor = providers.find(p => p.name === 'cursor')!
+  it('cursor model display names handle auto mode', async () => {
+    const all = await getAllProviders()
+    const cursor = all.find(p => p.name === 'cursor')!
     expect(cursor.modelDisplayName('default')).toBe('Auto (Sonnet est.)')
     expect(cursor.modelDisplayName('claude-4.5-opus-high-thinking')).toBe('Opus 4.5 (Thinking)')
     expect(cursor.modelDisplayName('grok-code-fast-1')).toBe('Grok Code Fast')
