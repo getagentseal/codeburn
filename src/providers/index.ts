@@ -1,8 +1,9 @@
 import { claude } from './claude.js'
 import { codex } from './codex.js'
+import { gemini } from './gemini.js'
 import type { Provider, SessionSource } from './types.js'
 
-export const providers: Provider[] = [claude, codex]
+export const providers: Provider[] = [claude, codex, gemini]
 
 export async function discoverAllSessions(providerFilter?: string): Promise<SessionSource[]> {
   const filtered = providerFilter && providerFilter !== 'all'

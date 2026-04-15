@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { providers } from '../src/providers/index.js'
 
 describe('provider registry', () => {
-  it('has claude and codex providers', () => {
-    expect(providers.map(p => p.name)).toEqual(['claude', 'codex'])
+  it('has claude, codex and gemini providers', () => {
+    expect(providers.map(p => p.name)).toEqual(['claude', 'codex', 'gemini'])
   })
 
   it('claude tool display names are identity', () => {
@@ -31,5 +31,11 @@ describe('provider registry', () => {
     const claude = providers.find(p => p.name === 'claude')!
     expect(claude.modelDisplayName('claude-opus-4-6-20260205')).toBe('Opus 4.6')
     expect(claude.modelDisplayName('claude-sonnet-4-6')).toBe('Sonnet 4.6')
+  })
+
+  it('gemini model display names are human-readable', () => {
+    const gemini = providers.find(p => p.name === 'gemini')!
+    expect(gemini.modelDisplayName('gemini-3-flash-preview')).toBe('Gemini 3 Flash')
+    expect(gemini.modelDisplayName('gemini-2.0-pro')).toBe('Gemini 2.0 Pro')
   })
 })
