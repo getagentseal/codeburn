@@ -20,6 +20,7 @@ export type ParsedProviderCall = {
   webSearchRequests: number
   costUSD: number
   tools: string[]
+  bashCommands: string[]
   timestamp: string
   speed: 'standard' | 'fast'
   deduplicationKey: string

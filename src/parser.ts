@@ -367,7 +367,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     hasPlanMode: tools.includes('EnterPlanMode'),
     speed: call.speed,
     timestamp: call.timestamp,
-    bashCommands: [],
+    bashCommands: call.bashCommands ?? [],
     deduplicationKey: call.deduplicationKey,
   }
 

@@ -259,6 +259,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             webSearchRequests: 0,
             costUSD,
             tools: pendingTools,
+            bashCommands: [],
             timestamp,
             speed: 'standard',
             deduplicationKey: dedupKey,

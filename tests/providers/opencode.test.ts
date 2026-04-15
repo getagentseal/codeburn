@@ -361,7 +361,7 @@ describe('opencode provider - session parsing', () => {
         tool: 'bash',
         state: {
           status: 'completed',
-          input: {},
+          input: { command: 'npm test && git push' },
           output: 'ok',
           title: 'bash',
           metadata: {},
@@ -418,6 +418,7 @@ describe('opencode provider - session parsing', () => {
     expect(call.cacheReadInputTokens).toBe(500)
     expect(call.cacheCreationInputTokens).toBe(300)
     expect(call.tools).toEqual(['Bash', 'Edit'])
+    expect(call.bashCommands).toEqual(['npm', 'git'])
     expect(call.userMessage).toBe('fix the login bug')
     expect(call.sessionId).toBe('sess-1')
     expect(call.timestamp).toBe(new Date(1700000001000).toISOString())

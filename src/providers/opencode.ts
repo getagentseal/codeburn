@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import Database from 'better-sqlite3'
 
 import { calculateCost, getShortModelName } from '../models.js'
+import { extractBashCommands } from '../bash-utils.js'
 import type {
   Provider,
   SessionSource,
@@ -106,7 +107,7 @@ function createParser(
 
         const partsByMsg = new Map<
           string,
-          Array<{ type: string; text?: string; tool?: string }>
+          Array<{ type: string; text?: string; tool?: string; state?: { input?: { command?: string } } }>
         >()
         for (const part of parts) {
           try {
@@ -161,10 +162,15 @@ function createParser(
               continue
             }
 
-            const tools = (partsByMsg.get(msg.id) ?? [])
-              .filter((p) => p.type === 'tool')
+            const msgParts = partsByMsg.get(msg.id) ?? []
+            const toolParts = msgParts.filter((p) => p.type === 'tool')
+            const tools = toolParts
               .map((p) => toolNameMap[p.tool ?? ''] ?? p.tool ?? '')
               .filter(Boolean)
+
+            const bashCommands = toolParts
+              .filter((p) => p.tool === 'bash' && typeof p.state?.input?.command === 'string')
+              .flatMap((p) => extractBashCommands(p.state!.input!.command!))
 
             const dedupKey = `opencode:${sessionId}:${msg.id}`
             if (seenKeys.has(dedupKey)) {
@@ -208,6 +214,7 @@ function createParser(
               webSearchRequests: 0,
               costUSD,
               tools,
+              bashCommands,
               timestamp,
               speed: 'standard',
               deduplicationKey: dedupKey,
