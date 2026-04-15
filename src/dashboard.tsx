@@ -546,9 +546,21 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return () => clearInterval(id)
   }, [refreshSeconds, period, activeProvider, reloadData])
 
-  const switchPeriod = useCallback(async (newPeriod: Period) => {
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const switchPeriod = useCallback((newPeriod: Period) => {
     if (newPeriod === period) return
     setPeriod(newPeriod)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      reloadData(newPeriod, activeProvider)
+    }, 600)
+  }, [period, activeProvider, reloadData])
+
+  const switchPeriodImmediate = useCallback(async (newPeriod: Period) => {
+    if (newPeriod === period) return
+    setPeriod(newPeriod)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     await reloadData(newPeriod, activeProvider)
   }, [period, activeProvider, reloadData])
 
@@ -563,6 +575,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const idx = options.indexOf(activeProvider)
       const next = options[(idx + 1) % options.length]
       setActiveProvider(next)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
       reloadData(period, next)
       return
     }
@@ -572,11 +585,11 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
     } else if (key.rightArrow || key.tab) {
       switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
-    } else if (input === '1') switchPeriod('today')
-    else if (input === '2') switchPeriod('week')
-    else if (input === '3') switchPeriod('30days')
-    else if (input === '4') switchPeriod('90days')
-    else if (input === '5') switchPeriod('month')
+    } else if (input === '1') switchPeriodImmediate('today')
+    else if (input === '2') switchPeriodImmediate('week')
+    else if (input === '3') switchPeriodImmediate('30days')
+    else if (input === '4') switchPeriodImmediate('90days')
+    else if (input === '5') switchPeriodImmediate('month')
   })
 
   if (loading) {
