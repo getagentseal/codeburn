@@ -50,11 +50,10 @@ function getDateRange(period: string): { range: DateRange; label: string } {
   }
 }
 
-function toPeriod(s: string): 'today' | 'week' | '30days' | '120days' | 'month' {
+function toPeriod(s: string): 'today' | 'week' | '30days' | 'month' {
   if (s === 'today') return 'today'
   if (s === 'month') return 'month'
   if (s === '30days') return '30days'
-  if (s === '120days') return '120days'
   return 'week'
 }
 
@@ -70,7 +69,7 @@ program.hook('preAction', async () => {
 program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
-  .option('-p, --period <period>', 'Starting period: today, week, 30days, 90days, month', 'week')
+  .option('-p, --period <period>', 'Starting period: today, week, 30days, month', 'week')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {

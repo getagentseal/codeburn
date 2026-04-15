@@ -8,14 +8,13 @@ import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 
-type Period = 'today' | 'week' | 'month' | '30days' | '120days'
+type Period = 'today' | 'week' | '30days' | 'month'
 
-const PERIODS: Period[] = ['today', 'week', '30days', '120days', 'month']
+const PERIODS: Period[] = ['today', 'week', '30days', 'month']
 const PERIOD_LABELS: Record<Period, string> = {
   today: 'Today',
   week: '7 Days',
   '30days': '30 Days',
-  '120days': '120 Days',
   month: 'This Month',
 }
 
@@ -87,7 +86,6 @@ function getDateRange(period: Period): { start: Date; end: Date } {
     case 'today': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate()), end }
     case 'week': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7), end }
     case '30days': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30), end }
-    case '120days': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 120), end }
     case 'month': return { start: new Date(now.getFullYear(), now.getMonth(), 1), end }
   }
 }
@@ -458,10 +456,8 @@ function StatusBar({ width, showProvider }: { width: number; showProvider?: bool
         <Text color={ORANGE} bold>2</Text>
         <Text dimColor> week   </Text>
         <Text color={ORANGE} bold>3</Text>
-        <Text dimColor> 30d   </Text>
+        <Text dimColor> 30 days   </Text>
         <Text color={ORANGE} bold>4</Text>
-        <Text dimColor> 120d   </Text>
-        <Text color={ORANGE} bold>5</Text>
         <Text dimColor> month</Text>
         {showProvider && (
           <>
@@ -493,7 +489,7 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
   }
 
   const pw = wide ? halfWidth : dashWidth
-  const days = period === 'month' || period === '30days' ? 31 : period === '120days' ? 120 : 14
+  const days = period === 'month' || period === '30days' ? 31 : 14
 
   return (
     <Box flexDirection="column" width={dashWidth}>
@@ -613,8 +609,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     } else if (input === '1') switchPeriodImmediate('today')
     else if (input === '2') switchPeriodImmediate('week')
     else if (input === '3') switchPeriodImmediate('30days')
-    else if (input === '4') switchPeriodImmediate('120days')
-    else if (input === '5') switchPeriodImmediate('month')
+    else if (input === '4') switchPeriodImmediate('month')
   })
 
   if (loading) {

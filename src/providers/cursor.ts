@@ -135,7 +135,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
-  const DEFAULT_LOOKBACK_DAYS = 120
+  const DEFAULT_LOOKBACK_DAYS = 35
   const timeFloor = new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   const userMessages = buildUserMessageMap(db, timeFloor)
