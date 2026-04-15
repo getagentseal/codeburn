@@ -1,6 +1,6 @@
-import { statSync } from "fs";
+import { access } from "fs/promises";
 import Database from "better-sqlite3";
-import { basename, join } from "path";
+import { join } from "path";
 import { homedir } from "os";
 
 import { calculateCost } from "../models.js";
@@ -10,6 +10,24 @@ import type {
   SessionParser,
   ParsedProviderCall,
 } from "./types.js";
+
+type MessageData = {
+  role: string;
+  modelID?: string;
+  cost?: number;
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  };
+};
+
+type PartData = {
+  type: string;
+  text?: string;
+  tool?: string;
+};
 
 const modelDisplayNames: Record<string, string> = {
   "claude-opus-4-6": "Opus 4.6",
@@ -51,6 +69,10 @@ const toolNameMap: Record<string, string> = {
   invalid: "Invalid",
 };
 
+function sanitize(dir: string): string {
+  return dir.replace(/^\//, "").replace(/\//g, "-");
+}
+
 function getDbPath(dataDir?: string): string {
   const base =
     dataDir ??
@@ -65,9 +87,9 @@ function createParser(
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      const parts = source.path.split(":");
-      const sessionId = parts[parts.length - 1]!;
-      const dbPath = parts.slice(0, -1).join(":");
+      const segments = source.path.split(":");
+      const sessionId = segments[segments.length - 1]!;
+      const dbPath = segments.slice(0, -1).join(":");
 
       let db: Database.Database;
       try {
@@ -104,15 +126,13 @@ function createParser(
               partsByMsg.set(part.message_id, []);
             }
             partsByMsg.get(part.message_id)!.push(parsed);
-          } catch {
-            // skip invalid JSON
-          }
+          } catch {}
         }
 
         let currentUserMessage = "";
 
         for (const msg of messages) {
-          let data: any;
+          let data: MessageData;
           try {
             data = JSON.parse(msg.data);
           } catch {
@@ -121,8 +141,8 @@ function createParser(
 
           if (data.role === "user") {
             const textParts = (partsByMsg.get(msg.id) ?? [])
-              .filter((p: any) => p.type === "text")
-              .map((p: any) => p.text ?? "")
+              .filter((p: PartData) => p.type === "text")
+              .map((p: PartData) => p.text ?? "")
               .filter(Boolean);
             if (textParts.length > 0) {
               currentUserMessage = textParts.join(" ");
@@ -150,8 +170,8 @@ function createParser(
             }
 
             const tools = (partsByMsg.get(msg.id) ?? [])
-              .filter((p: any) => p.type === "tool")
-              .map((p: any) => p.tool ?? "")
+              .filter((p: PartData) => p.type === "tool")
+              .map((p: PartData) => p.tool ?? "")
               .filter(Boolean);
 
             const dedupKey = `opencode:${sessionId}:${msg.id}`;
@@ -170,11 +190,19 @@ function createParser(
               0,
             );
 
-            if (costUSD === 0 && (data.cost ?? 0) > 0) {
+            if (
+              costUSD === 0 &&
+              typeof data.cost === "number" &&
+              data.cost > 0
+            ) {
               costUSD = data.cost;
             }
 
-            const timestamp = new Date(msg.time_created).toISOString();
+            const ms =
+              msg.time_created < 1e12
+                ? msg.time_created * 1000
+                : msg.time_created;
+            const timestamp = new Date(ms).toISOString();
 
             yield {
               provider: "opencode",
@@ -224,7 +252,7 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
 
     async discoverSessions(): Promise<SessionSource[]> {
       try {
-        statSync(dbPath);
+        await access(dbPath);
       } catch {
         return [];
       }
@@ -250,7 +278,7 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
 
         return rows.map((row) => ({
           path: `${dbPath}:${row.id}`,
-          project: row.directory ? basename(row.directory) : row.title,
+          project: row.directory ? sanitize(row.directory) : row.title,
           provider: "opencode",
         }));
       } catch {

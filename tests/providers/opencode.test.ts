@@ -124,7 +124,7 @@ describe("opencode provider - session discovery", () => {
 
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.provider).toBe("opencode");
-    expect(sessions[0]!.project).toBe("myproject");
+    expect(sessions[0]!.project).toBe("home-user-myproject");
     expect(sessions[0]!.path).toContain("sess-1");
   });
 
@@ -498,5 +498,64 @@ describe("opencode provider - session parsing", () => {
 
     expect(calls1).toHaveLength(1);
     expect(calls2).toHaveLength(0);
+  });
+
+  it("uses pre-calculated cost for unknown models", async () => {
+    const dbPath = await createTestDb(tmpDir);
+    const db = new Database(dbPath);
+
+    db.prepare(
+      `
+      INSERT INTO session (id, project_id, slug, directory, title, version, time_created)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(
+      "sess-1",
+      "proj-1",
+      "slug-1",
+      "/home/user/myproject",
+      "My Project",
+      "1.0",
+      1700000000000,
+    );
+
+    db.prepare(
+      `
+      INSERT INTO message (id, session_id, time_created, data)
+      VALUES (?, ?, ?, ?)
+    `,
+    ).run(
+      "msg-1",
+      "sess-1",
+      1700000001000,
+      JSON.stringify({
+        role: "assistant",
+        modelID: "totally-unknown-model-xyz",
+        cost: 0.42,
+        tokens: {
+          input: 100,
+          output: 200,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+      }),
+    );
+
+    db.close();
+
+    const provider = createOpenCodeProvider(tmpDir);
+    const source = {
+      path: `${dbPath}:sess-1`,
+      project: "myproject",
+      provider: "opencode",
+    };
+    const parser = provider.createSessionParser(source, new Set());
+    const calls: ParsedProviderCall[] = [];
+    for await (const call of parser.parse()) {
+      calls.push(call);
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.costUSD).toBe(0.42);
   });
 });

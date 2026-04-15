@@ -144,14 +144,17 @@ Requires [SwiftBar](https://github.com/swiftbar/SwiftBar) (`brew install --cask 
 
 **Codex** stores sessions at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with `token_count` events containing per-call and cumulative token usage, and `function_call` entries for tool tracking.
 
+**OpenCode** stores sessions in a SQLite database at `~/.local/share/opencode/opencode.db`. CodeBurn queries the `session`, `message`, and `part` tables read-only, extracts token counts and tool usage, deduplicates by message ID, and recalculates cost using CodeBurn's pricing engine. Only top-level sessions are included (subtask sessions are excluded to avoid double-counting).
+
 CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
-| Variable            | Description                                                |
-| ------------------- | ---------------------------------------------------------- |
-| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
-| `CODEX_HOME`        | Override Codex data directory (default: `~/.codex`)        |
+| Variable            | Description                                                          |
+| ------------------- | -------------------------------------------------------------------- |
+| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`)           |
+| `CODEX_HOME`        | Override Codex data directory (default: `~/.codex`)                  |
+| `XDG_DATA_HOME`     | Override XDG data directory for OpenCode (default: `~/.local/share`) |
 
 ## Project structure
 
