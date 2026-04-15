@@ -4,6 +4,10 @@ import type { Provider, SessionSource } from './types.js'
 
 let cursorProvider: Provider | null = null
 let cursorLoadAttempted = false
+let opencodeProvider: Provider | null = null
+let opencodeLoadAttempted = false
+let hermesProvider: Provider | null = null
+let hermesLoadAttempted = false
 
 async function loadCursor(): Promise<Provider | null> {
   if (cursorLoadAttempted) return cursorProvider
@@ -17,9 +21,6 @@ async function loadCursor(): Promise<Provider | null> {
   }
 }
 
-let opencodeProvider: Provider | null = null
-let opencodeLoadAttempted = false
-
 async function loadOpenCode(): Promise<Provider | null> {
   if (opencodeLoadAttempted) return opencodeProvider
   opencodeLoadAttempted = true
@@ -32,13 +33,30 @@ async function loadOpenCode(): Promise<Provider | null> {
   }
 }
 
+async function loadHermes(): Promise<Provider | null> {
+  if (hermesLoadAttempted) return hermesProvider
+  hermesLoadAttempted = true
+  try {
+    const { hermes } = await import('./hermes.js')
+    hermesProvider = hermes
+    return hermes
+  } catch {
+    return null
+  }
+}
+
 const coreProviders: Provider[] = [claude, codex]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [cursor, opencode] = await Promise.all([loadCursor(), loadOpenCode()])
+  const [cursor, opencode, hermes] = await Promise.all([
+    loadCursor(),
+    loadOpenCode(),
+    loadHermes(),
+  ])
   const all = [...coreProviders]
   if (cursor) all.push(cursor)
   if (opencode) all.push(opencode)
+  if (hermes) all.push(hermes)
   return all
 }
 
@@ -66,6 +84,9 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
     const oc = await loadOpenCode()
     return oc ?? undefined
   }
+  if (name === 'hermes') {
+    const hermes = await loadHermes()
+    return hermes ?? undefined
+  }
   return coreProviders.find(p => p.name === name)
 }
-
