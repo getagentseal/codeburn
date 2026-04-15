@@ -6,7 +6,7 @@ import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
-import { providers } from './providers/index.js'
+import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { createRequire } from 'node:module'
 
@@ -69,8 +69,8 @@ program.hook('preAction', async () => {
 program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
-  .option('-p, --period <period>', 'Starting period: today, week, month, 30days', 'week')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('-p, --period <period>', 'Starting period: today, week, 30days, month', 'week')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     await renderDashboard(toPeriod(opts.period), opts.provider, opts.refresh)
@@ -119,7 +119,7 @@ program
   .command('status')
   .description('Compact status output (today + week + month)')
   .option('--format <format>', 'Output format: terminal, menubar, json', 'terminal')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider
@@ -129,7 +129,7 @@ program
       const weekData = buildPeriodData('7 Days', await parseAllSessions(getDateRange('week').range, pf))
       const monthData = buildPeriodData('Month', await parseAllSessions(getDateRange('month').range, pf))
       const todayProviders: ProviderCost[] = []
-      for (const p of providers) {
+      for (const p of await getAllProviders()) {
         const data = await parseAllSessions(todayRange, p.name)
         const cost = data.reduce((s, proj) => s + proj.totalCostUSD, 0)
         if (cost > 0) todayProviders.push({ name: p.displayName, cost })
@@ -157,7 +157,7 @@ program
 program
   .command('today')
   .description('Today\'s usage dashboard')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     await renderDashboard('today', opts.provider, opts.refresh)
@@ -166,7 +166,7 @@ program
 program
   .command('month')
   .description('This month\'s usage dashboard')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     await renderDashboard('month', opts.provider, opts.refresh)
@@ -177,7 +177,7 @@ program
   .description('Export usage data to CSV or JSON (includes 1 day, 7 days, 30 days)')
   .option('-f, --format <format>', 'Export format: csv, json', 'csv')
   .option('-o, --output <path>', 'Output file path')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex', 'all')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider

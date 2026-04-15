@@ -385,7 +385,7 @@ async function parseProviderSources(
   seenKeys: Set<string>,
   dateRange?: DateRange,
 ): Promise<ProjectSummary[]> {
-  const provider = getProvider(providerName)
+  const provider = await getProvider(providerName)
   if (!provider) return []
 
   const sessionMap = new Map<string, { project: string; turns: ClassifiedTurn[] }>()

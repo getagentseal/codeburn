@@ -7,9 +7,9 @@ import { ScrollPanel } from './components/scroll-panel'
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
-import { providers } from './providers/index.js'
+import { getAllProviders } from './providers/index.js'
 
-type Period = 'today' | 'week' | 'month' | '30days'
+type Period = 'today' | 'week' | '30days' | 'month'
 
 const PERIODS: Period[] = ['today', 'week', '30days', 'month']
 const PERIOD_LABELS: Record<Period, string> = {
@@ -24,6 +24,16 @@ const ORANGE = '#FF8C42'
 const DIM = '#555555'
 const GOLD = '#FFD700'
 
+const LANG_DISPLAY_NAMES: Record<string, string> = {
+  javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
+  rust: 'Rust', go: 'Go', java: 'Java', cpp: 'C++', c: 'C', csharp: 'C#',
+  ruby: 'Ruby', php: 'PHP', swift: 'Swift', kotlin: 'Kotlin',
+  html: 'HTML', css: 'CSS', scss: 'SCSS', json: 'JSON', yaml: 'YAML',
+  sql: 'SQL', shell: 'Shell', shellscript: 'Shell Script', bash: 'Bash',
+  typescriptreact: 'TSX', javascriptreact: 'JSX',
+  markdown: 'Markdown', dockerfile: 'Dockerfile', toml: 'TOML',
+}
+
 const PANEL_COLORS = {
   overview: '#FF8C42',
   daily: '#5B9EF5',
@@ -33,6 +43,13 @@ const PANEL_COLORS = {
   tools: '#5BF5E0',
   mcp: '#F55BE0',
   bash: '#F5A05B',
+}
+
+const PROVIDER_COLORS: Record<string, string> = {
+  claude: '#FF8C42',
+  codex: '#5BF5A0',
+  cursor: '#00B4D8',
+  all: '#FF8C42',
 }
 
 const CATEGORY_COLORS: Record<TaskCategory, string> = {
@@ -296,11 +313,16 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   )
 }
 
-function ToolBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string; filterPrefix?: string }) {
   const toolTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [tool, data] of Object.entries(session.toolBreakdown)) {
+        if (filterPrefix) {
+          if (!tool.startsWith(filterPrefix)) continue
+        } else {
+          if (tool.startsWith('lang:')) continue
+        }
         toolTotals[tool] = (toolTotals[tool] ?? 0) + data.calls
       }
     }
@@ -310,15 +332,19 @@ function ToolBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   const nw = Math.max(6, pw - bw - 15)
 
   return (
-    <Panel title="Core Tools" color={PANEL_COLORS.tools} width={pw}>
+    <Panel title={title ?? 'Core Tools'} color={PANEL_COLORS.tools} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
-      {sorted.slice(0, 10).map(([tool, calls]) => (
-        <Text key={tool} wrap="truncate-end">
-          <HBar value={calls} max={maxCalls} width={bw} />
-          <Text> {fit(tool, nw)}</Text>
-          <Text>{String(calls).padStart(7)}</Text>
-        </Text>
-      ))}
+      {sorted.slice(0, 10).map(([tool, calls]) => {
+        const raw = filterPrefix ? tool.slice(filterPrefix.length) : tool
+        const display = filterPrefix ? (LANG_DISPLAY_NAMES[raw] ?? raw) : raw
+        return (
+          <Text key={tool} wrap="truncate-end">
+            <HBar value={calls} max={maxCalls} width={bw} />
+            <Text> {fit(display, nw)}</Text>
+            <Text>{String(calls).padStart(7)}</Text>
+          </Text>
+        )
+      })}
     </Panel>
   )
 }
@@ -383,10 +409,15 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   )
 }
 
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  all: 'All',
+  claude: 'Claude',
+  codex: 'Codex',
+  cursor: 'Cursor',
+}
+
 function getProviderDisplayName(name: string): string {
-  if (name === 'all') return 'All'
-  const provider = providers.find(p => p.name === name)
-  return provider?.displayName ?? name
+  return PROVIDER_DISPLAY_NAMES[name] ?? name
 }
 
 function PeriodTabs({ active, providerName, showProvider }: {
@@ -407,7 +438,7 @@ function PeriodTabs({ active, providerName, showProvider }: {
         <Box>
           <Text color={DIM}>|  </Text>
           <Text color={ORANGE} bold>[p]</Text>
-          <Text bold> {getProviderDisplayName(providerName)}</Text>
+          <Text bold color={PROVIDER_COLORS[providerName] ?? ORANGE}> {getProviderDisplayName(providerName)}</Text>
         </Box>
       )}
     </Box>
@@ -452,13 +483,16 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
 }
 
 const FIXED_ROWS = 10 // PeriodTabs(1) + Overview(5) + StatusBar(4)
-function DashboardContent({ projects, period, columns, scrollHeight }: {
+function DashboardContent({ projects, period, columns, activeProvider, scrollHeight }: {
   projects: ProjectSummary[]
   period: Period
   columns?: number
+  activeProvider?: string
   scrollHeight?: number
 }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
+  const isCursor = activeProvider === 'cursor'
+
   if (projects.length === 0) {
     return (
       <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
@@ -468,10 +502,12 @@ function DashboardContent({ projects, period, columns, scrollHeight }: {
   }
 
   const pw = wide ? halfWidth : dashWidth
+  const days = period === 'month' || period === '30days' ? 31 : 14
+
   const content = (
       <>
         <Row wide={wide} width={dashWidth}>
-          <DailyActivity projects={projects} days={period === 'month' || period === '30days' ? 31 : 14} pw={pw} bw={barWidth} />
+          <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />
           <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
         </Row>
 
@@ -480,12 +516,17 @@ function DashboardContent({ projects, period, columns, scrollHeight }: {
           <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
         </Row>
 
-        <Row wide={wide} width={dashWidth}>
-          <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
-          <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
-        </Row>
-
-        <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+        {isCursor ? (
+            <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
+        ) : (
+            <>
+              <Row wide={wide} width={dashWidth}>
+                <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
+                <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
+              </Row>
+              <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+            </>
+        )}
       </>
   )
 
@@ -523,16 +564,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     let cancelled = false
     async function detect() {
       const found: string[] = []
-      for (const p of providers) {
+      const allProviders = await getAllProviders()
+      for (const p of allProviders) {
         const sessions = await p.discoverSessions()
         if (sessions.length > 0) found.push(p.name)
       }
       if (!cancelled) {
         setDetectedProviders(found)
-        if (found.length > 1) {
-          const range = getDateRange(period)
-          for (const name of found) parseAllSessions(range, name).catch(() => {})
-        }
       }
     }
     detect()
@@ -553,9 +591,21 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return () => clearInterval(id)
   }, [refreshSeconds, period, activeProvider, reloadData])
 
-  const switchPeriod = useCallback(async (newPeriod: Period) => {
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const switchPeriod = useCallback((newPeriod: Period) => {
     if (newPeriod === period) return
     setPeriod(newPeriod)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      reloadData(newPeriod, activeProvider)
+    }, 600)
+  }, [period, activeProvider, reloadData])
+
+  const switchPeriodImmediate = useCallback(async (newPeriod: Period) => {
+    if (newPeriod === period) return
+    setPeriod(newPeriod)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     await reloadData(newPeriod, activeProvider)
   }, [period, activeProvider, reloadData])
 
@@ -570,6 +620,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const idx = options.indexOf(activeProvider)
       const next = options[(idx + 1) % options.length]
       setActiveProvider(next)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
       reloadData(period, next)
       return
     }
@@ -579,10 +630,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
     } else if (key.rightArrow || key.tab) {
       switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
-    } else if (input === '1') switchPeriod('today')
-    else if (input === '2') switchPeriod('week')
-    else if (input === '3') switchPeriod('30days')
-    else if (input === '4') switchPeriod('month')
+    } else if (input === '1') switchPeriodImmediate('today')
+    else if (input === '2') switchPeriodImmediate('week')
+    else if (input === '3') switchPeriodImmediate('30days')
+    else if (input === '4') switchPeriodImmediate('month')
   })
 
   if (loading) {
@@ -600,19 +651,19 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   return (
     <Box flexDirection="column" width={dashWidth} height={totalRows}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} scrollHeight={scrollHeight} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} scrollHeight={scrollHeight} />
       <StatusBar width={dashWidth} showProvider={multipleProviders} />
     </Box>
   )
 }
 
-function StaticDashboard({ projects, period }: { projects: ProjectSummary[]; period: Period }) {
+function StaticDashboard({ projects, period, activeProvider }: { projects: ProjectSummary[]; period: Period; activeProvider?: string }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} columns={columns} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
     </Box>
   )
 }
@@ -631,7 +682,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
     await waitUntilExit()
   } else {
     const { unmount } = render(
-      <StaticDashboard projects={projects} period={period} />,
+      <StaticDashboard projects={projects} period={period} activeProvider={provider} />,
       { patchConsole: false }
     )
     unmount()

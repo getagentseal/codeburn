@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 - 2026-04-15
+
+### Added
+- **Cursor IDE support.** Reads token usage from Cursor's local SQLite
+  database. Shows activity classification, model breakdown, and a Languages
+  panel extracted from code blocks. Costs estimated using Sonnet pricing for
+  Auto mode (labeled clearly). Supports macOS, Linux, and Windows paths.
+- SQLite adapter with lazy-loaded `better-sqlite3` (optional dependency).
+  Claude Code and Codex users are completely unaffected if it is not installed.
+- File-based result cache for Cursor. First run parses the database (can take
+  up to a minute on very large databases); subsequent runs load from cache
+  in under 250ms. Cache auto-invalidates when Cursor modifies the database.
+- Provider-specific dashboard layout. Cursor shows a Languages panel instead
+  of Core Tools, Shell Commands, and MCP Servers (Cursor does not log these).
+- Provider color coding in the dashboard tab bar (Claude: orange, Codex: green,
+  Cursor: cyan).
+- Broader activity classification patterns: file extensions, script references,
+  URLs, and HTTP status codes now trigger more accurate categories.
+- Debounced period switching. Arrow keys wait 600ms before loading data so
+  quickly scrolling through periods skips intermediate loads. Number keys
+  still load immediately.
+- Dynamic version reading from package.json (no more hardcoded version string).
+
+### Fixed
+- CLI `--version` reported stale 0.4.1 since v0.4.2. Closes #38.
+
 ## 0.4.4 - 2026-04-15
 
 ### Added

@@ -19,9 +19,9 @@
   <img src="https://raw.githubusercontent.com/AgentSeal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code** and **Codex** (OpenAI) with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. macOS menu bar widget via SwiftBar. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), and **Cursor** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. macOS menu bar widget via SwiftBar. CSV/JSON export.
 
-Works by reading session transcripts directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
+Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
 ## Install
 
@@ -38,7 +38,8 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`) and/or Codex (`~/.codex/sessions/`)
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), and/or Cursor
+- For Cursor support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
 
@@ -58,12 +59,13 @@ Arrow keys switch between Today / 7 Days / 30 Days / Month. Press `q` to quit, `
 
 ## Providers
 
-CodeBurn auto-detects which AI coding tools you use. If both Claude Code and Codex have session data on disk, press `p` in the dashboard to toggle between them.
+CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
 ```bash
 codeburn report                    # all providers combined (default)
 codeburn report --provider claude  # Claude Code only
 codeburn report --provider codex   # Codex only
+codeburn report --provider cursor  # Cursor only
 codeburn today --provider codex    # Codex today
 codeburn export --provider claude  # export Claude data only
 ```
@@ -77,9 +79,12 @@ The `--provider` flag works on all commands: `report`, `today`, `month`, `status
 | Claude Code | `~/.claude/projects/` | Supported |
 | Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
 | Codex (OpenAI) | `~/.codex/sessions/` | Supported |
+| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
 | Pi, OpenCode, Amp | -- | Planned (provider plugin system) |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
+
+Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 
 ### Adding a provider
 
@@ -146,7 +151,9 @@ Requires [SwiftBar](https://github.com/swiftbar/SwiftBar) (`brew install --cask 
 
 **Codex** stores sessions at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with `token_count` events containing per-call and cumulative token usage, and `function_call` entries for tool tracking.
 
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex), filters by date range per entry, and classifies each turn.
+**Cursor** stores session data in a SQLite database at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (macOS), `~/.config/Cursor/User/globalStorage/state.vscdb` (Linux), or `%APPDATA%/Cursor/User/globalStorage/state.vscdb` (Windows). Token counts are in `cursorDiskKV` table entries with `bubbleId:` key prefix. Requires `better-sqlite3` (installed as optional dependency). Parsed results are cached at `~/.cache/codeburn/cursor-results.json` and auto-invalidate when the database changes.
+
+CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
@@ -170,11 +177,14 @@ src/
   export.ts       CSV/JSON multi-period export
   config.ts       Config file management (~/.config/codeburn/)
   currency.ts     Currency conversion, exchange rates, Intl formatting
+  sqlite.ts       SQLite adapter (lazy-loads better-sqlite3)
+  cursor-cache.ts Cursor result cache (file-based, auto-invalidating)
   providers/
     types.ts      Provider interface definitions
-    index.ts      Provider registry
+    index.ts      Provider registry (lazy-loads Cursor)
     claude.ts     Claude Code session discovery
     codex.ts      Codex session discovery and JSONL parsing
+    cursor.ts     Cursor SQLite parsing, language extraction
 ```
 
 ## License
