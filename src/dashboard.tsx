@@ -1,3 +1,5 @@
+import { homedir } from 'os'
+
 import React, { useState, useCallback, useEffect } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
@@ -187,10 +189,27 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
   )
 }
 
-function shortProject(project: string): string {
-  const parts = project.replace(/^-/, '').split('-').filter(Boolean)
-  if (parts.length <= 2) return parts.join('/')
-  return parts.slice(-2).join('/')
+const _homeEncoded = homedir().replace(/\//g, '-')
+
+function shortProject(encoded: string): string {
+  let path = encoded.replace(/^-/, '')
+
+  // Strip home dir prefix (e.g. "Users-torukmakto-" → "")
+  if (path.startsWith(_homeEncoded.replace(/^-/, ''))) {
+    path = path.slice(_homeEncoded.replace(/^-/, '').length).replace(/^-/, '')
+  }
+
+  // Strip common system prefixes
+  path = path
+    .replace(/^private-tmp-[^-]+-[^-]+-/, '')  // /private/tmp/<org>/<env>/
+    .replace(/^private-tmp-/, '')
+    .replace(/^tmp-/, '')
+
+  if (!path) return '~'
+
+  const parts = path.split('-').filter(Boolean)
+  if (parts.length <= 3) return parts.join('/')
+  return parts.slice(-3).join('/')
 }
 
 function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {

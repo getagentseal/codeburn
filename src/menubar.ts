@@ -151,11 +151,15 @@ export function renderMenubarFormat(
   lines.push('---')
   const home = process.env.HOME ?? '~'
   const bin = getCodeburnBin()
-  lines.push(`Open Full Report | terminal=true shell=/bin/bash param1=-c param2="cd '${home}/codeburn' && npx tsx src/cli.ts report; echo ''; echo 'Press any key to close...'; read -n1"`)
-  lines.push(`Export CSV to Desktop | terminal=false shell=/bin/bash param1=-c param2="cd '${home}/codeburn' && npx tsx src/cli.ts export -o '${home}/Desktop/codeburn-report.csv' 2>/dev/null"`)
+  // Invoke the resolved `codeburn` binary directly. SwiftBar/xbar deliver
+  // each `paramN=` value as its own argv entry, so there's no shell
+  // quoting involved — and we don't ship the user to a `~/codeburn`
+  // checkout that only exists when running from a dev clone (#32).
+  lines.push(`Open Full Report | terminal=true shell=${bin} param1=report`)
+  lines.push(`Export CSV to Desktop | terminal=false shell=${bin} param1=export param2=-o param3=${home}/Desktop/codeburn-report.csv`)
 
   // Currency submenu -- common currencies as clickable items.
-  // Clicking one runs 'codeburn config currency XXX' and refreshes the plugin.
+  // Clicking one runs 'codeburn currency XXX' and refreshes the plugin.
   const activeCurrency = getCurrency().code
   const currencies = [
     { code: 'USD', name: 'US Dollar' },
@@ -179,10 +183,14 @@ export function renderMenubarFormat(
   lines.push(`Currency: ${activeCurrency} | size=14`)
   for (const { code, name } of currencies) {
     const check = code === activeCurrency ? ' *' : ''
-    const cmd = code === 'USD'
-      ? `${bin} config currency --reset`
-      : `${bin} config currency ${code}`
-    lines.push(`--${name} (${code})${check} | terminal=false refresh=true shell=/bin/bash param1=-c param2="${cmd}"`)
+    // The real CLI subcommand is `codeburn currency [code]` (with `--reset`
+    // for USD), not `codeburn config currency` — the latter doesn't exist
+    // and silently fails when SwiftBar runs it. Fixes #27.
+    if (code === 'USD') {
+      lines.push(`--${name} (${code})${check} | terminal=false refresh=true shell=${bin} param1=currency param2=--reset`)
+    } else {
+      lines.push(`--${name} (${code})${check} | terminal=false refresh=true shell=${bin} param1=currency param2=${code}`)
+    }
   }
 
   lines.push(`Refresh | refresh=true`)
