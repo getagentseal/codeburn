@@ -69,13 +69,13 @@ The `--provider` flag works on all commands: `report`, `today`, `month`, `status
 
 ### Supported providers
 
-| Provider       | Data location                                                     | Status                           |
-| -------------- | ----------------------------------------------------------------- | -------------------------------- |
-| Claude Code    | `~/.claude/projects/`                                             | Supported                        |
-| Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported                        |
-| Codex (OpenAI) | `~/.codex/sessions/`                                              | Supported                        |
-| OpenCode       | `~/.local/share/opencode/opencode.db` (SQLite)                    | Supported                        |
-| Pi, Amp        | --                                                                | Planned (provider plugin system) |
+| Provider | Data location | Status |
+|----------|--------------|--------|
+| Claude Code | `~/.claude/projects/` | Supported |
+| Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
+| Codex (OpenAI) | `~/.codex/sessions/` | Supported |
+| OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | Supported |
+| Pi, Amp | -- | Planned (provider plugin system) |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
 
@@ -116,21 +116,21 @@ Requires [SwiftBar](https://github.com/swiftbar/SwiftBar) (`brew install --cask 
 
 **13 task categories** classified from tool usage patterns and user message keywords. No LLM calls, fully deterministic.
 
-| Category      | What triggers it                      |
-| ------------- | ------------------------------------- |
-| Coding        | Edit, Write tools                     |
-| Debugging     | Error/fix keywords + tool usage       |
-| Feature Dev   | "add", "create", "implement" keywords |
-| Refactoring   | "refactor", "rename", "simplify"      |
-| Testing       | pytest, vitest, jest in Bash          |
-| Exploration   | Read, Grep, WebSearch without edits   |
-| Planning      | EnterPlanMode, TaskCreate tools       |
-| Delegation    | Agent tool spawns                     |
-| Git Ops       | git push/commit/merge in Bash         |
-| Build/Deploy  | npm build, docker, pm2                |
-| Brainstorming | "brainstorm", "what if", "design"     |
-| Conversation  | No tools, pure text exchange          |
-| General       | Skill tool, uncategorized             |
+| Category | What triggers it |
+|---|---|
+| Coding | Edit, Write tools |
+| Debugging | Error/fix keywords + tool usage |
+| Feature Dev | "add", "create", "implement" keywords |
+| Refactoring | "refactor", "rename", "simplify" |
+| Testing | pytest, vitest, jest in Bash |
+| Exploration | Read, Grep, WebSearch without edits |
+| Planning | EnterPlanMode, TaskCreate tools |
+| Delegation | Agent tool spawns |
+| Git Ops | git push/commit/merge in Bash |
+| Build/Deploy | npm build, docker, pm2 |
+| Brainstorming | "brainstorm", "what if", "design" |
+| Conversation | No tools, pure text exchange |
+| General | Skill tool, uncategorized |
 
 **Breakdowns**: daily cost chart, per-project, per-model (Opus/Sonnet/Haiku/GPT-5/GPT-4o/Gemini), per-activity with one-shot rate, core tools, shell commands, MCP servers.
 
@@ -150,11 +150,11 @@ CodeBurn reads these files, deduplicates messages (by API message ID for Claude,
 
 ## Environment variables
 
-| Variable            | Description                                                          |
-| ------------------- | -------------------------------------------------------------------- |
-| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`)           |
-| `CODEX_HOME`        | Override Codex data directory (default: `~/.codex`)                  |
-| `XDG_DATA_HOME`     | Override XDG data directory for OpenCode (default: `~/.local/share`) |
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
+| `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
+| `XDG_DATA_HOME` | Override XDG data directory for OpenCode (default: `~/.local/share`) |
 
 ## Project structure
 
