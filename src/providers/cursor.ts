@@ -64,11 +64,7 @@ const BUBBLE_QUERY_BASE = `
     AND json_extract(value, '$.tokenCount.inputTokens') > 0
 `
 
-const BUBBLE_QUERY_FULL = BUBBLE_QUERY_BASE + `
-  ORDER BY json_extract(value, '$.createdAt') ASC
-`
-
-const BUBBLE_QUERY_INCREMENTAL = BUBBLE_QUERY_BASE + `
+const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_BASE + `
     AND json_extract(value, '$.createdAt') > ?
   ORDER BY json_extract(value, '$.createdAt') ASC
 `
@@ -89,11 +85,12 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, afterTimestamp?
   let skipped = 0
   let maxCreatedAt = afterTimestamp ?? 0
 
+  const DEFAULT_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000
+  const timeFloor = afterTimestamp ?? (Date.now() - DEFAULT_LOOKBACK_MS)
+
   let rows: BubbleRow[]
   try {
-    rows = afterTimestamp
-      ? db.query<BubbleRow>(BUBBLE_QUERY_INCREMENTAL, [afterTimestamp])
-      : db.query<BubbleRow>(BUBBLE_QUERY_FULL)
+    rows = db.query<BubbleRow>(BUBBLE_QUERY_SINCE, [timeFloor])
   } catch {
     return { calls: results, maxCreatedAt }
   }
