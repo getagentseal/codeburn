@@ -68,6 +68,7 @@ export type ProviderCost = {
 export function renderMenubarFormat(
   today: PeriodData,
   week: PeriodData,
+  thirtyDays: PeriodData,
   month: PeriodData,
   todayProviders?: ProviderCost[],
 ): string {
@@ -126,6 +127,24 @@ export function renderMenubarFormat(
   for (const model of week.models.slice(0, 5)) {
     if (model.name === '<synthetic>') continue
     const bar = miniBar(model.cost, weekMaxModel)
+    const name = model.name.padEnd(14)
+    lines.push(`--${bar}  ${name} ${formatCost(model.cost).padStart(8)}  ${String(model.calls).padStart(5)} calls | font=Menlo size=11`)
+  }
+
+  lines.push(`30 Days    ${formatCost(thirtyDays.cost)}    ${thirtyDays.calls.toLocaleString()} calls | size=14`)
+  const tdMaxCat = Math.max(...thirtyDays.categories.map(c => c.cost), 0.01)
+  const tdMaxModel = Math.max(...thirtyDays.models.filter(m => m.name !== '<synthetic>').map(m => m.cost), 0.01)
+  lines.push(`--Activity | size=12 color=#FF8C42`)
+  for (const cat of thirtyDays.categories.slice(0, 8)) {
+    const bar = miniBar(cat.cost, tdMaxCat)
+    const name = cat.name.padEnd(14)
+    lines.push(`--${bar}  ${name} ${formatCost(cat.cost).padStart(8)}  ${String(cat.turns).padStart(4)} turns | font=Menlo size=11`)
+  }
+  lines.push(`-----`)
+  lines.push(`--Models | size=12 color=#FF8C42`)
+  for (const model of thirtyDays.models.slice(0, 5)) {
+    if (model.name === '<synthetic>') continue
+    const bar = miniBar(model.cost, tdMaxModel)
     const name = model.name.padEnd(14)
     lines.push(`--${bar}  ${name} ${formatCost(model.cost).padStart(8)}  ${String(model.calls).padStart(5)} calls | font=Menlo size=11`)
   }

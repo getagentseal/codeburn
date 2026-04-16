@@ -127,6 +127,7 @@ program
       const todayRange = getDateRange('today').range
       const todayData = buildPeriodData('Today', await parseAllSessions(todayRange, pf))
       const weekData = buildPeriodData('7 Days', await parseAllSessions(getDateRange('week').range, pf))
+      const thirtyDayData = buildPeriodData('30 Days', await parseAllSessions(getDateRange('30days').range, pf))
       const monthData = buildPeriodData('Month', await parseAllSessions(getDateRange('month').range, pf))
       const todayProviders: ProviderCost[] = []
       for (const p of await getAllProviders()) {
@@ -134,7 +135,7 @@ program
         const cost = data.reduce((s, proj) => s + proj.totalCostUSD, 0)
         if (cost > 0) todayProviders.push({ name: p.displayName, cost })
       }
-      console.log(renderMenubarFormat(todayData, weekData, monthData, todayProviders))
+      console.log(renderMenubarFormat(todayData, weekData, thirtyDayData, monthData, todayProviders))
       return
     }
 
