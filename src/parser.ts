@@ -462,6 +462,31 @@ function cachePut(key: string, data: ProjectSummary[]) {
   sessionCache.set(key, { data, ts: now })
 }
 
+export function filterProjectsByName(
+  projects: ProjectSummary[],
+  include?: string[],
+  exclude?: string[],
+): ProjectSummary[] {
+  let result = projects
+  if (include && include.length > 0) {
+    const patterns = include.map(s => s.toLowerCase())
+    result = result.filter(p => {
+      const name = p.project.toLowerCase()
+      const path = p.projectPath.toLowerCase()
+      return patterns.some(pat => name.includes(pat) || path.includes(pat))
+    })
+  }
+  if (exclude && exclude.length > 0) {
+    const patterns = exclude.map(s => s.toLowerCase())
+    result = result.filter(p => {
+      const name = p.project.toLowerCase()
+      const path = p.projectPath.toLowerCase()
+      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
+    })
+  }
+  return result
+}
+
 export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
   const key = cacheKey(dateRange, providerFilter)
   const cached = sessionCache.get(key)

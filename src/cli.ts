@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
@@ -61,10 +61,15 @@ function toPeriod(s: string): Period {
   return 'week'
 }
 
-async function runJsonReport(period: Period, provider: string): Promise<void> {
+function collect(val: string, acc: string[]): string[] {
+  acc.push(val)
+  return acc
+}
+
+async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const projects = await parseAllSessions(range, provider)
+  const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
   console.log(JSON.stringify(buildJsonReport(projects, label, period), null, 2))
 }
 
@@ -211,14 +216,16 @@ program
   .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all', 'week')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--format <format>', 'Output format: tui, json', 'tui')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     const period = toPeriod(opts.period)
     if (opts.format === 'json') {
-      await runJsonReport(period, opts.provider)
+      await runJsonReport(period, opts.provider, opts.project, opts.exclude)
       return
     }
-    await renderDashboard(period, opts.provider, opts.refresh)
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -265,15 +272,18 @@ program
   .description('Compact status output (today + week + month)')
   .option('--format <format>', 'Output format: terminal, menubar, json', 'terminal')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider
+    const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar') {
       const todayRange = getDateRange('today').range
-      const todayData = buildPeriodData('Today', await parseAllSessions(todayRange, pf))
-      const weekData = buildPeriodData('7 Days', await parseAllSessions(getDateRange('week').range, pf))
-      const thirtyDayData = buildPeriodData('30 Days', await parseAllSessions(getDateRange('30days').range, pf))
-      const monthData = buildPeriodData('Month', await parseAllSessions(getDateRange('month').range, pf))
+      const todayData = buildPeriodData('Today', fp(await parseAllSessions(todayRange, pf)))
+      const weekData = buildPeriodData('7 Days', fp(await parseAllSessions(getDateRange('week').range, pf)))
+      const thirtyDayData = buildPeriodData('30 Days', fp(await parseAllSessions(getDateRange('30days').range, pf)))
+      const monthData = buildPeriodData('Month', fp(await parseAllSessions(getDateRange('month').range, pf)))
       const todayProviders: ProviderCost[] = []
       for (const p of await getAllProviders()) {
         const data = await parseAllSessions(todayRange, p.name)
@@ -285,8 +295,8 @@ program
     }
 
     if (opts.format === 'json') {
-      const todayData = buildPeriodData('today', await parseAllSessions(getDateRange('today').range, pf))
-      const monthData = buildPeriodData('month', await parseAllSessions(getDateRange('month').range, pf))
+      const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf)))
+      const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range, pf)))
       const { code, rate } = getCurrency()
       console.log(JSON.stringify({
         currency: code,
@@ -296,7 +306,7 @@ program
       return
     }
 
-    const monthProjects = await parseAllSessions(getDateRange('month').range, pf)
+    const monthProjects = fp(await parseAllSessions(getDateRange('month').range, pf))
     console.log(renderStatusBar(monthProjects))
   })
 
@@ -305,13 +315,15 @@ program
   .description('Today\'s usage dashboard')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--format <format>', 'Output format: tui, json', 'tui')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     if (opts.format === 'json') {
-      await runJsonReport('today', opts.provider)
+      await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
     }
-    await renderDashboard('today', opts.provider, opts.refresh)
+    await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
 program
@@ -319,13 +331,15 @@ program
   .description('This month\'s usage dashboard')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--format <format>', 'Output format: tui, json', 'tui')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
     if (opts.format === 'json') {
-      await runJsonReport('month', opts.provider)
+      await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
     }
-    await renderDashboard('month', opts.provider, opts.refresh)
+    await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
 program
@@ -334,13 +348,16 @@ program
   .option('-f, --format <format>', 'Export format: csv, json', 'csv')
   .option('-o, --output <path>', 'Output file path')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider
+    const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     const periods: PeriodExport[] = [
-      { label: 'Today', projects: await parseAllSessions(getDateRange('today').range, pf) },
-      { label: '7 Days', projects: await parseAllSessions(getDateRange('week').range, pf) },
-      { label: '30 Days', projects: await parseAllSessions(getDateRange('30days').range, pf) },
+      { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range, pf)) },
+      { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range, pf)) },
+      { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range, pf)) },
     ]
 
     if (periods.every(p => p.projects.length === 0)) {

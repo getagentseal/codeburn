@@ -97,6 +97,20 @@ codeburn export --provider claude    # export Claude data only
 
 The `--provider` flag works on all commands: `report`, `today`, `month`, `status`, `export`.
 
+### Project filtering
+
+Filter results by project name (case-insensitive substring match). Both flags are repeatable:
+
+```bash
+codeburn report --project myapp                  # show only projects matching "myapp"
+codeburn report --exclude myapp                  # show everything except "myapp"
+codeburn report --exclude myapp --exclude tests  # exclude multiple projects
+codeburn month --project api --project web       # include multiple projects
+codeburn export --project inventory              # export only "inventory" project data
+```
+
+The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+
 ### Supported providers
 
 | Provider | Data location | Status |

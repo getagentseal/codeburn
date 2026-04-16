@@ -4,7 +4,7 @@ import React, { useState, useCallback, useEffect } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 
@@ -593,11 +593,13 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, refreshSeconds }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, refreshSeconds, projectFilter, excludeFilter }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
   refreshSeconds?: number
+  projectFilter?: string[]
+  excludeFilter?: string[]
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -629,10 +631,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const reloadData = useCallback(async (p: Period, prov: string) => {
     setLoading(true)
     const range = getDateRange(p)
-    const data = await parseAllSessions(range, prov)
+    const data = filterProjectsByName(await parseAllSessions(range, prov), projectFilter, excludeFilter)
     setProjects(data)
     setLoading(false)
-  }, [])
+  }, [projectFilter, excludeFilter])
 
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
@@ -718,16 +720,16 @@ function StaticDashboard({ projects, period, activeProvider }: { projects: Proje
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number): Promise<void> {
+export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[]): Promise<void> {
   await loadPricing()
   const range = getDateRange(period)
-  const projects = await parseAllSessions(range, provider)
+  const projects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
 
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
 
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} refreshSeconds={refreshSeconds} />
+      <InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} />
     )
     await waitUntilExit()
   } else {
