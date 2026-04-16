@@ -6,6 +6,7 @@ import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
+import { runOptimize } from './optimize.js'
 import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { createRequire } from 'node:module'
@@ -271,6 +272,18 @@ program
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('optimize')
+  .description('Find token waste and get exact fixes')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
+  .action(async (opts) => {
+    await loadPricing()
+    const { range, label } = getDateRange(opts.period)
+    const projects = await parseAllSessions(range, opts.provider)
+    await runOptimize(projects, label, range)
   })
 
 program.parse()

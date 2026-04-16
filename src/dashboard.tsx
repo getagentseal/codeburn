@@ -1,14 +1,18 @@
 import { homedir } from 'os'
 
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
+import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
+import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
+import { join } from 'path'
 
 type Period = 'today' | 'week' | '30days' | 'month'
+type View = 'dashboard' | 'optimize'
 
 const PERIODS: Period[] = ['today', 'week', '30days', 'month']
 const PERIOD_LABELS: Record<Period, string> = {
@@ -69,6 +73,8 @@ const CATEGORY_COLORS: Record<TaskCategory, string> = {
   general: '#666666',
 }
 
+const IMPACT_PANEL_COLORS: Record<string, string> = { high: '#F55B5B', medium: ORANGE, low: DIM }
+
 function toHex(r: number, g: number, b: number): string {
   return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('')
 }
@@ -77,7 +83,6 @@ function lerp(a: number, b: number, t: number): number {
   return a + t * (b - a)
 }
 
-// Blue -> amber -> orange gradient across the bar width
 function gradientColor(pct: number): string {
   if (pct <= 0.33) {
     const t = pct / 0.33
@@ -213,37 +218,37 @@ const _homeEncoded = homedir().replace(/\//g, '-')
 
 function shortProject(encoded: string): string {
   let path = encoded.replace(/^-/, '')
-
   if (path.startsWith(_homeEncoded.replace(/^-/, ''))) {
     path = path.slice(_homeEncoded.replace(/^-/, '').length).replace(/^-/, '')
   }
-
-  path = path
-    .replace(/^private-tmp-[^-]+-[^-]+-/, '')  // /private/tmp/<org>/<env>/
-    .replace(/^private-tmp-/, '')
-    .replace(/^tmp-/, '')
-
+  path = path.replace(/^private-tmp-[^-]+-[^-]+-/, '').replace(/^private-tmp-/, '').replace(/^tmp-/, '')
   if (!path) return 'home'
-
   const parts = path.split('-').filter(Boolean)
   if (parts.length <= 3) return parts.join('/')
   return parts.slice(-3).join('/')
 }
 
-function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget> }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
-  const nw = Math.max(8, pw - bw - 23)
+  const hasBudgets = budgets && budgets.size > 0
+  const nw = Math.max(8, pw - bw - (hasBudgets ? 31 : 23))
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'sess'.padStart(6)}</Text>
-      {projects.slice(0, 8).map((project, i) => (
-        <Text key={`${project.project}-${i}`} wrap="truncate-end">
-          <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
-          <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
-          <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
-          <Text>{String(project.sessions.length).padStart(6)}</Text>
-        </Text>
-      ))}
+      <Text dimColor wrap="truncate-end">
+        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'sess'.padStart(6)}{hasBudgets ? 'ctx'.padStart(8) : ''}
+      </Text>
+      {projects.slice(0, 8).map((project, i) => {
+        const budget = budgets?.get(project.project)
+        return (
+          <Text key={`${project.project}-${i}`} wrap="truncate-end">
+            <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
+            <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
+            <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
+            <Text>{String(project.sessions.length).padStart(6)}</Text>
+            {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(8)}</Text>}
+          </Text>
+        )
+      })}
     </Panel>
   )
 }
@@ -306,7 +311,6 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   }
   const sorted = Object.entries(categoryTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
-
   return (
     <Panel title="By Activity" color={PANEL_COLORS.activity} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 14)}{'cost'.padStart(8)}{'turns'.padStart(6)}{'1-shot'.padStart(7)}</Text>
@@ -315,9 +319,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
         return (
           <Text key={cat} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
-            <Text color={CATEGORY_COLORS[cat as TaskCategory] ?? '#666666'}>
-              {' '}{fit(CATEGORY_LABELS[cat as TaskCategory] ?? cat, 13)}
-            </Text>
+            <Text color={CATEGORY_COLORS[cat as TaskCategory] ?? '#666666'}> {fit(CATEGORY_LABELS[cat as TaskCategory] ?? cat, 13)}</Text>
             <Text color={GOLD}>{formatCost(data.costUSD).padStart(8)}</Text>
             <Text>{String(data.turns).padStart(6)}</Text>
             <Text color={data.editTurns === 0 ? DIM : oneShotPct === '100%' ? '#5BF58C' : ORANGE}>{String(oneShotPct).padStart(7)}</Text>
@@ -333,11 +335,7 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [tool, data] of Object.entries(session.toolBreakdown)) {
-        if (filterPrefix) {
-          if (!tool.startsWith(filterPrefix)) continue
-        } else {
-          if (tool.startsWith('lang:')) continue
-        }
+        if (filterPrefix) { if (!tool.startsWith(filterPrefix)) continue } else { if (tool.startsWith('lang:')) continue }
         toolTotals[tool] = (toolTotals[tool] ?? 0) + data.calls
       }
     }
@@ -345,7 +343,6 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
   const sorted = Object.entries(toolTotals).sort(([, a], [, b]) => b - a)
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
-
   return (
     <Panel title={title ?? 'Core Tools'} color={PANEL_COLORS.tools} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
@@ -366,29 +363,16 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
 
 function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
   const mcpTotals: Record<string, number> = {}
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      for (const [server, data] of Object.entries(session.mcpBreakdown)) {
-        mcpTotals[server] = (mcpTotals[server] ?? 0) + data.calls
-      }
-    }
-  }
+  for (const project of projects) { for (const session of project.sessions) { for (const [server, data] of Object.entries(session.mcpBreakdown)) { mcpTotals[server] = (mcpTotals[server] ?? 0) + data.calls } } }
   const sorted = Object.entries(mcpTotals).sort(([, a], [, b]) => b - a)
-  if (sorted.length === 0) {
-    return <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
-  }
+  if (sorted.length === 0) return <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
-
   return (
     <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(6)}</Text>
       {sorted.slice(0, 8).map(([server, calls]) => (
-        <Text key={server} wrap="truncate-end">
-          <HBar value={calls} max={maxCalls} width={bw} />
-          <Text> {fit(server, nw)}</Text>
-          <Text>{String(calls).padStart(6)}</Text>
-        </Text>
+        <Text key={server} wrap="truncate-end"><HBar value={calls} max={maxCalls} width={bw} /><Text> {fit(server, nw)}</Text><Text>{String(calls).padStart(6)}</Text></Text>
       ))}
     </Panel>
   )
@@ -396,29 +380,16 @@ function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: nu
 
 function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
   const bashTotals: Record<string, number> = {}
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      for (const [cmd, data] of Object.entries(session.bashBreakdown)) {
-        bashTotals[cmd] = (bashTotals[cmd] ?? 0) + data.calls
-      }
-    }
-  }
+  for (const project of projects) { for (const session of project.sessions) { for (const [cmd, data] of Object.entries(session.bashBreakdown)) { bashTotals[cmd] = (bashTotals[cmd] ?? 0) + data.calls } } }
   const sorted = Object.entries(bashTotals).sort(([, a], [, b]) => b - a)
-  if (sorted.length === 0) {
-    return <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
-  }
+  if (sorted.length === 0) return <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
-
   return (
     <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(7)}</Text>
       {sorted.slice(0, 10).map(([cmd, calls]) => (
-        <Text key={cmd} wrap="truncate-end">
-          <HBar value={calls} max={maxCalls} width={bw} />
-          <Text> {fit(cmd, nw)}</Text>
-          <Text>{String(calls).padStart(7)}</Text>
-        </Text>
+        <Text key={cmd} wrap="truncate-end"><HBar value={calls} max={maxCalls} width={bw} /><Text> {fit(cmd, nw)}</Text><Text>{String(calls).padStart(7)}</Text></Text>
       ))}
     </Panel>
   )
@@ -432,16 +403,9 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   opencode: 'OpenCode',
   pi: 'Pi',
 }
+function getProviderDisplayName(name: string): string { return PROVIDER_DISPLAY_NAMES[name] ?? name }
 
-function getProviderDisplayName(name: string): string {
-  return PROVIDER_DISPLAY_NAMES[name] ?? name
-}
-
-function PeriodTabs({ active, providerName, showProvider }: {
-  active: Period
-  providerName?: string
-  showProvider?: boolean
-}) {
+function PeriodTabs({ active, providerName, showProvider }: { active: Period; providerName?: string; showProvider?: boolean }) {
   return (
     <Box justifyContent="space-between" paddingX={1}>
       <Box gap={1}>
@@ -452,39 +416,95 @@ function PeriodTabs({ active, providerName, showProvider }: {
         ))}
       </Box>
       {showProvider && providerName && (
-        <Box>
-          <Text color={DIM}>|  </Text>
-          <Text color={ORANGE} bold>[p]</Text>
-          <Text bold color={PROVIDER_COLORS[providerName] ?? ORANGE}> {getProviderDisplayName(providerName)}</Text>
-        </Box>
+        <Box><Text color={DIM}>|  </Text><Text color={ORANGE} bold>[p]</Text><Text bold color={PROVIDER_COLORS[providerName] ?? ORANGE}> {getProviderDisplayName(providerName)}</Text></Box>
       )}
     </Box>
   )
 }
 
-function StatusBar({ width, showProvider }: { width: number; showProvider?: boolean }) {
+function ContextBudgetPanel({ budget, pw }: { budget: ContextBudget; pw: number }) {
+  const pct = ((budget.total / budget.modelContext) * 100).toFixed(1)
+  const available = budget.modelContext - budget.total
+  const items: Array<{ label: string; tokens: number; color: string }> = [
+    { label: 'System base', tokens: budget.systemBase, color: '#5B9EF5' },
+    { label: `MCP tools (${budget.mcpTools.count})`, tokens: budget.mcpTools.tokens, color: '#F55BE0' },
+    { label: `Skills (${budget.skills.count})`, tokens: budget.skills.tokens, color: '#F5C85B' },
+    { label: `Memory (${budget.memory.count})`, tokens: budget.memory.tokens, color: '#5BF5A0' },
+  ]
+  const maxTokens = Math.max(...items.map(i => i.tokens))
+  const bw = 6
+  return (
+    <Panel title="Context Budget" color="#7B9EF5" width={pw}>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 20)}{'tokens'.padStart(8)}</Text>
+      {items.filter(i => i.tokens > 0).map(item => (
+        <Text key={item.label} wrap="truncate-end">
+          <HBar value={item.tokens} max={maxTokens} width={bw} />
+          <Text color={item.color}> {fit(item.label, 19)}</Text>
+          <Text>{formatTokens(item.tokens).padStart(8)}</Text>
+        </Text>
+      ))}
+      <Text dimColor wrap="truncate-end">
+        Overhead: {formatTokens(budget.total)} ({pct}%)   Free: {formatTokens(available)}
+      </Text>
+    </Panel>
+  )
+}
+
+function FindingAction({ action }: { action: WasteAction }) {
+  const lines = action.type === 'file-content' ? action.content.split('\n') : action.type === 'command' ? action.text.split('\n') : [action.text]
+  return (<><Text dimColor>{action.label}</Text>{lines.map((line, i) => <Text key={i} color="#5BF5E0">  {line}</Text>)}</>)
+}
+
+function FindingPanel({ index, finding, costRate, width }: { index: number; finding: WasteFinding; costRate: number; width: number }) {
+  const costSaved = finding.tokensSaved * costRate
+  const color = IMPACT_PANEL_COLORS[finding.impact] ?? DIM
+  const label = finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width}>
+      <Text wrap="truncate-end"><Text bold>{index}. {finding.title}</Text>  <Text color={color}>{label}</Text></Text>
+      <Text dimColor wrap="wrap">{finding.explanation}</Text>
+      <Text color={GOLD}>Savings: ~{formatTokens(finding.tokensSaved)} tokens (~{formatCost(costSaved)})</Text>
+      <Text> </Text>
+      <FindingAction action={finding.fix} />
+    </Box>
+  )
+}
+
+function OptimizeView({ findings, costRate, projects, label, width }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number }) {
+  const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalTokens = findings.reduce((s, f) => s + f.tokensSaved, 0)
+  const totalCost = totalTokens * costRate
+  const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
+  const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
+  return (
+    <Box flexDirection="column" width={width}>
+      <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1} width={width}>
+        <Text wrap="truncate-end"><Text bold color={ORANGE}>CodeBurn Optimize</Text><Text dimColor>  {label}</Text></Text>
+        <Text color="#5BF5A0" wrap="truncate-end">Savings: ~{formatTokens(totalTokens)} tokens (~{formatCost(totalCost)}, ~{pct}% of spend)</Text>
+      </Box>
+      {findings.map((f, i) => <FindingPanel key={i} index={i + 1} finding={f} costRate={costRate} width={width} />)}
+      <Box paddingX={1} width={width}><Text dimColor>Token estimates are approximate.</Text></Box>
+    </Box>
+  )
+}
+
+function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean }) {
+  const isOptimize = view === 'optimize'
   return (
     <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
       <Text>
-        <Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text>
-        <Text dimColor> switch   </Text>
-        <Text color={ORANGE} bold>q</Text>
-        <Text dimColor> quit   </Text>
-        <Text color={ORANGE} bold>1</Text>
-        <Text dimColor> today   </Text>
-        <Text color={ORANGE} bold>2</Text>
-        <Text dimColor> week   </Text>
-        <Text color={ORANGE} bold>3</Text>
-        <Text dimColor> 30 days   </Text>
-        <Text color={ORANGE} bold>4</Text>
-        <Text dimColor> month</Text>
-        {showProvider && (
-          <>
-            <Text dimColor>   </Text>
-            <Text color={ORANGE} bold>p</Text>
-            <Text dimColor> provider</Text>
-          </>
+        {isOptimize
+          ? <><Text color={ORANGE} bold>b</Text><Text dimColor> back   </Text></>
+          : <><Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> switch   </Text></>}
+        <Text color={ORANGE} bold>q</Text><Text dimColor> quit   </Text>
+        <Text color={ORANGE} bold>1</Text><Text dimColor> today   </Text>
+        <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
+        <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
+        <Text color={ORANGE} bold>4</Text><Text dimColor> month</Text>
+        {!isOptimize && optimizeAvailable && findingCount != null && findingCount > 0 && (
+          <><Text dimColor>   </Text><Text color={ORANGE} bold>o</Text><Text dimColor> optimize</Text><Text color="#F55B5B"> ({findingCount})</Text></>
         )}
+        {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
       </Text>
     </Box>
   )
@@ -495,88 +515,87 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string }) {
+function DashboardContent({ projects, period, columns, activeProvider, budgets }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget> }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
-
-  if (projects.length === 0) {
-    return (
-      <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
-        <Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text>
-      </Panel>
-    )
-  }
-
+  if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = period === 'month' || period === '30days' ? 31 : 14
-
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
-
-      <Row wide={wide} width={dashWidth}>
-        <DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} />
-        <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
-      <Row wide={wide} width={dashWidth}>
-        <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
-        <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
+      <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
       ) : (
-        <>
-          <Row wide={wide} width={dashWidth}>
-            <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
-            <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
-          </Row>
-          <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
-        </>
+        <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} /></>
       )}
     </Box>
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, refreshSeconds }: {
-  initialProjects: ProjectSummary[]
-  initialPeriod: Period
-  initialProvider: string
-  refreshSeconds?: number
-}) {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, refreshSeconds }: { initialProjects: ProjectSummary[]; initialPeriod: Period; initialProvider: string; refreshSeconds?: number }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
   const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects)
   const [loading, setLoading] = useState(false)
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
+  const [view, setView] = useState<View>('dashboard')
+  const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null)
+  const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
+  const optimizeAvailable = activeProvider === 'all' || activeProvider === 'claude'
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const findingCount = optimizeResult?.findings.length ?? 0
 
   useEffect(() => {
     let cancelled = false
     async function detect() {
       const found: string[] = []
-      const allProviders = await getAllProviders()
-      for (const p of allProviders) {
-        const sessions = await p.discoverSessions()
-        if (sessions.length > 0) found.push(p.name)
-      }
-      if (!cancelled) {
-        setDetectedProviders(found)
-      }
+      for (const p of await getAllProviders()) { const s = await p.discoverSessions(); if (s.length > 0) found.push(p.name) }
+      if (!cancelled) setDetectedProviders(found)
     }
     detect()
     return () => { cancelled = true }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    async function loadBudgets() {
+      const claudeDir = join(homedir(), '.claude', 'projects')
+      const budgets = new Map<string, ContextBudget>()
+      for (const project of projects.slice(0, 8)) {
+        if (cancelled) return
+        const cwd = await discoverProjectCwd(join(claudeDir, project.project))
+        if (!cwd) continue
+        budgets.set(project.project, await estimateContextBudget(cwd))
+      }
+      if (!cancelled) setProjectBudgets(budgets)
+    }
+    loadBudgets()
+    return () => { cancelled = true }
+  }, [projects])
+
+  useEffect(() => {
+    if (!optimizeAvailable) { setOptimizeResult(null); return }
+    let cancelled = false
+    async function scan() {
+      if (projects.length === 0) { setOptimizeResult(null); return }
+      const result = await scanAndDetect(projects, getDateRange(period))
+      if (!cancelled) setOptimizeResult(result)
+    }
+    scan()
+    return () => { cancelled = true }
+  }, [projects, period, optimizeAvailable])
+
   const reloadData = useCallback(async (p: Period, prov: string) => {
     setLoading(true)
-    const range = getDateRange(p)
-    const data = await parseAllSessions(range, prov)
-    setProjects(data)
+    setOptimizeResult(null)
+    setProjects(await parseAllSessions(getDateRange(p), prov))
     setLoading(false)
   }, [])
 
@@ -586,46 +605,34 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return () => clearInterval(id)
   }, [refreshSeconds, period, activeProvider, reloadData])
 
-  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const switchPeriod = useCallback((newPeriod: Period) => {
-    if (newPeriod === period) return
-    setPeriod(newPeriod)
+  const switchPeriod = useCallback((np: Period) => {
+    if (np === period) return
+    setPeriod(np); setView('dashboard')
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      reloadData(newPeriod, activeProvider)
-    }, 600)
+    debounceRef.current = setTimeout(() => { reloadData(np, activeProvider) }, 600)
   }, [period, activeProvider, reloadData])
 
-  const switchPeriodImmediate = useCallback(async (newPeriod: Period) => {
-    if (newPeriod === period) return
-    setPeriod(newPeriod)
+  const switchPeriodImmediate = useCallback(async (np: Period) => {
+    if (np === period) return
+    setPeriod(np); setView('dashboard')
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    await reloadData(newPeriod, activeProvider)
+    await reloadData(np, activeProvider)
   }, [period, activeProvider, reloadData])
 
   useInput((input, key) => {
-    if (input === 'q') {
-      exit()
-      return
-    }
-
+    if (input === 'q') { exit(); return }
+    if (input === 'o' && findingCount > 0 && view === 'dashboard' && optimizeAvailable) { setView('optimize'); return }
+    if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); return }
     if (input === 'p' && multipleProviders) {
-      const options = ['all', ...detectedProviders]
-      const idx = options.indexOf(activeProvider)
-      const next = options[(idx + 1) % options.length]
-      setActiveProvider(next)
+      const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
+      setActiveProvider(next); setView('dashboard')
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      reloadData(period, next)
-      return
+      reloadData(period, next); return
     }
-
     const idx = PERIODS.indexOf(period)
-    if (key.leftArrow) {
-      switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
-    } else if (key.rightArrow || key.tab) {
-      switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
-    } else if (input === '1') switchPeriodImmediate('today')
+    if (key.leftArrow && view === 'dashboard') switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
+    else if ((key.rightArrow || key.tab) && view === 'dashboard') switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
+    else if (input === '1') switchPeriodImmediate('today')
     else if (input === '2') switchPeriodImmediate('week')
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
@@ -635,10 +642,8 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return (
       <Box flexDirection="column" width={dashWidth}>
         <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-        <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
-          <Text dimColor>Loading {PERIOD_LABELS[period]}...</Text>
-        </Panel>
-        <StatusBar width={dashWidth} showProvider={multipleProviders} />
+        <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>Loading {PERIOD_LABELS[period]}...</Text></Panel>
+        <StatusBar width={dashWidth} showProvider={multipleProviders} view="dashboard" findingCount={0} optimizeAvailable={false} />
       </Box>
     )
   }
@@ -646,8 +651,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} />
-      <StatusBar width={dashWidth} showProvider={multipleProviders} />
+      {view === 'optimize' && optimizeResult
+        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
+        : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} />}
+      <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} />
     </Box>
   )
 }
@@ -665,21 +672,13 @@ function StaticDashboard({ projects, period, activeProvider }: { projects: Proje
 
 export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number): Promise<void> {
   await loadPricing()
-  const range = getDateRange(period)
-  const projects = await parseAllSessions(range, provider)
-
+  const projects = await parseAllSessions(getDateRange(period), provider)
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
-
   if (isTTY) {
-    const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} refreshSeconds={refreshSeconds} />
-    )
+    const { waitUntilExit } = render(<InteractiveDashboard initialProjects={projects} initialPeriod={period} initialProvider={provider} refreshSeconds={refreshSeconds} />)
     await waitUntilExit()
   } else {
-    const { unmount } = render(
-      <StaticDashboard projects={projects} period={period} activeProvider={provider} />,
-      { patchConsole: false }
-    )
+    const { unmount } = render(<StaticDashboard projects={projects} period={period} activeProvider={provider} />, { patchConsole: false })
     unmount()
   }
 }
