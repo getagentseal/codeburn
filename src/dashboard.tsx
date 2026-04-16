@@ -470,16 +470,24 @@ function FindingPanel({ index, finding, costRate, width }: { index: number; find
   )
 }
 
-function OptimizeView({ findings, costRate, projects, label, width }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number }) {
+const GRADE_COLORS: Record<string, string> = { A: '#5BF5A0', B: '#5BF5A0', C: GOLD, D: ORANGE, F: '#F55B5B' }
+
+function OptimizeView({ findings, costRate, projects, label, width, healthScore, healthGrade }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number; healthScore: number; healthGrade: string }) {
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalTokens = findings.reduce((s, f) => s + f.tokensSaved, 0)
   const totalCost = totalTokens * costRate
   const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
   const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
+  const gradeColor = GRADE_COLORS[healthGrade] ?? DIM
   return (
     <Box flexDirection="column" width={width}>
       <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1} width={width}>
-        <Text wrap="truncate-end"><Text bold color={ORANGE}>CodeBurn Optimize</Text><Text dimColor>  {label}</Text></Text>
+        <Text wrap="truncate-end">
+          <Text bold color={ORANGE}>CodeBurn Optimize</Text>
+          <Text dimColor>  {label}   Setup: </Text>
+          <Text bold color={gradeColor}>{healthGrade}</Text>
+          <Text dimColor> ({healthScore}/100)</Text>
+        </Text>
         <Text color="#5BF5A0" wrap="truncate-end">Savings: ~{formatTokens(totalTokens)} tokens (~{formatCost(totalCost)}, ~{pct}% of spend)</Text>
       </Box>
       {findings.map((f, i) => <FindingPanel key={i} index={i + 1} finding={f} costRate={costRate} width={width} />)}
@@ -652,7 +660,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
       {view === 'optimize' && optimizeResult
-        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
+        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
         : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} />}
       <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} />
     </Box>

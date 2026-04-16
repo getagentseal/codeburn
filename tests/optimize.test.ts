@@ -236,3 +236,83 @@ describe('optimize: read:edit ratio detection', () => {
     expect(edits).toBe(0)
   })
 })
+
+function computeHealthLogic(impacts: Array<'high' | 'medium' | 'low'>): { score: number; grade: string } {
+  if (impacts.length === 0) return { score: 100, grade: 'A' }
+  const impactWeight: Record<string, number> = { high: 15, medium: 7, low: 3 }
+  let penalty = 0
+  for (const i of impacts) penalty += impactWeight[i] ?? 0
+  const score = Math.max(0, 100 - Math.min(80, penalty))
+  const grade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 55 ? 'C' : score >= 30 ? 'D' : 'F'
+  return { score, grade }
+}
+
+describe('optimize: health score and grade', () => {
+  it('returns A with no findings', () => {
+    const { score, grade } = computeHealthLogic([])
+    expect(score).toBe(100)
+    expect(grade).toBe('A')
+  })
+
+  it('one low finding keeps grade at A', () => {
+    const { score, grade } = computeHealthLogic(['low'])
+    expect(score).toBe(97)
+    expect(grade).toBe('A')
+  })
+
+  it('two high findings drop to C', () => {
+    const { score, grade } = computeHealthLogic(['high', 'high'])
+    expect(score).toBe(70)
+    expect(grade).toBe('C')
+  })
+
+  it('caps penalty at 80 to prevent going below 20', () => {
+    const impacts = Array(20).fill('high' as const)
+    const { score } = computeHealthLogic(impacts)
+    expect(score).toBe(20)
+  })
+
+  it('mix produces D grade', () => {
+    const { score, grade } = computeHealthLogic(['high', 'high', 'medium', 'medium', 'low'])
+    expect(score).toBe(100 - 15 - 15 - 7 - 7 - 3)
+    expect(grade).toBe('D')
+  })
+})
+
+function expandImportsLogic(content: string, resolveMap: Record<string, string>, depth = 0): number {
+  if (depth > 5) return 0
+  let total = content.split('\n').length
+  const matches = content.matchAll(/^@([^\s]+)/gm)
+  for (const m of matches) {
+    const key = m[1] || ''
+    if (resolveMap[key]) {
+      total += expandImportsLogic(resolveMap[key], resolveMap, depth + 1)
+    }
+  }
+  return total
+}
+
+describe('optimize: @-import expansion', () => {
+  it('counts only the base file when no imports', () => {
+    const total = expandImportsLogic('line 1\nline 2\nline 3', {})
+    expect(total).toBe(3)
+  })
+
+  it('expands single @-import', () => {
+    const main = 'line 1\n@./imported.md\nline 3'
+    const imported = 'i1\ni2\ni3\ni4\ni5'
+    expect(expandImportsLogic(main, { './imported.md': imported })).toBe(3 + 5)
+  })
+
+  it('expands nested @-imports recursively', () => {
+    const main = 'a\n@b.md'
+    const b = 'b1\nb2\n@c.md'
+    const c = 'c1\nc2\nc3'
+    expect(expandImportsLogic(main, { 'b.md': b, 'c.md': c })).toBe(2 + 3 + 3)
+  })
+
+  it('caps recursion depth', () => {
+    const circular = '@x.md'
+    expect(expandImportsLogic(circular, { 'x.md': circular })).toBeLessThan(10)
+  })
+})

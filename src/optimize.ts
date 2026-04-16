@@ -39,9 +39,13 @@ export type WasteFinding = {
   fix: WasteAction
 }
 
+export type HealthGrade = 'A' | 'B' | 'C' | 'D' | 'F'
+
 export type OptimizeResult = {
   findings: WasteFinding[]
   costRate: number
+  healthScore: number
+  healthGrade: HealthGrade
 }
 
 type ToolCall = {
@@ -61,6 +65,7 @@ type ScanData = {
   projectCwds: Set<string>
   apiCalls: ApiCallMeta[]
   versions: Set<string>
+  userMessages: string[]
 }
 
 const IMPACT_ORDER: Record<string, number> = { high: 3, medium: 2, low: 1 }
@@ -84,6 +89,7 @@ type ScanFileResult = {
   cwds: string[]
   apiCalls: ApiCallMeta[]
   versions: string[]
+  userMessages: string[]
 }
 
 async function scanJsonlFile(
@@ -94,12 +100,13 @@ async function scanJsonlFile(
   let content: string
   try {
     content = await readFile(filePath, 'utf-8')
-  } catch { return { calls: [], cwds: [], apiCalls: [], versions: [] } }
+  } catch { return { calls: [], cwds: [], apiCalls: [], versions: [], userMessages: [] } }
 
   const calls: ToolCall[] = []
   const cwds: string[] = []
   const apiCalls: ApiCallMeta[] = []
   const versions: string[] = []
+  const userMessages: string[] = []
   const sessionId = basename(filePath, '.jsonl')
 
   for (const line of content.split('\n')) {
@@ -109,6 +116,21 @@ async function scanJsonlFile(
 
     if (entry.cwd && typeof entry.cwd === 'string') cwds.push(entry.cwd)
     if (entry.version && typeof entry.version === 'string') versions.push(entry.version)
+
+    if (entry.type === 'user') {
+      const msg = entry.message as Record<string, unknown> | undefined
+      const msgContent = msg?.content
+      if (typeof msgContent === 'string') {
+        userMessages.push(msgContent)
+      } else if (Array.isArray(msgContent)) {
+        for (const block of msgContent) {
+          if (block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
+            userMessages.push(block.text)
+          }
+        }
+      }
+      continue
+    }
 
     if (entry.type !== 'assistant') continue
 
@@ -139,7 +161,7 @@ async function scanJsonlFile(
     }
   }
 
-  return { calls, cwds, apiCalls, versions }
+  return { calls, cwds, apiCalls, versions, userMessages }
 }
 
 async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
@@ -148,19 +170,21 @@ async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
   const allCwds = new Set<string>()
   const allApiCalls: ApiCallMeta[] = []
   const allVersions = new Set<string>()
+  const allUserMessages: string[] = []
 
   for (const source of sources) {
     const files = await collectJsonlFiles(source.path)
     for (const file of files) {
-      const { calls, cwds, apiCalls, versions } = await scanJsonlFile(file, source.project, dateRange)
+      const { calls, cwds, apiCalls, versions, userMessages } = await scanJsonlFile(file, source.project, dateRange)
       allCalls.push(...calls)
       for (const cwd of cwds) allCwds.add(cwd)
       allApiCalls.push(...apiCalls)
       for (const v of versions) if (v) allVersions.add(v)
+      allUserMessages.push(...userMessages)
     }
   }
 
-  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, versions: allVersions }
+  return { toolCalls: allCalls, projectCwds: allCwds, apiCalls: allApiCalls, versions: allVersions, userMessages: allUserMessages }
 }
 
 function detectJunkReads(calls: ToolCall[]): WasteFinding | null {
@@ -378,8 +402,36 @@ function detectMissingClaudeignore(projectCwds: Set<string>): WasteFinding | nul
   }
 }
 
+const MAX_IMPORT_DEPTH = 5
+const IMPORT_PATTERN = /^@([^\s]+)/gm
+
+function expandImports(filePath: string, seen: Set<string>, depth: number): { totalLines: number; importedFiles: number } {
+  if (depth > MAX_IMPORT_DEPTH || seen.has(filePath)) return { totalLines: 0, importedFiles: 0 }
+  seen.add(filePath)
+  let content: string
+  try { content = readFileSync(filePath, 'utf-8') } catch { return { totalLines: 0, importedFiles: 0 } }
+
+  const lines = content.split('\n').length
+  let totalLines = lines
+  let importedFiles = 0
+  const dir = join(filePath, '..')
+
+  const matches = content.matchAll(IMPORT_PATTERN)
+  for (const match of matches) {
+    const rawPath = match[1]
+    if (!rawPath || rawPath.startsWith('http') || rawPath.includes('@')) continue
+    const resolved = rawPath.startsWith('/') ? rawPath : join(dir, rawPath)
+    if (!existsSync(resolved)) continue
+    const nested = expandImports(resolved, seen, depth + 1)
+    totalLines += nested.totalLines
+    importedFiles += 1 + nested.importedFiles
+  }
+
+  return { totalLines, importedFiles }
+}
+
 function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
-  const bloated: { path: string; lines: number }[] = []
+  const bloated: { path: string; lines: number; expandedLines: number; imports: number }[] = []
 
   for (const cwd of projectCwds) {
     for (const name of ['CLAUDE.md', '.claude/CLAUDE.md']) {
@@ -388,9 +440,10 @@ function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
       try {
         const content = readFileSync(fullPath, 'utf-8')
         const lineCount = content.split('\n').length
-        if (lineCount > CLAUDEMD_HEALTHY_LINES) {
+        const { totalLines, importedFiles } = expandImports(fullPath, new Set(), 0)
+        if (totalLines > CLAUDEMD_HEALTHY_LINES) {
           const short = cwd.startsWith(homedir()) ? '~' + cwd.slice(homedir().length) : cwd
-          bloated.push({ path: `${short}/${name}`, lines: lineCount })
+          bloated.push({ path: `${short}/${name}`, lines: lineCount, expandedLines: totalLines, imports: importedFiles })
         }
       } catch { continue }
     }
@@ -398,23 +451,26 @@ function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
 
   if (bloated.length === 0) return null
 
-  const sorted = bloated.sort((a, b) => b.lines - a.lines)
+  const sorted = bloated.sort((a, b) => b.expandedLines - a.expandedLines)
   const worst = sorted[0]
-  const totalExtraLines = sorted.reduce((s, b) => s + (b.lines - CLAUDEMD_HEALTHY_LINES), 0)
+  const totalExtraLines = sorted.reduce((s, b) => s + (b.expandedLines - CLAUDEMD_HEALTHY_LINES), 0)
   const tokensPerLine = 25
   const tokensSaved = totalExtraLines * tokensPerLine
 
-  const list = sorted.slice(0, 3).map(b => `${b.path} (${b.lines} lines)`).join(', ')
+  const list = sorted.slice(0, 3).map(b => {
+    const importNote = b.imports > 0 ? ` + ${b.imports} imported` : ''
+    return `${b.path} (${b.expandedLines} lines${importNote})`
+  }).join(', ')
 
   return {
     title: 'TRIM BLOATED CLAUDE.md',
-    explanation: `${list}. Every line loads into every API call as context. Beyond ${CLAUDEMD_HEALTHY_LINES} lines, the extra ~${totalExtraLines} lines cost ~${formatTokens(tokensSaved)} tokens per call.`,
-    impact: worst.lines > 400 ? 'high' : 'medium',
+    explanation: `${list}. Every line loads into every API call as context, including @-imports. Beyond ${CLAUDEMD_HEALTHY_LINES} lines, the extra ~${totalExtraLines} lines cost ~${formatTokens(tokensSaved)} tokens per call.`,
+    impact: worst.expandedLines > 400 ? 'high' : 'medium',
     tokensSaved,
     fix: {
       type: 'paste',
       label: 'Ask Claude to trim it:',
-      text: 'Review CLAUDE.md and cut it to under 200 lines. Remove anything Claude can figure out from the code itself: file paths, architecture, imports. Keep only: rules, gotchas, and non-obvious conventions.',
+      text: 'Review CLAUDE.md and all @-imported files. Cut total expanded content to under 200 lines. Remove anything Claude can figure out from the code itself: file paths, architecture, imports. Keep only: rules, gotchas, and non-obvious conventions.',
     },
   }
 }
@@ -499,6 +555,126 @@ function detectCacheBloat(apiCalls: ApiCallMeta[]): WasteFinding | null {
       type: 'paste',
       label: 'Spoof older User-Agent to reduce overhead:',
       text: 'export ANTHROPIC_CUSTOM_HEADERS=\'User-Agent: claude-cli/2.1.98 (external, sdk-cli)\'',
+    },
+  }
+}
+
+const TOKENS_PER_AGENT_DEF = 80
+const TOKENS_PER_COMMAND_DEF = 60
+const SKILL_FRONTMATTER_TOKENS = 80
+
+async function listMarkdownFiles(dir: string): Promise<string[]> {
+  if (!existsSync(dir)) return []
+  try {
+    const entries = await readdir(dir)
+    return entries.filter(e => e.endsWith('.md')).map(e => e.replace(/\.md$/, ''))
+  } catch { return [] }
+}
+
+async function listSkillDirs(dir: string): Promise<string[]> {
+  if (!existsSync(dir)) return []
+  try {
+    const entries = await readdir(dir)
+    const names: string[] = []
+    for (const entry of entries) {
+      if (existsSync(join(dir, entry, 'SKILL.md'))) names.push(entry)
+    }
+    return names
+  } catch { return [] }
+}
+
+async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null> {
+  const agentDir = join(homedir(), '.claude', 'agents')
+  const defined = await listMarkdownFiles(agentDir)
+  if (defined.length === 0) return null
+
+  const invoked = new Set<string>()
+  for (const call of calls) {
+    if (call.name !== 'Agent' && call.name !== 'Task') continue
+    const subType = call.input.subagent_type as string | undefined
+    if (subType) invoked.add(subType)
+  }
+
+  const ghosts = defined.filter(name => !invoked.has(name))
+  if (ghosts.length === 0) return null
+
+  const tokensSaved = ghosts.length * TOKENS_PER_AGENT_DEF
+  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+
+  return {
+    title: 'REMOVE UNUSED CUSTOM AGENTS',
+    explanation: `${ghosts.length} agent definition${ghosts.length > 1 ? 's' : ''} in ~/.claude/agents/ never invoked: ${list}. Each agent adds ~${TOKENS_PER_AGENT_DEF} tokens of description to the Task tool schema on every session.`,
+    impact: ghosts.length >= 5 ? 'high' : ghosts.length >= 2 ? 'medium' : 'low',
+    tokensSaved,
+    fix: {
+      type: 'command',
+      label: `Archive unused agent${ghosts.length > 1 ? 's' : ''}:`,
+      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/agents/${name}.md ~/.claude/agents/.archived/`).join('\n'),
+    },
+  }
+}
+
+async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null> {
+  const skillDir = join(homedir(), '.claude', 'skills')
+  const defined = await listSkillDirs(skillDir)
+  if (defined.length === 0) return null
+
+  const invoked = new Set<string>()
+  for (const call of calls) {
+    if (call.name !== 'Skill') continue
+    const skillName = (call.input.skill as string) || (call.input.name as string)
+    if (skillName) invoked.add(skillName)
+  }
+
+  const ghosts = defined.filter(name => !invoked.has(name))
+  if (ghosts.length === 0 || ghosts.length < 3) return null
+
+  const tokensSaved = ghosts.length * SKILL_FRONTMATTER_TOKENS
+  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+
+  return {
+    title: 'REMOVE UNUSED SKILLS',
+    explanation: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} in ~/.claude/skills/ never invoked: ${list}. Each skill's frontmatter adds ~${SKILL_FRONTMATTER_TOKENS} tokens to the Skill tool invocation index on every session.`,
+    impact: ghosts.length >= 10 ? 'high' : ghosts.length >= 5 ? 'medium' : 'low',
+    tokensSaved,
+    fix: {
+      type: 'command',
+      label: `Archive unused skill${ghosts.length > 1 ? 's' : ''}:`,
+      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/skills/${name} ~/.claude/skills/.archived/`).join('\n'),
+    },
+  }
+}
+
+async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
+  const cmdDir = join(homedir(), '.claude', 'commands')
+  const defined = await listMarkdownFiles(cmdDir)
+  if (defined.length === 0) return null
+
+  const invoked = new Set<string>()
+  const cmdPattern = /<command-name>([^<]+)<\/command-name>|\/(\w+[-\w]*)/g
+  for (const msg of userMessages) {
+    const matches = msg.matchAll(cmdPattern)
+    for (const m of matches) {
+      const name = (m[1] || m[2] || '').replace(/^\//, '')
+      if (name) invoked.add(name)
+    }
+  }
+
+  const ghosts = defined.filter(name => !invoked.has(name))
+  if (ghosts.length === 0) return null
+
+  const tokensSaved = ghosts.length * TOKENS_PER_COMMAND_DEF
+  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+
+  return {
+    title: 'REMOVE UNUSED SLASH COMMANDS',
+    explanation: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} in ~/.claude/commands/ never used: ${list}. Each adds ~${TOKENS_PER_COMMAND_DEF} tokens of definition per session.`,
+    impact: ghosts.length >= 10 ? 'medium' : 'low',
+    tokensSaved,
+    fix: {
+      type: 'command',
+      label: `Archive unused command${ghosts.length > 1 ? 's' : ''}:`,
+      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/commands/${name}.md ~/.claude/commands/.archived/`).join('\n'),
     },
   }
 }
@@ -591,6 +767,8 @@ function renderFinding(n: number, f: WasteFinding, costRate: number, W: number):
   return lines
 }
 
+const GRADE_COLORS: Record<HealthGrade, string> = { A: GREEN, B: GREEN, C: GOLD, D: ORANGE, F: '#F55B5B' }
+
 function renderOptimize(
   findings: WasteFinding[],
   costRate: number,
@@ -598,6 +776,8 @@ function renderOptimize(
   periodCost: number,
   sessionCount: number,
   callCount: number,
+  healthScore: number,
+  healthGrade: HealthGrade,
 ): string {
   const lines: string[] = []
   const W = 62
@@ -611,6 +791,7 @@ function renderOptimize(
     `${sessionCount} sessions`,
     `${callCount.toLocaleString()} calls`,
     chalk.hex(GOLD)(formatCost(periodCost)),
+    `Setup: ${chalk.bold.hex(GRADE_COLORS[healthGrade])(healthGrade)} ${chalk.dim(`(${healthScore}/100)`)}`,
   ].join(chalk.hex(DIM)('   ')))
   lines.push('')
 
@@ -628,9 +809,7 @@ function renderOptimize(
   lines.push(chalk.hex(GREEN)(`  Potential savings: ~${formatTokens(totalTokens)} tokens (~${formatCost(totalCost)}, ~${pct}% of spend)`))
   lines.push('')
 
-  const sorted = findings.sort((a, b) =>
-    (IMPACT_ORDER[b.impact] ?? 0) - (IMPACT_ORDER[a.impact] ?? 0) || b.tokensSaved - a.tokensSaved
-  )
+  const sorted = findings
 
   for (let i = 0; i < sorted.length; i++) {
     lines.push(...renderFinding(i + 1, sorted[i], costRate, W))
@@ -643,15 +822,33 @@ function renderOptimize(
   return lines.join('\n')
 }
 
+function computeHealth(findings: WasteFinding[]): { score: number; grade: HealthGrade } {
+  if (findings.length === 0) return { score: 100, grade: 'A' }
+
+  const impactWeight: Record<string, number> = { high: 15, medium: 7, low: 3 }
+  let penalty = 0
+  for (const f of findings) penalty += impactWeight[f.impact] ?? 0
+
+  const score = Math.max(0, 100 - Math.min(80, penalty))
+  const grade: HealthGrade = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 55 ? 'C' : score >= 30 ? 'D' : 'F'
+  return { score, grade }
+}
+
+function urgencyScore(f: WasteFinding): number {
+  const impactWeight: Record<string, number> = { high: 1, medium: 0.5, low: 0.2 }
+  const normalizedTokens = Math.min(1, f.tokensSaved / 500_000)
+  return (impactWeight[f.impact] ?? 0) * 0.7 + normalizedTokens * 0.3
+}
+
 export async function scanAndDetect(
   projects: ProjectSummary[],
   dateRange?: DateRange,
 ): Promise<OptimizeResult> {
   const costRate = computeInputCostRate(projects)
-  const { toolCalls, projectCwds, apiCalls } = await scanSessions(dateRange)
+  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
 
   const findings: WasteFinding[] = []
-  const detectors = [
+  const syncDetectors = [
     () => detectCacheBloat(apiCalls),
     () => detectLowReadEditRatio(toolCalls),
     () => detectJunkReads(toolCalls),
@@ -661,17 +858,25 @@ export async function scanAndDetect(
     () => detectBloatedClaudeMd(projectCwds),
     () => detectBashBloat(),
   ]
-
-  for (const detect of detectors) {
+  for (const detect of syncDetectors) {
     const finding = detect()
     if (finding) findings.push(finding)
   }
 
-  findings.sort((a, b) =>
-    (IMPACT_ORDER[b.impact] ?? 0) - (IMPACT_ORDER[a.impact] ?? 0) || b.tokensSaved - a.tokensSaved
-  )
+  const asyncDetectors = [
+    () => detectGhostAgents(toolCalls),
+    () => detectGhostSkills(toolCalls),
+    () => detectGhostCommands(userMessages),
+  ]
+  for (const detect of asyncDetectors) {
+    const finding = await detect()
+    if (finding) findings.push(finding)
+  }
 
-  return { findings, costRate }
+  findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
+
+  const { score, grade } = computeHealth(findings)
+  return { findings, costRate, healthScore: score, healthGrade: grade }
 }
 
 export async function runOptimize(
@@ -686,11 +891,11 @@ export async function runOptimize(
 
   process.stderr.write(chalk.dim('  Scanning sessions for waste patterns...\n'))
 
-  const { findings, costRate } = await scanAndDetect(projects, dateRange)
+  const { findings, costRate, healthScore, healthGrade } = await scanAndDetect(projects, dateRange)
   const sessions = projects.flatMap(p => p.sessions)
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const callCount = projects.reduce((s, p) => s + p.totalApiCalls, 0)
 
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount)
+  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade)
   console.log(output)
 }
