@@ -227,14 +227,13 @@ codeburn optimize --provider claude     # restrict to one provider
 
 - Files Claude re-reads across sessions (same content, same context, over and over)
 - Low Read:Edit ratio (editing without reading leads to retries and wasted tokens)
-- Projects missing a `.claudeignore` (Claude wanders into `node_modules`, `.git`, build dirs)
 - Wasted bash output (uncapped `BASH_MAX_OUTPUT_LENGTH`, trailing noise)
 - Unused MCP servers still paying their tool-schema overhead every session
 - Ghost agents, skills, and slash commands defined in `~/.claude/` but never invoked
 - Bloated `CLAUDE.md` files (with `@-import` expansion counted)
 - Cache creation overhead and junk directory reads
 
-Each finding shows the estimated token and dollar savings plus a ready-to-paste fix: a `CLAUDE.md` line, a `.claudeignore` template, an environment variable, or a `mv` command to archive unused items. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A-F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
+Each finding shows the estimated token and dollar savings plus a ready-to-paste fix: a `CLAUDE.md` line, an environment variable, or a `mv` command to archive unused items. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A-F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
 
 You can also open it inline from the dashboard: press `o` when a finding count appears in the status bar, `b` to return.
 
