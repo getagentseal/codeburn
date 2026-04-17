@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
+import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -65,10 +66,11 @@ function sanitizeProject(cwd: string): string {
 }
 
 async function readFirstLine(filePath: string): Promise<CodexEntry | null> {
+  const content = await readSessionFile(filePath)
+  if (content === null) return null
+  const line = content.split('\n')[0]
+  if (!line?.trim()) return null
   try {
-    const content = await readFile(filePath, 'utf-8')
-    const line = content.split('\n')[0]
-    if (!line?.trim()) return null
     return JSON.parse(line) as CodexEntry
   } catch {
     return null
@@ -139,13 +141,8 @@ function resolveModel(info: CodexEntry['payload'], sessionModel?: string): strin
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      let content: string
-      try {
-        content = await readFile(source.path, 'utf-8')
-      } catch {
-        return
-      }
-
+      const content = await readSessionFile(source.path)
+      if (content === null) return
       const lines = content.split('\n').filter(l => l.trim())
       let sessionModel: string | undefined
       let sessionId = ''
