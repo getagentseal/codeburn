@@ -1,7 +1,9 @@
-import { readdir, readFile } from 'fs/promises'
+import { readdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
+
+import { readSessionFile } from './fs-utils.js'
 
 const CHARS_PER_TOKEN = 4
 const SYSTEM_BASE_TOKENS = 10400
@@ -23,9 +25,9 @@ function estimateTokens(text: string): number {
 
 async function readConfigFile(path: string): Promise<Record<string, unknown> | null> {
   if (!existsSync(path)) return null
-  try {
-    return JSON.parse(await readFile(path, 'utf-8'))
-  } catch { return null }
+  const raw = await readSessionFile(path)
+  if (raw === null) return null
+  try { return JSON.parse(raw) } catch { return null }
 }
 
 async function countMcpTools(projectPath?: string): Promise<number> {
@@ -91,10 +93,9 @@ async function scanMemoryFiles(projectPath?: string): Promise<Array<{ name: stri
 
   for (const { path, name } of paths) {
     if (!existsSync(path)) continue
-    try {
-      const content = await readFile(path, 'utf-8')
-      files.push({ name, tokens: estimateTokens(content) })
-    } catch { continue }
+    const content = await readSessionFile(path)
+    if (content === null) continue
+    files.push({ name, tokens: estimateTokens(content) })
   }
 
   return files
@@ -130,17 +131,19 @@ export async function estimateBudgetsByProject(projectPaths: Map<string, string>
 }
 
 export async function discoverProjectCwd(sessionDir: string): Promise<string | null> {
+  let files: string[]
   try {
-    const files = (await readdir(sessionDir)).filter(f => f.endsWith('.jsonl'))
-    if (files.length === 0) return null
-    const content = await readFile(join(sessionDir, files[0]), 'utf-8')
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue
-      try {
-        const entry = JSON.parse(line)
-        if (entry.cwd && typeof entry.cwd === 'string') return entry.cwd
-      } catch { continue }
-    }
+    files = (await readdir(sessionDir)).filter(f => f.endsWith('.jsonl'))
   } catch { return null }
+  if (files.length === 0) return null
+  const content = await readSessionFile(join(sessionDir, files[0]))
+  if (content === null) return null
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const entry = JSON.parse(line)
+      if (entry.cwd && typeof entry.cwd === 'string') return entry.cwd
+    } catch { continue }
+  }
   return null
 }
