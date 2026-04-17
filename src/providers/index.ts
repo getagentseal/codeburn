@@ -26,7 +26,17 @@ export async function getAllProviders(): Promise<Provider[]> {
 
 export const providers = coreProviders
 
+const discoveryCache = new Map<string, SessionSource[]>()
+
+export function clearDiscoveryCache(): void {
+  discoveryCache.clear()
+}
+
 export async function discoverAllSessions(providerFilter?: string): Promise<SessionSource[]> {
+  const cacheKey = providerFilter ?? 'all'
+  const cached = discoveryCache.get(cacheKey)
+  if (cached) return cached
+
   const allProviders = await getAllProviders()
   const filtered = providerFilter && providerFilter !== 'all'
     ? allProviders.filter(p => p.name === providerFilter)
@@ -36,6 +46,7 @@ export async function discoverAllSessions(providerFilter?: string): Promise<Sess
     const sessions = await provider.discoverSessions()
     all.push(...sessions)
   }
+  discoveryCache.set(cacheKey, all)
   return all
 }
 

@@ -6,7 +6,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
-import { getAllProviders } from './providers/index.js'
+import { getAllProviders, clearDiscoveryCache } from './providers/index.js'
 
 type Period = 'today' | 'week' | '30days' | 'month'
 
@@ -556,8 +556,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   const reloadData = useCallback(async (p: Period, prov: string) => {
     setLoading(true)
+    clearDiscoveryCache()
     const range = getDateRange(p)
-    const data = await parseAllSessions(range, prov)
+    const data = await parseAllSessions({ dateRange: range, providerFilter: prov, extractBash: true })
     setProjects(data)
     setLoading(false)
   }, [])
@@ -648,7 +649,7 @@ function StaticDashboard({ projects, period, activeProvider }: { projects: Proje
 export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number): Promise<void> {
   await loadPricing()
   const range = getDateRange(period)
-  const projects = await parseAllSessions(range, provider)
+  const projects = await parseAllSessions({ dateRange: range, providerFilter: provider, extractBash: true })
 
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
 

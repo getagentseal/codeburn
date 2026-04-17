@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { providers, getAllProviders } from '../src/providers/index.js'
+import { providers, getAllProviders, discoverAllSessions, clearDiscoveryCache } from '../src/providers/index.js'
 
 describe('provider registry', () => {
   it('has core providers registered synchronously', () => {
@@ -48,5 +48,31 @@ describe('provider registry', () => {
     expect(cursor.modelDisplayName('claude-4.5-opus-high-thinking')).toBe('Opus 4.5 (Thinking)')
     expect(cursor.modelDisplayName('grok-code-fast-1')).toBe('Grok Code Fast')
     expect(cursor.modelDisplayName('unknown-model')).toBe('unknown-model')
+  })
+})
+
+describe('discovery cache', () => {
+  it('returns same reference on second call', async () => {
+    clearDiscoveryCache()
+    const first = await discoverAllSessions()
+    const second = await discoverAllSessions()
+    expect(second).toBe(first)
+  })
+
+  it('clearDiscoveryCache resets the cache', async () => {
+    clearDiscoveryCache()
+    const first = await discoverAllSessions()
+    clearDiscoveryCache()
+    const third = await discoverAllSessions()
+    expect(third).not.toBe(first)
+    expect(third).toEqual(first)
+  })
+
+  it('caches different filters independently', async () => {
+    clearDiscoveryCache()
+    const all = await discoverAllSessions()
+    const claude = await discoverAllSessions('claude')
+    expect(claude).not.toBe(all)
+    expect(claude.length).toBeLessThanOrEqual(all.length)
   })
 })

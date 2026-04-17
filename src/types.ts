@@ -133,6 +133,12 @@ export type DateRange = {
   end: Date
 }
 
+export type ParseOptions = {
+  dateRange?: DateRange
+  providerFilter?: string
+  extractBash?: boolean
+}
+
 export const CATEGORY_LABELS: Record<TaskCategory, string> = {
   coding: 'Coding',
   debugging: 'Debugging',

@@ -1,5 +1,7 @@
-import { readdir, readFile } from 'fs/promises'
+import { createReadStream } from 'fs'
+import { readdir } from 'fs/promises'
 import { basename, join } from 'path'
+import { createInterface } from 'readline'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import type { ParsedProviderCall } from './providers/types.js'
@@ -10,6 +12,7 @@ import type {
   DateRange,
   JournalEntry,
   ParsedApiCall,
+  ParseOptions,
   ParsedTurn,
   ProjectSummary,
   SessionSummary,
@@ -73,7 +76,7 @@ function getMessageId(entry: JournalEntry): string | null {
   return msg?.id ?? null
 }
 
-function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
+function parseApiCall(entry: JournalEntry, extractBash = true): ParsedApiCall | null {
   if (entry.type !== 'assistant') return null
   const msg = entry.message as AssistantMessageContent | undefined
   if (!msg?.usage || !msg?.model) return null
@@ -100,7 +103,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     usage.speed ?? 'standard',
   )
 
-  const bashCmds = extractBashCommandsFromContent(msg.content ?? [])
+  const bashCmds = extractBash ? extractBashCommandsFromContent(msg.content ?? []) : []
 
   return {
     provider: 'claude',
@@ -118,7 +121,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   }
 }
 
-function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): ParsedTurn[] {
+function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>, extractBash = true): ParsedTurn[] {
   const turns: ParsedTurn[] = []
   let currentUserMessage = ''
   let currentCalls: ParsedApiCall[] = []
@@ -146,7 +149,7 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
       const msgId = getMessageId(entry)
       if (msgId && seenMsgIds.has(msgId)) continue
       if (msgId) seenMsgIds.add(msgId)
-      const call = parseApiCall(entry)
+      const call = parseApiCall(entry, extractBash)
       if (call) currentCalls.push(call)
     }
   }
@@ -259,40 +262,54 @@ function buildSessionSummary(
   }
 }
 
+export function extractTimestampFromLine(line: string): Date | null {
+  const key = '"timestamp":"'
+  const idx = line.indexOf(key)
+  if (idx === -1) return null
+  const start = idx + key.length
+  const end = line.indexOf('"', start)
+  if (end === -1) return null
+  const d = new Date(line.slice(start, end))
+  return isNaN(d.getTime()) ? null : d
+}
+
 async function parseSessionFile(
   filePath: string,
   project: string,
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
+  extractBash = true,
 ): Promise<SessionSummary | null> {
-  let content: string
+  let rl
   try {
-    content = await readFile(filePath, 'utf-8')
+    rl = createInterface({ input: createReadStream(filePath), crlfDelay: Infinity })
   } catch {
     return null
   }
-  const lines = content.split('\n').filter(l => l.trim())
-  const entries: JournalEntry[] = []
 
-  for (const line of lines) {
-    const entry = parseJsonlLine(line)
-    if (entry) entries.push(entry)
+  const entries: JournalEntry[] = []
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue
+      if (dateRange) {
+        const ts = extractTimestampFromLine(line)
+        if (ts !== null && (ts < dateRange.start || ts > dateRange.end)) continue
+      }
+      const entry = parseJsonlLine(line)
+      if (!entry) continue
+      if (dateRange && !entry.timestamp && entry.type !== 'user') continue
+      entries.push(entry)
+    }
+  } catch {
+    return null
+  } finally {
+    rl.close()
   }
 
   if (entries.length === 0) return null
 
-  let filteredEntries = entries
-  if (dateRange) {
-    filteredEntries = entries.filter(e => {
-      if (!e.timestamp) return e.type === 'user'
-      const ts = new Date(e.timestamp)
-      return ts >= dateRange.start && ts <= dateRange.end
-    })
-    if (filteredEntries.length === 0) return null
-  }
-
   const sessionId = basename(filePath, '.jsonl')
-  const turns = groupIntoTurns(filteredEntries, seenMsgIds)
+  const turns = groupIntoTurns(entries, seenMsgIds, extractBash)
   const classified = turns.map(classifyTurn)
 
   return buildSessionSummary(sessionId, project, classified)
@@ -314,14 +331,14 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return jsonlFiles
 }
 
-async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange): Promise<ProjectSummary[]> {
+async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange, extractBash = true): Promise<ProjectSummary[]> {
   const projectMap = new Map<string, SessionSummary[]>()
 
   for (const { path: dirPath, name: dirName } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
 
     for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange)
+      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, extractBash)
       if (session && session.apiCalls > 0) {
         const existing = projectMap.get(dirName) ?? []
         existing.push(session)
@@ -445,9 +462,9 @@ const CACHE_TTL_MS = 60_000
 const MAX_CACHE_ENTRIES = 10
 const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
 
-function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
+function cacheKey(dateRange?: DateRange, providerFilter?: string, extractBash?: boolean): string {
   const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
-  return `${s}:${providerFilter ?? 'all'}`
+  return `${s}:${providerFilter ?? 'all'}:${extractBash === false ? 'nobash' : 'bash'}`
 }
 
 function cachePut(key: string, data: ProjectSummary[]) {
@@ -462,20 +479,35 @@ function cachePut(key: string, data: ProjectSummary[]) {
   sessionCache.set(key, { data, ts: now })
 }
 
-export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
-  const key = cacheKey(dateRange, providerFilter)
+export async function parseAllSessions(dateRangeOrOpts?: DateRange | ParseOptions, providerFilter?: string): Promise<ProjectSummary[]> {
+  let dateRange: DateRange | undefined
+  let pf: string | undefined
+  let extractBash = true
+
+  if (dateRangeOrOpts && 'start' in dateRangeOrOpts) {
+    dateRange = dateRangeOrOpts
+    pf = providerFilter
+  } else if (dateRangeOrOpts) {
+    dateRange = dateRangeOrOpts.dateRange
+    pf = dateRangeOrOpts.providerFilter
+    extractBash = dateRangeOrOpts.extractBash !== false
+  } else {
+    pf = providerFilter
+  }
+
+  const key = cacheKey(dateRange, pf, extractBash)
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
 
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
-  const allSources = await discoverAllSessions(providerFilter)
+  const allSources = await discoverAllSessions(pf)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
   const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange)
+  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange, extractBash)
 
   const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
   for (const source of nonClaudeSources) {
@@ -505,4 +537,36 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)
   cachePut(key, result)
   return result
+}
+
+export function filterProjectsByDateRange(
+  projects: ProjectSummary[],
+  range: DateRange,
+): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+
+  for (const project of projects) {
+    const filteredSessions: SessionSummary[] = []
+
+    for (const session of project.sessions) {
+      const filteredTurns = session.turns.filter(turn => {
+        if (!turn.timestamp) return true
+        const ts = new Date(turn.timestamp)
+        return ts >= range.start && ts <= range.end
+      })
+      if (filteredTurns.length === 0) continue
+      filteredSessions.push(buildSessionSummary(session.sessionId, session.project, filteredTurns))
+    }
+
+    if (filteredSessions.length === 0) continue
+    filtered.push({
+      project: project.project,
+      projectPath: project.projectPath,
+      sessions: filteredSessions,
+      totalCostUSD: filteredSessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalApiCalls: filteredSessions.reduce((s, sess) => s + sess.apiCalls, 0),
+    })
+  }
+
+  return filtered
 }

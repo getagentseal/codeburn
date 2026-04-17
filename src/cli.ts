@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, filterProjectsByDateRange } from './parser.js'
 import { renderStatusBar } from './format.js'
 import { installMenubar, renderMenubarFormat, type PeriodData, type ProviderCost, uninstallMenubar } from './menubar.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
@@ -62,10 +62,6 @@ const program = new Command()
   .description('See where your AI coding tokens go - by task, tool, model, and project')
   .version(version)
 
-program.hook('preAction', async () => {
-  await loadCurrency()
-})
-
 program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
@@ -73,6 +69,7 @@ program
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
+    await loadCurrency()
     await renderDashboard(toPeriod(opts.period), opts.provider, opts.refresh)
   })
 
@@ -121,17 +118,26 @@ program
   .option('--format <format>', 'Output format: terminal, menubar, json', 'terminal')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .action(async (opts) => {
+    await loadCurrency()
     await loadPricing()
     const pf = opts.provider
+    const monthRange = getDateRange('month').range
+    const monthProjects = await parseAllSessions({ dateRange: monthRange, providerFilter: pf, extractBash: false })
+
     if (opts.format === 'menubar') {
       const todayRange = getDateRange('today').range
-      const todayData = buildPeriodData('Today', await parseAllSessions(todayRange, pf))
-      const weekData = buildPeriodData('7 Days', await parseAllSessions(getDateRange('week').range, pf))
-      const monthData = buildPeriodData('Month', await parseAllSessions(getDateRange('month').range, pf))
+      const todayFiltered = filterProjectsByDateRange(monthProjects, todayRange)
+      const todayData = buildPeriodData('Today', todayFiltered)
+      const weekData = buildPeriodData('7 Days', filterProjectsByDateRange(monthProjects, getDateRange('week').range))
+      const monthData = buildPeriodData('Month', monthProjects)
       const todayProviders: ProviderCost[] = []
       for (const p of await getAllProviders()) {
-        const data = await parseAllSessions(todayRange, p.name)
-        const cost = data.reduce((s, proj) => s + proj.totalCostUSD, 0)
+        const cost = todayFiltered
+          .flatMap(proj => proj.sessions)
+          .flatMap(s => s.turns)
+          .flatMap(t => t.assistantCalls)
+          .filter(c => c.provider === p.name)
+          .reduce((s, c) => s + c.costUSD, 0)
         if (cost > 0) todayProviders.push({ name: p.displayName, cost })
       }
       console.log(renderMenubarFormat(todayData, weekData, monthData, todayProviders))
@@ -139,8 +145,8 @@ program
     }
 
     if (opts.format === 'json') {
-      const todayData = buildPeriodData('today', await parseAllSessions(getDateRange('today').range, pf))
-      const monthData = buildPeriodData('month', await parseAllSessions(getDateRange('month').range, pf))
+      const todayData = buildPeriodData('today', filterProjectsByDateRange(monthProjects, getDateRange('today').range))
+      const monthData = buildPeriodData('month', monthProjects)
       const { code, rate } = getCurrency()
       console.log(JSON.stringify({
         currency: code,
@@ -150,7 +156,6 @@ program
       return
     }
 
-    const monthProjects = await parseAllSessions(getDateRange('month').range, pf)
     console.log(renderStatusBar(monthProjects))
   })
 
@@ -160,6 +165,7 @@ program
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
+    await loadCurrency()
     await renderDashboard('today', opts.provider, opts.refresh)
   })
 
@@ -169,6 +175,7 @@ program
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
+    await loadCurrency()
     await renderDashboard('month', opts.provider, opts.refresh)
   })
 
@@ -179,12 +186,14 @@ program
   .option('-o, --output <path>', 'Output file path')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .action(async (opts) => {
+    await loadCurrency()
     await loadPricing()
     const pf = opts.provider
+    const allData = await parseAllSessions({ dateRange: getDateRange('30days').range, providerFilter: pf, extractBash: true })
     const periods: PeriodExport[] = [
-      { label: 'Today', projects: await parseAllSessions(getDateRange('today').range, pf) },
-      { label: '7 Days', projects: await parseAllSessions(getDateRange('week').range, pf) },
-      { label: '30 Days', projects: await parseAllSessions(getDateRange('30days').range, pf) },
+      { label: 'Today', projects: filterProjectsByDateRange(allData, getDateRange('today').range) },
+      { label: '7 Days', projects: filterProjectsByDateRange(allData, getDateRange('week').range) },
+      { label: '30 Days', projects: allData },
     ]
 
     if (periods.every(p => p.projects.length === 0)) {
