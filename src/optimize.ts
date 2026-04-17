@@ -1,9 +1,10 @@
 import chalk from 'chalk'
-import { readdir, readFile, stat } from 'fs/promises'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { readdir, stat } from 'fs/promises'
+import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
+import { readSessionFile, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
@@ -227,10 +228,8 @@ export async function scanJsonlFile(
   dateRange: DateRange | undefined,
   recentCutoffMs = Date.now() - RECENT_WINDOW_MS,
 ): Promise<ScanFileResult> {
-  let content: string
-  try {
-    content = await readFile(filePath, 'utf-8')
-  } catch { return { calls: [], cwds: [], apiCalls: [], userMessages: [] } }
+  const content = await readSessionFile(filePath)
+  if (content === null) return { calls: [], cwds: [], apiCalls: [], userMessages: [] }
 
   const calls: ToolCall[] = []
   const cwds: string[] = []
@@ -328,7 +327,9 @@ async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
 // ============================================================================
 
 function readJsonFile(path: string): Record<string, unknown> | null {
-  try { return JSON.parse(readFileSync(path, 'utf-8')) } catch { return null }
+  const raw = readSessionFileSync(path)
+  if (raw === null) return null
+  try { return JSON.parse(raw) } catch { return null }
 }
 
 function shortHomePath(absPath: string): string {
@@ -571,8 +572,8 @@ export function detectMissingClaudeignore(projectCwds: Set<string>): WasteFindin
 function expandImports(filePath: string, seen: Set<string>, depth: number): { totalLines: number; importedFiles: number } {
   if (depth > MAX_IMPORT_DEPTH || seen.has(filePath)) return { totalLines: 0, importedFiles: 0 }
   seen.add(filePath)
-  let content: string
-  try { content = readFileSync(filePath, 'utf-8') } catch { return { totalLines: 0, importedFiles: 0 } }
+  const content = readSessionFileSync(filePath)
+  if (content === null) return { totalLines: 0, importedFiles: 0 }
 
   let totalLines = content.split('\n').length
   let importedFiles = 0
@@ -865,11 +866,10 @@ function readShellProfileLimit(): number | null {
   for (const profile of SHELL_PROFILES) {
     const path = join(homedir(), profile)
     if (!existsSync(path)) continue
-    try {
-      const content = readFileSync(path, 'utf-8')
-      const match = content.match(/^\s*export\s+BASH_MAX_OUTPUT_LENGTH\s*=\s*['"]?(\d+)['"]?/m)
-      if (match) return parseInt(match[1], 10)
-    } catch { continue }
+    const content = readSessionFileSync(path)
+    if (content === null) continue
+    const match = content.match(/^\s*export\s+BASH_MAX_OUTPUT_LENGTH\s*=\s*['"]?(\d+)['"]?/m)
+    if (match) return parseInt(match[1], 10)
   }
   return null
 }
