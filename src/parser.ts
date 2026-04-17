@@ -21,6 +21,8 @@ import type {
 } from './types.js'
 import { classifyTurn, BASH_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
+import { openCache, getCachedSummary, putCachedSummary, getFileFingerprint } from './session-cache.js'
+import type { SessionCacheDb } from './session-cache.js'
 
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
@@ -273,13 +275,24 @@ export function extractTimestampFromLine(line: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-async function parseSessionFile(
+export async function parseSessionFile(
   filePath: string,
   project: string,
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
   extractBash = true,
+  db: SessionCacheDb | null = null,
 ): Promise<SessionSummary | null> {
+  // R4, R5: cache lookup only when db available and no date filter (avoid caching partial results)
+  let fingerprint: { mtimeMs: number; size: number } | null = null
+  if (db && !dateRange) {
+    fingerprint = getFileFingerprint(filePath)
+    if (fingerprint) {
+      const cached = getCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size)
+      if (cached) return cached
+    }
+  }
+
   let rl
   try {
     rl = createInterface({ input: createReadStream(filePath), crlfDelay: Infinity })
@@ -312,7 +325,19 @@ async function parseSessionFile(
   const turns = groupIntoTurns(entries, seenMsgIds, extractBash)
   const classified = turns.map(classifyTurn)
 
-  return buildSessionSummary(sessionId, project, classified)
+  // R7, R9: zero userMessage after classifyTurn (which reads it), before cache write
+  for (const turn of classified) {
+    turn.userMessage = ''
+  }
+
+  const summary = buildSessionSummary(sessionId, project, classified)
+
+  // R4: write to cache after zeroing
+  if (db && fingerprint) {
+    putCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size, summary)
+  }
+
+  return summary
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -331,14 +356,14 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return jsonlFiles
 }
 
-async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange, extractBash = true): Promise<ProjectSummary[]> {
+async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange, extractBash = true, db: SessionCacheDb | null = null): Promise<ProjectSummary[]> {
   const projectMap = new Map<string, SessionSummary[]>()
 
   for (const { path: dirPath, name: dirName } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
 
     for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, extractBash)
+      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, extractBash, db)
       if (session && session.apiCalls > 0) {
         const existing = projectMap.get(dirName) ?? []
         existing.push(session)
@@ -422,6 +447,7 @@ async function parseProviderSources(
 
       const turn = providerCallToTurn(call)
       const classified = classifyTurn(turn)
+      classified.userMessage = ''  // R8, R9: zero after classifyTurn, before storing
       const key = `${providerName}:${call.sessionId}:${source.project}`
 
       const existing = sessionMap.get(key)
@@ -503,11 +529,14 @@ export async function parseAllSessions(dateRangeOrOpts?: DateRange | ParseOption
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(pf)
 
+  // R5: open cache once per parseAllSessions invocation
+  const db = await openCache()
+
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
   const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange, extractBash)
+  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange, extractBash, db)
 
   const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
   for (const source of nonClaudeSources) {

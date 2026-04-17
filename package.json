@@ -32,13 +32,11 @@
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",
   "dependencies": {
+    "better-sqlite3": "^12.0.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^7.0.0",
     "react": "^19.2.5"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^12.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
