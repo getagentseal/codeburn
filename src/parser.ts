@@ -283,15 +283,22 @@ export async function parseSessionFile(
   extractBash = true,
   db: SessionCacheDb | null = null,
 ): Promise<SessionSummary | null> {
-  // R4, R5: cache lookup only when db available and no date filter (avoid caching partial results)
+  // R4, R5: when db is available, cache full sessions (no date filter) and apply range after.
+  // This ensures the same cached session can serve any dateRange query.
   let fingerprint: { mtimeMs: number; size: number } | null = null
-  if (db && !dateRange) {
+  if (db) {
     fingerprint = getFileFingerprint(filePath)
     if (fingerprint) {
       const cached = getCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size)
-      if (cached) return cached
+      if (cached) {
+        return dateRange ? filterSessionByDateRange(cached, dateRange) : cached
+      }
     }
   }
+
+  // When using cache: parse full session (no date filter) so cached result serves all ranges.
+  // When no cache (db=null): apply date filter during parse for Phase 1 behavior (AC7).
+  const parseRange = db ? undefined : dateRange
 
   let rl
   try {
@@ -304,13 +311,13 @@ export async function parseSessionFile(
   try {
     for await (const line of rl) {
       if (!line.trim()) continue
-      if (dateRange) {
+      if (parseRange) {
         const ts = extractTimestampFromLine(line)
-        if (ts !== null && (ts < dateRange.start || ts > dateRange.end)) continue
+        if (ts !== null && (ts < parseRange.start || ts > parseRange.end)) continue
       }
       const entry = parseJsonlLine(line)
       if (!entry) continue
-      if (dateRange && !entry.timestamp && entry.type !== 'user') continue
+      if (parseRange && !entry.timestamp && entry.type !== 'user') continue
       entries.push(entry)
     }
   } catch {
@@ -332,12 +339,22 @@ export async function parseSessionFile(
 
   const summary = buildSessionSummary(sessionId, project, classified)
 
-  // R4: write to cache after zeroing
+  // R4: write full session to cache before applying any date filter
   if (db && fingerprint) {
     putCachedSummary(db, filePath, fingerprint.mtimeMs, fingerprint.size, summary)
   }
 
-  return summary
+  return dateRange ? filterSessionByDateRange(summary, dateRange) : summary
+}
+
+function filterSessionByDateRange(session: SessionSummary, range: DateRange): SessionSummary | null {
+  const filteredTurns = session.turns.filter(turn => {
+    if (!turn.timestamp) return true
+    const ts = new Date(turn.timestamp)
+    return ts >= range.start && ts <= range.end
+  })
+  if (filteredTurns.length === 0) return null
+  return buildSessionSummary(session.sessionId, session.project, filteredTurns)
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
