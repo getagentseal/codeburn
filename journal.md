@@ -105,6 +105,15 @@ The purpose of this Journal is to give a well detailed, but still readble, feedb
 
 ---
 
+### 2026-04-17 -- create-pr
+
+**Action**: Generated `gh pr create` command for `fix/performance-optimization`. Fixed H1 (menubar provider cost over-count: was using `proj.totalCostUSD` for all providers, now sums per-provider `assistantCalls`) and M2 (duplicate `filterProjectsByDateRange` call) before committing. Two commits: implementation+tests, then docs+journal. All 56 tests pass.
+**Value**: Caught uncommitted changes before PR creation. Fixed H1 correctness bug. Produced filled PR description with before/after performance table and conventional commit title.
+**Limitations**: Branch must be pushed before `gh pr create` runs (`git push -u origin fix/performance-optimization`).
+**Self-correction**: N/A.
+
+---
+
 ### 2026-04-17 -- implement (performance-optimization tasks)
 
 **Action**: Implemented all 10 tasks from the performance-optimization task breakdown across 5 phases.
