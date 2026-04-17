@@ -120,5 +120,40 @@ The purpose of this Journal is to give a well detailed, but still readble, feedb
 **Value**: All 8 spec requirements (R1-R8) implemented. Key changes: discovery caching in `providers/index.ts` (T1), `loadCurrency()` moved out of preAction hook (T2), `filterProjectsByDateRange` reusing `buildSessionSummary` for correct aggregates (T3a), widen-then-filter in status/export commands (T3b), JSONL streaming via readline (T4), `extractTimestampFromLine` date pre-filter before JSON.parse (T5a), `ParseOptions` with conditional bash extraction threaded through all call sites (T6a/T6b). Wrote 16 new tests across 3 files covering filter logic, timestamp extraction, and discovery cache. All 56 tests pass.
 **Limitations**: Did not measure actual wall-clock improvement (spec targets: `status --format json` under 400ms, RSS under 100MB) -- would require before/after benchmarking on a machine with real session data at scale.
 **Self-correction**: N/A.
+---
+
+## 2026-04-17 -- generate-spec (performance-optimization-v2)
+
+**Action**: Multi-agent spec generation for Phase 2 performance optimization. Tier 2 (Feature) classification. 2-round interview (9 questions, 7 binding decisions). Researcher explored codebase. 2 parallel spec writers (simplicity lens + defensive lens). Codebase-blind evaluator scored both (57/90 vs 72/90). Consolidator merged into `docs/specs/performance-optimization-v2/` (6 files, 14 requirements, 20 ACs, 10 constraints, 9 design decisions).
+**Value**: The multi-agent divergence caught critical gaps. Writer A (simplicity) had zero corruption handling, zero concurrent access protection, and no schema upgrade path. Writer B (defensive) caught all three but deviated from the interview measurement method (warmup-2/runs-10 instead of median-of-3). The evaluator identified 6 gaps both specs missed (cache observability, size bounds, directory creation, build-failure policy, baseline documentation, code-path constraint). The consolidated spec addresses all of them. The codebase research revealed `cursor-cache.ts` as an existing precedent for the mtime+size pattern, grounding the design decisions in existing code rather than invention.
+**Limitations**: Consolidator missed 2 of 6 output files (constraints.md, traceability.md); had to be written manually. Total agent cost was high (5 agents, ~170K tokens across all).
+**Self-correction**: Evaluator caught Spec B's measurement method deviation from interview decision D-PERF-1. Consolidated spec corrected to median-of-3. Evaluator also flagged Spec B's AC16 ("RSS drops after GC") as untestable; it was dropped from the final spec.
+
+---
+
+## 2026-04-17 -- spec-evaluator (performance-optimization-v2 review)
+
+**Action**: Codebase-blind evaluator reviewed the consolidated spec at `docs/specs/performance-optimization-v2/`. Scored 63/100 across 10 dimensions. Found 6 blocking issues, 8 non-blocking. Applied all fixes, bumping spec to v1.1.0.
+**Value**: Caught AC20 misassignment (mapped to R6 but tested perf ratio -- traceability broken), R5 with zero ACs, all 4 performance ACs non-deterministic ("Phase 1 baseline machine" undefined), D-BENCH-1 with no backing requirement, C7 (WAL/concurrent access) specifying 3 behaviors with zero tests, and a contradiction between "required dependency" and "graceful degradation." Fixes added R15 (benchmark suite), 8 new ACs (AC8, AC19-AC25), C10 (dep model clarification), and concrete benchmark thresholds. Also caught row-level data corruption gap (malformed summary_json in valid db) that both original writers missed.
+**Limitations**: Evaluator is codebase-blind by design, so it could not verify that the spec's function signatures match the existing codebase patterns. The consolidator agent also missed 2 of 6 output files (constraints.md, traceability.md) which had to be written manually.
+**Self-correction**: The evaluator caught the consolidator's traceability error (AC20 misassignment). The generate-spec pipeline produced a 63/100 spec on first pass; the evaluation+fix cycle raised it to address all blocking issues. This is the designed self-correction loop working as intended.
+
+---
+
+## 2026-04-17 -- generate-tasks (performance-optimization-v2)
+
+**Action**: Generated `docs/specs/performance-optimization-v2/tasks.md` from the Phase 2 spec (15 requirements, 25 ACs, 11 constraints).
+**Value**: Decomposed into 10 tasks across 5 groups (3 parallel groups, 2 sequential). File conflict matrix identified `src/parser.ts` as the serialization bottleneck (T3, T4, T5 must be sequential). T1 (cache module) and T7 (benchmark fixtures) are fully parallel with no shared files. Max parallel agents: 3. Total estimated effort: 18h. All 15 requirements traced; no orphan tasks. All 11 constraints mapped to covering tasks.
+**Limitations**: None.
+**Self-correction**: N/A.
+
+---
+
+## 2026-04-17 -- implement (performance-optimization-v2)
+
+**Action**: Implemented all 10 tasks from the Phase 2 task breakdown (Epic + Parallel tier). Created `src/session-cache.ts`, integrated cache into `src/parser.ts`, zeroed `userMessage` in both parse paths, added 5 benchmark JSONL fixtures (510 lines), `vitest.config.ts` to exclude bench files, and 18 new tests across 2 new test files. Opened PR gosswi/codeburn#72.
+**Value**: All 15 requirements implemented. Notable design decision during implementation: cache is keyed by `file_path + mtime_ms + file_size` only (no dateRange). Initial implementation skipped cache when `dateRange` was set to avoid caching partial results, but this caused 0 cache hits for the `status` command (which always passes `dateRange`). Fix: always cache the full unfiltered session, apply dateRange filter after cache read. This allows any dateRange query to benefit from warm cache. Warm cache result: `status --format json` 370ms median (target <400ms), RSS ~86MB (target <100MB), 74/74 tests pass.
+**Limitations**: `better-sqlite3` was in `optionalDependencies` in `package.json` but C10 required `dependencies` -- caught during spec binding, fixed before first commit.
+**Self-correction**: The `!dateRange` cache guard was a correctness-motivated design choice that made the performance target unreachable. Diagnosed during T10 verification (0 cache hits observed via DEBUG logging), root cause traced to how `status` calls `parseAllSessions`, fixed by restructuring to cache-full-then-filter.
 
 ---
