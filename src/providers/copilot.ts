@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
+import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -85,13 +86,8 @@ function parseCwd(yaml: string): string | null {
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      let content: string
-      try {
-        content = await readFile(source.path, 'utf-8')
-      } catch {
-        return
-      }
-
+      const content = await readSessionFile(source.path)
+      if (content === null) return
       const sessionId = basename(dirname(source.path))
       const lines = content.split('\n').filter(l => l.trim())
       let currentModel = ''
@@ -177,11 +173,11 @@ async function discoverSessionsInDir(sessionStateDir: string): Promise<SessionSo
     if (!s?.isFile()) continue
 
     let project = sessionId
-    try {
-      const yaml = await readFile(join(sessionStateDir, sessionId, 'workspace.yaml'), 'utf-8')
+    const yaml = await readSessionFile(join(sessionStateDir, sessionId, 'workspace.yaml'))
+    if (yaml !== null) {
       const cwd = parseCwd(yaml)
       if (cwd) project = basename(cwd)
-    } catch {}
+    }
 
     sources.push({ path: eventsPath, project, provider: 'copilot' })
   }
