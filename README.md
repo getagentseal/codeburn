@@ -166,6 +166,22 @@ The currency setting applies everywhere: dashboard, status bar, menu bar widget,
 
 The menu bar widget includes a currency picker with 17 common currencies. For any currency not listed, use the CLI command above.
 
+## Plans (subscription tracking)
+
+If you're on Claude Pro, Claude Max, or Cursor Pro, set your plan so the dashboard shows subscription-relative usage:
+
+```bash
+codeburn plan set claude-max                                  # $200/month
+codeburn plan set claude-pro                                  # $20/month
+codeburn plan set cursor-pro                                  # $20/month
+codeburn plan set custom --monthly-usd 150 --provider claude # custom
+codeburn plan set none                                        # disable plan view
+codeburn plan                                                 # show current
+codeburn plan reset                                           # remove plan config
+```
+
+The progress bar shows API-equivalent cost vs subscription price. Presets use publicly stated plan prices (as of April 2026); they do not model exact token allowances, because vendors do not publish precise consumer-plan limits.
+
 ## Menu Bar
 
 <img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/menubar-0.8.0.png" alt="CodeBurn macOS menubar app" width="420" />

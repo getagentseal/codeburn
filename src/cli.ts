@@ -15,7 +15,9 @@ import { parseDateRangeFlags } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
-import { readConfig, saveConfig, getConfigFilePath } from './config.js'
+import { clearPlan, readConfig, readPlan, saveConfig, savePlan, getConfigFilePath } from './config.js'
+import { clampResetDay, getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
+import { getPresetPlan, isPlanId, isPlanProvider, planDisplayName } from './plans.js'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -84,11 +86,50 @@ function collect(val: string, acc: string[]): string[] {
   return acc
 }
 
+function parseNumber(value: string): number {
+  return Number(value)
+}
+
+function parseInteger(value: string): number {
+  return parseInt(value, 10)
+}
+
+type JsonPlanSummary = {
+  id: 'claude-pro' | 'claude-max' | 'cursor-pro' | 'custom'
+  budget: number
+  spent: number
+  percentUsed: number
+  status: 'under' | 'near' | 'over'
+  projectedMonthEnd: number
+  daysUntilReset: number
+  periodStart: string
+  periodEnd: string
+}
+
+function toJsonPlanSummary(planUsage: PlanUsage): JsonPlanSummary {
+  return {
+    id: planUsage.plan.id,
+    budget: convertCost(planUsage.budgetUsd),
+    spent: convertCost(planUsage.spentApiEquivalentUsd),
+    percentUsed: Math.round(planUsage.percentUsed * 10) / 10,
+    status: planUsage.status,
+    projectedMonthEnd: convertCost(planUsage.projectedMonthUsd),
+    daysUntilReset: planUsage.daysUntilReset,
+    periodStart: planUsage.periodStart.toISOString(),
+    periodEnd: planUsage.periodEnd.toISOString(),
+  }
+}
+
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
   const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
-  console.log(JSON.stringify(buildJsonReport(projects, label, period), null, 2))
+  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary } = buildJsonReport(projects, label, period)
+  const planUsage = await getPlanUsageOrNull()
+  if (planUsage) {
+    report.plan = toJsonPlanSummary(planUsage)
+  }
+  console.log(JSON.stringify(report, null, 2))
 }
 
 const program = new Command()
@@ -483,11 +524,21 @@ program
       const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf)))
       const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range, pf)))
       const { code, rate } = getCurrency()
-      console.log(JSON.stringify({
+      const payload: {
+        currency: string
+        today: { cost: number; calls: number }
+        month: { cost: number; calls: number }
+        plan?: JsonPlanSummary
+      } = {
         currency: code,
         today: { cost: Math.round(todayData.cost * rate * 100) / 100, calls: todayData.calls },
         month: { cost: Math.round(monthData.cost * rate * 100) / 100, calls: monthData.calls },
-      }))
+      }
+      const planUsage = await getPlanUsageOrNull()
+      if (planUsage) {
+        payload.plan = toJsonPlanSummary(planUsage)
+      }
+      console.log(JSON.stringify(payload))
       return
     }
 
@@ -635,6 +686,125 @@ program
     console.log(`\n  Currency set to ${upperCode}.`)
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
+    console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('plan [action] [id]')
+  .description('Show or configure a subscription plan for overage tracking')
+  .option('--format <format>', 'Output format: text or json', 'text')
+  .option('--monthly-usd <n>', 'Monthly plan price in USD (for custom)', parseNumber)
+  .option('--provider <name>', 'Provider scope: all, claude, codex, cursor', 'all')
+  .option('--reset-day <n>', 'Day of month plan resets (1-28)', parseInteger, 1)
+  .action(async (action?: string, id?: string, opts?: { format?: string; monthlyUsd?: number; provider?: string; resetDay?: number }) => {
+    const mode = action ?? 'show'
+
+    if (mode === 'show') {
+      const plan = await readPlan()
+      const displayPlan = !plan || plan.id === 'none'
+        ? { id: 'none', monthlyUsd: 0, provider: 'all', resetDay: 1, setAt: null }
+        : {
+            id: plan.id,
+            monthlyUsd: plan.monthlyUsd,
+            provider: plan.provider,
+            resetDay: clampResetDay(plan.resetDay),
+            setAt: plan.setAt,
+          }
+      if (opts?.format === 'json') {
+        console.log(JSON.stringify(displayPlan))
+        return
+      }
+      if (!plan || plan.id === 'none') {
+        console.log('\n  Plan: none')
+        console.log('  API-pricing view is active.')
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+        return
+      }
+      console.log(`\n  Plan: ${planDisplayName(plan.id)} (${plan.id})`)
+      console.log(`  Budget: $${plan.monthlyUsd}/month`)
+      console.log(`  Provider: ${plan.provider}`)
+      console.log(`  Reset day: ${clampResetDay(plan.resetDay)}`)
+      console.log(`  Set at: ${plan.setAt}`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (mode === 'reset') {
+      await clearPlan()
+      console.log('\n  Plan reset. API-pricing view is active.\n')
+      return
+    }
+
+    if (mode !== 'set') {
+      console.error('\n  Usage: codeburn plan [set <id> | reset]\n')
+      process.exitCode = 1
+      return
+    }
+
+    if (!id || !isPlanId(id)) {
+      console.error(`\n  Plan id must be one of: claude-pro, claude-max, cursor-pro, custom, none; got "${id ?? ''}".\n`)
+      process.exitCode = 1
+      return
+    }
+
+    const resetDay = opts?.resetDay ?? 1
+    if (!Number.isInteger(resetDay) || resetDay < 1 || resetDay > 28) {
+      console.error(`\n  --reset-day must be an integer from 1 to 28; got ${resetDay}.\n`)
+      process.exitCode = 1
+      return
+    }
+
+    if (id === 'none') {
+      await clearPlan()
+      console.log('\n  Plan reset. API-pricing view is active.\n')
+      return
+    }
+
+    if (id === 'custom') {
+      if (opts?.monthlyUsd === undefined) {
+        console.error('\n  Custom plans require --monthly-usd <positive number>.\n')
+        process.exitCode = 1
+        return
+      }
+      const monthlyUsd = opts.monthlyUsd
+      if (!Number.isFinite(monthlyUsd) || monthlyUsd <= 0) {
+        console.error(`\n  --monthly-usd must be a positive number; got ${opts.monthlyUsd}.\n`)
+        process.exitCode = 1
+        return
+      }
+      const provider = opts?.provider ?? 'all'
+      if (!isPlanProvider(provider)) {
+        console.error(`\n  --provider must be one of: all, claude, codex, cursor; got "${provider}".\n`)
+        process.exitCode = 1
+        return
+      }
+      await savePlan({
+        id: 'custom',
+        monthlyUsd,
+        provider,
+        resetDay,
+        setAt: new Date().toISOString(),
+      })
+      console.log(`\n  Plan set to custom ($${monthlyUsd}/month, ${provider}, reset day ${resetDay}).`)
+      console.log(`  Config saved to ${getConfigFilePath()}\n`)
+      return
+    }
+
+    const preset = getPresetPlan(id)
+    if (!preset) {
+      console.error(`\n  Unknown preset "${id}".\n`)
+      process.exitCode = 1
+      return
+    }
+
+    await savePlan({
+      ...preset,
+      resetDay,
+      setAt: new Date().toISOString(),
+    })
+    console.log(`\n  Plan set to ${planDisplayName(preset.id)} ($${preset.monthlyUsd}/month).`)
+    console.log(`  Provider: ${preset.provider}`)
+    console.log(`  Reset day: ${resetDay}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
   })
 
