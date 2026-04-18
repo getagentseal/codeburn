@@ -10,6 +10,7 @@ import { buildMenubarPayload } from './menubar-json.js'
 import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCacheLock } from './daily-cache.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
+import { computeOutlierSessions, computeModelOneShotRates } from './analytics.js'
 import { renderDashboard } from './dashboard.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { getAllProviders } from './providers/index.js'
@@ -204,6 +205,25 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 5)
 
+  const outlierSessions = computeOutlierSessions(projects).map(r => ({
+    rank: r.rank,
+    project: r.project,
+    sessionId: r.sessionId,
+    date: r.date,
+    cost: convertCost(r.totalCostUSD),
+    dominantActivity: r.dominantActivity,
+    isOutlier: r.isOutlier,
+  }))
+
+  const modelOneShotRates = computeModelOneShotRates(projects).map(r => ({
+    model: r.model,
+    sessions: r.sessions,
+    oneShotRate: r.oneShotRate !== null ? Math.round(r.oneShotRate * 1000) / 10 : null,
+    editTurns: r.editTurns,
+    oneShotTurns: r.oneShotTurns,
+    cost: convertCost(r.costUSD),
+  }))
+
   return {
     generated: new Date().toISOString(),
     currency: code,
@@ -229,6 +249,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     mcpServers: sortedMap(mcpMap),
     shellCommands: sortedMap(bashMap),
     topSessions,
+    outlierSessions,
+    modelOneShotRates,
   }
 }
 
