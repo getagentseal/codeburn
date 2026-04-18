@@ -40,6 +40,8 @@ const PROVIDERS = [
     {id: 'codex', label: 'Codex'},
     {id: 'cursor', label: 'Cursor'},
     {id: 'copilot', label: 'Copilot'},
+    {id: 'opencode', label: 'OpenCode'},
+    {id: 'pi', label: 'Pi'},
 ];
 
 const CURRENCIES = [
@@ -184,11 +186,14 @@ class CodeburnIndicator extends PanelMenu.Button {
     /// only; the CLI still owns real "has usable data" semantics.
     _detectAvailableProviders() {
         const home = GLib.get_home_dir();
+        const xdgData = GLib.getenv('XDG_DATA_HOME') || `${home}/.local/share`;
         const paths = {
             claude: `${home}/.claude/projects`,
             codex: `${home}/.codex/sessions`,
             cursor: `${home}/.config/Cursor/User/globalStorage/state.vscdb`,
             copilot: `${home}/.copilot/session-state`,
+            opencode: `${xdgData}/opencode`,
+            pi: `${home}/.pi/agent/sessions`,
         };
         const out = [];
         for (const [id, path] of Object.entries(paths)) {
