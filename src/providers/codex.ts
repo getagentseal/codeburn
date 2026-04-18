@@ -15,6 +15,9 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-4o': 'GPT-4o',
 }
 
+// Sort by key length descending so longer prefixes match first
+const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
+
 const toolNameMap: Record<string, string> = {
   exec_command: 'Bash',
   read_file: 'Read',
@@ -205,10 +208,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            inputTokens = (total.input_tokens ?? 0) - prevInput
-            cachedInputTokens = (total.cached_input_tokens ?? 0) - prevCached
-            outputTokens = (total.output_tokens ?? 0) - prevOutput
-            reasoningTokens = (total.reasoning_output_tokens ?? 0) - prevReasoning
+            inputTokens = Math.max(0, (total.input_tokens ?? 0) - prevInput)
+            cachedInputTokens = Math.max(0, (total.cached_input_tokens ?? 0) - prevCached)
+            outputTokens = Math.max(0, (total.output_tokens ?? 0) - prevOutput)
+            reasoningTokens = Math.max(0, (total.reasoning_output_tokens ?? 0) - prevReasoning)
           }
 
           if (!last) {
@@ -280,7 +283,7 @@ export function createCodexProvider(codexDir?: string): Provider {
     displayName: 'Codex',
 
     modelDisplayName(model: string): string {
-      for (const [key, name] of Object.entries(modelDisplayNames)) {
+      for (const [key, name] of modelDisplayEntries) {
         if (model.startsWith(key)) return name
       }
       return model

@@ -20,7 +20,10 @@ function getConfigPath(): string {
 export async function readConfig(): Promise<CodeburnConfig> {
   try {
     const raw = await readFile(getConfigPath(), 'utf-8')
-    return JSON.parse(raw) as CodeburnConfig
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    if (parsed.currency && typeof parsed.currency.code !== 'string') delete parsed.currency
+    return parsed as CodeburnConfig
   } catch {
     return {}
   }

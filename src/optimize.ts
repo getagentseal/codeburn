@@ -448,7 +448,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
       totalDuplicates += extra
       if (entry.recent > 1) recentDuplicates += entry.recent - 1
       const name = basename(file)
-      fileDupes.set(name, (fileDupes.get(name) ?? 0) + extra)
+      fileDupes.set(name, (fileDupes.get(name) ?? 0) + entry.count)
     }
   }
 
@@ -461,7 +461,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
   const worst = [...fileDupes.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, TOP_ITEMS_PREVIEW)
-    .map(([name, n]) => `${name} (${n + 1}x)`)
+    .map(([name, n]) => `${name} (${n}x)`)
     .join(', ')
 
   const tokensSaved = totalDuplicates * AVG_TOKENS_PER_READ

@@ -34,12 +34,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
 
   for (const project of projects) {
     for (const session of project.sessions) {
-      const sessionDate = dateKey(session.firstTimestamp)
-      ensure(sessionDate).sessions += 1
+      const sessionDate = dateKey(session.firstTimestamp || '')
+      if (sessionDate) ensure(sessionDate).sessions += 1
 
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
-        const turnDate = dateKey(turn.assistantCalls[0]!.timestamp)
+        const rawTs = turn.assistantCalls[0]!.timestamp
+        if (!rawTs) continue
+        const turnDate = dateKey(rawTs)
         const turnDay = ensure(turnDate)
 
         const editTurns = turn.hasEdits ? 1 : 0

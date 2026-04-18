@@ -62,7 +62,7 @@ function getCachePath(): string {
 }
 
 function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
-  if (!entry.input_cost_per_token || !entry.output_cost_per_token) return null
+  if (entry.input_cost_per_token === undefined || entry.output_cost_per_token === undefined) return null
   return {
     inputCostPerToken: entry.input_cost_per_token,
     outputCostPerToken: entry.output_cost_per_token,
@@ -140,7 +140,7 @@ export function getModelCosts(model: string): ModelCosts | null {
   }
 
   for (const [key, costs] of pricingCache ?? new Map()) {
-    if (canonical.startsWith(key) || key.startsWith(canonical)) return costs
+    if (canonical.startsWith(key)) return costs
   }
 
   for (const [key, costs] of Object.entries(FALLBACK_PRICING)) {
@@ -202,7 +202,10 @@ export function getShortModelName(model: string): string {
     'o4-mini': 'o4-mini',
     'o3': 'o3',
   }
-  for (const [key, name] of Object.entries(shortNames)) {
+  // Sort by key length descending so longer prefixes match first
+  // (e.g., 'gpt-4o-mini' before 'gpt-4o')
+  const sorted = Object.entries(shortNames).sort((a, b) => b[0].length - a[0].length)
+  for (const [key, name] of sorted) {
     if (canonical.startsWith(key)) return name
   }
   return canonical
