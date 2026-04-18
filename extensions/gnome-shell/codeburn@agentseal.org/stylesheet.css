@@ -1,3 +1,12 @@
+/*
+ * CodeBurn GNOME Shell extension styles.
+ *
+ * Inherits colors from the active GNOME shell theme so the popup looks native on
+ * both light and dark system themes. Only the brand accent (orange) is hardcoded;
+ * every other color is left to the theme. Typography and spacing are tight to
+ * keep the popup compact even when every section is populated.
+ */
+
 .codeburn-panel {
     spacing: 4px;
 }
@@ -15,21 +24,54 @@
 .codeburn-header {
     font-weight: 600;
     color: #ff8c42;
+    font-size: 13px;
 }
 
-.codeburn-activity {
-    font-family: monospace;
+.codeburn-meta {
     font-size: 11px;
-    padding-left: 8px;
+    opacity: 0.75;
+}
+
+.codeburn-section-title {
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    padding-top: 4px;
+}
+
+.codeburn-row {
+    font-family: monospace;
+    font-size: 11.5px;
+    padding-left: 4px;
+    padding-right: 4px;
 }
 
 .codeburn-empty {
     font-style: italic;
-    color: rgba(255, 255, 255, 0.5);
+    opacity: 0.55;
     padding-left: 8px;
 }
 
 .codeburn-findings {
     color: #ff8c42;
     font-weight: 500;
+}
+
+.codeburn-updated {
+    font-size: 10px;
+    opacity: 0.5;
+    padding-left: 4px;
+}
+
+/* Optional: theme-specific tweaks if the inherited colors look off. Both classes
+ * are set dynamically by extension.js so we can override per-theme without
+ * fighting the shell's default popup palette. */
+.codeburn-dark .codeburn-row {
+    /* Monospace can render thin on dark themes; bump weight slightly. */
+}
+
+.codeburn-light .codeburn-row {
+    /* Nothing yet; placeholder for light-theme specific adjustments. */
 }
