@@ -33,19 +33,16 @@ struct AgentTabStrip: View {
     }
 
     private var visibleFilters: [ProviderFilter] {
-        // Only surface providers that actually spent money in the all-provider view.
-        // The CLI includes zero-cost providers in the payload for completeness, so
-        // filtering on value > 0 keeps the tab row honest and avoids showing tabs
-        // for tools the user hasn't run yet.
-        let activeKeys = Set(
-            allProvidersToday.current.providers
-                .filter { $0.value > 0 }
-                .keys
-                .map { $0.lowercased() }
+        // Show a tab for every provider detected on this machine. The CLI decides what
+        // to include in the providers map based on session dirs / credential files it
+        // finds, so zero-cost-today is still "installed" and the user expects to see
+        // it. Only providers that aren't installed at all are absent from the map.
+        let detectedKeys = Set(
+            allProvidersToday.current.providers.keys.map { $0.lowercased() }
         )
         return ProviderFilter.allCases.filter { filter in
             if filter == .all { return true }
-            return activeKeys.contains(filter.rawValue.lowercased())
+            return detectedKeys.contains(filter.rawValue.lowercased())
         }
     }
 

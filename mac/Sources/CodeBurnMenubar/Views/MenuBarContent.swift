@@ -64,13 +64,12 @@ struct MenuBarContent: View {
         return store.payload.current.cost <= 0 && store.payload.current.calls == 0
     }
 
-    /// Only show the tab row when two or more providers have non-zero spend. One
-    /// provider means the tabs are redundant (the All tab already shows it); zero
-    /// providers means the popover has nothing to filter.
+    /// Show the tab row whenever the CLI detected at least one AI coding tool installed
+    /// on this machine. Hidden only when nothing is detected, which means there's
+    /// nothing to filter by anyway.
     private var showAgentTabs: Bool {
         let payload = store.todayPayload ?? store.payload
-        let active = payload.current.providers.values.filter { $0 > 0 }
-        return active.count >= 2
+        return !payload.current.providers.isEmpty
     }
 
 }
