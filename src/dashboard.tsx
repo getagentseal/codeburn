@@ -618,7 +618,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         if (cancelled) return
         const cwd = await discoverProjectCwd(join(claudeDir, project.project))
         if (!cwd) continue
-        budgets.set(project.project, await estimateContextBudget(cwd))
+        const calledServers = new Set<string>()
+        for (const session of project.sessions) {
+          for (const server of Object.keys(session.mcpBreakdown)) {
+            calledServers.add(server)
+          }
+        }
+        budgets.set(project.project, await estimateContextBudget(cwd, 1_000_000, calledServers))
       }
       if (!cancelled) setProjectBudgets(budgets)
     }
