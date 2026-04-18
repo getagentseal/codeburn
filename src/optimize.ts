@@ -511,12 +511,12 @@ export function detectUnusedMcp(
   if (unused.length === 0) return null
 
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
-  const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
+  const perSessionTokens = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
+  const tokensSaved = perSessionTokens * Math.max(totalSessions, 1)
 
   return {
     title: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never used`,
-    explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
+    explanation: `Never called in this period: ${unused.join(', ')}. Estimated overhead: ~${formatTokens(perSessionTokens)} tokens/session (${formatTokens(tokensSaved)} tokens total across ${totalSessions} session${totalSessions !== 1 ? 's' : ''}).`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {

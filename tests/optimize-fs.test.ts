@@ -209,6 +209,19 @@ describe('detectUnusedMcp', () => {
     ]
     expect(detectUnusedMcp(calls, [], new Set([projectDir]))).toBeNull()
   })
+
+  it('explanation mentions tokens/session', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+      mcpServers: { ghost: { command: 'x' } },
+    }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const finding = detectUnusedMcp([], [], new Set([projectDir]))
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toMatch(/tokens\/session/)
+  })
 })
 
 // ============================================================================
