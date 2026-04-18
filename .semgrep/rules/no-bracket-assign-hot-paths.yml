@@ -1,0 +1,22 @@
+rules:
+  - id: no-bracket-assign-on-literal-object-map
+    languages: [typescript]
+    severity: ERROR
+    message: >
+      Bracket-assign on a map created with `{}` allows prototype pollution when
+      the key comes from external data. Initialize the map with
+      `Object.create(null)` instead.
+    patterns:
+      - pattern-either:
+          - pattern: $MAP[$KEY] = $MAP[$KEY] ?? $INIT
+          - pattern: $MAP[$KEY] = $MAP[$KEY] || $INIT
+          - pattern: $MAP[$KEY] ??= $INIT
+          - pattern: |
+              if (!$MAP[$KEY]) $MAP[$KEY] = $INIT
+      - pattern-not-inside: |
+          const $MAP = Object.create(null)
+          ...
+    paths:
+      include:
+        - '/src/providers/*.ts'
+        - '/src/parser.ts'

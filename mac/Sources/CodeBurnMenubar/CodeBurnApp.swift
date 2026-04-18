@@ -73,10 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.store.selectedPeriod != .today {
-                    await self.store.refreshQuietly(period: .today)
-                }
-                // Optimize is fast (~1s warm-cache) so include findings on every refresh.
+                // Always keep the (today, all) payload warm. The menubar title and the
+                // agent tab strip both read from it, so it has to refresh every cycle
+                // regardless of whether the user is currently viewing Today or a
+                // different period / provider.
+                await self.store.refreshQuietly(period: .today)
+                // Refresh the currently-viewed payload. Optimize is fast (~1s warm-cache)
+                // so include findings on every refresh.
                 await self.store.refresh(includeOptimize: true)
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
             }

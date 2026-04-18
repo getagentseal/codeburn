@@ -8,7 +8,7 @@ import { createWriteStream } from 'node:fs'
 
 /// Public GitHub repo that hosts release builds. `/releases/latest` returns the newest
 /// tagged release; we filter its assets list for the artifact matching the current OS + arch.
-const RELEASE_API = 'https://api.github.com/repos/AgentSeal/codeburn/releases/latest'
+const RELEASE_API = 'https://api.github.com/repos/getagentseal/codeburn/releases/latest'
 const MIN_MACOS_MAJOR = 14
 
 export type InstallResult = { installedPath: string; launched: boolean }
@@ -176,7 +176,7 @@ async function fetchLatestReleaseAsset(assetPattern: RegExp): Promise<ReleaseAss
   if (!asset) {
     throw new Error(
       `No matching asset found in release ${body.tag_name}. ` +
-      `Check https://github.com/AgentSeal/codeburn/releases.`
+      `Check https://github.com/getagentseal/codeburn/releases.`
     )
   }
   return asset

@@ -26,7 +26,7 @@ For contributors running a local build instead of the packaged release:
 
 ```bash
 npm install -g codeburn                       # CLI the app shells out to for data
-git clone https://github.com/AgentSeal/codeburn.git
+git clone https://github.com/getagentseal/codeburn.git
 cd codeburn/mac
 swift build -c release
 .build/release/CodeBurnMenubar                # launch

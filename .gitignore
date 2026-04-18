@@ -38,3 +38,6 @@ npm-debug.log*
 
 # Build artifacts
 *.tsbuildinfo
+
+# Local Discord brand / promo assets not yet ready to publish
+assets/discord-*.png

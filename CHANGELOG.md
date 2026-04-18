@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`codeburn report --from/--to`.** Filter sessions to an exact `YYYY-MM-DD` date range (local time). Either flag alone is valid: `--from` alone runs from the given date through end-of-today, `--to` alone runs from the earliest data through the given date. Inverted ranges or malformed dates exit with a clear error. In the TUI, pressing `1`-`5` still switches to the predefined periods. Credit: @lfl1337 (PR #80).
+- **`avgCostPerSession` in reports.** JSON `projects[]` entries gain an `avgCostPerSession` field and `export -f csv` adds an `Avg/Session (USD)` column to `projects.csv`. Column order in `projects.csv` is now `Project, Cost, Avg/Session, Share, API Calls, Sessions` -- scripts parsing by column position should read by header instead. Credit: @lfl1337 (PR #80).
+
+### Security
+- **Semgrep CI guard against prototype pollution regressions.** New `.github/workflows/ci.yml` runs a bracket-assign guard on `src/providers/` and `src/parser.ts` on every push to main and every PR. Blocks re-introducing `$MAP[$KEY] = $MAP[$KEY] ?? $INIT` patterns on `{}`-initialized maps. `categoryBreakdown` in `parser.ts` switched to `Object.create(null)` for consistency with its sibling breakdown maps. Credit: @lfl1337 (PR #78).
+
+## 0.7.3 - 2026-04-18
+
+### Changed
+- **Dropped `better-sqlite3` in favor of Node's built-in `node:sqlite`.** Removes the deprecated `prebuild-install` transitive dependency that npm warned about on every install (issue #75, credit @primeminister). End-user install is now 40 packages down from 167 and shows zero deprecation notices. The experimental-SQLite warning Node 22/23 normally prints on module load is silenced for this specific warning; other warnings pass through unchanged.
+- **Minimum Node version raised to 22.** Node 20 reached EOL on 2026-04-30; `node:sqlite` lives in 22+. Users on older Node get a clear upgrade message when a SQLite-backed provider (Cursor, OpenCode) is loaded.
+
+
 ## 0.7.2 - 2026-04-17
 
 ### Added

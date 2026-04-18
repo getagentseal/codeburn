@@ -11,6 +11,7 @@ import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCa
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
+import { parseDateRangeFlags } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { getAllProviders } from './providers/index.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
@@ -140,6 +141,9 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     name: p.project,
     path: p.projectPath,
     cost: convertCost(p.totalCostUSD),
+    avgCostPerSession: p.sessions.length > 0
+      ? convertCost(p.totalCostUSD / p.sessions.length)
+      : null,
     calls: p.totalApiCalls,
     sessions: p.sessions.length,
   }))
@@ -236,18 +240,40 @@ program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
   .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all', 'week')
+  .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
+  .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
   .action(async (opts) => {
+    let customRange: DateRange | null = null
+    try {
+      customRange = parseDateRangeFlags(opts.from, opts.to)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exit(1)
+    }
+
     const period = toPeriod(opts.period)
     if (opts.format === 'json') {
-      await runJsonReport(period, opts.provider, opts.project, opts.exclude)
+      await loadPricing()
+      if (customRange) {
+        const label = `${opts.from ?? 'all'} to ${opts.to ?? 'today'}`
+        const projects = filterProjectsByName(
+          await parseAllSessions(customRange, opts.provider),
+          opts.project,
+          opts.exclude,
+        )
+        console.log(JSON.stringify(buildJsonReport(projects, label, 'custom'), null, 2))
+      } else {
+        await runJsonReport(period, opts.provider, opts.project, opts.exclude)
+      }
       return
     }
-    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude)
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {

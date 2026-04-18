@@ -173,7 +173,7 @@ function buildSessionSummary(
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
   const mcpBreakdown: SessionSummary['mcpBreakdown'] = Object.create(null)
   const bashBreakdown: SessionSummary['bashBreakdown'] = Object.create(null)
-  const categoryBreakdown: SessionSummary['categoryBreakdown'] = {} as SessionSummary['categoryBreakdown']
+  const categoryBreakdown: SessionSummary['categoryBreakdown'] = Object.create(null)
 
   let totalCost = 0
   let totalInput = 0

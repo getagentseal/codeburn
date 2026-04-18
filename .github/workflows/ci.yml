@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep bracket-assign guard
+        run: |
+          set -e
+          semgrep --config .semgrep/rules/no-bracket-assign-hot-paths.yml \
+            --strict --json \
+            src/providers/ src/parser.ts > semgrep-out.json
+          FINDINGS=$(jq '.results | length' semgrep-out.json)
+          if [ "$FINDINGS" -gt 0 ]; then
+            jq -r '.results[] | "::error file=\(.path),line=\(.start.line)::\(.extra.message)"' semgrep-out.json
+            exit 1
+          fi

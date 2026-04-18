@@ -182,6 +182,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .map(p => ({
       Project: p.projectPath,
       [`Cost (${code})`]: round2(convertCost(p.totalCostUSD)),
+      [`Avg/Session (${code})`]: p.sessions.length > 0 ? round2(convertCost(p.totalCostUSD / p.sessions.length)) : '',
       'Share (%)': pct(p.totalCostUSD, total),
       'API Calls': p.totalApiCalls,
       Sessions: p.sessions.length,

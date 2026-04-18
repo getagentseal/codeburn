@@ -2,7 +2,7 @@ import { homedir } from 'os'
 
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
-import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
@@ -719,9 +719,9 @@ function StaticDashboard({ projects, period, activeProvider }: { projects: Proje
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[]): Promise<void> {
+export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null): Promise<void> {
   await loadPricing()
-  const range = getDateRange(period)
+  const range = customRange ?? getDateRange(period)
   const projects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   if (isTTY) {

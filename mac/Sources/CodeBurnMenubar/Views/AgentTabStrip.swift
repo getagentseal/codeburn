@@ -33,10 +33,16 @@ struct AgentTabStrip: View {
     }
 
     private var visibleFilters: [ProviderFilter] {
-        let activeKeys = Set(allProvidersToday.current.providers.keys.map { $0.lowercased() })
+        // Show a tab for every provider detected on this machine. The CLI decides what
+        // to include in the providers map based on session dirs / credential files it
+        // finds, so zero-cost-today is still "installed" and the user expects to see
+        // it. Only providers that aren't installed at all are absent from the map.
+        let detectedKeys = Set(
+            allProvidersToday.current.providers.keys.map { $0.lowercased() }
+        )
         return ProviderFilter.allCases.filter { filter in
             if filter == .all { return true }
-            return activeKeys.contains(filter.rawValue.lowercased())
+            return detectedKeys.contains(filter.rawValue.lowercased())
         }
     }
 
@@ -87,6 +93,8 @@ extension ProviderFilter {
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .copilot: return Color(red: 0x6D/255.0, green: 0x8F/255.0, blue: 0xA6/255.0)
+        case .opencode: return Color(red: 0x5B/255.0, green: 0x83/255.0, blue: 0x5B/255.0)
+        case .pi: return Color(red: 0xB2/255.0, green: 0x6B/255.0, blue: 0x3D/255.0)
         }
     }
 }

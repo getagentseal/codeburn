@@ -1,0 +1,43 @@
+name: Block Claude / Anthropic co-author trailers
+
+# Rejects PRs that contain a `Co-authored-by: ... claude ...` or `... anthropic ...`
+# trailer in any of their commits. Contributors can still use AI tools to help
+# write code, but they must remove the co-author attribution before the PR is
+# eligible to merge, per the project's contributor guidelines.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan PR commits for disallowed co-author trailers
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          FOUND=0
+          while IFS= read -r c; do
+            [ -z "$c" ] && continue
+            SUBJECT=$(git log -1 "$c" --format=%s)
+            if git log -1 "$c" --format="%B" | grep -qiE 'co-authored-by:.*(claude|anthropic)'; then
+              echo "::error::Commit $c ($SUBJECT) has a Claude/Anthropic co-author trailer. Please remove it before this PR can merge."
+              FOUND=1
+            fi
+          done < <(git log --format=%H "$BASE_SHA".."$HEAD_SHA")
+          if [ "$FOUND" != "0" ]; then
+            echo ""
+            echo "How to fix:"
+            echo "  1. Run: git rebase -i $BASE_SHA"
+            echo "  2. Mark each flagged commit as 'reword'"
+            echo "  3. Delete the Co-authored-by line from the commit message"
+            echo "  4. Save, then: git push --force-with-lease"
+            exit 1
+          fi
+          echo "No disallowed co-author trailers found."

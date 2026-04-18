@@ -11,9 +11,10 @@ struct MenuBarContent: View {
 
             Divider()
 
-            AgentTabStrip()
-
-            Divider()
+            if showAgentTabs {
+                AgentTabStrip()
+                Divider()
+            }
 
             ZStack {
                 ScrollView(.vertical, showsIndicators: false) {
@@ -61,6 +62,14 @@ struct MenuBarContent: View {
     private var isFilteredEmpty: Bool {
         guard store.selectedProvider != .all else { return false }
         return store.payload.current.cost <= 0 && store.payload.current.calls == 0
+    }
+
+    /// Show the tab row whenever the CLI detected at least one AI coding tool installed
+    /// on this machine. Hidden only when nothing is detected, which means there's
+    /// nothing to filter by anyway.
+    private var showAgentTabs: Bool {
+        let payload = store.todayPayload ?? store.payload
+        return !payload.current.providers.isEmpty
     }
 
 }
@@ -212,7 +221,7 @@ struct FlameMark: View {
     }
 }
 
-private let starBannerGitHubURL = URL(string: "https://github.com/AgentSeal/codeburn")!
+private let starBannerGitHubURL = URL(string: "https://github.com/getagentseal/codeburn")!
 
 /// Shown at the very bottom on first launch. A small terracotta strip nudges users to star the
 /// repo; clicking opens GitHub, clicking the close icon hides it forever (persisted to

@@ -209,7 +209,7 @@ private struct TrendChart: View {
             // Floats below the chart without taking layout space. Opaque dark card hides
             // whatever sits beneath it (mini stats, activity rows).
             if let hoveredBar {
-                BarTooltipCard(bar: hoveredBar, formatValue: formatValue)
+                BarTooltipCard(bar: hoveredBar, value: metric(hoveredBar), formatValue: formatValue)
                     .padding(.top, 6)
                     .offset(y: 92)
                     .transition(.opacity)
@@ -260,6 +260,12 @@ private struct BarColumn: View {
 
 private struct BarTooltipCard: View {
     let bar: TrendBar
+    /// Value to display in the tooltip header. Matches the metric the trend chart
+    /// is currently using (tokens when the .all-providers view has token data,
+    /// cost when provider-filtered views force a $ fallback). Passing this in keeps
+    /// the tooltip in sync with the chart instead of always reading bar.tokens,
+    /// which is zero for provider-filtered days.
+    let value: Double
     let formatValue: (Double) -> String
     @Environment(\.colorScheme) private var colorScheme
 
@@ -290,7 +296,7 @@ private struct BarTooltipCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(primaryText)
                 Spacer()
-                Text("\(formatValue(bar.tokens))")
+                Text("\(formatValue(value))")
                     .font(.codeMono(size: 10.5, weight: .semibold))
                     .foregroundStyle(Theme.brandAccent)
             }
@@ -313,10 +319,6 @@ private struct BarTooltipCard: View {
                         }
                     }
                 }
-            } else {
-                Text("No model breakdown available")
-                    .font(.system(size: 10))
-                    .foregroundStyle(tertiaryText)
             }
         }
         .padding(11)
@@ -1039,6 +1041,7 @@ private struct PlanLoadingView: View {
 
 private struct PlanNoCredentialsView: View {
     @Environment(AppStore.self) private var store
+    @State private var showManualFallback = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1048,16 +1051,32 @@ private struct PlanNoCredentialsView: View {
             Text("No Claude subscription connected")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("Run `claude login` in your terminal, then retry.")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
-            Button("Retry") {
-                Task { await store.refreshSubscription() }
+            if showManualFallback {
+                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            } else {
+                Text("Click Connect to sign in with Claude, then return here.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
             }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
+            HStack(spacing: 8) {
+                Button("Connect Claude") {
+                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.brandAccent)
+                Button("Retry") {
+                    Task { await store.refreshSubscription() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
@@ -1067,6 +1086,7 @@ private struct PlanNoCredentialsView: View {
 private struct PlanFailedView: View {
     @Environment(AppStore.self) private var store
     let error: String?
+    @State private var showManualFallback = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1076,7 +1096,13 @@ private struct PlanFailedView: View {
             Text("Couldn't load plan data")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            if let error {
+            if showManualFallback {
+                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            } else if let error {
                 Text(error)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
@@ -1084,11 +1110,19 @@ private struct PlanFailedView: View {
                     .frame(maxWidth: 280)
                     .lineLimit(3)
             }
-            Button("Retry") {
-                Task { await store.refreshSubscription() }
+            HStack(spacing: 8) {
+                Button("Reconnect Claude") {
+                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.brandAccent)
+                Button("Retry") {
+                    Task { await store.refreshSubscription() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
             }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)

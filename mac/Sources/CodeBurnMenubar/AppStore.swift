@@ -213,6 +213,8 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case codex = "Codex"
     case cursor = "Cursor"
     case copilot = "Copilot"
+    case opencode = "OpenCode"
+    case pi = "Pi"
 
     var id: String { rawValue }
 
@@ -224,6 +226,8 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .codex: "codex"
         case .cursor: "cursor"
         case .copilot: "copilot"
+        case .opencode: "opencode"
+        case .pi: "pi"
         }
     }
 }

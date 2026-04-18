@@ -29,7 +29,7 @@ function createTestDb(dir: string): string {
   mkdirSync(ocDir, { recursive: true })
   const dbPath = join(ocDir, 'opencode.db')
 
-  const Database = require('better-sqlite3')
+  const { DatabaseSync: Database } = require('node:sqlite')
   const db = new Database(dbPath)
   db.exec(`
     CREATE TABLE session (
@@ -57,7 +57,7 @@ function createTestDb(dir: string): string {
 }
 
 function withTestDb(dbPath: string, fn: (db: TestDb) => void): void {
-  const Database = require('better-sqlite3')
+  const { DatabaseSync: Database } = require('node:sqlite')
   const db = new Database(dbPath)
   fn(db)
   db.close()
@@ -221,7 +221,7 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     const ocDir = join(tmpDir, 'opencode')
     await mkdir(ocDir, { recursive: true })
 
-    const Database = require('better-sqlite3')
+    const { DatabaseSync: Database } = require('node:sqlite')
     for (const file of ['opencode.db', 'opencode-dev.db']) {
       const dbPath = join(ocDir, file)
       const db = new Database(dbPath)

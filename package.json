@@ -1,6 +1,6 @@
 {
   "name": "codeburn",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "See where your AI coding tokens go - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
@@ -29,21 +29,26 @@
     "developer-tools"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getagentseal/codeburn.git"
+  },
+  "bugs": {
+    "url": "https://github.com/getagentseal/codeburn/issues"
+  },
+  "homepage": "https://github.com/getagentseal/codeburn#readme",
   "dependencies": {
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^7.0.0",
     "react": "^19.2.5"
   },
-  "optionalDependencies": {
-    "better-sqlite3": "^12.0.0"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.19.17",
     "@types/react": "^19.2.14",
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
