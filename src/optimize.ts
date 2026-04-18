@@ -345,19 +345,15 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
     join(homedir(), '.claude', 'settings.json'),
     join(homedir(), '.claude', 'settings.local.json'),
   ]
+  const projectCwdList: string[] = []
   for (const cwd of projectCwds) {
+    projectCwdList.push(cwd)
     configPaths.push(join(cwd, '.mcp.json'))
     configPaths.push(join(cwd, '.claude', 'settings.json'))
     configPaths.push(join(cwd, '.claude', 'settings.local.json'))
   }
 
-  for (const p of configPaths) {
-    if (!existsSync(p)) continue
-    const config = readJsonFile(p)
-    if (!config) continue
-    let mtime = 0
-    try { mtime = statSync(p).mtimeMs } catch {}
-    const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
+  const pushServers = (serversObj: Record<string, unknown>, mtime: number): void => {
     for (const name of Object.keys(serversObj)) {
       const normalized = name.replace(/:/g, '_')
       const existing = servers.get(normalized)
@@ -366,6 +362,36 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
       }
     }
   }
+
+  for (const p of configPaths) {
+    if (!existsSync(p)) continue
+    const config = readJsonFile(p)
+    if (!config) continue
+    let mtime = 0
+    try { mtime = statSync(p).mtimeMs } catch {}
+    pushServers((config.mcpServers ?? {}) as Record<string, unknown>, mtime)
+  }
+
+  // `claude mcp add` writes to ~/.claude.json (top-level for user-scope,
+  // projects[cwd].mcpServers for project-local scope). This is the common config
+  // path and was missed by settings.json-only discovery.
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  if (existsSync(claudeJsonPath)) {
+    const config = readJsonFile(claudeJsonPath)
+    if (config) {
+      let mtime = 0
+      try { mtime = statSync(claudeJsonPath).mtimeMs } catch {}
+      pushServers((config.mcpServers ?? {}) as Record<string, unknown>, mtime)
+      const projectsObj = (config.projects ?? {}) as Record<string, { mcpServers?: Record<string, unknown> }>
+      for (const cwd of projectCwdList) {
+        const entry = projectsObj[cwd] ?? projectsObj[cwd.replace(/\\/g, '/')]
+        if (entry?.mcpServers) {
+          pushServers(entry.mcpServers, mtime)
+        }
+      }
+    }
+  }
+
   return servers
 }
 

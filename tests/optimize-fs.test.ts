@@ -48,6 +48,10 @@ function writeFile(path: string, content: string): void {
   writeFileSync(path, content)
 }
 
+beforeEach(() => {
+  rmSync(join(FAKE_HOME_FOR_MOCK, '.claude.json'), { force: true })
+})
+
 function touchOld(path: string, daysAgo: number): void {
   const past = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
   utimesSync(path, past, past)
@@ -168,6 +172,58 @@ describe('loadMcpConfigs', () => {
     writeFile(join(projectDir, '.mcp.json'), '{ not valid json')
     expect(() => loadMcpConfigs([projectDir])).not.toThrow()
     expect(loadMcpConfigs([projectDir]).size).toBe(0)
+  })
+
+  describe('~/.claude.json support (claude mcp add flow)', () => {
+    const claudeJsonPath = join(FAKE_HOME_FOR_MOCK, '.claude.json')
+
+    beforeEach(() => {
+      rmSync(claudeJsonPath, { force: true })
+    })
+
+    it('reads user-scope mcpServers from ~/.claude.json top-level', () => {
+      writeFile(claudeJsonPath, JSON.stringify({
+        mcpServers: { docker: { command: 'x' }, vault: { command: 'y' } },
+      }))
+      const servers = loadMcpConfigs([])
+      expect(servers.has('docker')).toBe(true)
+      expect(servers.has('vault')).toBe(true)
+    })
+
+    it('reads project-scope mcpServers from ~/.claude.json projects map', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(claudeJsonPath, JSON.stringify({
+        projects: { [projectDir]: { mcpServers: { local: { command: 'x' } } } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('local')).toBe(true)
+    })
+
+    it('matches projects map key with forward slashes on Windows paths', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(claudeJsonPath, JSON.stringify({
+        projects: { [projectDir.replace(/\\/g, '/')]: { mcpServers: { win: { command: 'x' } } } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('win')).toBe(true)
+    })
+
+    it('merges ~/.claude.json user-scope with project .mcp.json', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+        mcpServers: { proj_only: { command: 'x' } },
+      }))
+      writeFile(claudeJsonPath, JSON.stringify({
+        mcpServers: { user_wide: { command: 'y' } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('proj_only')).toBe(true)
+      expect(servers.has('user_wide')).toBe(true)
+      expect(servers.size).toBe(2)
+    })
   })
 })
 
