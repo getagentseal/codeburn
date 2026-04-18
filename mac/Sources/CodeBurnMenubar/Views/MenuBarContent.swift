@@ -221,7 +221,7 @@ struct FlameMark: View {
     }
 }
 
-private let starBannerGitHubURL = URL(string: "https://github.com/AgentSeal/codeburn")!
+private let starBannerGitHubURL = URL(string: "https://github.com/getagentseal/codeburn")!
 
 /// Shown at the very bottom on first launch. A small terracotta strip nudges users to star the
 /// repo; clicking opens GitHub, clicking the close icon hides it forever (persisted to

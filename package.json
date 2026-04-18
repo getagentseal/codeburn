@@ -33,6 +33,14 @@
   },
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getagentseal/codeburn.git"
+  },
+  "bugs": {
+    "url": "https://github.com/getagentseal/codeburn/issues"
+  },
+  "homepage": "https://github.com/getagentseal/codeburn#readme",
   "dependencies": {
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
