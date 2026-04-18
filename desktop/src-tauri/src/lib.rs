@@ -125,19 +125,22 @@ fn toggle_popover(app: &AppHandle) {
 /// so there is no reliable anchor to attach to. Top-right keeps the window visually
 /// close to the StatusNotifier area on every desktop we target (GNOME, KDE, Unity).
 fn position_popover_top_right(window: &tauri::WebviewWindow) {
-    const MARGIN_PX: u32 = 12;
-    const TOP_PANEL_PX: u32 = 36;
+    // Matches desktop/src-tauri/tauri.conf.json popover width (logical pixels).
+    const POPOVER_WIDTH_LOGICAL: f64 = 360.0;
+    const MARGIN_LOGICAL: f64 = 12.0;
+    const TOP_PANEL_LOGICAL: f64 = 36.0;
 
     let Ok(Some(monitor)) = window.primary_monitor() else {
         return;
     };
-    let Ok(size) = window.outer_size() else {
-        return;
-    };
+    let scale = monitor.scale_factor();
+    let popover_w = (POPOVER_WIDTH_LOGICAL * scale) as u32;
+    let margin = (MARGIN_LOGICAL * scale) as u32;
+    let panel = (TOP_PANEL_LOGICAL * scale) as u32;
     let screen = monitor.size();
-    let x = screen.width.saturating_sub(size.width).saturating_sub(MARGIN_PX);
-    let y = TOP_PANEL_PX;
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    let x = screen.width.saturating_sub(popover_w).saturating_sub(margin);
+    let y = panel;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
 }
 
 mod commands {
