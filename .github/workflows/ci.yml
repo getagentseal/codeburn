@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep bracket-assign guard
+        run: |
+          semgrep --config .semgrep/rules/no-bracket-assign-hot-paths.yml \
+            src/providers/ src/parser.ts --error
