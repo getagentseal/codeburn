@@ -49,6 +49,7 @@ codeburn today                  # today's usage
 codeburn month                  # this month's usage
 codeburn report -p 30days       # rolling 30-day window
 codeburn report -p all          # every recorded session
+codeburn report --from 2026-04-01 --to 2026-04-10  # exact date range
 codeburn report --format json   # full dashboard data as JSON
 codeburn report --refresh 60    # auto-refresh every 60 seconds
 codeburn status                 # compact one-liner (today + month)
@@ -72,7 +73,7 @@ codeburn month --format json              # this month as JSON
 codeburn report -p 30days --format json   # 30-day window
 ```
 
-The JSON includes all dashboard panels: overview (cost, calls, sessions, cache hit %), daily breakdown, projects, models with token counts, activities with one-shot rates, core tools, MCP servers, and shell commands. Pipe to `jq` for filtering:
+The JSON includes all dashboard panels: overview (cost, calls, sessions, cache hit %), daily breakdown, projects (with `avgCostPerSession`), models with token counts, activities with one-shot rates, core tools, MCP servers, and shell commands. Pipe to `jq` for filtering:
 
 ```bash
 codeburn report --format json | jq '.projects'
@@ -112,6 +113,19 @@ codeburn export --project inventory              # export only "inventory" proje
 ```
 
 The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+
+### Date range filtering
+
+Beyond the preset periods, specify an exact window with `--from` and `--to` (`YYYY-MM-DD`, local time):
+
+```bash
+codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window
+codeburn report --from 2026-04-01                    # this date through today
+codeburn report --to 2026-04-10                      # earliest data through this date
+codeburn report --from 2026-04-01 --to 2026-04-10 --format json
+```
+
+Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only -- pressing `1`-`5` switches back to predefined periods.
 
 ### Supported providers
 
