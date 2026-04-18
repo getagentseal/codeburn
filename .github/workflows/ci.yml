@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
 
 jobs:
@@ -17,4 +17,5 @@ jobs:
       - name: Run Semgrep bracket-assign guard
         run: |
           semgrep --config .semgrep/rules/no-bracket-assign-hot-paths.yml \
-            src/providers/ src/parser.ts --error
+            --error --strict \
+            src/providers/ src/parser.ts
