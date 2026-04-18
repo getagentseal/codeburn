@@ -143,12 +143,6 @@ export async function getPlanUsageOrNull(today = new Date()): Promise<PlanUsage 
   return getPlanUsage(plan, today)
 }
 
-export async function getPlanUsageOrNullForProjects(projects: ProjectSummary[], today = new Date()): Promise<PlanUsage | null> {
-  const plan = await readPlan()
-  if (!isActivePlan(plan)) return null
-  return getPlanUsageFromProjects(plan, projects, today)
-}
-
 export function isActivePlan(plan: Plan | undefined): plan is Plan {
   return Boolean(plan) && plan.id !== 'none' && Number.isFinite(plan.monthlyUsd) && plan.monthlyUsd > 0
 }

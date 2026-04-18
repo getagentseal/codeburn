@@ -11,7 +11,7 @@ import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult
 import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
 import { dateKey } from './day-aggregator.js'
 import { CompareView } from './compare.js'
-import { getPlanUsageOrNullForProjects, type PlanUsage } from './plan-usage.js'
+import { getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
 import { join } from 'path'
 
@@ -157,14 +157,15 @@ function fit(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) : s.padEnd(n)
 }
 
-function formatUsd(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
-}
-
 function renderPlanBar(percentUsed: number, width: number): string {
-  const capped = Math.max(0, Math.min(100, percentUsed))
-  const filled = Math.round((capped / 100) * width)
-  return `${'▓'.repeat(filled)}${'░'.repeat(Math.max(0, width - filled))}`
+  if (percentUsed <= 100) {
+    const capped = Math.max(0, percentUsed)
+    const filled = Math.round((capped / 100) * width)
+    return `${'▓'.repeat(filled)}${'░'.repeat(Math.max(0, width - filled))}`
+  }
+  const factor = percentUsed / 100
+  const chevrons = Math.min(4, Math.max(1, Math.floor(Math.log10(factor)) + 1))
+  return `${'▓'.repeat(width)}${'▶'.repeat(chevrons)}`
 }
 
 function Overview({ projects, label, width, planUsage }: { projects: ProjectSummary[]; label: string; width: number; planUsage?: PlanUsage }) {
@@ -179,7 +180,7 @@ function Overview({ projects, label, width, planUsage }: { projects: ProjectSumm
   const allInputTokens = totalInput + totalCacheRead + totalCacheWrite
   const cacheHit = allInputTokens > 0
     ? (totalCacheRead / allInputTokens) * 100 : 0
-  const planLabel = planUsage ? `${planDisplayName(planUsage.plan.id)} plan: ${formatUsd(planUsage.spentApiEquivalentUsd)} equiv / ${formatUsd(planUsage.budgetUsd)} included` : ''
+  const planLabel = planUsage ? `${planDisplayName(planUsage.plan.id)}: ${formatCost(planUsage.spentApiEquivalentUsd)} API-equivalent vs ${formatCost(planUsage.budgetUsd)} plan` : ''
   const planPct = planUsage ? `${planUsage.percentUsed.toFixed(1)}%` : ''
   const planColor = planUsage
     ? planUsage.status === 'over'
@@ -219,10 +220,10 @@ function Overview({ projects, label, width, planUsage }: { projects: ProjectSumm
           </Text>
           <Text dimColor wrap="truncate-end">
             {planUsage.status === 'under'
-              ? `Well within plan. Projected month: ${formatUsd(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`
+              ? `Well within plan. Projected month: ${formatCost(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`
               : planUsage.status === 'near'
-                ? `Approaching plan limit. Projected month: ${formatUsd(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`
-                : `You're ${(planUsage.spentApiEquivalentUsd / Math.max(planUsage.budgetUsd, 1)).toFixed(1)}x over subscription value; running on API overage pricing.`}
+                ? `Approaching plan limit. Projected month: ${formatCost(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`
+                : `${(planUsage.spentApiEquivalentUsd / Math.max(planUsage.budgetUsd, 1)).toFixed(1)}x your subscription value. Projected month: ${formatCost(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`}
           </Text>
         </>
       )}
@@ -703,7 +704,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       if (reloadGenerationRef.current !== generation) return
 
       setProjects(filteredProjects)
-      const usage = await getPlanUsageOrNullForProjects(filteredProjects)
+      const usage = await getPlanUsageOrNull()
       if (reloadGenerationRef.current !== generation) return
       setPlanUsage(usage ?? undefined)
     } catch (error) {
@@ -802,7 +803,7 @@ export async function renderDashboard(period: Period = 'week', provider: string 
   await loadPricing()
   const range = customRange ?? getDateRange(period)
   const filteredProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
-  const planUsage = await getPlanUsageOrNullForProjects(filteredProjects)
+  const planUsage = await getPlanUsageOrNull()
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   if (isTTY) {
     const { waitUntilExit } = render(
