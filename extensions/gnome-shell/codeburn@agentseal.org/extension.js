@@ -25,6 +25,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const REFRESH_INTERVAL_SECONDS = 60;
+const CACHE_TTL_MS = 60_000;
 const TOP_ACTIVITIES = 5;
 const CODEBURN_BIN = 'codeburn';
 
@@ -97,6 +98,11 @@ class CodeburnIndicator extends PanelMenu.Button {
         this._refreshGen = 0;
         this._timeout = null;
         this._payload = null;
+        // (period, provider) -> {payload, fetchedAt}. Matches the Mac AppStore
+        // cache pattern. Tab switches within TTL render from memory immediately;
+        // a background refresh silently replaces the cache when it returns.
+        this._payloadCache = new Map();
+        this._inFlightKeys = new Set();
         this._updateFxRate();
 
         this._themeSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
@@ -417,20 +423,24 @@ class CodeburnIndicator extends PanelMenu.Button {
     }
 
     _setCurrency(code) {
-        let proc;
+        // The CLI command is fire-and-forget — it writes config.json. We don't wait
+        // for it to finish because we already know the new code. Update the symbol
+        // + FX rate immediately and re-render from the cached payload (values are
+        // stored raw USD; formatCost applies the multiplier at render time). The
+        // CLI call is still dispatched so other surfaces (TUI, menubar subcommand)
+        // see the same currency on next run.
         try {
-            proc = Gio.Subprocess.new(
+            Gio.Subprocess.new(
                 [CODEBURN_BIN, 'currency', code],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
             );
         } catch (_) {
-            return;
+            // CLI missing; we'll still update the local display.
         }
-        proc.wait_async(null, () => {
-            this._currency = this._loadCurrency();
-            this._currencyBtn.set_label(`${this._currency.code} ⌄`);
-            this._updateFxRate();
-        });
+        const known = CURRENCIES.find(c => c.code === code);
+        this._currency = known || {code, symbol: `${code} `};
+        this._currencyBtn.set_label(`${this._currency.code} ⌄`);
+        this._updateFxRate();
     }
 
     /// menubar-json payloads stay in USD regardless of the user's configured
@@ -463,11 +473,27 @@ class CodeburnIndicator extends PanelMenu.Button {
         });
     }
 
-    _refresh() {
-        // Generation counter: a click while a previous fetch is in flight still
-        // fires a new process; the older response is dropped instead of racing
-        // to overwrite the new one. Solves the "first click does nothing" bug
-        // where the initial load was still running when the user tapped a tab.
+    _cacheKey() {
+        return `${this._period}|${this._provider}`;
+    }
+
+    /// Entry point for every tab/provider switch and the periodic poll.
+    /// 1. If we have a fresh cached payload for the current (period, provider),
+    ///    render immediately and return. Tab switches feel instant.
+    /// 2. If a fetch for this same key is already in flight, don't spawn another.
+    /// 3. Otherwise spawn a codeburn status subprocess; on return, cache the
+    ///    payload and render. Uses a generation counter so a stale response from
+    ///    a previous key doesn't clobber the current render.
+    _refresh(force = false) {
+        const key = this._cacheKey();
+        const cached = this._payloadCache.get(key);
+        if (!force && cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
+            this._payload = cached.payload;
+            this._render(this._payload);
+            return;
+        }
+        if (this._inFlightKeys.has(key)) return;
+        this._inFlightKeys.add(key);
         const gen = ++this._refreshGen;
         this._loading = true;
 
@@ -478,12 +504,14 @@ class CodeburnIndicator extends PanelMenu.Button {
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
             );
         } catch (_) {
+            this._inFlightKeys.delete(key);
             this._loading = false;
             this._renderError('codeburn CLI not found on PATH');
             return;
         }
 
         proc.communicate_utf8_async(null, null, (p, result) => {
+            this._inFlightKeys.delete(key);
             if (gen !== this._refreshGen) return;
             this._loading = false;
             try {
@@ -496,8 +524,15 @@ class CodeburnIndicator extends PanelMenu.Button {
                     this._renderError('codeburn returned no output');
                     return;
                 }
-                this._payload = JSON.parse(stdout);
-                this._render(this._payload);
+                const payload = JSON.parse(stdout);
+                this._payloadCache.set(key, {payload, fetchedAt: Date.now()});
+                // Only render if the user is still on this key — if they switched
+                // to a different period/provider while we were loading, the cache
+                // entry stays warm but the UI already moved on.
+                if (this._cacheKey() === key) {
+                    this._payload = payload;
+                    this._render(this._payload);
+                }
             } catch (e) {
                 this._renderError(`parse error: ${e.message}`);
             }
