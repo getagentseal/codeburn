@@ -48,7 +48,7 @@ autoinstall:
   late-commands:
     - curtin in-target --target=/target -- bash -lc '
         sudo -iu codeburn bash -lc "
-          curl -fsSL https://raw.githubusercontent.com/AgentSeal/codeburn/feat/tauri-menubar-win-linux/desktop/Scripts/provision-linux.sh \
+          curl -fsSL https://raw.githubusercontent.com/getagentseal/codeburn/feat/tauri-menubar-win-linux/desktop/Scripts/provision-linux.sh \
             -o /home/codeburn/provision.sh
           chmod +x /home/codeburn/provision.sh
         "

@@ -4,7 +4,7 @@
 # Usage inside a fresh Ubuntu 24.04 LTS Server VM (after `sudo apt install
 # ubuntu-desktop-minimal && sudo reboot`, and logging into GNOME):
 #
-#   curl -fsSL https://raw.githubusercontent.com/AgentSeal/codeburn/feat/tauri-menubar-win-linux/desktop/Scripts/provision-linux.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/getagentseal/codeburn/feat/tauri-menubar-win-linux/desktop/Scripts/provision-linux.sh | bash
 #
 # Or if you cloned the repo manually: `bash desktop/Scripts/provision-linux.sh`.
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/AgentSeal/codeburn.git"
+REPO_URL="https://github.com/getagentseal/codeburn.git"
 BRANCH="feat/tauri-menubar-win-linux"
 CHECKOUT="${HOME}/codeburn"
 

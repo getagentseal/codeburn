@@ -40,13 +40,14 @@
     "shortDescription": "AI coding cost tracker",
     "longDescription": "Shows today's AI coding spend in your system tray. Popover breaks down cost by activity, model, and provider across Claude Code, Cursor, Codex, and more.",
     "publisher": "AgentSeal",
-    "homepage": "https://github.com/AgentSeal/codeburn",
+    "homepage": "https://github.com/getagentseal/codeburn",
     "targets": ["deb", "rpm", "appimage", "msi"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png"
+      "icons/icon.png",
+      "icons/icon.ico"
     ],
     "linux": {
       "deb": {

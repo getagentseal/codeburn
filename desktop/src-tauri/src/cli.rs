@@ -15,12 +15,15 @@ const MAX_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 256 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 60;
 
-/// Alphanumerics plus `._/-` and space. No `$`, `;`, `&`, `|`, quotes, or newlines.
+/// Alphanumerics plus `._/-` and space, with `\`, `:`, `(`, `)` also allowed on Windows
+/// so a user-supplied `CODEBURN_BIN` path like `C:\Users\...\codeburn.cmd` is accepted.
+/// None of these are shell metacharacters in a direct-argv spawn (we never invoke `sh -c`).
 fn is_safe_arg(value: &str) -> bool {
     !value.is_empty()
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric()
                 || matches!(c, '.' | '_' | '/' | '-' | ' ')
+                || (cfg!(windows) && matches!(c, '\\' | ':' | '(' | ')'))
         })
 }
 
@@ -52,8 +55,14 @@ impl CodeburnCli {
     }
 
     fn default_program() -> Self {
+        // npm installs `codeburn.cmd` on Windows; `std::process::Command` doesn't
+        // guarantee PATHEXT resolution when the program name has no extension.
+        #[cfg(windows)]
+        let program = "codeburn.cmd".to_string();
+        #[cfg(not(windows))]
+        let program = "codeburn".to_string();
         CodeburnCli {
-            program: "codeburn".into(),
+            program,
             extra_args: vec![],
         }
     }
@@ -178,8 +187,10 @@ pub fn spawn_in_terminal(_app: &AppHandle, subcommand: &[&str]) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
+        // `start` treats the first quoted argument as the window title, so we pass
+        // an explicit empty title ("") to keep the program name from being eaten.
         let mut cmd = std::process::Command::new("cmd");
-        cmd.arg("/C").arg("start").arg(&cli.program);
+        cmd.arg("/C").arg("start").arg("").arg(&cli.program);
         for a in &cli.extra_args { cmd.arg(a); }
         for a in subcommand { cmd.arg(a); }
         cmd.spawn().with_context(|| "failed to open cmd.exe")?;

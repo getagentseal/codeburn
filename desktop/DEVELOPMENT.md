@@ -98,14 +98,18 @@ npm run tauri build
 - **FX fetches**: Frankfurter response is parsed as JSON and the rate is clamped to `[0.0001, 1_000_000]` before it touches displayed numbers. Stale cache preferred over poisoned fresh data.
 - **CSP**: `connect-src` restricted to `self`, `ipc:`, and `https://api.frankfurter.app`. No inline scripts.
 
+## Release tags
+
+- `linux-v*` -- triggers `.github/workflows/release-desktop-linux.yml`; publishes `.deb`, `.rpm`, `.AppImage`.
+- `win-v*` -- triggers `.github/workflows/release-desktop-windows.yml`; publishes `.msi`. Unsigned for now, so Windows SmartScreen prompts on first run until a signing cert is in place.
+
 ## Pending work
 
-Tracked in the `feat/tauri-menubar-win-linux` branch. Phase markers in commits. Highlights:
-
 1. ~~Scaffold Tauri 2.x + shared tokens + placeholder icons~~
-2. Data wiring: `fetch_payload` + React rendering of hero, activity, models
+2. ~~Data wiring: `fetch_payload` + React rendering of hero, activity, models~~
 3. Full popover parity with mac/ (trend chart, forecast, pulse, stats, plan pills)
-4. Currency picker instant switch + Frankfurter fetch
-5. Linux release workflow (`ubuntu-latest`): `.deb`, `.AppImage`, `.rpm`, Flatpak manifest
-6. Windows release workflow (`windows-latest`): `.msi`
+4. ~~Currency picker instant switch + Frankfurter fetch~~
+5. ~~Linux release workflow (`ubuntu-latest`): `.deb`, `.AppImage`, `.rpm`~~ (Flatpak manifest still TODO)
+6. ~~Windows release workflow (`windows-latest`): `.msi`~~
 7. Icon pass (vector flame replacing the terracotta-square placeholders)
+8. Code signing for Windows `.msi` to remove the SmartScreen warning

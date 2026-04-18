@@ -1,0 +1,97 @@
+name: Release Windows Desktop
+
+# Triggers on a `win-v*` tag push (e.g. `git tag win-v0.1.0 && git push origin win-v0.1.0`),
+# or manually via the Actions tab. Runs on the free windows-latest runner. The produced
+# `.msi` is unsigned; users see a SmartScreen prompt on first run until we add signing.
+on:
+  push:
+    tags:
+      - 'win-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for the bundle (e.g. v0.1.0 or dev-preview)'
+        required: true
+        default: 'dev-preview'
+
+permissions:
+  contents: write  # Needed to create the release + upload assets.
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version label
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/win-v* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/win-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+
+      - name: Install npm deps
+        working-directory: desktop
+        run: npm install
+
+      - name: Build MSI bundle
+        working-directory: desktop
+        # Produces .msi (and possibly .nsis) under src-tauri/target/release/bundle/
+        run: npm run tauri build
+
+      - name: Collect artifacts
+        id: collect
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          find desktop/src-tauri/target/release/bundle -type f \
+            \( -name '*.msi' -o -name '*.exe' \) \
+            -exec cp -v {} release-artifacts/ \;
+          ls -la release-artifacts
+
+      - name: Upload artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeburn-desktop-windows-${{ steps.version.outputs.value }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+      - name: Create / update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Windows Desktop ${{ steps.version.outputs.value }}
+          body: |
+            Install by downloading the `.msi` below and running it. Windows SmartScreen may
+            warn on first run because the bundle is unsigned; click "More info" then "Run
+            anyway". Signing support is planned.
+
+            Requires the WebView2 Runtime (preinstalled on Windows 11 and recent Windows
+            10 updates; otherwise installed on demand the first time the app launches).
+          files: release-artifacts/*
+          fail_on_unmatched_files: true
