@@ -1,14 +1,13 @@
 # CodeBurn Audit Report (1.0.0)
 
-Generated: 2026-04-19
-Branch: feat/auggie-only
+Generated: 2026-04-19Branch: feat/auggie-only
 
 ## Executive Summary
 
 CodeBurn 1.0.0 is in excellent health. The audit found 0 critical or high-severity issues. All 172 tests pass (168 TypeScript, 4 Swift), TypeScript type-checks cleanly, and npm audit reports 0 vulnerabilities across 178 dependencies. Two medium-severity performance findings relate to missing fetch timeouts in currency.ts and models.ts. The codebase follows defense-in-depth patterns throughout: symlink rejection, size caps on reads, regex allowlists for shell arguments, and prototype pollution guards.
 
 | Severity | Count |
-|----------|-------|
+| --- | --- |
 | Critical | 0 |
 | High | 0 |
 | Medium | 2 |
@@ -20,6 +19,7 @@ CodeBurn 1.0.0 is in excellent health. The audit found 0 critical or high-severi
 **Scope:** TypeScript CLI (src/), Vitest test suite (tests/), macOS menubar app (mac/), CI workflows (.github/workflows/)
 
 **Methodology:**
+
 1. Repository layout analysis and dependency audit
 2. Full test suite execution (Vitest + Swift Testing)
 3. TypeScript type-check (tsc --noEmit)
@@ -30,6 +30,7 @@ CodeBurn 1.0.0 is in excellent health. The audit found 0 critical or high-severi
 ## Discovery
 
 ### Repository Layout
+
 ```
 codeburn/
 ├── src/                    # TypeScript source (23 files)
@@ -49,27 +50,29 @@ codeburn/
 ```
 
 ### Key Entry Points
+
 | Entry | File | Description |
-|-------|------|-------------|
+| --- | --- | --- |
 | CLI | src/cli.ts | Commander.js binary |
 | Dashboard | src/dashboard.tsx | Ink/React TUI |
 | Mac App | mac/Sources/CodeBurnMenubar/CodeBurnApp.swift | SwiftUI menubar |
 
 ### Version Requirements
+
 - Node.js >= 22
 - Swift 6.0
 - macOS >= 14
 
 ## Test Coverage
 
-**TypeScript (Vitest):** 168 tests, 15 files, 773ms
-**Swift (swift test):** 4 tests, 1 suite
+**TypeScript (Vitest):** 168 tests, 15 files, 773ms**Swift (swift test):** 4 tests, 1 suite
 
 **Total:** 172 tests passing, 0 failed, 0 skipped
 
 ### Test Categories
+
 | Category | Tests | Coverage |
-|----------|-------|----------|
+| --- | --- | --- |
 | Security (installer, prototype pollution) | 21 | Host allowlist, SHA-256 verify, pollution guards |
 | Provider (auggie) | 9 | Discovery, parsing, model aliasing |
 | Export | 2 | CSV injection, symlink rejection |
@@ -84,7 +87,7 @@ codeburn/
 ## Security Findings
 
 | Location | Severity | Issue | Status |
-|----------|----------|-------|--------|
+| --- | --- | --- | --- |
 | - | - | No hardcoded tokens/keys | OK |
 | - | - | No TLS bypass patterns | OK |
 | - | - | No token/session logging | OK |
@@ -100,7 +103,7 @@ codeburn/
 ## Performance and Stability Findings
 
 | Location | Severity | Issue | Recommendation |
-|----------|----------|-------|----------------|
+| --- | --- | --- | --- |
 | src/currency.ts:66 | M | fetch() without timeout | Add AbortSignal.timeout(10000) |
 | src/models.ts:77 | M | fetch() without timeout | Add AbortSignal.timeout(10000) |
 | src/fs-utils.ts:53 | L | Sync fs in readSessionFileSync | Only used in tests |
@@ -108,15 +111,17 @@ codeburn/
 | src/cli.ts | L | No unhandledRejection handler | Consider adding for cleaner errors |
 
 ### Resource Caps
+
 | File | Limit |
-|------|-------|
+| --- | --- |
 | src/fs-utils.ts | MAX_SESSION_FILE_BYTES = 128MB |
 | mac/DataClient.swift | maxPayloadBytes = 20MB |
 | mac/DataClient.swift | Per-array caps on decoded payload |
 
 ### Cache TTLs
+
 | Cache | Strategy |
-|-------|----------|
+| --- | --- |
 | currency.ts | 24h TTL |
 | models.ts | 24h TTL |
 | daily-cache.ts | ~365KB max (no eviction needed) |
@@ -125,25 +130,29 @@ codeburn/
 ## Improvement Plan
 
 ### High Impact / Low Effort
+
 | Issue | Branch | Effort |
-|-------|--------|--------|
+| --- | --- | --- |
 | Add fetch timeout to currency.ts | audit/performance-improvements | 1 line |
 | Add fetch timeout to models.ts | audit/performance-improvements | 1 line |
 
 ### Medium Impact / Low Effort
+
 | Issue | Branch | Effort |
-|-------|--------|--------|
+| --- | --- | --- |
 | Add unhandledRejection handler | audit/performance-improvements | 5 lines |
 
 ### Low Impact / Informational
+
 | Issue | Branch | Notes |
-|-------|--------|-------|
+| --- | --- | --- |
 | Sync fs usage in tests | audit/test-coverage | Acceptable for fixtures |
 | Sync fs in optimize.ts | - | Non-hot path, acceptable |
 
 ### Test Coverage Improvements
+
 | Target | Branch | Notes |
-|--------|--------|-------|
+| --- | --- | --- |
 | CLI integration tests | audit/test-coverage | E2E for report, today, month |
 | Mac app unit tests | audit/test-coverage | Expand beyond DataClient bounds |
 
