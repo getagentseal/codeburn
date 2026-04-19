@@ -8,12 +8,25 @@ private let maxPayloadBytes = 20 * 1024 * 1024
 private let maxStderrBytes = 256 * 1024
 private let spawnTimeoutSeconds: UInt64 = 60
 
+/// Per-array caps enforced AFTER JSON decoding. The 20 MB byte cap above bounds total memory
+/// but a single 20 MB payload could still carry millions of entries in one array and force the
+/// decoder to allocate an oversized Swift array. These caps reject payloads whose shape does
+/// not match what the CLI legitimately produces, so a malicious or buggy CLI cannot amplify
+/// allocations beyond the product's real working set.
+private let maxDailyHistoryEntries = 400        // >1 year of daily history
+private let maxActivityEntries = 64
+private let maxModelEntries = 64
+private let maxProviderEntries = 64
+private let maxFindingEntries = 64
+private let maxDailyTopModelEntries = 64
+
 enum DataClientError: Error {
     case spawn(String)
     case nonZeroExit(code: Int32, stderr: String)
     case decode(Error)
     case timeout
     case outputTooLarge
+    case payloadFieldTooLarge(field: String, count: Int, max: Int)
 }
 
 /// Runs the CLI via argv (no shell interpretation). See `CodeburnCLI` for why we never route
@@ -34,10 +47,33 @@ struct DataClient {
         guard result.exitCode == 0 else {
             throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
         }
+        let payload: MenubarPayload
         do {
-            return try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
+            payload = try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
         } catch {
             throw DataClientError.decode(error)
+        }
+        try validatePayloadBounds(payload)
+        return payload
+    }
+
+    /// Rejects a decoded payload whose array fields exceed the expected working-set sizes.
+    /// Throws `.payloadFieldTooLarge` with the offending field name so diagnostics stay
+    /// informative without leaking any payload contents.
+    static func validatePayloadBounds(_ payload: MenubarPayload) throws {
+        try enforce("history.daily", payload.history.daily.count, max: maxDailyHistoryEntries)
+        try enforce("current.topActivities", payload.current.topActivities.count, max: maxActivityEntries)
+        try enforce("current.topModels", payload.current.topModels.count, max: maxModelEntries)
+        try enforce("current.providers", payload.current.providers.count, max: maxProviderEntries)
+        try enforce("optimize.topFindings", payload.optimize.topFindings.count, max: maxFindingEntries)
+        for (index, entry) in payload.history.daily.enumerated() {
+            try enforce("history.daily[\(index)].topModels", entry.topModels.count, max: maxDailyTopModelEntries)
+        }
+    }
+
+    private static func enforce(_ field: String, _ count: Int, max: Int) throws {
+        if count > max {
+            throw DataClientError.payloadFieldTooLarge(field: field, count: count, max: max)
         }
     }
 
