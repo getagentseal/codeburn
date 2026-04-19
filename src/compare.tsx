@@ -16,6 +16,8 @@ const LOW_DATA_THRESHOLD = 20
 const LABEL_WIDTH = 20
 const VALUE_WIDTH = 14
 const WINNER_WIDTH = 12
+const MODEL_NAME_COL = 24
+const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 function formatValue(value: number | null, fmt: ComparisonRow['formatFn']): string {
   if (value === null) return '-'
@@ -34,7 +36,7 @@ function shortName(model: string): string {
 function daysOfData(first: string, last: string): number {
   if (!first || !last) return 0
   const ms = new Date(last).getTime() - new Date(first).getTime()
-  return Math.max(1, Math.ceil(ms / (1000 * 60 * 60 * 24)))
+  return Math.max(1, Math.ceil(ms / MS_PER_DAY))
 }
 
 type ModelSelectorProps = {
@@ -95,7 +97,7 @@ function ModelSelector({ models, onSelect, onBack }: ModelSelectorProps) {
           <Text key={m.model}>
             <Text color={isCursor ? ORANGE : undefined}>{prefix}</Text>
             <Text bold={isSelected} color={isSelected ? GREEN : undefined}>
-              {m.model.padEnd(24)}
+              {m.model.padEnd(MODEL_NAME_COL)}
             </Text>
             <Text>{m.calls.toLocaleString().padStart(8)} calls</Text>
             <Text color={GOLD}>{formatCost(m.cost).padStart(10)}</Text>
@@ -243,12 +245,12 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
     }
 
     const corrections = await scanSelfCorrections(dirs)
-    a.selfCorrections = corrections.get(a.model) ?? 0
-    b.selfCorrections = corrections.get(b.model) ?? 0
+    const aCopy = { ...a, selfCorrections: corrections.get(a.model) ?? 0 }
+    const bCopy = { ...b, selfCorrections: corrections.get(b.model) ?? 0 }
 
-    const comparisonRows = computeComparison(a, b)
-    setSelectedA(a)
-    setSelectedB(b)
+    const comparisonRows = computeComparison(aCopy, bCopy)
+    setSelectedA(aCopy)
+    setSelectedB(bCopy)
     setRows(comparisonRows)
     setPhase('results')
   }
