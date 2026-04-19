@@ -1,3 +1,4 @@
+import { auggie } from './auggie.js'
 import { claude } from './claude.js'
 import { codex } from './codex.js'
 import { copilot } from './copilot.js'
@@ -34,7 +35,7 @@ async function loadOpenCode(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, codex, copilot, pi]
+const coreProviders: Provider[] = [claude, codex, copilot, pi, auggie]
 
 export async function getAllProviders(): Promise<Provider[]> {
   const [cursor, opencode] = await Promise.all([loadCursor(), loadOpenCode()])

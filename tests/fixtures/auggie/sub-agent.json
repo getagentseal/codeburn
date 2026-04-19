@@ -1,0 +1,50 @@
+{
+  "sessionId": "44444444-4444-4444-8444-444444444444",
+  "created": "2026-04-03T11:00:00.000Z",
+  "modified": "2026-04-03T11:01:00.000Z",
+  "rootTaskUuid": "root-task-0001",
+  "creditUsage": null,
+  "subAgentCreditsUsed": 0,
+  "workspaceId": "ws-cccccccc",
+  "agentState": {
+    "modelId": "claude-haiku-4-5"
+  },
+  "chatHistory": [
+    {
+      "exchange": {
+        "request_id": "req-dddd0001",
+        "request_message": "REDACTED sub-agent task",
+        "response_text": "sub reply",
+        "request_nodes": [
+          {
+            "id": 0,
+            "type": 4,
+            "ide_state_node": {
+              "current_terminal": { "current_working_directory": "/Users/tester/workspaces/alpha/repo" },
+              "workspace_folders": [
+                { "repository_root": "/Users/tester/workspaces/alpha/repo" }
+              ]
+            }
+          }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 8,
+            "content": "",
+            "tool_use": null,
+            "thinking": null,
+            "metadata": { "provider": "anthropic" },
+            "token_usage": {
+              "input_tokens": 1,
+              "output_tokens": 25,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "timestamp_ms": 1775559660000
+          }
+        ]
+      }
+    }
+  ]
+}
