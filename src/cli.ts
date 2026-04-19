@@ -15,7 +15,7 @@ import { parseDateRangeFlags } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
-import { clearPlan, readConfig, readPlan, saveConfig, savePlan, getConfigFilePath } from './config.js'
+import { clearPlan, readConfig, readPlan, saveConfig, savePlan, getConfigFilePath, type PlanId } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, planDisplayName } from './plans.js'
 import { createRequire } from 'node:module'
@@ -95,7 +95,7 @@ function parseInteger(value: string): number {
 }
 
 type JsonPlanSummary = {
-  id: 'claude-pro' | 'claude-max' | 'cursor-pro' | 'custom'
+  id: PlanId
   budget: number
   spent: number
   percentUsed: number

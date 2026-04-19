@@ -144,5 +144,5 @@ export async function getPlanUsageOrNull(today = new Date()): Promise<PlanUsage 
 }
 
 export function isActivePlan(plan: Plan | undefined): plan is Plan {
-  return Boolean(plan) && plan.id !== 'none' && Number.isFinite(plan.monthlyUsd) && plan.monthlyUsd > 0
+  return plan !== undefined && plan.id !== 'none' && Number.isFinite(plan.monthlyUsd) && plan.monthlyUsd > 0
 }
