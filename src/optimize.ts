@@ -26,8 +26,6 @@ const RED = '#F55B5B'
 // ============================================================================
 
 const AVG_TOKENS_PER_READ = 600
-const TOKENS_PER_MCP_TOOL = 400
-const TOOLS_PER_MCP_SERVER = 5
 const BASH_TOKENS_PER_CHAR = 0.25
 
 // ============================================================================
@@ -46,10 +44,6 @@ const LOW_RATIO_HIGH_THRESHOLD = 2
 const LOW_RATIO_MEDIUM_THRESHOLD = 3
 const MIN_API_CALLS_FOR_CACHE = 10
 const CACHE_EXCESS_HIGH_THRESHOLD = 15000
-const UNUSED_MCP_HIGH_THRESHOLD = 3
-const MCP_NEW_CONFIG_GRACE_MS = 24 * 60 * 60 * 1000
-const AUGGIE_MCP_SETTINGS_PATH = '.augment/mcp_settings.json'
-const MCP_TOOL_SUFFIX = '-mcp'
 const BASH_DEFAULT_LIMIT = 30000
 const BASH_RECOMMENDED_LIMIT = 15000
 
@@ -317,25 +311,6 @@ function isReadTool(name: string): boolean {
   return name === 'Read' || name === 'FileReadTool'
 }
 
-type McpConfigEntry = { normalized: string; original: string; mtime: number }
-
-export function loadMcpConfigs(): Map<string, McpConfigEntry> {
-  const servers = new Map<string, McpConfigEntry>()
-  const configPath = join(homedir(), AUGGIE_MCP_SETTINGS_PATH)
-  if (!existsSync(configPath)) return servers
-
-  const config = readJsonFile(configPath)
-  if (!config) return servers
-
-  let mtime = 0
-  try { mtime = statSync(configPath).mtimeMs } catch {}
-  const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
-  for (const name of Object.keys(serversObj)) {
-    servers.set(name, { normalized: name, original: name, mtime })
-  }
-  return servers
-}
-
 // ============================================================================
 // Detectors
 // ============================================================================
@@ -444,59 +419,6 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
       text: 'In <file> lines <start>-<end>, look at the <function> function.',
     },
     trend,
-  }
-}
-
-function extractMcpServerFromToolName(toolName: string): string | null {
-  if (!toolName.endsWith(MCP_TOOL_SUFFIX)) return null
-  const withoutSuffix = toolName.slice(0, -MCP_TOOL_SUFFIX.length)
-  const lastUnderscore = withoutSuffix.lastIndexOf('_')
-  if (lastUnderscore <= 0) return null
-  return withoutSuffix.slice(lastUnderscore + 1)
-}
-
-export function detectUnusedMcp(
-  calls: ToolCall[],
-  projects: ProjectSummary[],
-): WasteFinding | null {
-  const configured = loadMcpConfigs()
-  if (configured.size === 0) return null
-
-  const calledServers = new Set<string>()
-  for (const call of calls) {
-    const server = extractMcpServerFromToolName(call.name)
-    if (server) calledServers.add(server)
-  }
-  for (const p of projects) {
-    for (const s of p.sessions) {
-      for (const server of Object.keys(s.mcpBreakdown)) calledServers.add(server)
-    }
-  }
-
-  const now = Date.now()
-  const unused: string[] = []
-  for (const entry of configured.values()) {
-    if (calledServers.has(entry.normalized)) continue
-    if (entry.mtime > 0 && now - entry.mtime < MCP_NEW_CONFIG_GRACE_MS) continue
-    unused.push(entry.original)
-  }
-
-  if (unused.length === 0) return null
-
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
-  const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
-
-  return {
-    title: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never used`,
-    explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
-    impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
-    tokensSaved,
-    fix: {
-      type: 'paste',
-      label: `Edit ~/.augment/mcp_settings.json and remove unused servers:`,
-      text: unused.join(', '),
-    },
   }
 }
 
@@ -611,8 +533,8 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Check for heavy MCP tool additions or agent rules bloat.',
-      text: 'Review ~/.augment/mcp_settings.json and remove unused MCP servers.',
+      label: 'Check for agent rules bloat or large context files.',
+      text: 'Review CLAUDE.md, .cursor/rules, and other context files for excessive content.',
     },
     trend,
   }
@@ -773,7 +695,6 @@ export async function scanAndDetect(
     () => detectLowReadEditRatio(toolCalls),
     () => detectJunkReads(toolCalls, dateRange),
     () => detectDuplicateReads(toolCalls, dateRange),
-    () => detectUnusedMcp(toolCalls, projects),
     () => detectBashBloat(),
   ]
   for (const detect of detectors) {
@@ -877,8 +798,7 @@ function renderOptimize(
     lines.push(chalk.hex(GREEN)('  Nothing to fix. Your setup is lean.'))
     lines.push('')
     lines.push(chalk.dim('  CodeBurn optimize scans your Augment sessions for token waste:'))
-    lines.push(chalk.dim('  junk directory reads, duplicate file reads, unused MCP servers,'))
-    lines.push(chalk.dim('  and more.'))
+    lines.push(chalk.dim('  junk directory reads, duplicate file reads, and more.'))
     lines.push('')
     return lines.join('\n')
   }
