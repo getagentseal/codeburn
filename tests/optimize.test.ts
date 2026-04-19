@@ -5,7 +5,6 @@ import {
   detectDuplicateReads,
   detectLowReadEditRatio,
   detectCacheBloat,
-  detectBloatedClaudeMd,
   computeHealth,
   computeTrend,
   type ToolCall,
@@ -76,14 +75,14 @@ describe('detectJunkReads', () => {
     expect(detectJunkReads(calls)).toBeNull()
   })
 
-  it('suggests CLAUDE.md advice listing detected and common junk dirs', () => {
+  it('suggests agent rules advice listing detected and common junk dirs', () => {
     const calls = Array.from({ length: 5 }, () => call('Read', { file_path: '/x/node_modules/a.js' }))
     const finding = detectJunkReads(calls)!
     expect(finding.fix.type).toBe('paste')
     if (finding.fix.type === 'paste') {
       expect(finding.fix.text).toContain('node_modules')
     }
-    expect(finding.fix.label).toContain('CLAUDE.md')
+    expect(finding.fix.label).toContain('agent rules')
   })
 })
 
@@ -192,18 +191,6 @@ describe('detectCacheBloat', () => {
     }))
     const finding = detectCacheBloat(apiCalls, emptyProjects())
     expect(finding).not.toBeNull()
-  })
-})
-
-describe('detectBloatedClaudeMd', () => {
-  it('returns null when no projects have CLAUDE.md', () => {
-    const result = detectBloatedClaudeMd(new Set(['/nonexistent/path']))
-    expect(result).toBeNull()
-  })
-
-  it('returns null for empty project set', () => {
-    const result = detectBloatedClaudeMd(new Set())
-    expect(result).toBeNull()
   })
 })
 

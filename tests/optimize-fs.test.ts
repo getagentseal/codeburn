@@ -7,7 +7,7 @@ vi.mock('os', async () => {
   const actual = await vi.importActual<typeof import('os')>('os')
   const fs = await vi.importActual<typeof import('fs')>('fs')
   const fakeHome = fs.mkdtempSync(actual.tmpdir() + '/codeburn-home-')
-  fs.mkdirSync(fakeHome + '/.claude', { recursive: true })
+  fs.mkdirSync(fakeHome + '/.augment', { recursive: true })
   process.env['CODEBURN_TEST_FAKE_HOME'] = fakeHome
   return { ...actual, homedir: () => fakeHome }
 })
@@ -15,12 +15,8 @@ vi.mock('os', async () => {
 const FAKE_HOME_FOR_MOCK = process.env['CODEBURN_TEST_FAKE_HOME']!
 
 import {
-  detectBloatedClaudeMd,
   detectUnusedMcp,
   detectBashBloat,
-  detectGhostAgents,
-  detectGhostSkills,
-  detectGhostCommands,
   loadMcpConfigs,
   scanJsonlFile,
   scanAndDetect,
@@ -60,154 +56,59 @@ afterAll(() => {
 })
 
 // ============================================================================
-// detectBloatedClaudeMd (including @-import expansion)
-// ============================================================================
-
-describe('detectBloatedClaudeMd', () => {
-  it('flags a CLAUDE.md with more than 200 lines', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    const content = Array.from({ length: 300 }, (_, i) => `line ${i}`).join('\n')
-    writeFile(join(projectDir, 'CLAUDE.md'), content)
-    const finding = detectBloatedClaudeMd(new Set([projectDir]))
-    expect(finding).not.toBeNull()
-  })
-
-  it('expands @-imports and counts transitive load', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(
-      join(projectDir, 'CLAUDE.md'),
-      'line 1\nline 2\n@./rules.md\n@./conventions.md\n',
-    )
-    writeFile(join(projectDir, 'rules.md'), Array.from({ length: 120 }, (_, i) => `rule ${i}`).join('\n'))
-    writeFile(join(projectDir, 'conventions.md'), Array.from({ length: 120 }, (_, i) => `conv ${i}`).join('\n'))
-    const finding = detectBloatedClaudeMd(new Set([projectDir]))
-    expect(finding).not.toBeNull()
-    expect(finding!.explanation).toContain('2 @-imports')
-  })
-
-  it('does not flag a lean CLAUDE.md under 200 lines with no imports', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, 'CLAUDE.md'), 'just a few\nlines\nhere\n')
-    expect(detectBloatedClaudeMd(new Set([projectDir]))).toBeNull()
-  })
-
-  it('does not recurse infinitely on circular @-imports', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, 'CLAUDE.md'), '@./a.md\n')
-    writeFile(join(projectDir, 'a.md'), '@./b.md\n')
-    writeFile(join(projectDir, 'b.md'), '@./a.md\n')
-    expect(() => detectBloatedClaudeMd(new Set([projectDir]))).not.toThrow()
-  })
-
-  it('ignores @ tokens that are not paths (emails, npm scopes)', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(
-      join(projectDir, 'CLAUDE.md'),
-      Array.from({ length: 250 }, (_, i) =>
-        i === 10 ? '@user@example.com' :
-        i === 20 ? '@org/package' :
-        `line ${i}`
-      ).join('\n'),
-    )
-    const finding = detectBloatedClaudeMd(new Set([projectDir]))
-    expect(finding).not.toBeNull()
-    // "with N @-imports" suffix appears only when non-zero imports were resolved
-    expect(finding!.explanation).not.toMatch(/with \d+ @-import/)
-  })
-})
-
-// ============================================================================
 // loadMcpConfigs + detectUnusedMcp
 // ============================================================================
 
 describe('loadMcpConfigs', () => {
-  it('returns empty map when no configs exist', () => {
-    const root = makeFixtureRoot()
-    const servers = loadMcpConfigs([root])
+  it('returns empty map when no config exists', () => {
+    const servers = loadMcpConfigs()
     expect(servers.size).toBe(0)
   })
 
-  it('reads servers from project .mcp.json', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+  it('reads servers from ~/.augment/mcp_settings.json', () => {
+    writeFile(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), JSON.stringify({
       mcpServers: { foo: { command: 'foo' }, bar: { command: 'bar' } },
     }))
-    const servers = loadMcpConfigs([projectDir])
+    const servers = loadMcpConfigs()
     expect(servers.has('foo')).toBe(true)
     expect(servers.has('bar')).toBe(true)
   })
 
-  it('normalizes server names by replacing colons with underscores', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
-      mcpServers: { 'plugin:context7:context7': { command: 'ctx' } },
-    }))
-    const servers = loadMcpConfigs([projectDir])
-    expect(servers.has('plugin_context7_context7')).toBe(true)
-    expect(servers.get('plugin_context7_context7')!.original).toBe('plugin:context7:context7')
-  })
-
   it('handles malformed JSON without crashing', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), '{ not valid json')
-    expect(() => loadMcpConfigs([projectDir])).not.toThrow()
-    expect(loadMcpConfigs([projectDir]).size).toBe(0)
+    writeFile(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), '{ not valid json')
+    expect(() => loadMcpConfigs()).not.toThrow()
+    expect(loadMcpConfigs().size).toBe(0)
   })
 })
 
 describe('detectUnusedMcp', () => {
   it('flags servers configured but never called', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+    writeFile(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), JSON.stringify({
       mcpServers: { ghost: { command: 'x' } },
     }))
-    const configFile = join(projectDir, '.mcp.json')
+    const configFile = join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json')
     touchOld(configFile, 30)
-    const finding = detectUnusedMcp([], [], new Set([projectDir]))
+    const finding = detectUnusedMcp([], [])
     expect(finding).not.toBeNull()
     expect(finding!.explanation).toContain('ghost')
   })
 
   it('does not flag servers configured within 24 hours', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+    writeFile(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), JSON.stringify({
       mcpServers: { freshly_added: { command: 'x' } },
     }))
-    expect(detectUnusedMcp([], [], new Set([projectDir]))).toBeNull()
+    expect(detectUnusedMcp([], [])).toBeNull()
   })
 
-  it('does not flag servers that were called', () => {
-    const root = makeFixtureRoot()
-    const projectDir = join(root, 'myapp')
-    mkdirSync(projectDir, { recursive: true })
-    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+  it('does not flag servers that were called via Auggie MCP tool naming', () => {
+    writeFile(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), JSON.stringify({
       mcpServers: { used: { command: 'x' } },
     }))
-    touchOld(join(projectDir, '.mcp.json'), 30)
+    touchOld(join(FAKE_HOME_FOR_MOCK, '.augment', 'mcp_settings.json'), 30)
     const calls: ToolCall[] = [
-      { name: 'mcp__used__some_tool', input: {}, sessionId: 's1', project: 'p1' },
+      { name: 'some_tool_used-mcp', input: {}, sessionId: 's1', project: 'p1' },
     ]
-    expect(detectUnusedMcp(calls, [], new Set([projectDir]))).toBeNull()
+    expect(detectUnusedMcp(calls, [])).toBeNull()
   })
 })
 
@@ -246,30 +147,6 @@ describe('detectBashBloat', () => {
     process.env['BASH_MAX_OUTPUT_LENGTH'] = '50000'
     const finding = detectBashBloat()
     expect(finding).not.toBeNull()
-  })
-})
-
-// ============================================================================
-// detectGhostCommands (the pure-function ghost detector)
-// ============================================================================
-
-describe('detectGhostCommands', () => {
-  it('returns null when no commands are defined', async () => {
-    expect(await detectGhostCommands([])).toBeNull()
-  })
-
-  it('does not match /tmp or /usr or other path prefixes as command usage', async () => {
-    const messages = [
-      'check /tmp/debug.log',
-      'look at /usr/local/bin',
-      'rm -rf /var/cache',
-    ]
-    expect(await detectGhostCommands(messages)).toBeNull()
-  })
-
-  it('matches <command-name> tags in user messages', async () => {
-    const messages = ['<command-name>review</command-name>']
-    expect(await detectGhostCommands(messages)).toBeNull()
   })
 })
 

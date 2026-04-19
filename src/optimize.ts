@@ -28,18 +28,12 @@ const RED = '#F55B5B'
 const AVG_TOKENS_PER_READ = 600
 const TOKENS_PER_MCP_TOOL = 400
 const TOOLS_PER_MCP_SERVER = 5
-const TOKENS_PER_AGENT_DEF = 80
-const TOKENS_PER_SKILL_DEF = 80
-const TOKENS_PER_COMMAND_DEF = 60
-const CLAUDEMD_TOKENS_PER_LINE = 13
 const BASH_TOKENS_PER_CHAR = 0.25
 
 // ============================================================================
 // Detector thresholds
 // ============================================================================
 
-const CLAUDEMD_HEALTHY_LINES = 200
-const CLAUDEMD_HIGH_THRESHOLD_LINES = 400
 const MIN_JUNK_READS_TO_FLAG = 3
 const JUNK_READS_HIGH_THRESHOLD = 20
 const JUNK_READS_MEDIUM_THRESHOLD = 5
@@ -53,12 +47,9 @@ const LOW_RATIO_MEDIUM_THRESHOLD = 3
 const MIN_API_CALLS_FOR_CACHE = 10
 const CACHE_EXCESS_HIGH_THRESHOLD = 15000
 const UNUSED_MCP_HIGH_THRESHOLD = 3
-const GHOST_AGENTS_HIGH_THRESHOLD = 5
-const GHOST_AGENTS_MEDIUM_THRESHOLD = 2
-const GHOST_SKILLS_HIGH_THRESHOLD = 10
-const GHOST_SKILLS_MEDIUM_THRESHOLD = 5
-const GHOST_COMMANDS_MEDIUM_THRESHOLD = 10
 const MCP_NEW_CONFIG_GRACE_MS = 24 * 60 * 60 * 1000
+const AUGGIE_MCP_SETTINGS_PATH = '.augment/mcp_settings.json'
+const MCP_TOOL_SUFFIX = '-mcp'
 const BASH_DEFAULT_LIMIT = 30000
 const BASH_RECOMMENDED_LIMIT = 15000
 
@@ -82,10 +73,6 @@ const URGENCY_TOKEN_NORMALIZE = 500_000
 // File system constants
 // ============================================================================
 
-const MAX_IMPORT_DEPTH = 5
-const IMPORT_PATTERN = /^@(\.\.?\/[^\s]+|\/[^\s]+)/gm
-const COMMAND_PATTERN = /<command-name>([^<]+)<\/command-name>|(?:^|\s)\/([a-zA-Z][\w-]*)/gm
-
 const JUNK_DIRS = [
   'node_modules', '.git', 'dist', 'build', '__pycache__', '.next',
   '.nuxt', '.output', 'coverage', '.cache', '.tsbuildinfo',
@@ -96,8 +83,6 @@ const JUNK_PATTERN = new RegExp(`/(?:${JUNK_DIRS.join('|')})/`)
 const SHELL_PROFILES = ['.zshrc', '.bashrc', '.bash_profile', '.profile']
 
 const TOP_ITEMS_PREVIEW = 3
-const GHOST_NAMES_PREVIEW = 5
-const GHOST_CLEANUP_COMMANDS_LIMIT = 10
 
 // ============================================================================
 // Types
@@ -292,7 +277,7 @@ export async function scanJsonlFile(
 }
 
 async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
-  const sources = await discoverAllSessions('claude')
+  const sources = await discoverAllSessions()
   const allCalls: ToolCall[] = []
   const allCwds = new Set<string>()
   const allApiCalls: ApiCallMeta[] = []
@@ -328,43 +313,25 @@ function readJsonFile(path: string): Record<string, unknown> | null {
   try { return JSON.parse(raw) } catch { return null }
 }
 
-function shortHomePath(absPath: string): string {
-  const home = homedir()
-  return absPath.startsWith(home) ? '~' + absPath.slice(home.length) : absPath
-}
-
 function isReadTool(name: string): boolean {
   return name === 'Read' || name === 'FileReadTool'
 }
 
 type McpConfigEntry = { normalized: string; original: string; mtime: number }
 
-export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
+export function loadMcpConfigs(): Map<string, McpConfigEntry> {
   const servers = new Map<string, McpConfigEntry>()
-  const configPaths = [
-    join(homedir(), '.claude', 'settings.json'),
-    join(homedir(), '.claude', 'settings.local.json'),
-  ]
-  for (const cwd of projectCwds) {
-    configPaths.push(join(cwd, '.mcp.json'))
-    configPaths.push(join(cwd, '.claude', 'settings.json'))
-    configPaths.push(join(cwd, '.claude', 'settings.local.json'))
-  }
+  const configPath = join(homedir(), AUGGIE_MCP_SETTINGS_PATH)
+  if (!existsSync(configPath)) return servers
 
-  for (const p of configPaths) {
-    if (!existsSync(p)) continue
-    const config = readJsonFile(p)
-    if (!config) continue
-    let mtime = 0
-    try { mtime = statSync(p).mtimeMs } catch {}
-    const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
-    for (const name of Object.keys(serversObj)) {
-      const normalized = name.replace(/:/g, '_')
-      const existing = servers.get(normalized)
-      if (!existing || existing.mtime < mtime) {
-        servers.set(normalized, { normalized, original: name, mtime })
-      }
-    }
+  const config = readJsonFile(configPath)
+  if (!config) return servers
+
+  let mtime = 0
+  try { mtime = statSync(configPath).mtimeMs } catch {}
+  const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
+  for (const name of Object.keys(serversObj)) {
+    servers.set(name, { normalized: name, original: name, mtime })
   }
   return servers
 }
@@ -408,13 +375,13 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   const dirsToAvoid = [...detected, ...extras].join(', ')
 
   return {
-    title: 'Claude is reading build/dependency folders',
-    explanation: `Claude read into ${dirList} (${totalJunkReads} reads). These are generated or dependency directories, not your code. Tell Claude in CLAUDE.md to avoid them.`,
+    title: 'Agent is reading build/dependency folders',
+    explanation: `Agent read into ${dirList} (${totalJunkReads} reads). These are generated or dependency directories, not your code. Add a rule to avoid them.`,
     impact: totalJunkReads > JUNK_READS_HIGH_THRESHOLD ? 'high' : totalJunkReads > JUNK_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Append to your project CLAUDE.md:',
+      label: 'Add to your agent rules:',
       text: `Do not read or search files under these directories unless I explicitly ask: ${dirsToAvoid}.`,
     },
     trend,
@@ -467,32 +434,38 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
   const tokensSaved = totalDuplicates * AVG_TOKENS_PER_READ
 
   return {
-    title: 'Claude is re-reading the same files',
+    title: 'Agent is re-reading the same files',
     explanation: `${totalDuplicates} redundant re-reads across sessions. Top repeats: ${worst}. Each re-read loads the same content into context again.`,
     impact: totalDuplicates > DUPLICATE_READS_HIGH_THRESHOLD ? 'high' : totalDuplicates > DUPLICATE_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Point Claude at exact locations in your prompt, for example:',
+      label: 'Point agent at exact locations in your prompt, for example:',
       text: 'In <file> lines <start>-<end>, look at the <function> function.',
     },
     trend,
   }
 }
 
+function extractMcpServerFromToolName(toolName: string): string | null {
+  if (!toolName.endsWith(MCP_TOOL_SUFFIX)) return null
+  const withoutSuffix = toolName.slice(0, -MCP_TOOL_SUFFIX.length)
+  const lastUnderscore = withoutSuffix.lastIndexOf('_')
+  if (lastUnderscore <= 0) return null
+  return withoutSuffix.slice(lastUnderscore + 1)
+}
+
 export function detectUnusedMcp(
   calls: ToolCall[],
   projects: ProjectSummary[],
-  projectCwds: Set<string>,
 ): WasteFinding | null {
-  const configured = loadMcpConfigs(projectCwds)
+  const configured = loadMcpConfigs()
   if (configured.size === 0) return null
 
   const calledServers = new Set<string>()
   for (const call of calls) {
-    if (!call.name.startsWith('mcp__')) continue
-    const seg = call.name.split('__')[1]
-    if (seg) calledServers.add(seg)
+    const server = extractMcpServerFromToolName(call.name)
+    if (server) calledServers.add(server)
   }
   for (const p of projects) {
     for (const s of p.sessions) {
@@ -520,72 +493,9 @@ export function detectUnusedMcp(
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {
-      type: 'command',
-      label: `Remove unused server${unused.length > 1 ? 's' : ''}:`,
-      text: unused.map(s => `claude mcp remove ${s}`).join('\n'),
-    },
-  }
-}
-
-function expandImports(filePath: string, seen: Set<string>, depth: number): { totalLines: number; importedFiles: number } {
-  if (depth > MAX_IMPORT_DEPTH || seen.has(filePath)) return { totalLines: 0, importedFiles: 0 }
-  seen.add(filePath)
-  const content = readSessionFileSync(filePath)
-  if (content === null) return { totalLines: 0, importedFiles: 0 }
-
-  let totalLines = content.split('\n').length
-  let importedFiles = 0
-  const dir = join(filePath, '..')
-
-  IMPORT_PATTERN.lastIndex = 0
-  for (const match of content.matchAll(IMPORT_PATTERN)) {
-    const rawPath = match[1]
-    if (!rawPath) continue
-    const resolved = rawPath.startsWith('/') ? rawPath : join(dir, rawPath)
-    if (!existsSync(resolved)) continue
-    const nested = expandImports(resolved, seen, depth + 1)
-    totalLines += nested.totalLines
-    importedFiles += 1 + nested.importedFiles
-  }
-
-  return { totalLines, importedFiles }
-}
-
-export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | null {
-  const bloated: { path: string; expandedLines: number; imports: number }[] = []
-
-  for (const cwd of projectCwds) {
-    for (const name of ['CLAUDE.md', '.claude/CLAUDE.md']) {
-      const fullPath = join(cwd, name)
-      if (!existsSync(fullPath)) continue
-      const { totalLines, importedFiles } = expandImports(fullPath, new Set(), 0)
-      if (totalLines > CLAUDEMD_HEALTHY_LINES) {
-        bloated.push({ path: `${shortHomePath(cwd)}/${name}`, expandedLines: totalLines, imports: importedFiles })
-      }
-    }
-  }
-
-  if (bloated.length === 0) return null
-
-  const sorted = bloated.sort((a, b) => b.expandedLines - a.expandedLines)
-  const worst = sorted[0]
-  const totalExtraLines = sorted.reduce((s, b) => s + (b.expandedLines - CLAUDEMD_HEALTHY_LINES), 0)
-  const tokensSaved = totalExtraLines * CLAUDEMD_TOKENS_PER_LINE
-
-  const list = sorted.slice(0, TOP_ITEMS_PREVIEW).map(b => {
-    const importNote = b.imports > 0 ? ` with ${b.imports} @-import${b.imports > 1 ? 's' : ''}` : ''
-    return `${b.path} (${b.expandedLines} lines${importNote})`
-  }).join(', ')
-
-  return {
-    title: `Your CLAUDE.md is too long`,
-    explanation: `${list}. CLAUDE.md plus all @-imported files load into every API call. Trimming below ${CLAUDEMD_HEALTHY_LINES} lines saves ~${formatTokens(tokensSaved)} tokens per call.`,
-    impact: worst.expandedLines > CLAUDEMD_HIGH_THRESHOLD_LINES ? 'high' : 'medium',
-    tokensSaved,
-    fix: {
       type: 'paste',
-      label: 'Ask Claude to trim it:',
-      text: `Review CLAUDE.md and all @-imported files. Cut total expanded content to under ${CLAUDEMD_HEALTHY_LINES} lines. Remove anything Claude can figure out from the code itself. Keep only rules, gotchas, and non-obvious conventions.`,
+      label: `Edit ~/.augment/mcp_settings.json and remove unused servers:`,
+      text: unused.join(', '),
     },
   }
 }
@@ -625,13 +535,13 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   if (trend === 'resolved') return null
 
   return {
-    title: 'Claude edits more than it reads',
-    explanation: `Claude made ${reads} reads and ${edits} edits (ratio ${ratio.toFixed(1)}:1). A healthy ratio is ${HEALTHY_READ_EDIT_RATIO}+ reads per edit. Editing without reading leads to retries and wasted tokens.`,
+    title: 'Agent edits more than it reads',
+    explanation: `Agent made ${reads} reads and ${edits} edits (ratio ${ratio.toFixed(1)}:1). A healthy ratio is ${HEALTHY_READ_EDIT_RATIO}+ reads per edit. Editing without reading leads to retries and wasted tokens.`,
     impact,
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Add to your CLAUDE.md:',
+      label: 'Add to your agent rules:',
       text: 'Before editing any file, read it first. Before modifying a function, grep for all callers. Research before you edit.',
     },
     trend,
@@ -701,122 +611,10 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Check for recent Claude Code updates or heavy MCP/skill additions. As a workaround (not officially supported):',
-      text: 'export ANTHROPIC_CUSTOM_HEADERS=\'User-Agent: claude-cli/2.1.98 (external, sdk-cli)\'',
+      label: 'Check for heavy MCP tool additions or agent rules bloat.',
+      text: 'Review ~/.augment/mcp_settings.json and remove unused MCP servers.',
     },
     trend,
-  }
-}
-
-async function listMarkdownFiles(dir: string): Promise<string[]> {
-  if (!existsSync(dir)) return []
-  try {
-    const entries = await readdir(dir)
-    return entries.filter(e => e.endsWith('.md')).map(e => e.replace(/\.md$/, ''))
-  } catch { return [] }
-}
-
-async function listSkillDirs(dir: string): Promise<string[]> {
-  if (!existsSync(dir)) return []
-  try {
-    const entries = await readdir(dir)
-    const names: string[] = []
-    for (const entry of entries) {
-      if (existsSync(join(dir, entry, 'SKILL.md'))) names.push(entry)
-    }
-    return names
-  } catch { return [] }
-}
-
-export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding | null> {
-  const defined = await listMarkdownFiles(join(homedir(), '.claude', 'agents'))
-  if (defined.length === 0) return null
-
-  const invoked = new Set<string>()
-  for (const call of calls) {
-    if (call.name !== 'Agent' && call.name !== 'Task') continue
-    const subType = call.input.subagent_type as string | undefined
-    if (subType) invoked.add(subType)
-  }
-
-  const ghosts = defined.filter(name => !invoked.has(name))
-  if (ghosts.length === 0) return null
-
-  const tokensSaved = ghosts.length * TOKENS_PER_AGENT_DEF
-  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
-
-  return {
-    title: `${ghosts.length} custom agent${ghosts.length > 1 ? 's' : ''} you never use`,
-    explanation: `Defined in ~/.claude/agents/ but never invoked in this period: ${list}. Each adds ~${TOKENS_PER_AGENT_DEF} tokens to the Task tool schema on every session.`,
-    impact: ghosts.length >= GHOST_AGENTS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_AGENTS_MEDIUM_THRESHOLD ? 'medium' : 'low',
-    tokensSaved,
-    fix: {
-      type: 'command',
-      label: `Archive unused agent${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/agents/${name}.md ~/.claude/agents/.archived/`).join('\n'),
-    },
-  }
-}
-
-export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding | null> {
-  const defined = await listSkillDirs(join(homedir(), '.claude', 'skills'))
-  if (defined.length === 0) return null
-
-  const invoked = new Set<string>()
-  for (const call of calls) {
-    if (call.name !== 'Skill') continue
-    const skillName = (call.input.skill as string) || (call.input.name as string)
-    if (skillName) invoked.add(skillName)
-  }
-
-  const ghosts = defined.filter(name => !invoked.has(name))
-  if (ghosts.length === 0) return null
-
-  const tokensSaved = ghosts.length * TOKENS_PER_SKILL_DEF
-  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
-
-  return {
-    title: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} you never use`,
-    explanation: `In ~/.claude/skills/ but not invoked this period: ${list}. Each adds ~${TOKENS_PER_SKILL_DEF} tokens of metadata to every session.`,
-    impact: ghosts.length >= GHOST_SKILLS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_SKILLS_MEDIUM_THRESHOLD ? 'medium' : 'low',
-    tokensSaved,
-    fix: {
-      type: 'command',
-      label: `Archive unused skill${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/skills/${name} ~/.claude/skills/.archived/`).join('\n'),
-    },
-  }
-}
-
-export async function detectGhostCommands(userMessages: string[]): Promise<WasteFinding | null> {
-  const defined = await listMarkdownFiles(join(homedir(), '.claude', 'commands'))
-  if (defined.length === 0) return null
-
-  const invoked = new Set<string>()
-  for (const msg of userMessages) {
-    COMMAND_PATTERN.lastIndex = 0
-    for (const m of msg.matchAll(COMMAND_PATTERN)) {
-      const name = (m[1] || m[2] || '').trim()
-      if (name) invoked.add(name)
-    }
-  }
-
-  const ghosts = defined.filter(name => !invoked.has(name))
-  if (ghosts.length === 0) return null
-
-  const tokensSaved = ghosts.length * TOKENS_PER_COMMAND_DEF
-  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
-
-  return {
-    title: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} you never use`,
-    explanation: `In ~/.claude/commands/ but not referenced this period: ${list}. Each adds ~${TOKENS_PER_COMMAND_DEF} tokens of definition per session.`,
-    impact: ghosts.length >= GHOST_COMMANDS_MEDIUM_THRESHOLD ? 'medium' : 'low',
-    tokensSaved,
-    fix: {
-      type: 'command',
-      label: `Archive unused command${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/commands/${name}.md ~/.claude/commands/.archived/`).join('\n'),
-    },
   }
 }
 
@@ -967,29 +765,21 @@ export async function scanAndDetect(
   if (cached && Date.now() - cached.ts < RESULT_CACHE_TTL_MS) return cached.data
 
   const costRate = computeInputCostRate(projects)
-  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
+  const { toolCalls, apiCalls } = await scanSessions(dateRange)
 
   const findings: WasteFinding[] = []
-  const syncDetectors: Array<() => WasteFinding | null> = [
+  const detectors: Array<() => WasteFinding | null> = [
     () => detectCacheBloat(apiCalls, projects, dateRange),
     () => detectLowReadEditRatio(toolCalls),
     () => detectJunkReads(toolCalls, dateRange),
     () => detectDuplicateReads(toolCalls, dateRange),
-    () => detectUnusedMcp(toolCalls, projects, projectCwds),
-    () => detectBloatedClaudeMd(projectCwds),
+    () => detectUnusedMcp(toolCalls, projects),
     () => detectBashBloat(),
   ]
-  for (const detect of syncDetectors) {
+  for (const detect of detectors) {
     const finding = detect()
     if (finding) findings.push(finding)
   }
-
-  const ghostResults = await Promise.all([
-    detectGhostAgents(toolCalls),
-    detectGhostSkills(toolCalls),
-    detectGhostCommands(userMessages),
-  ])
-  for (const f of ghostResults) if (f) findings.push(f)
 
   findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
   const { score, grade } = computeHealth(findings)
@@ -1086,9 +876,9 @@ function renderOptimize(
   if (findings.length === 0) {
     lines.push(chalk.hex(GREEN)('  Nothing to fix. Your setup is lean.'))
     lines.push('')
-    lines.push(chalk.dim('  CodeBurn optimize scans your Claude Code sessions and config for'))
-    lines.push(chalk.dim('  token waste: junk directory reads, duplicate file reads, unused'))
-    lines.push(chalk.dim('  agents/skills/MCP servers, bloated CLAUDE.md, and more.'))
+    lines.push(chalk.dim('  CodeBurn optimize scans your Augment sessions for token waste:'))
+    lines.push(chalk.dim('  junk directory reads, duplicate file reads, unused MCP servers,'))
+    lines.push(chalk.dim('  and more.'))
     lines.push('')
     return lines.join('\n')
   }
