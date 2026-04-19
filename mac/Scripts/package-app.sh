@@ -106,7 +106,9 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
   codesign --verify --deep --strict --verbose=2 "${BUNDLE}"
 else
   echo "▸ Ad-hoc signing (DEVELOPER_ID_SIGNING_IDENTITY unset)..."
-  codesign --force --sign - --timestamp=none --deep "${BUNDLE}" 2>/dev/null || true
+  # Let real codesign failures surface (previously `|| true` swallowed them, so a local
+  # build with a malformed SwiftPM output would ship a silently unsigned bundle).
+  codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
   codesign --verify --deep --strict "${BUNDLE}" 2>/dev/null || echo "  (signature verify skipped)"
 fi
 

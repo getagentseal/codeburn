@@ -38,9 +38,28 @@ enum Pinning {
     static let pinnedHosts: Set<String> = ["platform.claude.com", "api.anthropic.com"]
 
     /// Reads the opt-in allow-list from UserDefaults. Empty array means "no pinning".
+    /// If the key is set to a non-array type (e.g. `defaults write ... -string`), log a single
+    /// warning so a misconfigured user knows why pinning isn't taking effect, then fall back
+    /// to the empty allow-list (fail-open, matching the opt-in contract).
     static func configuredHashes() -> Set<String> {
-        let raw = UserDefaults.standard.array(forKey: pinnedHashesKey) as? [String] ?? []
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: pinnedHashesKey) != nil,
+           defaults.array(forKey: pinnedHashesKey) == nil {
+            logTypeMismatchOnce()
+            return []
+        }
+        let raw = defaults.array(forKey: pinnedHashesKey) as? [String] ?? []
         return Set(raw.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+    }
+
+    /// Diagnostic-only. Fires at most once per process to keep the log quiet when the
+    /// delegate is invoked on every TLS handshake.
+    private static let typeMismatchLogger: Void = {
+        NSLog("CodeBurn: \(Pinning.pinnedHashesKey) is set to a non-array type; ignoring. Use `defaults write ... -array ...` to enable pinning.")
+    }()
+
+    private static func logTypeMismatchOnce() {
+        _ = typeMismatchLogger
     }
 }
 
