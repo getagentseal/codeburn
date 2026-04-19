@@ -16,9 +16,10 @@ struct CodeBurnApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
-        // SwiftUI App needs at least one scene. Settings is invisible by default.
+        // The Settings scene is also what backs Cmd-, from the menubar; we use it to host
+        // the privacy toggle for the Anthropic subscription sync (see SettingsView).
         Settings {
-            EmptyView()
+            SettingsView()
         }
     }
 }
