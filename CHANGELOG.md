@@ -1,13 +1,24 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-04-19
+
+### Breaking changes
+- Removed `--provider` flag from all commands (report, today, month, status, export)
+- Removed support for Claude Code, Codex, Cursor, OpenCode, Pi, GitHub Copilot providers
+- Removed TUI provider toggle (`p` key)
+- Removed provider tab strip from macOS menubar app
+- macOS menubar Plan pill now reads Augment credit info from ~/.augment/session.json; users must run `auggie login`
 
 ### Added
-- **`codeburn report --from/--to`.** Filter sessions to an exact `YYYY-MM-DD` date range (local time). Either flag alone is valid: `--from` alone runs from the given date through end-of-today, `--to` alone runs from the earliest data through the given date. Inverted ranges or malformed dates exit with a clear error. In the TUI, pressing `1`-`5` still switches to the predefined periods. Credit: @lfl1337 (PR #80).
-- **`avgCostPerSession` in reports.** JSON `projects[]` entries gain an `avgCostPerSession` field and `export -f csv` adds an `Avg/Session (USD)` column to `projects.csv`. Column order in `projects.csv` is now `Project, Cost, Avg/Session, Share, API Calls, Sessions` -- scripts parsing by column position should read by header instead. Credit: @lfl1337 (PR #80).
+- Augment credit/plan view via /get-credit-info
+- `--from`/`--to` date range filtering on all commands. Filter sessions to an exact `YYYY-MM-DD` date range (local time). Either flag alone is valid. Credit: @lfl1337 (PR #80).
+- `avgCostPerSession` in JSON reports. `export -f csv` adds an `Avg/Session (USD)` column to `projects.csv`. Credit: @lfl1337 (PR #80).
 
 ### Security
-- **Semgrep CI guard against prototype pollution regressions.** New `.github/workflows/ci.yml` runs a bracket-assign guard on `src/providers/` and `src/parser.ts` on every push to main and every PR. Blocks re-introducing `$MAP[$KEY] = $MAP[$KEY] ?? $INIT` patterns on `{}`-initialized maps. `categoryBreakdown` in `parser.ts` switched to `Object.create(null)` for consistency with its sibling breakdown maps. Credit: @lfl1337 (PR #78).
+- Semgrep CI guard against prototype pollution regressions. Credit: @lfl1337 (PR #78).
+
+### Notes
+- Screenshots in assets/ predate 1.0.0 and will be regenerated in a follow-up
 
 ## 0.7.3 - 2026-04-18
 

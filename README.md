@@ -4,7 +4,7 @@
 
 <h1 align="center">CodeBurn</h1>
 
-<p align="center">See where your AI coding tokens go.</p>
+<p align="center">See where your Auggie tokens go.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/v/codeburn.svg" alt="npm version" /></a>
@@ -19,9 +19,11 @@
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, **GitHub Copilot**, and **Auggie** (Augment Code CLI) with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+*Screenshot predates 1.0.0 and will be updated.*
 
-Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
+A usage dashboard for Auggie (the Augment Code CLI). Tracks cost by task type, tool, model, MCP server, and project. Shows one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+
+Works by reading Auggie session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
 ## Install
 
@@ -37,9 +39,8 @@ npx codeburn
 
 ### Requirements
 
-- Node.js 20+
-- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), GitHub Copilot (`~/.copilot/session-state/`), and/or Auggie / Augment Code (`~/.augment/sessions/`)
-- For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
+- Node.js 22+
+- Auggie (Augment Code CLI) with session data at `~/.augment/sessions/`
 
 ## Usage
 
@@ -82,25 +83,6 @@ codeburn today --format json | jq '.overview.cost'
 
 For the lighter `status --format json` (today + month totals only) or file-based exports (`export -f json`), see above.
 
-## Providers
-
-CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
-
-```bash
-codeburn report                      # all providers combined (default)
-codeburn report --provider claude    # Claude Code only
-codeburn report --provider codex     # Codex only
-codeburn report --provider cursor    # Cursor only
-codeburn report --provider opencode  # OpenCode only
-codeburn report --provider pi        # Pi only
-codeburn report --provider copilot   # GitHub Copilot only
-codeburn report --provider auggie    # Auggie (Augment Code CLI) only
-codeburn today --provider codex      # Codex today
-codeburn export --provider claude    # export Claude data only
-```
-
-The `--provider` flag works on all commands: `report`, `today`, `month`, `status`, `export`.
-
 ### Project filtering
 
 Filter results by project name (case-insensitive substring match). Both flags are repeatable:
@@ -113,7 +95,7 @@ codeburn month --project api --project web       # include multiple projects
 codeburn export --project inventory              # export only "inventory" project data
 ```
 
-The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+The `--project` and `--exclude` flags work on all commands.
 
 ### Date range filtering
 
@@ -126,33 +108,11 @@ codeburn report --to 2026-04-10                      # earliest data through thi
 codeburn report --from 2026-04-01 --to 2026-04-10 --format json
 ```
 
-Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only -- pressing `1`-`5` switches back to predefined periods.
+Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only - pressing `1`-`5` switches back to predefined periods.
 
-### Supported providers
+### How Auggie sessions are parsed
 
-| Provider | Data location | Status |
-|----------|--------------|--------|
-| Claude Code | `~/.claude/projects/` | Supported |
-| Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
-| Codex (OpenAI) | `~/.codex/sessions/` | Supported |
-| Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
-| OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
-| Pi | `~/.pi/agent/sessions/` | Supported |
-| GitHub Copilot | `~/.copilot/session-state/` | Supported (output tokens only) |
-| Auggie (Augment Code CLI) | `~/.augment/sessions/` | Supported |
-| Amp | -- | Planned (provider plugin system) |
-
-Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
-
-Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
-
-GitHub Copilot only logs output tokens in its session state, so Copilot cost rows sit below actual API cost. The model is tracked via `session.model_change` events; messages before the first model change are skipped to avoid silent misattribution.
-
-Auggie (Augment Code's CLI) writes one pretty-printed JSON file per conversation into `~/.augment/sessions/<uuid>.json`. codeburn emits one row per response node with populated `token_usage` (each exchange can carry multiple rows because of tool-use loops), dedups on `auggie:${sessionId}:${request_id}:${response_node.id}`, and tags sub-agent sessions with their `rootTaskUuid` in the session label. The credentials file at `~/.augment/session.json` is never read. When `agentState.modelId` is empty, codeburn falls back to a provider-aware default (`anthropic` → `claude-sonnet-4-5`, `openai` → `gpt-5.1`, `google` → `gemini-3-pro`); each default is overridable via `CODEBURN_AUGGIE_DEFAULT_ANTHROPIC`, `CODEBURN_AUGGIE_DEFAULT_OPENAI`, `CODEBURN_AUGGIE_DEFAULT_GOOGLE`. Augment-internal model ids are aliased for pricing (e.g. `butler` → `claude-haiku-4-5`); override any alias via `CODEBURN_AUGGIE_ALIAS_<MODEL>`. Parsed calls are cached per session at `~/.cache/codeburn/auggie/<uuid>.json` (mode 0600) and invalidated on mtime+size change.
-
-### Adding a provider
-
-The provider plugin system makes adding a new provider a single file. Each provider implements session discovery, JSONL parsing, tool normalization, and model display names. See `src/providers/codex.ts` for an example.
+Auggie writes one pretty-printed JSON file per conversation into `~/.augment/sessions/<uuid>.json`. CodeBurn emits one row per response node with populated `token_usage` (each exchange can carry multiple rows because of tool-use loops), dedups on `auggie:${sessionId}:${request_id}:${response_node.id}`, and tags sub-agent sessions with their `rootTaskUuid` in the session label. The credentials file at `~/.augment/session.json` is never read. When `agentState.modelId` is empty, CodeBurn falls back to a provider-aware default (`anthropic` to `claude-sonnet-4-5`, `openai` to `gpt-5.1`, `google` to `gemini-3-pro`); each default is overridable via `CODEBURN_AUGGIE_DEFAULT_ANTHROPIC`, `CODEBURN_AUGGIE_DEFAULT_OPENAI`, `CODEBURN_AUGGIE_DEFAULT_GOOGLE`. Augment-internal model ids are aliased for pricing (e.g. `butler` to `claude-haiku-4-5`); override any alias via `CODEBURN_AUGGIE_ALIAS_<MODEL>`. Parsed calls are cached per session at `~/.cache/codeburn/auggie/<uuid>.json` (mode 0600) and invalidated on mtime+size change.
 
 ## Currency
 
@@ -176,11 +136,13 @@ The menu bar widget includes a currency picker with 17 common currencies. For an
 
 <img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/menubar-0.7.2.png" alt="CodeBurn macOS menubar app" width="420" />
 
+*Screenshot predates 1.0.0 and will be updated.*
+
 ```bash
 npx codeburn menubar
 ```
 
-One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 60-second poll.
+One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 60-second poll.
 
 ## What it tracks
 
@@ -227,46 +189,31 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 ## Optimize
 
-Once you know what to look for, `codeburn optimize` scans your sessions and your `~/.claude/` setup for the most common waste patterns and hands back exact, copy-paste fixes. It never writes to your files.
+`codeburn optimize` scans your Auggie sessions for common waste patterns and hands back exact, copy-paste fixes. It never writes to your files.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/optimize.jpg" alt="CodeBurn optimize output" width="720" />
 </p>
 
+*Screenshot predates 1.0.0 and will be updated.*
+
 ```bash
 codeburn optimize                       # scan the last 30 days
 codeburn optimize -p today              # today only
 codeburn optimize -p week               # last 7 days
-codeburn optimize --provider claude     # restrict to one provider
 ```
 
 **What it detects**
 
-- Files Claude re-reads across sessions (same content, same context, over and over)
+- Files re-read across sessions (same content, same context, over and over)
 - Low Read:Edit ratio (editing without reading leads to retries and wasted tokens)
-- Wasted bash output (uncapped `BASH_MAX_OUTPUT_LENGTH`, trailing noise)
+- Wasted bash output (uncapped output, trailing noise)
 - Unused MCP servers still paying their tool-schema overhead every session
-- Ghost agents, skills, and slash commands defined in `~/.claude/` but never invoked
-- Bloated `CLAUDE.md` files (with `@-import` expansion counted)
 - Cache creation overhead and junk directory reads
 
-Each finding shows the estimated token and dollar savings plus a ready-to-paste fix: a `CLAUDE.md` line, an environment variable, or a `mv` command to archive unused items. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A-F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
+Each finding shows the estimated token and dollar savings plus a ready-to-paste fix. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A-F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
 
 You can also open it inline from the dashboard: press `o` when a finding count appears in the status bar, `b` to return.
-
-## How it reads data
-
-**Claude Code** stores session transcripts as JSONL at `~/.claude/projects/<sanitized-path>/<session-id>.jsonl`. Each assistant entry contains model name, token usage (input, output, cache read, cache write), tool_use blocks, and timestamps.
-
-**Codex** stores sessions at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with `token_count` events containing per-call and cumulative token usage, and `function_call` entries for tool tracking.
-
-**Cursor** stores session data in a SQLite database at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (macOS), `~/.config/Cursor/User/globalStorage/state.vscdb` (Linux), or `%APPDATA%/Cursor/User/globalStorage/state.vscdb` (Windows). Token counts are in `cursorDiskKV` table entries with `bubbleId:` key prefix. Requires `better-sqlite3` (installed as optional dependency). Parsed results are cached at `~/.cache/codeburn/cursor-results.json` and auto-invalidate when the database changes.
-
-**OpenCode** stores sessions in SQLite databases at `~/.local/share/opencode/opencode*.db`. CodeBurn queries the `session`, `message`, and `part` tables read-only, extracts token counts and tool usage, and recalculates cost using the LiteLLM pricing engine. Falls back to OpenCode's own cost field for models not in our pricing data. Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double-counting. Supports multiple channel databases and respects `XDG_DATA_HOME`.
-
-**Pi** stores sessions as JSONL at `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl`. Each assistant message carries token usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` content blocks. CodeBurn extracts token counts, normalizes Pi's lowercase tool names to the standard set (`bash` -> `Bash`, `dispatch_agent` -> `Agent`), and pulls bash commands from `toolCall.arguments.command` for the shell breakdown.
-
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi), filters by date range per entry, and classifies each turn.
 
 ## Privacy and network access
 
@@ -277,45 +224,18 @@ CodeBurn parses session logs locally; no prompt or response text is sent off you
 | CLI | `raw.githubusercontent.com/BerriAI/litellm/...` | nothing (GET only) | model pricing refresh, cached locally |
 | CLI | `api.frankfurter.app` | nothing (GET only) | currency FX rate, cached locally |
 | CLI installer | `api.github.com/repos/getagentseal/codeburn/...`, `objects.githubusercontent.com` | nothing (GET only) | only when you run `codeburn menubar` to install/upgrade the macOS app |
-| Menubar app | `platform.claude.com/v1/oauth/token`, `api.anthropic.com/api/oauth/usage` | your Claude OAuth bearer / refresh token, sent to Anthropic | only when you click the Plan pill in the popover |
-
-The menubar app reads `~/.claude/.credentials.json` and the `Claude Code-credentials` Keychain item to pull your subscription usage from Anthropic. To disable that integration entirely (no credential read, no Anthropic requests), open **CodeBurn Menubar → Settings (Cmd-,) → Privacy** and turn off **Sync Anthropic plan usage**.
-
-For headless setups, the same control is exposed as a defaults key:
-
-```bash
-defaults write org.agentseal.codeburn-menubar CodeBurnDisableSubscriptionFetch -bool true
-```
+| Menubar app | Augment `/get-credit-info` | nothing (reads local `~/.augment/session.json`) | when you click the Plan pill in the popover |
 
 Cache and config files written by the CLI are created with mode `0600` under directories with mode `0700`. The macOS installer verifies a published SHA-256 sidecar before unpacking the downloaded app and refuses to install on mismatch (set `CODEBURN_ALLOW_UNVERIFIED_INSTALL=1` to override for releases that pre-date the sidecar).
-
-### Optional: TLS certificate pinning
-
-The menubar app's calls to `platform.claude.com` and `api.anthropic.com` trust the system root store by default. If you route traffic through a TLS-intercepting proxy you don't trust (or want defence in depth against a rogue root in your chain), you can pin the SHA-256 of the expected DER-encoded certificate for each endpoint. Extract the current hash:
-
-```bash
-openssl s_client -connect api.anthropic.com:443 -servername api.anthropic.com </dev/null 2>/dev/null \
-  | openssl x509 -outform DER \
-  | openssl dgst -sha256 -binary \
-  | base64
-```
-
-Repeat for `platform.claude.com`, then enable pinning by adding both hashes to the allow-list:
-
-```bash
-defaults write org.agentseal.codeburn-menubar CodeBurnPinnedSPKIHashes -array \
-  "<base64-hash-for-platform-claude-com>" \
-  "<base64-hash-for-api-anthropic-com>"
-```
-
-With the allow-list populated, the app rejects a TLS connection whose presented chain contains no matching certificate hash. Leave the key unset (the default) to fall back to system-trust evaluation. You must refresh the hashes when Anthropic rotates certificates; otherwise the subscription sync will fail closed. (The defaults key is named `CodeBurnPinnedSPKIHashes` for forward compatibility with a future SPKI-based pin; the current implementation hashes the full certificate DER.)
 
 ## Environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
-| `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
+| `CODEBURN_AUGGIE_DEFAULT_ANTHROPIC` | Override Auggie fallback model for Anthropic provider (default: `claude-sonnet-4-5`) |
+| `CODEBURN_AUGGIE_DEFAULT_OPENAI` | Override Auggie fallback model for OpenAI provider (default: `gpt-5.1`) |
+| `CODEBURN_AUGGIE_DEFAULT_GOOGLE` | Override Auggie fallback model for Google provider (default: `gemini-3-pro`) |
+| `CODEBURN_AUGGIE_ALIAS_<MODEL>` | Override model alias for Augment-internal model IDs |
 | `CODEBURN_ALLOW_UNVERIFIED_INSTALL` | Set to `1` to install the macOS menubar app from a release that does not publish a SHA-256 sidecar. Off by default; not recommended. |
 
 ## Project structure
@@ -324,7 +244,7 @@ With the allow-list populated, the app rejects a TLS connection whose presented 
 src/
   cli.ts          Commander.js entry point
   dashboard.tsx   Ink TUI (React for terminals)
-  parser.ts       JSONL reader, dedup, date filter, provider orchestration
+  parser.ts       Session reader, dedup, date filter
   models.ts       LiteLLM pricing, cost calculation
   classifier.ts   13-category task classifier
   types.ts        Type definitions
@@ -333,16 +253,10 @@ src/
   export.ts       CSV/JSON multi-period export
   config.ts       Config file management (~/.config/codeburn/)
   currency.ts     Currency conversion, exchange rates, Intl formatting
-  sqlite.ts       SQLite adapter (lazy-loads better-sqlite3)
-  cursor-cache.ts Cursor result cache (file-based, auto-invalidating)
   providers/
     types.ts      Provider interface definitions
-    index.ts      Provider registry (lazy-loads Cursor, OpenCode)
-    claude.ts     Claude Code session discovery
-    codex.ts      Codex session discovery and JSONL parsing
-    cursor.ts     Cursor SQLite parsing, language extraction
-    opencode.ts   OpenCode SQLite session discovery and parsing
-    pi.ts         Pi agent JSONL session discovery and parsing
+    index.ts      Provider registry
+    auggie.ts     Auggie session discovery and JSON parsing
 ```
 
 ## License

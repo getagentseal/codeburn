@@ -1,7 +1,7 @@
 {
   "name": "codeburn",
-  "version": "0.7.3",
-  "description": "See where your AI coding tokens go - by task, tool, model, and project",
+  "version": "1.0.0",
+  "description": "See where your Auggie tokens go - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {
@@ -17,11 +17,8 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "claude-code",
-    "cursor",
-    "codex",
-    "opencode",
-    "pi",
+    "augment",
+    "auggie",
     "ai-coding",
     "token-usage",
     "cost-tracking",
