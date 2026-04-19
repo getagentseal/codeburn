@@ -1,40 +1,24 @@
 import Foundation
-import Security
 
-private let credentialsRelativePath = ".claude/.credentials.json"
-private let keychainService = "Claude Code-credentials"
-private let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-private let refreshURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
-private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-private let betaHeader = "oauth-2025-04-20"
-private let userAgent = "claude-code/2.1.0"
+private let sessionRelativePath = ".augment/session.json"
 private let requestTimeout: TimeInterval = 30
+private let maxSessionBytes = 64 * 1024
 
-/// User-controllable kill switch for the entire subscription fetch path. Set with:
-///   defaults write org.agentseal.codeburn-menubar CodeBurnDisableSubscriptionFetch -bool true
-/// When true, no credential file or Keychain item is read and no requests are sent to
-/// platform.claude.com / api.anthropic.com. The Plan pill behaves as if no credentials exist.
 private let disableSubscriptionFetchKey = "CodeBurnDisableSubscriptionFetch"
 
-/// Claude Code writes Keychain items with `kSecAttrAccount = "default"`. Filtering on this
-/// prevents a planted Keychain item from another app (or a stale install with a mangled
-/// account) from being accepted as our source of OAuth credentials.
-private let expectedKeychainAccounts: Set<String> = ["default"]
-private let maxCredentialBytes = 64 * 1024
-
 enum SubscriptionError: Error, LocalizedError {
-    case noCredentials
-    case credentialsInvalid
-    case refreshFailed(Int, String?)
-    case usageFetchFailed(Int, String?)
+    case noSession
+    case sessionInvalid
+    case sessionExpired(Int)
+    case fetchFailed(Int, String?)
     case decodeFailed(Error)
 
     var errorDescription: String? {
         switch self {
-        case .noCredentials: "No Claude OAuth credentials found"
-        case .credentialsInvalid: "Claude OAuth credentials malformed"
-        case let .refreshFailed(code, body): "Token refresh failed (\(code))\(body.map { ": \($0)" } ?? "")"
-        case let .usageFetchFailed(code, body): "Usage fetch failed (\(code))\(body.map { ": \($0)" } ?? "")"
+        case .noSession: "No Augment session found"
+        case .sessionInvalid: "Augment session.json malformed"
+        case let .sessionExpired(code): "Session expired (\(code))"
+        case let .fetchFailed(code, body): "Credit info fetch failed (\(code))\(body.map { ": \($0)" } ?? "")"
         case let .decodeFailed(err): "Decode failed: \(err.localizedDescription)"
         }
     }
@@ -43,216 +27,82 @@ enum SubscriptionError: Error, LocalizedError {
 struct SubscriptionClient {
     static func fetch() async throws -> SubscriptionUsage {
         if UserDefaults.standard.bool(forKey: disableSubscriptionFetchKey) {
-            // Treat opt-out exactly like "no credentials": AppStore.refreshSubscription maps this
-            // to subscriptionLoadState = .noCredentials and the popover shows the unauthenticated
-            // copy, which is the right UX for a user who explicitly disabled the integration.
-            throw SubscriptionError.noCredentials
+            throw SubscriptionError.noSession
         }
-        let creds = try loadCredentials()
+        let session = try loadSession()
+        let response = try await fetchCreditInfo(session: session)
+        return mapResponse(response)
+    }
 
-        // Try the usage call with the existing token first. Only refresh on 401.
+    private static func loadSession() throws -> AugmentSession {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(sessionRelativePath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw SubscriptionError.noSession
+        }
+        let data: Data
         do {
-            let response = try await fetchUsage(token: creds.accessToken)
-            return mapResponse(response, rawTier: creds.rateLimitTier)
-        } catch SubscriptionError.usageFetchFailed(401, _) {
-            guard let refreshToken = creds.refreshToken, !refreshToken.isEmpty else {
-                throw SubscriptionError.usageFetchFailed(401, "no refresh token available")
-            }
-            let newToken = try await refreshAccessToken(refreshToken: refreshToken)
-            let response = try await fetchUsage(token: newToken)
-            return mapResponse(response, rawTier: creds.rateLimitTier)
+            data = try SafeFile.read(from: url.path, maxBytes: maxSessionBytes)
+        } catch {
+            throw SubscriptionError.noSession
         }
-    }
-
-    // MARK: - Credentials
-
-    private static func loadCredentials() throws -> StoredCredentials {
-        if let data = try readFileCredentials() {
-            return try parseCredentials(data: sanitizeKeychainData(data))
-        }
-        if let creds = try readKeychainCredentials() {
-            return creds
-        }
-        throw SubscriptionError.noCredentials
-    }
-
-    private static func readFileCredentials() throws -> Data? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(credentialsRelativePath)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        // SafeFile refuses to follow symlinks and caps the read, so a 6 GB /dev/urandom
-        // masquerading as the creds file can't blow up the app.
-        return try SafeFile.read(from: url.path, maxBytes: maxCredentialBytes)
-    }
-
-    /// Two-phase keychain enumeration: (1) list persistent refs + accounts, (2) fetch each
-    /// item's data by ref. The combination kSecMatchLimitAll + kSecReturnData errors with -50,
-    /// so the data fetch has to be per-item.
-    private static func readKeychainCredentials() throws -> StoredCredentials? {
-        let listQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true,
-            kSecReturnPersistentRef as String: true,
-        ]
-        var listResult: CFTypeRef?
-        let listStatus = SecItemCopyMatching(listQuery as CFDictionary, &listResult)
-        if listStatus == errSecItemNotFound {
-            NSLog("CodeBurn: keychain query found no items for service \(keychainService)")
-            return nil
-        }
-        guard listStatus == errSecSuccess, let rows = listResult as? [[String: Any]] else {
-            NSLog("CodeBurn: keychain enumerate failed status=\(listStatus)")
-            return nil
-        }
-
-        var best: StoredCredentials? = nil
-        for row in rows {
-            guard let ref = row[kSecValuePersistentRef as String] as? Data else { continue }
-            let account = (row[kSecAttrAccount as String] as? String) ?? ""
-            // Ignore rows whose account doesn't match Claude Code's known writer. Stops another
-            // app's item (or a legacy install with an unexpected account) from being accepted.
-            guard expectedKeychainAccounts.contains(account) else { continue }
-            let dataQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecValuePersistentRef as String: ref,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-                kSecReturnData as String: true,
-            ]
-            var dataResult: CFTypeRef?
-            let dataStatus = SecItemCopyMatching(dataQuery as CFDictionary, &dataResult)
-            guard dataStatus == errSecSuccess, let data = dataResult as? Data else { continue }
-            let sanitized = sanitizeKeychainData(data)
-            guard let parsed = try? parseCredentials(data: sanitized) else { continue }
-            if let current = best {
-                if (parsed.expiresAt ?? .distantPast) > (current.expiresAt ?? .distantPast) {
-                    best = parsed
-                }
-            } else {
-                best = parsed
-            }
-        }
-        return best
-    }
-
-    /// Claude Code's keychain writer line-wraps long string values (newline + leading spaces)
-    /// mid-token, producing JSON with literal control chars and stray spaces inside string
-    /// values. Replace every newline (CR/LF) plus the run of spaces/tabs that follows it.
-    /// Drops both the wrapping in tokens AND pretty-print indentation between fields (both
-    /// produce valid, compact JSON afterward).
-    private static func sanitizeKeychainData(_ data: Data) -> Data {
-        guard var s = String(data: data, encoding: .utf8) else { return data }
-        s = s.replacingOccurrences(of: "\r", with: "")
-        let regex = try? NSRegularExpression(pattern: "\\n[ \\t]*", options: [])
-        if let regex {
-            let range = NSRange(s.startIndex..<s.endIndex, in: s)
-            s = regex.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: "")
-        }
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.data(using: .utf8) ?? data
-    }
-
-    /// Decodes the credential JSON blob. Never logs the blob contents or any slice of it --
-    /// even a partial access token reaching Console.app is a leak, and the byte-window
-    /// diagnostic that used to live here could overlap the `accessToken` field bytes.
-    private static func parseCredentials(data: Data) throws -> StoredCredentials {
         do {
-            let root = try JSONDecoder().decode(CredentialsRoot.self, from: data)
-            guard let oauth = root.claudeAiOauth else { throw SubscriptionError.credentialsInvalid }
-            let token = oauth.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !token.isEmpty else { throw SubscriptionError.credentialsInvalid }
-            let expiresAt = oauth.expiresAt.map { Date(timeIntervalSince1970: $0 / 1000.0) }
-            return StoredCredentials(
-                accessToken: token,
-                refreshToken: oauth.refreshToken,
-                expiresAt: expiresAt,
-                rateLimitTier: oauth.rateLimitTier
-            )
+            let session = try JSONDecoder().decode(AugmentSession.self, from: data)
+            let token = session.accessToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tenant = session.tenantURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty, !tenant.isEmpty else {
+                throw SubscriptionError.sessionInvalid
+            }
+            return AugmentSession(accessToken: token, tenantURL: tenant)
         } catch let err as SubscriptionError {
             throw err
         } catch {
-            throw SubscriptionError.decodeFailed(error)
+            throw SubscriptionError.sessionInvalid
         }
     }
 
-    // MARK: - Refresh
-
-    private static func refreshAccessToken(refreshToken: String) async throws -> String {
-        var request = URLRequest(url: refreshURL)
+    private static func fetchCreditInfo(session: AugmentSession) async throws -> GetCreditInfoResponse {
+        guard let url = URL(string: session.tenantURL)?.appendingPathComponent("get-credit-info") else {
+            throw SubscriptionError.sessionInvalid
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = requestTimeout
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
-            URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "client_id", value: oauthClientID),
-        ]
-        request.httpBody = (components.percentEncodedQuery ?? "").data(using: .utf8)
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = "{}".data(using: .utf8)
 
-        // Route through PinningURLSession so users who populate CodeBurnPinnedSPKIHashes
-        // get SPKI pinning on the Anthropic hosts. Default (empty allow-list) behaves
-        // exactly like URLSession.shared.
-        let (data, response) = try await PinningURLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw SubscriptionError.refreshFailed(-1, nil)
+            throw SubscriptionError.fetchFailed(-1, nil)
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw SubscriptionError.sessionExpired(http.statusCode)
         }
         guard http.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8)
-            throw SubscriptionError.refreshFailed(http.statusCode, body)
+            throw SubscriptionError.fetchFailed(http.statusCode, body)
         }
         do {
-            let decoded = try JSONDecoder().decode(TokenRefreshResponse.self, from: data)
-            return decoded.accessToken
+            return try JSONDecoder().decode(GetCreditInfoResponse.self, from: data)
         } catch {
             throw SubscriptionError.decodeFailed(error)
         }
     }
 
-    // MARK: - Usage fetch
+    private static func mapResponse(_ r: GetCreditInfoResponse) -> SubscriptionUsage {
+        let planName = r.displayInfo?.planDisplayName
+        let displayName = (planName?.isEmpty ?? true) ? "Auggie Plan" : planName!
+        let usedUnits = r.usageUnitsTotal - r.usageUnitsRemaining
+        let resetsAt = parseDate(r.currentBillingCycleEndDateIso)
+        let unitLabel = r.displayInfo?.usageUnitDisplayName ?? "credits"
 
-    private static func fetchUsage(token: String) async throws -> UsageResponse {
-        var request = URLRequest(url: usageURL)
-        request.httpMethod = "GET"
-        request.timeoutInterval = requestTimeout
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(betaHeader, forHTTPHeaderField: "anthropic-beta")
-        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-
-        // Route through PinningURLSession so users who populate CodeBurnPinnedSPKIHashes
-        // get SPKI pinning on the Anthropic hosts. Default (empty allow-list) behaves
-        // exactly like URLSession.shared.
-        let (data, response) = try await PinningURLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw SubscriptionError.usageFetchFailed(-1, nil)
-        }
-        guard http.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8)
-            throw SubscriptionError.usageFetchFailed(http.statusCode, body)
-        }
-        do {
-            return try JSONDecoder().decode(UsageResponse.self, from: data)
-        } catch {
-            throw SubscriptionError.decodeFailed(error)
-        }
-    }
-
-    // MARK: - Mapping
-
-    private static func mapResponse(_ r: UsageResponse, rawTier: String?) -> SubscriptionUsage {
-        SubscriptionUsage(
-            tier: SubscriptionUsage.tier(from: rawTier),
-            rawTier: rawTier,
-            fiveHourPercent: r.fiveHour?.utilization,
-            fiveHourResetsAt: parseDate(r.fiveHour?.resetsAt),
-            sevenDayPercent: r.sevenDay?.utilization,
-            sevenDayResetsAt: parseDate(r.sevenDay?.resetsAt),
-            sevenDayOpusPercent: r.sevenDayOpus?.utilization,
-            sevenDayOpusResetsAt: parseDate(r.sevenDayOpus?.resetsAt),
-            sevenDaySonnetPercent: r.sevenDaySonnet?.utilization,
-            sevenDaySonnetResetsAt: parseDate(r.sevenDaySonnet?.resetsAt),
+        return SubscriptionUsage(
+            planDisplayName: displayName,
+            usedUnits: usedUnits,
+            totalUnits: r.usageUnitsTotal,
+            resetsAt: resetsAt,
+            isLow: r.isCreditBalanceLow,
+            unitLabel: unitLabel,
             fetchedAt: Date()
         )
     }
@@ -267,58 +117,33 @@ struct SubscriptionClient {
     }
 }
 
-// MARK: - Internal models
-
-private struct StoredCredentials {
+private struct AugmentSession: Decodable {
     let accessToken: String
-    let refreshToken: String?
-    let expiresAt: Date?
-    let rateLimitTier: String?
+    let tenantURL: String
 }
 
-private struct CredentialsRoot: Decodable {
-    let claudeAiOauth: OAuthBlock?
-}
-
-private struct OAuthBlock: Decodable {
-    let accessToken: String?
-    let refreshToken: String?
-    let expiresAt: Double?
-    let rateLimitTier: String?
-}
-
-private struct TokenRefreshResponse: Decodable {
-    let accessToken: String
-    let refreshToken: String?
-    let expiresIn: Int?
+private struct GetCreditInfoResponse: Decodable {
+    let usageUnitsTotal: Double
+    let usageUnitsRemaining: Double
+    let isCreditBalanceLow: Bool
+    let currentBillingCycleEndDateIso: String?
+    let displayInfo: DisplayInfo?
 
     enum CodingKeys: String, CodingKey {
-        case accessToken = "access_token"
-        case refreshToken = "refresh_token"
-        case expiresIn = "expires_in"
+        case usageUnitsTotal = "usage_units_total"
+        case usageUnitsRemaining = "usage_units_remaining"
+        case isCreditBalanceLow = "is_credit_balance_low"
+        case currentBillingCycleEndDateIso = "current_billing_cycle_end_date_iso"
+        case displayInfo = "display_info"
     }
 }
 
-private struct UsageResponse: Decodable {
-    let fiveHour: Window?
-    let sevenDay: Window?
-    let sevenDayOpus: Window?
-    let sevenDaySonnet: Window?
+private struct DisplayInfo: Decodable {
+    let planDisplayName: String?
+    let usageUnitDisplayName: String?
 
     enum CodingKeys: String, CodingKey {
-        case fiveHour = "five_hour"
-        case sevenDay = "seven_day"
-        case sevenDayOpus = "seven_day_opus"
-        case sevenDaySonnet = "seven_day_sonnet"
-    }
-}
-
-private struct Window: Decodable {
-    let utilization: Double?
-    let resetsAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case utilization
-        case resetsAt = "resets_at"
+        case planDisplayName = "plan_display_name"
+        case usageUnitDisplayName = "usage_unit_display_name"
     }
 }

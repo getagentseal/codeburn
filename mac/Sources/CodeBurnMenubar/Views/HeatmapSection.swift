@@ -872,12 +872,6 @@ private struct PlanInsight: View {
     @Environment(AppStore.self) private var store
     let usage: SubscriptionUsage?
 
-    private static let fiveHourSeconds: TimeInterval = 5 * 3600
-    private static let sevenDaySeconds: TimeInterval = 7 * 86400
-    private static let freshWindowThreshold: Double = 0.05
-
-    @State private var projections: [String: WindowProjection] = [:]
-
     var body: some View {
         Group {
             switch store.subscriptionLoadState {
@@ -887,6 +881,8 @@ private struct PlanInsight: View {
                 PlanLoadingView()
             case .noCredentials:
                 PlanNoCredentialsView()
+            case .sessionExpired:
+                PlanSessionExpiredView()
             case .failed:
                 PlanFailedView(error: store.subscriptionError)
             case .loaded:
@@ -898,7 +894,6 @@ private struct PlanInsight: View {
             }
         }
         .task {
-            // Lazy-trigger fetch the first time Plan is opened.
             if store.subscriptionLoadState == .idle {
                 await store.refreshSubscription()
             }
@@ -909,92 +904,34 @@ private struct PlanInsight: View {
     private func loadedBody(usage: SubscriptionUsage) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(usage.tier.displayName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.brandAccent)
+                HStack(spacing: 6) {
+                    Text(usage.planDisplayName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.brandAccent)
+                    if usage.isLow {
+                        Text("LOW")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Theme.brandAccent)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
                 Spacer()
-                if let resets = headlineReset(usage: usage) {
-                    Text("Resets \(resets)")
+                if let resets = usage.resetsAt {
+                    Text("Resets \(relativeReset(resets))")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                 }
             }
 
             VStack(spacing: 8) {
-                if let p = usage.fiveHourPercent {
-                    UtilizationRow(label: "5-hour window", percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
-                }
-                if let p = usage.sevenDayPercent {
-                    UtilizationRow(label: "7-day total", percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
-                }
-                if let p = usage.sevenDayOpusPercent {
-                    UtilizationRow(label: "7-day Opus", percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projections["seven_day_opus"])
-                }
-                if let p = usage.sevenDaySonnetPercent {
-                    UtilizationRow(label: "7-day Sonnet", percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projections["seven_day_sonnet"])
-                }
+                CreditUsageRow(usage: usage)
             }
 
             OptimizeSavingsBadge(payload: store.payload)
         }
-        .task(id: usage.fetchedAt) {
-            await recomputeProjections(usage: usage)
-        }
-    }
-
-    private func recomputeProjections(usage: SubscriptionUsage) async {
-        var result: [String: WindowProjection] = [:]
-        let inputs: [(String, Double?, Date?, TimeInterval)] = [
-            ("five_hour", usage.fiveHourPercent, usage.fiveHourResetsAt, Self.fiveHourSeconds),
-            ("seven_day", usage.sevenDayPercent, usage.sevenDayResetsAt, Self.sevenDaySeconds),
-            ("seven_day_opus", usage.sevenDayOpusPercent, usage.sevenDayOpusResetsAt, Self.sevenDaySeconds),
-            ("seven_day_sonnet", usage.sevenDaySonnetPercent, usage.sevenDaySonnetResetsAt, Self.sevenDaySeconds),
-        ]
-        for (key, percent, resetsAt, windowSeconds) in inputs {
-            if let projection = await project(key: key, percent: percent, resetsAt: resetsAt, windowSeconds: windowSeconds) {
-                result[key] = projection
-            }
-        }
-        projections = result
-    }
-
-    /// Linear extrapolation when window is past the freshness threshold; otherwise falls back to
-    /// the prior cycle's final percent from the snapshot store.
-    private func project(key: String, percent: Double?, resetsAt: Date?, windowSeconds: TimeInterval) async -> WindowProjection? {
-        guard let percent, let resetsAt else { return nil }
-        let windowStart = resetsAt.addingTimeInterval(-windowSeconds)
-        let elapsed = Date().timeIntervalSince(windowStart)
-        let elapsedFraction = elapsed / windowSeconds
-
-        if elapsedFraction > Self.freshWindowThreshold, percent > 0 {
-            let projectedPercent = percent / elapsedFraction
-            var hitDate: Date? = nil
-            if projectedPercent > 100, percent < 100 {
-                let remainingPercent = 100 - percent
-                let percentPerSecond = percent / elapsed
-                if percentPerSecond > 0 {
-                    hitDate = Date().addingTimeInterval(remainingPercent / percentPerSecond)
-                }
-            }
-            return WindowProjection(percent: projectedPercent, willOverflow: projectedPercent > 100, hitsLimitAt: hitDate, source: .linear)
-        }
-
-        // Window too fresh OR percent exactly zero -- use the prior cycle's final reading.
-        if let prior = await SubscriptionSnapshotStore.previousWindowFinal(windowKey: key, currentResetsAt: resetsAt) {
-            return WindowProjection(percent: prior, willOverflow: prior > 100, hitsLimitAt: nil, source: .historicalBaseline)
-        }
-        return nil
-    }
-
-    private func headlineReset(usage: SubscriptionUsage) -> String? {
-        let candidates = [
-            usage.fiveHourResetsAt,
-            usage.sevenDayResetsAt,
-            usage.sevenDayOpusResetsAt,
-            usage.sevenDaySonnetResetsAt,
-        ].compactMap { $0 }
-        guard let earliest = candidates.min() else { return nil }
-        return relativeReset(earliest)
     }
 }
 
@@ -1009,11 +946,6 @@ private struct PlanIdleView: View {
             Text("Loading your plan...")
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text("macOS may ask permission to read your Claude Code credentials.")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -1024,7 +956,7 @@ private struct PlanLoadingView: View {
     var body: some View {
         VStack(spacing: 8) {
             ProgressView().scaleEffect(0.8)
-            Text("Reading Claude credentials...")
+            Text("Fetching credit info...")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -1042,25 +974,69 @@ private struct PlanNoCredentialsView: View {
             Image(systemName: "key.slash")
                 .font(.system(size: 20))
                 .foregroundStyle(.tertiary)
-            Text("No Claude subscription connected")
+            Text("Sign in to Auggie")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
             if showManualFallback {
-                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
+                Text("Terminal.app isn't available. Open your terminal and run `auggie login`.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
             } else {
-                Text("Click Connect to sign in with Claude, then return here.")
+                Text("Run `auggie login` to connect your account.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 260)
             }
             HStack(spacing: 8) {
-                Button("Connect Claude") {
-                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
+                Button("Sign In") {
+                    if !TerminalLauncher.openAuggieLogin() { showManualFallback = true }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.brandAccent)
+                Button("Retry") {
+                    Task { await store.refreshSubscription() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+    }
+}
+
+private struct PlanSessionExpiredView: View {
+    @Environment(AppStore.self) private var store
+    @State private var showManualFallback = false
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "clock.badge.exclamationmark")
+                .font(.system(size: 20))
+                .foregroundStyle(Theme.brandAccent)
+            Text("Session expired")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+            if showManualFallback {
+                Text("Terminal.app isn't available. Open your terminal and run `auggie login`.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            } else {
+                Text("Run `auggie login` and reopen.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            }
+            HStack(spacing: 8) {
+                Button("Sign In") {
+                    if !TerminalLauncher.openAuggieLogin() { showManualFallback = true }
                 }
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
@@ -1091,7 +1067,7 @@ private struct PlanFailedView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
             if showManualFallback {
-                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
+                Text("Terminal.app isn't available. Open your terminal and run `auggie login`.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1105,8 +1081,8 @@ private struct PlanFailedView: View {
                     .lineLimit(3)
             }
             HStack(spacing: 8) {
-                Button("Reconnect Claude") {
-                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
+                Button("Reconnect") {
+                    if !TerminalLauncher.openAuggieLogin() { showManualFallback = true }
                 }
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
@@ -1123,110 +1099,49 @@ private struct PlanFailedView: View {
     }
 }
 
-private struct WindowProjection {
-    enum Source { case linear, historicalBaseline }
-    let percent: Double
-    let willOverflow: Bool
-    let hitsLimitAt: Date?
-    let source: Source
-}
-
-private struct UtilizationRow: View {
-    let label: String
-    /// API returns utilization as 0..100 (a percentage value, not a fraction).
-    let percent: Double
-    let resetsAt: Date?
-    let projection: WindowProjection?
+private struct CreditUsageRow: View {
+    let usage: SubscriptionUsage
 
     var body: some View {
         VStack(spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
-                Text(label)
+                Text(usageLabel)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(String(format: "%.0f%%", clampedPercent))
+                Text(String(format: "%.0f%%", usage.usagePercent))
                     .font(.codeMono(size: 11, weight: .semibold))
-                    .foregroundStyle(barColor)
+                    .foregroundStyle(Theme.brandAccent)
                     .monospacedDigit()
             }
-            UtilizationBar(
-                fraction: clampedPercent / 100,
-                color: barColor,
-                markerFraction: projection.map { min(max($0.percent, 0), 100) / 100 }
-            )
-            .frame(height: 6)
-            if let projection {
-                ProjectionCaption(projection: projection)
-            }
+            CreditBar(fraction: min(max(usage.usagePercent / 100, 0), 1))
+                .frame(height: 6)
         }
     }
 
-    private var clampedPercent: Double { min(max(percent, 0), 100) }
-
-    /// Single-color brand palette decision (see session notes): the number is the signal, not
-    /// the color. Keeping this as a computed property so a future threshold-based palette
-    /// reintroduction stays scoped to one place.
-    private var barColor: Color { Theme.brandAccent }
-}
-
-private struct ProjectionCaption: View {
-    let projection: WindowProjection
-
-    var body: some View {
-        HStack(spacing: 3) {
-            if projection.willOverflow {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Theme.brandAccent)
-            } else {
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.tertiary)
-            }
-            Text(captionText)
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(projection.willOverflow
-                    ? AnyShapeStyle(Theme.brandAccent)
-                    : AnyShapeStyle(.tertiary))
-            Spacer()
-        }
+    private var usageLabel: String {
+        let used = formatUnits(usage.usedUnits)
+        let total = formatUnits(usage.totalUnits)
+        return "\(used) / \(total) \(usage.unitLabel)"
     }
 
-    private var captionText: String {
-        let projected = String(format: "%.0f%%", projection.percent)
-        switch projection.source {
-        case .linear:
-            if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return "On pace: \(projected) at reset · hits 100% \(relativeReset(hit))"
-            }
-            return "On pace: \(projected) at reset"
-        case .historicalBaseline:
-            return "Based on last cycle: \(projected)"
-        }
+    private func formatUnits(_ n: Double) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", n / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.0fK", n / 1_000) }
+        return String(format: "%.0f", n)
     }
 }
 
-private struct UtilizationBar: View {
-    /// 0..1 fraction of the bar to fill.
+private struct CreditBar: View {
     let fraction: Double
-    let color: Color
-    /// Optional 0..1 marker position for projected utilization at reset.
-    let markerFraction: Double?
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.12))
                 RoundedRectangle(cornerRadius: 3)
-                    .fill(color)
+                    .fill(Theme.brandAccent)
                     .frame(width: max(0, geo.size.width * CGFloat(fraction)))
-                if let m = markerFraction {
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.55))
-                        .frame(width: 1.5)
-                        .offset(x: max(0, geo.size.width * CGFloat(m)) - 0.75)
-                }
             }
         }
     }

@@ -31,15 +31,12 @@ enum TerminalLauncher {
         try? headless.run()
     }
 
-    /// Launches `claude login` in Terminal.app so the user can complete the OAuth flow
-    /// without leaving CodeBurn. The command is a hardcoded literal -- no user input is
-    /// interpolated, so there's no injection surface.
-    static func openClaudeLogin() -> Bool {
+    static func openAuggieLogin() -> Bool {
         guard terminalPaths.contains(where: FileManager.default.fileExists(atPath:)) else {
-            NSLog("CodeBurn: Terminal.app not present; user must run `claude login` manually")
+            NSLog("CodeBurn: Terminal.app not present; user must run `auggie login` manually")
             return false
         }
-        runInTerminal(command: "claude login", preValidated: true)
+        runInTerminal(command: "auggie login", preValidated: true)
         return true
     }
 
