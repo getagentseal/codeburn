@@ -185,9 +185,10 @@ describe('auggie provider - cache', () => {
 })
 
 describe('auggie provider - display helpers', () => {
-  it('renames the unknown-model fallback for display', () => {
+  it('renames sentinel model fallbacks for display', () => {
     const provider = createAuggieProvider(sessionsDir)
     expect(provider.modelDisplayName('auggie-unknown')).toBe('Auggie (unknown model)')
+    expect(provider.modelDisplayName('auggie-legacy')).toBe('Auggie (legacy session)')
     expect(provider.modelDisplayName('claude-sonnet-4-5')).toBe('claude-sonnet-4-5')
   })
 

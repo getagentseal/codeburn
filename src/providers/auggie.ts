@@ -19,15 +19,19 @@ const BASH_TOOL_NAME = 'launch-process'
 const MCP_TOOL_SUFFIX = '-mcp'
 
 /// Per-provider default model when agentState.modelId is empty. Indexed by metadata.provider
-/// on the response_node. Augment routes across Anthropic / OpenAI / Google, so the default
-/// should match the provider the call went to. Users can override any of these via env:
+/// on the response_node. Augment routes across Anthropic / OpenAI / Google / xAI / Minimax, so
+/// the default should match the provider the call went to. Users can override any of these via env:
 ///   CODEBURN_AUGGIE_DEFAULT_ANTHROPIC
 ///   CODEBURN_AUGGIE_DEFAULT_OPENAI
-///   CODEBURN_AUGGIE_DEFAULT_GOOGLE
+///   CODEBURN_AUGGIE_DEFAULT_GEMINI
+///   CODEBURN_AUGGIE_DEFAULT_XAI
+///   CODEBURN_AUGGIE_DEFAULT_MINIMAX
 const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
   anthropic: 'claude-sonnet-4-5',
   openai: 'gpt-5.1',
-  google: 'gemini-3-pro',
+  gemini: 'gemini-3-pro',
+  xai: 'grok-2', // TODO(billing): confirm grok-2 is the correct default for xAI provider
+  minimax: 'minimax', // TODO(billing): confirm actual model name for minimax provider
 }
 
 /// Augment-internal model IDs that LiteLLM has no pricing for. The entries here are
@@ -36,7 +40,16 @@ const PROVIDER_DEFAULT_MODEL: Record<string, string> = {
 /// Keep conservative: if a model name isn't clearly mappable, leave it unaliased and
 /// accept $0 cost rather than guessing wrong.
 const MODEL_ALIASES: Record<string, string> = {
-  butler: 'claude-haiku-4-5',
+  // TODO(billing): confirm public-model mapping with billing team
+  'butler': 'claude-haiku-4-5',
+  // TODO(billing): confirm public-model mapping with billing team — gpt-5-2-codex may map to gpt-5.3-codex
+  'gpt-5-2-codex': 'gpt-5.3-codex',
+  // TODO(billing): confirm public-model mapping with billing team — gpt-5-4 may map to gpt-5.4
+  'gpt-5-4': 'gpt-5.4',
+  // TODO(billing): confirm public-model mapping with billing team — gpt-5-2-medium may map to gpt-5 or gpt-5-mini
+  'gpt-5-2-medium': 'gpt-5',
+  // TODO(billing): confirm public-model mapping with billing team — claude-sonnet-4-6 is close to claude-sonnet-4-5
+  'claude-sonnet-4-6': 'claude-sonnet-4-5',
 }
 
 type AuggieTokenUsage = {
@@ -122,14 +135,41 @@ function resolveModelAlias(modelId: string): string {
 
 /// Picks the model name used for pricing and display. Preference order:
 ///   1. `agentState.modelId` when populated -> resolved through the alias table
-///   2. provider-aware default keyed off `response_node.metadata.provider`
-///   3. `auggie-unknown` as a terminal fallback; priced at $0
+///   2. provider-aware default keyed off the first non-null provider from response_nodes
+///   3. `auggie-legacy` when modelId is empty AND no provider hint can be derived
+///      (pre-Nov-2025 sessions with no recoverable model information)
+///   4. `auggie-unknown` when modelId is set but not found in alias table (shouldn't happen
+///      after step 1, but kept for future model IDs we haven't aliased yet)
+///
+/// Sentinel distinction:
+///   - `auggie-unknown`: we have a modelId but it isn't in the alias table yet
+///   - `auggie-legacy`: pre-Nov-2025 session with no modelId, unrecoverable
 function selectModel(session: AuggieSession, nodeProvider: string | null | undefined): string {
   const raw = session.agentState?.modelId?.trim()
   if (raw) return resolveModelAlias(raw)
   const providerDefault = resolveDefaultModel(nodeProvider)
   if (providerDefault) return providerDefault
-  return 'auggie-unknown'
+  // No modelId AND no provider hint: this is a pre-Nov-2025 legacy session
+  return 'auggie-legacy'
+}
+
+/// Scans response_nodes (in particular type-8 ASSISTANT_CHAT_RESULT nodes) to find
+/// the first non-null `metadata.provider`. Type-10 billing nodes often have null
+/// provider even when type-8 nodes in the same exchange have it populated.
+function extractProviderHint(responseNodes: AuggieResponseNode[]): string | null {
+  for (const node of responseNodes) {
+    // Type-8 nodes (legacy THINKING / ASSISTANT_CHAT_RESULT) reliably carry provider
+    if (node.type === NODE_TYPE_ASSISTANT_RESULT) {
+      const provider = node.metadata?.provider
+      if (provider) return provider
+    }
+  }
+  // Fallback: scan all nodes in case type-5 or type-10 has it
+  for (const node of responseNodes) {
+    const provider = node.metadata?.provider
+    if (provider) return provider
+  }
+  return null
 }
 
 /// `tool_use.name` at the response_node level takes a few shapes:
@@ -199,8 +239,10 @@ function totalTokens(usage: AuggieTokenUsage): number {
 
 /// ChatResultNodeType enum constants (from Auggie schema):
 ///   5 = TOOL_USE (has tool_use, no token_usage)
+///   8 = ASSISTANT_CHAT_RESULT (legacy "THINKING" nodes — carry both tool_use and token_usage)
 ///  10 = TOKEN_USAGE (has token_usage, no tool_use — billing boundary)
 const NODE_TYPE_TOOL_USE = 5
+const NODE_TYPE_ASSISTANT_RESULT = 8
 const NODE_TYPE_TOKEN_USAGE = 10
 
 /// Parse a tool_use.input_json string into a record. Auggie serializes tool inputs as JSON
@@ -236,6 +278,11 @@ function* parseExchange(
   const userMessage = extractUserMessage(exchange)
   const requestId = exchange.request_id ?? ''
   const responseNodes = exchange.response_nodes ?? []
+
+  // Extract provider hint once at the exchange level. This scans ALL type-8 nodes
+  // (ASSISTANT_CHAT_RESULT / THINKING) for metadata.provider because billing nodes
+  // (type-10) often have null provider while type-8 nodes have it populated.
+  const exchangeProviderHint = extractProviderHint(responseNodes)
 
   // Detect whether this exchange uses modern schema (has type-10 TOKEN_USAGE nodes)
   // or legacy schema (type-8 nodes with both tool_use and token_usage)
@@ -288,8 +335,9 @@ function* parseExchange(
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
-      const providerHint = node.metadata?.provider ?? null
-      const model = selectModel(session, providerHint)
+      // Use exchange-level provider hint (from type-8 nodes) rather than per-node,
+      // because type-10 billing nodes often have null provider.
+      const model = selectModel(session, exchangeProviderHint)
       const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
       const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
 
@@ -337,8 +385,10 @@ function* parseExchange(
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
-      const providerHint = node.metadata?.provider ?? null
-      const model = selectModel(session, providerHint)
+      // Use exchange-level provider hint (extracted once from all type-8 nodes).
+      // For legacy schema, type-8 nodes usually have provider, but we use the
+      // exchange-level extraction for consistency.
+      const model = selectModel(session, exchangeProviderHint)
       const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
       const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
 
@@ -491,6 +541,7 @@ export function createAuggieProvider(sessionsDirOverride?: string): Provider {
 
     modelDisplayName(model: string): string {
       if (model === 'auggie-unknown') return 'Auggie (unknown model)'
+      if (model === 'auggie-legacy') return 'Auggie (legacy session)'
       return model
     },
 

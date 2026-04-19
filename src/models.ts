@@ -25,6 +25,11 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const WEB_SEARCH_COST = 0.01
 
 const FALLBACK_PRICING: Record<string, ModelCosts> = {
+  // Auggie sentinel models — priced at $0 so they don't crash cost calculations
+  // - auggie-unknown: we have a modelId but it isn't in the alias table yet
+  // - auggie-legacy: pre-Nov-2025 session with no modelId, unrecoverable
+  'auggie-unknown': { inputCostPerToken: 0, outputCostPerToken: 0, cacheWriteCostPerToken: 0, cacheReadCostPerToken: 0, webSearchCostPerRequest: 0, fastMultiplier: 1 },
+  'auggie-legacy': { inputCostPerToken: 0, outputCostPerToken: 0, cacheWriteCostPerToken: 0, cacheReadCostPerToken: 0, webSearchCostPerRequest: 0, fastMultiplier: 1 },
   'claude-opus-4-7': { inputCostPerToken: 5e-6, outputCostPerToken: 25e-6, cacheWriteCostPerToken: 6.25e-6, cacheReadCostPerToken: 0.5e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 6 },
   'claude-opus-4-6': { inputCostPerToken: 5e-6, outputCostPerToken: 25e-6, cacheWriteCostPerToken: 6.25e-6, cacheReadCostPerToken: 0.5e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 6 },
   'claude-opus-4-5': { inputCostPerToken: 5e-6, outputCostPerToken: 25e-6, cacheWriteCostPerToken: 6.25e-6, cacheReadCostPerToken: 0.5e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
