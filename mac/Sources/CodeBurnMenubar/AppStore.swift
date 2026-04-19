@@ -11,13 +11,11 @@ struct CachedPayload {
 
 struct PayloadCacheKey: Hashable {
     let period: Period
-    let provider: ProviderFilter
 }
 
 @MainActor
 @Observable
 final class AppStore {
-    var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
     var selectedInsight: InsightMode = .trend
     var currency: String = "USD"
@@ -31,17 +29,17 @@ final class AppStore {
     private var cache: [PayloadCacheKey: CachedPayload] = [:]
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider)
+        PayloadCacheKey(period: selectedPeriod)
     }
 
     var payload: MenubarPayload {
         cache[currentKey]?.payload ?? .empty
     }
 
-    /// Today (across all providers) is pinned for the always-visible menubar icon, independent of
-    /// the popover's selected period or provider.
+    /// Today is pinned for the always-visible menubar icon, independent of
+    /// the popover's selected period.
     var todayPayload: MenubarPayload? {
-        cache[PayloadCacheKey(period: .today, provider: .all)]?.payload
+        cache[PayloadCacheKey(period: .today)]?.payload
     }
 
     var hasCachedData: Bool {
@@ -59,18 +57,10 @@ final class AppStore {
         await refresh(includeOptimize: true)
     }
 
-    /// Switch to a provider filter. Uses cached payload if fresh; otherwise fetches.
-    func switchTo(provider: ProviderFilter) async {
-        selectedProvider = provider
-        if let cached = cache[currentKey], cached.isFresh { return }
-        await refresh(includeOptimize: true)
-    }
-
     private var inFlightKeys: Set<PayloadCacheKey> = []
 
-    /// Refresh the currently selected (period, provider) combination. Guards against concurrent
-    /// fetches for the same key so a slow initial request can't overwrite a newer one that
-    /// finished first (which would show stale numbers the user has already moved past).
+    /// Refresh the currently selected period. Guards against concurrent fetches for the same key
+    /// so a slow initial request can't overwrite a newer one that finished first.
     func refresh(includeOptimize: Bool) async {
         let key = currentKey
         guard !inFlightKeys.contains(key) else { return }
@@ -81,22 +71,21 @@ final class AppStore {
             isLoading = false
         }
         do {
-            let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
+            let fresh = try await DataClient.fetch(period: key.period, includeOptimize: includeOptimize)
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
             lastError = nil
         } catch {
             lastError = String(describing: error)
-            NSLog("CodeBurn: fetch failed for \(key.period.rawValue)/\(key.provider.rawValue): \(error)")
+            NSLog("CodeBurn: fetch failed for \(key.period.rawValue): \(error)")
         }
     }
 
     /// Background refresh for a period other than the visible one (e.g. keeping today fresh for the menubar badge).
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
-    /// Always uses the .all provider since the menubar badge shows total spend.
     func refreshQuietly(period: Period) async {
         do {
-            let fresh = try await DataClient.fetch(period: period, provider: .all, includeOptimize: true)
-            cache[PayloadCacheKey(period: period, provider: .all)] = CachedPayload(payload: fresh, fetchedAt: Date())
+            let fresh = try await DataClient.fetch(period: period, includeOptimize: true)
+            cache[PayloadCacheKey(period: period)] = CachedPayload(payload: fresh, fetchedAt: Date())
         } catch {
             NSLog("CodeBurn: quiet refresh failed for \(period.rawValue): \(error)")
         }
@@ -203,31 +192,6 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
         case .MXN: "Mexican Peso"
         case .ZAR: "South African Rand"
         case .DKK: "Danish Krone"
-        }
-    }
-}
-
-enum ProviderFilter: String, CaseIterable, Identifiable {
-    case all = "All"
-    case claude = "Claude"
-    case codex = "Codex"
-    case cursor = "Cursor"
-    case copilot = "Copilot"
-    case opencode = "OpenCode"
-    case pi = "Pi"
-
-    var id: String { rawValue }
-
-    /// Maps to the CLI's `--provider` argument values.
-    var cliArg: String {
-        switch self {
-        case .all: "all"
-        case .claude: "claude"
-        case .codex: "codex"
-        case .cursor: "cursor"
-        case .copilot: "copilot"
-        case .opencode: "opencode"
-        case .pi: "pi"
         }
     }
 }

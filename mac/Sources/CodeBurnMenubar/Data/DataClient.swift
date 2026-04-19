@@ -32,12 +32,11 @@ enum DataClientError: Error {
 /// Runs the CLI via argv (no shell interpretation). See `CodeburnCLI` for why we never route
 /// commands through `/bin/zsh -c` anymore.
 struct DataClient {
-    static func fetch(period: Period, provider: ProviderFilter, includeOptimize: Bool) async throws -> MenubarPayload {
+    static func fetch(period: Period, includeOptimize: Bool) async throws -> MenubarPayload {
         var subcommand = [
             "status",
             "--format", "menubar-json",
             "--period", period.cliArg,
-            "--provider", provider.cliArg,
         ]
         if !includeOptimize {
             subcommand.append("--no-optimize")

@@ -11,11 +11,6 @@ struct MenuBarContent: View {
 
             Divider()
 
-            if showAgentTabs {
-                AgentTabStrip()
-                Divider()
-            }
-
             ZStack {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
@@ -23,21 +18,17 @@ struct MenuBarContent: View {
                         Divider().opacity(0.5)
                         PeriodSegmentedControl()
                         Divider().opacity(0.5)
-                        if isFilteredEmpty {
-                            EmptyProviderState(provider: store.selectedProvider, period: store.selectedPeriod)
-                        } else {
-                            HeatmapSection()
-                                .padding(.horizontal, 14)
-                                .padding(.top, 10)
-                                .padding(.bottom, 10)
-                                .zIndex(10)
-                            Divider().opacity(0.5)
-                            ActivitySection()
-                            Divider().opacity(0.5)
-                            ModelsSection()
-                            Divider().opacity(0.5)
-                            FindingsSection()
-                        }
+                        HeatmapSection()
+                            .padding(.horizontal, 14)
+                            .padding(.top, 10)
+                            .padding(.bottom, 10)
+                            .zIndex(10)
+                        Divider().opacity(0.5)
+                        ActivitySection()
+                        Divider().opacity(0.5)
+                        ModelsSection()
+                        Divider().opacity(0.5)
+                        FindingsSection()
                     }
                 }
 
@@ -54,51 +45,6 @@ struct MenuBarContent: View {
             FooterBar()
 
             StarBanner()
-        }
-    }
-
-    /// True when a specific provider tab is selected and that provider has no spend in the
-    /// currently selected period. The .all tab is exempt -- it always shows aggregated data.
-    private var isFilteredEmpty: Bool {
-        guard store.selectedProvider != .all else { return false }
-        return store.payload.current.cost <= 0 && store.payload.current.calls == 0
-    }
-
-    /// Show the tab row whenever the CLI detected at least one AI coding tool installed
-    /// on this machine. Hidden only when nothing is detected, which means there's
-    /// nothing to filter by anyway.
-    private var showAgentTabs: Bool {
-        let payload = store.todayPayload ?? store.payload
-        return !payload.current.providers.isEmpty
-    }
-
-}
-
-private struct EmptyProviderState: View {
-    let provider: ProviderFilter
-    let period: Period
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "tray")
-                .font(.system(size: 26))
-                .foregroundStyle(.tertiary)
-            Text("No \(provider.rawValue) data for \(periodPhrase)")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
-    }
-
-    private var periodPhrase: String {
-        switch period {
-        case .today: "today"
-        case .sevenDays: "the last 7 days"
-        case .thirtyDays: "the last 30 days"
-        case .month: "this month"
-        case .all: "all time"
         }
     }
 }

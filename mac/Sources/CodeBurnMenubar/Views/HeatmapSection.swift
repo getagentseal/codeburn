@@ -17,7 +17,6 @@ struct HeatmapSection: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { ensureValidSelection() }
-        .onChange(of: store.selectedProvider) { _, _ in ensureValidSelection() }
     }
 
     private var bindingMode: Binding<InsightMode> {
@@ -25,12 +24,7 @@ struct HeatmapSection: View {
     }
 
     private var visibleModes: [InsightMode] {
-        // Plan sources from Claude's OAuth usage endpoint, so it only makes sense when the
-        // Claude provider tab is selected. Hidden on All/Cursor/Codex/etc.
-        InsightMode.allCases.filter { mode in
-            if mode == .plan { return store.selectedProvider == .claude }
-            return true
-        }
+        InsightMode.allCases
     }
 
     private func ensureValidSelection() {
