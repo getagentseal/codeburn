@@ -1,0 +1,99 @@
+{
+  "sessionId": "55555555-5555-4555-8555-555555555555",
+  "created": "2026-04-10T10:00:00.000Z",
+  "modified": "2026-04-10T10:05:00.000Z",
+  "creditUsage": 42.5,
+  "subAgentCreditsUsed": 0,
+  "workspaceId": "ws-modern01",
+  "agentState": {
+    "modelId": "claude-opus-4-7",
+    "userEmail": "",
+    "userGuidelines": "",
+    "workspaceGuidelines": "",
+    "agentMemories": ""
+  },
+  "chatHistory": [
+    {
+      "exchange": {
+        "request_id": "req-modern0001",
+        "request_message": "REDACTED modern schema test",
+        "response_text": "done",
+        "request_nodes": [
+          { "id": 0, "type": 0, "text_node": { "content": "REDACTED" } },
+          {
+            "id": 1,
+            "type": 4,
+            "ide_state_node": {
+              "current_terminal": { "current_working_directory": "/Users/tester/projects/modern" },
+              "workspace_folders": [{ "repository_root": "/Users/tester/projects/modern" }]
+            }
+          }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 8,
+            "content": "",
+            "tool_use": null,
+            "thinking": { "summary": "plan", "encrypted_content": "REDACTED", "content": null },
+            "billing_metadata": null,
+            "metadata": { "provider": "anthropic", "phase": "thinking" },
+            "token_usage": null,
+            "timestamp_ms": 1775728800000
+          },
+          {
+            "id": 1,
+            "type": 5,
+            "tool_use": { "tool_name": "view", "input_json": "{\"path\":\"src/main.ts\"}" },
+            "token_usage": null,
+            "metadata": null
+          },
+          {
+            "id": 2,
+            "type": 5,
+            "tool_use": { "tool_name": "launch-process", "input_json": "{\"command\":\"npm test && echo OK\"}" },
+            "token_usage": null,
+            "metadata": null
+          },
+          {
+            "id": 3,
+            "type": 10,
+            "tool_use": null,
+            "token_usage": {
+              "input_tokens": 100,
+              "output_tokens": 200,
+              "cache_read_input_tokens": 50,
+              "cache_creation_input_tokens": 150
+            },
+            "metadata": null,
+            "timestamp_ms": 1775728860000
+          },
+          {
+            "id": 4,
+            "type": 10,
+            "tool_use": null,
+            "token_usage": {
+              "input_tokens": 80,
+              "output_tokens": 120,
+              "cache_read_input_tokens": 30,
+              "cache_creation_input_tokens": 40
+            },
+            "metadata": null,
+            "timestamp_ms": 1775728920000
+          },
+          {
+            "id": 5,
+            "type": 9,
+            "billing_metadata": {
+              "transaction_id": "txn-modern-001",
+              "credits_consumed": 42.5
+            },
+            "token_usage": null,
+            "metadata": null,
+            "timestamp_ms": 1775728920000
+          }
+        ]
+      }
+    }
+  ]
+}

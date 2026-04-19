@@ -160,6 +160,8 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
     if (acc === null && p.totalCredits === null) return null
     return (acc ?? 0) + (p.totalCredits ?? 0)
   }, null)
+  // Count distinct sessions with auggie-legacy model (model unrecoverable from pre-Nov-2025)
+  const legacySessions = allSessions.filter(sess => 'auggie-legacy' in sess.modelBreakdown).length
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
@@ -186,6 +188,11 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
       <Text dimColor wrap="truncate-end">
         {formatTokens(totalInput)} in   {formatTokens(totalOutput)} out   {formatTokens(totalCacheRead)} cached   {formatTokens(totalCacheWrite)} written
       </Text>
+      {legacySessions > 0 && (
+        <Text dimColor wrap="truncate-end">
+          ({legacySessions} legacy session{legacySessions > 1 ? 's' : ''} — model unrecoverable)
+        </Text>
+      )}
     </Box>
   )
 }

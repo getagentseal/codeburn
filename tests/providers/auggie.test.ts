@@ -184,6 +184,100 @@ describe('auggie provider - cache', () => {
   })
 })
 
+describe('auggie provider - modern schema', () => {
+  it('tools attach to first call only; subsequent calls have empty tools', async () => {
+    const path = await stageFixture('modern-schema.json')
+    const calls = await collectCalls(path)
+    // modern-schema.json has 2 type-10 nodes, so 2 calls
+    expect(calls.length).toBe(2)
+    // First call should have all tools (view, launch-process)
+    expect(calls[0].tools.length).toBeGreaterThan(0)
+    expect(calls[0].tools).toContain('view')
+    expect(calls[0].tools).toContain('launch-process')
+    // Subsequent calls should have empty tools
+    expect(calls[1].tools).toEqual([])
+  })
+
+  it('extracts bash commands from input_json in type-5 tool_use nodes', async () => {
+    const path = await stageFixture('modern-schema.json')
+    const calls = await collectCalls(path)
+    // Bash commands attached to first call only
+    expect(calls[0].bashCommands).toContain('npm')
+    expect(calls[0].bashCommands).toContain('echo')
+  })
+
+  it('credits come from type-9 billing_metadata', async () => {
+    const path = await stageFixture('modern-schema.json')
+    const calls = await collectCalls(path)
+    // First call should have credits, subsequent null
+    expect(calls[0].credits).toBe(42.5)
+    expect(calls[1].credits).toBeNull()
+  })
+
+  it('session.creditUsage fast-path: sessionCreditUsage present on first call', async () => {
+    const path = await stageFixture('modern-schema.json')
+    const calls = await collectCalls(path)
+    // sessionCreditUsage should be on first call for session-level total
+    expect(calls[0].sessionCreditUsage).toBe(42.5)
+  })
+})
+
+describe('auggie provider - legacy schema', () => {
+  it('session with empty modelId and no provider hint buckets as auggie-legacy', async () => {
+    // legacy-no-provider.json: empty modelId AND no metadata.provider on any node
+    const path = await stageFixture('legacy-no-provider.json')
+    const calls = await collectCalls(path)
+    expect(calls.length).toBe(1)
+    expect(calls[0].model).toBe('auggie-legacy')
+  })
+
+  it('provider hint from type-8 THINKING node is used when modelId empty', async () => {
+    // legacy-empty-modelid.json: has metadata.provider: "openai" on second node
+    const path = await stageFixture('legacy-empty-modelid.json')
+    const calls = await collectCalls(path)
+    expect(calls.length).toBe(2)
+    // extractProviderHint scans all type-8 nodes and finds "openai", returns gpt-5.1 default
+    for (const call of calls) {
+      expect(call.model).toBe('gpt-5.1')
+    }
+  })
+})
+
+describe('auggie provider - MCP routing', () => {
+  it('MCP structured fields: mcp_server_name + mcp_tool_name route to MCP panel', async () => {
+    const path = await stageFixture('mcp-structured.json')
+    const calls = await collectCalls(path)
+    expect(calls.length).toBe(1)
+    // Structured MCP: mcp_server_name: "workspace", mcp_tool_name: "read_note"
+    // Should emit "read_note_workspace-mcp" format for downstream MCP detection
+    expect(calls[0].tools).toContain('read_note_workspace-mcp')
+  })
+
+  it('MCP suffix-only fallback: _server-mcp routes to MCP panel', async () => {
+    const path = await stageFixture('mcp-suffix-only.json')
+    const calls = await collectCalls(path)
+    expect(calls.length).toBe(1)
+    // tool_name: "read_note_workspace-mcp" directly in tool_use
+    expect(calls[0].tools).toContain('read_note_workspace-mcp')
+  })
+})
+
+describe('auggie provider - credits deduplication', () => {
+  it('duplicate transaction_id across exchanges counts once', async () => {
+    const path = await stageFixture('credits-dedup.json')
+    const calls = await collectCalls(path)
+    // credits-dedup.json has 2 exchanges with same transaction_id "txn-dedup-shared"
+    // Each exchange emits 10.0 credits, but dedup should make total 10.0
+    expect(calls.length).toBe(2)
+    // First call gets the credits (10.0), second gets 0 (billing node exists but deduped)
+    expect(calls[0].credits).toBe(10.0)
+    expect(calls[1].credits).toBe(0) // 0 because billing node exists but was deduped
+    // Total credits across all calls should sum to 10.0, not 20.0
+    const totalCredits = calls.reduce((sum, c) => sum + (c.credits ?? 0), 0)
+    expect(totalCredits).toBe(10.0)
+  })
+})
+
 describe('auggie provider - display helpers', () => {
   it('renames sentinel model fallbacks for display', () => {
     const provider = createAuggieProvider(sessionsDir)

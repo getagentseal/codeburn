@@ -1,0 +1,83 @@
+{
+  "sessionId": "99999999-9999-4999-8999-999999999999",
+  "created": "2026-04-13T10:00:00.000Z",
+  "modified": "2026-04-13T10:05:00.000Z",
+  "creditUsage": null,
+  "subAgentCreditsUsed": 0,
+  "workspaceId": "ws-dedup01",
+  "agentState": {
+    "modelId": "claude-sonnet-4-5"
+  },
+  "chatHistory": [
+    {
+      "exchange": {
+        "request_id": "req-dedup0001",
+        "request_message": "REDACTED dedup test exchange 1",
+        "response_text": "reply1",
+        "request_nodes": [
+          { "id": 0, "type": 0, "text_node": { "content": "REDACTED" } }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 10,
+            "tool_use": null,
+            "token_usage": {
+              "input_tokens": 25,
+              "output_tokens": 50,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "metadata": { "provider": "anthropic" },
+            "timestamp_ms": 1775988000000
+          },
+          {
+            "id": 1,
+            "type": 9,
+            "billing_metadata": {
+              "transaction_id": "txn-dedup-shared",
+              "credits_consumed": 10.0
+            },
+            "token_usage": null,
+            "metadata": null
+          }
+        ]
+      }
+    },
+    {
+      "exchange": {
+        "request_id": "req-dedup0002",
+        "request_message": "REDACTED dedup test exchange 2",
+        "response_text": "reply2",
+        "request_nodes": [
+          { "id": 0, "type": 0, "text_node": { "content": "REDACTED" } }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 10,
+            "tool_use": null,
+            "token_usage": {
+              "input_tokens": 30,
+              "output_tokens": 60,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "metadata": { "provider": "anthropic" },
+            "timestamp_ms": 1775988060000
+          },
+          {
+            "id": 1,
+            "type": 9,
+            "billing_metadata": {
+              "transaction_id": "txn-dedup-shared",
+              "credits_consumed": 10.0
+            },
+            "token_usage": null,
+            "metadata": null
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "sessionId": "77777777-7777-4777-8777-777777777777",
+  "created": "2026-04-11T10:00:00.000Z",
+  "modified": "2026-04-11T10:01:00.000Z",
+  "creditUsage": 5.0,
+  "subAgentCreditsUsed": 0,
+  "workspaceId": "ws-mcp01",
+  "agentState": {
+    "modelId": "claude-sonnet-4-5"
+  },
+  "chatHistory": [
+    {
+      "exchange": {
+        "request_id": "req-mcp0001",
+        "request_message": "REDACTED MCP structured test",
+        "response_text": "done",
+        "request_nodes": [
+          { "id": 0, "type": 0, "text_node": { "content": "REDACTED" } }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 5,
+            "tool_use": {
+              "mcp_server_name": "workspace",
+              "mcp_tool_name": "read_note"
+            },
+            "token_usage": null,
+            "metadata": null
+          },
+          {
+            "id": 1,
+            "type": 10,
+            "tool_use": null,
+            "token_usage": {
+              "input_tokens": 50,
+              "output_tokens": 100,
+              "cache_read_input_tokens": 10,
+              "cache_creation_input_tokens": 20
+            },
+            "metadata": { "provider": "anthropic" },
+            "timestamp_ms": 1775815200000
+          },
+          {
+            "id": 2,
+            "type": 9,
+            "billing_metadata": {
+              "transaction_id": "txn-mcp-001",
+              "credits_consumed": 5.0
+            },
+            "token_usage": null,
+            "metadata": null
+          }
+        ]
+      }
+    }
+  ]
+}
