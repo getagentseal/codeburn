@@ -3,7 +3,7 @@ import { homedir } from 'os'
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost, formatTokens } from './format.js'
+import { formatCost, formatTokens, formatCredits } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
 
@@ -155,6 +155,11 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
   const allInputTokens = totalInput + totalCacheRead + totalCacheWrite
   const cacheHit = allInputTokens > 0
     ? (totalCacheRead / allInputTokens) * 100 : 0
+  // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+  const totalCredits = projects.reduce<number | null>((acc, p) => {
+    if (acc === null && p.totalCredits === null) return null
+    return (acc ?? 0) + (p.totalCredits ?? 0)
+  }, null)
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
@@ -164,7 +169,13 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
       </Text>
       <Text wrap="truncate-end">
         <Text bold color={GOLD}>{formatCost(totalCost)}</Text>
-        <Text dimColor> cost   </Text>
+        <Text dimColor> est. USD   </Text>
+        {totalCredits !== null && (
+          <>
+            <Text bold color={GOLD}>{formatCredits(totalCredits)}</Text>
+            <Text dimColor> credits   </Text>
+          </>
+        )}
         <Text bold>{totalCalls.toLocaleString()}</Text>
         <Text dimColor> calls   </Text>
         <Text bold>{String(totalSessions)}</Text>
@@ -254,18 +265,27 @@ function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw
 }
 
 const MODEL_COL_COST = 8
+const MODEL_COL_CREDITS = 7
 const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
-const MODEL_NAME_WIDTH = 14
+const MODEL_NAME_WIDTH = 12
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; costUSD: number; credits: number | null; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, credits: null, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
+        // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+        const existingCredits = modelTotals[model].credits
+        const newCredits = data.credits
+        if (existingCredits === null && newCredits === null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].credits = (existingCredits ?? 0) + (newCredits ?? 0)
+        }
         modelTotals[model].freshInput += data.tokens.inputTokens
         modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens
         modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens
@@ -274,10 +294,18 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   }
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
+  // Check if any model has credits data
+  const hasAnyCredits = sorted.some(([, d]) => d.credits !== null)
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}</Text>
+      <Text dimColor wrap="truncate-end">
+        {''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}
+        {'est.USD'.padStart(MODEL_COL_COST)}
+        {hasAnyCredits && 'credits'.padStart(MODEL_COL_CREDITS)}
+        {'cache'.padStart(MODEL_COL_CACHE)}
+        {'calls'.padStart(MODEL_COL_CALLS)}
+      </Text>
       {sorted.map(([model, data], i) => {
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
@@ -287,6 +315,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
             <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
+            {hasAnyCredits && <Text color={GOLD}>{formatCredits(data.credits).padStart(MODEL_COL_CREDITS)}</Text>}
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
           </Text>

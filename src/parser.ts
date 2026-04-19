@@ -139,6 +139,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     model: msg.model,
     usage: tokens,
     costUSD,
+    credits: null, // Claude provider does not have Augment credits
     tools,
     mcpTools: extractMcpTools(tools),
     hasAgentSpawn: tools.includes('Agent'),
@@ -195,6 +196,13 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
   return turns
 }
 
+/// Helper to add credits with proper null semantics.
+/// null + null = null (no data), null + N = N, N + M = N + M
+function addCredits(a: number | null, b: number | null): number | null {
+  if (a === null && b === null) return null
+  return (a ?? 0) + (b ?? 0)
+}
+
 function buildSessionSummary(
   sessionId: string,
   project: string,
@@ -211,6 +219,7 @@ function buildSessionSummary(
   let totalOutput = 0
   let totalCacheRead = 0
   let totalCacheWrite = 0
+  let totalCredits: number | null = null
   let apiCalls = 0
   let firstTs = ''
   let lastTs = ''
@@ -235,6 +244,7 @@ function buildSessionSummary(
       totalOutput += call.usage.outputTokens
       totalCacheRead += call.usage.cacheReadInputTokens
       totalCacheWrite += call.usage.cacheCreationInputTokens
+      totalCredits = addCredits(totalCredits, call.credits)
       apiCalls++
 
       const modelKey = getShortModelName(call.model)
@@ -242,11 +252,13 @@ function buildSessionSummary(
         modelBreakdown[modelKey] = {
           calls: 0,
           costUSD: 0,
+          credits: null,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
+      modelBreakdown[modelKey].credits = addCredits(modelBreakdown[modelKey].credits, call.credits)
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
@@ -281,6 +293,7 @@ function buildSessionSummary(
     totalOutputTokens: totalOutput,
     totalCacheReadTokens: totalCacheRead,
     totalCacheWriteTokens: totalCacheWrite,
+    totalCredits,
     apiCalls,
     turns,
     modelBreakdown,
@@ -369,11 +382,17 @@ async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seen
 
   const projects: ProjectSummary[] = []
   for (const [dirName, sessions] of projectMap) {
+    // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+    const totalCredits = sessions.reduce<number | null>((acc, sess) => {
+      if (acc === null && sess.totalCredits === null) return null
+      return (acc ?? 0) + (sess.totalCredits ?? 0)
+    }, null)
     projects.push({
       project: dirName,
       projectPath: unsanitizePath(dirName),
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalCredits,
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }
@@ -398,6 +417,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     model: call.model,
     usage,
     costUSD: call.costUSD,
+    credits: call.credits ?? null,
     tools,
     mcpTools: extractMcpTools(tools),
     hasAgentSpawn: tools.includes('Agent'),
@@ -472,11 +492,17 @@ async function parseProviderSources(
 
   const projects: ProjectSummary[] = []
   for (const [dirName, sessions] of projectMap) {
+    // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+    const totalCredits = sessions.reduce<number | null>((acc, sess) => {
+      if (acc === null && sess.totalCredits === null) return null
+      return (acc ?? 0) + (sess.totalCredits ?? 0)
+    }, null)
     projects.push({
       project: dirName,
       projectPath: unsanitizePath(dirName),
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalCredits,
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }
@@ -556,6 +582,12 @@ export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSu
     if (existing) {
       existing.sessions.push(...p.sessions)
       existing.totalCostUSD += p.totalCostUSD
+      // Merge credits: null + null = null, null + N = N, N + M = N + M
+      if (existing.totalCredits === null && p.totalCredits === null) {
+        // Both null, keep null
+      } else {
+        existing.totalCredits = (existing.totalCredits ?? 0) + (p.totalCredits ?? 0)
+      }
       existing.totalApiCalls += p.totalApiCalls
     } else {
       mergedMap.set(p.project, { ...p })

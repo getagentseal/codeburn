@@ -70,6 +70,8 @@ export type ParsedApiCall = {
   model: string
   usage: TokenUsage
   costUSD: number
+  /// Augment credits for this call. null = no billing data, 0 = zero usage, positive = usage.
+  credits: number | null
   tools: string[]
   mcpTools: string[]
   hasAgentSpawn: boolean
@@ -111,9 +113,11 @@ export type SessionSummary = {
   totalOutputTokens: number
   totalCacheReadTokens: number
   totalCacheWriteTokens: number
+  /// Total Augment credits for this session. null = no billing data, 0 = zero usage, positive = usage.
+  totalCredits: number | null
   apiCalls: number
   turns: ClassifiedTurn[]
-  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage }>
+  modelBreakdown: Record<string, { calls: number; costUSD: number; credits: number | null; tokens: TokenUsage }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>
   bashBreakdown: Record<string, { calls: number }>
@@ -125,6 +129,8 @@ export type ProjectSummary = {
   projectPath: string
   sessions: SessionSummary[]
   totalCostUSD: number
+  /// Total Augment credits for this project. null = no billing data, 0 = zero usage, positive = usage.
+  totalCredits: number | null
   totalApiCalls: number
 }
 

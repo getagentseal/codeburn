@@ -26,6 +26,10 @@ export type ParsedProviderCall = {
   deduplicationKey: string
   userMessage: string
   sessionId: string
+  /// Augment credits consumed for this call. null means no billing data available
+  /// (e.g., non-Augment provider or legacy session), 0 means zero usage, positive
+  /// means actual credits consumed.
+  credits?: number | null
 }
 
 export type Provider = {

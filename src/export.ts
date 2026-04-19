@@ -103,13 +103,21 @@ function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
 }
 
 function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
-  const modelTotals: Record<string, { calls: number; cost: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; cost: number; credits: number | null; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, d] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, credits: null, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += d.calls
         modelTotals[model].cost += d.costUSD
+        // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+        const existingCredits = modelTotals[model].credits
+        const newCredits = d.credits
+        if (existingCredits === null && newCredits === null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].credits = (existingCredits ?? 0) + (newCredits ?? 0)
+        }
         modelTotals[model].input += d.tokens.inputTokens
         modelTotals[model].output += d.tokens.outputTokens
         modelTotals[model].cacheRead += d.tokens.cacheReadInputTokens ?? 0
@@ -122,17 +130,24 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
   return Object.entries(modelTotals)
     .filter(([name]) => name !== '<synthetic>')
     .sort(([, a], [, b]) => b.cost - a.cost)
-    .map(([model, d]) => ({
-      Period: period,
-      Model: model,
-      [`Cost (${code})`]: round2(convertCost(d.cost)),
-      'Share (%)': pct(d.cost, totalCost),
-      'API Calls': d.calls,
-      'Input Tokens': d.input,
-      'Output Tokens': d.output,
-      'Cache Read Tokens': d.cacheRead,
-      'Cache Write Tokens': d.cacheWrite,
-    }))
+    .map(([model, d]) => {
+      const row: Row = {
+        Period: period,
+        Model: model,
+        [`Cost (${code}, est.)`]: round2(convertCost(d.cost)),
+        'Share (%)': pct(d.cost, totalCost),
+        'API Calls': d.calls,
+        'Input Tokens': d.input,
+        'Output Tokens': d.output,
+        'Cache Read Tokens': d.cacheRead,
+        'Cache Write Tokens': d.cacheWrite,
+      }
+      // Include credits column: null = '—', otherwise the number
+      if (d.credits !== null) {
+        row['Credits (Augment)'] = d.credits
+      }
+      return row
+    })
 }
 
 function buildToolRows(projects: ProjectSummary[]): Row[] {
@@ -179,14 +194,21 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
   return projects
     .slice()
     .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
-    .map(p => ({
-      Project: p.projectPath,
-      [`Cost (${code})`]: round2(convertCost(p.totalCostUSD)),
-      [`Avg/Session (${code})`]: p.sessions.length > 0 ? round2(convertCost(p.totalCostUSD / p.sessions.length)) : '',
-      'Share (%)': pct(p.totalCostUSD, total),
-      'API Calls': p.totalApiCalls,
-      Sessions: p.sessions.length,
-    }))
+    .map(p => {
+      const row: Row = {
+        Project: p.projectPath,
+        [`Cost (${code}, est.)`]: round2(convertCost(p.totalCostUSD)),
+        [`Avg/Session (${code})`]: p.sessions.length > 0 ? round2(convertCost(p.totalCostUSD / p.sessions.length)) : '',
+        'Share (%)': pct(p.totalCostUSD, total),
+        'API Calls': p.totalApiCalls,
+        Sessions: p.sessions.length,
+      }
+      // Include credits column if present
+      if (p.totalCredits !== null) {
+        row['Credits (Augment)'] = p.totalCredits
+      }
+      return row
+    })
 }
 
 function buildSessionRows(projects: ProjectSummary[]): Row[] {
@@ -219,13 +241,23 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
     const calls = p.projects.reduce((s, proj) => s + proj.totalApiCalls, 0)
     const sessions = p.projects.reduce((s, proj) => s + proj.sessions.length, 0)
     const projectCount = p.projects.filter(proj => proj.totalCostUSD > 0).length
-    return {
+    // Aggregate credits: null + null = null, null + N = N, N + M = N + M
+    const credits = p.projects.reduce<number | null>((acc, proj) => {
+      if (acc === null && proj.totalCredits === null) return null
+      return (acc ?? 0) + (proj.totalCredits ?? 0)
+    }, null)
+    const row: Row = {
       Period: p.label,
-      [`Cost (${code})`]: round2(convertCost(cost)),
+      [`Cost (${code}, est.)`]: round2(convertCost(cost)),
       'API Calls': calls,
       Sessions: sessions,
       Projects: projectCount,
     }
+    // Include credits column if present
+    if (credits !== null) {
+      row['Credits (Augment)'] = credits
+    }
+    return row
   })
 }
 

@@ -70,6 +70,11 @@ type AuggieToolUse = {
   mcp_tool_name?: string
 }
 
+type AuggieBillingMetadata = {
+  transaction_id?: string
+  credits_consumed?: number
+}
+
 type AuggieResponseNode = {
   id?: number
   type?: number
@@ -77,6 +82,8 @@ type AuggieResponseNode = {
   token_usage?: AuggieTokenUsage | null
   metadata?: { provider?: string | null } | null
   timestamp_ms?: number | null
+  /// Type-9 BILLING_METADATA nodes carry credits info
+  billing_metadata?: AuggieBillingMetadata | null
 }
 
 type AuggieRequestNode = {
@@ -109,6 +116,12 @@ type AuggieSession = {
     modelId?: string
   }
   chatHistory?: AuggieChatTurn[]
+  /// Session-level credit usage (newer sessions, Apr 2026+). When present, this is the
+  /// authoritative total for the session. Per-exchange credits are still parsed for
+  /// breakdown purposes but the session total should use this when available.
+  creditUsage?: number | null
+  /// Credits consumed by sub-agents spawned from this session.
+  subAgentCreditsUsed?: number | null
 }
 
 function getAugmentDir(): string {
@@ -240,9 +253,11 @@ function totalTokens(usage: AuggieTokenUsage): number {
 /// ChatResultNodeType enum constants (from Auggie schema):
 ///   5 = TOOL_USE (has tool_use, no token_usage)
 ///   8 = ASSISTANT_CHAT_RESULT (legacy "THINKING" nodes — carry both tool_use and token_usage)
+///   9 = BILLING_METADATA (credits info with transaction_id for deduplication)
 ///  10 = TOKEN_USAGE (has token_usage, no tool_use — billing boundary)
 const NODE_TYPE_TOOL_USE = 5
 const NODE_TYPE_ASSISTANT_RESULT = 8
+const NODE_TYPE_BILLING_METADATA = 9
 const NODE_TYPE_TOKEN_USAGE = 10
 
 /// Parse a tool_use.input_json string into a record. Auggie serializes tool inputs as JSON
@@ -258,6 +273,42 @@ function parseToolInputJson(inputJson: string | null | undefined): Record<string
   return {}
 }
 
+/// Extract credits from type-9 BILLING_METADATA nodes, deduplicating by transaction_id.
+/// This matches Augment's calculateCreditsFromHistory approach: each transaction should
+/// only be counted once even if it appears in multiple nodes.
+///
+/// Returns null if no billing nodes were found (legacy session / no billing data),
+/// otherwise returns the sum of credits_consumed across unique transactions.
+function extractCreditsFromNodes(
+  responseNodes: AuggieResponseNode[],
+  seenTransactionIds: Set<string>,
+): number | null {
+  let hasAnyBillingNode = false
+  let credits = 0
+
+  for (const node of responseNodes) {
+    if (node.type !== NODE_TYPE_BILLING_METADATA) continue
+    const billing = node.billing_metadata
+    if (!billing) continue
+
+    hasAnyBillingNode = true
+    const txId = billing.transaction_id
+    const consumed = billing.credits_consumed ?? 0
+
+    // Dedupe by transaction_id to prevent double-counting
+    if (txId) {
+      if (seenTransactionIds.has(txId)) continue
+      seenTransactionIds.add(txId)
+    }
+
+    credits += consumed
+  }
+
+  // Return null if no billing nodes found (no billing data available)
+  // Return 0 if billing nodes exist but sum to zero
+  return hasAnyBillingNode ? credits : null
+}
+
 /// Turn a single Auggie exchange into zero-or-more ParsedProviderCalls.
 ///
 /// Auggie has two data formats:
@@ -268,12 +319,17 @@ function parseToolInputJson(inputJson: string | null | undefined): Record<string
 ///
 /// This prevents tool-count inflation: a tool invoked once should be counted once,
 /// not once per token_usage node.
+///
+/// Credits are extracted from type-9 BILLING_METADATA nodes and attached to the first
+/// ParsedProviderCall emitted for this exchange. Transaction IDs are tracked across the
+/// session to prevent double-counting the same billing transaction.
 function* parseExchange(
   session: AuggieSession,
   exchange: AuggieExchange,
   sessionId: string,
   projectLabel: string,
   seenKeys: Set<string>,
+  seenTransactionIds: Set<string>,
 ): Generator<ParsedProviderCall> {
   const userMessage = extractUserMessage(exchange)
   const requestId = exchange.request_id ?? ''
@@ -283,6 +339,10 @@ function* parseExchange(
   // (ASSISTANT_CHAT_RESULT / THINKING) for metadata.provider because billing nodes
   // (type-10) often have null provider while type-8 nodes have it populated.
   const exchangeProviderHint = extractProviderHint(responseNodes)
+
+  // Extract credits from type-9 BILLING_METADATA nodes for this exchange.
+  // Deduplication happens via seenTransactionIds which persists across the session.
+  const exchangeCredits = extractCreditsFromNodes(responseNodes, seenTransactionIds)
 
   // Detect whether this exchange uses modern schema (has type-10 TOKEN_USAGE nodes)
   // or legacy schema (type-8 nodes with both tool_use and token_usage)
@@ -341,9 +401,10 @@ function* parseExchange(
       const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
       const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
 
-      // Attach tools only to first call to prevent inflation
+      // Attach tools and credits only to first call to prevent inflation
       const tools = firstEmitted ? [] : allTools
       const bashCommands = firstEmitted ? [] : allBashCommands
+      const credits = firstEmitted ? null : exchangeCredits
       firstEmitted = true
 
       yield {
@@ -364,12 +425,14 @@ function* parseExchange(
         deduplicationKey: dedupKey,
         userMessage,
         sessionId,
+        credits,
       }
     }
   } else {
     // ─────────────────────────────────────────────────────────────────────────
     // Legacy schema (type-8): Each node is self-contained with its own tool
     // ─────────────────────────────────────────────────────────────────────────
+    let firstEmitted = false
     for (const node of responseNodes) {
       const usage = node.token_usage
       if (!usage) continue
@@ -402,6 +465,10 @@ function* parseExchange(
         if (typeof cmd === 'string') bashCommands.push(...extractBashCommands(cmd))
       }
 
+      // Attach credits only to first call to prevent inflation
+      const credits = firstEmitted ? null : exchangeCredits
+      firstEmitted = true
+
       yield {
         provider: 'auggie',
         model,
@@ -420,6 +487,7 @@ function* parseExchange(
         deduplicationKey: dedupKey,
         userMessage,
         sessionId,
+        credits,
       }
     }
   }
@@ -501,11 +569,22 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
       }
 
+      // Track seen transaction_ids to dedupe billing metadata across exchanges.
+      // This matches Augment's calculateCreditsFromHistory approach.
+      const seenTransactionIds = new Set<string>()
+
+      // Session-level creditUsage fast-path: Newer sessions (Apr 2026+) may have
+      // session.creditUsage set. When present, this is the authoritative total.
+      // We still parse per-exchange credits for the breakdown, but downstream
+      // aggregation should prefer creditUsage when available.
+      // Note: We DON'T distribute creditUsage across calls here — the per-exchange
+      // credits are independently computed from type-9 nodes.
+
       const fresh: ParsedProviderCall[] = []
       for (const turn of chatHistory) {
         const ex = turn.exchange
         if (!ex) continue
-        for (const call of parseExchange(session, ex, sessionId, projectLabel, seenKeys)) {
+        for (const call of parseExchange(session, ex, sessionId, projectLabel, seenKeys, seenTransactionIds)) {
           fresh.push(call)
           yield call
         }

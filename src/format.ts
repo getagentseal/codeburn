@@ -13,6 +13,15 @@ export function formatTokens(n: number): string {
   return n.toString()
 }
 
+/// Format Augment credits for display.
+/// null returns '—' (no billing data), 0 returns '0', positive returns the number.
+export function formatCredits(credits: number | null): string {
+  if (credits === null) return '—'
+  if (credits >= 1_000_000) return `${(credits / 1_000_000).toFixed(1)}M`
+  if (credits >= 1_000) return `${(credits / 1_000).toFixed(1)}K`
+  return credits.toFixed(0)
+}
+
 /// Returns YYYY-MM-DD for the given date in the process-local timezone. Cheaper than shelling
 /// out to Intl.DateTimeFormat for every turn in a loop and avoids the UTC drift that bites
 /// `Date.toISOString().slice(0,10)` whenever the user runs this between local midnight and
