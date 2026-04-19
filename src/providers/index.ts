@@ -1,6 +1,7 @@
 import { claude } from './claude.js'
 import { codex } from './codex.js'
 import { copilot } from './copilot.js'
+import { openclaw } from './openclaw.js'
 import { pi } from './pi.js'
 import type { Provider, SessionSource } from './types.js'
 
@@ -34,7 +35,7 @@ async function loadOpenCode(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, codex, copilot, pi]
+const coreProviders: Provider[] = [claude, codex, copilot, openclaw, pi]
 
 export async function getAllProviders(): Promise<Provider[]> {
   const [cursor, opencode] = await Promise.all([loadCursor(), loadOpenCode()])
