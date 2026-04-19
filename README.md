@@ -84,7 +84,7 @@ Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q`
 
 | Panel | What it contains |
 |---|---|
-| **Overview** | Estimated USD, **Augment credits** (when billing metadata is present), total calls, sessions, cache-hit %, token totals, legacy-session count |
+| **Overview** | Estimated USD, **Augment credits** (when billing metadata is present), total calls, sessions, cache-hit %, token totals, legacy-session count (shown as `(N legacy sessions — model unrecoverable)` when applicable) |
 | **By Model** | Cost and call count per model, with an **Augment** credits column alongside `est.USD`. Pre-Nov-2025 sessions appear under `auggie-legacy`; set-but-unpriced IDs under `auggie-unknown` |
 | **Daily Activity** | Sparkline of cost per day across the selected window |
 | **Projects** | Top projects by cost, with `avgCostPerSession` in JSON output |
@@ -99,11 +99,11 @@ The `--format json` flag on `report`, `today`, and `month` emits the same data a
 
 Auggie writes one JSON file per conversation into `~/.augment/sessions/`. CodeBurn walks each file's `response_node` stream, aggregates at the **exchange level** (tool_use nodes + token_usage nodes that belong to the same model turn), and emits one row per `token_usage` node. Dedup key: `auggie:${sessionId}:${request_id}:${response_node.id}`. Sub-agent sessions are tagged with their `rootTaskUuid` in the session label.
 
-**Model selection** prefers `agentState.modelId` (resolved through an alias table). When it's empty, CodeBurn falls back to a provider-aware default derived from `metadata.provider` on type-8 THINKING nodes. Sessions with neither a `modelId` nor a recoverable provider hint (pre-Nov-2025 sessions) bucket under `auggie-legacy`; `auggie-unknown` is reserved for sessions where the `modelId` is set but not yet in the alias table.
+**Model selection** prefers `agentState.modelId` (resolved through an alias table). When it's empty, CodeBurn falls back to a provider-aware default derived from `metadata.provider` on type-8 THINKING nodes (see `CODEBURN_AUGGIE_DEFAULT_*` and `CODEBURN_AUGGIE_ALIAS_*` in the Environment Variables table below). Sessions with neither a `modelId` nor a recoverable provider hint (pre-Nov-2025 sessions) bucket under `auggie-legacy`; `auggie-unknown` is reserved for sessions where the `modelId` is set but not yet in the alias table.
 
 **Credits** come from Augment's own billing metadata: `billing_metadata.credits_consumed` on type-9 BILLING_METADATA nodes, deduped by `transaction_id`. When the top-level `session.creditUsage` is present it's used as the authoritative session total (it already includes sub-agent credits). The estimated USD column uses [LiteLLM](https://github.com/BerriAI/litellm) pricing data, cached for 24 hours at `~/.cache/codeburn/litellm-pricing.json`.
 
-Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mode `0600`) and invalidated on mtime+size change. The credentials file at `~/.augment/session.json` is never read by the CLI.
+Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mode `0600`) and invalidated on mtime+size change. A daily cache at `~/.cache/codeburn/daily.json` aggregates completed days (yesterday and earlier) so `status --format menubar-json` stays fast; today's data is always re-parsed live. The credentials file at `~/.augment/session.json` is never read by the CLI.
 
 ## Environment variables
 
@@ -116,6 +116,9 @@ Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mod
 | `CODEBURN_AUGGIE_DEFAULT_XAI` | Fallback model for xAI (default: `grok-2`). |
 | `CODEBURN_AUGGIE_DEFAULT_MINIMAX` | Fallback model for MiniMax (default: `minimax`). |
 | `CODEBURN_AUGGIE_ALIAS_<MODELID>` | Override the alias for a specific Augment-internal model ID. Example: `CODEBURN_AUGGIE_ALIAS_BUTLER=claude-haiku-4-5`. |
+| `CODEBURN_VERBOSE` | Set to `1` to enable verbose logging (same as `--verbose` flag). Prints warnings to stderr on skipped/failed session reads. |
+| `CODEBURN_CACHE_DIR` | Override the cache directory (default: `~/.cache/codeburn`). Affects session cache, daily cache, pricing cache, and FX rate cache. |
+| `BASH_MAX_OUTPUT_LENGTH` | Cap shell command output length in bytes (no default). Prevents unbounded token consumption from long-running commands. |
 | `CODEBURN_ALLOW_UNVERIFIED_INSTALL` | Set to `1` to install the macOS menubar app from a release that doesn't publish a SHA-256 sidecar. Off by default. |
 
 ## Currency
@@ -170,7 +173,7 @@ Cache and config files are created with mode `0600` under directories with mode 
 
 ## Troubleshooting
 
-- **`By Model` shows `auggie-legacy`** — these are pre-Nov-2025 sessions with an empty `modelId` and no recoverable provider hint. The model is unrecoverable; the count is shown under the overview so you can see the blind-spot size. This is expected.
+- **`By Model` shows `auggie-legacy`** — these are pre-Nov-2025 sessions with an empty `modelId` and no recoverable provider hint. The model is unrecoverable; the Overview panel shows a parenthetical hint (`(N legacy sessions — model unrecoverable)`) so you can see the blind-spot size. This is expected.
 - **Credits column shows `—`** — the session has no `billing_metadata` nodes and no top-level `creditUsage`. Typical for very old sessions or CLI-offline runs.
 - **Core Tools / Shell Commands / MCP Servers tables empty** — confirm `~/.augment/sessions/` contains recent files (`ls -lt ~/.augment/sessions/ | head`). If your Augment data lives elsewhere, set `AUGMENT_HOME`.
 - **`auggie-unknown` in By Model** — CodeBurn has a `modelId` it doesn't know how to price. Add an alias via `CODEBURN_AUGGIE_ALIAS_<MODELID>=<public-model-name>` or file an issue.
@@ -181,7 +184,9 @@ Cache and config files are created with mode `0600` under directories with mode 
 ```bash
 npm install
 npm test                       # vitest, 177 tests
-npm run build                  # tsup → dist/cli.js
+npm run build                  # tsup → dist/cli.js (target: node20¹)
+
+¹ `tsup.config.ts` uses `target: node20` for compile-time syntax transpilation, while `package.json engines` requires Node ≥ 22 at runtime.
 npm run dev -- report          # run CLI directly from src/ via tsx
 ```
 
@@ -202,6 +207,8 @@ src/
   config.ts           Config file management (~/.config/codeburn/)
   currency.ts         Currency conversion, Intl formatting
   optimize.ts         Waste-pattern scanner
+  daily-cache.ts      Daily aggregation cache for menubar-json performance
+  day-aggregator.ts   Day-level aggregation for cache
   providers/
     index.ts          Provider registry (single entry: auggie)
     auggie.ts         Session discovery, exchange-level parsing, credits, model selection
