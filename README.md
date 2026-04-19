@@ -19,7 +19,7 @@
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, **GitHub Copilot**, and **Auggie** (Augment Code CLI) with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -38,7 +38,7 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), GitHub Copilot (`~/.copilot/session-state/`), and/or Auggie / Augment Code (`~/.augment/sessions/`)
 - For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
@@ -94,6 +94,7 @@ codeburn report --provider cursor    # Cursor only
 codeburn report --provider opencode  # OpenCode only
 codeburn report --provider pi        # Pi only
 codeburn report --provider copilot   # GitHub Copilot only
+codeburn report --provider auggie    # Auggie (Augment Code CLI) only
 codeburn today --provider codex      # Codex today
 codeburn export --provider claude    # export Claude data only
 ```
@@ -138,6 +139,7 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 | OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
 | Pi | `~/.pi/agent/sessions/` | Supported |
 | GitHub Copilot | `~/.copilot/session-state/` | Supported (output tokens only) |
+| Auggie (Augment Code CLI) | `~/.augment/sessions/` | Supported |
 | Amp | -- | Planned (provider plugin system) |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
@@ -145,6 +147,8 @@ Codex tool names are normalized to match Claude's conventions (`exec_command` sh
 Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 
 GitHub Copilot only logs output tokens in its session state, so Copilot cost rows sit below actual API cost. The model is tracked via `session.model_change` events; messages before the first model change are skipped to avoid silent misattribution.
+
+Auggie (Augment Code's CLI) writes one pretty-printed JSON file per conversation into `~/.augment/sessions/<uuid>.json`. codeburn emits one row per response node with populated `token_usage` (each exchange can carry multiple rows because of tool-use loops), dedups on `auggie:${sessionId}:${request_id}:${response_node.id}`, and tags sub-agent sessions with their `rootTaskUuid` in the session label. The credentials file at `~/.augment/session.json` is never read. When `agentState.modelId` is empty, codeburn falls back to a provider-aware default (`anthropic` → `claude-sonnet-4-5`, `openai` → `gpt-5.1`, `google` → `gemini-3-pro`); each default is overridable via `CODEBURN_AUGGIE_DEFAULT_ANTHROPIC`, `CODEBURN_AUGGIE_DEFAULT_OPENAI`, `CODEBURN_AUGGIE_DEFAULT_GOOGLE`. Augment-internal model ids are aliased for pricing (e.g. `butler` → `claude-haiku-4-5`); override any alias via `CODEBURN_AUGGIE_ALIAS_<MODEL>`. Parsed calls are cached per session at `~/.cache/codeburn/auggie/<uuid>.json` (mode 0600) and invalidated on mtime+size change.
 
 ### Adding a provider
 

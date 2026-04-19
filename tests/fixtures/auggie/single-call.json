@@ -1,0 +1,74 @@
+{
+  "sessionId": "11111111-1111-4111-8111-111111111111",
+  "created": "2026-04-01T10:00:00.000Z",
+  "modified": "2026-04-01T10:01:00.000Z",
+  "creditUsage": null,
+  "subAgentCreditsUsed": 0,
+  "workspaceId": "ws-aaaaaaaa",
+  "agentState": {
+    "modelId": "claude-sonnet-4-5",
+    "userEmail": "",
+    "userGuidelines": "",
+    "workspaceGuidelines": "",
+    "agentMemories": ""
+  },
+  "chatHistory": [
+    {
+      "exchange": {
+        "request_id": "req-aaaa0001",
+        "request_message": "REDACTED test prompt",
+        "response_text": "ok",
+        "request_nodes": [
+          {
+            "id": 0,
+            "type": 0,
+            "text_node": { "content": "REDACTED test prompt" }
+          },
+          {
+            "id": 1,
+            "type": 4,
+            "ide_state_node": {
+              "current_terminal": {
+                "terminal_id": 0,
+                "current_working_directory": "/Users/tester/projects/demo-project/repo"
+              },
+              "workspace_folders": [
+                {
+                  "repository_root": "/Users/tester/projects/demo-project/repo",
+                  "folder_root": "/Users/tester/projects/demo-project/repo"
+                }
+              ],
+              "workspace_folders_unchanged": false
+            }
+          }
+        ],
+        "response_nodes": [
+          {
+            "id": 0,
+            "type": 8,
+            "content": "",
+            "tool_use": null,
+            "thinking": { "summary": "plan", "encrypted_content": "REDACTED", "content": null },
+            "billing_metadata": null,
+            "metadata": { "openai_id": null, "google_ts": null, "provider": "anthropic", "phase": null },
+            "token_usage": {
+              "input_tokens": 5,
+              "output_tokens": 120,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 1000,
+              "system_prompt_tokens": 500,
+              "chat_history_tokens": 0,
+              "current_message_tokens": 20,
+              "max_context_tokens": 200000,
+              "tool_definitions_tokens": 400,
+              "tool_result_tokens": 0,
+              "assistant_response_tokens": 120,
+              "max_output_tokens": 8192
+            },
+            "timestamp_ms": 1775383260000
+          }
+        ]
+      }
+    }
+  ]
+}
