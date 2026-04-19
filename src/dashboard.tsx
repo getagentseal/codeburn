@@ -8,8 +8,6 @@ import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
 
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
-import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
-import { join } from 'path'
 
 type Period = 'today' | 'week' | '30days' | 'month' | 'all'
 type View = 'dashboard' | 'optimize'
@@ -228,19 +226,16 @@ function shortProject(encoded: string): string {
 
 const PROJECT_COL_AVG = 7
 const PROJECT_COL_BASE_WIDTH = 30
-const PROJECT_COL_WITH_OVERHEAD_WIDTH = 40
 
-function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget> }) {
+function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
-  const hasBudgets = budgets && budgets.size > 0
-  const nw = Math.max(8, pw - bw - (hasBudgets ? PROJECT_COL_WITH_OVERHEAD_WIDTH : PROJECT_COL_BASE_WIDTH))
+  const nw = Math.max(8, pw - bw - PROJECT_COL_BASE_WIDTH)
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
       <Text dimColor wrap="truncate-end">
-        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
+        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
-        const budget = budgets?.get(project.project)
         const avgCost = project.sessions.length > 0
           ? formatCost(project.totalCostUSD / project.sessions.length)
           : '-'
@@ -251,7 +246,6 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
-            {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
           </Text>
         )
       })}
@@ -532,7 +526,7 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, budgets }: { projects: ProjectSummary[]; period: Period; columns?: number; budgets?: Map<string, ContextBudget> }) {
+function DashboardContent({ projects, period, columns }: { projects: ProjectSummary[]; period: Period; columns?: number }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
@@ -540,7 +534,7 @@ function DashboardContent({ projects, period, columns, budgets }: { projects: Pr
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       <TopSessions projects={projects} pw={dashWidth} bw={barWidth} />
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       <Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
@@ -562,28 +556,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, refreshSeconds, 
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<View>('dashboard')
   const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null)
-  const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const findingCount = optimizeResult?.findings.length ?? 0
-
-  useEffect(() => {
-    let cancelled = false
-    async function loadBudgets() {
-      const claudeDir = join(homedir(), '.claude', 'projects')
-      const budgets = new Map<string, ContextBudget>()
-      for (const project of projects.slice(0, 8)) {
-        if (cancelled) return
-        const cwd = await discoverProjectCwd(join(claudeDir, project.project))
-        if (!cwd) continue
-        budgets.set(project.project, await estimateContextBudget(cwd))
-      }
-      if (!cancelled) setProjectBudgets(budgets)
-    }
-    loadBudgets()
-    return () => { cancelled = true }
-  }, [projects])
 
   useEffect(() => {
     let cancelled = false
@@ -654,7 +630,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, refreshSeconds, 
       <PeriodTabs active={period} />
       {view === 'optimize' && optimizeResult
         ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-        : <DashboardContent projects={projects} period={period} columns={columns} budgets={projectBudgets} />}
+        : <DashboardContent projects={projects} period={period} columns={columns} />}
       <StatusBar width={dashWidth} view={view} findingCount={findingCount} />
     </Box>
   )
