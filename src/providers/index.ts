@@ -7,6 +7,10 @@ export function getProvider(name: string): Provider | undefined {
   return providers.find(p => p.name === name)
 }
 
+export function getAllProviders(): Provider[] {
+  return providers
+}
+
 export async function discoverAllSessions(): Promise<SessionSource[]> {
   const all: SessionSource[] = []
   for (const provider of providers) {

@@ -457,9 +457,8 @@ const CACHE_TTL_MS = 60_000
 const MAX_CACHE_ENTRIES = 10
 const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
 
-function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
-  const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
-  return `${s}:${providerFilter ?? 'all'}`
+function cacheKey(dateRange?: DateRange): string {
+  return dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
 }
 
 function cachePut(key: string, data: ProjectSummary[]) {
@@ -499,36 +498,29 @@ export function filterProjectsByName(
   return result
 }
 
-export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
-  const key = cacheKey(dateRange, providerFilter)
+export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSummary[]> {
+  const key = cacheKey(dateRange)
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
 
-  const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
-  const allSources = await discoverAllSessions(providerFilter)
-
-  const claudeSources = allSources.filter(s => s.provider === 'claude')
-  const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
-
-  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange)
+  const allSources = await discoverAllSessions()
 
   const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
-  for (const source of nonClaudeSources) {
+  for (const source of allSources) {
     const existing = providerGroups.get(source.provider) ?? []
     existing.push({ path: source.path, project: source.project })
     providerGroups.set(source.provider, existing)
   }
 
-  const otherProjects: ProjectSummary[] = []
+  const allProjects: ProjectSummary[] = []
   for (const [providerName, sources] of providerGroups) {
     const projects = await parseProviderSources(providerName, sources, seenKeys, dateRange)
-    otherProjects.push(...projects)
+    allProjects.push(...projects)
   }
 
   const mergedMap = new Map<string, ProjectSummary>()
-  for (const p of [...claudeProjects, ...otherProjects]) {
+  for (const p of allProjects) {
     const existing = mergedMap.get(p.project)
     if (existing) {
       existing.sessions.push(...p.sessions)
