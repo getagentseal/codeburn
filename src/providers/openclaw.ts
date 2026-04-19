@@ -61,10 +61,6 @@ function getOpenClawAgentsDir(override?: string): string {
   return override ?? process.env['OPENCLAW_AGENTS_DIR'] ?? join(homedir(), '.openclaw', 'agents')
 }
 
-function isArchivedFilename(name: string): boolean {
-  return name.includes('.deleted.') || name.includes('.reset.')
-}
-
 function isLocalModel(model: string, api?: string): boolean {
   if (api === 'ollama') return true
   return model.toLowerCase().includes('qwen')
@@ -93,8 +89,7 @@ async function discoverSessionsInDir(agentsDir: string): Promise<SessionSource[]
     }
 
     for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      if (isArchivedFilename(file)) continue
+      if (!file.includes('.jsonl')) continue
       const filePath = join(sessionsDir, file)
       const fileStat = await stat(filePath).catch(() => null)
       if (!fileStat?.isFile()) continue

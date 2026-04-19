@@ -119,16 +119,15 @@ describe('openclaw provider - session discovery', () => {
     expect(projects).toEqual(['douyun', 'ivy', 'main'])
   })
 
-  it('skips .deleted. and .reset. archived files', async () => {
-    await writeSession(join(tmpDir, 'ivy'), 'live.jsonl', [sessionMeta(), assistantMessage({})])
-    await writeSession(join(tmpDir, 'ivy'), 'old.jsonl.deleted.2026-04-01T00-00-00.000Z', [sessionMeta(), assistantMessage({})])
-    await writeSession(join(tmpDir, 'ivy'), 'reset.jsonl.reset.2026-04-02T00-00-00.000Z', [sessionMeta(), assistantMessage({})])
+  it('includes .deleted. and .reset. rotated files (data is preserved, not deleted)', async () => {
+    await writeSession(join(tmpDir, 'ivy'), 'live.jsonl', [sessionMeta({ id: 'live-id' }), assistantMessage({ id: 'm1' })])
+    await writeSession(join(tmpDir, 'ivy'), 'old.jsonl.deleted.2026-04-01T00-00-00.000Z', [sessionMeta({ id: 'old-id' }), assistantMessage({ id: 'm2' })])
+    await writeSession(join(tmpDir, 'ivy'), 'reset.jsonl.reset.2026-04-02T00-00-00.000Z', [sessionMeta({ id: 'reset-id' }), assistantMessage({ id: 'm3' })])
 
     const provider = createOpenClawProvider(tmpDir)
     const sessions = await provider.discoverSessions()
 
-    expect(sessions).toHaveLength(1)
-    expect(sessions[0]!.path).toContain('live.jsonl')
+    expect(sessions).toHaveLength(3)
   })
 
   it('returns empty for non-existent directory', async () => {
