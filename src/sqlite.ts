@@ -3,6 +3,8 @@
 /// so the dependency graph no longer pulls in the deprecated `prebuild-install` package
 /// (issue #75). Works across Cursor and OpenCode session DBs, both of which we only read.
 
+import { createRequire } from 'node:module'
+
 type Row = Record<string, unknown>
 
 export type SqliteDatabase = {
@@ -18,6 +20,7 @@ type DatabaseSyncCtor = new (path: string, options?: { readOnly?: boolean }) => 
 let DatabaseSync: DatabaseSyncCtor | null = null
 let loadAttempted = false
 let loadError: string | null = null
+const require = createRequire(import.meta.url)
 
 /// Lazily imports `node:sqlite`. On Node 22/23 it emits an ExperimentalWarning the first
 /// time the module is loaded; we silence that specific warning once so dashboards aren't
@@ -55,10 +58,7 @@ function loadDriver(): boolean {
   } as typeof process.emit
 
   try {
-    // Dynamic require via createRequire avoids TypeScript chasing types we don't need at
-    // build time (node:sqlite landed in @types/node much later than in Node itself).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = eval('require')('node:sqlite') as { DatabaseSync: DatabaseSyncCtor }
+    const mod = require('node:sqlite') as { DatabaseSync: DatabaseSyncCtor }
     DatabaseSync = mod.DatabaseSync
     return true
   } catch (err) {
