@@ -285,6 +285,28 @@ defaults write org.agentseal.codeburn-menubar CodeBurnDisableSubscriptionFetch -
 
 Cache and config files written by the CLI are created with mode `0600` under directories with mode `0700`. The macOS installer verifies a published SHA-256 sidecar before unpacking the downloaded app and refuses to install on mismatch (set `CODEBURN_ALLOW_UNVERIFIED_INSTALL=1` to override for releases that pre-date the sidecar).
 
+### Optional: SPKI certificate pinning
+
+The menubar app's calls to `platform.claude.com` and `api.anthropic.com` trust the system root store by default. If you route traffic through a TLS-intercepting proxy you don't trust (or want defence in depth against a rogue root in your chain), you can pin the expected SubjectPublicKeyInfo (SPKI) hashes. Extract the current hash for each endpoint:
+
+```bash
+openssl s_client -connect api.anthropic.com:443 -servername api.anthropic.com </dev/null 2>/dev/null \
+  | openssl x509 -pubkey -noout \
+  | openssl pkey -pubin -outform DER \
+  | openssl dgst -sha256 -binary \
+  | base64
+```
+
+Then enable pinning by adding each hash to the allow-list:
+
+```bash
+defaults write org.agentseal.codeburn-menubar CodeBurnPinnedSPKIHashes -array \
+  "<base64-hash-for-platform-claude-com>" \
+  "<base64-hash-for-api-anthropic-com>"
+```
+
+With the allow-list populated, the app rejects a TLS connection whose presented chain contains no matching SPKI. Leave the key unset (the default) to fall back to system-trust evaluation. You must refresh the hashes when Anthropic rotates certificates; otherwise the subscription sync will fail closed.
+
 ## Environment variables
 
 | Variable | Description |

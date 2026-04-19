@@ -191,7 +191,10 @@ struct SubscriptionClient {
         ]
         request.httpBody = (components.percentEncodedQuery ?? "").data(using: .utf8)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Route through PinningURLSession so users who populate CodeBurnPinnedSPKIHashes
+        // get SPKI pinning on the Anthropic hosts. Default (empty allow-list) behaves
+        // exactly like URLSession.shared.
+        let (data, response) = try await PinningURLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw SubscriptionError.refreshFailed(-1, nil)
         }
@@ -218,7 +221,10 @@ struct SubscriptionClient {
         request.setValue(betaHeader, forHTTPHeaderField: "anthropic-beta")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Route through PinningURLSession so users who populate CodeBurnPinnedSPKIHashes
+        // get SPKI pinning on the Anthropic hosts. Default (empty allow-list) behaves
+        // exactly like URLSession.shared.
+        let (data, response) = try await PinningURLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw SubscriptionError.usageFetchFailed(-1, nil)
         }
