@@ -59,6 +59,8 @@ describe('menubar installer verification', () => {
 describe('menubar installer download host allow-list', () => {
   it.each([
     'https://github.com/getagentseal/codeburn/releases/download/mac-v1/CodeBurnMenubar.zip',
+    'https://GitHub.com/getagentseal/codeburn/releases/download/mac-v1/CodeBurnMenubar.zip',
+    'https://github.com./getagentseal/codeburn/releases/download/mac-v1/CodeBurnMenubar.zip',
     'https://objects.githubusercontent.com/path/to/asset',
     'https://release-assets.githubusercontent.com/path/to/asset',
   ])('accepts %s', (url) => {
@@ -71,6 +73,23 @@ describe('menubar installer download host allow-list', () => {
     'https://raw.githubusercontent.com/attacker/repo/main/CodeBurnMenubar.zip',
   ])('rejects %s', (url) => {
     expect(() => _ensureAllowedHostForTest(url)).toThrow(/unexpected host/i)
+  })
+
+  it.each([
+    // Userinfo: even when the host parses to an allow-listed value, refuse on principle.
+    'https://attacker@github.com/asset.zip',
+    'https://user:pw@github.com/asset.zip',
+    'https://attacker@evil.example.com/asset.zip',
+  ])('rejects URL containing userinfo: %s', (url) => {
+    expect(() => _ensureAllowedHostForTest(url)).toThrow(/userinfo/i)
+  })
+
+  it.each([
+    // Node converts non-ASCII hostnames to xn-- punycode at parse time. Reject all of them.
+    'https://gïthub.com/asset.zip',
+    'https://gïthub.com.evil.example/asset.zip',
+  ])('rejects IDN/punycode host: %s', (url) => {
+    expect(() => _ensureAllowedHostForTest(url)).toThrow(/idn|punycode/i)
   })
 
   it('rejects an unparseable URL', () => {

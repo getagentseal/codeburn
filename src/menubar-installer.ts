@@ -97,24 +97,65 @@ async function fetchLatestReleaseAsset(): Promise<AssetPair> {
 /// Refuses to download if the published asset URL points anywhere other than a GitHub-controlled
 /// host. Belt-and-braces alongside the SHA256 verification: even with TLS, a malicious release
 /// payload can ship arbitrary `browser_download_url` strings.
+///
+/// Hardening notes:
+/// - Trailing dots are stripped: `github.com.` resolves to the same DNS record as `github.com`,
+///   so treating them as different would let an attacker bypass the allow-list with a host that
+///   `fetch` happily resolves.
+/// - URLs carrying userinfo (`https://anyone@host/...`) are rejected. GitHub release URLs never
+///   carry credentials, so userinfo signals either tampering or someone smuggling additional
+///   semantics past a careless reader.
+/// - IDN/punycode hosts (`xn--...`) are rejected. The allow-list is plain ASCII; a punycoded
+///   host that visually looks like `github.com` is exactly the homoglyph attack we want to refuse.
 function ensureAllowedHost(url: string, label: string): void {
-  let host: string
+  let parsed: URL
   try {
-    host = new URL(url).host.toLowerCase()
+    parsed = new URL(url)
   } catch {
     throw new Error(`${label} URL is unparseable: ${url}`)
   }
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error(`${label} URL contains userinfo; refusing to install.`)
+  }
+  const rawHost = parsed.host
+  if (rawHost.startsWith('xn--') || rawHost.includes('.xn--')) {
+    throw new Error(`${label} URL host is IDN/punycode (${rawHost}); refusing to install.`)
+  }
+  const host = rawHost.toLowerCase().replace(/\.$/, '')
   if (!ALLOWED_DOWNLOAD_HOSTS.has(host)) {
     throw new Error(`${label} URL points at an unexpected host (${host}); refusing to install.`)
   }
 }
 
+/// Walks a redirect chain manually so the host check runs on every hop, not just the initial
+/// URL. `fetch`'s `redirect: 'follow'` mode applies the host check only once and then trusts
+/// whatever the server sends; this loop re-validates after each 3xx so an asset URL that 302s
+/// to an attacker-hosted CDN is rejected at the redirect, not after the bytes are on disk.
+async function fetchFollowingAllowedRedirects(url: string, label: string): Promise<Response> {
+  const maxRedirects = 5
+  let current = url
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    ensureAllowedHost(current, label)
+    const response = await fetch(current, {
+      headers: { 'User-Agent': 'codeburn-menubar-installer' },
+      redirect: 'manual',
+    })
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (!location) {
+        throw new Error(`${label} redirect missing Location header (HTTP ${response.status}).`)
+      }
+      // Resolve relative redirects against the current URL, matching browser behaviour.
+      current = new URL(location, current).toString()
+      continue
+    }
+    return response
+  }
+  throw new Error(`${label} exceeded ${maxRedirects} redirects; refusing to install.`)
+}
+
 async function downloadToFile(url: string, destPath: string): Promise<void> {
-  ensureAllowedHost(url, 'Download')
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'codeburn-menubar-installer' },
-    redirect: 'follow',
-  })
+  const response = await fetchFollowingAllowedRedirects(url, 'Download')
   if (!response.ok || response.body === null) {
     throw new Error(`Download failed: HTTP ${response.status}`)
   }
@@ -124,11 +165,7 @@ async function downloadToFile(url: string, destPath: string): Promise<void> {
 }
 
 async function fetchExpectedSha256(asset: ReleaseAsset): Promise<string> {
-  ensureAllowedHost(asset.browser_download_url, 'Checksum')
-  const response = await fetch(asset.browser_download_url, {
-    headers: { 'User-Agent': 'codeburn-menubar-installer' },
-    redirect: 'follow',
-  })
+  const response = await fetchFollowingAllowedRedirects(asset.browser_download_url, 'Checksum')
   if (!response.ok) {
     throw new Error(`Checksum download failed: HTTP ${response.status}`)
   }
