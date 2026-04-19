@@ -264,12 +264,32 @@ You can also open it inline from the dashboard: press `o` when a finding count a
 
 CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi), filters by date range per entry, and classifies each turn.
 
+## Privacy and network access
+
+CodeBurn parses session logs locally; no prompt or response text is sent off your machine. The CLI and the optional macOS menubar app do make a small number of well-defined network calls:
+
+| Caller | Endpoint | What is sent | When |
+|--------|----------|--------------|------|
+| CLI | `raw.githubusercontent.com/BerriAI/litellm/...` | nothing (GET only) | model pricing refresh, cached locally |
+| CLI | `api.frankfurter.app` | nothing (GET only) | currency FX rate, cached locally |
+| CLI installer | `api.github.com/repos/getagentseal/codeburn/...`, `objects.githubusercontent.com` | nothing (GET only) | only when you run `codeburn menubar` to install/upgrade the macOS app |
+| Menubar app | `platform.claude.com/v1/oauth/token`, `api.anthropic.com/api/oauth/usage` | your Claude OAuth bearer / refresh token, sent to Anthropic | only when you click the Plan pill in the popover |
+
+The menubar app reads `~/.claude/.credentials.json` and the `Claude Code-credentials` Keychain item to pull your subscription usage from Anthropic. To disable that integration entirely (no credential read, no Anthropic requests):
+
+```bash
+defaults write org.agentseal.codeburn-menubar CodeBurnDisableSubscriptionFetch -bool true
+```
+
+Cache and config files written by the CLI are created with mode `0600` under directories with mode `0700`. The macOS installer verifies a published SHA-256 sidecar before unpacking the downloaded app and refuses to install on mismatch (set `CODEBURN_ALLOW_UNVERIFIED_INSTALL=1` to override for releases that pre-date the sidecar).
+
 ## Environment variables
 
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
+| `CODEBURN_ALLOW_UNVERIFIED_INSTALL` | Set to `1` to install the macOS menubar app from a release that does not publish a SHA-256 sidecar. Off by default; not recommended. |
 
 ## Project structure
 
