@@ -182,9 +182,35 @@ function totalTokens(usage: AuggieTokenUsage): number {
     + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
 }
 
-/// Turn a single Auggie exchange into zero-or-more ParsedProviderCalls. Each response_node
-/// that carries a populated token_usage is one LLM API call; a tool-loop turn produces
-/// multiple. request_id is stable per exchange, response_node.id indexes within the exchange.
+/// ChatResultNodeType enum constants (from Auggie schema):
+///   5 = TOOL_USE (has tool_use, no token_usage)
+///  10 = TOKEN_USAGE (has token_usage, no tool_use — billing boundary)
+const NODE_TYPE_TOOL_USE = 5
+const NODE_TYPE_TOKEN_USAGE = 10
+
+/// Parse a tool_use.input_json string into a record. Auggie serializes tool inputs as JSON
+/// strings; we need to parse to extract command fields for bash extraction.
+function parseToolInputJson(inputJson: string | null | undefined): Record<string, unknown> {
+  if (!inputJson) return {}
+  try {
+    const parsed = JSON.parse(inputJson) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch { /* malformed JSON, ignore */ }
+  return {}
+}
+
+/// Turn a single Auggie exchange into zero-or-more ParsedProviderCalls.
+///
+/// Auggie has two data formats:
+///   1. Legacy (type-8): Each node carries BOTH tool_use AND token_usage together.
+///      Treat each node independently — one tool per call.
+///   2. Modern (type-5 + type-10): Tool_use on type-5 nodes, token_usage on type-10.
+///      Aggregate all tools across the exchange, emit with first type-10 node only.
+///
+/// This prevents tool-count inflation: a tool invoked once should be counted once,
+/// not once per token_usage node.
 function* parseExchange(
   session: AuggieSession,
   exchange: AuggieExchange,
@@ -196,54 +222,140 @@ function* parseExchange(
   const requestId = exchange.request_id ?? ''
   const responseNodes = exchange.response_nodes ?? []
 
-  for (const node of responseNodes) {
-    const usage = node.token_usage
-    if (!usage) continue
+  // Detect whether this exchange uses modern schema (has type-10 TOKEN_USAGE nodes)
+  // or legacy schema (type-8 nodes with both tool_use and token_usage)
+  const hasModernTokenNodes = responseNodes.some(n => n.type === NODE_TYPE_TOKEN_USAGE)
 
-    const input = usage.input_tokens ?? 0
-    const output = usage.output_tokens ?? 0
-    const cacheRead = usage.cache_read_input_tokens ?? 0
-    const cacheWrite = usage.cache_creation_input_tokens ?? 0
-    if (totalTokens(usage) === 0) continue
+  if (hasModernTokenNodes) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Modern schema: Aggregate tools from type-5, emit with first type-10
+    // ─────────────────────────────────────────────────────────────────────────
+    const allTools: string[] = []
+    const allBashCommands: string[] = []
 
-    const nodeId = node.id ?? 0
-    const dedupKey = `auggie:${sessionId}:${requestId}:${nodeId}`
-    if (seenKeys.has(dedupKey)) continue
-    seenKeys.add(dedupKey)
-
-    const providerHint = node.metadata?.provider ?? null
-    const model = selectModel(session, providerHint)
-    const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
-
-    const rawToolName = toolNameOf(node.tool_use)
-    const tools = rawToolName ? [rawToolName] : []
-    const bashCommands: string[] = []
-    if (rawToolName === BASH_TOOL_NAME) {
-      const input = toolInputOf(node.tool_use)
-      const cmd = input['command']
-      if (typeof cmd === 'string') bashCommands.push(...extractBashCommands(cmd))
+    // Collect tools from type-5 TOOL_USE nodes
+    for (const node of responseNodes) {
+      if (node.type === NODE_TYPE_TOOL_USE) {
+        const rawToolName = toolNameOf(node.tool_use)
+        if (rawToolName) {
+          allTools.push(rawToolName)
+          if (rawToolName === BASH_TOOL_NAME) {
+            const toolUse = node.tool_use as AuggieToolUse & { input_json?: string }
+            const inputRecord = toolUse?.input_json
+              ? parseToolInputJson(toolUse.input_json)
+              : toolInputOf(node.tool_use)
+            const cmd = inputRecord['command']
+            if (typeof cmd === 'string') {
+              allBashCommands.push(...extractBashCommands(cmd))
+            }
+          }
+        }
+      }
     }
 
-    const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
+    // Emit calls for type-10 TOKEN_USAGE nodes
+    let firstEmitted = false
+    let tokenNodeIndex = 0
 
-    yield {
-      provider: 'auggie',
-      model,
-      inputTokens: input,
-      outputTokens: output,
-      cacheCreationInputTokens: cacheWrite,
-      cacheReadInputTokens: cacheRead,
-      cachedInputTokens: cacheRead,
-      reasoningTokens: 0,
-      webSearchRequests: 0,
-      costUSD,
-      tools,
-      bashCommands,
-      timestamp,
-      speed: 'standard',
-      deduplicationKey: dedupKey,
-      userMessage,
-      sessionId,
+    for (const node of responseNodes) {
+      if (node.type !== NODE_TYPE_TOKEN_USAGE) continue
+      const usage = node.token_usage
+      if (!usage) continue
+
+      const input = usage.input_tokens ?? 0
+      const output = usage.output_tokens ?? 0
+      const cacheRead = usage.cache_read_input_tokens ?? 0
+      const cacheWrite = usage.cache_creation_input_tokens ?? 0
+      if (totalTokens(usage) === 0) continue
+
+      // Modern type-10 nodes may have duplicate ids, so use incrementing index
+      const dedupKey = `auggie:${sessionId}:${requestId}:t${tokenNodeIndex++}`
+      if (seenKeys.has(dedupKey)) continue
+      seenKeys.add(dedupKey)
+
+      const providerHint = node.metadata?.provider ?? null
+      const model = selectModel(session, providerHint)
+      const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+      const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
+
+      // Attach tools only to first call to prevent inflation
+      const tools = firstEmitted ? [] : allTools
+      const bashCommands = firstEmitted ? [] : allBashCommands
+      firstEmitted = true
+
+      yield {
+        provider: 'auggie',
+        model,
+        inputTokens: input,
+        outputTokens: output,
+        cacheCreationInputTokens: cacheWrite,
+        cacheReadInputTokens: cacheRead,
+        cachedInputTokens: cacheRead,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+        costUSD,
+        tools,
+        bashCommands,
+        timestamp,
+        speed: 'standard',
+        deduplicationKey: dedupKey,
+        userMessage,
+        sessionId,
+      }
+    }
+  } else {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Legacy schema (type-8): Each node is self-contained with its own tool
+    // ─────────────────────────────────────────────────────────────────────────
+    for (const node of responseNodes) {
+      const usage = node.token_usage
+      if (!usage) continue
+
+      const input = usage.input_tokens ?? 0
+      const output = usage.output_tokens ?? 0
+      const cacheRead = usage.cache_read_input_tokens ?? 0
+      const cacheWrite = usage.cache_creation_input_tokens ?? 0
+      if (totalTokens(usage) === 0) continue
+
+      const nodeId = node.id ?? 0
+      const dedupKey = `auggie:${sessionId}:${requestId}:${nodeId}`
+      if (seenKeys.has(dedupKey)) continue
+      seenKeys.add(dedupKey)
+
+      const providerHint = node.metadata?.provider ?? null
+      const model = selectModel(session, providerHint)
+      const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+      const timestamp = isoFromMs(node.timestamp_ms) ?? session.modified ?? session.created ?? ''
+
+      // Legacy: extract tool from the same node
+      const rawToolName = toolNameOf(node.tool_use)
+      const tools = rawToolName ? [rawToolName] : []
+      const bashCommands: string[] = []
+      if (rawToolName === BASH_TOOL_NAME) {
+        const inputRecord = toolInputOf(node.tool_use)
+        const cmd = inputRecord['command']
+        if (typeof cmd === 'string') bashCommands.push(...extractBashCommands(cmd))
+      }
+
+      yield {
+        provider: 'auggie',
+        model,
+        inputTokens: input,
+        outputTokens: output,
+        cacheCreationInputTokens: cacheWrite,
+        cacheReadInputTokens: cacheRead,
+        cachedInputTokens: cacheRead,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+        costUSD,
+        tools,
+        bashCommands,
+        timestamp,
+        speed: 'standard',
+        deduplicationKey: dedupKey,
+        userMessage,
+        sessionId,
+      }
     }
   }
 }

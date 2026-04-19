@@ -38,12 +38,43 @@ function extractToolNames(content: ContentBlock[]): string[] {
     .map(b => b.name)
 }
 
+/// MCP tool naming conventions:
+///   - Claude Code (legacy): "mcp__server__tool" prefix format
+///   - Auggie: "tool_server-mcp" suffix format (e.g., "read_note_workspace-mcp")
+/// Both are valid MCP tools; this function accepts either convention.
+const MCP_PREFIX = 'mcp__'
+const MCP_SUFFIX = '-mcp'
+
+function isMcpTool(tool: string): boolean {
+  return tool.startsWith(MCP_PREFIX) || tool.endsWith(MCP_SUFFIX)
+}
+
+/// Extract the MCP server name from a tool name.
+/// - Claude Code format: "mcp__server__tool" → "server"
+/// - Auggie format: "tool_server-mcp" → "server"
+function extractMcpServerName(tool: string): string {
+  if (tool.startsWith(MCP_PREFIX)) {
+    // Claude Code: mcp__server__tool
+    return tool.split('__')[1] ?? tool
+  }
+  if (tool.endsWith(MCP_SUFFIX)) {
+    // Auggie: tool_server-mcp
+    const withoutSuffix = tool.slice(0, -MCP_SUFFIX.length)
+    const lastUnderscore = withoutSuffix.lastIndexOf('_')
+    if (lastUnderscore > 0) {
+      return withoutSuffix.slice(lastUnderscore + 1)
+    }
+    return withoutSuffix
+  }
+  return tool
+}
+
 function extractMcpTools(tools: string[]): string[] {
-  return tools.filter(t => t.startsWith('mcp__'))
+  return tools.filter(isMcpTool)
 }
 
 function extractCoreTools(tools: string[]): string[] {
-  return tools.filter(t => !t.startsWith('mcp__'))
+  return tools.filter(t => !isMcpTool(t))
 }
 
 function extractBashCommandsFromContent(content: ContentBlock[]): string[] {
@@ -226,7 +257,7 @@ function buildSessionSummary(
         toolBreakdown[tool].calls++
       }
       for (const mcp of call.mcpTools) {
-        const server = mcp.split('__')[1] ?? mcp
+        const server = extractMcpServerName(mcp)
         mcpBreakdown[server] = mcpBreakdown[server] ?? { calls: 0 }
         mcpBreakdown[server].calls++
       }
