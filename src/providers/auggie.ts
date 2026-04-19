@@ -51,6 +51,10 @@ type AuggieToolUse = {
   name?: string
   input?: Record<string, unknown>
   arguments?: Record<string, unknown>
+  /// Structured MCP fields (modern sessions). When both are present, prefer these
+  /// over suffix-parsing to identify MCP tools.
+  mcp_server_name?: string
+  mcp_tool_name?: string
 }
 
 type AuggieResponseNode = {
@@ -135,8 +139,19 @@ function selectModel(session: AuggieSession, nodeProvider: string | null | undef
 /// For the tool breakdown we keep the raw name. For the MCP panel we parse off the `-mcp`
 /// suffix and treat the trailing segment as the server (matching how parser.ts groups MCP
 /// tools for the other providers via mcp__server__tool).
+///
+/// Structured MCP field preference: When both mcp_server_name and mcp_tool_name are
+/// present (modern sessions), we emit a canonical name in the Auggie suffix format:
+/// `${mcp_tool_name}_${mcp_server_name}-mcp`. This ensures downstream extractMcpTools
+/// in parser.ts picks it up via the `-mcp` suffix path.
 function toolNameOf(toolUse: AuggieToolUse | null | undefined): string {
   if (!toolUse) return ''
+  // Prefer structured MCP fields when both are present
+  const mcpServer = toolUse.mcp_server_name
+  const mcpTool = toolUse.mcp_tool_name
+  if (mcpServer && mcpTool) {
+    return `${mcpTool}_${mcpServer}-mcp`
+  }
   return toolUse.tool_name ?? toolUse.name ?? ''
 }
 
