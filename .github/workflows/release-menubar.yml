@@ -62,15 +62,24 @@ jobs:
           fi
           KEYCHAIN="$RUNNER_TEMP/codeburn-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/codeburn-developer-id.p12"
+          # Clean up the decoded .p12 on every exit path, not just the happy one. With
+          # `set -euo pipefail` in effect, a failure in any of the `security` invocations
+          # below would otherwise leave the private key sitting on $RUNNER_TEMP until the
+          # runner VM is reaped.
+          trap 'rm -f "$CERT_PATH"' EXIT
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          CERT_PATH="$RUNNER_TEMP/codeburn-developer-id.p12"
+          # Prepend the new keychain to the existing user search list. Capture the existing
+          # list into a variable first so word-splitting doesn't mangle paths containing
+          # whitespace (macos-latest runners don't normally hit this, but it's a one-line
+          # improvement and removes a future foot-gun on self-hosted runners).
+          existing=$(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s "$KEYCHAIN" $existing
           echo "$P12_BASE64" | base64 --decode > "$CERT_PATH"
           security import "$CERT_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
-          rm -f "$CERT_PATH"
           echo "identity=${SIGNING_IDENTITY}" >> "$GITHUB_OUTPUT"
           echo "Developer ID cert imported into an ephemeral keychain."
 
