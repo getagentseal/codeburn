@@ -10,6 +10,7 @@ import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
 import { dateKey } from './day-aggregator.js'
+import { createTerminalProgressReporter } from './parse-progress.js'
 import { CompareView } from './compare.js'
 import { getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
@@ -620,7 +621,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsage, refreshSeconds, projectFilter, excludeFilter }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsage, refreshSeconds, projectFilter, excludeFilter, noCache }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
@@ -628,6 +629,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   refreshSeconds?: number
   projectFilter?: string[]
   excludeFilter?: string[]
+  noCache?: boolean
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -697,13 +699,14 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     setOptimizeResult(null)
     try {
       const range = getDateRange(p)
-      const data = await parseAllSessions(range, prov)
+      const data = filterProjectsByName(
+        await parseAllSessions(range, prov, { noCache: noCache ?? false, progress: null }),
+        projectFilter,
+        excludeFilter,
+      )
       if (reloadGenerationRef.current !== generation) return
 
-      const filteredProjects = filterProjectsByName(data, projectFilter, excludeFilter)
-      if (reloadGenerationRef.current !== generation) return
-
-      setProjects(filteredProjects)
+      setProjects(data)
       const usage = await getPlanUsageOrNull()
       if (reloadGenerationRef.current !== generation) return
       setPlanUsage(usage ?? undefined)
@@ -714,7 +717,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         setLoading(false)
       }
     }
-  }, [projectFilter, excludeFilter])
+  }, [excludeFilter, noCache, projectFilter])
 
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
@@ -799,15 +802,36 @@ function StaticDashboard({ projects, period, activeProvider, planUsage }: { proj
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null): Promise<void> {
+export async function renderDashboard(
+  period: Period = 'week',
+  provider: string = 'all',
+  refreshSeconds?: number,
+  projectFilter?: string[],
+  excludeFilter?: string[],
+  customRange?: DateRange | null,
+  noCache = false,
+): Promise<void> {
   await loadPricing()
-  const range = customRange ?? getDateRange(period)
-  const filteredProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
-  const planUsage = await getPlanUsageOrNull()
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
+  const range = customRange ?? getDateRange(period)
+  const filteredProjects = filterProjectsByName(
+    await parseAllSessions(range, provider, { noCache, progress: createTerminalProgressReporter(isTTY) }),
+    projectFilter,
+    excludeFilter,
+  )
+  const planUsage = await getPlanUsageOrNull()
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsage={planUsage ?? undefined} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} />
+      <InteractiveDashboard
+        initialProjects={filteredProjects}
+        initialPeriod={period}
+        initialProvider={provider}
+        initialPlanUsage={planUsage ?? undefined}
+        refreshSeconds={refreshSeconds}
+        projectFilter={projectFilter}
+        excludeFilter={excludeFilter}
+        noCache={noCache}
+      />
     )
     await waitUntilExit()
   } else {
