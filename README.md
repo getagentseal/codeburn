@@ -33,6 +33,18 @@ Override the Augment directory with `AUGMENT_HOME=/path/to/.augment` if you keep
 
 This fork is Auggie-specific and runs from source. Clone, build, then either invoke directly or link it into `$PATH`:
 
+### Quickstart (one command)
+
+```bash
+git clone https://github.com/jaycdave88/codeburn.git
+cd codeburn
+./run.sh
+```
+
+`run.sh` checks prerequisites, builds if needed, and launches the dashboard in credits mode. See [Quick mode switch via `run.sh`](#quick-mode-switch-via-runsh) below to change modes.
+
+### Manual build
+
 ```bash
 git clone https://github.com/jaycdave88/codeburn.git
 cd codeburn
@@ -54,6 +66,8 @@ During development, `npm run dev -- report` runs the CLI directly via `tsx` with
 > **Note:** The upstream `codeburn` package on npm (v1.x) is a different build. Running `npm install -g codeburn` or `npx codeburn` installs the upstream package, **not this fork**.
 
 ## Usage
+
+> For the fastest path, see [`./run.sh`](#quickstart-one-command) above. The examples below use the `codeburn` binary after `npm link`, or `node dist/cli.js` otherwise.
 
 > **Note:** If you ran `npm link`, you can use `codeburn …` below. Otherwise substitute `node dist/cli.js …`.
 
@@ -165,6 +179,18 @@ Shows estimated **USD cost** instead of credits. Useful for enterprise users wit
 |---|---|---|
 | `CODEBURN_BILLING_MODE` | `credits` or `token_plus` | `credits` |
 | `CODEBURN_SURCHARGE_RATE` | Decimal surcharge for token_plus mode | `0` (0% surcharge; enterprise USD users set to contracted rate e.g. `0.3` for 30%) |
+
+### Quick mode switch via `run.sh`
+
+```bash
+./run.sh                                          # credits mode (default)
+BILLING_MODE=token_plus ./run.sh                  # USD estimate, 0% surcharge
+BILLING_MODE=token_plus SURCHARGE_RATE=0.3 ./run.sh  # Enterprise USD, 30% surcharge
+FORMAT=json ./run.sh | jq '.billing'              # JSON output, pipe to jq
+./run.sh --check                                  # 5-point UI/UX sanity pass
+```
+
+The top of `run.sh` has commented placeholders you can edit in-place if you'd rather not use inline env vars.
 
 ### CLI examples
 
