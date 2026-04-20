@@ -15,16 +15,16 @@ A usage analytics tool for [Augment Code (Auggie)](https://www.augmentcode.com/)
 
 ## Project status
 
-- **Version:** 2.0.0 (Auggie-only, fork)
-- **Tests:** 203 passing (193 TypeScript, 10 Swift)
-- **What's new in 2.0.0:** Dual billing modes (credits vs USD-estimate), per-model surcharge support. See the [Billing modes](#billing-modes) section and [CHANGELOG.md](./CHANGELOG.md) for details.
+- **Version:** 2.0.1 (Auggie-only, CLI-only fork)
+- **Tests:** 160+ passing
+- **What's new in 2.0.1:** Removed macOS menubar app (CLI-only fork), added GPT-5.2 pricing. See [CHANGELOG.md](./CHANGELOG.md) for details.
 
 ## Prerequisites
 
 CodeBurn reads local files only. To get useful output you need:
 
 - **Node.js ≥ 22** (see `engines` in [`package.json`](./package.json)).
-- **Auggie (Augment Code CLI) installed and logged in.** Running `auggie login` writes `~/.augment/session.json` containing `accessToken` + `tenantURL`. CodeBurn itself does not read the token, but the macOS menubar app uses it to fetch live credit info from Augment's `/get-credit-info` endpoint.
+- **Auggie (Augment Code CLI) installed and logged in.** Running `auggie login` creates session files that CodeBurn reads.
 - **Session history under `~/.augment/sessions/`.** Every Auggie conversation is saved there as a pretty-printed JSON file. If the directory is empty or missing, the dashboard will have nothing to show.
 
 Override the Augment directory with `AUGMENT_HOME=/path/to/.augment` if you keep it elsewhere.
@@ -70,7 +70,6 @@ codeburn export                # per-period CSV bundle
 codeburn export -f json        # JSON export
 codeburn optimize              # find waste, get copy-paste fixes
 codeburn currency GBP          # switch display currency (any ISO 4217 code)
-codeburn menubar               # install/update the macOS menubar app
 ```
 
 Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q` to quit, `1`–`5` for shortcuts, `o` to open optimize findings inline.
@@ -100,7 +99,7 @@ Auggie writes one JSON file per conversation into `~/.augment/sessions/`. CodeBu
 
 **Credits** come from Augment's own billing metadata: `billing_metadata.credits_consumed` on type-9 BILLING_METADATA nodes, deduped by `transaction_id`. When the top-level `session.creditUsage` is present it's used as the authoritative session total (it already includes sub-agent credits). In **token_plus mode**, USD cost is computed from token counts using [LiteLLM](https://github.com/BerriAI/litellm) pricing (cached at `~/.cache/codeburn/litellm-pricing.json`); in **credits mode** the USD column is `null`.
 
-Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mode `0600`) and invalidated on mtime+size change. A daily cache at `~/.cache/codeburn/daily.json` aggregates completed days (yesterday and earlier) so `status --format menubar-json` stays fast; today's data is always re-parsed live. The credentials file at `~/.augment/session.json` is never read by the CLI.
+Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mode `0600`) and invalidated on mtime+size change. The credentials file at `~/.augment/session.json` is never read by the CLI.
 
 ## Environment variables
 
@@ -118,7 +117,6 @@ Parsed calls are cached per session at `~/.cache/codeburn/auggie/<id>.json` (mod
 | `CODEBURN_VERBOSE` | Set to `1` to enable verbose logging (same as `--verbose` flag). Prints warnings to stderr on skipped/failed session reads. |
 | `CODEBURN_CACHE_DIR` | Override the cache directory (default: `~/.cache/codeburn`). Affects session cache, daily cache, pricing cache, and FX rate cache. |
 | `BASH_MAX_OUTPUT_LENGTH` | Cap shell command output length in bytes (no default). Prevents unbounded token consumption from long-running commands. |
-| `CODEBURN_ALLOW_UNVERIFIED_INSTALL` | Set to `1` to install the macOS menubar app from a release that doesn't publish a SHA-256 sidecar. Off by default. |
 
 ## Currency
 
@@ -128,21 +126,7 @@ codeburn currency              # show current setting
 codeburn currency --reset      # back to USD
 ```
 
-Rates come from [Frankfurter](https://www.frankfurter.app/) (ECB data, no API key) and are cached for 24 hours. Config lives at `~/.config/codeburn/config.json` and applies to dashboard, exports, JSON output, and the menubar app.
-
-## macOS menubar app
-
-A native Swift + SwiftUI menubar app lives in [`mac/`](./mac/). Install it with:
-
-```bash
-npx codeburn menubar           # downloads the latest .app into ~/Applications and launches it
-```
-
-![CodeBurn macOS menubar app](https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/menubar-0.7.2.png)
-
-*Screenshot predates 2.0.0 and will be updated.*
-
-The popover shows today's cost, a period switcher, activity/model breakdowns, optimize findings, and a Plan pill that fetches live credit info from Augment's `/get-credit-info` endpoint (using the `accessToken` + `tenantURL` from `~/.augment/session.json`). Refresh is live via FSEvents plus a 60-second poll. Build details: [`mac/README.md`](./mac/README.md).
+Rates come from [Frankfurter](https://www.frankfurter.app/) (ECB data, no API key) and are cached for 24 hours. Config lives at `~/.config/codeburn/config.json` and applies to dashboard, exports, and JSON output.
 
 ## Optimize
 
@@ -228,7 +212,7 @@ The credit pricing table is cross-referenced against [docs.augmentcode.com/model
 
 Models in our table that aren't on the docs page: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1*`, `gpt-5`, `gpt-5-mini`, `gpt-5.3-codex`, `gpt-5.4-mini`, `o3`, `o4-mini`, `claude-3-5-sonnet`, `claude-3-7-sonnet`, `claude-3-5-haiku`, `gemini-2.5-pro`, `auggie-legacy`, `auggie-unknown`.
 
-Models on the docs page not in our table: `GPT-5.2` (missing from `models.ts` — flagged, may need addition if used in Auggie sessions).
+GPT-5.2 is now included in models.ts (added in v2.0.1).
 
 ## Data and privacy
 
@@ -238,10 +222,8 @@ All session parsing is local; no prompt or response text is sent off your machin
 |---|---|---|---|
 | CLI | `raw.githubusercontent.com/BerriAI/litellm/...` | none (GET) | LiteLLM model-price refresh (cached at `~/.cache/codeburn/litellm-pricing.json`) |
 | CLI | `api.frankfurter.app` | none (GET) | currency FX rate refresh (cached 24h) |
-| CLI installer | `api.github.com/repos/getagentseal/codeburn/...` | none (GET) | only when you run `codeburn menubar` |
-| Menubar app | Augment `{tenantURL}/get-credit-info` | Bearer `accessToken` from `~/.augment/session.json` | Plan pill refresh |
 
-Cache and config files are created with mode `0600` under directories with mode `0700`. The macOS installer verifies a published SHA-256 sidecar before unpacking the downloaded app (override with `CODEBURN_ALLOW_UNVERIFIED_INSTALL=1`).
+Cache and config files are created with mode `0600` under directories with mode `0700`.
 
 ## Troubleshooting
 
@@ -249,13 +231,12 @@ Cache and config files are created with mode `0600` under directories with mode 
 - **Credits column shows `—`** — the session has no `billing_metadata` nodes and no top-level `creditUsage`. Typical for very old sessions or CLI-offline runs.
 - **Core Tools / Shell Commands / MCP Servers tables empty** — confirm `~/.augment/sessions/` contains recent files (`ls -lt ~/.augment/sessions/ | head`). If your Augment data lives elsewhere, set `AUGMENT_HOME`.
 - **`auggie-unknown` in By Model** — CodeBurn has a `modelId` it doesn't know how to price. Add an alias via `CODEBURN_AUGGIE_ALIAS_<MODELID>=<public-model-name>` or file an issue.
-- **Plan pill says "Session expired"** — run `auggie login` to refresh `~/.augment/session.json`.
 
 ## Development
 
 ```bash
 npm install
-npm test                       # vitest, 203 tests
+npm test                       # vitest tests
 npm run build                  # tsup → dist/cli.js (target: node20¹)
 
 ¹ `tsup.config.ts` uses `target: node20` for compile-time syntax transpilation, while `package.json engines` requires Node ≥ 22 at runtime.
@@ -274,17 +255,13 @@ src/
   models.ts           LiteLLM pricing, cost calculation
   classifier.ts       13-category task classifier
   format.ts           Text rendering (cost, tokens, credits)
-  menubar-json.ts     Payload builder for the Swift menubar app
   export.ts           CSV/JSON multi-period export
   config.ts           Config file management (~/.config/codeburn/)
   currency.ts         Currency conversion, Intl formatting
   optimize.ts         Waste-pattern scanner
-  daily-cache.ts      Daily aggregation cache for menubar-json performance
-  day-aggregator.ts   Day-level aggregation for cache
   providers/
     index.ts          Provider registry (single entry: auggie)
     auggie.ts         Session discovery, exchange-level parsing, credits, model selection
-mac/                  Native Swift + SwiftUI menubar app
 tests/                Vitest suite (providers, security, parser, export, …)
 ```
 
