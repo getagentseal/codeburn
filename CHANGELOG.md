@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.0.0] - 2026-04-20
+
+### Added
+
+- **Credits mode** (default): Shows Augment credits consumed per session and per model. Ground-truth credits from `billing_metadata` are used when present; otherwise credits are synthesized as `⌈ base_cost_usd × 1600 ⌉`.
+- **Token+ mode** ("USD estimate"): Shows estimated USD cost instead of credits, with configurable surcharge. Useful for enterprise users with contracted USD rates.
+- **`billing` JSON block** in export output with mode, surchargeRate, and credit/cost breakdowns.
+- **Per-model and per-project credits** in dashboard panels and JSON exports.
+- **macOS menubar mode-awareness**: Billing mode indicator in footer shows "credits" or "USD estimate" with surcharge rate.
+- **Invariant test** for Token+ aggregation ensuring `base + surcharge = billed`.
+
+### Changed
+
+- **Default `CODEBURN_SURCHARGE_RATE` is now `0`** (was implicitly `0.3` in pre-release drafts). Self-serve CBP tenants have `surcharge_rate = 0` at the metering-event ground truth; 30% was wrong for most users except some enterprise USD deals.
+- **Display label "Token+" shown as "USD estimate"** in CLI dashboard and macOS menubar UI. Internal mode value `token_plus` unchanged.
+- Updated README with "Billing modes" section documenting both modes, env vars, limitations, and migration notes.
+
+### Breaking
+
+- **JSON schema v2**: `overview.cost` is `null` in credits mode. Callers that indexed `overview.cost` as a number must handle null.
+- **New fields**: `creditsAugment`, `creditsSynthesized`, `baseCostUsd`, `surchargeUsd`, `billedAmountUsd`, and top-level `billing` block.
+- **Cache format versioned to v2**: Pre-v2 caches auto-invalidated on upgrade.
+
+### Fixed
+
+- **Token+ aggregation reducer short-circuit** that caused `base + surcharge ≠ billed` in edge cases.
+
+### Known Limitations
+
+- See README "Billing modes → Limitations" section.
+
 ## 1.0.0 - 2026-04-19
 
 ### Breaking changes

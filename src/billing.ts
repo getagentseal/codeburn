@@ -7,7 +7,7 @@
  *
  * Environment variables:
  *   CODEBURN_BILLING_MODE: 'credits' | 'token_plus' (default: 'credits')
- *   CODEBURN_SURCHARGE_RATE: decimal surcharge for token_plus mode (default: 0.3 = 30%)
+ *   CODEBURN_SURCHARGE_RATE: decimal surcharge for token_plus mode (default: 0)
  *
  * Credit formula (no surcharge): Math.ceil(baseCostUsd × 1600 × 1.0 × 1.0)
  */
@@ -58,7 +58,7 @@ export function loadBillingConfig(env: NodeJS.ProcessEnv = process.env): Billing
 
   const rawSurcharge = env.CODEBURN_SURCHARGE_RATE
   const parsed = rawSurcharge !== undefined ? Number(rawSurcharge) : NaN
-  const surchargeRate = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0.3
+  const surchargeRate = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
 
   return { mode, surchargeRate }
 }

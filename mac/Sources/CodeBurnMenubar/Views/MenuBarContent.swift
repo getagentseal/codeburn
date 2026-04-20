@@ -316,9 +316,9 @@ struct FooterBar: View {
         case .tokenPlus:
             if let rate = store.payload.billing?.surchargeRate {
                 let pct = Int(rate * 100)
-                return "Billing: Token+ · \(pct)%"
+                return "Billing: USD estimate · \(pct)%"
             }
-            return "Billing: Token+"
+            return "Billing: USD estimate"
         case .legacy:
             return nil // Don't show indicator for legacy payloads
         }

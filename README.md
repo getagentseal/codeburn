@@ -158,6 +158,66 @@ Detects files re-read across sessions, low Read:Edit ratios, uncapped bash outpu
 
 *Screenshot predates 1.0.0 and will be updated.*
 
+## Billing modes
+
+CodeBurn supports two billing modes for tracking Auggie usage:
+
+### `credits` (default)
+
+Shows **Augment credits** consumed per session and per model. Credits are the authoritative billing unit for most users.
+
+- **Ground-truth credits**: When present in session data (via `billing_metadata.credits_consumed`), these are used directly
+- **Synthesized credits**: When ground-truth is missing but model pricing is known, credits are computed as `⌈ base_cost_usd × 1600 ⌉`
+
+### `token_plus` (a.k.a. "USD estimate")
+
+Shows estimated **USD cost** instead of credits. Useful for enterprise users with contracted USD rates.
+
+- Displays `base cost`, `surcharge`, and `billed amount` columns
+- Formula: `billed = base_cost_usd × (1 + surcharge_rate)`
+
+### Environment variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `CODEBURN_BILLING_MODE` | `credits` or `token_plus` | `credits` |
+| `CODEBURN_SURCHARGE_RATE` | Decimal surcharge for token_plus mode | `0` (0% surcharge; enterprise USD users set to contracted rate e.g. `0.3` for 30%) |
+
+### Limitations
+
+> **⚠️ Token+ mode is approximate.** The USD values shown are synthesized from token counts plus a configured surcharge. They are **not invoice-accurate**. True per-request USD (`billed_amount_usd`) lives in Augment's server-side metering pipeline and isn't written to local session logs.
+
+- `CREDITS_PER_DOLLAR = 1600` is the platform default but is a feature flag; some tenants may use a different rate.
+- Activity multiplier is hardcoded to 1.0 (correct for `Chat` / `Agent` / `CliNoninteractive`). ContextEngine activities (3.0x) and CodeReview (2.0x) would be under-counted, but these aren't exercised through the Auggie CLI path codeburn reads.
+- Legacy sessions missing `modelId` (~22% in observed corpora) are reported as `null` credits / cost.
+
+### Migration from v1.x
+
+JSON schema v2 is **breaking**:
+- `overview.cost` is `null` in credits mode (callers that indexed `overview.cost` as a number must handle null)
+- New fields: `creditsAugment`, `creditsSynthesized`, `baseCostUsd`, `surchargeUsd`, `billedAmountUsd`, and top-level `billing` block
+- Cache format versioned to v2 (pre-v2 caches auto-invalidated on upgrade)
+
+### Rate-card reference
+
+The credit pricing table is cross-referenced against [docs.augmentcode.com/models/credit-based-pricing](https://docs.augmentcode.com/models/credit-based-pricing) (advisory). Internal `billing_configs.jsonnet` is Augment's actual source of truth.
+
+**Models in CodeBurn's pricing table:**
+
+| Model | Relative to Sonnet | Notes |
+|---|---|---|
+| Claude Sonnet 4.5/4.6 | 100% (baseline) | 293 credits per standard task |
+| Claude Opus 4.5/4.6/4.7 | 167% | 488 credits per standard task |
+| Claude Haiku 4.5 | 30% | 88 credits per standard task |
+| Gemini 3.1 Pro | 92% | 268 credits per standard task |
+| GPT-5.1 | 75% | 219 credits per standard task |
+| GPT-5.2 | 133% | 390 credits per standard task |
+| GPT-5.4 | 143% | 420 credits per standard task |
+
+Models in our table that aren't on the docs page: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1*`, `gpt-5`, `gpt-5-mini`, `gpt-5.3-codex`, `gpt-5.4-mini`, `o3`, `o4-mini`, `claude-3-5-sonnet`, `claude-3-7-sonnet`, `claude-3-5-haiku`, `gemini-2.5-pro`, `auggie-legacy`, `auggie-unknown`.
+
+Models on the docs page not in our table: `GPT-5.2` (missing from `models.ts` — flagged, may need addition if used in Auggie sessions).
+
 ## Data and privacy
 
 All session parsing is local; no prompt or response text is sent off your machine. The network calls CodeBurn makes are:

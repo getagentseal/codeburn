@@ -143,9 +143,9 @@ describe('loadBillingConfig', () => {
     expect(config.mode).toBe('token_plus')
   })
 
-  it('defaults surchargeRate to 0.3 when unset', () => {
+  it('defaults surchargeRate to 0 when unset', () => {
     const config = loadBillingConfig({})
-    expect(config.surchargeRate).toBe(0.3)
+    expect(config.surchargeRate).toBe(0)
   })
 
   it('parses custom surchargeRate', () => {
@@ -153,13 +153,13 @@ describe('loadBillingConfig', () => {
     expect(config.surchargeRate).toBe(0.25)
   })
 
-  it('falls back to 0.3 for negative surchargeRate', () => {
+  it('falls back to 0 for negative surchargeRate', () => {
     const config = loadBillingConfig({ CODEBURN_SURCHARGE_RATE: '-0.1' })
-    expect(config.surchargeRate).toBe(0.3)
+    expect(config.surchargeRate).toBe(0)
   })
 
-  it('falls back to 0.3 for non-numeric surchargeRate', () => {
+  it('falls back to 0 for non-numeric surchargeRate', () => {
     const config = loadBillingConfig({ CODEBURN_SURCHARGE_RATE: 'invalid' })
-    expect(config.surchargeRate).toBe(0.3)
+    expect(config.surchargeRate).toBe(0)
   })
 })

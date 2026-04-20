@@ -176,7 +176,7 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
   // Build billing mode subtitle
   const billingSubtitle = billingMode === 'credits'
     ? 'Billing: credits'
-    : `Billing: Token+ · surcharge ${Math.round(surchargeRate * 100)}%`
+    : `Billing: USD estimate · surcharge ${Math.round(surchargeRate * 100)}%`
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
@@ -185,6 +185,9 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
         <Text dimColor>  {label}   </Text>
         <Text dimColor>{billingSubtitle}</Text>
       </Text>
+      {billingMode === 'token_plus' && (
+        <Text dimColor wrap="truncate-end">Approximated from token costs; not invoice-accurate.</Text>
+      )}
       <Text wrap="truncate-end">
         {billingMode === 'credits' ? (
           // Credits mode: show credits prominently, no USD
