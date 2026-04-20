@@ -1,6 +1,6 @@
 {
   "name": "codeburn",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "See where your Auggie tokens go - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
