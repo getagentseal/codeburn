@@ -373,24 +373,21 @@ function buildOverview(projects: ProjectSummary[], billingConfig: BillingConfig)
   const totalCacheRead = allSessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = allSessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
 
-  // Aggregate billing fields
-  const totalCredits = allSessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalCredits === null) return null
-    return (acc ?? 0) + (sess.totalCredits ?? 0)
-  }, null)
-  const totalBaseCostUsd = allSessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalBaseCostUsd == null) return null
-    return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
-  }, null)
-  const totalSurchargeUsd = allSessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalSurchargeUsd == null) return null
-    return (acc ?? 0) + (sess.totalSurchargeUsd ?? 0)
-  }, null)
-  const totalBilledAmountUsd = allSessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalBilledAmountUsd == null) return null
-    return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
-  }, null)
-  const creditsSynthesizedCount = allSessions.reduce((s, sess) => s + (sess.creditsSynthesizedCount ?? 0), 0)
+  // Aggregate billing fields — use simple summation (null → 0 contribution, no short-circuit).
+  // This ensures all sessions contribute equally to base, surcharge, and billed.
+  let totalCredits: number | null = null
+  let totalBaseCostUsd: number | null = null
+  let totalSurchargeUsd: number | null = null
+  let totalBilledAmountUsd: number | null = null
+  let creditsSynthesizedCount = 0
+
+  for (const sess of allSessions) {
+    if (sess.totalCredits != null) totalCredits = (totalCredits ?? 0) + sess.totalCredits
+    if (sess.totalBaseCostUsd != null) totalBaseCostUsd = (totalBaseCostUsd ?? 0) + sess.totalBaseCostUsd
+    if (sess.totalSurchargeUsd != null) totalSurchargeUsd = (totalSurchargeUsd ?? 0) + sess.totalSurchargeUsd
+    if (sess.totalBilledAmountUsd != null) totalBilledAmountUsd = (totalBilledAmountUsd ?? 0) + sess.totalBilledAmountUsd
+    creditsSynthesizedCount += sess.creditsSynthesizedCount ?? 0
+  }
 
   const base: Record<string, unknown> = {
     calls: totalCalls,

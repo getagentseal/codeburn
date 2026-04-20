@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-import { exportCsv, type PeriodExport } from '../src/export.js'
-import type { ProjectSummary } from '../src/types.js'
+import { exportCsv, exportJson, type PeriodExport } from '../src/export.js'
+import type { ProjectSummary, BillingResult } from '../src/types.js'
 
 let tmpDir: string
 
@@ -154,5 +154,133 @@ describe('exportCsv', () => {
     // Confirm nothing was deleted from the target directory.
     const survived = await readFile(userFile, 'utf-8')
     expect(survived).toBe('do not delete me\n')
+  })
+})
+
+describe('exportJson token+ billing invariant', () => {
+  /** Helper to create a project with billing data */
+  function makeProjectWithBilling(baseCost: number, surchargeRate: number): ProjectSummary {
+    const surcharge = baseCost * surchargeRate
+    const billed = baseCost + surcharge
+    const billing: BillingResult = {
+      mode: 'token_plus',
+      baseCostUsd: baseCost,
+      surchargeRate,
+      surchargeUsd: surcharge,
+      billedAmountUsd: billed,
+      creditsAugment: null,
+      synthesized: false,
+    }
+    return {
+      project: 'test-project',
+      projectPath: 'test-project',
+      sessions: [
+        {
+          sessionId: 'sess-billing-1',
+          project: 'test-project',
+          firstTimestamp: '2026-04-14T10:00:00Z',
+          lastTimestamp: '2026-04-14T10:01:00Z',
+          totalCostUSD: baseCost,
+          totalInputTokens: 1000,
+          totalOutputTokens: 500,
+          totalCacheReadTokens: 0,
+          totalCacheWriteTokens: 0,
+          apiCalls: 1,
+          totalCredits: null,
+          billingMode: 'token_plus',
+          totalBaseCostUsd: baseCost,
+          totalSurchargeUsd: surcharge,
+          totalBilledAmountUsd: billed,
+          creditsSynthesizedCount: 0,
+          turns: [
+            {
+              userMessage: 'test',
+              timestamp: '2026-04-14T10:00:00Z',
+              sessionId: 'sess-billing-1',
+              category: 'coding',
+              retries: 0,
+              hasEdits: false,
+              assistantCalls: [
+                {
+                  provider: 'claude',
+                  model: 'claude-sonnet-4',
+                  usage: { inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
+                  costUSD: baseCost,
+                  credits: null,
+                  billing,
+                  tools: [],
+                  mcpTools: [],
+                  hasAgentSpawn: false,
+                  hasPlanMode: false,
+                  speed: 'standard',
+                  timestamp: '2026-04-14T10:00:00Z',
+                  bashCommands: [],
+                  deduplicationKey: 'dedup-billing-1',
+                },
+              ],
+            },
+          ],
+          modelBreakdown: { 'claude-sonnet-4': { calls: 1, costUSD: baseCost, credits: null, tokens: { inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }, baseCostUsd: baseCost, surchargeUsd: surcharge, billedAmountUsd: billed } },
+          toolBreakdown: {},
+          mcpBreakdown: {},
+          bashBreakdown: {},
+          categoryBreakdown: {
+            coding: { turns: 1, costUSD: baseCost, retries: 0, editTurns: 0, oneShotTurns: 0, credits: null, baseCostUsd: baseCost, surchargeUsd: surcharge, billedAmountUsd: billed },
+            debugging: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            feature: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            refactoring: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            testing: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            exploration: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            planning: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            delegation: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            git: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            'build/deploy': { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            conversation: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            brainstorming: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+            general: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+          },
+        },
+      ],
+      totalCostUSD: baseCost,
+      totalCredits: null,
+      billingMode: 'token_plus',
+      totalBaseCostUsd: baseCost,
+      totalSurchargeUsd: surcharge,
+      totalBilledAmountUsd: billed,
+      creditsSynthesizedCount: 0,
+      totalApiCalls: 1,
+    }
+  }
+
+  it('invariant: baseCostUsd + surchargeUsd ≈ billedAmountUsd (±0.01)', async () => {
+    // Set token_plus mode via env
+    const origMode = process.env['CODEBURN_BILLING_MODE']
+    const origRate = process.env['CODEBURN_SURCHARGE_RATE']
+    process.env['CODEBURN_BILLING_MODE'] = 'token_plus'
+    process.env['CODEBURN_SURCHARGE_RATE'] = '0.25'
+    try {
+      const baseCost = 100.0
+      const surchargeRate = 0.25
+      const project = makeProjectWithBilling(baseCost, surchargeRate)
+      const periods: PeriodExport[] = [{ label: '30 Days', projects: [project] }]
+      const outputPath = join(tmpDir, 'billing-invariant.json')
+      await exportJson(periods, outputPath)
+      const raw = await readFile(outputPath, 'utf-8')
+      const data = JSON.parse(raw)
+      const overview = data.overview
+
+      // Invariant 1: base + surcharge ≈ billed
+      const summed = overview.baseCostUsd + overview.surchargeUsd
+      expect(Math.abs(summed - overview.billedAmountUsd)).toBeLessThanOrEqual(0.01)
+
+      // Invariant 2: surcharge ≈ base × surchargeRate
+      const expectedSurcharge = overview.baseCostUsd * surchargeRate
+      expect(Math.abs(overview.surchargeUsd - expectedSurcharge)).toBeLessThanOrEqual(0.01)
+    } finally {
+      if (origMode !== undefined) process.env['CODEBURN_BILLING_MODE'] = origMode
+      else delete process.env['CODEBURN_BILLING_MODE']
+      if (origRate !== undefined) process.env['CODEBURN_SURCHARGE_RATE'] = origRate
+      else delete process.env['CODEBURN_SURCHARGE_RATE']
+    }
   })
 })

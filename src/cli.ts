@@ -221,23 +221,21 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     .slice(0, 5)
 
   // Aggregate billing-specific fields for overview
-  const totalCredits = sessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalCredits === null) return null
-    return (acc ?? 0) + (sess.totalCredits ?? 0)
-  }, null)
-  const totalBaseCostUsd = sessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalBaseCostUsd == null) return null
-    return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
-  }, null)
-  const totalSurchargeUsd = sessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalSurchargeUsd == null) return null
-    return (acc ?? 0) + (sess.totalSurchargeUsd ?? 0)
-  }, null)
-  const totalBilledAmountUsd = sessions.reduce<number | null>((acc, sess) => {
-    if (acc === null && sess.totalBilledAmountUsd == null) return null
-    return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
-  }, null)
-  const creditsSynthesizedCount = sessions.reduce((s, sess) => s + (sess.creditsSynthesizedCount ?? 0), 0)
+  // Use simple summation: null → 0 contribution, no short-circuit.
+  // This ensures all sessions contribute equally to base, surcharge, and billed.
+  let totalCredits: number | null = null
+  let totalBaseCostUsd: number | null = null
+  let totalSurchargeUsd: number | null = null
+  let totalBilledAmountUsd: number | null = null
+  let creditsSynthesizedCount = 0
+
+  for (const sess of sessions) {
+    if (sess.totalCredits != null) totalCredits = (totalCredits ?? 0) + sess.totalCredits
+    if (sess.totalBaseCostUsd != null) totalBaseCostUsd = (totalBaseCostUsd ?? 0) + sess.totalBaseCostUsd
+    if (sess.totalSurchargeUsd != null) totalSurchargeUsd = (totalSurchargeUsd ?? 0) + sess.totalSurchargeUsd
+    if (sess.totalBilledAmountUsd != null) totalBilledAmountUsd = (totalBilledAmountUsd ?? 0) + sess.totalBilledAmountUsd
+    creditsSynthesizedCount += sess.creditsSynthesizedCount ?? 0
+  }
 
   // Build overview with billing-mode aware fields
   const overview: Record<string, unknown> = {
