@@ -1,143 +1,154 @@
 /**
  * Billing engine for CodeBurn v2.0.0
  *
- * Supports dual billing: estimated USD (via LiteLLM pricing) and Augment credits.
- * The credit formula matches Augment's internal billing:
- *   credits = ⌈costUSD × BASE_RATE × (1 + surchargeRate)⌉
+ * Two mutually exclusive billing modes:
+ *   - credits: Only Augment credits (ground-truth or synthesized), never USD
+ *   - token_plus: Only USD (base + surcharge = billed), never credits
  *
  * Environment variables:
- *   CODEBURN_BILLING_MODE: 'usd' | 'credits' | 'dual' (default: 'dual')
- *   CODEBURN_SURCHARGE_RATE: decimal surcharge (default: 0)
+ *   CODEBURN_BILLING_MODE: 'credits' | 'token_plus' (default: 'credits')
+ *   CODEBURN_SURCHARGE_RATE: decimal surcharge for token_plus mode (default: 0.3 = 30%)
  *
- * Activity and model multipliers are hardcoded to 1.0 per spec.
+ * Credit formula (no surcharge): Math.ceil(baseCostUsd × 1600 × 1.0 × 1.0)
  */
 
-import { calculateCost } from './models.js'
+import type { ModelCosts } from './models.js'
 
 // ============================================================================
-// Constants (module-internal, not configurable via env)
+// Constants
 // ============================================================================
 
-/** Base conversion rate: 1 USD = 100 credits */
-const BASE_RATE = 100
+/** Augment credits per dollar */
+export const CREDITS_PER_DOLLAR = 1600
 
-/** Activity multiplier - hardcoded per spec */
+/** Activity multiplier - hardcoded per spec (module-internal) */
 const ACTIVITY_MULTIPLIER = 1.0
 
-/** Model multiplier - hardcoded per spec */
+/** Model multiplier - hardcoded per spec (module-internal) */
 const MODEL_MULTIPLIER = 1.0
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type BillingMode = 'usd' | 'credits' | 'dual'
+export type BillingMode = 'credits' | 'token_plus'
 
 export type BillingConfig = {
   mode: BillingMode
-  surchargeRate: number
+  surchargeRate: number // only used in token_plus mode
 }
 
 export type BillingResult = {
-  costUSD: number
-  credits: number | null
+  mode: BillingMode
+  baseCostUsd: number // always computed
+  surchargeUsd: number | null // null in credits mode
+  billedAmountUsd: number | null // null in credits mode
+  creditsAugment: number | null // null in token_plus mode or when model unknown
+  creditsSynthesized: number | null // null unless synthesized in credits mode
+  synthesized: boolean // true iff credits were synthesized (no ground truth)
 }
 
 // ============================================================================
 // Config loading
 // ============================================================================
 
-function parseBillingMode(value: string | undefined): BillingMode {
-  if (value === 'usd' || value === 'credits' || value === 'dual') {
-    return value
-  }
-  return 'dual'
-}
+export function loadBillingConfig(env: NodeJS.ProcessEnv = process.env): BillingConfig {
+  const rawMode = env.CODEBURN_BILLING_MODE
+  const mode: BillingMode = rawMode === 'token_plus' ? 'token_plus' : 'credits' // invalid → 'credits'
 
-function parseSurchargeRate(value: string | undefined): number {
-  if (!value) return 0
-  const parsed = parseFloat(value)
-  if (Number.isNaN(parsed) || parsed < 0) return 0
-  return parsed
-}
+  const rawSurcharge = env.CODEBURN_SURCHARGE_RATE
+  const parsed = rawSurcharge !== undefined ? Number(rawSurcharge) : NaN
+  const surchargeRate = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0.3
 
-/**
- * Load billing configuration from environment variables.
- */
-export function loadBillingConfig(): BillingConfig {
-  return {
-    mode: parseBillingMode(process.env['CODEBURN_BILLING_MODE']),
-    surchargeRate: parseSurchargeRate(process.env['CODEBURN_SURCHARGE_RATE']),
-  }
+  return { mode, surchargeRate }
 }
 
 // ============================================================================
-// Credit calculation
+// Credit synthesis
 // ============================================================================
 
 /**
- * Calculate credits from USD cost using Augment's formula:
- *   credits = ⌈costUSD × BASE_RATE × activityMultiplier × modelMultiplier × (1 + surchargeRate)⌉
- *
- * Activity and model multipliers are hardcoded to 1.0.
+ * Synthesize credits from base USD cost.
+ * Formula: Math.ceil(baseCostUsd × CREDITS_PER_DOLLAR × ACTIVITY_MULTIPLIER × MODEL_MULTIPLIER)
+ * Note: NO surcharge applied to credits - surcharge is a token_plus concept only.
  */
-export function calculateCredits(costUSD: number, surchargeRate: number): number {
-  if (costUSD <= 0) return 0
-  const raw = costUSD * BASE_RATE * ACTIVITY_MULTIPLIER * MODEL_MULTIPLIER * (1 + surchargeRate)
-  return Math.ceil(raw)
+export function synthesizeCredits(baseCostUsd: number): number {
+  return Math.ceil(baseCostUsd * CREDITS_PER_DOLLAR * ACTIVITY_MULTIPLIER * MODEL_MULTIPLIER)
 }
 
 // ============================================================================
-// Billing calculation
+// Core billing computation
 // ============================================================================
 
 /**
- * Calculate billing for a single API call.
- *
- * Uses calculateCost from models.ts for the USD calculation, then converts to credits
- * based on the billing mode.
+ * Calculate base USD cost from tokens and model costs.
  */
-export function calculateBilling(
-  config: BillingConfig,
-  model: string,
-  inputTokens: number,
-  outputTokens: number,
-  cacheCreationTokens: number,
-  cacheReadTokens: number,
-  webSearchRequests: number,
-  speed: 'standard' | 'fast' = 'standard',
-): BillingResult {
-  const costUSD = calculateCost(
-    model,
-    inputTokens,
-    outputTokens,
-    cacheCreationTokens,
-    cacheReadTokens,
-    webSearchRequests,
-    speed,
+function calculateBaseCost(
+  tokens: { input: number; output: number; cacheRead?: number; cacheWrite?: number },
+  modelCosts: ModelCosts,
+): number {
+  return (
+    tokens.input * modelCosts.inputCostPerToken +
+    tokens.output * modelCosts.outputCostPerToken +
+    (tokens.cacheRead ?? 0) * modelCosts.cacheReadCostPerToken +
+    (tokens.cacheWrite ?? 0) * modelCosts.cacheWriteCostPerToken
   )
-
-  let credits: number | null = null
-
-  if (config.mode === 'credits' || config.mode === 'dual') {
-    credits = calculateCredits(costUSD, config.surchargeRate)
-  }
-
-  return { costUSD, credits }
 }
 
 /**
- * Format billing result for display based on mode.
+ * Compute billing for a single API call.
+ *
+ * @param tokens - Token counts (input, output, cacheRead, cacheWrite)
+ * @param modelCosts - Model pricing info, or null for unknown/legacy models
+ * @param config - Billing configuration (mode and surchargeRate)
+ * @param groundTruthCredits - Credits from type-9 BILLING_METADATA (optional)
  */
-export function formatBillingResult(result: BillingResult, mode: BillingMode): string {
-  switch (mode) {
-    case 'usd':
-      return `$${result.costUSD.toFixed(4)}`
-    case 'credits':
-      return result.credits !== null ? `${result.credits} credits` : 'N/A'
-    case 'dual':
-      return result.credits !== null
-        ? `$${result.costUSD.toFixed(4)} (${result.credits} credits)`
-        : `$${result.costUSD.toFixed(4)}`
+export function computeBilling(
+  tokens: { input: number; output: number; cacheRead?: number; cacheWrite?: number },
+  modelCosts: ModelCosts | null,
+  config: BillingConfig,
+  groundTruthCredits?: number | null,
+): BillingResult {
+  const baseCostUsd = modelCosts ? calculateBaseCost(tokens, modelCosts) : 0
+
+  if (config.mode === 'credits') {
+    // Credits mode: NO surcharge, NO billed USD. Either ground-truth or synthesized.
+    let creditsAugment: number | null
+    let creditsSynthesized: number | null = null
+    let synthesized = false
+
+    if (groundTruthCredits != null) {
+      creditsAugment = groundTruthCredits
+    } else if (modelCosts) {
+      creditsSynthesized = synthesizeCredits(baseCostUsd)
+      creditsAugment = creditsSynthesized
+      synthesized = true
+    } else {
+      creditsAugment = null // unknown model AND no ground truth → cannot compute
+    }
+
+    return {
+      mode: 'credits',
+      baseCostUsd,
+      surchargeUsd: null,
+      billedAmountUsd: null,
+      creditsAugment,
+      creditsSynthesized,
+      synthesized,
+    }
+  }
+
+  // Token+ mode: NO credits. Base + surcharge = billed.
+  const surchargeUsd = baseCostUsd * config.surchargeRate
+  const billedAmountUsd = baseCostUsd + surchargeUsd
+
+  return {
+    mode: 'token_plus',
+    baseCostUsd,
+    surchargeUsd,
+    billedAmountUsd,
+    creditsAugment: null,
+    creditsSynthesized: null,
+    synthesized: false,
   }
 }

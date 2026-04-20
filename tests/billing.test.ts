@@ -1,161 +1,165 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   loadBillingConfig,
-  calculateCredits,
-  calculateBilling,
-  formatBillingResult,
+  computeBilling,
+  synthesizeCredits,
+  CREDITS_PER_DOLLAR,
   type BillingConfig,
-  type BillingMode,
 } from '../src/billing.js'
+import type { ModelCosts } from '../src/models.js'
 
-describe('billing module', () => {
-  const originalEnv = process.env
+// Realistic model costs fixture (claude-opus-4-5 pricing)
+const OPUS_COSTS: ModelCosts = {
+  inputCostPerToken: 5e-6,
+  outputCostPerToken: 25e-6,
+  cacheWriteCostPerToken: 6.25e-6,
+  cacheReadCostPerToken: 0.5e-6,
+  webSearchCostPerRequest: 0.01,
+  fastMultiplier: 1,
+}
 
-  beforeEach(() => {
-    process.env = { ...originalEnv }
-    delete process.env['CODEBURN_BILLING_MODE']
-    delete process.env['CODEBURN_SURCHARGE_RATE']
+describe('computeBilling — credits mode', () => {
+  // Test 1: passes through ground-truth credits unchanged
+  it('1. passes through ground-truth credits unchanged', () => {
+    const config: BillingConfig = { mode: 'credits', surchargeRate: 0 }
+    const tokens = { input: 1000, output: 500 }
+    const groundTruthCredits = 12345
+
+    const result = computeBilling(tokens, OPUS_COSTS, config, groundTruthCredits)
+
+    expect(result.creditsAugment).toBe(12345)
+    expect(result.creditsSynthesized).toBeNull()
+    expect(result.synthesized).toBe(false)
+    expect(result.surchargeUsd).toBeNull()
+    expect(result.billedAmountUsd).toBeNull()
+    expect(result.mode).toBe('credits')
   })
 
-  afterEach(() => {
-    process.env = originalEnv
+  // Test 2: synthesizes credits when groundTruthCredits missing but model+tokens present
+  it('2. synthesizes credits when groundTruthCredits missing but model+tokens present', () => {
+    const config: BillingConfig = { mode: 'credits', surchargeRate: 0 }
+    const tokens = { input: 1000, output: 500 }
+
+    const result = computeBilling(tokens, OPUS_COSTS, config, null)
+
+    // baseCostUsd = 1000 * 5e-6 + 500 * 25e-6 = 0.005 + 0.0125 = 0.0175
+    // credits = Math.ceil(0.0175 * 1600) = Math.ceil(28) = 28
+    const expectedBase = 1000 * 5e-6 + 500 * 25e-6
+    const expectedCredits = Math.ceil(expectedBase * CREDITS_PER_DOLLAR)
+
+    expect(result.synthesized).toBe(true)
+    expect(result.creditsAugment).toBe(expectedCredits)
+    expect(result.creditsSynthesized).toBe(expectedCredits)
+    expect(result.baseCostUsd).toBeCloseTo(expectedBase)
+    expect(result.surchargeUsd).toBeNull()
+    expect(result.billedAmountUsd).toBeNull()
   })
 
-  // =========================================================================
-  // Test 1: Config loader defaults
-  // =========================================================================
-  describe('loadBillingConfig', () => {
-    it('returns default config when no env vars are set', () => {
-      const config = loadBillingConfig()
-      expect(config.mode).toBe('dual')
-      expect(config.surchargeRate).toBe(0)
-    })
+  // Test 3: returns credits = 0 when tokens are all zero and model is known
+  it('3. returns credits = 0 when tokens are all zero and model is known', () => {
+    const config: BillingConfig = { mode: 'credits', surchargeRate: 0 }
+    const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
-    it('parses CODEBURN_BILLING_MODE correctly', () => {
-      process.env['CODEBURN_BILLING_MODE'] = 'usd'
-      expect(loadBillingConfig().mode).toBe('usd')
+    const result = computeBilling(tokens, OPUS_COSTS, config, null)
 
-      process.env['CODEBURN_BILLING_MODE'] = 'credits'
-      expect(loadBillingConfig().mode).toBe('credits')
-
-      process.env['CODEBURN_BILLING_MODE'] = 'dual'
-      expect(loadBillingConfig().mode).toBe('dual')
-    })
-
-    it('falls back to dual for invalid billing mode', () => {
-      process.env['CODEBURN_BILLING_MODE'] = 'invalid'
-      expect(loadBillingConfig().mode).toBe('dual')
-    })
-
-    it('parses CODEBURN_SURCHARGE_RATE correctly', () => {
-      process.env['CODEBURN_SURCHARGE_RATE'] = '0.15'
-      expect(loadBillingConfig().surchargeRate).toBe(0.15)
-
-      process.env['CODEBURN_SURCHARGE_RATE'] = '0.5'
-      expect(loadBillingConfig().surchargeRate).toBe(0.5)
-    })
-
-    it('returns 0 surcharge for invalid values', () => {
-      process.env['CODEBURN_SURCHARGE_RATE'] = 'invalid'
-      expect(loadBillingConfig().surchargeRate).toBe(0)
-
-      process.env['CODEBURN_SURCHARGE_RATE'] = '-0.1'
-      expect(loadBillingConfig().surchargeRate).toBe(0)
-    })
+    expect(result.creditsAugment).toBe(0)
+    expect(result.synthesized).toBe(true)
+    expect(result.baseCostUsd).toBe(0)
   })
 
-  // =========================================================================
-  // Test 2: Credit calculation with zero cost
-  // =========================================================================
-  describe('calculateCredits', () => {
-    it('returns 0 for zero cost', () => {
-      expect(calculateCredits(0, 0)).toBe(0)
-      expect(calculateCredits(0, 0.15)).toBe(0)
-    })
+  // Test 4: returns creditsAugment = null when model is unknown and no ground truth
+  it('4. returns creditsAugment = null when model is unknown and no ground truth', () => {
+    const config: BillingConfig = { mode: 'credits', surchargeRate: 0 }
+    const tokens = { input: 1000, output: 500 }
 
-    // Test 3: Credit calculation with no surcharge
-    it('calculates credits with no surcharge (BASE_RATE = 100)', () => {
-      // $1.00 × 100 = 100 credits
-      expect(calculateCredits(1.0, 0)).toBe(100)
-      // $0.50 × 100 = 50 credits
-      expect(calculateCredits(0.5, 0)).toBe(50)
-      // $0.01 × 100 = 1 credit
-      expect(calculateCredits(0.01, 0)).toBe(1)
-    })
+    const result = computeBilling(tokens, null, config, null)
 
-    // Test 4: Credit calculation with surcharge
-    it('calculates credits with surcharge using Math.ceil', () => {
-      // $1.00 × 100 × (1 + 0.15) = 115 credits
-      expect(calculateCredits(1.0, 0.15)).toBe(115)
-      // $0.50 × 100 × (1 + 0.15) = 57.5 → ceil → 58 credits
-      expect(calculateCredits(0.5, 0.15)).toBe(58)
-      // $0.01 × 100 × (1 + 0.15) = 1.15 → ceil → 2 credits
-      expect(calculateCredits(0.01, 0.15)).toBe(2)
-    })
+    expect(result.creditsAugment).toBeNull()
+    expect(result.creditsSynthesized).toBeNull()
+    expect(result.synthesized).toBe(false)
+    expect(result.baseCostUsd).toBe(0)
+  })
+})
 
-    // Test 5: Math.ceil rounding behavior
-    it('always rounds up with Math.ceil', () => {
-      // $0.001 × 100 = 0.1 → ceil → 1 credit
-      expect(calculateCredits(0.001, 0)).toBe(1)
-      // $0.0001 × 100 = 0.01 → ceil → 1 credit
-      expect(calculateCredits(0.0001, 0)).toBe(1)
-      // $1.001 × 100 = 100.1 → ceil → 101 credits
-      expect(calculateCredits(1.001, 0)).toBe(101)
-    })
+describe('computeBilling — token_plus mode', () => {
+  // Test 5: applies default 30% surcharge so billed = base × 1.3
+  it('5. applies default 30% surcharge so billed = base × 1.3', () => {
+    const config: BillingConfig = { mode: 'token_plus', surchargeRate: 0.3 }
+    const tokens = { input: 1000, output: 500 }
+
+    const result = computeBilling(tokens, OPUS_COSTS, config, null)
+
+    const expectedBase = 1000 * 5e-6 + 500 * 25e-6 // 0.0175
+    expect(result.baseCostUsd).toBeCloseTo(expectedBase)
+    expect(result.surchargeUsd).toBeCloseTo(expectedBase * 0.3)
+    expect(result.billedAmountUsd).toBeCloseTo(expectedBase * 1.3)
+    expect(result.creditsAugment).toBeNull()
+    expect(result.creditsSynthesized).toBeNull()
+    expect(result.synthesized).toBe(false)
+    expect(result.mode).toBe('token_plus')
   })
 
-  // =========================================================================
-  // Test 6: Billing result with dual mode
-  // =========================================================================
-  describe('calculateBilling', () => {
-    it('returns both costUSD and credits in dual mode', () => {
-      const config: BillingConfig = { mode: 'dual', surchargeRate: 0 }
-      // Using claude-opus-4-5: input=$5e-6/token, output=$25e-6/token
-      const result = calculateBilling(config, 'claude-opus-4-5', 1000, 500, 0, 0, 0)
-      expect(result.costUSD).toBeGreaterThan(0)
-      expect(result.credits).not.toBeNull()
-      expect(result.credits).toBeGreaterThan(0)
-    })
+  // Test 6: applies custom 25% surcharge so billed = base × 1.25
+  it('6. applies custom 25% surcharge so billed = base × 1.25', () => {
+    const config: BillingConfig = { mode: 'token_plus', surchargeRate: 0.25 }
+    const tokens = { input: 2000, output: 1000 }
 
-    // Test 7: Billing result with usd-only mode
-    it('returns null credits in usd mode', () => {
-      const config: BillingConfig = { mode: 'usd', surchargeRate: 0 }
-      const result = calculateBilling(config, 'claude-opus-4-5', 1000, 500, 0, 0, 0)
-      expect(result.costUSD).toBeGreaterThan(0)
-      expect(result.credits).toBeNull()
-    })
+    const result = computeBilling(tokens, OPUS_COSTS, config, null)
 
-    // Test 8: Billing result with credits-only mode
-    it('returns credits in credits mode', () => {
-      const config: BillingConfig = { mode: 'credits', surchargeRate: 0 }
-      const result = calculateBilling(config, 'claude-opus-4-5', 1000, 500, 0, 0, 0)
-      expect(result.costUSD).toBeGreaterThan(0)
-      expect(result.credits).not.toBeNull()
-    })
+    const expectedBase = 2000 * 5e-6 + 1000 * 25e-6 // 0.035
+    expect(result.baseCostUsd).toBeCloseTo(expectedBase)
+    expect(result.surchargeUsd).toBeCloseTo(expectedBase * 0.25)
+    expect(result.billedAmountUsd).toBeCloseTo(expectedBase * 1.25)
   })
 
-  // =========================================================================
-  // Additional tests: formatBillingResult
-  // =========================================================================
-  describe('formatBillingResult', () => {
-    it('formats usd mode correctly', () => {
-      const result = formatBillingResult({ costUSD: 1.2345, credits: 124 }, 'usd')
-      expect(result).toBe('$1.2345')
-    })
+  // Test 7: applies 0% surcharge so billed = base exactly
+  it('7. applies 0% surcharge so billed = base exactly', () => {
+    const config: BillingConfig = { mode: 'token_plus', surchargeRate: 0 }
+    const tokens = { input: 1000, output: 500 }
 
-    it('formats credits mode correctly', () => {
-      const result = formatBillingResult({ costUSD: 1.2345, credits: 124 }, 'credits')
-      expect(result).toBe('124 credits')
-    })
+    const result = computeBilling(tokens, OPUS_COSTS, config, null)
 
-    it('formats dual mode correctly', () => {
-      const result = formatBillingResult({ costUSD: 1.2345, credits: 124 }, 'dual')
-      expect(result).toBe('$1.2345 (124 credits)')
-    })
+    const expectedBase = 1000 * 5e-6 + 500 * 25e-6
+    expect(result.baseCostUsd).toBeCloseTo(expectedBase)
+    expect(result.surchargeUsd).toBe(0)
+    expect(result.billedAmountUsd).toBeCloseTo(expectedBase)
+  })
+})
 
-    it('handles null credits gracefully', () => {
-      expect(formatBillingResult({ costUSD: 1.0, credits: null }, 'credits')).toBe('N/A')
-      expect(formatBillingResult({ costUSD: 1.0, credits: null }, 'dual')).toBe('$1.0000')
-    })
+describe('loadBillingConfig', () => {
+  // Test 8: falls back to credits mode for invalid CODEBURN_BILLING_MODE
+  it('8. falls back to credits mode for invalid CODEBURN_BILLING_MODE', () => {
+    const config = loadBillingConfig({ CODEBURN_BILLING_MODE: 'bogus' })
+    expect(config.mode).toBe('credits')
+  })
+
+  it('defaults to credits mode when env var is unset', () => {
+    const config = loadBillingConfig({})
+    expect(config.mode).toBe('credits')
+  })
+
+  it('parses token_plus mode correctly', () => {
+    const config = loadBillingConfig({ CODEBURN_BILLING_MODE: 'token_plus' })
+    expect(config.mode).toBe('token_plus')
+  })
+
+  it('defaults surchargeRate to 0.3 when unset', () => {
+    const config = loadBillingConfig({})
+    expect(config.surchargeRate).toBe(0.3)
+  })
+
+  it('parses custom surchargeRate', () => {
+    const config = loadBillingConfig({ CODEBURN_SURCHARGE_RATE: '0.25' })
+    expect(config.surchargeRate).toBe(0.25)
+  })
+
+  it('falls back to 0.3 for negative surchargeRate', () => {
+    const config = loadBillingConfig({ CODEBURN_SURCHARGE_RATE: '-0.1' })
+    expect(config.surchargeRate).toBe(0.3)
+  })
+
+  it('falls back to 0.3 for non-numeric surchargeRate', () => {
+    const config = loadBillingConfig({ CODEBURN_SURCHARGE_RATE: 'invalid' })
+    expect(config.surchargeRate).toBe(0.3)
   })
 })
