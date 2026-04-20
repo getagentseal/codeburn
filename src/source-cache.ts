@@ -37,6 +37,10 @@ export type SourceCacheManifest = {
   entries: Record<string, { file: string; provider: string; logicalPath: string }>
 }
 
+export type ReadSourceCacheEntryOptions = {
+  allowStaleFingerprint?: boolean
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -246,6 +250,7 @@ export async function readSourceCacheEntry(
   manifest: SourceCacheManifest,
   provider: string,
   logicalPath: string,
+  options: ReadSourceCacheEntryOptions = {},
 ): Promise<SourceCacheEntry | null> {
   const meta = manifest.entries[sourceKey(provider, logicalPath)]
   if (!meta) return null
@@ -260,12 +265,14 @@ export async function readSourceCacheEntry(
     if (!isSourceCacheEntry(entry) || entry.version !== SOURCE_CACHE_VERSION) return null
     if (entry.provider !== provider || entry.logicalPath !== logicalPath) return null
 
-    const currentFingerprint = await computeFileFingerprint(entry.fingerprintPath)
-    if (
-      currentFingerprint.mtimeMs !== entry.fingerprint.mtimeMs
-      || currentFingerprint.sizeBytes !== entry.fingerprint.sizeBytes
-    ) {
-      return null
+    if (!options.allowStaleFingerprint) {
+      const currentFingerprint = await computeFileFingerprint(entry.fingerprintPath)
+      if (
+        currentFingerprint.mtimeMs !== entry.fingerprint.mtimeMs
+        || currentFingerprint.sizeBytes !== entry.fingerprint.sizeBytes
+      ) {
+        return null
+      }
     }
 
     return entry

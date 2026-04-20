@@ -1,6 +1,7 @@
+import { createHash } from 'crypto'
 import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
-import { readSessionFile } from './fs-utils.js'
+import { readSessionFile, readSessionLinesFromOffset } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
@@ -317,7 +318,7 @@ function filterSessionSummaryToRange(session: SessionSummary, dateRange?: DateRa
   return buildSessionSummary(session.sessionId, session.project, turns)
 }
 
-function addSeenKeysFromSessions(sessions: SessionSummary[], seenKeys: Set<string>) {
+function addSeenDeduplicationKeysFromSessions(sessions: SessionSummary[], seenKeys: Set<string>) {
   for (const session of sessions) {
     for (const turn of session.turns) {
       for (const call of turn.assistantCalls) {
@@ -325,6 +326,45 @@ function addSeenKeysFromSessions(sessions: SessionSummary[], seenKeys: Set<strin
       }
     }
   }
+}
+
+function buildSessionSummaryFromEntries(
+  entries: JournalEntry[],
+  project: string,
+  seenMsgIds: Set<string>,
+  sessionIdFallback: string,
+  dateRange?: DateRange,
+): SessionSummary | null {
+  if (entries.length === 0) return null
+
+  let filteredEntries = entries
+  if (dateRange) {
+    filteredEntries = entries.filter(entry => {
+      if (!entry.timestamp) return entry.type === 'user'
+      const ts = new Date(entry.timestamp)
+      return ts >= dateRange.start && ts <= dateRange.end
+    })
+    if (filteredEntries.length === 0) return null
+  }
+
+  const sessionId = entries.find(entry => typeof entry.sessionId === 'string')?.sessionId ?? sessionIdFallback
+  const turns = groupIntoTurns(filteredEntries, seenMsgIds)
+  if (turns.length === 0) return null
+
+  return buildSessionSummary(sessionId, project, turns.map(classifyTurn))
+}
+
+function buildClaudeSessionSummaryFromLines(
+  lines: string[],
+  project: string,
+  seenMsgIds: Set<string>,
+  sessionIdFallback: string,
+  dateRange?: DateRange,
+): SessionSummary | null {
+  const entries = lines
+    .map(parseJsonlLine)
+    .filter((entry): entry is JournalEntry => entry !== null)
+  return buildSessionSummaryFromEntries(entries, project, seenMsgIds, sessionIdFallback, dateRange)
 }
 
 async function parseSessionFile(
@@ -345,30 +385,7 @@ async function parseSessionFile(
   const content = await readSessionFile(filePath)
   if (content === null) return null
   const lines = content.split('\n').filter(l => l.trim())
-  const entries: JournalEntry[] = []
-
-  for (const line of lines) {
-    const entry = parseJsonlLine(line)
-    if (entry) entries.push(entry)
-  }
-
-  if (entries.length === 0) return null
-
-  let filteredEntries = entries
-  if (dateRange) {
-    filteredEntries = entries.filter(e => {
-      if (!e.timestamp) return e.type === 'user'
-      const ts = new Date(e.timestamp)
-      return ts >= dateRange.start && ts <= dateRange.end
-    })
-    if (filteredEntries.length === 0) return null
-  }
-
-  const sessionId = basename(filePath, '.jsonl')
-  const turns = groupIntoTurns(filteredEntries, seenMsgIds)
-  const classified = turns.map(classifyTurn)
-
-  return buildSessionSummary(sessionId, project, classified)
+  return buildClaudeSessionSummaryFromLines(lines, project, seenMsgIds, basename(filePath, '.jsonl'), dateRange)
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -387,18 +404,168 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return jsonlFiles
 }
 
-async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange): Promise<ProjectSummary[]> {
-  const projectMap = new Map<string, SessionSummary[]>()
+type ClaudeCacheUnit = {
+  path: string
+  project: string
+  progressLabel: string
+}
 
-  for (const { path: dirPath, name: dirName } of dirs) {
-    const jsonlFiles = await collectJsonlFiles(dirPath)
+async function listClaudeCacheUnits(dirPath: string, dirName: string): Promise<ClaudeCacheUnit[]> {
+  const jsonlFiles = await collectJsonlFiles(dirPath)
+  return jsonlFiles.map(filePath => ({
+    path: filePath,
+    project: dirName,
+    progressLabel: filePath.split(/[\\/]/).slice(-2).join('/'),
+  }))
+}
 
-    for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange)
-      if (session) addSessionToProjectMap(projectMap, session)
+function appendStateTailHash(session: SessionSummary): string {
+  return createHash('sha1').update(session.lastTimestamp).digest('hex')
+}
+
+function fingerprintsMatch(
+  left: { mtimeMs: number; sizeBytes: number },
+  right: { mtimeMs: number; sizeBytes: number },
+): boolean {
+  return left.mtimeMs === right.mtimeMs && left.sizeBytes === right.sizeBytes
+}
+
+async function refreshClaudeCacheUnit(
+  manifest: Awaited<ReturnType<typeof loadSourceCacheManifest>>,
+  unit: ClaudeCacheUnit,
+  seenMsgIds: Set<string>,
+  parserVersion: string,
+  options: ParseOptions,
+): Promise<{ session: SessionSummary | null; wrote: boolean; refreshed: boolean }> {
+  let reportedRefresh = false
+  const cached = options.noCache
+    ? null
+    : await readSourceCacheEntry(manifest, 'claude', unit.path, { allowStaleFingerprint: true })
+  const fingerprint = await computeFileFingerprint(unit.path)
+
+  if (
+    cached
+    && cached.parserVersion === parserVersion
+    && cached.cacheStrategy === 'append-jsonl'
+    && fingerprintsMatch(fingerprint, cached.fingerprint)
+  ) {
+    addSeenDeduplicationKeysFromSessions(cached.sessions, seenMsgIds)
+    return { session: cached.sessions[0] ?? null, wrote: false, refreshed: false }
+  }
+
+  if (
+    cached
+    && cached.parserVersion === parserVersion
+    && cached.cacheStrategy === 'append-jsonl'
+    && cached.appendState
+    && fingerprint.sizeBytes > cached.fingerprint.sizeBytes
+  ) {
+    reportedRefresh = true
+    options.progress?.advance(unit.progressLabel)
+    addSeenDeduplicationKeysFromSessions(cached.sessions, seenMsgIds)
+    const appendedLines: string[] = []
+    for await (const line of readSessionLinesFromOffset(unit.path, cached.appendState.endOffset)) {
+      if (line.trim()) appendedLines.push(line)
+    }
+
+    const appended = buildClaudeSessionSummaryFromLines(
+      appendedLines,
+      unit.project,
+      seenMsgIds,
+      cached.sessions[0]?.sessionId ?? basename(unit.path, '.jsonl'),
+    )
+
+    if (appended && cached.sessions[0]) {
+      const merged = buildSessionSummary(
+        cached.sessions[0].sessionId,
+        unit.project,
+        [...cached.sessions[0].turns, ...appended.turns],
+      )
+      await writeSourceCacheEntry(manifest, {
+        version: SOURCE_CACHE_VERSION,
+        provider: 'claude',
+        logicalPath: unit.path,
+        fingerprintPath: unit.path,
+        cacheStrategy: 'append-jsonl',
+        parserVersion,
+        fingerprint,
+        sessions: [merged],
+        appendState: {
+          endOffset: fingerprint.sizeBytes,
+          tailHash: appendStateTailHash(merged),
+        },
+      })
+      return { session: merged, wrote: true, refreshed: true }
     }
   }
 
+  if (!reportedRefresh) options.progress?.advance(unit.progressLabel)
+  const session = await parseSessionFile(unit.path, unit.project, seenMsgIds)
+  if (!session) return { session: null, wrote: false, refreshed: true }
+
+  await writeSourceCacheEntry(manifest, {
+    version: SOURCE_CACHE_VERSION,
+    provider: 'claude',
+    logicalPath: unit.path,
+    fingerprintPath: unit.path,
+    cacheStrategy: 'append-jsonl',
+    parserVersion,
+    fingerprint,
+    sessions: [session],
+    appendState: {
+      endOffset: fingerprint.sizeBytes,
+      tailHash: appendStateTailHash(session),
+    },
+  })
+  return { session, wrote: true, refreshed: true }
+}
+
+async function scanClaudeDirsWithCache(
+  dirs: Array<{ path: string; name: string }>,
+  seenMsgIds: Set<string>,
+  dateRange?: DateRange,
+  options: ParseOptions = {},
+): Promise<ProjectSummary[]> {
+  const projectMap = new Map<string, SessionSummary[]>()
+  const manifest = await loadSourceCacheManifest()
+  const parserVersion = 'claude:v1'
+  const units = (await Promise.all(
+    dirs.map(dir => listClaudeCacheUnits(dir.path, dir.name)),
+  )).flat()
+  const refreshStates = await Promise.all(units.map(async unit => {
+    const cached = options.noCache
+      ? null
+      : await readSourceCacheEntry(manifest, 'claude', unit.path, { allowStaleFingerprint: true })
+    const fingerprint = await computeFileFingerprint(unit.path).catch(() => null)
+    const reusable = !!(
+      cached
+      && fingerprint
+      && cached.parserVersion === parserVersion
+      && cached.cacheStrategy === 'append-jsonl'
+      && fingerprintsMatch(fingerprint, cached.fingerprint)
+    )
+    return { unit, refreshed: !reusable }
+  }))
+
+  const refreshCount = refreshStates.filter(state => state.refreshed).length
+  let wroteManifest = false
+
+  if (refreshCount > 0) options.progress?.start('Updating cache', refreshCount)
+
+  try {
+    for (const { unit } of refreshStates) {
+      const { session, wrote } = await refreshClaudeCacheUnit(manifest, unit, seenMsgIds, parserVersion, options)
+      if (wrote) wroteManifest = true
+      if (!session) continue
+
+      const filtered = filterSessionSummaryToRange(session, dateRange)
+      if (filtered) addSessionToProjectMap(projectMap, filtered)
+    }
+  } finally {
+    if (refreshCount > 0) options.progress?.finish()
+  }
+
+  if (wroteManifest) await saveSourceCacheManifest(manifest)
   return buildProjects(projectMap)
 }
 
@@ -470,7 +637,7 @@ async function parseProviderSources(
       let fullSessions = state.cachedSessions
 
       if (fullSessions) {
-        addSeenKeysFromSessions(fullSessions, seenKeys)
+        addSeenDeduplicationKeysFromSessions(fullSessions, seenKeys)
       } else {
         provider ??= await getProvider(providerName)
         if (!provider) continue
@@ -518,23 +685,42 @@ function cacheKey(dateRange?: DateRange, providerFilter?: string, noCache = fals
 
 async function sourceSignatureForCache(sources: SessionSource[]): Promise<string> {
   const fingerprints = await Promise.all(sources.map(async source => {
+    if (source.provider === 'claude') {
+      const jsonlFiles = await collectJsonlFiles(source.path)
+      return Promise.all(jsonlFiles.map(async filePath => {
+        try {
+          const meta = await stat(filePath)
+          return [
+            source.provider,
+            source.project,
+            filePath,
+            filePath,
+            String(meta.mtimeMs),
+            String(meta.size),
+          ].join(':')
+        } catch {
+          return [source.provider, source.project, filePath, filePath, 'missing'].join(':')
+        }
+      }))
+    }
+
     const fingerprintPath = source.fingerprintPath ?? source.path
     try {
       const meta = await stat(fingerprintPath)
-      return [
+      return [[
         source.provider,
         source.project,
         source.path,
         fingerprintPath,
         String(meta.mtimeMs),
         String(meta.size),
-      ].join(':')
+      ].join(':')]
     } catch {
-      return [source.provider, source.project, source.path, fingerprintPath, 'missing'].join(':')
+      return [[source.provider, source.project, source.path, fingerprintPath, 'missing'].join(':')]
     }
   }))
 
-  return fingerprints.sort().join('|')
+  return fingerprints.flat().sort().join('|')
 }
 
 function cachePut(key: string, data: ProjectSummary[], sourceSignature: string) {
@@ -622,7 +808,7 @@ export async function parseAllSessions(
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
   const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange)
+  const claudeProjects = await scanClaudeDirsWithCache(claudeDirs, seenMsgIds, dateRange, options)
 
   const providerGroups = new Map<string, SessionSource[]>()
   for (const source of nonClaudeSources) {
