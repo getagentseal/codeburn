@@ -62,7 +62,7 @@ function getCachePath(): string {
 }
 
 function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
-  if (!entry.input_cost_per_token || !entry.output_cost_per_token) return null
+  if (entry.input_cost_per_token === undefined || entry.output_cost_per_token === undefined) return null
   return {
     inputCostPerToken: entry.input_cost_per_token,
     outputCostPerToken: entry.output_cost_per_token,
@@ -140,7 +140,7 @@ export function getModelCosts(model: string): ModelCosts | null {
   }
 
   for (const [key, costs] of pricingCache ?? new Map()) {
-    if (canonical.startsWith(key) || key.startsWith(canonical)) return costs
+    if (canonical.startsWith(key)) return costs
   }
 
   for (const [key, costs] of Object.entries(FALLBACK_PRICING)) {

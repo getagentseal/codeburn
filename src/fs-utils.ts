@@ -89,5 +89,7 @@ export async function* readSessionLines(filePath: string): AsyncGenerator<string
     for await (const line of rl) yield line
   } catch (err) {
     warn(`stream read failed for ${filePath}: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`)
+  } finally {
+    stream.destroy()
   }
 }

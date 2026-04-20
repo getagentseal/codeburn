@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, readFile, rm } from 'fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -133,5 +133,27 @@ describe('exportCsv', () => {
     expect(content).toContain("\"'=cmd,calc\"")
     expect(content).toContain("'+danger-model")
     expect(content).toContain("'@malicious")
+  })
+
+  it('escapes tab and carriage-return prefixes in CSV cells', async () => {
+    const periods: PeriodExport[] = [
+      {
+        label: '30 Days',
+        projects: [makeProject('\tcmd'), makeProject('\rcmd')],
+      },
+    ]
+
+    const outputPath = join(tmpDir, 'tab-cr.csv')
+    const folder = await exportCsv(periods, outputPath)
+    const projects = await readFile(join(folder, 'projects.csv'), 'utf-8')
+    expect(projects).toContain("'\tcmd")
+    expect(projects).toContain("'\rcmd")
+  })
+
+  it('does not crash when periods array is empty', async () => {
+    const outputPath = join(tmpDir, 'empty.csv')
+    const folder = await exportCsv([], outputPath)
+    const entries = await readdir(folder)
+    expect(entries.length).toBeGreaterThanOrEqual(0)
   })
 })

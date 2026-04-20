@@ -6,7 +6,7 @@ import { getCurrency, convertCost } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 
 function escCsv(s: string): string {
-  const sanitized = /^[=+\-@]/.test(s) ? `'${s}` : s
+  const sanitized = /^[\t\r=+\-@]/.test(s) ? `'${s}` : s
   if (sanitized.includes(',') || sanitized.includes('"') || sanitized.includes('\n')) {
     return `"${sanitized.replace(/"/g, '""')}"`
   }
@@ -283,7 +283,7 @@ async function clearCodeburnExportFolder(path: string): Promise<void> {
 /// wipe a sensitive file (prior versions did `rm(path, { force: true })` unconditionally).
 export async function exportCsv(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
-  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1].projects
+  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
 
   let folder = resolve(outputPath)
   if (folder.toLowerCase().endsWith('.csv')) {
@@ -325,7 +325,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
 
 export async function exportJson(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
-  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1].projects
+  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
   const { code, rate, symbol } = getCurrency()
 
   const data = {
