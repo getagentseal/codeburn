@@ -14,6 +14,7 @@ import { createTerminalProgressReporter } from './parse-progress.js'
 import { CompareView } from './compare.js'
 import { getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
+import { providerColor, providerLabel } from './provider-colors.js'
 import { join } from 'path'
 
 type Period = 'today' | 'week' | '30days' | 'month' | 'all'
@@ -54,15 +55,6 @@ const PANEL_COLORS = {
   tools: '#5BF5E0',
   mcp: '#F55BE0',
   bash: '#F5A05B',
-}
-
-const PROVIDER_COLORS: Record<string, string> = {
-  claude: '#FF8C42',
-  codex: '#5BF5A0',
-  cursor: '#00B4D8',
-  opencode: '#A78BFA',
-  pi: '#F472B6',
-  all: '#FF8C42',
 }
 
 const CATEGORY_COLORS: Record<TaskCategory, string> = {
@@ -490,16 +482,6 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   )
 }
 
-const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
-  all: 'All',
-  claude: 'Claude',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  opencode: 'OpenCode',
-  pi: 'Pi',
-}
-function getProviderDisplayName(name: string): string { return PROVIDER_DISPLAY_NAMES[name] ?? name }
-
 function PeriodTabs({ active, providerName, showProvider }: { active: Period; providerName?: string; showProvider?: boolean }) {
   return (
     <Box justifyContent="space-between" paddingX={1}>
@@ -510,9 +492,7 @@ function PeriodTabs({ active, providerName, showProvider }: { active: Period; pr
           </Text>
         ))}
       </Box>
-      {showProvider && providerName && (
-        <Box><Text color={DIM}>|  </Text><Text color={ORANGE} bold>[p]</Text><Text bold color={PROVIDER_COLORS[providerName] ?? ORANGE}> {getProviderDisplayName(providerName)}</Text></Box>
-      )}
+      {showProvider && providerName && <Box><Text color={DIM}>|  </Text><Text color={ORANGE} bold>[p]</Text><Text bold color={providerColor(providerName)}> {providerLabel(providerName)}</Text></Box>}
     </Box>
   )
 }
