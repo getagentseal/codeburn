@@ -227,67 +227,101 @@ struct FooterBar: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        HStack(spacing: 6) {
-            Menu {
-                ForEach(SupportedCurrency.allCases) { currency in
-                    Button {
-                        applyCurrency(code: currency.rawValue)
-                    } label: {
-                        if currency.rawValue == store.currency {
-                            Label("\(currency.displayName) (\(currency.rawValue))", systemImage: "checkmark")
-                        } else {
-                            Text("\(currency.displayName) (\(currency.rawValue))")
-                        }
-                    }
+        VStack(spacing: 0) {
+            // Billing mode indicator strip
+            if let indicator = billingModeIndicator {
+                HStack {
+                    Text(indicator)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-            } label: {
-                Label(store.currency, systemImage: "dollarsign.circle")
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.06))
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .fixedSize()
 
-            Button {
-                Task { await store.refresh(includeOptimize: true) }
-            } label: {
-                Image(systemName: store.isLoading ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 6) {
+                // Only show currency picker in non-credits mode (credits are unitless)
+                if store.payload.billingMode != .credits {
+                    Menu {
+                        ForEach(SupportedCurrency.allCases) { currency in
+                            Button {
+                                applyCurrency(code: currency.rawValue)
+                            } label: {
+                                if currency.rawValue == store.currency {
+                                    Label("\(currency.displayName) (\(currency.rawValue))", systemImage: "checkmark")
+                                } else {
+                                    Text("\(currency.displayName) (\(currency.rawValue))")
+                                }
+                            }
+                        }
+                    } label: {
+                        Label(store.currency, systemImage: "dollarsign.circle")
+                            .font(.system(size: 11, weight: .medium))
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+
+                Button {
+                    Task { await store.refresh(includeOptimize: true) }
+                } label: {
+                    Image(systemName: store.isLoading ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isLoading)
+
+                Menu {
+                    Button("CSV (folder)") { runExport(format: .csv) }
+                    Button("JSON") { runExport(format: .json) }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .labelStyle(.titleAndIcon)
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+
+                Spacer()
+
+                Button { openReport() } label: {
+                    Label("Open Full Report", systemImage: "terminal")
+                        .font(.system(size: 11, weight: .semibold))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(Theme.brandAccent)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(store.isLoading)
-
-            Menu {
-                Button("CSV (folder)") { runExport(format: .csv) }
-                Button("JSON") { runExport(format: .json) }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .fixedSize()
-
-            Spacer()
-
-            Button { openReport() } label: {
-                Label("Open Full Report", systemImage: "terminal")
-                    .font(.system(size: 11, weight: .semibold))
-                    .labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .tint(Theme.brandAccent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+
+    /// Returns billing mode indicator text, or nil for legacy mode (no indicator needed)
+    private var billingModeIndicator: String? {
+        switch store.payload.billingMode {
+        case .credits:
+            return "Billing: credits"
+        case .tokenPlus:
+            if let rate = store.payload.billing?.surchargeRate {
+                let pct = Int(rate * 100)
+                return "Billing: Token+ · \(pct)%"
+            }
+            return "Billing: Token+"
+        case .legacy:
+            return nil // Don't show indicator for legacy payloads
+        }
     }
 
     private func openReport() {

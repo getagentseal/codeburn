@@ -10,7 +10,7 @@ struct ActivitySection: View {
             isExpanded: $isExpanded,
             trailing: {
                 HStack(spacing: 8) {
-                    Text("Cost").frame(minWidth: 54, alignment: .trailing)
+                    Text(costColumnHeader).frame(minWidth: 54, alignment: .trailing)
                     Text("Turns").frame(minWidth: 52, alignment: .trailing)
                     Text("1-shot").frame(minWidth: 44, alignment: .trailing)
                 }
@@ -20,11 +20,20 @@ struct ActivitySection: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 7) {
+                let billingMode = store.payload.billingMode
                 let maxCost = store.payload.current.topActivities.map(\.cost).max() ?? 1
                 ForEach(store.payload.current.topActivities, id: \.name) { activity in
-                    ActivityRow(activity: activity, maxCost: maxCost)
+                    ActivityRow(activity: activity, maxCost: maxCost, billingMode: billingMode)
                 }
             }
+        }
+    }
+
+    /// Column header varies by billing mode
+    private var costColumnHeader: String {
+        switch store.payload.billingMode {
+        case .credits: "Cost"  // Activities don't have per-activity credits in v2
+        case .tokenPlus, .legacy: "Cost"
         }
     }
 }
@@ -32,6 +41,7 @@ struct ActivitySection: View {
 struct ActivityRow: View {
     let activity: ActivityEntry
     let maxCost: Double
+    let billingMode: BillingMode
 
     var body: some View {
         HStack(spacing: 8) {
@@ -42,7 +52,7 @@ struct ActivityRow: View {
                 .font(.system(size: 12.5, weight: .medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(activity.cost.asCompactCurrency())
+            Text(formattedCost)
                 .font(.codeMono(size: 12, weight: .medium))
                 .tracking(-0.2)
                 .frame(minWidth: 54, alignment: .trailing)
@@ -61,6 +71,19 @@ struct ActivityRow: View {
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 1)
+    }
+
+    /// Format cost based on billing mode. Activities in the v2 schema only have `cost`
+    /// (no per-activity credits field), so we show the numeric cost without $ in credits mode.
+    private var formattedCost: String {
+        switch billingMode {
+        case .credits:
+            // In credits mode, activities don't have a credits field in the JSON schema,
+            // so we show the cost value as a raw number (no $ symbol)
+            return String(format: "%.2f", activity.cost)
+        case .tokenPlus, .legacy:
+            return activity.cost.asCompactCurrency()
+        }
     }
 
     private var oneShotText: String {

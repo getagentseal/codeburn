@@ -8,7 +8,7 @@ struct HeroSection: View {
             SectionCaption(text: caption)
 
             HStack(alignment: .firstTextBaseline) {
-                Text(store.payload.current.cost.asCurrency())
+                Text(heroValue)
                     .font(.system(size: 32, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .tracking(-1)
@@ -19,6 +19,14 @@ struct HeroSection: View {
                             endPoint: .bottom
                         )
                     )
+
+                // Unit indicator for credits mode
+                if store.payload.billingMode == .credits {
+                    Text("credits")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                }
 
                 Spacer()
 
@@ -37,6 +45,25 @@ struct HeroSection: View {
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 12)
+    }
+
+    /// Returns the hero metric formatted according to billing mode:
+    /// - credits mode: credits (no $)
+    /// - token_plus mode: billed USD amount
+    /// - legacy mode: cost as USD (backwards compat)
+    private var heroValue: String {
+        let current = store.payload.current
+        switch store.payload.billingMode {
+        case .credits:
+            // Show credits, no $ sign
+            return current.creditsAugment.asCredits(fallback: "0")
+        case .tokenPlus:
+            // Show billed USD amount
+            return current.billedAmountUsd.asCurrency(fallback: current.cost.asCurrency(fallback: "$0.00"))
+        case .legacy:
+            // Legacy mode: show cost as USD for backwards compat
+            return current.cost.asCurrency(fallback: "$0.00")
+        }
     }
 
     private var caption: String {

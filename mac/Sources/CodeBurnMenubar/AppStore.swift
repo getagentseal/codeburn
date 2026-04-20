@@ -217,6 +217,44 @@ extension Double {
         let state = CurrencyState.shared
         return String(format: "\(state.symbol)%.2f", self * state.rate)
     }
+
+    /// Format as credits (no currency symbol, comma-separated integer)
+    func asCredits() -> String {
+        thousandsFormatter.string(from: NSNumber(value: Int(self))) ?? "\(Int(self))"
+    }
+
+    /// Format as compact credits (K/M suffix for large values)
+    func asCompactCredits() -> String {
+        if self >= 1_000_000 {
+            return String(format: "%.1fM", self / 1_000_000)
+        } else if self >= 1_000 {
+            return String(format: "%.1fK", self / 1_000)
+        }
+        return "\(Int(self))"
+    }
+}
+
+extension Optional where Wrapped == Double {
+    /// Format optional double as currency with fallback
+    func asCurrency(fallback: String = "—") -> String {
+        guard let v = self else { return fallback }
+        return v.asCurrency()
+    }
+
+    func asCompactCurrency(fallback: String = "—") -> String {
+        guard let v = self else { return fallback }
+        return v.asCompactCurrency()
+    }
+
+    func asCredits(fallback: String = "—") -> String {
+        guard let v = self else { return fallback }
+        return v.asCredits()
+    }
+
+    func asCompactCredits(fallback: String = "—") -> String {
+        guard let v = self else { return fallback }
+        return v.asCompactCredits()
+    }
 }
 
 extension Int {

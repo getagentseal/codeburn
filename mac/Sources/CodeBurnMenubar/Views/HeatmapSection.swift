@@ -611,10 +611,8 @@ private struct PulseInsight: View {
             PulseTile(label: "Cache hit", value: cacheHitText, color: Theme.brandAccent)
             PulseTile(label: "1-shot", value: oneShotText, color: oneShotColor)
             PulseTile(
-                label: "Cost / session",
-                value: payload.current.sessions > 0
-                    ? (payload.current.cost / Double(payload.current.sessions)).asCompactCurrency()
-                    : "—",
+                label: perSessionLabel,
+                value: perSessionValue,
                 color: .secondary
             )
         }
@@ -632,6 +630,33 @@ private struct PulseInsight: View {
 
     private var oneShotColor: Color {
         payload.current.oneShotRate == nil ? .secondary : Theme.brandAccent
+    }
+
+    /// Label varies by billing mode
+    private var perSessionLabel: String {
+        switch payload.billingMode {
+        case .credits: "Credits / session"
+        case .tokenPlus, .legacy: "Cost / session"
+        }
+    }
+
+    /// Value formatted according to billing mode
+    private var perSessionValue: String {
+        guard payload.current.sessions > 0 else { return "—" }
+        switch payload.billingMode {
+        case .credits:
+            guard let credits = payload.current.creditsAugment else { return "—" }
+            let perSession = credits / Double(payload.current.sessions)
+            return perSession.asCompactCredits()
+        case .tokenPlus:
+            guard let billed = payload.current.billedAmountUsd else {
+                return payload.current.cost.asCompactCurrency(fallback: "—")
+            }
+            return (billed / Double(payload.current.sessions)).asCompactCurrency()
+        case .legacy:
+            guard let cost = payload.current.cost else { return "—" }
+            return (cost / Double(payload.current.sessions)).asCompactCurrency()
+        }
     }
 }
 
