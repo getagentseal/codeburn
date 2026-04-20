@@ -2,6 +2,7 @@ import { readdir, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
+import { type DiscoverySnapshotEntry, loadDiscoveryCache, saveDiscoveryCache } from '../discovery-cache.js'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -157,7 +158,42 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
   }
 }
 
+async function collectCopilotDiscoverySnapshot(sessionStateDir: string): Promise<DiscoverySnapshotEntry[]> {
+  const snapshot: DiscoverySnapshotEntry[] = []
+
+  let sessionDirs: string[]
+  try {
+    sessionDirs = await readdir(sessionStateDir)
+  } catch {
+    return snapshot
+  }
+
+  for (const sessionId of sessionDirs) {
+    const sessionDir = join(sessionStateDir, sessionId)
+    const dirStat = await stat(sessionDir).catch(() => null)
+    if (!dirStat?.isDirectory()) continue
+
+    const eventsPath = join(sessionDir, 'events.jsonl')
+    const eventsStat = await stat(eventsPath).catch(() => null)
+    if (!eventsStat?.isFile()) continue
+
+    snapshot.push({ path: eventsPath, mtimeMs: eventsStat.mtimeMs })
+
+    const workspacePath = join(sessionDir, 'workspace.yaml')
+    const workspaceStat = await stat(workspacePath).catch(() => null)
+    if (workspaceStat?.isFile()) {
+      snapshot.push({ path: workspacePath, mtimeMs: workspaceStat.mtimeMs })
+    }
+  }
+
+  return snapshot
+}
+
 async function discoverSessionsInDir(sessionStateDir: string): Promise<SessionSource[]> {
+  const snapshot = await collectCopilotDiscoverySnapshot(sessionStateDir)
+  const cached = await loadDiscoveryCache('copilot', sessionStateDir, snapshot)
+  if (cached) return cached
+
   const sources: SessionSource[] = []
 
   let sessionDirs: string[]
@@ -190,6 +226,7 @@ async function discoverSessionsInDir(sessionStateDir: string): Promise<SessionSo
     })
   }
 
+  await saveDiscoveryCache('copilot', sessionStateDir, snapshot, sources)
   return sources
 }
 

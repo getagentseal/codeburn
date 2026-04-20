@@ -1,18 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { createCodexProvider } from '../../src/providers/codex.js'
+import * as fsUtils from '../../src/fs-utils.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'codex-test-'))
+  process.env['CODEBURN_CACHE_DIR'] = join(tmpDir, 'cache')
 })
 
 afterEach(async () => {
+  delete process.env['CODEBURN_CACHE_DIR']
   await rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -135,6 +138,28 @@ describe('codex provider - session discovery', () => {
     const provider = createCodexProvider(tmpDir)
     const sessions = await provider.discoverSessions()
     expect(sessions).toEqual([])
+  })
+
+  it('reuses cached discovery results when the directory tree is unchanged', async () => {
+    await writeSession(tmpDir, '2026-04-14', 'rollout-cached.jsonl', [
+      sessionMeta({ cwd: '/Users/test/myproject' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const readSpy = vi.spyOn(fsUtils, 'readSessionFile')
+
+    const first = await provider.discoverSessions()
+    const firstReadCount = readSpy.mock.calls.length
+    const second = await provider.discoverSessions()
+    const secondReadCount = readSpy.mock.calls.length
+
+    expect(first).toHaveLength(1)
+    expect(second).toEqual(first)
+    expect(firstReadCount).toBeGreaterThan(0)
+    expect(secondReadCount).toBe(firstReadCount)
+
+    readSpy.mockRestore()
   })
 })
 
