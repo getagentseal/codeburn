@@ -1,5 +1,6 @@
 import chalk from 'chalk'
 import type { ProjectSummary } from './types.js'
+import { loadBillingConfig } from './billing.js'
 
 // Re-exported from currency.ts so existing imports from './format.js' keep working.
 // The currency-aware version applies exchange rate and symbol automatically.
@@ -34,11 +35,12 @@ function localDateString(d: Date): string {
 }
 
 export function renderStatusBar(projects: ProjectSummary[]): string {
+  const billingConfig = loadBillingConfig()
   const now = new Date()
   const today = localDateString(now)
   const monthStart = `${today.slice(0, 7)}-01`
 
-  let todayCost = 0, todayCalls = 0, monthCost = 0, monthCalls = 0
+  let todayValue = 0, todayCalls = 0, monthValue = 0, monthCalls = 0
 
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -49,16 +51,27 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
         // strings; naively slicing `timestamp.slice(0,10)` bucketed them by UTC date, which
         // showed `Today $0` during the UTC-midnight-to-local-midnight window.
         const day = localDateString(new Date(turn.timestamp))
-        const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+        // Use billing-mode aware value: credits in credits mode, billedAmountUsd in token_plus
+        const turnValue = turn.assistantCalls.reduce((s, c) => {
+          if (billingConfig.mode === 'credits') {
+            return s + (c.billing?.creditsAugment ?? c.credits ?? 0)
+          } else {
+            return s + (c.billing?.billedAmountUsd ?? c.costUSD)
+          }
+        }, 0)
         const turnCalls = turn.assistantCalls.length
-        if (day === today) { todayCost += turnCost; todayCalls += turnCalls }
-        if (day >= monthStart) { monthCost += turnCost; monthCalls += turnCalls }
+        if (day === today) { todayValue += turnValue; todayCalls += turnCalls }
+        if (day >= monthStart) { monthValue += turnValue; monthCalls += turnCalls }
       }
     }
   }
 
   const lines: string[] = ['']
-  lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(`${monthCalls} calls`)}`)
+  if (billingConfig.mode === 'credits') {
+    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCredits(todayValue))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCredits(monthValue))}  ${chalk.dim(`${monthCalls} calls`)}`)
+  } else {
+    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayValue))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthValue))}  ${chalk.dim(`${monthCalls} calls`)}`)
+  }
   lines.push('')
 
   return lines.join('\n')

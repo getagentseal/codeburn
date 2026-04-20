@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildMenubarPayload, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
+import type { BillingConfig } from '../src/billing.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
 function emptyPeriod(label: string): PeriodData {
@@ -19,6 +20,10 @@ function emptyPeriod(label: string): PeriodData {
 }
 
 describe('buildMenubarPayload', () => {
+  // Use token_plus mode for tests expecting cost to be present
+  const tokenPlusConfig: BillingConfig = { mode: 'token_plus', surchargeRate: 0.3 }
+  const creditsConfig: BillingConfig = { mode: 'credits', surchargeRate: 0.3 }
+
   it('emits the full schema with current-period metrics and iso timestamp', () => {
     const period: PeriodData = {
       label: '7 Days',
@@ -31,8 +36,9 @@ describe('buildMenubarPayload', () => {
       cacheWriteTokens: 0,
       categories: [],
       models: [],
+      billedAmountUsd: 1248.01, // For token_plus mode
     }
-    const payload = buildMenubarPayload(period, [], null)
+    const payload = buildMenubarPayload(period, [], null, undefined, tokenPlusConfig)
 
     expect(payload.generated).toMatch(/^\d{4}-\d{2}-\d{2}T/)
     expect(payload.current.label).toBe('7 Days')
@@ -41,6 +47,32 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.sessions).toBe(97)
     expect(payload.current.inputTokens).toBe(19100)
     expect(payload.current.outputTokens).toBe(675600)
+    expect(payload.billing?.mode).toBe('token_plus')
+    expect(payload.billing?.surchargeRate).toBe(0.3)
+  })
+
+  it('emits credits mode fields when billing mode is credits', () => {
+    const period: PeriodData = {
+      label: '7 Days',
+      cost: 1248.01,
+      calls: 11231,
+      sessions: 97,
+      inputTokens: 19100,
+      outputTokens: 675600,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      categories: [],
+      models: [],
+      creditsAugment: 1996816,
+      creditsSynthesized: 5,
+    }
+    const payload = buildMenubarPayload(period, [], null, undefined, creditsConfig)
+
+    expect(payload.current.cost).toBeNull()
+    expect(payload.current.creditsAugment).toBe(1996816)
+    expect(payload.current.creditsSynthesized).toBe(5)
+    expect(payload.billing?.mode).toBe('credits')
+    expect(payload.billing?.creditsPerDollar).toBe(1600)
   })
 
   it('computes per-category oneShotRate from editTurns and skips categories without edits', () => {

@@ -206,12 +206,18 @@ describe('auggie provider - modern schema', () => {
     expect(calls[0].bashCommands).toContain('echo')
   })
 
-  it('credits come from type-9 billing_metadata', async () => {
+  it('credits come from type-9 billing_metadata (or synthesized from billing engine)', async () => {
     const path = await stageFixture('modern-schema.json')
     const calls = await collectCalls(path)
-    // First call should have credits, subsequent null
+    // First call should have ground-truth credits from type-9
     expect(calls[0].credits).toBe(42.5)
-    expect(calls[1].credits).toBeNull()
+    // Subsequent calls have synthesized credits from billing engine (no ground-truth)
+    // The billing engine always computes credits now, so this won't be null
+    expect(calls[1].credits).toBeTypeOf('number')
+    expect(calls[1].credits).toBeGreaterThanOrEqual(0)
+    // Check billing result for more details
+    expect(calls[0].billing?.synthesized).toBe(false) // ground truth
+    expect(calls[1].billing?.synthesized).toBe(true) // synthesized
   })
 
   it('session.creditUsage fast-path: sessionCreditUsage present on first call', async () => {

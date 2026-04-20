@@ -6,6 +6,7 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { formatCost, formatTokens, formatCredits } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
+import { loadBillingConfig, type BillingMode } from './billing.js'
 
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 
@@ -143,7 +144,7 @@ function fit(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) : s.padEnd(n)
 }
 
-function Overview({ projects, label, width }: { projects: ProjectSummary[]; label: string; width: number }) {
+function Overview({ projects, label, width, billingMode, surchargeRate }: { projects: ProjectSummary[]; label: string; width: number; billingMode: BillingMode; surchargeRate: number }) {
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
@@ -160,22 +161,56 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
     if (acc === null && p.totalCredits === null) return null
     return (acc ?? 0) + (p.totalCredits ?? 0)
   }, null)
+  // Token+ aggregates
+  const totalBaseCostUsd = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalBaseCostUsd == null) return null
+    return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
+  }, null)
+  const totalBilledAmountUsd = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalBilledAmountUsd == null) return null
+    return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
+  }, null)
   // Count distinct sessions with auggie-legacy model (model unrecoverable from pre-Nov-2025)
   const legacySessions = allSessions.filter(sess => 'auggie-legacy' in sess.modelBreakdown).length
+
+  // Build billing mode subtitle
+  const billingSubtitle = billingMode === 'credits'
+    ? 'Billing: credits'
+    : `Billing: Token+ · surcharge ${Math.round(surchargeRate * 100)}%`
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
       <Text wrap="truncate-end">
         <Text bold color={ORANGE}>CodeBurn</Text>
-        <Text dimColor>  {label}</Text>
+        <Text dimColor>  {label}   </Text>
+        <Text dimColor>{billingSubtitle}</Text>
       </Text>
       <Text wrap="truncate-end">
-        <Text bold color={GOLD}>{formatCost(totalCost)}</Text>
-        <Text dimColor> est. USD   </Text>
-        {totalCredits !== null && (
+        {billingMode === 'credits' ? (
+          // Credits mode: show credits prominently, no USD
           <>
-            <Text bold color={GOLD}>{formatCredits(totalCredits)}</Text>
-            <Text dimColor> credits   </Text>
+            {totalCredits !== null && (
+              <>
+                <Text bold color={GOLD}>{formatCredits(totalCredits)}</Text>
+                <Text dimColor> credits   </Text>
+              </>
+            )}
+          </>
+        ) : (
+          // Token+ mode: show Base / Billed USD
+          <>
+            {totalBaseCostUsd !== null && (
+              <>
+                <Text bold color={GOLD}>{formatCost(totalBaseCostUsd)}</Text>
+                <Text dimColor> base   </Text>
+              </>
+            )}
+            {totalBilledAmountUsd !== null && (
+              <>
+                <Text bold color={GOLD}>{formatCost(totalBilledAmountUsd)}</Text>
+                <Text dimColor> billed   </Text>
+              </>
+            )}
           </>
         )}
         <Text bold>{totalCalls.toLocaleString()}</Text>
@@ -197,30 +232,41 @@ function Overview({ projects, label, width }: { projects: ProjectSummary[]; labe
   )
 }
 
-function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number }) {
-  const dailyCosts: Record<string, number> = {}
+function DailyActivity({ projects, days = 14, pw, bw, billingMode }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number; billingMode: BillingMode }) {
+  const dailyValues: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
         if (!turn.timestamp) continue
         const day = turn.timestamp.slice(0, 10)
-        dailyCosts[day] = (dailyCosts[day] ?? 0) + turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+        // In credits mode: sum credits. In token_plus mode: sum billedAmountUsd
+        const value = turn.assistantCalls.reduce((s, c) => {
+          if (billingMode === 'credits') {
+            return s + (c.billing?.creditsAugment ?? c.credits ?? 0)
+          } else {
+            return s + (c.billing?.billedAmountUsd ?? c.costUSD)
+          }
+        }, 0)
+        dailyValues[day] = (dailyValues[day] ?? 0) + value
         dailyCalls[day] = (dailyCalls[day] ?? 0) + turn.assistantCalls.length
       }
     }
   }
-  const sortedDays = days !== undefined ? Object.keys(dailyCosts).sort().slice(-days) : Object.keys(dailyCosts).sort()
-  const maxCost = Math.max(...sortedDays.map(d => dailyCosts[d] ?? 0))
+  const sortedDays = days !== undefined ? Object.keys(dailyValues).sort().slice(-days) : Object.keys(dailyValues).sort()
+  const maxValue = Math.max(...sortedDays.map(d => dailyValues[d] ?? 0))
+
+  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
     <Panel title="Daily Activity" color={PANEL_COLORS.daily} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{valueLabel.padStart(8)}{'calls'.padStart(6)}</Text>
       {sortedDays.map(day => (
         <Text key={day} wrap="truncate-end">
           <Text dimColor>{day.slice(5)} </Text>
-          <HBar value={dailyCosts[day] ?? 0} max={maxCost} width={bw} />
-          <Text color={GOLD}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
+          <HBar value={dailyValues[day] ?? 0} max={maxValue} width={bw} />
+          <Text color={GOLD}>{formatValue(dailyValues[day] ?? 0).padStart(8)}</Text>
           <Text>{String(dailyCalls[day] ?? 0).padStart(6)}</Text>
         </Text>
       ))}
@@ -245,24 +291,38 @@ function shortProject(encoded: string): string {
 const PROJECT_COL_AVG = 7
 const PROJECT_COL_BASE_WIDTH = 30
 
-function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
+function ProjectBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
+  // Compute total value per project based on billing mode
+  const projectValues = projects.map(p => {
+    if (billingMode === 'credits') {
+      return p.totalCredits ?? 0
+    } else {
+      // Sum billedAmountUsd across all sessions
+      return p.sessions.reduce((s, sess) => s + (sess.totalBilledAmountUsd ?? sess.totalCostUSD), 0)
+    }
+  })
+  const maxValue = Math.max(...projectValues)
   const nw = Math.max(8, pw - bw - PROJECT_COL_BASE_WIDTH)
+
+  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const formatValue = billingMode === 'credits' ? formatCredits : formatCost
+
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
       <Text dimColor wrap="truncate-end">
-        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}
+        {''.padEnd(bw + 1 + nw)}{valueLabel.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
-        const avgCost = project.sessions.length > 0
-          ? formatCost(project.totalCostUSD / project.sessions.length)
+        const totalValue = projectValues[i]
+        const avgValue = project.sessions.length > 0
+          ? formatValue(totalValue / project.sessions.length)
           : '-'
         return (
           <Text key={`${project.project}-${i}`} wrap="truncate-end">
-            <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
+            <HBar value={totalValue} max={maxValue} width={bw} />
             <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
-            <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
-            <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
+            <Text color={GOLD}>{formatValue(totalValue).padStart(8)}</Text>
+            <Text color={GOLD}>{avgValue.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
           </Text>
         )
@@ -271,18 +331,17 @@ function ProjectBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw
   )
 }
 
-const MODEL_COL_COST = 8
-const MODEL_COL_CREDITS = 7
+const MODEL_COL_VALUE = 8
 const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
 const MODEL_NAME_WIDTH = 12
 
-function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; credits: number | null; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
+  const modelTotals: Record<string, { calls: number; costUSD: number; credits: number | null; billedAmountUsd: number | null; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, credits: null, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, credits: null, billedAmountUsd: null, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
         // Aggregate credits: null + null = null, null + N = N, N + M = N + M
@@ -293,23 +352,38 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         } else {
           modelTotals[model].credits = (existingCredits ?? 0) + (newCredits ?? 0)
         }
+        // Aggregate billedAmountUsd
+        const existingBilled = modelTotals[model].billedAmountUsd
+        const newBilled = data.billedAmountUsd
+        if (existingBilled === null && newBilled == null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].billedAmountUsd = (existingBilled ?? 0) + (newBilled ?? 0)
+        }
         modelTotals[model].freshInput += data.tokens.inputTokens
         modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens
         modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens
       }
     }
   }
-  const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
-  const maxCost = sorted[0]?.[1]?.costUSD ?? 0
-  // Check if any model has credits data
-  const hasAnyCredits = sorted.some(([, d]) => d.credits !== null)
+  // Sort by the relevant billing value
+  const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => {
+    const valueA = billingMode === 'credits' ? (a.credits ?? 0) : (a.billedAmountUsd ?? a.costUSD)
+    const valueB = billingMode === 'credits' ? (b.credits ?? 0) : (b.billedAmountUsd ?? b.costUSD)
+    return valueB - valueA
+  })
+  const maxValue = sorted.length > 0
+    ? (billingMode === 'credits' ? (sorted[0][1].credits ?? 0) : (sorted[0][1].billedAmountUsd ?? sorted[0][1].costUSD))
+    : 0
+
+  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
       <Text dimColor wrap="truncate-end">
         {''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}
-        {'est.USD'.padStart(MODEL_COL_COST)}
-        {hasAnyCredits && 'Augment'.padStart(MODEL_COL_CREDITS)}
+        {valueLabel.padStart(MODEL_COL_VALUE)}
         {'cache'.padStart(MODEL_COL_CACHE)}
         {'calls'.padStart(MODEL_COL_CALLS)}
       </Text>
@@ -317,12 +391,12 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
         const cacheLabel = totalInput > 0 ? `${cacheHit.toFixed(1)}%` : '-'
+        const displayValue = billingMode === 'credits' ? data.credits : (data.billedAmountUsd ?? data.costUSD)
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
-            <HBar value={data.costUSD} max={maxCost} width={bw} />
+            <HBar value={displayValue ?? 0} max={maxValue} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
-            {hasAnyCredits && <Text color={GOLD}>{formatCredits(data.credits).padStart(MODEL_COL_CREDITS)}</Text>}
+            <Text color={GOLD}>{formatValue(displayValue ?? 0).padStart(MODEL_COL_VALUE)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
           </Text>
@@ -398,35 +472,47 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
 }
 
 const TOP_SESSIONS_DATE_LEN = 10
-const TOP_SESSIONS_COST_COL = 8
+const TOP_SESSIONS_VALUE_COL = 8
 const TOP_SESSIONS_CALLS_COL = 6
 
-function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+function TopSessions({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
   const allSessions = projects.flatMap(p =>
     p.sessions.map(s => ({ ...s, projectName: p.project }))
   )
-  const top = [...allSessions].sort((a, b) => b.totalCostUSD - a.totalCostUSD).slice(0, 5)
+  // Sort by relevant billing value
+  const getValue = (s: typeof allSessions[0]): number => {
+    if (billingMode === 'credits') {
+      return s.totalCredits ?? 0
+    } else {
+      return s.totalBilledAmountUsd ?? s.totalCostUSD
+    }
+  }
+  const top = [...allSessions].sort((a, b) => getValue(b) - getValue(a)).slice(0, 5)
 
   if (top.length === 0) {
     return <Panel title="Top Sessions" color={PANEL_COLORS.sessions} width={pw}><Text dimColor>No sessions</Text></Panel>
   }
 
-  const maxCost = top[0].totalCostUSD
-  const nw = Math.max(8, pw - bw - TOP_SESSIONS_COST_COL - TOP_SESSIONS_CALLS_COL - 1 - PANEL_CHROME)
+  const maxValue = getValue(top[0])
+  const nw = Math.max(8, pw - bw - TOP_SESSIONS_VALUE_COL - TOP_SESSIONS_CALLS_COL - 1 - PANEL_CHROME)
+
+  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
     <Panel title="Top Sessions" color={PANEL_COLORS.sessions} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(TOP_SESSIONS_COST_COL)}{'calls'.padStart(TOP_SESSIONS_CALLS_COL)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{valueLabel.padStart(TOP_SESSIONS_VALUE_COL)}{'calls'.padStart(TOP_SESSIONS_CALLS_COL)}</Text>
       {top.map((session, i) => {
         const date = session.firstTimestamp
           ? session.firstTimestamp.slice(0, TOP_SESSIONS_DATE_LEN)
           : '----------'
         const label = `${date} ${shortProject(session.projectName)}`
+        const displayValue = getValue(session)
         return (
           <Text key={`${session.sessionId}-${i}`} wrap="truncate-end">
-            <HBar value={session.totalCostUSD} max={maxCost} width={bw} />
+            <HBar value={displayValue} max={maxValue} width={bw} />
             <Text dimColor> {fit(label, nw - 1)}</Text>
-            <Text color={GOLD}>{formatCost(session.totalCostUSD).padStart(TOP_SESSIONS_COST_COL)}</Text>
+            <Text color={GOLD}>{formatValue(displayValue).padStart(TOP_SESSIONS_VALUE_COL)}</Text>
             <Text>{String(session.apiCalls).padStart(TOP_SESSIONS_CALLS_COL)}</Text>
           </Text>
         )
@@ -562,29 +648,31 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns }: { projects: ProjectSummary[]; period: Period; columns?: number }) {
+function DashboardContent({ projects, period, columns, billingMode, surchargeRate }: { projects: ProjectSummary[]; period: Period; columns?: number; billingMode: BillingMode; surchargeRate: number }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
   return (
     <Box flexDirection="column" width={dashWidth}>
-      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
-      <TopSessions projects={projects} pw={dashWidth} bw={barWidth} />
-      <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
+      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} billingMode={billingMode} surchargeRate={surchargeRate} />
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} billingMode={billingMode} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} /></Row>
+      <TopSessions projects={projects} pw={dashWidth} bw={barWidth} billingMode={billingMode} />
+      <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} /></Row>
       <Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
     </Box>
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, refreshSeconds, projectFilter, excludeFilter }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, refreshSeconds, projectFilter, excludeFilter, billingMode, surchargeRate }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   refreshSeconds?: number
   projectFilter?: string[]
   excludeFilter?: string[]
+  billingMode: BillingMode
+  surchargeRate: number
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -666,35 +754,36 @@ function InteractiveDashboard({ initialProjects, initialPeriod, refreshSeconds, 
       <PeriodTabs active={period} />
       {view === 'optimize' && optimizeResult
         ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-        : <DashboardContent projects={projects} period={period} columns={columns} />}
+        : <DashboardContent projects={projects} period={period} columns={columns} billingMode={billingMode} surchargeRate={surchargeRate} />}
       <StatusBar width={dashWidth} view={view} findingCount={findingCount} />
     </Box>
   )
 }
 
-function StaticDashboard({ projects, period }: { projects: ProjectSummary[]; period: Period }) {
+function StaticDashboard({ projects, period, billingMode, surchargeRate }: { projects: ProjectSummary[]; period: Period; billingMode: BillingMode; surchargeRate: number }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
-      <DashboardContent projects={projects} period={period} columns={columns} />
+      <DashboardContent projects={projects} period={period} columns={columns} billingMode={billingMode} surchargeRate={surchargeRate} />
     </Box>
   )
 }
 
 export async function renderDashboard(period: Period = 'week', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null): Promise<void> {
   await loadPricing()
+  const billingConfig = loadBillingConfig()
   const range = customRange ?? getDateRange(period)
   const projects = filterProjectsByName(await parseAllSessions(range), projectFilter, excludeFilter)
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={projects} initialPeriod={period} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} />
+      <InteractiveDashboard initialProjects={projects} initialPeriod={period} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} billingMode={billingConfig.mode} surchargeRate={billingConfig.surchargeRate} />
     )
     await waitUntilExit()
   } else {
-    const { unmount } = render(<StaticDashboard projects={projects} period={period} />, { patchConsole: false })
+    const { unmount } = render(<StaticDashboard projects={projects} period={period} billingMode={billingConfig.mode} surchargeRate={billingConfig.surchargeRate} />, { patchConsole: false })
     unmount()
   }
 }

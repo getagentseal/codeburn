@@ -196,12 +196,15 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
   return turns
 }
 
-/// Helper to add credits with proper null semantics.
+/// Helper to add nullable numbers with proper null semantics.
 /// null + null = null (no data), null + N = N, N + M = N + M
-function addCredits(a: number | null, b: number | null): number | null {
-  if (a === null && b === null) return null
+function addNullable(a: number | null | undefined, b: number | null | undefined): number | null {
+  if ((a === null || a === undefined) && (b === null || b === undefined)) return null
   return (a ?? 0) + (b ?? 0)
 }
+
+// Alias for backwards compat
+const addCredits = addNullable
 
 function buildSessionSummary(
   sessionId: string,
@@ -222,6 +225,12 @@ function buildSessionSummary(
   let totalCacheWrite = 0
   // Per-call credits summed for fallback (older sessions without sessionCreditUsage)
   let summedCredits: number | null = null
+  // Billing aggregates (Token+ mode)
+  let totalBaseCostUsd: number | null = null
+  let totalSurchargeUsd: number | null = null
+  let totalBilledAmountUsd: number | null = null
+  let creditsSynthesizedCount = 0
+  let billingMode: 'credits' | 'token_plus' | undefined = undefined
   let apiCalls = 0
   let firstTs = ''
   let lastTs = ''
@@ -249,6 +258,16 @@ function buildSessionSummary(
       summedCredits = addCredits(summedCredits, call.credits)
       apiCalls++
 
+      // Aggregate billing fields if present
+      const billing = call.billing
+      if (billing) {
+        if (!billingMode) billingMode = billing.mode
+        totalBaseCostUsd = addNullable(totalBaseCostUsd, billing.baseCostUsd)
+        totalSurchargeUsd = addNullable(totalSurchargeUsd, billing.surchargeUsd)
+        totalBilledAmountUsd = addNullable(totalBilledAmountUsd, billing.billedAmountUsd)
+        if (billing.synthesized) creditsSynthesizedCount++
+      }
+
       const modelKey = getShortModelName(call.model)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
@@ -256,6 +275,10 @@ function buildSessionSummary(
           costUSD: 0,
           credits: null,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
+          baseCostUsd: null,
+          surchargeUsd: null,
+          billedAmountUsd: null,
+          creditsSynthesizedCount: 0,
         }
       }
       modelBreakdown[modelKey].calls++
@@ -265,6 +288,16 @@ function buildSessionSummary(
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
       modelBreakdown[modelKey].tokens.cacheCreationInputTokens += call.usage.cacheCreationInputTokens
+
+      // Aggregate billing fields per model
+      if (billing) {
+        modelBreakdown[modelKey].baseCostUsd = addNullable(modelBreakdown[modelKey].baseCostUsd, billing.baseCostUsd)
+        modelBreakdown[modelKey].surchargeUsd = addNullable(modelBreakdown[modelKey].surchargeUsd, billing.surchargeUsd)
+        modelBreakdown[modelKey].billedAmountUsd = addNullable(modelBreakdown[modelKey].billedAmountUsd, billing.billedAmountUsd)
+        if (billing.synthesized) {
+          modelBreakdown[modelKey].creditsSynthesizedCount = (modelBreakdown[modelKey].creditsSynthesizedCount ?? 0) + 1
+        }
+      }
 
       for (const tool of extractCoreTools(call.tools)) {
         toolBreakdown[tool] = toolBreakdown[tool] ?? { calls: 0 }
@@ -303,6 +336,11 @@ function buildSessionSummary(
     totalCacheReadTokens: totalCacheRead,
     totalCacheWriteTokens: totalCacheWrite,
     totalCredits,
+    billingMode,
+    totalBaseCostUsd,
+    totalSurchargeUsd,
+    totalBilledAmountUsd,
+    creditsSynthesizedCount,
     apiCalls,
     turns,
     modelBreakdown,
@@ -427,6 +465,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     usage,
     costUSD: call.costUSD,
     credits: call.credits ?? null,
+    billing: call.billing ?? null,
     tools,
     mcpTools: extractMcpTools(tools),
     hasAgentSpawn: tools.includes('Agent'),

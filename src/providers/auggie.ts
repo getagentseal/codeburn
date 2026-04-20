@@ -4,8 +4,9 @@ import { homedir } from 'os'
 
 import { readCachedCalls, writeCachedCalls } from '../auggie-cache.js'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, getModelCosts } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
+import { loadBillingConfig, computeBilling, type BillingConfig, type BillingResult } from '../billing.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 /// Augment Code's CLI ("Auggie") writes one JSON file per conversation into ~/.augment/sessions/.
@@ -323,6 +324,9 @@ function extractCreditsFromNodes(
 /// Credits are extracted from type-9 BILLING_METADATA nodes and attached to the first
 /// ParsedProviderCall emitted for this exchange. Transaction IDs are tracked across the
 /// session to prevent double-counting the same billing transaction.
+///
+/// Billing: Each call is run through computeBilling() to attach the full BillingResult.
+/// The `credits` field is preserved for back-compat (derived from BillingResult.creditsAugment).
 function* parseExchange(
   session: AuggieSession,
   exchange: AuggieExchange,
@@ -330,6 +334,7 @@ function* parseExchange(
   projectLabel: string,
   seenKeys: Set<string>,
   seenTransactionIds: Set<string>,
+  billingConfig: BillingConfig,
 ): Generator<ParsedProviderCall> {
   const userMessage = extractUserMessage(exchange)
   const requestId = exchange.request_id ?? ''
@@ -404,8 +409,20 @@ function* parseExchange(
       // Attach tools and credits only to first call to prevent inflation
       const tools = firstEmitted ? [] : allTools
       const bashCommands = firstEmitted ? [] : allBashCommands
-      const credits = firstEmitted ? null : exchangeCredits
+      const groundTruthCredits = firstEmitted ? null : exchangeCredits
       firstEmitted = true
+
+      // Compute billing using the billing engine
+      const modelCosts = getModelCosts(model)
+      const billingResult = computeBilling(
+        { input, output, cacheRead, cacheWrite },
+        modelCosts,
+        billingConfig,
+        groundTruthCredits,
+      )
+
+      // Derive `credits` from BillingResult.creditsAugment for back-compat
+      const credits = billingResult.creditsAugment
 
       yield {
         provider: 'auggie',
@@ -426,6 +443,7 @@ function* parseExchange(
         userMessage,
         sessionId,
         credits,
+        billing: billingResult,
       }
     }
   } else {
@@ -466,8 +484,20 @@ function* parseExchange(
       }
 
       // Attach credits only to first call to prevent inflation
-      const credits = firstEmitted ? null : exchangeCredits
+      const groundTruthCredits = firstEmitted ? null : exchangeCredits
       firstEmitted = true
+
+      // Compute billing using the billing engine
+      const modelCosts = getModelCosts(model)
+      const billingResult = computeBilling(
+        { input, output, cacheRead, cacheWrite },
+        modelCosts,
+        billingConfig,
+        groundTruthCredits,
+      )
+
+      // Derive `credits` from BillingResult.creditsAugment for back-compat
+      const credits = billingResult.creditsAugment
 
       yield {
         provider: 'auggie',
@@ -488,6 +518,7 @@ function* parseExchange(
         userMessage,
         sessionId,
         credits,
+        billing: billingResult,
       }
     }
   }
@@ -535,11 +566,19 @@ function taggedSessionId(session: AuggieSession): string {
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+  // Load billing config once per parser (per session file).
+  // Config is env-var driven so this is deterministic for the lifetime of the process.
+  const billingConfig = loadBillingConfig()
+
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       // Cache hit: the session file is unchanged since the last run (same mtime + size).
       // Yield the cached calls directly -- this is the happy path for most of the 700+
       // sessions on a typical install.
+      // NOTE: Cached calls may have billing computed under a different config.
+      // This is acceptable since the cache is keyed by mtime+size, so if the user
+      // changes billing mode, they can touch/edit the session files to invalidate.
+      // In practice, billing mode rarely changes mid-flight.
       const cached = await readCachedCalls(source.path)
       if (cached) {
         for (const call of cached) {
@@ -585,7 +624,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       for (const turn of chatHistory) {
         const ex = turn.exchange
         if (!ex) continue
-        for (const call of parseExchange(session, ex, sessionId, projectLabel, seenKeys, seenTransactionIds)) {
+        for (const call of parseExchange(session, ex, sessionId, projectLabel, seenKeys, seenTransactionIds, billingConfig)) {
           // Attach session-level creditUsage to the first call so the parser can use it.
           if (isFirstCall && sessionCreditUsage !== null) {
             call.sessionCreditUsage = sessionCreditUsage

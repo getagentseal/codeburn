@@ -65,13 +65,18 @@ export type ParsedTurn = {
   sessionId: string
 }
 
+import type { BillingMode, BillingResult } from './billing.js'
+
 export type ParsedApiCall = {
   provider: string
   model: string
   usage: TokenUsage
   costUSD: number
   /// Augment credits for this call. null = no billing data, 0 = zero usage, positive = usage.
+  /// DEPRECATED: Use billing.creditsAugment instead. Kept for back-compat.
   credits: number | null
+  /// Full billing result from computeBilling(). Present when billing engine is active.
+  billing?: BillingResult | null
   tools: string[]
   mcpTools: string[]
   hasAgentSpawn: boolean
@@ -115,9 +120,27 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   /// Total Augment credits for this session. null = no billing data, 0 = zero usage, positive = usage.
   totalCredits: number | null
+  /// Billing mode in effect for this session (credits or token_plus).
+  billingMode?: BillingMode
+  /// Token+ billing aggregates (null in credits mode).
+  totalBaseCostUsd?: number | null
+  totalSurchargeUsd?: number | null
+  totalBilledAmountUsd?: number | null
+  /// Count of calls where credits were synthesized (no ground-truth billing data).
+  creditsSynthesizedCount?: number
   apiCalls: number
   turns: ClassifiedTurn[]
-  modelBreakdown: Record<string, { calls: number; costUSD: number; credits: number | null; tokens: TokenUsage }>
+  modelBreakdown: Record<string, {
+    calls: number
+    costUSD: number
+    credits: number | null
+    tokens: TokenUsage
+    /// Token+ billing aggregates per model.
+    baseCostUsd?: number | null
+    surchargeUsd?: number | null
+    billedAmountUsd?: number | null
+    creditsSynthesizedCount?: number
+  }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>
   bashBreakdown: Record<string, { calls: number }>
@@ -131,6 +154,14 @@ export type ProjectSummary = {
   totalCostUSD: number
   /// Total Augment credits for this project. null = no billing data, 0 = zero usage, positive = usage.
   totalCredits: number | null
+  /// Billing mode (from first session with billing data).
+  billingMode?: BillingMode
+  /// Token+ billing aggregates (null in credits mode).
+  totalBaseCostUsd?: number | null
+  totalSurchargeUsd?: number | null
+  totalBilledAmountUsd?: number | null
+  /// Count of calls where credits were synthesized.
+  creditsSynthesizedCount?: number
   totalApiCalls: number
 }
 

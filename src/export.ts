@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'path'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { getCurrency, convertCost } from './currency.js'
+import { loadBillingConfig, CREDITS_PER_DOLLAR, type BillingConfig } from './billing.js'
 
 function escCsv(s: string): string {
   const sanitized = /^[=+\-@]/.test(s) ? `'${s}` : s
@@ -361,15 +362,218 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   return folder
 }
 
+/// Build overview object with billing-aware fields
+function buildOverview(projects: ProjectSummary[], billingConfig: BillingConfig): Record<string, unknown> {
+  const allSessions = projects.flatMap(p => p.sessions)
+  const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  const totalSessions = allSessions.length
+  const totalInputTokens = allSessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
+  const totalOutputTokens = allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
+  const totalCacheRead = allSessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
+  const totalCacheWrite = allSessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
+
+  // Aggregate billing fields
+  const totalCredits = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalCredits === null) return null
+    return (acc ?? 0) + (sess.totalCredits ?? 0)
+  }, null)
+  const totalBaseCostUsd = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalBaseCostUsd == null) return null
+    return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
+  }, null)
+  const totalSurchargeUsd = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalSurchargeUsd == null) return null
+    return (acc ?? 0) + (sess.totalSurchargeUsd ?? 0)
+  }, null)
+  const totalBilledAmountUsd = allSessions.reduce<number | null>((acc, sess) => {
+    if (acc === null && sess.totalBilledAmountUsd == null) return null
+    return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
+  }, null)
+  const creditsSynthesizedCount = allSessions.reduce((s, sess) => s + (sess.creditsSynthesizedCount ?? 0), 0)
+
+  const base: Record<string, unknown> = {
+    calls: totalCalls,
+    sessions: totalSessions,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    cacheReadTokens: totalCacheRead,
+    cacheWriteTokens: totalCacheWrite,
+  }
+
+  if (billingConfig.mode === 'credits') {
+    // Credits mode: cost = null, add creditsAugment and creditsSynthesized
+    base.cost = null
+    base.creditsAugment = totalCredits
+    base.creditsSynthesized = creditsSynthesizedCount
+  } else {
+    // Token+ mode: add baseCostUsd, surchargeUsd, billedAmountUsd; keep cost = billedAmountUsd for back-compat
+    base.baseCostUsd = totalBaseCostUsd !== null ? round2(totalBaseCostUsd) : null
+    base.surchargeUsd = totalSurchargeUsd !== null ? round2(totalSurchargeUsd) : null
+    base.billedAmountUsd = totalBilledAmountUsd !== null ? round2(totalBilledAmountUsd) : null
+    base.cost = totalBilledAmountUsd !== null ? round2(totalBilledAmountUsd) : round2(totalCostUSD)
+  }
+
+  return base
+}
+
+/// Build byModel array with billing-aware fields
+function buildByModel(projects: ProjectSummary[], billingConfig: BillingConfig): unknown[] {
+  const modelTotals: Record<string, {
+    calls: number
+    costUSD: number
+    credits: number | null
+    baseCostUsd: number | null
+    surchargeUsd: number | null
+    billedAmountUsd: number | null
+    creditsSynthesizedCount: number
+    inputTokens: number
+    outputTokens: number
+    cacheRead: number
+    cacheWrite: number
+  }> = {}
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [model, data] of Object.entries(session.modelBreakdown)) {
+        if (!modelTotals[model]) {
+          modelTotals[model] = {
+            calls: 0, costUSD: 0, credits: null, baseCostUsd: null, surchargeUsd: null, billedAmountUsd: null,
+            creditsSynthesizedCount: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0,
+          }
+        }
+        modelTotals[model].calls += data.calls
+        modelTotals[model].costUSD += data.costUSD
+        // Aggregate credits
+        if (modelTotals[model].credits === null && data.credits === null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].credits = (modelTotals[model].credits ?? 0) + (data.credits ?? 0)
+        }
+        // Aggregate billing fields
+        if (modelTotals[model].baseCostUsd === null && data.baseCostUsd == null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].baseCostUsd = (modelTotals[model].baseCostUsd ?? 0) + (data.baseCostUsd ?? 0)
+        }
+        if (modelTotals[model].surchargeUsd === null && data.surchargeUsd == null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].surchargeUsd = (modelTotals[model].surchargeUsd ?? 0) + (data.surchargeUsd ?? 0)
+        }
+        if (modelTotals[model].billedAmountUsd === null && data.billedAmountUsd == null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].billedAmountUsd = (modelTotals[model].billedAmountUsd ?? 0) + (data.billedAmountUsd ?? 0)
+        }
+        modelTotals[model].creditsSynthesizedCount += data.creditsSynthesizedCount ?? 0
+        modelTotals[model].inputTokens += data.tokens.inputTokens
+        modelTotals[model].outputTokens += data.tokens.outputTokens
+        modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens ?? 0
+        modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens ?? 0
+      }
+    }
+  }
+
+  return Object.entries(modelTotals)
+    .filter(([name]) => name !== '<synthetic>')
+    .sort(([, a], [, b]) => (billingConfig.mode === 'credits' ? (b.credits ?? 0) - (a.credits ?? 0) : b.costUSD - a.costUSD))
+    .map(([model, d]) => {
+      const base: Record<string, unknown> = {
+        model,
+        calls: d.calls,
+        inputTokens: d.inputTokens,
+        outputTokens: d.outputTokens,
+        cacheReadTokens: d.cacheRead,
+        cacheWriteTokens: d.cacheWrite,
+      }
+      if (billingConfig.mode === 'credits') {
+        base.cost = null
+        base.creditsAugment = d.credits
+        base.creditsSynthesized = d.creditsSynthesizedCount
+      } else {
+        base.baseCostUsd = d.baseCostUsd !== null ? round2(d.baseCostUsd) : null
+        base.surchargeUsd = d.surchargeUsd !== null ? round2(d.surchargeUsd) : null
+        base.billedAmountUsd = d.billedAmountUsd !== null ? round2(d.billedAmountUsd) : null
+        base.cost = d.billedAmountUsd !== null ? round2(d.billedAmountUsd) : round2(d.costUSD)
+      }
+      return base
+    })
+}
+
+/// Build byProject array with billing-aware fields
+function buildByProject(projects: ProjectSummary[], billingConfig: BillingConfig): unknown[] {
+  return projects
+    .slice()
+    .sort((a, b) => {
+      if (billingConfig.mode === 'credits') {
+        return (b.totalCredits ?? 0) - (a.totalCredits ?? 0)
+      }
+      // Token+ mode: sort by billed amount
+      const aBilled = b.sessions.reduce((s, sess) => s + (sess.totalBilledAmountUsd ?? sess.totalCostUSD), 0)
+      const bBilled = a.sessions.reduce((s, sess) => s + (sess.totalBilledAmountUsd ?? sess.totalCostUSD), 0)
+      return aBilled - bBilled
+    })
+    .map(p => {
+      const allSessions = p.sessions
+      const totalBilledAmountUsd = allSessions.reduce<number | null>((acc, sess) => {
+        if (acc === null && sess.totalBilledAmountUsd == null) return null
+        return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
+      }, null)
+      const totalBaseCostUsd = allSessions.reduce<number | null>((acc, sess) => {
+        if (acc === null && sess.totalBaseCostUsd == null) return null
+        return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
+      }, null)
+      const totalSurchargeUsd = allSessions.reduce<number | null>((acc, sess) => {
+        if (acc === null && sess.totalSurchargeUsd == null) return null
+        return (acc ?? 0) + (sess.totalSurchargeUsd ?? 0)
+      }, null)
+      const creditsSynthesizedCount = allSessions.reduce((s, sess) => s + (sess.creditsSynthesizedCount ?? 0), 0)
+
+      const base: Record<string, unknown> = {
+        project: p.projectPath,
+        calls: p.totalApiCalls,
+        sessions: p.sessions.length,
+      }
+      if (billingConfig.mode === 'credits') {
+        base.cost = null
+        base.creditsAugment = p.totalCredits
+        base.creditsSynthesized = creditsSynthesizedCount
+      } else {
+        base.baseCostUsd = totalBaseCostUsd !== null ? round2(totalBaseCostUsd) : null
+        base.surchargeUsd = totalSurchargeUsd !== null ? round2(totalSurchargeUsd) : null
+        base.billedAmountUsd = totalBilledAmountUsd !== null ? round2(totalBilledAmountUsd) : null
+        base.cost = totalBilledAmountUsd !== null ? round2(totalBilledAmountUsd) : round2(p.totalCostUSD)
+      }
+      return base
+    })
+}
+
 export async function exportJson(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
   const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1].projects
   const { code, rate, symbol } = getCurrency()
+  const billingConfig = loadBillingConfig()
+
+  // Build billing metadata for top-level
+  const billingMeta: Record<string, unknown> = {
+    mode: billingConfig.mode,
+  }
+  if (billingConfig.mode === 'credits') {
+    billingMeta.creditsPerDollar = CREDITS_PER_DOLLAR
+  } else {
+    billingMeta.surchargeRate = billingConfig.surchargeRate
+  }
 
   const data = {
     schema: 'codeburn.export.v2',
     generated: new Date().toISOString(),
     currency: { code, rate, symbol },
+    billing: billingMeta,
+    overview: buildOverview(thirtyDayProjects, billingConfig),
+    byModel: buildByModel(thirtyDayProjects, billingConfig),
+    byProject: buildByProject(thirtyDayProjects, billingConfig),
+    // Legacy fields for compatibility
     summary: buildSummaryRows(periods),
     periods: periods.map(p => ({
       label: p.label,
