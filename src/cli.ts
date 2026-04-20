@@ -1,19 +1,13 @@
 import { Command } from 'commander'
-import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
-import { type PeriodData, type ProviderCost } from './menubar-json.js'
-import { buildMenubarPayload } from './menubar-json.js'
-import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCacheLock } from './daily-cache.js'
-import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
 import { parseDateRangeFlags } from './cli-date.js'
-import { runOptimize, scanAndDetect } from './optimize.js'
-import { getAllProviders } from './providers/index.js'
+import { runOptimize } from './optimize.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { loadBillingConfig, CREDITS_PER_DOLLAR } from './billing.js'
 import { createRequire } from 'node:module'
@@ -21,13 +15,6 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000
-const BACKFILL_DAYS = 365
-
-function toDateString(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
 
 function getDateRange(period: string): { range: DateRange; label: string } {
   const now = new Date()
@@ -126,8 +113,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
-  // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
-  // counts tokens being stored, not served, so it doesn't belong in the denominator.
+  // Cache hit percent: reads over reads+fresh-input. cache_write counts tokens being stored,
+  // not served, so it doesn't belong in the denominator.
   const cacheHitDenom = totalInput + totalCacheRead
   const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
 
@@ -318,129 +305,26 @@ program
     await renderDashboard(period, opts.refresh, opts.project, opts.exclude, customRange)
   })
 
-function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
-  const sessions = projects.flatMap(p => p.sessions)
-  const catTotals: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number }> = {}
-  let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
-
-  for (const sess of sessions) {
-    inputTokens += sess.totalInputTokens
-    outputTokens += sess.totalOutputTokens
-    cacheReadTokens += sess.totalCacheReadTokens
-    cacheWriteTokens += sess.totalCacheWriteTokens
-    for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
-      if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, editTurns: 0, oneShotTurns: 0 }
-      catTotals[cat].turns += d.turns
-      catTotals[cat].cost += d.costUSD
-      catTotals[cat].editTurns += d.editTurns
-      catTotals[cat].oneShotTurns += d.oneShotTurns
-    }
-    for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0 }
-      modelTotals[model].calls += d.calls
-      modelTotals[model].cost += d.costUSD
-    }
-  }
-
+function buildStatusData(projects: ProjectSummary[]): { cost: number; calls: number } {
   return {
-    label,
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
-    sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
-    inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
-    categories: Object.entries(catTotals)
-      .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
-    models: Object.entries(modelTotals)
-      .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, ...d })),
   }
 }
 
 program
   .command('status')
-  .description('Compact status output (today + week + month)')
-  .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
+  .description('Compact status output (today + month)')
+  .option('--format <format>', 'Output format: terminal, json', 'terminal')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
-  .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     await loadPricing()
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
-    if (opts.format === 'menubar-json') {
-      const periodInfo = getDateRange(opts.period)
-      const now = new Date()
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const yesterdayEnd = new Date(todayStart.getTime() - 1)
-      const yesterdayStr = toDateString(new Date(todayStart.getTime() - MS_PER_DAY))
-
-      const cache = await withDailyCacheLock(async () => {
-        let c = await loadDailyCache()
-        const gapStart = c.lastComputedDate
-          ? new Date(new Date(`${c.lastComputedDate}T00:00:00.000Z`).getTime() + MS_PER_DAY)
-          : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
-
-        if (gapStart.getTime() <= yesterdayEnd.getTime()) {
-          const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
-          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange), opts.project, opts.exclude)
-          const gapDays = aggregateProjectsIntoDays(gapProjects)
-          c = addNewDays(c, gapDays, yesterdayStr)
-          await saveDailyCache(c)
-        }
-        return c
-      })
-
-      const todayRange: DateRange = { start: todayStart, end: now }
-      const todayProjects = fp(await parseAllSessions(todayRange))
-      const todayDays = aggregateProjectsIntoDays(todayProjects)
-      const rangeStartStr = toDateString(periodInfo.range.start)
-      const rangeEndStr = toDateString(periodInfo.range.end)
-      const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
-      const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
-      const allDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
-      const currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
-
-      const allProviders = getAllProviders()
-      const providers: ProviderCost[] = [{ name: allProviders[0]?.displayName ?? 'Auggie', cost: currentData.cost }]
-
-      const historyStartStr = toDateString(new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY))
-      const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
-      const allTodayDaysForHistory = aggregateProjectsIntoDays(fp(await parseAllSessions({ start: todayStart, end: now })))
-      const fullHistory = [...allCacheDays, ...allTodayDaysForHistory]
-      const dailyHistory = fullHistory.map(d => {
-        const topModels = Object.entries(d.models)
-          .filter(([name]) => name !== '<synthetic>')
-          .sort(([, a], [, b]) => b.cost - a.cost)
-          .slice(0, 5)
-          .map(([name, m]) => ({
-            name,
-            cost: m.cost,
-            calls: m.calls,
-            inputTokens: m.inputTokens,
-            outputTokens: m.outputTokens,
-          }))
-        return {
-          date: d.date,
-          cost: d.cost,
-          calls: d.calls,
-          inputTokens: d.inputTokens,
-          outputTokens: d.outputTokens,
-          cacheReadTokens: d.cacheReadTokens,
-          cacheWriteTokens: d.cacheWriteTokens,
-          topModels,
-        }
-      })
-
-      const optimize = opts.optimize === false ? null : await scanAndDetect(todayProjects, todayRange)
-      console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory)))
-      return
-    }
 
     if (opts.format === 'json') {
-      const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range)))
-      const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range)))
+      const todayData = buildStatusData(fp(await parseAllSessions(getDateRange('today').range)))
+      const monthData = buildStatusData(fp(await parseAllSessions(getDateRange('month').range)))
       const { code, rate } = getCurrency()
       console.log(JSON.stringify({
         currency: code,
@@ -522,21 +406,6 @@ program
     }
 
     console.log(`\n  Exported (Today + 7 Days + 30 Days) to: ${savedPath}\n`)
-  })
-
-program
-  .command('menubar')
-  .description('Install and launch the macOS menubar app (one command, no clone)')
-  .option('--force', 'Reinstall even if an older copy is already in ~/Applications')
-  .action(async (opts: { force?: boolean }) => {
-    try {
-      const result = await installMenubarApp({ force: opts.force })
-      console.log(`\n  Ready. ${result.installedPath}\n`)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(`\n  Menubar install failed: ${message}\n`)
-      process.exit(1)
-    }
   })
 
 program

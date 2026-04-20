@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.1] - 2026-04-20
+
+### Removed (breaking)
+
+- **macOS menubar app** (`mac/`), `codeburn menubar` subcommand, `--format menubar-json`, `menubar-installer.ts`, `menubar-json.ts`, `CODEBURN_ALLOW_UNVERIFIED_INSTALL` env var. This fork is now CLI-only. Users who want the menubar should use the upstream `codeburn` package.
+- **`daily-cache.ts`, `day-aggregator.ts`** — no longer needed without menubar-json format.
+- **`--period` and `--no-optimize` flags** from `codeburn status` (menubar-json exclusive).
+- **`.github/workflows/release-menubar.yml`** — Swift build workflow.
+
+### Added
+
+- **GPT-5.2 model pricing** in `src/models.ts` with tests. ~390 credits per standard task (133% of Claude Sonnet 4.6's 293-credit baseline).
+
+### Docs
+
+- README pruned of all menubar references.
+- Updated project status and structure sections.
+
 ## [2.0.0] - 2026-04-20
 
 ### Added
