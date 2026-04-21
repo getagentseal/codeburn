@@ -22,6 +22,9 @@ async function loadCursor(): Promise<Provider | null> {
 let opencodeProvider: Provider | null = null
 let opencodeLoadAttempted = false
 
+let cursorAgentProvider: Provider | null = null
+let cursorAgentLoadAttempted = false
+
 async function loadOpenCode(): Promise<Provider | null> {
   if (opencodeLoadAttempted) return opencodeProvider
   opencodeLoadAttempted = true
@@ -34,13 +37,26 @@ async function loadOpenCode(): Promise<Provider | null> {
   }
 }
 
+async function loadCursorAgent(): Promise<Provider | null> {
+  if (cursorAgentLoadAttempted) return cursorAgentProvider
+  cursorAgentLoadAttempted = true
+  try {
+    const { cursor_agent } = await import('./cursor-agent.js')
+    cursorAgentProvider = cursor_agent
+    return cursor_agent
+  } catch {
+    return null
+  }
+}
+
 const coreProviders: Provider[] = [claude, codex, copilot, pi]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [cursor, opencode] = await Promise.all([loadCursor(), loadOpenCode()])
+  const [cursor, opencode, cursorAgent] = await Promise.all([loadCursor(), loadOpenCode(), loadCursorAgent()])
   const all = [...coreProviders]
   if (cursor) all.push(cursor)
   if (opencode) all.push(opencode)
+  if (cursorAgent) all.push(cursorAgent)
   return all
 }
 
@@ -67,6 +83,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'opencode') {
     const oc = await loadOpenCode()
     return oc ?? undefined
+  }
+  if (name === 'cursor-agent') {
+    const ca = await loadCursorAgent()
+    return ca ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }
