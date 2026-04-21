@@ -107,9 +107,6 @@ describe('cursor-agent provider', () => {
     expect(sources).toHaveLength(1)
     expect(sources[0]!.provider).toBe('cursor-agent')
     expect(sources[0]!.path).toBe(transcriptPath)
-    expect(sources[0]!.fingerprintPath).toBe(transcriptPath)
-    expect(sources[0]!.cacheStrategy).toBe('full-reparse')
-    expect(sources[0]!.parserVersion).toBe('cursor-agent:v1')
   })
 
   it('discovers transcripts across multiple projects', async () => {

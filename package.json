@@ -1,15 +1,14 @@
 {
   "name": "codeburn",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "See where your AI coding tokens go - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {
-    "codeburn": "bin/codeburn"
+    "codeburn": "dist/cli.js"
   },
   "files": [
-    "dist",
-    "bin"
+    "dist"
   ],
   "scripts": {
     "build": "tsup",

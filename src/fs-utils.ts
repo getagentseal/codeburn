@@ -93,31 +93,3 @@ export async function* readSessionLines(filePath: string): AsyncGenerator<string
     stream.destroy()
   }
 }
-
-export async function* readSessionLinesFromOffset(filePath: string, startOffset: number): AsyncGenerator<string> {
-  let size: number
-  try {
-    size = (await stat(filePath)).size
-  } catch (err) {
-    warn(`stat failed for ${filePath}: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`)
-    return
-  }
-
-  if (size > MAX_SESSION_FILE_BYTES) {
-    warn(`skipped oversize file ${filePath} (${size} bytes > cap ${MAX_SESSION_FILE_BYTES})`)
-    return
-  }
-
-  const stream = createReadStream(filePath, {
-    encoding: 'utf-8',
-    start: Math.max(0, startOffset),
-  })
-  const rl = createInterface({ input: stream, crlfDelay: Infinity })
-  try {
-    for await (const line of rl) yield line
-  } catch (err) {
-    warn(`stream read failed for ${filePath}: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`)
-  } finally {
-    stream.destroy()
-  }
-}

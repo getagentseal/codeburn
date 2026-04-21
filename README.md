@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/v/codeburn.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/dt/codeburn.svg" alt="total downloads" /></a>
   <a href="https://github.com/getagentseal/codeburn/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeburn.svg" alt="license" /></a>
-  <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="node version" /></a>
+  <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="node version" /></a>
 </p>
 
 <p align="center">
@@ -35,9 +35,9 @@ npx codeburn
 
 ### Requirements
 
-- Node.js 22+
+- Node.js 20+
 - Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
-- For Cursor/OpenCode support: uses Node's built-in `node:sqlite` (Node 22+)
+- For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
 
@@ -79,25 +79,6 @@ codeburn today --format json | jq '.overview.cost'
 ```
 
 For the lighter `status --format json` (today + month totals only) or file-based exports (`export -f json`), see above.
-
-## Cache behavior
-
-CodeBurn now keeps a persistent parse cache under `~/.cache/codeburn/source-cache-v1/`.
-It applies to every provider. Unchanged sources load from cache across fresh CLI runs,
-while changed sources are refreshed on demand so rolling windows like `today` stay current
-as new log entries land.
-
-Use `--no-cache` on any command that reads session data to ignore cached entries for that
-run and rebuild them from raw logs:
-
-```bash
-codeburn today --no-cache
-codeburn report --period all --no-cache
-codeburn export --no-cache
-```
-
-When a non-JSON command needs to rebuild part of the cache, CodeBurn shows an
-`Updating cache` progress bar on stderr. JSON output stays clean on stdout.
 
 ## Providers
 
@@ -160,7 +141,7 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
 
-Cursor reads token usage from its local SQLite database via Node's built-in `node:sqlite`. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. Parsed results are cached through the shared persistent cache layer.
+Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 
 GitHub Copilot only logs output tokens in its session state, so Copilot cost rows sit below actual API cost. The model is tracked via `session.model_change` events; messages before the first model change are skipped to avoid silent misattribution.
 
@@ -340,35 +321,28 @@ CodeBurn reads these files, deduplicates messages (by API message ID for Claude,
 
 ```
 src/
-  cli.ts            Commander.js entry point
-  dashboard.tsx     Ink TUI (React for terminals)
-  parser.ts         JSONL reader, dedup, date filter, provider orchestration
-  models.ts         LiteLLM pricing, cost calculation
-  classifier.ts     13-category task classifier
-  compare-stats.ts  Model comparison engine (metrics, category breakdown, working style)
-  types.ts          Type definitions
-  format.ts         Text rendering (status bar)
-  menubar-json.ts   Payload builder consumed by the native macOS menubar app in mac/
-  export.ts         CSV/JSON multi-period export
-  config.ts         Config file management (~/.config/codeburn/)
-  currency.ts       Currency conversion, exchange rates, Intl formatting
-  sqlite.ts         SQLite adapter (node:sqlite)
-  source-cache.ts   Persistent parse cache (manifest + per-source entries)
-  discovery-cache.ts Provider directory scan caching
-  parse-progress.ts Stderr progress bar for cache rebuilds
-  provider-colors.ts Provider color and label constants
-  plans.ts          Subscription plan presets and validators
-  plan-usage.ts     Billing period math and usage projection
-  fs-utils.ts       Bounded file readers with stream support
+  cli.ts          Commander.js entry point
+  dashboard.tsx   Ink TUI (React for terminals)
+  parser.ts       JSONL reader, dedup, date filter, provider orchestration
+  models.ts       LiteLLM pricing, cost calculation
+  classifier.ts   13-category task classifier
+  compare-stats.ts Model comparison engine (metrics, category breakdown, working style)
+  types.ts        Type definitions
+  format.ts       Text rendering (status bar)
+  menubar-json.ts Payload builder consumed by the native macOS menubar app in mac/
+  export.ts       CSV/JSON multi-period export
+  config.ts       Config file management (~/.config/codeburn/)
+  currency.ts     Currency conversion, exchange rates, Intl formatting
+  sqlite.ts       SQLite adapter (lazy-loads better-sqlite3)
+  cursor-cache.ts Cursor result cache (file-based, auto-invalidating)
   providers/
-    types.ts        Provider interface definitions
-    index.ts        Provider registry (lazy-loads Cursor, OpenCode)
-    claude.ts       Claude Code session discovery
-    codex.ts        Codex session discovery and JSONL parsing
-    copilot.ts      GitHub Copilot session state parsing
-    cursor.ts       Cursor SQLite parsing, language extraction
-    opencode.ts     OpenCode SQLite session discovery and parsing
-    pi.ts           Pi agent JSONL session discovery and parsing
+    types.ts      Provider interface definitions
+    index.ts      Provider registry (lazy-loads Cursor, OpenCode)
+    claude.ts     Claude Code session discovery
+    codex.ts      Codex session discovery and JSONL parsing
+    cursor.ts     Cursor SQLite parsing, language extraction
+    opencode.ts   OpenCode SQLite session discovery and parsing
+    pi.ts         Pi agent JSONL session discovery and parsing
 ```
 
 ## Star History

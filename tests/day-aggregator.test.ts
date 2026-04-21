@@ -38,11 +38,6 @@ function makeCall(timestamp: string, costUSD: number, model = 'Opus 4.7', provid
   }
 }
 
-function localDateKey(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 describe('aggregateProjectsIntoDays', () => {
   it('buckets api calls by calendar date derived from timestamp', () => {
     const projects: ProjectSummary[] = [
@@ -135,13 +130,12 @@ describe('aggregateProjectsIntoDays', () => {
   })
 
   it('counts a session under its firstTimestamp date', () => {
-    const firstTimestamp = '2026-04-09T23:59:00Z'
     const projects: ProjectSummary[] = [
       makeProject({
         sessions: [{
           sessionId: 's1',
           project: 'p',
-          firstTimestamp,
+          firstTimestamp: '2026-04-09T23:59:00Z',
           lastTimestamp: '2026-04-10T00:10:00Z',
           totalCostUSD: 1,
           totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheWriteTokens: 0,
@@ -153,7 +147,7 @@ describe('aggregateProjectsIntoDays', () => {
       }),
     ]
     const days = aggregateProjectsIntoDays(projects)
-    expect(days[0]!.date).toBe(localDateKey(firstTimestamp))
+    expect(days[0]!.date).toBe('2026-04-09')
     expect(days[0]!.sessions).toBe(1)
   })
 
@@ -260,5 +254,49 @@ describe('buildPeriodDataFromDays', () => {
     expect(pd.sessions).toBe(0)
     expect(pd.categories).toEqual([])
     expect(pd.models).toEqual([])
+  })
+
+  it('attributes a midnight-straddling turn to the first assistant call date, not the user message date', () => {
+    // Regression for the bug that shipped in 0.8.2-0.8.4: when a user message
+    // sat on one side of midnight and the assistant response landed on the other,
+    // day-aggregator.ts bucketed by assistant time but renderStatusBar bucketed
+    // by user time, so the menubar and `codeburn status` disagreed on Today.
+    // The invariant for both surfaces: a turn is counted on the day its first
+    // assistant call actually ran.
+    const userTs = '2026-04-20T23:58:00Z'
+    const assistantTs = '2026-04-21T00:30:00Z'
+    const assistantLocal = new Date(assistantTs)
+    const expectedDate = `${assistantLocal.getFullYear()}-${String(assistantLocal.getMonth() + 1).padStart(2, '0')}-${String(assistantLocal.getDate()).padStart(2, '0')}`
+
+    const projects: ProjectSummary[] = [
+      makeProject({
+        sessions: [{
+          sessionId: 's1',
+          project: 'p',
+          firstTimestamp: userTs,
+          lastTimestamp: assistantTs,
+          totalCostUSD: 5,
+          totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheWriteTokens: 0,
+          apiCalls: 1,
+          turns: [{
+            userMessage: 'ask',
+            timestamp: userTs,
+            sessionId: 's1',
+            category: 'coding',
+            retries: 0,
+            hasEdits: false,
+            assistantCalls: [makeCall(assistantTs, 5)],
+          }],
+          modelBreakdown: {}, toolBreakdown: {}, mcpBreakdown: {}, bashBreakdown: {},
+          categoryBreakdown: {} as never,
+        }],
+      }),
+    ]
+
+    const days = aggregateProjectsIntoDays(projects)
+    const costDay = days.find(d => d.cost === 5)
+    expect(costDay, 'turn cost must be bucketed somewhere').toBeDefined()
+    expect(costDay!.date).toBe(expectedDate)
+    expect(costDay!.calls).toBe(1)
   })
 })

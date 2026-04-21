@@ -2,7 +2,6 @@ import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
-import { type DiscoverySnapshotEntry, loadDiscoveryCache, saveDiscoveryCache } from '../discovery-cache.js'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -87,49 +86,8 @@ async function isValidCodexSession(filePath: string): Promise<{ valid: boolean; 
   return { valid, meta: valid ? entry : undefined }
 }
 
-async function collectCodexDiscoverySnapshot(sessionsDir: string): Promise<DiscoverySnapshotEntry[]> {
-  const snapshot: DiscoverySnapshotEntry[] = []
-
-  let years: string[]
-  try {
-    years = await readdir(sessionsDir)
-  } catch {
-    return snapshot
-  }
-
-  for (const year of years) {
-    if (!/^\d{4}$/.test(year)) continue
-    const yearDir = join(sessionsDir, year)
-    const yearStat = await stat(yearDir).catch(() => null)
-    if (!yearStat?.isDirectory()) continue
-
-    const months = await readdir(yearDir).catch(() => [] as string[])
-    for (const month of months) {
-      if (!/^\d{2}$/.test(month)) continue
-      const monthDir = join(yearDir, month)
-      const monthStat = await stat(monthDir).catch(() => null)
-      if (!monthStat?.isDirectory()) continue
-
-      const days = await readdir(monthDir).catch(() => [] as string[])
-      for (const day of days) {
-        if (!/^\d{2}$/.test(day)) continue
-        const dayDir = join(monthDir, day)
-        const dayStat = await stat(dayDir).catch(() => null)
-        if (!dayStat?.isDirectory()) continue
-        snapshot.push({ path: dayDir, mtimeMs: dayStat.mtimeMs })
-      }
-    }
-  }
-
-  return snapshot
-}
-
 async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
   const sessionsDir = join(codexDir, 'sessions')
-  const snapshot = await collectCodexDiscoverySnapshot(sessionsDir)
-  const cached = await loadDiscoveryCache('codex', sessionsDir, snapshot)
-  if (cached) return cached
-
   const sources: SessionSource[] = []
 
   let years: string[]
@@ -164,21 +122,12 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
           if (!valid || !meta) continue
 
           const cwd = meta.payload?.cwd ?? 'unknown'
-          sources.push({
-            path: filePath,
-            project: sanitizeProject(cwd),
-            provider: 'codex',
-            fingerprintPath: filePath,
-            cacheStrategy: 'append-jsonl',
-            progressLabel: basename(filePath),
-            parserVersion: 'codex:v1',
-          })
+          sources.push({ path: filePath, project: sanitizeProject(cwd), provider: 'codex' })
         }
       }
     }
   }
 
-  await saveDiscoveryCache('codex', sessionsDir, snapshot, sources)
   return sources
 }
 

@@ -12,7 +12,6 @@ import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './d
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
 import { parseDateRangeFlags } from './cli-date.js'
-import { createTerminalProgressReporter } from './parse-progress.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
@@ -121,31 +120,16 @@ function toJsonPlanSummary(planUsage: PlanUsage): JsonPlanSummary {
   }
 }
 
-async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[], noCache = false): Promise<void> {
+async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const projects = filterProjectsByName(
-    await parseAllSessions(range, provider, { noCache, progress: null }),
-    project,
-    exclude,
-  )
+  const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
   const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary } = buildJsonReport(projects, label, period)
   const planUsage = await getPlanUsageOrNull()
   if (planUsage) {
     report.plan = toJsonPlanSummary(planUsage)
   }
   console.log(JSON.stringify(report, null, 2))
-}
-
-function noCacheRequested(opts: { cache?: boolean }): boolean {
-  return opts.cache === false
-}
-
-function buildParseOptions(noCache: boolean, enableProgress: boolean) {
-  return {
-    noCache,
-    progress: createTerminalProgressReporter(enableProgress),
-  }
 }
 
 const program = new Command()
@@ -304,10 +288,8 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
-    const noCache = noCacheRequested(opts)
     let customRange: DateRange | null = null
     try {
       customRange = parseDateRangeFlags(opts.from, opts.to)
@@ -323,17 +305,17 @@ program
       if (customRange) {
         const label = `${opts.from ?? 'all'} to ${opts.to ?? 'today'}`
         const projects = filterProjectsByName(
-          await parseAllSessions(customRange, opts.provider, { noCache, progress: null }),
+          await parseAllSessions(customRange, opts.provider),
           opts.project,
           opts.exclude,
         )
         console.log(JSON.stringify(buildJsonReport(projects, label, 'custom'), null, 2))
       } else {
-        await runJsonReport(period, opts.provider, opts.project, opts.exclude, noCache)
+        await runJsonReport(period, opts.provider, opts.project, opts.exclude)
       }
       return
     }
-    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, noCache)
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -385,11 +367,8 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .action(async (opts) => {
     await loadPricing()
-    const noCache = noCacheRequested(opts)
-    const parseOptions = buildParseOptions(noCache, opts.format === 'terminal')
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
@@ -424,7 +403,7 @@ program
 
         if (gapStart.getTime() <= yesterdayEnd.getTime()) {
           const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
-          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange, 'all', { noCache, progress: null }), opts.project, opts.exclude)
+          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange, 'all'), opts.project, opts.exclude)
           const gapDays = aggregateProjectsIntoDays(gapProjects)
           c = addNewDays(c, gapDays, yesterdayStr)
           await saveDailyCache(c)
@@ -441,7 +420,7 @@ program
 
       if (isAllProviders) {
         const todayRange: DateRange = { start: todayStart, end: now }
-        const todayProjects = fp(await parseAllSessions(todayRange, 'all', { noCache, progress: null }))
+        const todayProjects = fp(await parseAllSessions(todayRange, 'all'))
         const todayDays = aggregateProjectsIntoDays(todayProjects)
         const rangeStartStr = toDateString(periodInfo.range.start)
         const rangeEndStr = toDateString(periodInfo.range.end)
@@ -452,7 +431,7 @@ program
         scanProjects = todayProjects
         scanRange = todayRange
       } else {
-        const projects = fp(await parseAllSessions(periodInfo.range, pf, { noCache, progress: null }))
+        const projects = fp(await parseAllSessions(periodInfo.range, pf))
         currentData = buildPeriodData(periodInfo.label, projects)
         scanProjects = projects
         scanRange = periodInfo.range
@@ -466,7 +445,7 @@ program
       const providers: ProviderCost[] = []
       if (isAllProviders) {
         const todayRangeForProviders: DateRange = { start: todayStart, end: now }
-        const todayDaysForProviders = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRangeForProviders, 'all', { noCache, progress: null })))
+        const todayDaysForProviders = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRangeForProviders, 'all')))
         const rangeStartStr = toDateString(periodInfo.range.start)
         const allDaysForProviders = [
           ...getDaysInRange(cache, rangeStartStr, yesterdayStr),
@@ -497,7 +476,7 @@ program
       // in the cache, so the filtered view shows zero tokens (heatmap/trend still works on cost).
       const historyStartStr = toDateString(new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY))
       const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
-      const allTodayDaysForHistory = aggregateProjectsIntoDays(fp(await parseAllSessions({ start: todayStart, end: now }, 'all', { noCache, progress: null })))
+      const allTodayDaysForHistory = aggregateProjectsIntoDays(fp(await parseAllSessions({ start: todayStart, end: now }, 'all')))
       const fullHistory = [...allCacheDays, ...allTodayDaysForHistory]
       const dailyHistory = fullHistory.map(d => {
         if (isAllProviders) {
@@ -542,8 +521,8 @@ program
     }
 
     if (opts.format === 'json') {
-      const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf, { noCache, progress: null })))
-      const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range, pf, { noCache, progress: null })))
+      const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf)))
+      const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range, pf)))
       const { code, rate } = getCurrency()
       const payload: {
         currency: string
@@ -563,7 +542,7 @@ program
       return
     }
 
-    const monthProjects = fp(await parseAllSessions(getDateRange('month').range, pf, parseOptions))
+    const monthProjects = fp(await parseAllSessions(getDateRange('month').range, pf))
     console.log(renderStatusBar(monthProjects))
   })
 
@@ -574,15 +553,13 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
-    const noCache = noCacheRequested(opts)
     if (opts.format === 'json') {
-      await runJsonReport('today', opts.provider, opts.project, opts.exclude, noCache)
+      await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
     }
-    await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude, null, noCache)
+    await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
 program
@@ -592,15 +569,13 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInt, 30)
   .action(async (opts) => {
-    const noCache = noCacheRequested(opts)
     if (opts.format === 'json') {
-      await runJsonReport('month', opts.provider, opts.project, opts.exclude, noCache)
+      await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
     }
-    await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude, null, noCache)
+    await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
 program
@@ -611,16 +586,14 @@ program
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .action(async (opts) => {
     await loadPricing()
-    const parseOptions = buildParseOptions(noCacheRequested(opts), true)
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     const periods: PeriodExport[] = [
-      { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range, pf, parseOptions)) },
-      { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range, pf, parseOptions)) },
-      { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range, pf, parseOptions)) },
+      { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range, pf)) },
+      { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range, pf)) },
+      { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range, pf)) },
     ]
 
     if (periods.every(p => p.projects.length === 0)) {
@@ -840,11 +813,10 @@ program
   .description('Find token waste and get exact fixes')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .action(async (opts) => {
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
-    const projects = await parseAllSessions(range, opts.provider, buildParseOptions(noCacheRequested(opts), true))
+    const projects = await parseAllSessions(range, opts.provider)
     await runOptimize(projects, label, range)
   })
 
@@ -853,11 +825,10 @@ program
   .description('Compare two AI models side-by-side')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
-  .option('--no-cache', 'Rebuild the parsed source cache for this run')
   .action(async (opts) => {
     await loadPricing()
     const { range } = getDateRange(opts.period)
-    await renderCompare(range, opts.provider, noCacheRequested(opts))
+    await renderCompare(range, opts.provider)
   })
 
 program.parse()

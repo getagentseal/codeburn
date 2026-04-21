@@ -1,37 +1,18 @@
 # Changelog
 
-## 0.8.4 - 2026-04-20
+## 0.8.5 - 2026-04-21
 
 ### Fixed
-- **Menubar hang on large session histories.** Menubar-json now uses the source cache instead of re-parsing all files on every poll.
+- **Stale Today totals after 0.8.2.** The persistent source cache introduced in 0.8.2 caused Today's cost to under-report and sometimes drop between polls during active Claude Code sessions. The cache keyed entries on `(mtime, size)` fingerprints that diverged from Claude's append-mostly JSONL model, producing empty or partial entries that were served on subsequent polls. Reverted the cache rewrite to the v0.8.1 full-reparse path for Claude sessions. Both the menubar and `codeburn status` now return consistent, monotonically-increasing Today totals.
+- **Menubar and terminal status disagreed on Today.** A turn that straddled midnight (user message in one day, response in the next) was bucketed by user timestamp in one code path and by assistant timestamp in another, producing different Today values in the two surfaces. Both paths now count a turn on the day its first assistant call ran.
+- **Kept from 0.8.2-0.8.4:** subscription plan tracking, pricing accuracy and CSV injection hardening, cursor-agent provider, menubar prefetch and timezone alignment. Only the cache rewrite and its follow-up patches were reverted.
 
-## 0.8.3 - 2026-04-20
+### Removed
+- `--no-cache` flag on `report`, `today`, `month`, `status`, `export`, `optimize`, and `compare`. The flag existed to bypass the persistent source cache which no longer exists. If your scripts pass `--no-cache`, drop it; the parse runs fresh every time now.
 
-### Fixed
-- **Source cache empty-session poisoning.** Cache entries with zero sessions are now treated as cache misses, forcing a fresh re-parse instead of silently dropping the session data.
-- **Date range skip on changed files.** The date range exclusion now runs only after the fingerprint matches, so files that have grown with new data are never incorrectly skipped.
-- **TUI auto-refresh not updating.** The 30-second refresh timer now bypasses the in-memory CachedWindow, which was permanently stale because the date range end is always end-of-day.
-- **Menubar showing stale or decreasing costs.** Fixed cache invalidation so the menubar receives correct, up-to-date cost data.
-- **Swift menubar observation race.** Explicit UI refresh calls after each data fetch prevent missed updates from the one-shot observation callback.
-
-## 0.8.2 - 2026-04-20
-
-### Added
-- **Persistent parse cache for all providers.** Repeated CLI runs now reuse parsed source summaries across fresh processes instead of reparsing raw logs every time. Cache lives at `~/.cache/codeburn/source-cache-v1/` with atomic writes and 0600 file permissions. Credit: @spMohanty (PR #116).
-- **`--no-cache` on parse-backed commands.** `report`, `today`, `month`, `status`, `export`, `optimize`, and `compare` can bypass cached entries for that run and rebuild them from raw logs. Credit: @spMohanty (PR #116).
-- **`Updating cache` stderr progress.** Non-JSON cold or partial cache rebuilds now show progress while CodeBurn refreshes changed sources. Credit: @spMohanty (PR #116).
-- **`codeburn plan` subscription tracking.** Set your plan (`claude-pro`, `claude-max`, `cursor-pro`, or custom) to see a usage progress bar in the dashboard. Includes 7-day trailing median projection and billing-cycle-aware period math. Credit: @tmchow (PR #74).
-
-### Changed
-- **Cursor now uses the shared parse cache.** The provider-specific Cursor cache path is gone; SQLite-backed provider data now flows through the same persistent cache layer as the other providers. Credit: @spMohanty (PR #116).
-
-### Fixed
-- **Model pricing: removed bidirectional fuzzy match.** `canonical.startsWith(key) || key.startsWith(canonical)` could match unrelated models. Now uses one-directional prefix only. Credit: @hobostay (PR #77).
-- **Zero-cost models incorrectly filtered.** `!entry.input_cost_per_token` treated `0` as missing. Now checks `=== undefined` so free-tier models retain their pricing entry. Credit: @hobostay (PR #77).
-- **File descriptor leak in `readSessionLines`.** Generator now calls `stream.destroy()` in a `finally` block so early abandonment does not leak open handles. Credit: @hobostay (PR #77).
-- **CSV injection guard extended.** Tab and carriage return characters at cell start are now escaped alongside `=`, `+`, `-`, `@`. Credit: @hobostay (PR #77).
-- **Crash on empty export periods.** Optional chaining prevents `undefined` access when a period has no projects. Credit: @hobostay (PR #77).
-- **Config read crash on malformed JSON.** Restored catch-all error handling in `readConfig` so a corrupt `config.json` returns defaults instead of crashing.
+### Notes
+- 0.8.2, 0.8.3, and 0.8.4 on npm contain the buggy cache. Upgrade with `npm i -g codeburn@latest` or `npm i -g codeburn@0.8.5`.
+- This release uses a full reparse on every invocation, matching v0.8.1 behavior. On large corpora (5,000+ session files) expect 3 to 10 seconds per invocation. An incremental refresh design that preserves correctness is planned for a follow-up release.
 
 ## 0.8.0 - 2026-04-19
 

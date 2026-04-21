@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { copilot, createCopilotProvider } from '../../src/providers/copilot.js'
-import * as fsUtils from '../../src/fs-utils.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -41,11 +40,9 @@ function assistantMessage(opts: { messageId: string; outputTokens: number; tools
 describe('copilot provider - JSONL parsing', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'copilot-test-'))
-    process.env['CODEBURN_CACHE_DIR'] = join(tmpDir, 'cache')
   })
 
   afterEach(async () => {
-    delete process.env['CODEBURN_CACHE_DIR']
     await rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -221,25 +218,6 @@ describe('copilot provider - discoverSessions', () => {
     const provider = createCopilotProvider(tmpDir)
     const sessions = await provider.discoverSessions()
     expect(sessions).toHaveLength(0)
-  })
-
-  it('reuses cached discovery results when session directories are unchanged', async () => {
-    await createSessionDir('sess-disc-cached', [modelChange('gpt-4.1')], '/home/user/myapp')
-
-    const provider = createCopilotProvider(tmpDir)
-    const readSpy = vi.spyOn(fsUtils, 'readSessionFile')
-
-    const first = await provider.discoverSessions()
-    const firstReadCount = readSpy.mock.calls.length
-    const second = await provider.discoverSessions()
-    const secondReadCount = readSpy.mock.calls.length
-
-    expect(first).toHaveLength(1)
-    expect(second).toEqual(first)
-    expect(firstReadCount).toBeGreaterThan(0)
-    expect(secondReadCount).toBe(firstReadCount)
-
-    readSpy.mockRestore()
   })
 })
 

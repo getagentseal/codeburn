@@ -403,10 +403,6 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
             path: transcriptPath,
             project: projectId,
             provider: 'cursor-agent',
-            fingerprintPath: transcriptPath,
-            cacheStrategy: 'full-reparse',
-            progressLabel: `cursor-agent:${basename(transcript.name)}`,
-            parserVersion: 'cursor-agent:v1',
           })
         }
       }

@@ -34,12 +34,15 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
-        if (!turn.timestamp) continue
-        // Bucket by the session timestamp's local date so the user's "today" and "this month"
-        // match the wall clock on their machine. Session timestamps are stored as UTC ISO
-        // strings; naively slicing `timestamp.slice(0,10)` bucketed them by UTC date, which
-        // showed `Today $0` during the UTC-midnight-to-local-midnight window.
-        const day = localDateString(new Date(turn.timestamp))
+        if (turn.assistantCalls.length === 0) continue
+        // Bucket by the first assistant call's local date -- the moment the cost was
+        // incurred. Bucketing by `turn.timestamp` (the user message time) drops turns
+        // that straddle midnight (user asked at 23:58, response arrived at 00:30) and
+        // disagrees with parseAllSessions' dateRange filter which is also on assistant
+        // time.
+        const bucketTs = turn.assistantCalls[0]!.timestamp
+        if (!bucketTs) continue
+        const day = localDateString(new Date(bucketTs))
         const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
         const turnCalls = turn.assistantCalls.length
         if (day === today) { todayCost += turnCost; todayCalls += turnCalls }

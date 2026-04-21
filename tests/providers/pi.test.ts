@@ -1,24 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { createPiProvider } from '../../src/providers/pi.js'
-import * as fsUtils from '../../src/fs-utils.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
-let cacheDir: string
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'pi-test-'))
-  cacheDir = await mkdtemp(join(tmpdir(), 'pi-cache-'))
-  process.env['CODEBURN_CACHE_DIR'] = cacheDir
 })
 
 afterEach(async () => {
-  delete process.env['CODEBURN_CACHE_DIR']
-  await rm(cacheDir, { recursive: true, force: true })
   await rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -151,29 +145,6 @@ describe('pi provider - session discovery', () => {
     const provider = createPiProvider(tmpDir)
     const sessions = await provider.discoverSessions()
     expect(sessions).toEqual([])
-  })
-
-  it('reuses cached discovery results when project directories are unchanged', async () => {
-    const projectDir = join(tmpDir, '--Users-test-myproject--')
-    await writeSession(projectDir, 'cached.jsonl', [
-      sessionMeta({ cwd: '/Users/test/myproject' }),
-      assistantMessage({}),
-    ])
-
-    const provider = createPiProvider(tmpDir)
-    const readSpy = vi.spyOn(fsUtils, 'readSessionFile')
-
-    const first = await provider.discoverSessions()
-    const firstReadCount = readSpy.mock.calls.length
-    const second = await provider.discoverSessions()
-    const secondReadCount = readSpy.mock.calls.length
-
-    expect(first).toHaveLength(1)
-    expect(second).toEqual(first)
-    expect(firstReadCount).toBeGreaterThan(0)
-    expect(secondReadCount).toBe(firstReadCount)
-
-    readSpy.mockRestore()
   })
 })
 

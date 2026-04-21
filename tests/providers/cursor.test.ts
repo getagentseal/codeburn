@@ -1,15 +1,6 @@
-import { beforeEach, afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
-import { join } from 'path'
-import { tmpdir } from 'os'
-
+import { describe, it, expect, beforeEach } from 'vitest'
 import { getAllProviders } from '../../src/providers/index.js'
-import { createCursorProvider } from '../../src/providers/cursor.js'
-import { createOpenCodeProvider } from '../../src/providers/opencode.js'
 import type { Provider } from '../../src/providers/types.js'
-import { isSqliteAvailable } from '../../src/sqlite.js'
-
-const skipUnlessSqlite = isSqliteAvailable() ? describe : describe.skip
 
 describe('cursor provider', () => {
   let cursorProvider: Provider
@@ -77,83 +68,10 @@ describe('cursor sqlite adapter', () => {
   })
 })
 
-skipUnlessSqlite('shared cache metadata', () => {
-  let tmpDir: string
-
-  beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), 'provider-cache-meta-'))
-  })
-
-  afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true })
-  })
-
-  async function createOpenCodeTestDb(dir: string): Promise<string> {
-    const ocDir = join(dir, 'opencode')
-    const dbPath = join(ocDir, 'opencode.db')
-    const { DatabaseSync: Database } = require('node:sqlite')
-
-    await mkdir(ocDir, { recursive: true })
-    const db = new Database(dbPath)
-    db.exec(`
-      CREATE TABLE session (
-        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
-        slug TEXT NOT NULL, directory TEXT NOT NULL, title TEXT NOT NULL,
-        version TEXT NOT NULL, time_created INTEGER, time_updated INTEGER,
-        time_archived INTEGER
-      )
-    `)
-    db.exec(`
-      CREATE TABLE message (
-        id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
-        time_created INTEGER, time_updated INTEGER, data TEXT NOT NULL
-      )
-    `)
-    db.exec(`
-      CREATE TABLE part (
-        id TEXT PRIMARY KEY, message_id TEXT NOT NULL,
-        session_id TEXT NOT NULL, time_created INTEGER,
-        time_updated INTEGER, data TEXT NOT NULL
-      )
-    `)
-    db.prepare(`
-      INSERT INTO session (id, project_id, slug, directory, title, version, time_created)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run('sess-1', 'proj-1', 'slug-1', '/home/user/myproject', 'My Project', '1.0', 1700000000000)
-    db.close()
-    return dbPath
-  }
-
-  it('cursor exposes the sqlite database as its fingerprint path', async () => {
-    const dbPath = join(tmpDir, 'state.vscdb')
-    await writeFile(dbPath, '')
-
-    const cursor = createCursorProvider(dbPath)
-    const sources = await cursor.discoverSessions()
-
-    expect(sources).toHaveLength(1)
-    for (const source of sources) {
-      expect(source.cacheStrategy).toBe('full-reparse')
-      expect(source.fingerprintPath).toBe(source.path)
-      expect(source.progressLabel).toBe('Cursor state.vscdb')
-      expect(source.parserVersion).toBe('cursor:v1')
-    }
-  })
-
-  it('opencode sources fingerprint the backing database, not the logical dbPath:sessionId key', async () => {
-    const dbPath = await createOpenCodeTestDb(tmpDir)
-
-    const opencode = createOpenCodeProvider(tmpDir)
-    const sources = await opencode.discoverSessions()
-
-    expect(sources).toHaveLength(1)
-    for (const source of sources) {
-      expect(source.cacheStrategy).toBe('full-reparse')
-      expect(source.fingerprintPath).toBeTruthy()
-      expect(source.fingerprintPath).toBe(dbPath)
-      expect(source.fingerprintPath).not.toBe(source.path)
-      expect(source.progressLabel).toBe('opencode:sess-1')
-      expect(source.parserVersion).toBe('opencode:v1')
-    }
+describe('cursor cache', () => {
+  it('returns null when no cache exists', async () => {
+    const { readCachedResults } = await import('../../src/cursor-cache.js')
+    const result = await readCachedResults('/nonexistent/path.db')
+    expect(result).toBeNull()
   })
 })

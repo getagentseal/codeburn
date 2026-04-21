@@ -271,10 +271,6 @@ async function discoverFromDb(dbPath: string): Promise<SessionSource[]> {
       path: `${dbPath}:${row.id}`,
       project: row.directory ? sanitize(row.directory) : sanitize(row.title),
       provider: 'opencode',
-      fingerprintPath: dbPath,
-      cacheStrategy: 'full-reparse',
-      progressLabel: `opencode:${row.id}`,
-      parserVersion: 'opencode:v1',
     }))
   } catch {
     return []

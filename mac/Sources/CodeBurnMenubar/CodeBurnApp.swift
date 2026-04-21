@@ -72,12 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func startRefreshLoop() {
         refreshTask = Task { [weak self] in
             guard let s = self else { return }
-            // First cycle: fetch current view, then prefetch all periods in background
+            // First cycle: fetch today so the status icon has a number within seconds of launch.
             await s.store.refreshQuietly(period: .today)
             s.refreshStatusButton()
             await s.store.refresh(includeOptimize: true)
             s.refreshStatusButton()
-            await s.store.prefetchAll()
 
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
@@ -87,6 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 await s.store.refresh(includeOptimize: true)
                 s.refreshStatusButton()
             }
+        }
+
+        // Prefetch the remaining periods in a detached task. This used to be awaited inside the
+        // refresh loop, but on large corpora the All Time / Month period can take 60+ seconds to
+        // parse and blocked Today's refresh for that whole window, so the status label drifted
+        // out of sync with the CLI until prefetchAll finally returned.
+        Task { @MainActor [weak self] in
+            guard let s = self else { return }
+            await s.store.prefetchAll()
         }
     }
 

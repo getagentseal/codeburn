@@ -8,7 +8,6 @@ import {
   STREAM_THRESHOLD_BYTES,
   readSessionFile,
   readSessionLines,
-  readSessionLinesFromOffset,
 } from '../src/fs-utils.js'
 
 describe('readSessionFile', () => {
@@ -95,35 +94,5 @@ describe('readSessionLines', () => {
     const gen = readSessionLines(p)
     await gen.next()
     await gen.return(undefined)
-  })
-})
-
-describe('readSessionLinesFromOffset', () => {
-  const tmpDirs: string[] = []
-
-  afterEach(async () => {
-    while (tmpDirs.length > 0) {
-      const d = tmpDirs.pop()
-      if (d) await rm(d, { recursive: true, force: true })
-    }
-  })
-
-  async function tmpPath(content: string): Promise<string> {
-    const base = await mkdtemp(join(tmpdir(), 'codeburn-fs-offset-'))
-    tmpDirs.push(base)
-    const p = join(base, 'offset.txt')
-    await writeFile(p, content, 'utf-8')
-    return p
-  }
-
-  it('starts at the requested byte offset', async () => {
-    const p = await tmpPath('alpha\nbeta\ngamma\n')
-    const lines: string[] = []
-
-    for await (const line of readSessionLinesFromOffset(p, Buffer.byteLength('alpha\n', 'utf-8'))) {
-      lines.push(line)
-    }
-
-    expect(lines).toEqual(['beta', 'gamma'])
   })
 })
