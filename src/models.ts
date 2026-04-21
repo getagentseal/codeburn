@@ -49,6 +49,8 @@ const FALLBACK_PRICING: Record<string, ModelCosts> = {
   'gpt-4.1-nano': { inputCostPerToken: 0.1e-6, outputCostPerToken: 0.4e-6, cacheWriteCostPerToken: 0.1e-6, cacheReadCostPerToken: 0.025e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
   'o3': { inputCostPerToken: 10e-6, outputCostPerToken: 40e-6, cacheWriteCostPerToken: 10e-6, cacheReadCostPerToken: 2.5e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
   'o4-mini': { inputCostPerToken: 1.1e-6, outputCostPerToken: 4.4e-6, cacheWriteCostPerToken: 1.1e-6, cacheReadCostPerToken: 0.275e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
+  'MiniMax-M2.7-highspeed': { inputCostPerToken: 0.6e-6, outputCostPerToken: 2.4e-6, cacheWriteCostPerToken: 0.375e-6, cacheReadCostPerToken: 0.06e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
+  'MiniMax-M2.7': { inputCostPerToken: 0.3e-6, outputCostPerToken: 1.2e-6, cacheWriteCostPerToken: 0.375e-6, cacheReadCostPerToken: 0.06e-6, webSearchCostPerRequest: WEB_SEARCH_COST, fastMultiplier: 1 },
 }
 
 let pricingCache: Map<string, ModelCosts> | null = null
@@ -201,6 +203,8 @@ export function getShortModelName(model: string): string {
     'gemini-2.5-pro': 'Gemini 2.5 Pro',
     'o4-mini': 'o4-mini',
     'o3': 'o3',
+    'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
+    'MiniMax-M2.7': 'MiniMax M2.7',
   }
   for (const [key, name] of Object.entries(shortNames)) {
     if (canonical.startsWith(key)) return name
