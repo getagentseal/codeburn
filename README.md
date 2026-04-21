@@ -17,7 +17,7 @@
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, **Codebuff**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -92,6 +92,7 @@ codeburn report --provider cursor    # Cursor only
 codeburn report --provider cursor-agent  # cursor-agent CLI only
 codeburn report --provider opencode  # OpenCode only
 codeburn report --provider pi        # Pi only
+codeburn report --provider codebuff  # Codebuff only
 codeburn report --provider copilot   # GitHub Copilot only
 codeburn today --provider codex      # Codex today
 codeburn export --provider claude    # export Claude data only
@@ -136,6 +137,7 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
 | OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
 | Pi | `~/.pi/agent/sessions/` | Supported |
+| Codebuff | `~/.config/manicode/` | Supported (credits-based cost) |
 | GitHub Copilot | `~/.copilot/session-state/` | Supported (output tokens only) |
 | Amp | -- | Planned (provider plugin system) |
 
@@ -308,7 +310,9 @@ All metrics are computed from your local session data. No LLM calls, fully deter
 
 **Pi** stores sessions as JSONL at `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl`. Each assistant message carries token usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` content blocks. CodeBurn extracts token counts, normalizes Pi's lowercase tool names to the standard set (`bash` -> `Bash`, `dispatch_agent` -> `Agent`), and pulls bash commands from `toolCall.arguments.command` for the shell breakdown.
 
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi), filters by date range per entry, and classifies each turn.
+**Codebuff** (formerly Manicode) stores per-chat history as JSON at `~/.config/manicode/projects/<project>/chats/<chatId>/chat-messages.json`. Codebuff bills in credits rather than tokens, so CodeBurn records each completed assistant message (via `msg.credits`) and approximates cost at the public pay-as-you-go rate ($0.01 / credit). When Codebuff routes a call through an upstream provider and the stashed RunState records token-level usage (`message.metadata.runState.sessionState.mainAgentState.messageHistory[*].providerOptions`), the real tokens and LiteLLM-calculated cost take precedence. Codebuff-native tool names (`read_files`, `str_replace`, `run_terminal_command`, `spawn_agents`, etc.) normalize to the canonical set (`Read`, `Edit`, `Bash`, `Agent`). The `manicode-dev` and `manicode-staging` channels are walked automatically when present. Honors `CODEBUFF_DATA_DIR` for a custom root.
+
+CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi, by chat folder + message ID for Codebuff), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
@@ -316,6 +320,7 @@ CodeBurn reads these files, deduplicates messages (by API message ID for Claude,
 |----------|-------------|
 | `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
+| `CODEBUFF_DATA_DIR` | Override Codebuff data directory (default: `~/.config/manicode`) |
 
 ## Project structure
 
