@@ -126,6 +126,35 @@ describe('omp provider - session discovery', () => {
     const sessions = await provider.discoverSessions()
     expect(sessions).toEqual([])
   })
+  it('discovers sub-agent sessions nested inside session subdirectory', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const parentFile = '2026-04-21T10-00-00-000Z_abc123'
+
+    // Main session at project-dir level
+    await writeSession(projectDir, `${parentFile}.jsonl`, [
+      sessionMeta({ id: 'main-session', cwd: '/Users/test/myproject' }),
+      assistantMessage({}),
+    ])
+
+    // Sub-agent sessions inside <session-id>/ subdirectory
+    const subDir = join(projectDir, parentFile)
+    await writeSession(subDir, '0-SubAgent.jsonl', [
+      sessionMeta({ id: 'sub-agent-0', cwd: '/Users/test/myproject' }),
+      assistantMessage({ input: 500, output: 100 }),
+    ])
+    await writeSession(subDir, '1-SubAgent.jsonl', [
+      sessionMeta({ id: 'sub-agent-1', cwd: '/Users/test/myproject' }),
+      assistantMessage({ input: 600, output: 120 }),
+    ])
+
+    const provider = createOmpProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(3)
+    expect(sessions.every(s => s.provider === 'omp')).toBe(true)
+    expect(sessions.every(s => s.project === 'myproject')).toBe(true)
+  })
+
 })
 
 describe('omp provider - JSONL parsing', () => {
@@ -164,7 +193,7 @@ describe('omp provider - JSONL parsing', () => {
     expect(call.sessionId).toBe('sess-omp-1')
     expect(call.userMessage).toBe('write a test')
     expect(call.timestamp).toBe('2026-04-14T10:00:30.000Z')
-    expect(call.deduplicationKey).toContain('pi:')
+    expect(call.deduplicationKey).toContain('omp:')
     expect(call.deduplicationKey).toContain('resp-omp-1')
   })
 
@@ -183,7 +212,7 @@ describe('omp provider - JSONL parsing', () => {
     }
 
     // cost must be calculated by codeburn, not taken from usage.cost (which is zeroed in fixture)
-    expect(calls[0]!.costUSD).toBeGreaterThanOrEqual(0)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
   it('collects tool names from toolCall content items', async () => {

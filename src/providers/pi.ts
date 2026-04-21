@@ -88,6 +88,23 @@ async function collectDiscoverySnapshot(sessionsDir: string): Promise<DiscoveryS
     const dirStat = await stat(dirPath).catch(() => null)
     if (!dirStat?.isDirectory()) continue
     snapshot.push({ path: dirPath, mtimeMs: dirStat.mtimeMs })
+
+    // Sub-agent sessions land in <project-dir>/<session-id>/ subdirectories.
+    // Their mtimes must be tracked separately — adding files inside a subdir
+    // does not bump the parent project dir's mtime.
+    let subEntries: string[]
+    try {
+      subEntries = await readdir(dirPath)
+    } catch {
+      continue
+    }
+    for (const subName of subEntries) {
+      const subPath = join(dirPath, subName)
+      const subStat = await stat(subPath).catch(() => null)
+      if (subStat?.isDirectory()) {
+        snapshot.push({ path: subPath, mtimeMs: subStat.mtimeMs })
+      }
+    }
   }
 
   return snapshot
@@ -112,37 +129,56 @@ async function discoverSessionsInDir(sessionsDir: string, providerName: string):
     const dirStat = await stat(dirPath).catch(() => null)
     if (!dirStat?.isDirectory()) continue
 
-    let files: string[]
-    try {
-      files = await readdir(dirPath)
-    } catch {
-      continue
-    }
-
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      const filePath = join(dirPath, file)
-      const fileStat = await stat(filePath).catch(() => null)
-      if (!fileStat?.isFile()) continue
-
-      const first = await readFirstEntry(filePath)
-      if (!first || first.type !== 'session') continue
-
-      const cwd = first.cwd ?? dirName
-      sources.push({
-        path: filePath,
-        project: basename(cwd),
-        provider: providerName,
-        fingerprintPath: filePath,
-        cacheStrategy: 'append-jsonl',
-        progressLabel: basename(filePath),
-        parserVersion: `${providerName}:v1`,
-      })
-    }
+    await collectJsonlFromDir(dirPath, dirName, providerName, sources)
   }
 
   await saveDiscoveryCache(providerName, sessionsDir, snapshot, sources)
   return sources
+}
+
+// Collects session sources from dirPath and one level of subdirectories.
+// Sub-agent sessions land in <project-dir>/<parent-session-id>/<agent-name>.jsonl,
+// so we must recurse one level deeper than the project directory.
+async function collectJsonlFromDir(
+  dirPath: string,
+  projectDirName: string,
+  providerName: string,
+  sources: SessionSource[],
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(dirPath)
+  } catch {
+    return
+  }
+
+  for (const entry of entries) {
+    const entryPath = join(dirPath, entry)
+    const entryStat = await stat(entryPath).catch(() => null)
+    if (!entryStat) continue
+
+    if (entryStat.isDirectory()) {
+      // Sub-agent session dir: recurse one level, but don't go deeper
+      await collectJsonlFromDir(entryPath, projectDirName, providerName, sources)
+      continue
+    }
+
+    if (!entryStat.isFile() || !entry.endsWith('.jsonl')) continue
+
+    const first = await readFirstEntry(entryPath)
+    if (!first || first.type !== 'session') continue
+
+    const cwd = first.cwd ?? projectDirName
+    sources.push({
+      path: entryPath,
+      project: basename(cwd),
+      provider: providerName,
+      fingerprintPath: entryPath,
+      cacheStrategy: 'append-jsonl',
+      progressLabel: basename(entryPath),
+      parserVersion: `${providerName}:v1`,
+    })
+  }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -188,7 +224,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         const model = msg.model ?? 'gpt-5'
         const responseId = msg.responseId ?? ''
-        const dedupKey = `pi:${source.path}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
+        const dedupKey = `${source.provider}:${source.path}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
 
         if (seenKeys.has(dedupKey)) continue
         seenKeys.add(dedupKey)
