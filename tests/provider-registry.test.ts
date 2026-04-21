@@ -3,7 +3,25 @@ import { providers, getAllProviders } from '../src/providers/index.js'
 
 describe('provider registry', () => {
   it('has core providers registered synchronously', () => {
-    expect(providers.map(p => p.name)).toEqual(['claude', 'codex', 'copilot', 'pi'])
+    expect(providers.map(p => p.name)).toEqual(['claude', 'codex', 'codebuff', 'copilot', 'pi'])
+  })
+
+  it('codebuff tool display names normalize codebuff-native names to canonical set', () => {
+    const codebuff = providers.find(p => p.name === 'codebuff')!
+    expect(codebuff.toolDisplayName('read_files')).toBe('Read')
+    expect(codebuff.toolDisplayName('code_search')).toBe('Grep')
+    expect(codebuff.toolDisplayName('str_replace')).toBe('Edit')
+    expect(codebuff.toolDisplayName('run_terminal_command')).toBe('Bash')
+    expect(codebuff.toolDisplayName('spawn_agents')).toBe('Agent')
+    expect(codebuff.toolDisplayName('write_todos')).toBe('TodoWrite')
+    expect(codebuff.toolDisplayName('unknown_tool')).toBe('unknown_tool')
+  })
+
+  it('codebuff model display names cover known agent tiers', () => {
+    const codebuff = providers.find(p => p.name === 'codebuff')!
+    expect(codebuff.modelDisplayName('codebuff')).toBe('Codebuff')
+    expect(codebuff.modelDisplayName('codebuff-base2')).toBe('Codebuff Base 2')
+    expect(codebuff.modelDisplayName('some-future-model')).toBe('some-future-model')
   })
 
   it('includes sqlite providers after async load', async () => {
