@@ -158,6 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             attributes: [.font: font, .foregroundColor: color]
         ))
         button.attributedTitle = composed
+        // Force immediate redraw. NSStatusItem sometimes defers the status bar paint for an
+        // accessory app that is not foreground, so the label visually freezes until the user
+        // opens the popover (which triggers NSApp.activate + a forced redraw cycle).
+        button.needsDisplay = true
+        button.display()
     }
 
     // MARK: - Popover

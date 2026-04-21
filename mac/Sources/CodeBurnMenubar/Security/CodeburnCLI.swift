@@ -41,6 +41,11 @@ enum CodeburnCLI {
         // `env --` treats everything following as argv, not VAR=val pairs -- guards against an
         // argument accidentally resembling an env assignment.
         process.arguments = ["--"] + baseArgv() + subcommand
+        // The menubar runs as an accessory app with no foreground window, and macOS
+        // background-throttles accessory apps and their children. Without this lift the
+        // codeburn subprocess parses 5-10x slower than the same command run from a
+        // user-interactive terminal, which starves the 15s refresh cadence on large corpora.
+        process.qualityOfService = .userInitiated
         return process
     }
 
