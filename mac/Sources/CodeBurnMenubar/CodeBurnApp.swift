@@ -38,9 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var backgroundActivity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Menubar accessory -- no Dock icon, no app switcher entry.
         NSApp.setActivationPolicy(.accessory)
 
+        ProcessInfo.processInfo.automaticTerminationSupportEnabled = false
+        ProcessInfo.processInfo.disableSuddenTermination()
         backgroundActivity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .automaticTerminationDisabled, .suddenTerminationDisabled],
             reason: "CodeBurn menubar polls AI coding cost every 15 seconds while idle in the background."

@@ -10,10 +10,6 @@ private let betaHeader = "oauth-2025-04-20"
 private let userAgent = "claude-code/2.1.0"
 private let requestTimeout: TimeInterval = 30
 
-/// Claude Code writes Keychain items with `kSecAttrAccount = "default"`. Filtering on this
-/// prevents a planted Keychain item from another app (or a stale install with a mangled
-/// account) from being accepted as our source of OAuth credentials.
-private let expectedKeychainAccounts: Set<String> = ["default"]
 private let maxCredentialBytes = 64 * 1024
 
 enum SubscriptionError: Error, LocalizedError {
@@ -72,55 +68,21 @@ struct SubscriptionClient {
         return try SafeFile.read(from: url.path, maxBytes: maxCredentialBytes)
     }
 
-    /// Two-phase keychain enumeration: (1) list persistent refs + accounts, (2) fetch each
-    /// item's data by ref. The combination kSecMatchLimitAll + kSecReturnData errors with -50,
-    /// so the data fetch has to be per-item.
     private static func readKeychainCredentials() throws -> StoredCredentials? {
-        let listQuery: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true,
-            kSecReturnPersistentRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true,
         ]
-        var listResult: CFTypeRef?
-        let listStatus = SecItemCopyMatching(listQuery as CFDictionary, &listResult)
-        if listStatus == errSecItemNotFound {
-            NSLog("CodeBurn: keychain query found no items for service \(keychainService)")
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else {
+            NSLog("CodeBurn: keychain query failed status=\(status)")
             return nil
         }
-        guard listStatus == errSecSuccess, let rows = listResult as? [[String: Any]] else {
-            NSLog("CodeBurn: keychain enumerate failed status=\(listStatus)")
-            return nil
-        }
-
-        var best: StoredCredentials? = nil
-        for row in rows {
-            guard let ref = row[kSecValuePersistentRef as String] as? Data else { continue }
-            let account = (row[kSecAttrAccount as String] as? String) ?? ""
-            // Ignore rows whose account doesn't match Claude Code's known writer. Stops another
-            // app's item (or a legacy install with an unexpected account) from being accepted.
-            guard expectedKeychainAccounts.contains(account) else { continue }
-            let dataQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecValuePersistentRef as String: ref,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-                kSecReturnData as String: true,
-            ]
-            var dataResult: CFTypeRef?
-            let dataStatus = SecItemCopyMatching(dataQuery as CFDictionary, &dataResult)
-            guard dataStatus == errSecSuccess, let data = dataResult as? Data else { continue }
-            let sanitized = sanitizeKeychainData(data)
-            guard let parsed = try? parseCredentials(data: sanitized) else { continue }
-            if let current = best {
-                if (parsed.expiresAt ?? .distantPast) > (current.expiresAt ?? .distantPast) {
-                    best = parsed
-                }
-            } else {
-                best = parsed
-            }
-        }
-        return best
+        return try parseCredentials(data: sanitizeKeychainData(data))
     }
 
     /// Claude Code's keychain writer line-wraps long string values (newline + leading spaces)
