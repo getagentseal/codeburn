@@ -1,6 +1,6 @@
 import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
-import { readSessionFile } from './fs-utils.js'
+import { readSessionLines } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import type { ParsedProviderCall } from './providers/types.js'
@@ -275,15 +275,16 @@ async function parseSessionFile(
       if (s.mtimeMs < dateRange.start.getTime()) return null
     } catch { /* fall through to normal read; missing stat shouldn't break parsing */ }
   }
-  const content = await readSessionFile(filePath)
-  if (content === null) return null
-  const lines = content.split('\n').filter(l => l.trim())
   const entries: JournalEntry[] = []
+  let hasLines = false
 
-  for (const line of lines) {
+  for await (const line of readSessionLines(filePath)) {
+    hasLines = true
     const entry = parseJsonlLine(line)
     if (entry) entries.push(entry)
   }
+
+  if (!hasLines) return null
 
   if (entries.length === 0) return null
 

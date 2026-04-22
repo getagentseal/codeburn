@@ -4,7 +4,7 @@ import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
-import { readSessionFile, readSessionFileSync } from './fs-utils.js'
+import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
@@ -224,9 +224,6 @@ export async function scanJsonlFile(
   dateRange: DateRange | undefined,
   recentCutoffMs = Date.now() - RECENT_WINDOW_MS,
 ): Promise<ScanFileResult> {
-  const content = await readSessionFile(filePath)
-  if (content === null) return { calls: [], cwds: [], apiCalls: [], userMessages: [] }
-
   const calls: ToolCall[] = []
   const cwds: string[] = []
   const apiCalls: ApiCallMeta[] = []
@@ -234,7 +231,7 @@ export async function scanJsonlFile(
   const sessionId = basename(filePath, '.jsonl')
   let lastVersion = ''
 
-  for (const line of content.split('\n')) {
+  for await (const line of readSessionLines(filePath)) {
     if (!line.trim()) continue
     let entry: Record<string, unknown>
     try { entry = JSON.parse(line) } catch { continue }

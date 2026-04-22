@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import * as fsUtils from '../src/fs-utils.js'
 
 vi.mock('os', async () => {
   const actual = await vi.importActual<typeof import('os')>('os')
@@ -311,6 +312,40 @@ describe('scanJsonlFile', () => {
     writeFile(filePath, 'this is not json\n{broken\n{"type":"assistant","message":{"content":[]}}\n')
     const result = await scanJsonlFile(filePath, 'p1', undefined)
     expect(result.calls).toEqual([])
+  })
+
+  it('uses readSessionLines (streaming) rather than readSessionFile (full-string load)', async () => {
+    const readSessionLinesSpy = vi.spyOn(fsUtils, 'readSessionLines')
+    const readSessionFileSpy = vi.spyOn(fsUtils, 'readSessionFile')
+    const root = makeFixtureRoot()
+    const filePath = join(root, 'session.jsonl')
+    const now = new Date().toISOString()
+    writeFile(filePath, JSON.stringify({
+      type: 'assistant', timestamp: now,
+      message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] },
+    }))
+    await scanJsonlFile(filePath, 'p1', undefined)
+    expect(readSessionLinesSpy).toHaveBeenCalledWith(filePath)
+    expect(readSessionFileSpy).not.toHaveBeenCalled()
+    readSessionLinesSpy.mockRestore()
+    readSessionFileSpy.mockRestore()
+  })
+
+  it('processes all entries in a large multi-line file without truncation', async () => {
+    const root = makeFixtureRoot()
+    const filePath = join(root, 'session.jsonl')
+    const now = new Date().toISOString()
+    const ENTRY_COUNT = 500
+    const lines = Array.from({ length: ENTRY_COUNT }, (_, i) =>
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: now,
+        message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: `/file-${i}.ts` } }] },
+      }),
+    )
+    writeFile(filePath, lines.join('\n'))
+    const result = await scanJsonlFile(filePath, 'p1', undefined)
+    expect(result.calls).toHaveLength(ENTRY_COUNT)
   })
 
   it('respects date-range filter for assistant entries', async () => {
