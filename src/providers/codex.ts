@@ -183,6 +183,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
+        if (entry.type === 'event_msg' && entry.payload?.type === 'patch_apply_end') {
+          pendingTools.push('Edit')
+          continue
+        }
+
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'user') {
           const texts = (entry.payload.content ?? [])
             .filter(c => c.type === 'input_text')
