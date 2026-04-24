@@ -34,6 +34,27 @@ type BubbleRow = {
   code_blocks: string | null
 }
 
+type AgentKvRow = {
+  key: string
+  role: string | null
+  content: string | null
+  request_id: string | null
+  content_length: number
+}
+
+type AgentKvContent = {
+  type?: string
+  text?: string
+  providerOptions?: {
+    cursor?: {
+      modelName?: string
+      requestId?: string
+    }
+  }
+}
+
+const CHARS_PER_TOKEN = 4
+
 function getCursorDbPath(): string {
   if (process.platform === 'darwin') {
     return join(homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb')
@@ -85,6 +106,19 @@ const BUBBLE_QUERY_BASE = `
   FROM cursorDiskKV
   WHERE key LIKE 'bubbleId:%'
     AND json_extract(value, '$.tokenCount.inputTokens') > 0
+`
+
+const AGENTKV_QUERY = `
+  SELECT
+    key,
+    json_extract(value, '$.role') as role,
+    json_extract(value, '$.content') as content,
+    json_extract(value, '$.providerOptions.cursor.requestId') as request_id,
+    length(value) as content_length
+  FROM cursorDiskKV
+  WHERE key LIKE 'agentKv:blob:%'
+    AND hex(substr(value, 1, 1)) = '7B'
+  ORDER BY ROWID ASC
 `
 
 const USER_MESSAGES_QUERY = `
@@ -207,6 +241,116 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
   return { calls: results }
 }
 
+function extractModelFromContent(content: AgentKvContent[]): string | null {
+  for (const c of content) {
+    if (c.providerOptions?.cursor?.modelName) {
+      return c.providerOptions.cursor.modelName
+    }
+  }
+  return null
+}
+
+function extractTextLength(content: AgentKvContent[]): number {
+  let total = 0
+  for (const c of content) {
+    if (c.text) total += c.text.length
+  }
+  return total
+}
+
+function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
+  const results: ParsedProviderCall[] = []
+
+  let rows: AgentKvRow[]
+  try {
+    rows = db.query<AgentKvRow>(AGENTKV_QUERY)
+  } catch {
+    return { calls: results }
+  }
+
+  const sessions: Map<string, { inputChars: number; outputChars: number; model: string | null; userText: string }> = new Map()
+  let currentRequestId = 'unknown'
+  let turnIndex = 0
+
+  for (const row of rows) {
+    if (!row.role || !row.content) continue
+
+    let content: AgentKvContent[]
+    try {
+      content = JSON.parse(row.content)
+      if (!Array.isArray(content)) continue
+    } catch {
+      continue
+    }
+
+    const requestId = row.request_id ?? currentRequestId
+    if (requestId !== currentRequestId) {
+      currentRequestId = requestId
+      turnIndex = 0
+    }
+
+    const textLength = extractTextLength(content)
+    const model = extractModelFromContent(content)
+
+    if (row.role === 'user') {
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      existing.inputChars += textLength
+      if (!existing.userText && content[0]?.text) {
+        const text = content[0].text
+        const queryMatch = text.match(/<user_query>([\s\S]*?)<\/user_query>/)
+        existing.userText = queryMatch ? queryMatch[1].trim().slice(0, 500) : text.slice(0, 500)
+      }
+      sessions.set(requestId, existing)
+    } else if (row.role === 'assistant') {
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      existing.outputChars += textLength
+      if (model) existing.model = model
+      sessions.set(requestId, existing)
+    } else if (row.role === 'tool' || row.role === 'system') {
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      existing.inputChars += textLength
+      sessions.set(requestId, existing)
+    }
+  }
+
+  for (const [requestId, session] of sessions) {
+    if (session.inputChars === 0 && session.outputChars === 0) continue
+
+    const inputTokens = Math.ceil(session.inputChars / CHARS_PER_TOKEN)
+    const outputTokens = Math.ceil(session.outputChars / CHARS_PER_TOKEN)
+    const dedupKey = `cursor:agentKv:${requestId}`
+
+    if (seenKeys.has(dedupKey)) continue
+    seenKeys.add(dedupKey)
+
+    const pricingModel = resolveModel(session.model)
+    const displayModel = modelForDisplay(session.model)
+    const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
+
+    results.push({
+      provider: 'cursor',
+      model: displayModel,
+      inputTokens,
+      outputTokens,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: 0,
+      costUSD,
+      tools: [],
+      bashCommands: [],
+      timestamp: new Date().toISOString(),
+      speed: 'standard',
+      deduplicationKey: dedupKey,
+      userMessage: session.userText,
+      sessionId: requestId,
+    })
+  }
+
+  return { calls: results }
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -239,7 +383,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           return
         }
 
-        const { calls } = parseBubbles(db, seenKeys)
+        let { calls } = parseBubbles(db, seenKeys)
+
+        if (calls.length === 0) {
+          const agentKvResult = parseAgentKv(db, seenKeys)
+          calls = agentKvResult.calls
+        }
 
         await writeCachedResults(source.path, calls)
 
