@@ -5,6 +5,7 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { getCurrency } from './currency.js'
 import { loadBillingConfig, type BillingConfig } from './billing.js'
 import { localDateString } from './cli-date.js'
+import { EXPORT_OUTPUT_SCHEMA, MACHINE_OUTPUT_SCHEMA_VERSION } from './output-schema.js'
 import {
   addBillingAggregate,
   aggregateCallsBilling,
@@ -480,7 +481,8 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
   const billingMeta = buildBillingMetadata(billingConfig)
 
   const data = {
-    schema: 'codeburn.export.v2',
+    schema: EXPORT_OUTPUT_SCHEMA,
+    schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
     generated: new Date().toISOString(),
     currency: { code, rate, symbol },
     billing: billingMeta,

@@ -16,7 +16,7 @@ A usage analytics tool for [Augment Code (Auggie)](https://www.augmentcode.com/)
 ## Project status
 
 - **Version:** 2.0.1 (Auggie-only, CLI-only fork)
-- **Tests:** Vitest suite, build, typecheck, and `./run.sh --check` used for readiness verification
+- **Tests:** Vitest suite, build, typecheck, `./run.sh --check`, and `git diff --check` used for readiness verification
 - **What's new in 2.0.1:** Removed macOS menubar app (CLI-only fork), added GPT-5.2 pricing. See [CHANGELOG.md](./CHANGELOG.md) for details.
 
 ## Prerequisites
@@ -103,7 +103,7 @@ Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q`
 | **Shell Commands** | `launch-process` command lines pulled from every tool-use node |
 | **MCP Servers** | MCP tool calls routed by `tool_use.mcp_server_name` when present, suffix-parsed as fallback for older sessions |
 
-The `--format json` flag on `report`, `today`, `month`, and `status`, plus `export --format json`, emits machine-readable data. Treat JSON and CSV as **semi-stable customer-facing APIs**: fields may be added, but billing fields are labeled to distinguish authoritative local credits from estimates. Current report/status payloads include a top-level `billing` block and per-row fields such as `creditsAugment`, `creditsSynthesizedCalls`, `subAgentCreditsUsedUnconfirmed`, `pricingStatus`, `warnings`, `costEstimateUsd`, `baseCostUsd`, `surchargeUsd`, and `billedAmountUsd`. Export JSON currently includes `schema: "codeburn.export.v2"`; report/status do not yet emit a separate `schemaVersion` field.
+The `--format json` flag on `report`, `today`, `month`, and `status`, plus `export --format json`, emits machine-readable data. Treat JSON and CSV as **semi-stable customer-facing APIs**: fields may be added, but billing fields are labeled to distinguish authoritative local credits from estimates. Current report/status/export payloads include top-level `schema` and `schemaVersion` fields (`codeburn.report.v2`, `codeburn.status.v2`, `codeburn.export.v2`; `schemaVersion: 2`), a top-level `billing` block, and per-row fields such as `creditsAugment`, `creditsSynthesizedCalls`, `subAgentCreditsUsedUnconfirmed`, `pricingStatus`, `warnings`, `costEstimateUsd`, `baseCostUsd`, `surchargeUsd`, and `billedAmountUsd`.
 
 ## How Auggie sessions are parsed
 
@@ -233,7 +233,7 @@ JSON/CSV outputs are semi-stable APIs. Current billing-related fields include:
 - `costEstimateUsd`: secondary token-pricing estimate in credits mode.
 - `baseCostUsd`, `surchargeUsd`, `billedAmountUsd`: token_plus USD estimate fields.
 - CSV exports label the same informational data as `Sub-Agent Credits (Unconfirmed)`.
-- `schema: "codeburn.export.v2"`: present on `export --format json`; report/status JSON currently rely on the top-level `billing` block and field names rather than a separate `schemaVersion`.
+- `schema` and `schemaVersion`: present on report/status/export JSON (`codeburn.report.v2`, `codeburn.status.v2`, `codeburn.export.v2`; `schemaVersion: 2`). Fields may be added within the same major schema; incompatible machine-readable changes require a new schema string/version.
 
 ### Rate-card reference
 
@@ -282,6 +282,9 @@ Cache and config files are created with mode `0600` under directories with mode 
 npm install
 npm test                       # vitest tests
 npm run build                  # tsup → dist/cli.js (target: node20¹)
+npx tsc --noEmit               # typecheck source without writing dist
+./run.sh --check               # readiness smoke check for JSON/billing modes
+git diff --check               # whitespace check before opening a PR
 
 ¹ `tsup.config.ts` uses `target: node20` for compile-time syntax transpilation, while `package.json engines` requires Node ≥ 22 at runtime.
 npm run dev -- report          # run CLI directly from src/ via tsx

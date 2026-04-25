@@ -40,6 +40,7 @@ describe('billing-aware report/status JSON', () => {
   it('uses credits fields and nullable cost for credits mode rows', () => {
     const report = runCli(['report', '--period', 'all', '--format', 'json'], { CODEBURN_BILLING_MODE: 'credits' })
 
+    expect(report).toMatchObject({ schema: 'codeburn.report.v2', schemaVersion: 2 })
     expect(report.billing.mode).toBe('credits')
     expect(report.overview.cost).toBeNull()
     expect(report.overview.creditsAugment).toBeGreaterThan(0)
@@ -50,6 +51,7 @@ describe('billing-aware report/status JSON', () => {
     expect(report.topSessions[0]).toMatchObject({ cost: null, creditsSynthesizedCalls: 1 })
 
     const status = runCli(['status', '--format', 'json'], { CODEBURN_BILLING_MODE: 'credits' })
+    expect(status).toMatchObject({ schema: 'codeburn.status.v2', schemaVersion: 2 })
     expect(status.billing.mode).toBe('credits')
     expect(status.month.cost).toBeNull()
     expect(status.month.creditsSynthesizedCalls).toBe(1)

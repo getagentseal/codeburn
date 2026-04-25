@@ -71,6 +71,18 @@ json_get() {
   fi
 }
 
+check_schema_version() {
+  local output="$1"
+  local version
+  version=$(json_get "$output" '.schemaVersion')
+  if [[ "$version" == "2" ]]; then
+    ok "schemaVersion == 2"
+  else
+    err "schemaVersion != 2 (got: $version)"
+    ((FAILURES++))
+  fi
+}
+
 # ---------------------------------------------------------------
 # --check mode: UI/UX sanity checks
 # ---------------------------------------------------------------
@@ -93,6 +105,7 @@ if [[ "${1:-}" == "--check" ]]; then
   COST=$(json_get "$OUTPUT" '.overview.cost')
   CREDITS=$(json_get "$OUTPUT" '.overview.creditsAugment')
   
+  check_schema_version "$OUTPUT"
   if [[ "$MODE" == "credits" ]]; then ok "billing.mode == credits"; else err "billing.mode != credits (got: $MODE)"; ((FAILURES++)); fi
   if [[ "$COST" == "null" ]]; then ok "overview.cost == null"; else err "overview.cost != null (got: $COST)"; ((FAILURES++)); fi
   if [[ "$CREDITS" =~ ^[0-9]+(\.[0-9]+)?$ || "$CREDITS" == "null" ]]; then ok "overview.creditsAugment is number or null"; else err "overview.creditsAugment invalid (got: $CREDITS)"; ((FAILURES++)); fi
@@ -105,6 +118,7 @@ if [[ "${1:-}" == "--check" ]]; then
   COST=$(json_get "$OUTPUT" '.overview.cost')
   CREDITS=$(json_get "$OUTPUT" '.overview.creditsAugment')
   
+  check_schema_version "$OUTPUT"
   if [[ "$MODE" == "token_plus" ]]; then ok "billing.mode == token_plus"; else err "billing.mode != token_plus (got: $MODE)"; ((FAILURES++)); fi
   if [[ "$SURCHARGE" == "0" ]]; then ok "billing.surchargeRate == 0"; else err "billing.surchargeRate != 0 (got: $SURCHARGE)"; ((FAILURES++)); fi
   if [[ "$COST" =~ ^[0-9]+(\.[0-9]+)?$ || "$COST" == "null" ]]; then ok "overview.cost is number or null"; else err "overview.cost invalid (got: $COST)"; ((FAILURES++)); fi

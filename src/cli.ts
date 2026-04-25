@@ -9,6 +9,7 @@ import { formatCustomDateRangeLabel, getDateRange, localDateString, parseDateRan
 import { runOptimize } from './optimize.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { loadBillingConfig } from './billing.js'
+import { MACHINE_OUTPUT_SCHEMA_VERSION, REPORT_OUTPUT_SCHEMA, STATUS_OUTPUT_SCHEMA } from './output-schema.js'
 import {
   addBillingAggregate,
   aggregateCallsBilling,
@@ -222,6 +223,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   }
 
   return {
+    schema: REPORT_OUTPUT_SCHEMA,
+    schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
     generated: new Date().toISOString(),
     currency: code,
     billing: buildBillingMetadata(billingConfig),
@@ -312,6 +315,9 @@ program
       const monthData = buildStatusData(fp(await parseAllSessions(getDateRange('month').range)), billingConfig)
       const { code } = getCurrency()
       console.log(JSON.stringify({
+        schema: STATUS_OUTPUT_SCHEMA,
+        schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
+        generated: new Date().toISOString(),
         currency: code,
         billing: buildBillingMetadata(billingConfig),
         today: todayData,
