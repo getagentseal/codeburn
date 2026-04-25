@@ -9,17 +9,19 @@ import { discoverAllSessions } from './providers/index.js'
 import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
+import { TUI_THEME } from './theme.js'
 
 // ============================================================================
 // Display constants
 // ============================================================================
 
-const ORANGE = '#FF8C42'
-const DIM = '#666666'
-const GOLD = '#FFD700'
-const CYAN = '#5BF5E0'
-const GREEN = '#5BF5A0'
-const RED = '#F55B5B'
+const ACCENT = TUI_THEME.accent.primary
+const DIM = TUI_THEME.chrome.disabled
+const VALUE = TUI_THEME.value.primary
+const ACTION_CODE = TUI_THEME.action.code
+const SUCCESS = TUI_THEME.state.success
+const WARNING = TUI_THEME.state.warning
+const ERROR = TUI_THEME.state.error
 
 // ============================================================================
 // Token estimation constants
@@ -807,8 +809,8 @@ export async function scanAndDetect(
 
 const PANEL_WIDTH = 62
 const SEP = '\u2500'
-const IMPACT_COLORS: Record<Impact, string> = { high: RED, medium: ORANGE, low: DIM }
-const GRADE_COLORS: Record<HealthGrade, string> = { A: GREEN, B: GREEN, C: GOLD, D: ORANGE, F: RED }
+const IMPACT_COLORS: Record<Impact, string> = { high: ERROR, medium: WARNING, low: SUCCESS }
+const GRADE_COLORS: Record<HealthGrade, string> = { A: SUCCESS, B: SUCCESS, C: WARNING, D: WARNING, F: ERROR }
 
 function wrap(text: string, width: number, indent: string): string {
   const words = text.split(' ')
@@ -839,24 +841,24 @@ function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
     chalk.bold(`${n}. ${f.title}`) +
     chalk.hex(DIM)(pad) +
     chalk.hex(IMPACT_COLORS[f.impact])(impactLabel) +
-    (trendBadge ? chalk.hex(GREEN)(trendBadge) : '') +
+    (trendBadge ? chalk.hex(SUCCESS)(trendBadge) : '') +
     chalk.hex(DIM)(` ${SEP}${SEP}${SEP}`))
   lines.push('')
   lines.push(wrap(f.explanation, PANEL_WIDTH - 4, '  '))
   lines.push('')
-  lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`))
+  lines.push(chalk.hex(VALUE)(`  Potential savings: ${savings}`))
   lines.push('')
 
   const a = f.fix
   if (a.type === 'file-content') {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    for (const line of a.content.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
+    for (const line of a.content.split('\n')) lines.push(chalk.hex(ACTION_CODE)(`    ${line}`))
   } else if (a.type === 'command') {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    for (const line of a.text.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
+    for (const line of a.text.split('\n')) lines.push(chalk.hex(ACTION_CODE)(`    ${line}`))
   } else {
     lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    lines.push(chalk.hex(CYAN)(`    ${a.text}`))
+    lines.push(chalk.hex(ACTION_CODE)(`    ${a.text}`))
   }
   lines.push('')
   return lines
@@ -874,20 +876,20 @@ function renderOptimize(
 ): string {
   const lines: string[] = []
   lines.push('')
-  lines.push(`  ${chalk.bold.hex(ORANGE)('CodeBurn config health')}${chalk.dim('  ' + periodLabel)}`)
+  lines.push(`  ${chalk.bold.hex(ACCENT)('CodeBurn config health')}${chalk.hex(TUI_THEME.text.dim)('  ' + periodLabel)}`)
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
 
   const issueSuffix = findings.length > 0 ? `, ${findings.length} issue${findings.length > 1 ? 's' : ''}` : ''
   lines.push('  ' + [
     `${sessionCount} sessions`,
     `${callCount.toLocaleString()} calls`,
-    chalk.hex(GOLD)(formatCost(periodCost)),
+    chalk.hex(VALUE)(formatCost(periodCost)),
     `Health: ${chalk.bold.hex(GRADE_COLORS[healthGrade])(healthGrade)}${chalk.dim(` (${healthScore}/100${issueSuffix})`)}`,
   ].join(chalk.hex(DIM)('   ')))
   lines.push('')
 
   if (findings.length === 0) {
-    lines.push(chalk.hex(GREEN)('  Nothing to fix. Your setup is lean.'))
+    lines.push(chalk.hex(SUCCESS)('  Nothing to fix. Your setup is lean.'))
     lines.push('')
     lines.push(chalk.dim('  CodeBurn optimize scans your Augment sessions for token waste:'))
     lines.push(chalk.dim('  junk directory reads, duplicate file reads, and more.'))
@@ -901,7 +903,7 @@ function renderOptimize(
   const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
 
   const costText = costRate > 0 ? ` (~${formatCost(totalCost)}, ~${pct}% of spend)` : ''
-  lines.push(chalk.hex(GREEN)(`  Potential savings: ~${formatTokens(totalTokens)} tokens${costText}`))
+  lines.push(chalk.hex(VALUE)(`  Potential savings: ~${formatTokens(totalTokens)} tokens${costText}`))
   lines.push('')
 
   for (let i = 0; i < findings.length; i++) {

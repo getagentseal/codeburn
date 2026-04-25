@@ -1,6 +1,7 @@
 import chalk from 'chalk'
 import type { ProjectSummary } from './types.js'
 import { loadBillingConfig } from './billing.js'
+import { TUI_THEME } from './theme.js'
 
 // Re-exported from currency.ts so existing imports from './format.js' keep working.
 // The currency-aware version applies exchange rate and symbol automatically.
@@ -68,9 +69,9 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
 
   const lines: string[] = ['']
   if (billingConfig.mode === 'credits') {
-    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCredits(todayValue))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCredits(monthValue))}  ${chalk.dim(`${monthCalls} calls`)}`)
+    lines.push(`  ${chalk.bold.hex(TUI_THEME.accent.primary)('Today')}  ${chalk.hex(TUI_THEME.value.primary)(formatCredits(todayValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${todayCalls} calls`)}    ${chalk.bold.hex(TUI_THEME.accent.primary)('Month')}  ${chalk.hex(TUI_THEME.value.primary)(formatCredits(monthValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${monthCalls} calls`)}`)
   } else {
-    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayValue))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthValue))}  ${chalk.dim(`${monthCalls} calls`)}`)
+    lines.push(`  ${chalk.bold.hex(TUI_THEME.accent.primary)('Today')}  ${chalk.hex(TUI_THEME.value.primary)(formatCost(todayValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${todayCalls} calls`)}    ${chalk.bold.hex(TUI_THEME.accent.primary)('Month')}  ${chalk.hex(TUI_THEME.value.primary)(formatCost(monthValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${monthCalls} calls`)}`)
   }
   lines.push('')
 
