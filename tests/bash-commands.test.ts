@@ -47,6 +47,11 @@ describe('extractBashCommands', () => {
     expect(extractBashCommands('  git   status  ')).toEqual(['git'])
   })
 
+  it('strips ANSI escape codes before extracting basenames (no escapes leak into bashBreakdown keys)', () => {
+    expect(extractBashCommands('[31mnpm[0m install')).toEqual(['npm'])
+    expect(extractBashCommands('[1;33mgit[0m status && [36mls[0m')).toEqual(['git', 'ls'])
+  })
+
   it('handles command with quotes containing separators', () => {
     expect(extractBashCommands('echo "hello && world"')).toEqual(['echo'])
   })

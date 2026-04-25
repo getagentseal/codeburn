@@ -1,12 +1,18 @@
 import { basename } from 'path'
 
+import { stripAnsi } from './ansi.js'
+
 function stripQuotedStrings(command: string): string {
   return command.replace(/"[^"]*"|'[^']*'/g, match => ' '.repeat(match.length))
 }
 
-export function extractBashCommands(command: string): string[] {
-  if (!command || !command.trim()) return []
+export function extractBashCommands(rawCommand: string): string[] {
+  if (!rawCommand || !rawCommand.trim()) return []
 
+  // Bash inputs in session JSONL can carry ANSI escape sequences (terminal pastes,
+  // colorized command-line snippets). Stripping here keeps `bashBreakdown` keys
+  // and any other downstream display free of raw escape codes.
+  const command = stripAnsi(rawCommand)
   const stripped = stripQuotedStrings(command)
 
   const separatorRegex = /\s*(?:&&|;|\|)\s*/g
