@@ -1,6 +1,16 @@
+/*
+ * Auggie paths inspected on 2026-04-25 for this retarget:
+ * - Skills: /Users/jaydave/.augment/skills and repo-local <project>/.augment/skills
+ * - Agent rules: /Users/jaydave/.augment/tmp/agent-rules-*.md,
+ *   /Users/jaydave/.augment/rules, /Users/jaydave/.augment/user-guidelines.md,
+ *   and repo-local <project>/AGENTS.md
+ * - MCP config: /Users/jaydave/.augment/settings.json,
+ *   /Users/jaydave/.augment/mcp_settings.json,
+ *   /Users/jaydave/.augment/tmp/mcp-config-*.json, and repo-local <project>/.mcp.json
+ */
 import { readdir } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile } from './fs-utils.js'
@@ -9,6 +19,9 @@ const CHARS_PER_TOKEN = 4
 const SYSTEM_BASE_TOKENS = 10400
 const TOOL_TOKENS_OVERHEAD = 400
 const SKILL_FRONTMATTER_TOKENS = 80
+const AUGGIE_DIR = '.augment'
+const RUNTIME_MCP_CONFIG_PREFIX = 'mcp-config-'
+const RUNTIME_AGENT_RULES_PREFIX = 'agent-rules-'
 
 export type ContextBudget = {
   systemBase: number
@@ -30,18 +43,41 @@ async function readConfigFile(path: string): Promise<Record<string, unknown> | n
   try { return JSON.parse(raw) } catch { return null }
 }
 
-async function countMcpTools(projectPath?: string): Promise<number> {
-  const home = homedir()
-  const configPaths = [
-    join(home, '.claude', 'settings.json'),
-    join(home, '.claude', 'settings.local.json'),
-  ]
-  if (projectPath) {
-    configPaths.push(join(projectPath, '.mcp.json'))
-    configPaths.push(join(projectPath, '.claude', 'settings.json'))
-    configPaths.push(join(projectPath, '.claude', 'settings.local.json'))
-  }
+async function listFiles(dir: string, predicate: (name: string) => boolean): Promise<string[]> {
+  if (!existsSync(dir)) return []
+  const files: string[] = []
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        files.push(...await listFiles(path, predicate))
+      } else if (entry.isFile() && predicate(entry.name)) {
+        files.push(path)
+      }
+    }
+  } catch { return [] }
+  return files
+}
 
+async function getMcpConfigPaths(projectPath?: string): Promise<string[]> {
+  const augmentHome = join(homedir(), AUGGIE_DIR)
+  const paths = [
+    join(augmentHome, 'settings.json'),
+    join(augmentHome, 'mcp_settings.json'),
+  ]
+
+  paths.push(...await listFiles(
+    join(augmentHome, 'tmp'),
+    name => name.startsWith(RUNTIME_MCP_CONFIG_PREFIX) && name.endsWith('.json'),
+  ))
+
+  if (projectPath) paths.push(join(projectPath, '.mcp.json'))
+  return paths
+}
+
+async function countMcpTools(projectPath?: string): Promise<number> {
+  const configPaths = await getMcpConfigPaths(projectPath)
   const servers = new Set<string>()
   let toolCount = 0
 
@@ -60,8 +96,8 @@ async function countMcpTools(projectPath?: string): Promise<number> {
 }
 
 async function countSkills(projectPath?: string): Promise<number> {
-  const dirs = [join(homedir(), '.claude', 'skills')]
-  if (projectPath) dirs.push(join(projectPath, '.claude', 'skills'))
+  const dirs = [join(homedir(), AUGGIE_DIR, 'skills')]
+  if (projectPath) dirs.push(join(projectPath, AUGGIE_DIR, 'skills'))
 
   let count = 0
   for (const dir of dirs) {
@@ -81,17 +117,38 @@ async function countSkills(projectPath?: string): Promise<number> {
 async function scanMemoryFiles(projectPath?: string): Promise<Array<{ name: string; tokens: number }>> {
   const home = homedir()
   const files: Array<{ name: string; tokens: number }> = []
+  const augmentHome = join(home, AUGGIE_DIR)
   const paths: Array<{ path: string; name: string }> = [
-    { path: join(home, '.claude', 'CLAUDE.md'), name: '~/.claude/CLAUDE.md' },
+    { path: join(augmentHome, 'user-guidelines.md'), name: '~/.augment/user-guidelines.md' },
   ]
 
-  if (projectPath) {
-    paths.push({ path: join(projectPath, 'CLAUDE.md'), name: 'CLAUDE.md' })
-    paths.push({ path: join(projectPath, '.claude', 'CLAUDE.md'), name: '.claude/CLAUDE.md' })
-    paths.push({ path: join(projectPath, 'CLAUDE.local.md'), name: 'CLAUDE.local.md' })
+  const homeRuleFiles = await listFiles(
+    join(augmentHome, 'rules'),
+    name => name.endsWith('.md') || name.endsWith('.txt'),
+  )
+  const runtimeRuleFiles = await listFiles(
+    join(augmentHome, 'tmp'),
+    name => name.startsWith(RUNTIME_AGENT_RULES_PREFIX) && name.endsWith('.md'),
+  )
+  for (const path of [...homeRuleFiles, ...runtimeRuleFiles]) {
+    paths.push({ path, name: `~/.augment/${relative(augmentHome, path)}` })
   }
 
+  if (projectPath) {
+    paths.push({ path: join(projectPath, 'AGENTS.md'), name: 'AGENTS.md' })
+    const projectRuleFiles = await listFiles(
+      join(projectPath, AUGGIE_DIR, 'rules'),
+      name => name.endsWith('.md') || name.endsWith('.txt'),
+    )
+    for (const path of projectRuleFiles) {
+      paths.push({ path, name: relative(projectPath, path) })
+    }
+  }
+
+  const seen = new Set<string>()
   for (const { path, name } of paths) {
+    if (seen.has(path)) continue
+    seen.add(path)
     if (!existsSync(path)) continue
     const content = await readSessionFile(path)
     if (content === null) continue

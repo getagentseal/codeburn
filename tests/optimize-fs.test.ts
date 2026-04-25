@@ -180,7 +180,7 @@ describe('estimateContextBudget', () => {
     expect(budget.skills.count).toBe(0)
   })
 
-  it('includes MCP tools from project .mcp.json', async () => {
+  it('includes MCP tools from Auggie repo-local .mcp.json', async () => {
     const root = makeFixtureRoot()
     writeFile(join(root, '.mcp.json'), JSON.stringify({
       mcpServers: { a: { command: 'x' }, b: { command: 'x' } },
@@ -189,12 +189,20 @@ describe('estimateContextBudget', () => {
     expect(budget.mcpTools.count).toBeGreaterThan(0)
   })
 
-  it('includes memory file tokens from CLAUDE.md', async () => {
+  it('includes Auggie skills from project .augment/skills', async () => {
     const root = makeFixtureRoot()
-    writeFile(join(root, 'CLAUDE.md'), 'Project context for Claude.\n')
+    writeFile(join(root, '.augment', 'skills', 'review', 'SKILL.md'), '# Review skill\n')
+    const budget = await estimateContextBudget(root)
+    expect(budget.skills.count).toBeGreaterThan(0)
+  })
+
+  it('includes memory file tokens from AGENTS.md', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, 'AGENTS.md'), 'Project context for Auggie.\n')
     const budget = await estimateContextBudget(root)
     expect(budget.memory.count).toBeGreaterThan(0)
     expect(budget.memory.tokens).toBeGreaterThan(0)
+    expect(budget.memory.files.some(file => file.name === 'AGENTS.md')).toBe(true)
   })
 })
 
