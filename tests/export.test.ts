@@ -42,7 +42,7 @@ function makeProject(projectPath: string): ProjectSummary {
             hasEdits: true,
             assistantCalls: [
               {
-                provider: 'claude',
+                provider: 'auggie',
                 model: '+danger-model',
                 usage: {
                   inputTokens: 100,
@@ -202,8 +202,8 @@ describe('exportJson token+ billing invariant', () => {
               hasEdits: false,
               assistantCalls: [
                 {
-                  provider: 'claude',
-                  model: 'claude-sonnet-4',
+                  provider: 'auggie',
+                  model: 'claude-sonnet-4-5',
                   usage: { inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
                   costUSD: baseCost,
                   credits: null,
@@ -220,7 +220,7 @@ describe('exportJson token+ billing invariant', () => {
               ],
             },
           ],
-          modelBreakdown: { 'claude-sonnet-4': { calls: 1, costUSD: baseCost, credits: null, tokens: { inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }, baseCostUsd: baseCost, surchargeUsd: surcharge, billedAmountUsd: billed } },
+          modelBreakdown: { 'claude-sonnet-4-5': { calls: 1, costUSD: baseCost, credits: null, tokens: { inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 }, baseCostUsd: baseCost, surchargeUsd: surcharge, billedAmountUsd: billed } },
           toolBreakdown: {},
           mcpBreakdown: {},
           bashBreakdown: {},

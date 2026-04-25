@@ -12,7 +12,7 @@ import type { ParsedProviderCall } from './providers/types.js'
 /// any change.
 ///
 /// File mode 0600, parent dir 0700 -- matches the round-2 G4 hardening on
-/// `src/cursor-cache.ts` and `src/config.ts`. Writes are atomic (temp + rename).
+/// Auggie cache files and `src/config.ts`. Writes are atomic (temp + rename).
 
 type SessionCacheFile = {
   version: number
