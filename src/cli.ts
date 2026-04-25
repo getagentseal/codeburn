@@ -44,8 +44,8 @@ function getDateRange(period: string): { range: DateRange; label: string } {
     }
     case 'all': {
       // Cap "All Time" to the last 6 months. Older data is rarely actionable for a cost
-      // tracker and keeps the parse path bounded so providers like Codex/Cursor with sparse
-      // data still load in seconds.
+      // tracker and keeps the parse path bounded so sparse Auggie session data still loads
+      // in seconds.
       const start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
       return { range: { start, end }, label: 'Last 6 months' }
     }
