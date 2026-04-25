@@ -1,4 +1,4 @@
-import { Command } from 'commander'
+import { Command, InvalidArgumentError, Option } from 'commander'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
@@ -6,7 +6,7 @@ import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
-import { parseDateRangeFlags } from './cli-date.js'
+import { formatCustomDateRangeLabel, getDateRange, localDateString, parseDateRangeFlags, PERIOD_LABELS, PERIODS, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
 import { readConfig, saveConfig, getConfigFilePath } from './config.js'
 import { loadBillingConfig, CREDITS_PER_DOLLAR } from './billing.js'
@@ -16,54 +16,31 @@ const require = createRequire(import.meta.url)
 const { version } = require('../package.json')
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
 
-function getDateRange(period: string): { range: DateRange; label: string } {
-  const now = new Date()
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+const TUI_FORMATS = ['tui', 'json'] as const
+const STATUS_FORMATS = ['terminal', 'json'] as const
+const EXPORT_FORMATS = ['csv', 'json'] as const
 
-  switch (period) {
-    case 'today': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      return { range: { start, end }, label: `Today (${start.toISOString().slice(0, 10)})` }
-    }
-    case 'yesterday': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
-      const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999)
-      return { range: { start, end: yesterdayEnd }, label: `Yesterday (${start.toISOString().slice(0, 10)})` }
-    }
-    case 'week': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
-      return { range: { start, end }, label: 'Last 7 Days' }
-    }
-    case 'month': {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1)
-      return { range: { start, end }, label: `${now.toLocaleString('default', { month: 'long' })} ${now.getFullYear()}` }
-    }
-    case '30days': {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)
-      return { range: { start, end }, label: 'Last 30 Days' }
-    }
-    case 'all': {
-      // Cap "All Time" to the last 6 months. Older data is rarely actionable for a cost
-      // tracker and keeps the parse path bounded so sparse Auggie session data still loads
-      // in seconds.
-      const start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
-      return { range: { start, end }, label: 'Last 6 months' }
-    }
-    default: {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
-      return { range: { start, end }, label: 'Last 7 Days' }
-    }
+function parseRefreshSeconds(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new InvalidArgumentError('must be a positive integer')
   }
+  const seconds = Number(value)
+  if (!Number.isSafeInteger(seconds)) {
+    throw new InvalidArgumentError('must be a safe integer')
+  }
+  return seconds
 }
 
-type Period = 'today' | 'week' | '30days' | 'month' | 'all'
+function periodOption(description: string, defaultValue: Period): Option {
+  return new Option('-p, --period <period>', description).choices(PERIODS).default(defaultValue)
+}
 
-function toPeriod(s: string): Period {
-  if (s === 'today') return 'today'
-  if (s === 'month') return 'month'
-  if (s === '30days') return '30days'
-  if (s === 'all') return 'all'
-  return 'week'
+function formatOption(description: string, choices: readonly string[], defaultValue: string, flags = '--format <format>'): Option {
+  return new Option(flags, description).choices(choices).default(defaultValue)
+}
+
+function refreshOption(): Option {
+  return new Option('--refresh <seconds>', 'Auto-refresh interval in seconds').argParser(parseRefreshSeconds)
 }
 
 function collect(val: string, acc: string[]): string[] {
@@ -80,7 +57,7 @@ async function runJsonReport(period: Period, project: string[], exclude: string[
 
 const program = new Command()
   .name('codeburn')
-  .description('See where your AI coding tokens go - by task, tool, model, and project')
+  .description('See where your Auggie tokens (and credits) go - by task, tool, model, and project')
   .version(version)
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
 
@@ -122,7 +99,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   for (const sess of sessions) {
     for (const turn of sess.turns) {
       if (!turn.timestamp) { continue }
-      const day = turn.timestamp.slice(0, 10)
+      const day = localDateString(new Date(turn.timestamp))
       if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0 } }
       for (const call of turn.assistantCalls) {
         dailyMap[day].cost += call.costUSD
@@ -269,13 +246,13 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
 program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
-  .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all', 'week')
+  .addOption(periodOption('Starting period', 'week'))
   .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
   .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
-  .option('--format <format>', 'Output format: tui, json', 'tui')
+  .addOption(formatOption('Output format', TUI_FORMATS, 'tui'))
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .addOption(refreshOption())
   .action(async (opts) => {
     let customRange: DateRange | null = null
     try {
@@ -286,11 +263,11 @@ program
       process.exit(1)
     }
 
-    const period = toPeriod(opts.period)
+    const period = opts.period as Period
     if (opts.format === 'json') {
       await loadPricing()
       if (customRange) {
-        const label = `${opts.from ?? 'all'} to ${opts.to ?? 'today'}`
+        const label = formatCustomDateRangeLabel(opts.from, opts.to)
         const projects = filterProjectsByName(
           await parseAllSessions(customRange),
           opts.project,
@@ -302,7 +279,7 @@ program
       }
       return
     }
-    await renderDashboard(period, opts.refresh, opts.project, opts.exclude, customRange)
+    await renderDashboard(period, opts.refresh, opts.project, opts.exclude, customRange, customRange ? formatCustomDateRangeLabel(opts.from, opts.to) : undefined)
   })
 
 function buildStatusData(projects: ProjectSummary[]): { cost: number; calls: number } {
@@ -315,7 +292,7 @@ function buildStatusData(projects: ProjectSummary[]): { cost: number; calls: num
 program
   .command('status')
   .description('Compact status output (today + month)')
-  .option('--format <format>', 'Output format: terminal, json', 'terminal')
+  .addOption(formatOption('Output format', STATUS_FORMATS, 'terminal'))
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
@@ -341,10 +318,10 @@ program
 program
   .command('today')
   .description('Today\'s usage dashboard')
-  .option('--format <format>', 'Output format: tui, json', 'tui')
+  .addOption(formatOption('Output format', TUI_FORMATS, 'tui'))
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .addOption(refreshOption())
   .action(async (opts) => {
     if (opts.format === 'json') {
       await runJsonReport('today', opts.project, opts.exclude)
@@ -356,10 +333,10 @@ program
 program
   .command('month')
   .description('This month\'s usage dashboard')
-  .option('--format <format>', 'Output format: tui, json', 'tui')
+  .addOption(formatOption('Output format', TUI_FORMATS, 'tui'))
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds', parseInt)
+  .addOption(refreshOption())
   .action(async (opts) => {
     if (opts.format === 'json') {
       await runJsonReport('month', opts.project, opts.exclude)
@@ -371,7 +348,7 @@ program
 program
   .command('export')
   .description('Export usage data to CSV or JSON (includes 1 day, 7 days, 30 days)')
-  .option('-f, --format <format>', 'Export format: csv, json', 'csv')
+  .addOption(formatOption('Export format', EXPORT_FORMATS, 'csv', '-f, --format <format>'))
   .option('-o, --output <path>', 'Output file path')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -379,9 +356,9 @@ program
     await loadPricing()
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     const periods: PeriodExport[] = [
-      { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range)) },
-      { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range)) },
-      { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range)) },
+      { label: PERIOD_LABELS.today, projects: fp(await parseAllSessions(getDateRange('today').range)) },
+      { label: PERIOD_LABELS.week, projects: fp(await parseAllSessions(getDateRange('week').range)) },
+      { label: PERIOD_LABELS['30days'], projects: fp(await parseAllSessions(getDateRange('30days').range)) },
     ]
 
     if (periods.every(p => p.projects.length === 0)) {
@@ -462,7 +439,7 @@ program
 program
   .command('optimize')
   .description('Find token waste and get exact fixes')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .addOption(periodOption('Analysis period', '30days'))
   .action(async (opts) => {
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
