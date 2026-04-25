@@ -103,7 +103,7 @@ Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q`
 | **Shell Commands** | `launch-process` command lines pulled from every tool-use node |
 | **MCP Servers** | MCP tool calls routed by `tool_use.mcp_server_name` when present, suffix-parsed as fallback for older sessions |
 
-The `--format json` flag on `report`, `today`, `month`, and `status`, plus `export --format json`, emits machine-readable data. Treat JSON and CSV as **semi-stable customer-facing APIs**: fields may be added, but billing fields are labeled to distinguish authoritative local credits from estimates. Current report/status payloads include a top-level `billing` block and per-row fields such as `creditsAugment`, `creditsSynthesizedCalls`, `subAgentCreditsUsedUnconfirmed`, `costEstimateUsd`, `baseCostUsd`, `surchargeUsd`, and `billedAmountUsd`. Export JSON currently includes `schema: "codeburn.export.v2"`; report/status do not yet emit a separate `schemaVersion` field.
+The `--format json` flag on `report`, `today`, `month`, and `status`, plus `export --format json`, emits machine-readable data. Treat JSON and CSV as **semi-stable customer-facing APIs**: fields may be added, but billing fields are labeled to distinguish authoritative local credits from estimates. Current report/status payloads include a top-level `billing` block and per-row fields such as `creditsAugment`, `creditsSynthesizedCalls`, `subAgentCreditsUsedUnconfirmed`, `pricingStatus`, `warnings`, `costEstimateUsd`, `baseCostUsd`, `surchargeUsd`, and `billedAmountUsd`. Export JSON currently includes `schema: "codeburn.export.v2"`; report/status do not yet emit a separate `schemaVersion` field.
 
 ## How Auggie sessions are parsed
 
@@ -215,7 +215,7 @@ CODEBURN_BILLING_MODE=token_plus CODEBURN_SURCHARGE_RATE=0.3 node dist/cli.js to
 - Token+ USD values and `costEstimateUsd` are token-pricing estimates, not authoritative Augment credit billing.
 - The `CREDITS_PER_DOLLAR = 1600` multiplier is an implementation default used only for estimates when local credit data is missing; do not treat it as a contractual rate.
 - Activity rows categorize work by observed Auggie tool/session usage. They are not billing-rate multipliers; CodeBurn keeps activity multiplier assumptions at `1.0` until authoritative values exist.
-- Unknown/unpriced non-empty model IDs remain visible as raw IDs with pricing unknown. They do not contribute to authoritative credit totals unless a local credit source exists.
+- Unknown/unpriced non-empty model IDs remain visible as raw IDs with pricing unknown. They do not contribute to authoritative credit totals unless a local credit source exists; token_plus/base/cost estimate fields are `null` when pricing is unavailable.
 - Legacy sessions missing both `modelId` and a recoverable provider hint are reported under `auggie-legacy` with `null` credits/cost unless local credit data exists.
 - Nonzero `subAgentCreditsUsed` semantics are not confirmed. Treat the field as informational and avoid adding it to totals manually, to prevent double counting.
 
