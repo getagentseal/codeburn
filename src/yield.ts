@@ -57,7 +57,6 @@ function getCommitsInRange(cwd: string, since: Date, until: Date, mainBranch: st
   const sinceStr = since.toISOString()
   const untilStr = until.toISOString()
 
-  // Get all commits in range with their info
   const log = runGit(
     `git log --all --since="${sinceStr}" --until="${untilStr}" --format="%H|%aI|%s"`,
     cwd
@@ -88,7 +87,6 @@ function categorizeSession(
     return { category: 'abandoned', commitCount: 0 }
   }
 
-  // Find commits within a window around the session (session time + 1 hour buffer)
   const sessionStart = new Date(session.firstTimestamp)
   const lastTs = session.lastTimestamp ?? session.firstTimestamp
   const sessionEnd = new Date(new Date(lastTs).getTime() + 60 * 60 * 1000) // +1 hour
@@ -98,11 +96,6 @@ function categorizeSession(
   )
 
   if (relevantCommits.length === 0) {
-    // No commits near this session - check if session had edits
-    if (session.toolBreakdown['Edit'] || session.toolBreakdown['Write']) {
-      return { category: 'abandoned', commitCount: 0 }
-    }
-    // No edits, not applicable
     return { category: 'abandoned', commitCount: 0 }
   }
 
