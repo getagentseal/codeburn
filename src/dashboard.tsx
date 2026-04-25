@@ -6,13 +6,13 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { formatCost, formatTokens, formatCredits } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
-import { loadBillingConfig, type BillingMode } from './billing.js'
+import { loadBillingConfig, synthesizeCredits, type BillingMode } from './billing.js'
 import { getDateRange, localDateString, PERIOD_LABELS, PERIODS, type Period } from './cli-date.js'
 
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { TUI_THEME, gradientColor } from './theme.js'
 
-type View = 'dashboard' | 'optimize'
+export type View = 'dashboard' | 'optimize'
 
 const MIN_WIDE = 90
 const ACCENT = TUI_THEME.accent.primary
@@ -20,6 +20,44 @@ const ACCENT_BRIGHT = TUI_THEME.accent.bright
 const DIM = TUI_THEME.chrome.disabled
 const DIM_TEXT = TUI_THEME.text.dim
 const VALUE = TUI_THEME.value.primary
+
+type KeyInput = { escape?: boolean; leftArrow?: boolean; rightArrow?: boolean; tab?: boolean }
+export type DashboardInputAction = 'quit' | 'openOptimize' | 'backToDashboard' | 'billingCredits' | 'billingBilledCost' | null
+
+export function billingModeLabel(mode: BillingMode): 'Credits' | 'Billed Cost' {
+  return mode === 'credits' ? 'Credits' : 'Billed Cost'
+}
+
+export function compactBillingMetricLabel(mode: BillingMode): 'credits' | 'billed' {
+  return mode === 'credits' ? 'credits' : 'billed'
+}
+
+export function projectAverageHeaderLabel(): 'avg/run' {
+  return 'avg/run'
+}
+
+export function billingDisplayValue(
+  value: { credits?: number | null; baseCostUsd?: number | null; billedAmountUsd?: number | null; costUSD?: number },
+  billingMode: BillingMode,
+  surchargeRate = 0,
+): number | null {
+  if (billingMode === 'credits') {
+    if (value.credits != null) return value.credits
+    return value.baseCostUsd != null ? synthesizeCredits(value.baseCostUsd) : null
+  }
+  if (value.billedAmountUsd != null) return value.billedAmountUsd
+  if (value.baseCostUsd != null) return value.baseCostUsd + value.baseCostUsd * surchargeRate
+  return value.costUSD ?? null
+}
+
+export function dashboardInputAction(input: string, key: KeyInput, view: View, findingCount: number): DashboardInputAction {
+  if (input === 'q') return 'quit'
+  if (input === 'c') return 'billingCredits'
+  if (input === 'd') return 'billingBilledCost'
+  if (input === 'o' && findingCount > 0 && view === 'dashboard') return 'openOptimize'
+  if ((input === 'b' || key.escape) && view === 'optimize') return 'backToDashboard'
+  return null
+}
 
 const LANG_DISPLAY_NAMES: Record<string, string> = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
@@ -140,10 +178,8 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
   // Count distinct sessions with auggie-legacy model (model unrecoverable from pre-Nov-2025)
   const legacySessions = allSessions.filter(sess => 'auggie-legacy' in sess.modelBreakdown).length
 
-  // Build billing mode subtitle
-  const billingSubtitle = billingMode === 'credits'
-    ? 'Billing: credits'
-    : `Billing: USD estimate · surcharge ${Math.round(surchargeRate * 100)}%`
+  const totalBilledDisplay = billingDisplayValue({ baseCostUsd: totalBaseCostUsd, billedAmountUsd: totalBilledAmountUsd, costUSD: totalCost }, 'token_plus', surchargeRate)
+  const billingSubtitle = `Billing: ${billingModeLabel(billingMode)}`
 
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
@@ -153,7 +189,7 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
         <Text dimColor>{billingSubtitle}</Text>
       </Text>
       {billingMode === 'token_plus' && (
-        <Text dimColor wrap="truncate-end">Approximated from token costs; not invoice-accurate.</Text>
+        <Text dimColor wrap="truncate-end">{`Billed Cost is a token-pricing estimate; surcharge ${Math.round(surchargeRate * 100)}%; not invoice-accurate.`}</Text>
       )}
       <Text wrap="truncate-end">
         {billingMode === 'credits' ? (
@@ -167,17 +203,11 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
             )}
           </>
         ) : (
-          // Token+ mode: show Base / Billed USD
+          // Billed Cost mode: show primary billed-cost estimate only.
           <>
-            {totalBaseCostUsd !== null && (
+            {totalBilledDisplay !== null && (
               <>
-                <Text bold color={VALUE}>{formatCost(totalBaseCostUsd)}</Text>
-                <Text dimColor> base   </Text>
-              </>
-            )}
-            {totalBilledAmountUsd !== null && (
-              <>
-                <Text bold color={VALUE}>{formatCost(totalBilledAmountUsd)}</Text>
+                <Text bold color={VALUE}>{formatCost(totalBilledDisplay)}</Text>
                 <Text dimColor> billed   </Text>
               </>
             )}
@@ -205,7 +235,7 @@ function Overview({ projects, label, width, billingMode, surchargeRate }: { proj
   )
 }
 
-function DailyActivity({ projects, days = 14, pw, bw, billingMode }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number; billingMode: BillingMode }) {
+function DailyActivity({ projects, days = 14, pw, bw, billingMode, surchargeRate }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number; billingMode: BillingMode; surchargeRate: number }) {
   const dailyValues: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
   for (const project of projects) {
@@ -215,11 +245,7 @@ function DailyActivity({ projects, days = 14, pw, bw, billingMode }: { projects:
         const day = localDateString(new Date(turn.timestamp))
         // In credits mode: sum credits. In token_plus mode: sum billedAmountUsd
         const value = turn.assistantCalls.reduce((s, c) => {
-          if (billingMode === 'credits') {
-            return s + (c.billing?.creditsAugment ?? c.credits ?? 0)
-          } else {
-            return s + (c.billing?.billedAmountUsd ?? c.costUSD)
-          }
+          return s + (billingDisplayValue({ credits: c.billing?.creditsAugment ?? c.credits, baseCostUsd: c.billing?.baseCostUsd, billedAmountUsd: c.billing?.billedAmountUsd, costUSD: c.costUSD }, billingMode, surchargeRate) ?? 0)
         }, 0)
         dailyValues[day] = (dailyValues[day] ?? 0) + value
         dailyCalls[day] = (dailyCalls[day] ?? 0) + turn.assistantCalls.length
@@ -229,7 +255,7 @@ function DailyActivity({ projects, days = 14, pw, bw, billingMode }: { projects:
   const sortedDays = days !== undefined ? Object.keys(dailyValues).sort().slice(-days) : Object.keys(dailyValues).sort()
   const maxValue = Math.max(...sortedDays.map(d => dailyValues[d] ?? 0))
 
-  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const valueLabel = compactBillingMetricLabel(billingMode)
   const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
@@ -264,26 +290,29 @@ function shortProject(encoded: string): string {
 const PROJECT_COL_AVG = 7
 const PROJECT_COL_BASE_WIDTH = 30
 
-function ProjectBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
+function ProjectBreakdown({ projects, pw, bw, billingMode, surchargeRate }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode; surchargeRate: number }) {
   // Compute total value per project based on billing mode
   const projectValues = projects.map(p => {
-    if (billingMode === 'credits') {
-      return p.totalCredits ?? 0
-    } else {
-      // Sum billedAmountUsd across all sessions
-      return p.sessions.reduce((s, sess) => s + (sess.totalBilledAmountUsd ?? sess.totalCostUSD), 0)
-    }
+    const baseCostUsd = p.sessions.reduce<number | null>((acc, sess) => {
+      if (acc === null && sess.totalBaseCostUsd == null) return null
+      return (acc ?? 0) + (sess.totalBaseCostUsd ?? 0)
+    }, null)
+    const billedAmountUsd = p.sessions.reduce<number | null>((acc, sess) => {
+      if (acc === null && sess.totalBilledAmountUsd == null) return null
+      return (acc ?? 0) + (sess.totalBilledAmountUsd ?? 0)
+    }, null)
+    return billingDisplayValue({ credits: p.totalCredits, baseCostUsd, billedAmountUsd, costUSD: p.totalCostUSD }, billingMode, surchargeRate) ?? 0
   })
   const maxValue = Math.max(...projectValues)
   const nw = Math.max(8, pw - bw - PROJECT_COL_BASE_WIDTH)
 
-  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const valueLabel = compactBillingMetricLabel(billingMode)
   const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
       <Text dimColor wrap="truncate-end">
-        {''.padEnd(bw + 1 + nw)}{valueLabel.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}
+        {''.padEnd(bw + 1 + nw)}{valueLabel.padStart(8)}{projectAverageHeaderLabel().padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
         const totalValue = projectValues[i]
@@ -309,12 +338,12 @@ const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
 const MODEL_NAME_WIDTH = 12
 
-function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; credits: number | null; billedAmountUsd: number | null; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+function ModelBreakdown({ projects, pw, bw, billingMode, surchargeRate }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode; surchargeRate: number }) {
+  const modelTotals: Record<string, { calls: number; costUSD: number; credits: number | null; baseCostUsd: number | null; billedAmountUsd: number | null; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, credits: null, billedAmountUsd: null, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, credits: null, baseCostUsd: null, billedAmountUsd: null, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
         // Aggregate credits: null + null = null, null + N = N, N + M = N + M
@@ -325,7 +354,14 @@ function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSu
         } else {
           modelTotals[model].credits = (existingCredits ?? 0) + (newCredits ?? 0)
         }
-        // Aggregate billedAmountUsd
+        // Aggregate billed-cost fields
+        const existingBase = modelTotals[model].baseCostUsd
+        const newBase = data.baseCostUsd
+        if (existingBase === null && newBase == null) {
+          // Both null, keep null
+        } else {
+          modelTotals[model].baseCostUsd = (existingBase ?? 0) + (newBase ?? 0)
+        }
         const existingBilled = modelTotals[model].billedAmountUsd
         const newBilled = data.billedAmountUsd
         if (existingBilled === null && newBilled == null) {
@@ -341,15 +377,15 @@ function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSu
   }
   // Sort by the relevant billing value
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => {
-    const valueA = billingMode === 'credits' ? (a.credits ?? 0) : (a.billedAmountUsd ?? a.costUSD)
-    const valueB = billingMode === 'credits' ? (b.credits ?? 0) : (b.billedAmountUsd ?? b.costUSD)
+    const valueA = billingDisplayValue(a, billingMode, surchargeRate) ?? 0
+    const valueB = billingDisplayValue(b, billingMode, surchargeRate) ?? 0
     return valueB - valueA
   })
   const maxValue = sorted.length > 0
-    ? (billingMode === 'credits' ? (sorted[0][1].credits ?? 0) : (sorted[0][1].billedAmountUsd ?? sorted[0][1].costUSD))
+    ? (billingDisplayValue(sorted[0][1], billingMode, surchargeRate) ?? 0)
     : 0
 
-  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const valueLabel = compactBillingMetricLabel(billingMode)
   const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
@@ -364,7 +400,7 @@ function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSu
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
         const cacheLabel = totalInput > 0 ? `${cacheHit.toFixed(1)}%` : '-'
-        const displayValue = billingMode === 'credits' ? data.credits : (data.billedAmountUsd ?? data.costUSD)
+        const displayValue = billingDisplayValue(data, billingMode, surchargeRate)
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={displayValue ?? 0} max={maxValue} width={bw} />
@@ -379,12 +415,12 @@ function ModelBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSu
   )
 }
 
-function ActivityBreakdown({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
-  const categoryTotals: Record<string, { turns: number; costUSD: number; credits: number | null; billedAmountUsd: number | null; editTurns: number; oneShotTurns: number }> = {}
+function ActivityBreakdown({ projects, pw, bw, billingMode, surchargeRate }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode; surchargeRate: number }) {
+  const categoryTotals: Record<string, { turns: number; costUSD: number; credits: number | null; baseCostUsd: number | null; billedAmountUsd: number | null; editTurns: number; oneShotTurns: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [cat, data] of Object.entries(session.categoryBreakdown)) {
-        if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, credits: null, billedAmountUsd: null, editTurns: 0, oneShotTurns: 0 }
+        if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, credits: null, baseCostUsd: null, billedAmountUsd: null, editTurns: 0, oneShotTurns: 0 }
         categoryTotals[cat].turns += data.turns
         categoryTotals[cat].costUSD += data.costUSD
         categoryTotals[cat].editTurns += data.editTurns
@@ -394,6 +430,11 @@ function ActivityBreakdown({ projects, pw, bw, billingMode }: { projects: Projec
           // Both null, keep null
         } else {
           categoryTotals[cat].credits = (categoryTotals[cat].credits ?? 0) + (data.credits ?? 0)
+        }
+        if (categoryTotals[cat].baseCostUsd === null && data.baseCostUsd == null) {
+          // Both null, keep null
+        } else {
+          categoryTotals[cat].baseCostUsd = (categoryTotals[cat].baseCostUsd ?? 0) + (data.baseCostUsd ?? 0)
         }
         if (categoryTotals[cat].billedAmountUsd === null && data.billedAmountUsd == null) {
           // Both null, keep null
@@ -405,22 +446,22 @@ function ActivityBreakdown({ projects, pw, bw, billingMode }: { projects: Projec
   }
   // Sort by billing-mode aware value
   const sorted = Object.entries(categoryTotals).sort(([, a], [, b]) => {
-    const valueA = billingMode === 'credits' ? (a.credits ?? 0) : (a.billedAmountUsd ?? a.costUSD)
-    const valueB = billingMode === 'credits' ? (b.credits ?? 0) : (b.billedAmountUsd ?? b.costUSD)
+    const valueA = billingDisplayValue(a, billingMode, surchargeRate) ?? 0
+    const valueB = billingDisplayValue(b, billingMode, surchargeRate) ?? 0
     return valueB - valueA
   })
   const maxValue = sorted.length > 0
-    ? (billingMode === 'credits' ? (sorted[0][1].credits ?? 0) : (sorted[0][1].billedAmountUsd ?? sorted[0][1].costUSD))
+    ? (billingDisplayValue(sorted[0][1], billingMode, surchargeRate) ?? 0)
     : 0
 
-  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const valueLabel = compactBillingMetricLabel(billingMode)
   const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
     <Panel title="By Activity" color={PANEL_COLORS.activity} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 14)}{valueLabel.padStart(8)}{'turns'.padStart(6)}{'1-shot'.padStart(7)}</Text>
       {sorted.map(([cat, data]) => {
-        const displayValue = billingMode === 'credits' ? data.credits : (data.billedAmountUsd ?? data.costUSD)
+        const displayValue = billingDisplayValue(data, billingMode, surchargeRate)
         const oneShotPct = data.editTurns > 0 ? Math.round((data.oneShotTurns / data.editTurns) * 100) + '%' : '-'
         return (
           <Text key={cat} wrap="truncate-end">
@@ -471,17 +512,13 @@ const TOP_SESSIONS_DATE_LEN = 10
 const TOP_SESSIONS_VALUE_COL = 8
 const TOP_SESSIONS_CALLS_COL = 6
 
-function TopSessions({ projects, pw, bw, billingMode }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode }) {
+function TopSessions({ projects, pw, bw, billingMode, surchargeRate }: { projects: ProjectSummary[]; pw: number; bw: number; billingMode: BillingMode; surchargeRate: number }) {
   const allSessions = projects.flatMap(p =>
     p.sessions.map(s => ({ ...s, projectName: p.project }))
   )
   // Sort by relevant billing value
   const getValue = (s: typeof allSessions[0]): number => {
-    if (billingMode === 'credits') {
-      return s.totalCredits ?? 0
-    } else {
-      return s.totalBilledAmountUsd ?? s.totalCostUSD
-    }
+    return billingDisplayValue({ credits: s.totalCredits, baseCostUsd: s.totalBaseCostUsd, billedAmountUsd: s.totalBilledAmountUsd, costUSD: s.totalCostUSD }, billingMode, surchargeRate) ?? 0
   }
   const top = [...allSessions].sort((a, b) => getValue(b) - getValue(a)).slice(0, 5)
 
@@ -492,7 +529,7 @@ function TopSessions({ projects, pw, bw, billingMode }: { projects: ProjectSumma
   const maxValue = getValue(top[0])
   const nw = Math.max(8, pw - bw - TOP_SESSIONS_VALUE_COL - TOP_SESSIONS_CALLS_COL - 1 - PANEL_CHROME)
 
-  const valueLabel = billingMode === 'credits' ? 'credits' : 'billed'
+  const valueLabel = compactBillingMetricLabel(billingMode)
   const formatValue = billingMode === 'credits' ? formatCredits : formatCost
 
   return (
@@ -570,18 +607,18 @@ function FindingAction({ action }: { action: WasteAction }) {
   return (<><Text color={DIM_TEXT}>{action.label}</Text>{lines.map((line, i) => <Text key={i} color={TUI_THEME.action.code}>  {line}</Text>)}</>)
 }
 
-function formatInlineSavings(tokens: number, costRate: number): string {
+function formatInlineSavings(tokens: number, costRate: number, includeCostEstimate = true): string {
   const costSaved = tokens * costRate
-  const costText = costRate > 0 ? ` (~${formatCost(costSaved)} token-pricing estimate)` : ''
+  const costText = includeCostEstimate && costRate > 0 ? ` (~${formatCost(costSaved)} token-pricing estimate)` : ''
   return `~${formatTokens(tokens)} tokens${costText}`
 }
 
-export function formatInlineOptimizeFindingSavings(finding: WasteFinding, costRate: number): string {
+export function formatInlineOptimizeFindingSavings(finding: WasteFinding, costRate: number, includeCostEstimate = true): string {
   const savingsLabel = finding.savingsScope === 'per-call' ? 'Potential savings per affected call' : 'Potential savings'
-  return `${savingsLabel}: ${formatInlineSavings(finding.tokensSaved, costRate)}`
+  return `${savingsLabel}: ${formatInlineSavings(finding.tokensSaved, costRate, includeCostEstimate)}`
 }
 
-export function formatInlineOptimizeSummary(findings: WasteFinding[], costRate: number, periodCost: number): string[] {
+export function formatInlineOptimizeSummary(findings: WasteFinding[], costRate: number, periodCost: number, includeCostEstimate = true): string[] {
   const lines: string[] = []
   const aggregateFindings = findings.filter(f => f.savingsScope !== 'per-call')
   const perCallFindings = findings.filter(f => f.savingsScope === 'per-call')
@@ -590,17 +627,17 @@ export function formatInlineOptimizeSummary(findings: WasteFinding[], costRate: 
     const totalCost = totalTokens * costRate
     const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
     const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
-    const costText = costRate > 0 ? ` (~${formatCost(totalCost)} token-pricing estimate, ~${pct}% of token-priced spend)` : ''
+    const costText = includeCostEstimate && costRate > 0 ? ` (~${formatCost(totalCost)} token-pricing estimate, ~${pct}% of token-priced spend)` : ''
     lines.push(`Potential aggregate savings: ~${formatTokens(totalTokens)} tokens${costText}`)
   }
   const perCallTokens = perCallFindings.reduce((s, f) => s + f.tokensSaved, 0)
   if (perCallTokens > 0) {
-    lines.push(`Potential per-call savings: ${formatInlineSavings(perCallTokens, costRate)}`)
+    lines.push(`Potential per-call savings: ${formatInlineSavings(perCallTokens, costRate, includeCostEstimate)}`)
   }
   return lines
 }
 
-function FindingPanel({ index, finding, costRate, width }: { index: number; finding: WasteFinding; costRate: number; width: number }) {
+function FindingPanel({ index, finding, costRate, width, includeCostEstimate }: { index: number; finding: WasteFinding; costRate: number; width: number; includeCostEstimate: boolean }) {
   const color = IMPACT_PANEL_COLORS[finding.impact] ?? DIM
   const label = finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)
   const trendBadge = finding.trend === 'improving' ? ' improving \u2193' : ''
@@ -613,7 +650,7 @@ function FindingPanel({ index, finding, costRate, width }: { index: number; find
         {trendBadge && <Text color={TUI_THEME.state.success}>{trendBadge}</Text>}
       </Text>
       <Text dimColor wrap="wrap">{finding.explanation}</Text>
-      <Text color={VALUE}>{formatInlineOptimizeFindingSavings(finding, costRate)}</Text>
+      <Text color={VALUE}>{formatInlineOptimizeFindingSavings(finding, costRate, includeCostEstimate)}</Text>
       <Text> </Text>
       <FindingAction action={finding.fix} />
     </Box>
@@ -622,9 +659,10 @@ function FindingPanel({ index, finding, costRate, width }: { index: number; find
 
 const GRADE_COLORS: Record<string, string> = { A: TUI_THEME.state.success, B: TUI_THEME.state.success, C: TUI_THEME.state.warning, D: TUI_THEME.state.warning, F: TUI_THEME.state.error }
 
-function OptimizeView({ findings, costRate, projects, label, width, healthScore, healthGrade }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number; healthScore: number; healthGrade: string }) {
+function OptimizeView({ findings, costRate, projects, label, width, healthScore, healthGrade, billingMode }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number; healthScore: number; healthGrade: string; billingMode: BillingMode }) {
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
-  const summaryLines = formatInlineOptimizeSummary(findings, costRate, periodCost)
+  const includeCostEstimate = billingMode === 'token_plus'
+  const summaryLines = formatInlineOptimizeSummary(findings, costRate, periodCost, includeCostEstimate)
   const gradeColor = GRADE_COLORS[healthGrade] ?? DIM
   return (
     <Box flexDirection="column" width={width}>
@@ -633,24 +671,43 @@ function OptimizeView({ findings, costRate, projects, label, width, healthScore,
           <Text bold color={ACCENT}>CodeBurn Optimize</Text>
           <Text dimColor>  {label}   Setup: </Text>
           <Text bold color={gradeColor}>{healthGrade}</Text>
-          <Text dimColor> ({healthScore}/100)</Text>
+          <Text dimColor> ({healthScore}/100)   Billing: {billingModeLabel(billingMode)}</Text>
         </Text>
         {summaryLines.map((line, i) => <Text key={i} color={VALUE} wrap="truncate-end">{line}</Text>)}
       </Box>
-      {findings.map((f, i) => <FindingPanel key={i} index={i + 1} finding={f} costRate={costRate} width={width} />)}
-      <Box paddingX={1} width={width}><Text dimColor>Estimates only.</Text></Box>
+      {findings.map((f, i) => <FindingPanel key={i} index={i + 1} finding={f} costRate={costRate} width={width} includeCostEstimate={includeCostEstimate} />)}
+      <Box paddingX={1} width={width}><Text dimColor>{includeCostEstimate ? 'Billed Cost estimates only.' : 'Token savings shown; switch to Billed Cost for USD estimates.'}</Text></Box>
     </Box>
   )
 }
 
-function StatusBar({ width, view, findingCount }: { width: number; view?: View; findingCount?: number }) {
+export function statusBarHelpLabels(view: View | undefined, findingCount?: number): string[] {
+  const isOptimize = view === 'optimize'
+  const labels = isOptimize ? ['b back'] : ['<> switch']
+  labels.push('c credits', 'd billed cost', 'q quit', '1 today', '2 week', '3 30 days', '4 month', '5 all time')
+  if (!isOptimize && findingCount != null && findingCount > 0) labels.push(`o optimize (${findingCount})`)
+  return labels
+}
+
+function BillingShortcut({ shortcutMode, activeMode }: { shortcutMode: BillingMode; activeMode: BillingMode }) {
+  const active = shortcutMode === activeMode
+  const key = shortcutMode === 'credits' ? 'c' : 'd'
+  const label = shortcutMode === 'credits' ? ' credits   ' : ' billed cost   '
+  const color = active ? VALUE : ACCENT_BRIGHT
+  const labelColor = active ? VALUE : DIM_TEXT
+  return <><Text color={color} bold>{key}</Text><Text color={labelColor} bold={active}>{label}</Text></>
+}
+
+function StatusBar({ width, view, findingCount, billingMode }: { width: number; view?: View; findingCount?: number; billingMode: BillingMode }) {
   const isOptimize = view === 'optimize'
   return (
-    <Box borderStyle="round" borderColor={TUI_THEME.chrome.borderNeutral} width={width} justifyContent="center" paddingX={1}>
+    <Box borderStyle="round" borderColor={TUI_THEME.chrome.borderMuted} width={width} justifyContent="center" paddingX={1}>
       <Text>
         {isOptimize
           ? <><Text color={ACCENT_BRIGHT} bold>b</Text><Text color={DIM_TEXT}> back   </Text></>
           : <><Text color={ACCENT_BRIGHT} bold>{'<'}</Text><Text color={ACCENT_BRIGHT}>{'>'}</Text><Text color={DIM_TEXT}> switch   </Text></>}
+        <BillingShortcut shortcutMode="credits" activeMode={billingMode} />
+        <BillingShortcut shortcutMode="token_plus" activeMode={billingMode} />
         <Text color={ACCENT_BRIGHT} bold>q</Text><Text color={DIM_TEXT}> quit   </Text>
         <Text color={ACCENT_BRIGHT} bold>1</Text><Text color={DIM_TEXT}> today   </Text>
         <Text color={ACCENT_BRIGHT} bold>2</Text><Text color={DIM_TEXT}> week   </Text>
@@ -678,9 +735,9 @@ function DashboardContent({ projects, period, label, columns, billingMode, surch
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={label} width={dashWidth} billingMode={billingMode} surchargeRate={surchargeRate} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} billingMode={billingMode} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} /></Row>
-      <TopSessions projects={projects} pw={dashWidth} bw={barWidth} billingMode={billingMode} />
-      <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} /></Row>
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} billingMode={billingMode} surchargeRate={surchargeRate} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} surchargeRate={surchargeRate} /></Row>
+      <TopSessions projects={projects} pw={dashWidth} bw={barWidth} billingMode={billingMode} surchargeRate={surchargeRate} />
+      <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} surchargeRate={surchargeRate} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} billingMode={billingMode} surchargeRate={surchargeRate} /></Row>
       <Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
     </Box>
@@ -703,6 +760,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialLabel, re
   const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects)
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<View>('dashboard')
+  const [activeBillingMode, setActiveBillingMode] = useState<BillingMode>(billingMode)
   const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null)
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
@@ -752,9 +810,12 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialLabel, re
   }, [period, reloadData])
 
   useInput((input, key) => {
-    if (input === 'q') { exit(); return }
-    if (input === 'o' && findingCount > 0 && view === 'dashboard') { setView('optimize'); return }
-    if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); return }
+    const action = dashboardInputAction(input, key, view, findingCount)
+    if (action === 'quit') { exit(); return }
+    if (action === 'billingCredits') { setActiveBillingMode('credits'); return }
+    if (action === 'billingBilledCost') { setActiveBillingMode('token_plus'); return }
+    if (action === 'openOptimize') { setView('optimize'); return }
+    if (action === 'backToDashboard') { setView('dashboard'); return }
     const idx = PERIODS.indexOf(period)
     if (key.leftArrow && view === 'dashboard') switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length])
     else if ((key.rightArrow || key.tab) && view === 'dashboard') switchPeriod(PERIODS[(idx + 1) % PERIODS.length])
@@ -770,7 +831,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialLabel, re
       <Box flexDirection="column" width={dashWidth}>
         <PeriodTabs active={period} />
         <Panel title="CodeBurn" color={ACCENT} width={dashWidth}><Text dimColor>Loading {label}...</Text></Panel>
-        <StatusBar width={dashWidth} view="dashboard" findingCount={0} />
+        <StatusBar width={dashWidth} view="dashboard" findingCount={0} billingMode={activeBillingMode} />
       </Box>
     )
   }
@@ -779,9 +840,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialLabel, re
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} />
       {view === 'optimize' && optimizeResult
-        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={label} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-        : <DashboardContent projects={projects} period={period} label={label} columns={columns} billingMode={billingMode} surchargeRate={surchargeRate} />}
-      <StatusBar width={dashWidth} view={view} findingCount={findingCount} />
+        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={label} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} billingMode={activeBillingMode} />
+        : <DashboardContent projects={projects} period={period} label={label} columns={columns} billingMode={activeBillingMode} surchargeRate={surchargeRate} />}
+      <StatusBar width={dashWidth} view={view} findingCount={findingCount} billingMode={activeBillingMode} />
     </Box>
   )
 }

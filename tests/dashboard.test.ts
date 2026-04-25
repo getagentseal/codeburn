@@ -1,6 +1,15 @@
 import { describe, it, expect } from 'vitest'
 
-import { formatInlineOptimizeFindingSavings, formatInlineOptimizeSummary } from '../src/dashboard.js'
+import {
+  billingDisplayValue,
+  billingModeLabel,
+  compactBillingMetricLabel,
+  dashboardInputAction,
+  formatInlineOptimizeFindingSavings,
+  formatInlineOptimizeSummary,
+  projectAverageHeaderLabel,
+  statusBarHelpLabels,
+} from '../src/dashboard.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 import type { WasteFinding } from '../src/optimize.js'
@@ -100,7 +109,7 @@ describe('TopSessions - top-5 selection', () => {
   })
 })
 
-describe('avg/s in ProjectBreakdown', () => {
+describe('avg/run in ProjectBreakdown', () => {
   it('returns dash for a project with no sessions', () => {
     const project = makeProject('proj', [])
     expect(avgCostLabel(project)).toBe('-')
@@ -110,6 +119,56 @@ describe('avg/s in ProjectBreakdown', () => {
     const sessions = [makeSession('s1', 2.0), makeSession('s2', 4.0)]
     const project = makeProject('proj', sessions)
     expect(avgCostLabel(project)).toBe(formatCost(3.0))
+  })
+
+  it('uses avg/run header wording instead of per-second wording', () => {
+    expect(projectAverageHeaderLabel()).toBe('avg/run')
+  })
+})
+
+describe('interactive billing mode helpers', () => {
+  it('uses approved customer-facing billing labels', () => {
+    expect(billingModeLabel('credits')).toBe('Credits')
+    expect(billingModeLabel('token_plus')).toBe('Billed Cost')
+    expect(compactBillingMetricLabel('credits')).toBe('credits')
+    expect(compactBillingMetricLabel('token_plus')).toBe('billed')
+  })
+
+  it('maps c and d keys to session-local billing mode actions in dashboard and optimize views', () => {
+    expect(dashboardInputAction('c', {}, 'dashboard', 2)).toBe('billingCredits')
+    expect(dashboardInputAction('d', {}, 'dashboard', 2)).toBe('billingBilledCost')
+    expect(dashboardInputAction('c', {}, 'optimize', 2)).toBe('billingCredits')
+    expect(dashboardInputAction('d', {}, 'optimize', 2)).toBe('billingBilledCost')
+  })
+
+  it('keeps existing navigation actions intact', () => {
+    expect(dashboardInputAction('o', {}, 'dashboard', 2)).toBe('openOptimize')
+    expect(dashboardInputAction('b', {}, 'optimize', 2)).toBe('backToDashboard')
+    expect(dashboardInputAction('', { escape: true }, 'optimize', 2)).toBe('backToDashboard')
+    expect(dashboardInputAction('q', {}, 'dashboard', 2)).toBe('quit')
+  })
+
+  it('advertises footer shortcuts in the approved order', () => {
+    expect(statusBarHelpLabels('dashboard', 2)).toEqual([
+      '<> switch',
+      'c credits',
+      'd billed cost',
+      'q quit',
+      '1 today',
+      '2 week',
+      '3 30 days',
+      '4 month',
+      '5 all time',
+      'o optimize (2)',
+    ])
+    expect(statusBarHelpLabels('optimize', 2).slice(0, 4)).toEqual(['b back', 'c credits', 'd billed cost', 'q quit'])
+  })
+
+  it('derives the toggled display value without changing env/config state', () => {
+    expect(billingDisplayValue({ credits: 42, baseCostUsd: 0.01 }, 'credits')).toBe(42)
+    expect(billingDisplayValue({ credits: null, baseCostUsd: 0.01 }, 'credits')).toBe(16)
+    expect(billingDisplayValue({ baseCostUsd: 1, billedAmountUsd: null }, 'token_plus', 0.3)).toBe(1.3)
+    expect(billingDisplayValue({ billedAmountUsd: 2, baseCostUsd: 1 }, 'token_plus', 0.3)).toBe(2)
   })
 })
 
@@ -148,5 +207,13 @@ describe('inline optimize wording', () => {
   it('labels per-call finding savings per affected call', () => {
     expect(formatInlineOptimizeFindingSavings(makeFinding(2_000, 'per-call'), 0.00001))
       .toBe('Potential savings per affected call: ~2.0K tokens (~$0.020 token-pricing estimate)')
+  })
+
+  it('suppresses USD estimates in credits-mode inline optimize output', () => {
+    expect(formatInlineOptimizeSummary([makeFinding(10_000)], 0.00001, 1, false)).toEqual([
+      'Potential aggregate savings: ~10.0K tokens',
+    ])
+    expect(formatInlineOptimizeFindingSavings(makeFinding(2_000, 'per-call'), 0.00001, false))
+      .toBe('Potential savings per affected call: ~2.0K tokens')
   })
 })

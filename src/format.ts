@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 import type { ProjectSummary } from './types.js'
-import { loadBillingConfig } from './billing.js'
+import { loadBillingConfig, synthesizeCredits } from './billing.js'
 import { TUI_THEME } from './theme.js'
 
 // Re-exported from currency.ts so existing imports from './format.js' keep working.
@@ -52,12 +52,17 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
         // strings; naively slicing `timestamp.slice(0,10)` bucketed them by UTC date, which
         // showed `Today $0` during the UTC-midnight-to-local-midnight window.
         const day = localDateString(new Date(turn.timestamp))
-        // Use billing-mode aware value: credits in credits mode, billedAmountUsd in token_plus
+        // Use billing-mode aware value: credits in credits mode, billedAmountUsd in token_plus.
+        // Fallbacks keep compact static status labels consistent with the interactive TUI
+        // without changing env/config defaults.
         const turnValue = turn.assistantCalls.reduce((s, c) => {
           if (billingConfig.mode === 'credits') {
-            return s + (c.billing?.creditsAugment ?? c.credits ?? 0)
+            return s + (c.billing?.creditsAugment ?? c.credits ?? (c.billing?.baseCostUsd != null ? synthesizeCredits(c.billing.baseCostUsd) : 0))
           } else {
-            return s + (c.billing?.billedAmountUsd ?? c.costUSD)
+            const fallbackBilled = c.billing?.baseCostUsd != null
+              ? c.billing.baseCostUsd + c.billing.baseCostUsd * billingConfig.surchargeRate
+              : c.costUSD
+            return s + (c.billing?.billedAmountUsd ?? fallbackBilled)
           }
         }, 0)
         const turnCalls = turn.assistantCalls.length
@@ -68,6 +73,7 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
   }
 
   const lines: string[] = ['']
+  lines.push(`  ${chalk.hex(TUI_THEME.text.dim)(`Billing: ${billingConfig.mode === 'credits' ? 'Credits' : 'Billed Cost'}`)}`)
   if (billingConfig.mode === 'credits') {
     lines.push(`  ${chalk.bold.hex(TUI_THEME.accent.primary)('Today')}  ${chalk.hex(TUI_THEME.value.primary)(formatCredits(todayValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${todayCalls} calls`)}    ${chalk.bold.hex(TUI_THEME.accent.primary)('Month')}  ${chalk.hex(TUI_THEME.value.primary)(formatCredits(monthValue))}  ${chalk.hex(TUI_THEME.text.dim)(`${monthCalls} calls`)}`)
   } else {
