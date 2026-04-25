@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { copyFile, mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { createAuggieProvider } from '../../src/providers/auggie.js'
+import type { BillingConfig } from '../../src/billing.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const FIXTURE_DIR = new URL('../fixtures/auggie/', import.meta.url).pathname
@@ -32,6 +33,24 @@ async function stageFixture(name: string): Promise<string> {
   return dest
 }
 
+async function waitForCacheFile(path: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    if (existsSync(path)) return
+    await new Promise(r => setTimeout(r, 10))
+  }
+  expect(existsSync(path)).toBe(true)
+}
+
+async function waitForCacheBillingConfig(path: string, expected: BillingConfig): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    const cache = JSON.parse(await readFile(path, 'utf-8'))
+    if (cache.billingConfig?.mode === expected.mode && cache.billingConfig?.surchargeRate === expected.surchargeRate) return
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const cache = JSON.parse(await readFile(path, 'utf-8'))
+  expect(cache.billingConfig).toEqual(expected)
+}
+
 beforeEach(async () => {
   workDir = await mkdtemp(join(tmpdir(), 'codeburn-auggie-test-'))
   sessionsDir = join(workDir, 'sessions')
@@ -42,6 +61,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env['CODEBURN_CACHE_DIR']
+  delete process.env['CODEBURN_BILLING_MODE']
+  delete process.env['CODEBURN_SURCHARGE_RATE']
   for (const k of Object.keys(process.env)) {
     if (k.startsWith('CODEBURN_AUGGIE_')) delete process.env[k]
   }
@@ -83,6 +104,8 @@ describe('auggie provider - parsing', () => {
     expect(calls).toHaveLength(1)
     const [call] = calls
     expect(call.provider).toBe('auggie')
+    expect(call.project).toBe('demo-project/repo')
+    expect(call.workspaceId).toBe('ws-aaaaaaaa')
     expect(call.model).toBe('claude-sonnet-4-5')
     expect(call.inputTokens).toBe(5)
     expect(call.outputTokens).toBe(120)
@@ -181,6 +204,43 @@ describe('auggie provider - cache', () => {
     expect(calls[0].deduplicationKey).toBe(
       'auggie:11111111-1111-4111-8111-111111111111:req-aaaa0001:0',
     )
+  })
+
+  it('does not reuse cached credits billing when switching to token_plus mode', async () => {
+    const path = await stageFixture('single-call.json')
+    const cacheFile = join(cacheDir, 'auggie', 'single-call.json')
+
+    const creditsCalls = await collectCalls(path)
+    expect(creditsCalls[0].billing?.mode).toBe('credits')
+    await waitForCacheFile(cacheFile)
+
+    process.env['CODEBURN_BILLING_MODE'] = 'token_plus'
+    process.env['CODEBURN_SURCHARGE_RATE'] = '0.25'
+    const tokenPlusCalls = await collectCalls(path)
+
+    expect(tokenPlusCalls[0].billing?.mode).toBe('token_plus')
+    expect(tokenPlusCalls[0].billing?.creditsAugment).toBeNull()
+    expect(tokenPlusCalls[0].billing?.surchargeUsd).toBeGreaterThan(0)
+    expect(tokenPlusCalls[0].billing?.billedAmountUsd).toBeGreaterThan(0)
+  })
+
+  it('does not reuse cached token_plus billing when surcharge settings change', async () => {
+    const path = await stageFixture('single-call.json')
+    const cacheFile = join(cacheDir, 'auggie', 'single-call.json')
+
+    process.env['CODEBURN_BILLING_MODE'] = 'token_plus'
+    process.env['CODEBURN_SURCHARGE_RATE'] = '0.10'
+    const first = await collectCalls(path)
+    await waitForCacheFile(cacheFile)
+
+    process.env['CODEBURN_SURCHARGE_RATE'] = '0.25'
+    const second = await collectCalls(path)
+
+    expect(first[0].billing?.surchargeUsd).toBeGreaterThan(0)
+    expect(second[0].billing?.surchargeUsd).toBeGreaterThan(first[0].billing!.surchargeUsd!)
+    expect(second[0].billing?.billedAmountUsd).toBeGreaterThan(first[0].billing!.billedAmountUsd!)
+
+    await waitForCacheBillingConfig(cacheFile, { mode: 'token_plus', surchargeRate: 0.25 })
   })
 })
 
