@@ -12,6 +12,8 @@ export type SessionParser = {
 
 export type ParsedProviderCall = {
   provider: string
+  project?: string
+  workspaceId?: string
   model: string
   inputTokens: number
   outputTokens: number

@@ -14,6 +14,7 @@ import type {
 import { classifyTurn } from './classifier.js'
 
 function unsanitizePath(dirName: string): string {
+  if (dirName.includes('/')) return dirName
   return dirName.replace(/-/g, '/')
 }
 
@@ -63,6 +64,7 @@ function buildSessionSummary(
   project: string,
   turns: ClassifiedTurn[],
   sessionCreditUsage?: number | null,
+  workspaceId?: string,
 ): SessionSummary {
   const modelBreakdown: SessionSummary['modelBreakdown'] = Object.create(null)
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
@@ -194,6 +196,7 @@ function buildSessionSummary(
   return {
     sessionId,
     project,
+    ...(workspaceId ? { workspaceId } : {}),
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
@@ -231,6 +234,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
 
   const apiCall: ParsedApiCall = {
     provider: call.provider,
+    ...(call.workspaceId ? { workspaceId: call.workspaceId } : {}),
     model: call.model,
     usage,
     costUSD: call.costUSD,
@@ -263,7 +267,7 @@ async function parseProviderSources(
   const provider = await getProvider(providerName)
   if (!provider) return []
 
-  const sessionMap = new Map<string, { sessionId: string; project: string; turns: ClassifiedTurn[]; sessionCreditUsage?: number | null }>()
+  const sessionMap = new Map<string, { sessionId: string; project: string; turns: ClassifiedTurn[]; sessionCreditUsage?: number | null; workspaceId?: string }>()
 
   for (const source of sources) {
     if (dateRange) {
@@ -286,7 +290,8 @@ async function parseProviderSources(
 
       const turn = providerCallToTurn(call)
       const classified = classifyTurn(turn)
-      const key = JSON.stringify([providerName, call.sessionId, source.project])
+      const project = call.project || source.project
+      const key = JSON.stringify([providerName, call.sessionId, project, call.workspaceId ?? ''])
 
       const existing = sessionMap.get(key)
       if (existing) {
@@ -295,24 +300,26 @@ async function parseProviderSources(
         if (call.sessionCreditUsage !== undefined && existing.sessionCreditUsage === undefined) {
           existing.sessionCreditUsage = call.sessionCreditUsage
         }
+        if (call.workspaceId && !existing.workspaceId) existing.workspaceId = call.workspaceId
       } else {
-        sessionMap.set(key, { sessionId: call.sessionId, project: source.project, turns: [classified], sessionCreditUsage: call.sessionCreditUsage })
+        sessionMap.set(key, { sessionId: call.sessionId, project, turns: [classified], sessionCreditUsage: call.sessionCreditUsage, workspaceId: call.workspaceId })
       }
     }
   }
 
-  const projectMap = new Map<string, SessionSummary[]>()
-  for (const { sessionId, project, turns, sessionCreditUsage } of sessionMap.values()) {
-    const session = buildSessionSummary(sessionId, project, turns, sessionCreditUsage)
+  const projectMap = new Map<string, { sessions: SessionSummary[]; workspaceIds: Set<string> }>()
+  for (const { sessionId, project, turns, sessionCreditUsage, workspaceId } of sessionMap.values()) {
+    const session = buildSessionSummary(sessionId, project, turns, sessionCreditUsage, workspaceId)
     if (session.apiCalls > 0) {
-      const existing = projectMap.get(project) ?? []
-      existing.push(session)
+      const existing = projectMap.get(project) ?? { sessions: [], workspaceIds: new Set<string>() }
+      existing.sessions.push(session)
+      if (workspaceId) existing.workspaceIds.add(workspaceId)
       projectMap.set(project, existing)
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
+  for (const [dirName, { sessions, workspaceIds }] of projectMap) {
     // Aggregate credits: null + null = null, null + N = N, N + M = N + M
     const totalCredits = sessions.reduce<number | null>((acc, sess) => {
       if (acc === null && sess.totalCredits === null) return null
@@ -321,6 +328,7 @@ async function parseProviderSources(
     projects.push({
       project: dirName,
       projectPath: unsanitizePath(dirName),
+      workspaceIds: [...workspaceIds].sort(),
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
       totalCredits,
@@ -360,20 +368,27 @@ export function filterProjectsByName(
   if (include && include.length > 0) {
     const patterns = include.map(s => s.toLowerCase())
     result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const labels = searchableProjectLabels(p)
+      return patterns.some(pat => labels.some(label => label.includes(pat)))
     })
   }
   if (exclude && exclude.length > 0) {
     const patterns = exclude.map(s => s.toLowerCase())
     result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const labels = searchableProjectLabels(p)
+      return !patterns.some(pat => labels.some(label => label.includes(pat)))
     })
   }
   return result
+}
+
+function searchableProjectLabels(project: ProjectSummary): string[] {
+  return [
+    project.project,
+    project.projectPath,
+    ...(project.workspaceIds ?? []),
+    ...project.sessions.map(session => session.workspaceId).filter((id): id is string => Boolean(id)),
+  ].map(label => label.toLowerCase())
 }
 
 export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSummary[]> {
@@ -402,6 +417,7 @@ export async function parseAllSessions(dateRange?: DateRange): Promise<ProjectSu
     const existing = mergedMap.get(p.project)
     if (existing) {
       existing.sessions.push(...p.sessions)
+      existing.workspaceIds = [...new Set([...(existing.workspaceIds ?? []), ...(p.workspaceIds ?? [])])].sort()
       existing.totalCostUSD += p.totalCostUSD
       // Merge credits: null + null = null, null + N = N, N + M = N + M
       if (existing.totalCredits === null && p.totalCredits === null) {
