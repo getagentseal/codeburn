@@ -133,6 +133,8 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'cursor-auto':                    'claude-sonnet-4-5',
   'cursor-agent-auto':             'claude-sonnet-4-5',
   'copilot-auto':                  'claude-sonnet-4-5',
+  'copilot-openai-auto':           'gpt-5.3-codex',
+  'copilot-anthropic-auto':        'claude-sonnet-4-5',
   'kiro-auto':                     'claude-sonnet-4-5',
   'cline-auto':                    'claude-sonnet-4-5',
   'openclaw-auto':                 'claude-sonnet-4-5',

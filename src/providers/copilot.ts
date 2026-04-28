@@ -13,8 +13,16 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-4.1': 'GPT-4.1',
   'gpt-4o-mini': 'GPT-4o Mini',
   'gpt-4o': 'GPT-4o',
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5.3-codex': 'GPT-5.3 Codex',
   'gpt-5-mini': 'GPT-5 Mini',
   'gpt-5': 'GPT-5',
+  'claude-opus-4-7': 'Opus 4.7',
+  'claude-opus-4-6': 'Opus 4.6',
+  'claude-opus-4-5': 'Opus 4.5',
+  'claude-opus-4-1': 'Opus 4.1',
+  'claude-opus-4': 'Opus 4',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-sonnet-4': 'Sonnet 4',
   'claude-3-7-sonnet': 'Sonnet 3.7',
@@ -45,6 +53,8 @@ const toolNameMap: Record<string, string> = {
 }
 
 const CHARS_PER_TOKEN = 4
+const COPILOT_OPENAI_AUTO = 'copilot-openai-auto'
+const COPILOT_ANTHROPIC_AUTO = 'copilot-anthropic-auto'
 
 const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
@@ -143,15 +153,35 @@ type TranscriptEvent =
   | { type: 'assistant.message'; timestamp?: string; data: { messageId: string; content?: string; reasoningText?: string; toolRequests?: TranscriptToolRequest[]; outputTokens?: number } }
   | { type: string; timestamp?: string; data: Record<string, unknown> }
 
+const transcriptToolCallModelHints: Array<{ prefix: string; model: string }> = [
+  // Anthropic tool-call ID variants observed in Copilot transcript logs.
+  { prefix: 'toolu_bdrk_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'toolu_vrtx_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'tooluse_', model: COPILOT_ANTHROPIC_AUTO },
+  // OpenAI tool-call IDs.
+  { prefix: 'call_', model: COPILOT_OPENAI_AUTO },
+]
+
 function inferModelFromToolCallIds(events: TranscriptEvent[]): string {
+  const modelCounts = new Map<string, number>()
+
   for (const e of events) {
     if (e.type !== 'assistant.message') continue
     const msg = e as { data: { toolRequests?: TranscriptToolRequest[] } }
     for (const t of msg.data.toolRequests ?? []) {
-      if (t.toolCallId?.startsWith('toolu_bdrk_')) return 'claude-sonnet-4-5'
-      if (t.toolCallId?.startsWith('call_')) return 'gpt-4.1'
+      const toolCallId = t.toolCallId ?? ''
+      for (const hint of transcriptToolCallModelHints) {
+        if (!toolCallId.startsWith(hint.prefix)) continue
+        modelCounts.set(hint.model, (modelCounts.get(hint.model) ?? 0) + 1)
+        break
+      }
     }
   }
+
+  if (modelCounts.size > 0) {
+    return [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+  }
+
   return 'copilot-auto'
 }
 
@@ -375,6 +405,8 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
 
     modelDisplayName(model: string): string {
       if (model === 'copilot-auto') return 'Copilot (auto)'
+      if (model === COPILOT_OPENAI_AUTO) return 'Copilot (OpenAI auto)'
+      if (model === COPILOT_ANTHROPIC_AUTO) return 'Copilot (Anthropic auto)'
       for (const [key, name] of modelDisplayEntries) {
         if (model === key || model.startsWith(key + '-')) return name
       }
