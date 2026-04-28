@@ -69,8 +69,9 @@ export function computeModelOneShotRates(projects: ProjectSummary[]): ModelOneSh
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
-        const primaryModel = turn.assistantCalls[0]
-          ? getShortModelName(turn.assistantCalls[0].model)
+        const lastCall = turn.assistantCalls[turn.assistantCalls.length - 1]
+        const primaryModel = lastCall
+          ? getShortModelName(lastCall.model)
           : null
         if (!primaryModel) continue
         const entry = modelData.get(primaryModel) ?? {
