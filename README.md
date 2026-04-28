@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/getagentseal-codeburn-badge.png)](https://mseep.ai/app/getagentseal-codeburn)
+
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/logo.png" alt="CodeBurn" width="120" />
 </p>
