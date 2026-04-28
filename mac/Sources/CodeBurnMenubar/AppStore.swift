@@ -246,8 +246,8 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     var providerKeys: [String] {
         switch self {
         case .cursor: ["cursor", "cursor agent"]
-        case .rooCode: ["roo-code"]
-        case .kiloCode: ["kilo-code"]
+        case .rooCode: ["roo-code", "roo code"]
+        case .kiloCode: ["kilo-code", "kilocode"]
         case .openclaw: ["openclaw"]
         default: [rawValue.lowercased()]
         }

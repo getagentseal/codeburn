@@ -62,11 +62,11 @@ describe('loadDailyCache', () => {
     expect(cache.days).toEqual([])
   })
 
-  it('returns an empty cache when the version does not match', async () => {
-    const saved: DailyCache = {
-      version: DAILY_CACHE_VERSION - 999,
+  it('returns an empty cache and backs up when version is too old to migrate', async () => {
+    const saved = {
+      version: 1,
       lastComputedDate: '2026-04-10',
-      days: [emptyDay('2026-04-10', 10)],
+      days: [{ date: '2026-04-10', cost: 10, calls: 5 }],
     }
     const { writeFile, mkdir } = await import('fs/promises')
     await mkdir(TMP_CACHE_ROOT, { recursive: true })
@@ -74,6 +74,32 @@ describe('loadDailyCache', () => {
     const cache = await loadDailyCache()
     expect(cache.days).toEqual([])
     expect(cache.lastComputedDate).toBeNull()
+    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v1.bak'))).toBe(true)
+  })
+
+  it('migrates an older supported version by filling missing fields', async () => {
+    const saved = {
+      version: 2,
+      lastComputedDate: '2026-04-10',
+      days: [{
+        date: '2026-04-10', cost: 10, calls: 5, sessions: 2,
+        inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100,
+        models: { 'claude-opus-4-6': { calls: 5, cost: 10, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100 } },
+      }],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+    const cache = await loadDailyCache()
+    expect(cache.version).toBe(DAILY_CACHE_VERSION)
+    expect(cache.days).toHaveLength(1)
+    expect(cache.days[0].date).toBe('2026-04-10')
+    expect(cache.days[0].cost).toBe(10)
+    expect(cache.days[0].editTurns).toBe(0)
+    expect(cache.days[0].oneShotTurns).toBe(0)
+    expect(cache.days[0].categories).toEqual({})
+    expect(cache.days[0].providers).toEqual({})
+    expect(cache.days[0].models['claude-opus-4-6'].calls).toBe(5)
   })
 
   it('round-trips a valid cache through save and load', async () => {

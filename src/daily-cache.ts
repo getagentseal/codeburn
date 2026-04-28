@@ -3,8 +3,10 @@ import { existsSync } from 'fs'
 import { mkdir, open, readFile, rename, unlink } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
+import type { DateRange, ProjectSummary } from './types.js'
 
 export const DAILY_CACHE_VERSION = 4
+const MIN_SUPPORTED_VERSION = 2
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
@@ -48,12 +50,35 @@ function emptyCache(): DailyCache {
   return { version: DAILY_CACHE_VERSION, lastComputedDate: null, days: [] }
 }
 
-function isValidCache(parsed: unknown): parsed is DailyCache {
+function isMigratableCache(parsed: unknown): parsed is { version: number; lastComputedDate: string | null; days: Record<string, unknown>[] } {
   if (!parsed || typeof parsed !== 'object') return false
   const c = parsed as Partial<DailyCache>
-  if (c.version !== DAILY_CACHE_VERSION) return false
+  if (typeof c.version !== 'number') return false
   if (!Array.isArray(c.days)) return false
-  return true
+  return c.version >= MIN_SUPPORTED_VERSION && c.version <= DAILY_CACHE_VERSION
+}
+
+function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
+  return days.map(d => ({
+    date: d.date as string,
+    cost: (d.cost as number) ?? 0,
+    calls: (d.calls as number) ?? 0,
+    sessions: (d.sessions as number) ?? 0,
+    inputTokens: (d.inputTokens as number) ?? 0,
+    outputTokens: (d.outputTokens as number) ?? 0,
+    cacheReadTokens: (d.cacheReadTokens as number) ?? 0,
+    cacheWriteTokens: (d.cacheWriteTokens as number) ?? 0,
+    editTurns: (d.editTurns as number) ?? 0,
+    oneShotTurns: (d.oneShotTurns as number) ?? 0,
+    models: (d.models as DailyEntry['models']) ?? {},
+    categories: (d.categories as DailyEntry['categories']) ?? {},
+    providers: (d.providers as DailyEntry['providers']) ?? {},
+  }))
+}
+
+async function backupOldCache(path: string, version: number): Promise<void> {
+  const backupPath = `${path}.v${version}.bak`
+  try { await rename(path, backupPath) } catch { /* best-effort */ }
 }
 
 export async function loadDailyCache(): Promise<DailyCache> {
@@ -62,8 +87,16 @@ export async function loadDailyCache(): Promise<DailyCache> {
   try {
     const raw = await readFile(path, 'utf-8')
     const parsed: unknown = JSON.parse(raw)
-    if (!isValidCache(parsed)) return emptyCache()
-    return parsed
+    if (isMigratableCache(parsed)) {
+      return {
+        version: DAILY_CACHE_VERSION,
+        lastComputedDate: parsed.lastComputedDate,
+        days: migrateDays(parsed.days),
+      }
+    }
+    const oldVersion = (parsed as { version?: number })?.version
+    if (typeof oldVersion === 'number') await backupOldCache(path, oldVersion)
+    return emptyCache()
   } catch {
     return emptyCache()
   }
@@ -112,4 +145,49 @@ export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
   const next = lockChain.then(() => fn())
   lockChain = next.catch(() => undefined)
   return next
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const BACKFILL_DAYS = 365
+
+function toDateString(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+export async function ensureCacheHydrated(
+  parseSessions: (range: DateRange) => Promise<ProjectSummary[]>,
+  aggregateDays: (projects: ProjectSummary[]) => DailyEntry[],
+): Promise<DailyCache> {
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterdayEnd = new Date(todayStart.getTime() - 1)
+  const yesterdayStr = toDateString(new Date(todayStart.getTime() - MS_PER_DAY))
+
+  return withDailyCacheLock(async () => {
+    let c = await loadDailyCache()
+
+    const hadYesterday = c.days.some(d => d.date >= yesterdayStr)
+    if (hadYesterday) {
+      const freshDays = c.days.filter(d => d.date < yesterdayStr)
+      const latestFresh = freshDays.length > 0 ? freshDays[freshDays.length - 1].date : null
+      c = { ...c, days: freshDays, lastComputedDate: latestFresh }
+    }
+
+    const gapStart = c.lastComputedDate
+      ? new Date(
+          parseInt(c.lastComputedDate.slice(0, 4)),
+          parseInt(c.lastComputedDate.slice(5, 7)) - 1,
+          parseInt(c.lastComputedDate.slice(8, 10)) + 1
+        )
+      : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
+
+    if (gapStart.getTime() <= yesterdayEnd.getTime()) {
+      const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
+      const gapProjects = await parseSessions(gapRange)
+      const gapDays = aggregateDays(gapProjects)
+      c = addNewDays(c, gapDays, yesterdayStr)
+      await saveDailyCache(c)
+    }
+    return c
+  })
 }

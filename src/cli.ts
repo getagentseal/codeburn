@@ -7,7 +7,7 @@ import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { type PeriodData, type ProviderCost } from './menubar-json.js'
 import { buildMenubarPayload } from './menubar-json.js'
-import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCacheLock } from './daily-cache.js'
+import { getDaysInRange, ensureCacheHydrated } from './daily-cache.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
@@ -29,6 +29,13 @@ const BACKFILL_DAYS = 365
 
 function toDateString(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function hydrateCache() {
+  return ensureCacheHydrated(
+    (range) => parseAllSessions(range, 'all'),
+    aggregateProjectsIntoDays,
+  )
 }
 
 function getDateRange(period: string): { range: DateRange; label: string } {
@@ -122,6 +129,7 @@ function toJsonPlanSummary(planUsage: PlanUsage): JsonPlanSummary {
 
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
+  await hydrateCache()
   const { range, label } = getDateRange(period)
   const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
   const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary } = buildJsonReport(projects, label, period)
@@ -304,6 +312,7 @@ program
     const period = toPeriod(opts.period)
     if (opts.format === 'json') {
       await loadPricing()
+      await hydrateCache()
       if (customRange) {
         const label = `${opts.from ?? 'all'} to ${opts.to ?? 'today'}`
         const projects = filterProjectsByName(
@@ -317,6 +326,7 @@ program
       }
       return
     }
+    await hydrateCache()
     await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange)
   })
 
@@ -377,41 +387,10 @@ program
       const periodInfo = getDateRange(opts.period)
       const now = new Date()
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const yesterdayEnd = new Date(todayStart.getTime() - 1)
       const yesterdayStr = toDateString(new Date(todayStart.getTime() - MS_PER_DAY))
       const isAllProviders = pf === 'all'
 
-      // The daily cache is provider-agnostic: always backfill it from .all so subsequent
-      // provider-filtered reads can derive per-provider cost+calls from DailyEntry.providers.
-      // Yesterday is always recomputed: it may have been cached mid-day with partial data.
-      const cache = await withDailyCacheLock(async () => {
-        let c = await loadDailyCache()
-
-        // Evict yesterday (and any stale future entries) so the gap fill recomputes them.
-        const hadYesterday = c.days.some(d => d.date >= yesterdayStr)
-        if (hadYesterday) {
-          const freshDays = c.days.filter(d => d.date < yesterdayStr)
-          const latestFresh = freshDays.length > 0 ? freshDays[freshDays.length - 1].date : null
-          c = { ...c, days: freshDays, lastComputedDate: latestFresh }
-        }
-
-        const gapStart = c.lastComputedDate
-          ? new Date(
-              parseInt(c.lastComputedDate.slice(0, 4)),
-              parseInt(c.lastComputedDate.slice(5, 7)) - 1,
-              parseInt(c.lastComputedDate.slice(8, 10)) + 1
-            )
-          : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
-
-        if (gapStart.getTime() <= yesterdayEnd.getTime()) {
-          const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
-          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange, 'all'), opts.project, opts.exclude)
-          const gapDays = aggregateProjectsIntoDays(gapProjects)
-          c = addNewDays(c, gapDays, yesterdayStr)
-          await saveDailyCache(c)
-        }
-        return c
-      })
+      const cache = await hydrateCache()
 
       // CURRENT PERIOD DATA
       // - .all provider: assemble from cache + today (fast)
@@ -529,6 +508,7 @@ program
     }
 
     if (opts.format === 'json') {
+      await hydrateCache()
       const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf)))
       const monthData = buildPeriodData('month', fp(await parseAllSessions(getDateRange('month').range, pf)))
       const { code, rate } = getCurrency()
@@ -550,6 +530,7 @@ program
       return
     }
 
+    await hydrateCache()
     const monthProjects = fp(await parseAllSessions(getDateRange('month').range, pf))
     console.log(renderStatusBar(monthProjects))
   })
@@ -567,6 +548,7 @@ program
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
     }
+    await hydrateCache()
     await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
@@ -583,6 +565,7 @@ program
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
     }
+    await hydrateCache()
     await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude)
   })
 
@@ -596,6 +579,7 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     await loadPricing()
+    await hydrateCache()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     const periods: PeriodExport[] = [
@@ -873,6 +857,7 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .action(async (opts) => {
     await loadPricing()
+    await hydrateCache()
     const { range, label } = getDateRange(opts.period)
     const projects = await parseAllSessions(range, opts.provider)
     await runOptimize(projects, label, range)
@@ -885,6 +870,7 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .action(async (opts) => {
     await loadPricing()
+    await hydrateCache()
     const { range } = getDateRange(opts.period)
     await renderCompare(range, opts.provider)
   })
@@ -896,6 +882,7 @@ program
   .action(async (opts) => {
     const { computeYield, formatYieldSummary } = await import('./yield.js')
     await loadPricing()
+    await hydrateCache()
     const { range, label } = getDateRange(opts.period)
     console.log(`\n  Analyzing yield for ${label}...\n`)
     const summary = await computeYield(range, process.cwd())

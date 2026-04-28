@@ -212,6 +212,8 @@ const autoModelNames: Record<string, string> = {
   'cursor-auto': 'Cursor (auto)',
   'cursor-agent-auto': 'Cursor (auto)',
   'copilot-auto': 'Copilot (auto)',
+  'copilot-openai-auto': 'Copilot (OpenAI)',
+  'copilot-anthropic-auto': 'Copilot (Anthropic)',
   'kiro-auto': 'Kiro (auto)',
   'cline-auto': 'Cline (auto)',
   'openclaw-auto': 'OpenClaw (auto)',
