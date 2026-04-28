@@ -25,34 +25,30 @@ struct AgentTabStrip: View {
         }
     }
 
-    /// Drive tab visibility and per-tab cost labels from the *all-provider* payload (today),
-    /// not the currently selected provider's payload. Without this, switching to Codex (which
-    /// has no data) would hide every other tab including Claude.
-    private var allProvidersToday: MenubarPayload {
+    private var todayAll: MenubarPayload {
         store.todayPayload ?? store.payload
     }
 
+    private var periodAll: MenubarPayload {
+        store.periodAllPayload ?? store.payload
+    }
+
     private var visibleFilters: [ProviderFilter] {
-        // Show a tab for every provider detected on this machine. The CLI decides what
-        // to include in the providers map based on session dirs / credential files it
-        // finds, so zero-cost-today is still "installed" and the user expects to see
-        // it. Only providers that aren't installed at all are absent from the map.
         let detectedKeys = Set(
-            allProvidersToday.current.providers.keys.map { $0.lowercased() }
+            todayAll.current.providers.keys.map { $0.lowercased() }
         )
         return ProviderFilter.allCases.filter { filter in
             if filter == .all { return true }
-            return detectedKeys.contains(filter.rawValue.lowercased())
+            return filter.providerKeys.contains(where: detectedKeys.contains)
         }
     }
 
     private func cost(for filter: ProviderFilter) -> Double? {
-        switch filter {
-        case .all:
-            return allProvidersToday.current.cost
-        default:
-            let key = filter.rawValue.lowercased()
-            return allProvidersToday.current.providers[key]
+        let data = periodAll
+        if filter == .all { return data.current.cost }
+        let providers = data.current.providers
+        return filter.providerKeys.reduce(0.0) { sum, key in
+            sum + (providers[key] ?? 0)
         }
     }
 }
@@ -93,8 +89,10 @@ extension ProviderFilter {
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .copilot: return Color(red: 0x6D/255.0, green: 0x8F/255.0, blue: 0xA6/255.0)
+        case .kiro: return Color(red: 0x4A/255.0, green: 0x9E/255.0, blue: 0xC4/255.0)
         case .opencode: return Color(red: 0x5B/255.0, green: 0x83/255.0, blue: 0x5B/255.0)
         case .pi: return Color(red: 0xB2/255.0, green: 0x6B/255.0, blue: 0x3D/255.0)
+        case .omp: return Color(red: 0x8B/255.0, green: 0x5C/255.0, blue: 0xB0/255.0)
         }
     }
 }

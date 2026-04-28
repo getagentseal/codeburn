@@ -44,6 +44,12 @@ final class AppStore {
         cache[PayloadCacheKey(period: .today, provider: .all)]?.payload
     }
 
+    /// All-provider payload for the selected period. Used by the tab strip to show
+    /// per-provider costs that match the active period, not just today.
+    var periodAllPayload: MenubarPayload? {
+        cache[PayloadCacheKey(period: selectedPeriod, provider: .all)]?.payload
+    }
+
     var hasCachedData: Bool {
         cache[currentKey] != nil
     }
@@ -85,6 +91,11 @@ final class AppStore {
         } catch {
             lastError = String(describing: error)
             NSLog("CodeBurn: fetch failed for \(key.period.rawValue)/\(key.provider.rawValue): \(error)")
+        }
+
+        let allKey = PayloadCacheKey(period: selectedPeriod, provider: .all)
+        if key != allKey, cache[allKey]?.isFresh != true {
+            await refreshQuietly(period: selectedPeriod)
         }
     }
 
@@ -211,12 +222,20 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case codex = "Codex"
     case cursor = "Cursor"
     case copilot = "Copilot"
+    case kiro = "Kiro"
     case opencode = "OpenCode"
     case pi = "Pi"
+    case omp = "OMP"
 
     var id: String { rawValue }
 
-    /// Maps to the CLI's `--provider` argument values.
+    var providerKeys: [String] {
+        switch self {
+        case .cursor: ["cursor", "cursor agent"]
+        default: [rawValue.lowercased()]
+        }
+    }
+
     var cliArg: String {
         switch self {
         case .all: "all"
@@ -224,8 +243,10 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .codex: "codex"
         case .cursor: "cursor"
         case .copilot: "copilot"
+        case .kiro: "kiro"
         case .opencode: "opencode"
         case .pi: "pi"
+        case .omp: "omp"
         }
     }
 }
