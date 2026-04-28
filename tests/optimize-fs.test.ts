@@ -510,6 +510,18 @@ describe('estimateContextBudget with calledServers', () => {
     expect(budget.mcpTools.tokens).toBe(2000)
   })
 
+  it('reports all servers unused when calledServers is empty set', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { alpha: { command: 'a' }, beta: { command: 'b' } },
+    }))
+    const budget = await estimateContextBudget(root, 1_000_000, new Set())
+    expect(budget.mcpTools.declared).toBe(2)
+    expect(budget.mcpTools.used).toBe(0)
+    expect(budget.mcpTools.unused).toEqual(['alpha', 'beta'])
+    expect(budget.mcpTools.unusedTokens).toBe(2 * 5 * 400)
+  })
+
   it('normalizes plugin:foo:bar names before comparison', async () => {
     const root = makeFixtureRoot()
     writeFile(join(root, '.mcp.json'), JSON.stringify({

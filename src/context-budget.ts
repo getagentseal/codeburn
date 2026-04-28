@@ -94,8 +94,12 @@ async function countMcpTools(projectPath?: string, calledServers?: Set<string>):
   const toolCount = normalizedSeen.size * TOOLS_PER_MCP_SERVER
   const declared = normalizedSeen.size
 
-  if (!calledServers || calledServers.size === 0) {
+  if (!calledServers) {
     return { toolCount, declared, used: 0, unused: [], unusedTokens: 0 }
+  }
+  if (calledServers.size === 0) {
+    const unusedTokens = serverNames.length * TOOLS_PER_MCP_SERVER * TOOL_TOKENS_OVERHEAD
+    return { toolCount, declared, used: 0, unused: serverNames, unusedTokens }
   }
 
   let usedCount = 0
