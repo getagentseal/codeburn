@@ -108,7 +108,9 @@ function parseChatFile(data: KiroChatFile, sessionId: string, project: string, s
   const outputTokens = Math.ceil(totalOutputChars / CHARS_PER_TOKEN)
   const inputTokens = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
   const costUSD = calculateCost(modelId, inputTokens, outputTokens, 0, 0, 0)
-  const timestamp = new Date(metadata.startTime).toISOString()
+  const tsDate = metadata.startTime ? new Date(metadata.startTime) : null
+  if (!tsDate || isNaN(tsDate.getTime()) || tsDate.getTime() < 1_000_000_000_000) return results
+  const timestamp = tsDate.toISOString()
 
   results.push({
     provider: 'kiro',

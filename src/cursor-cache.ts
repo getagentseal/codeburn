@@ -4,7 +4,10 @@ import { homedir } from 'os'
 
 import type { ParsedProviderCall } from './providers/types.js'
 
+const CURSOR_CACHE_VERSION = 2
+
 type ResultCache = {
+  version?: number
   dbMtimeMs: number
   dbSizeBytes: number
   calls: ParsedProviderCall[]
@@ -37,7 +40,7 @@ export async function readCachedResults(dbPath: string): Promise<ParsedProviderC
     const raw = await readFile(getCachePath(), 'utf-8')
     const cache = JSON.parse(raw) as ResultCache
 
-    if (cache.dbMtimeMs === fp.mtimeMs && cache.dbSizeBytes === fp.size) {
+    if (cache.version === CURSOR_CACHE_VERSION && cache.dbMtimeMs === fp.mtimeMs && cache.dbSizeBytes === fp.size) {
       return cache.calls
     }
     return null
@@ -54,6 +57,7 @@ export async function writeCachedResults(dbPath: string, calls: ParsedProviderCa
     const dir = getCacheDir()
     await mkdir(dir, { recursive: true })
     const cache: ResultCache = {
+      version: CURSOR_CACHE_VERSION,
       dbMtimeMs: fp.mtimeMs,
       dbSizeBytes: fp.size,
       calls,

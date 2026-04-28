@@ -4,7 +4,7 @@ import { mkdir, open, readFile, rename, unlink } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 
-export const DAILY_CACHE_VERSION = 3
+export const DAILY_CACHE_VERSION = 4
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {

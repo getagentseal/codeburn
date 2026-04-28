@@ -46,7 +46,10 @@ struct AgentTabStrip: View {
     private func cost(for filter: ProviderFilter) -> Double? {
         let data = periodAll
         if filter == .all { return data.current.cost }
-        let providers = data.current.providers
+        let providers = Dictionary(
+            data.current.providers.map { ($0.key.lowercased(), $0.value) },
+            uniquingKeysWith: +
+        )
         return filter.providerKeys.reduce(0.0) { sum, key in
             sum + (providers[key] ?? 0)
         }
