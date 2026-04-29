@@ -182,6 +182,102 @@ html, body, #root {
   border-radius: 3px;
 }
 
+/* ---- collapsible section header ---- */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0 0 var(--spacing-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+.section-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--brand-accent);
+  flex-shrink: 0;
+}
+.section-caption { color: var(--brand-accent); }
+.section-columns {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.3px;
+}
+.chevron {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+  margin-left: 4px;
+}
+.chevron-open { transform: rotate(90deg); }
+
+/* ---- models ---- */
+.models-section {
+  padding: var(--spacing-sm) var(--spacing-lg) var(--spacing-md);
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+.model-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto 36px;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 3px 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.row-bar-container {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.row-bar-fill {
+  height: 100%;
+  background: var(--brand-accent);
+  border-radius: 3px;
+  min-width: 1px;
+}
+.row-calls {
+  color: var(--text-secondary);
+  text-align: right;
+  font-size: 10.5px;
+}
+
+/* ---- tokens line ---- */
+.tokens-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: var(--spacing-sm);
+  margin-top: var(--spacing-xs);
+  border-top: 1px solid rgba(0, 0, 0, 0.04);
+  font-size: 10px;
+}
+.tokens-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+.tokens-value {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.tokens-sep {
+  color: var(--text-tertiary);
+}
+
 /* ---- findings ---- */
 .findings { padding: 0 var(--spacing-lg) var(--spacing-sm); }
 .findings-cta {

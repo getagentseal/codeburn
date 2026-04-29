@@ -9,6 +9,7 @@ import { USD, formatCompactCurrency, formatCurrency } from './lib/currency'
 import { PayloadCache } from './lib/cache'
 import { AgentTabStrip } from './components/AgentTabStrip'
 import type { Provider } from './components/AgentTabStrip'
+import { ModelsSection } from './components/ModelsSection'
 
 const payloadCache = new PayloadCache<MenubarPayload>()
 
@@ -174,6 +175,14 @@ export function App() {
           ))}
         </section>
       )}
+
+      <ModelsSection
+        models={payload.current.topModels}
+        inputTokens={payload.current.inputTokens}
+        outputTokens={payload.current.outputTokens}
+        cacheHitPercent={payload.current.cacheHitPercent}
+        currency={currency}
+      />
 
       {payload.optimize.findingCount > 0 && (
         <section className="findings">
