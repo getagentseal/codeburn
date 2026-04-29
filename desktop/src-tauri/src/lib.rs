@@ -15,7 +15,7 @@ use tauri::Listener;
 #[cfg(not(target_os = "linux"))]
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIconEvent},
 };
 
 use crate::cli::CodeburnCli;
@@ -85,52 +85,51 @@ pub fn run() {
 
 #[cfg(not(target_os = "linux"))]
 fn build_tray_tauri(app: &AppHandle) -> tauri::Result<()> {
+    let Some(tray) = app.tray_by_id("codeburn-tray") else {
+        return Ok(());
+    };
+
     let refresh = MenuItem::with_id(app, "refresh", "Refresh", true, None::<&str>)?;
     let report = MenuItem::with_id(app, "report", "Open Full Report", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit CodeBurn", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&refresh, &report, &quit])?;
 
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
-        .expect("failed to load tray icon");
+    tray.set_menu(Some(menu))?;
+    tray.set_show_menu_on_left_click(false)?;
 
-    TrayIconBuilder::with_id("codeburn-tray")
-        .icon(icon)
-        .tooltip("CodeBurn")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "refresh" => {
-                if let Some(window) = app.get_webview_window("popover") {
-                    let _ = window.emit("codeburn://refresh", ());
-                }
+    tray.on_menu_event(|app, event| match event.id.as_ref() {
+        "quit" => app.exit(0),
+        "refresh" => {
+            if let Some(window) = app.get_webview_window("popover") {
+                let _ = window.emit("codeburn://refresh", ());
             }
-            "report" => {
-                let _ = cli::spawn_in_terminal(app, &["report"]);
+        }
+        "report" => {
+            let _ = cli::spawn_in_terminal(app, &["report"]);
+        }
+        _ => {}
+    });
+
+    tray.on_tray_icon_event(|tray, event| {
+        match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                position,
+                ..
+            } => {
+                toggle_popover(tray.app_handle(), Some((position.x as i32, position.y as i32)));
+            }
+            TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                position,
+                ..
+            } => {
+                toggle_popover(tray.app_handle(), Some((position.x as i32, position.y as i32)));
             }
             _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            match event {
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    position,
-                    ..
-                } => {
-                    toggle_popover(tray.app_handle(), Some((position.x as i32, position.y as i32)));
-                }
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    position,
-                    ..
-                } => {
-                    toggle_popover(tray.app_handle(), Some((position.x as i32, position.y as i32)));
-                }
-                _ => {}
-            }
-        })
-        .build(app)?;
+        }
+    });
 
     Ok(())
 }
