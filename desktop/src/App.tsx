@@ -7,13 +7,12 @@ import { placeholderPayload } from './lib/payload'
 import type { CurrencyState } from './lib/currency'
 import { USD, formatCompactCurrency, formatCurrency } from './lib/currency'
 import { PayloadCache } from './lib/cache'
+import { AgentTabStrip } from './components/AgentTabStrip'
+import type { Provider } from './components/AgentTabStrip'
 
 const payloadCache = new PayloadCache<MenubarPayload>()
 
 type Period = 'today' | 'week' | '30days' | 'month' | 'all'
-
-/// Keep in sync with the CLI's provider ids in src/cli.ts
-type Provider = 'all' | 'claude' | 'cursor' | 'codex' | 'copilot'
 
 const PERIODS: Array<{ id: Period; label: string }> = [
   { id: 'today',   label: 'Today'   },
@@ -109,17 +108,12 @@ export function App() {
         <div className="subhead">AI Coding Cost Tracker</div>
       </header>
 
-      <nav className="agent-tabs">
-        {(['all', 'claude', 'codex', 'cursor'] as Provider[]).map(p => (
-          <button
-            key={p}
-            className={`tab ${provider === p ? 'tab-active' : ''}`}
-            onClick={() => setProvider(p)}
-          >
-            <span className="tab-label">{p[0].toUpperCase() + p.slice(1)}</span>
-          </button>
-        ))}
-      </nav>
+      <AgentTabStrip
+        selected={provider}
+        onSelect={setProvider}
+        payload={payload}
+        currency={currency}
+      />
 
       <section className="hero">
         <div className="hero-label">

@@ -86,6 +86,14 @@ html, body, #root {
   color: var(--text-secondary);
 }
 .tab-active { background: var(--brand-accent); color: #fff; }
+.tab-cost {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  opacity: 0.7;
+  margin-top: 1px;
+}
+.tab-active .tab-cost { opacity: 0.85; }
 
 /* ---- hero ---- */
 .hero { padding: var(--spacing-md) var(--spacing-lg); }
