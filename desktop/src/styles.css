@@ -588,3 +588,206 @@ html, body, #root {
   font-variant-numeric: tabular-nums;
   color: var(--brand-accent);
 }
+
+/* ---- activity section ---- */
+.activity-section { padding: var(--spacing-sm) var(--spacing-lg); }
+.activity-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto 40px 40px;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: 3px 0;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.col-header-sm { min-width: 36px; }
+
+/* ---- findings section ---- */
+.findings-section {
+  margin: var(--spacing-sm) var(--spacing-lg);
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+}
+.findings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-primary);
+  padding: 0;
+}
+.findings-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.findings-icon { font-size: 11px; }
+.findings-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.findings-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.findings-count {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+.findings-body { margin-top: 10px; }
+.tips-group { margin-bottom: 10px; }
+.tips-group-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--brand-accent);
+  margin-bottom: 5px;
+}
+.tips-group-icon { font-size: 10px; }
+.tips-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  padding: 2px 0;
+  color: var(--text-primary);
+}
+.tips-bullet {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--brand-accent);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+.tips-text { flex: 1; }
+.tips-trailing {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.findings-open-optimize {
+  border: 0;
+  background: transparent;
+  color: var(--brand-accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0 0;
+}
+
+/* ---- loading overlay ---- */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: rgba(250, 247, 243, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  animation: fadeIn 0.2s ease-in-out;
+}
+@media (prefers-color-scheme: dark) {
+  .loading-overlay { background: rgba(28, 24, 22, 0.6); }
+}
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.loading-flame {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  font-size: 48px;
+  line-height: 64px;
+  text-align: center;
+}
+.flame-outline {
+  opacity: 0.25;
+}
+.flame-fill {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  animation: flameFill 1.4s ease-in-out infinite alternate;
+}
+@keyframes flameFill {
+  from { clip-path: inset(100% 0 0 0); }
+  to   { clip-path: inset(0 0 0 0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.loading-text {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.main-content {
+  position: relative;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ---- empty provider ---- */
+.empty-provider {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px 0;
+  gap: 10px;
+}
+.empty-provider-icon {
+  font-size: 26px;
+  opacity: 0.4;
+}
+.empty-provider-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ---- star banner ---- */
+.star-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(201, 82, 29, 0.08);
+  border-top: 0.5px solid rgba(128, 128, 128, 0.18);
+}
+.star-banner-icon { font-size: 10px; }
+.star-banner-link {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  cursor: pointer;
+}
+.star-banner-cta {
+  color: var(--brand-accent);
+  text-decoration: underline;
+}
+.star-banner-close {
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+}
