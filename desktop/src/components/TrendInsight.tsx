@@ -69,10 +69,8 @@ export function TrendInsight({ days, currency }: Props) {
   const avgVal = bars.length > 0 ? bars.reduce((s, b) => s + metric(b), 0) / bars.length : 0
   const totalCost = bars.reduce((s, b) => s + b.cost, 0)
   const peak = bars.filter(b => metric(b) > 0).sort((a, b) => metric(b) - metric(a))[0]
-  const yesterday = bars.find(b => {
-    const yd = formatDateKey(addDays(startOfDay(new Date()), -1))
-    return b.date === yd
-  })
+  const yd = formatDateKey(addDays(startOfDay(new Date()), -1))
+  const yesterday = bars.find(b => b.date === yd)
   const delta = computeDelta(bars, days)
 
   const fmtVal = (v: number) => useTokens ? `${formatTokens(v)} tok` : formatCompactCurrency(v, currency)

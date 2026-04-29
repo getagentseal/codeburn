@@ -38,10 +38,20 @@ function computeStats(payload: MenubarPayload, currency: CurrencyState) {
 
   let longestStreak = 0
   let running = 0
-  const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
-  for (const d of sorted) {
-    if (d.cost > 0) { running++; longestStreak = Math.max(longestStreak, running) }
-    else running = 0
+  if (history.length > 0) {
+    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date))
+    const first = new Date(sorted[0].date + 'T00:00:00Z')
+    const last = addDays(today, 0)
+    const totalDays = Math.round((last.getTime() - first.getTime()) / 86_400_000) + 1
+    for (let i = 0; i < totalDays; i++) {
+      const key = formatDateKey(addDays(first, i))
+      if ((costByDate.get(key) ?? 0) > 0) {
+        running++
+        longestStreak = Math.max(longestStreak, running)
+      } else {
+        running = 0
+      }
+    }
   }
 
   const lifetimeTotal = history.length > 0 ? history.reduce((s, d) => s + d.cost, 0) : null

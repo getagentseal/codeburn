@@ -185,8 +185,8 @@ html, body, #root {
 /* ---- collapsible section header ---- */
 .section-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 6px;
   width: 100%;
   border: 0;
   background: transparent;
@@ -197,6 +197,21 @@ html, body, #root {
   font-weight: 600;
   letter-spacing: 0.2px;
   text-transform: uppercase;
+}
+.section-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.section-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.3px;
 }
 .section-dot {
   width: 5px; height: 5px; border-radius: 50%;
@@ -214,6 +229,8 @@ html, body, #root {
   color: var(--text-tertiary);
   letter-spacing: 0.3px;
 }
+.col-header { min-width: 44px; text-align: right; }
+.section-body { padding-bottom: 6px; }
 .chevron {
   font-size: 10px;
   color: var(--text-tertiary);
@@ -347,7 +364,6 @@ html, body, #root {
 .insight-pills {
   display: flex;
   gap: 4px;
-  padding: 0 var(--spacing-lg);
   margin-bottom: 10px;
 }
 .insight-pill {
