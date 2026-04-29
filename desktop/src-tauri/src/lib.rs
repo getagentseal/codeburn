@@ -110,10 +110,11 @@ fn build_tray_tauri(app: &AppHandle) -> tauri::Result<()> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                position,
                 ..
             } = event
             {
-                toggle_popover(tray.app_handle(), None);
+                toggle_popover(tray.app_handle(), Some((position.x as i32, position.y as i32)));
             }
         })
         .build(app)?;
@@ -195,19 +196,20 @@ fn position_popover(window: &tauri::WebviewWindow, anchor: Option<(i32, i32)>) {
 
     let (x, y) = match usable_anchor {
         Some((click_x, click_y)) => {
-            // Center horizontally on the click, drop the popover just below it. Clamp to
-            // the screen so it doesn't fall off the edge on multi-monitor setups.
             let desired_x = click_x - pop_w / 2;
             let max_x = (screen_w - pop_w - margin).max(margin);
             let clamped_x = desired_x.clamp(margin, max_x);
+            let below_midpoint = click_y > screen_h / 2;
+            let desired_y = if below_midpoint {
+                click_y - pop_h - margin
+            } else {
+                click_y + margin
+            };
             let max_y = (screen_h - pop_h - margin).max(margin);
-            let clamped_y = (click_y + margin).clamp(margin, max_y);
+            let clamped_y = desired_y.clamp(margin, max_y);
             (clamped_x, clamped_y)
         }
         None => {
-            // No usable anchor. Some SNI hosts (notably the GNOME AppIndicator extension)
-            // send (0, 0) instead of real screen coordinates. Fall back to the top-right
-            // corner where the StatusNotifier area lives on GNOME, KDE, and Unity.
             let x = (screen_w - pop_w - margin).max(0);
             (x, panel)
         }
