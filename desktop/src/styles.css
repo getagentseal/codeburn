@@ -42,6 +42,7 @@
   --text-primary: #FAF7F3;
   --text-secondary: #B5A49A;
   --text-tertiary: #8A7A70;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -342,8 +343,6 @@ html, body, #root {
 .currency-picker,
 .refresh,
 .export-picker {
-  appearance: none;
-  -webkit-appearance: none;
   background: rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: var(--radius-lg);
@@ -352,6 +351,7 @@ html, body, #root {
   font-family: var(--font-sans);
   cursor: pointer;
   color: var(--text-primary);
+  color-scheme: light dark;
   transition: background 0.15s;
 }
 .currency-picker:hover,
