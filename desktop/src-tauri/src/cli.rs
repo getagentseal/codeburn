@@ -97,11 +97,18 @@ impl CodeburnCli {
             args.push("--no-optimize".into());
         }
 
-        let mut child = Command::new(&self.program)
-            .args(&args)
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn {}", self.program))?;
 
