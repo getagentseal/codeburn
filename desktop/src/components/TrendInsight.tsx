@@ -5,6 +5,8 @@ import { formatCompactCurrency, formatCurrency } from '../lib/currency'
 import { todayKey, formatDateKey, addDays, startOfDay, prettyDate, shortDate } from '../lib/dates'
 
 const TREND_DAYS = 19
+const MAX_TOOLTIP_MODELS = 4
+const MIN_BAR_PCT = 2
 
 type TrendBar = {
   date: string
@@ -106,7 +108,7 @@ export function TrendInsight({ days, currency }: Props) {
                 <div className="trend-bar-spacer" />
                 <div
                   className={`trend-bar ${bar.isToday ? 'trend-bar-today' : ''} ${isHovered ? 'trend-bar-hovered' : ''}`}
-                  style={{ height: `${Math.max(2, pct)}%` }}
+                  style={{ height: `${Math.max(MIN_BAR_PCT, pct)}%` }}
                 />
               </div>
             )
@@ -122,7 +124,7 @@ export function TrendInsight({ days, currency }: Props) {
               <span>{prettyDate(bars[hoveredIdx].date)}</span>
               <span className="trend-tooltip-value">{fmtVal(metric(bars[hoveredIdx]))}</span>
             </div>
-            {bars[hoveredIdx].topModels.slice(0, 4).map(m => (
+            {bars[hoveredIdx].topModels.slice(0, MAX_TOOLTIP_MODELS).map(m => (
               <div key={m.name} className="trend-tooltip-model">
                 <span className="trend-tooltip-dot" />
                 <span className="trend-tooltip-name">{m.name}</span>
@@ -141,12 +143,12 @@ export function TrendInsight({ days, currency }: Props) {
         <div className="mini-stat">
           <div className="mini-stat-label">Peak</div>
           <div className="mini-stat-value">
-            {peak ? `${fmtVal(metric(peak))} on ${shortDate(peak.date)}` : '—'}
+            {peak ? `${fmtVal(metric(peak))} on ${shortDate(peak.date)}` : '-'}
           </div>
         </div>
         <div className="mini-stat">
           <div className="mini-stat-label">Yesterday</div>
-          <div className="mini-stat-value">{yesterday ? fmtVal(metric(yesterday)) : '—'}</div>
+          <div className="mini-stat-value">{yesterday ? fmtVal(metric(yesterday)) : '-'}</div>
         </div>
       </div>
     </div>

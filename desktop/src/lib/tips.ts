@@ -4,6 +4,17 @@ import { formatDateKey, addDays, startOfDay, firstOfMonth, daysInMonth, dayOfMon
 export type TipItem = { text: string; trailing: string | null }
 export type TipGroup = { label: string; icon: string; items: TipItem[] }
 
+const MAX_STREAK_CHECK = 60
+const CACHE_HIT_GOOD = 80
+const CACHE_HIT_LOW = 50
+const ONESHOT_GOOD = 0.75
+const ONESHOT_LOW = 0.5
+const SPEND_DOWN_THRESHOLD = -10
+const SPEND_UP_THRESHOLD = 25
+const STREAK_MILESTONE = 5
+const MONTH_GROWTH_WARNING = 1.3
+const TOP_FINDINGS_COUNT = 3
+
 function historyStats(history: DailyEntry[]) {
   const now = new Date()
   const today = startOfDay(now)
@@ -17,7 +28,7 @@ function historyStats(history: DailyEntry[]) {
   const weekDelta = prior > 0 ? ((thisWeek - prior) / prior) * 100 : null
 
   let streak = 0
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < MAX_STREAK_CHECK; i++) {
     const key = formatDateKey(addDays(today, -i))
     if ((costByDate.get(key) ?? 0) > 0) streak++
     else break
@@ -43,28 +54,28 @@ export function computeTipGroups(payload: MenubarPayload): TipGroup[] {
   const { cacheHitPercent, oneShotRate } = payload.current
 
   const wins: TipItem[] = []
-  if (cacheHitPercent >= 80) wins.push({ text: `Cache hit at ${Math.round(cacheHitPercent)}% — most prompts reuse cache`, trailing: null })
-  if (oneShotRate != null && oneShotRate >= 0.75) wins.push({ text: `${Math.round(oneShotRate * 100)}% one-shot — edits landing first try`, trailing: null })
-  if (stats.weekDelta != null && stats.weekDelta < -10) wins.push({ text: `Spend down ${Math.round(Math.abs(stats.weekDelta))}% vs last 7 days`, trailing: null })
-  if (stats.streak >= 5) wins.push({ text: `${stats.streak}-day usage streak`, trailing: null })
+  if (cacheHitPercent >= CACHE_HIT_GOOD) wins.push({ text: `Cache hit at ${Math.round(cacheHitPercent)}% - most prompts reuse cache`, trailing: null })
+  if (oneShotRate != null && oneShotRate >= ONESHOT_GOOD) wins.push({ text: `${Math.round(oneShotRate * 100)}% one-shot - edits landing first try`, trailing: null })
+  if (stats.weekDelta != null && stats.weekDelta < SPEND_DOWN_THRESHOLD) wins.push({ text: `Spend down ${Math.round(Math.abs(stats.weekDelta))}% vs last 7 days`, trailing: null })
+  if (stats.streak >= STREAK_MILESTONE) wins.push({ text: `${stats.streak}-day usage streak`, trailing: null })
 
-  const improvements: TipItem[] = payload.optimize.topFindings.slice(0, 3).map(f => ({
+  const improvements: TipItem[] = payload.optimize.topFindings.slice(0, TOP_FINDINGS_COUNT).map(f => ({
     text: f.title,
     trailing: `$${f.savingsUSD.toFixed(2)}`,
   }))
 
   const risks: TipItem[] = []
-  if (stats.weekDelta != null && stats.weekDelta > 25) risks.push({ text: `Spend up ${Math.round(stats.weekDelta)}% vs prior 7 days`, trailing: null })
-  if (cacheHitPercent > 0 && cacheHitPercent < 50) risks.push({ text: `Cache hit only ${Math.round(cacheHitPercent)}% — paying for cold prompts`, trailing: null })
-  if (oneShotRate != null && oneShotRate < 0.5) risks.push({ text: `${Math.round(oneShotRate * 100)}% one-shot — lots of iteration`, trailing: null })
-  if (stats.projected != null && stats.prevTotal != null && stats.projected > stats.prevTotal * 1.3) {
+  if (stats.weekDelta != null && stats.weekDelta > SPEND_UP_THRESHOLD) risks.push({ text: `Spend up ${Math.round(stats.weekDelta)}% vs prior 7 days`, trailing: null })
+  if (cacheHitPercent > 0 && cacheHitPercent < CACHE_HIT_LOW) risks.push({ text: `Cache hit only ${Math.round(cacheHitPercent)}% - paying for cold prompts`, trailing: null })
+  if (oneShotRate != null && oneShotRate < ONESHOT_LOW) risks.push({ text: `${Math.round(oneShotRate * 100)}% one-shot - lots of iteration`, trailing: null })
+  if (stats.projected != null && stats.prevTotal != null && stats.projected > stats.prevTotal * MONTH_GROWTH_WARNING) {
     const pct = Math.round(((stats.projected - stats.prevTotal) / stats.prevTotal) * 100)
     risks.push({ text: `On pace for $${stats.projected.toFixed(2)} this month (+${pct}% vs last)`, trailing: null })
   }
 
   return [
-    { label: "What's working", icon: '✓', items: wins },
-    { label: 'What to improve', icon: '↗', items: improvements },
-    { label: 'Risks', icon: '⚠', items: risks },
+    { label: "What's working", icon: '+', items: wins },
+    { label: 'What to improve', icon: '^', items: improvements },
+    { label: 'Risks', icon: '!', items: risks },
   ]
 }

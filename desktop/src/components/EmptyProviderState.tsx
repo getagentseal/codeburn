@@ -26,7 +26,7 @@ export function EmptyProviderState({ provider, period }: Props) {
 
   return (
     <div className="empty-provider">
-      <div className="empty-provider-icon">📭</div>
+      <div className="empty-provider-icon">--</div>
       <div className="empty-provider-text">No {name} data for {phrase}</div>
     </div>
   )

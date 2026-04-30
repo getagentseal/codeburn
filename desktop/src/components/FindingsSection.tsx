@@ -17,7 +17,7 @@ export function FindingsSection({ payload }: Props) {
     <section className="findings-section">
       <button className="findings-header" onClick={() => setExpanded(!expanded)}>
         <div className="findings-header-left">
-          <span className="findings-icon">💡</span>
+          <span className="findings-icon section-dot" />
           <span className="findings-title">Tips for you</span>
         </div>
         <div className="findings-header-right">

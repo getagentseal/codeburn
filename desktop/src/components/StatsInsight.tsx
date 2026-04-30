@@ -13,7 +13,7 @@ function computeStats(payload: MenubarPayload, currency: CurrencyState) {
   const now = new Date()
   const today = startOfDay(now)
 
-  const favoriteModel = payload.current.topModels[0]?.name ?? '—'
+  const favoriteModel = payload.current.topModels[0]?.name ?? '-'
 
   const fom = firstOfMonth(now)
   const fomStr = formatDateKey(fom)
@@ -25,12 +25,13 @@ function computeStats(payload: MenubarPayload, currency: CurrencyState) {
   )
   const mostActiveDay = peak && peak.cost > 0
     ? new Date(peak.date + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-    : '—'
-  const peakDaySpend = peak && peak.cost > 0 ? formatCompactCurrency(peak.cost, currency) : '—'
+    : '-'
+  const peakDaySpend = peak && peak.cost > 0 ? formatCompactCurrency(peak.cost, currency) : '-'
 
+  const MAX_STREAK_LOOKBACK = 400
   const costByDate = new Map(history.map(d => [d.date, d.cost]))
   let currentStreak = 0
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < MAX_STREAK_LOOKBACK; i++) {
     const key = formatDateKey(addDays(today, -i))
     if ((costByDate.get(key) ?? 0) > 0) currentStreak++
     else break
@@ -61,8 +62,8 @@ function computeStats(payload: MenubarPayload, currency: CurrencyState) {
     activeDaysFraction,
     mostActiveDay,
     peakDaySpend,
-    currentStreak: currentStreak > 0 ? `${currentStreak} days` : '—',
-    longestStreak: longestStreak > 0 ? `${longestStreak} days` : '—',
+    currentStreak: currentStreak > 0 ? `${currentStreak} days` : '-',
+    longestStreak: longestStreak > 0 ? `${longestStreak} days` : '-',
     lifetimeTotal,
     historyDayCount: history.length,
   }

@@ -3,6 +3,8 @@ import type { MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency } from '../lib/currency'
 
+const MIN_BAR_PCT = 2
+
 type Props = {
   payload: MenubarPayload
   currency: CurrencyState
@@ -37,14 +39,14 @@ export function ActivitySection({ payload, currency }: Props) {
               <div className="row-bar-container">
                 <div
                   className="row-bar-fill"
-                  style={{ width: `${Math.max(2, (a.cost / maxCost) * 100)}%` }}
+                  style={{ width: `${Math.max(MIN_BAR_PCT, (a.cost / maxCost) * 100)}%` }}
                 />
               </div>
               <div className="row-label">{a.name}</div>
               <div className="row-cost">{formatCompactCurrency(a.cost, currency)}</div>
               <div className="row-turns">{a.turns}</div>
               <div className="row-oneshot">
-                {a.oneShotRate == null ? '—' : `${Math.round(a.oneShotRate * 100)}%`}
+                {a.oneShotRate == null ? '-' : `${Math.round(a.oneShotRate * 100)}%`}
               </div>
             </div>
           ))}

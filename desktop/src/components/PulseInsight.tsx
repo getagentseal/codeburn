@@ -9,9 +9,9 @@ type Props = {
 
 export function PulseInsight({ payload, currency }: Props) {
   const { cacheHitPercent, oneShotRate, cost, sessions } = payload.current
-  const cacheText = cacheHitPercent <= 0 ? '—' : `${Math.round(cacheHitPercent)}%`
-  const oneShotText = oneShotRate == null ? '—' : `${Math.round(oneShotRate * 100)}%`
-  const costPerSession = sessions > 0 ? formatCompactCurrency(cost / sessions, currency) : '—'
+  const cacheText = cacheHitPercent <= 0 ? '-' : `${Math.round(cacheHitPercent)}%`
+  const oneShotText = oneShotRate == null ? '-' : `${Math.round(oneShotRate * 100)}%`
+  const costPerSession = sessions > 0 ? formatCompactCurrency(cost / sessions, currency) : '-'
 
   return (
     <div className="pulse-tiles">

@@ -17,7 +17,7 @@ export function StarBanner() {
 
   return (
     <div className="star-banner">
-      <span className="star-banner-icon">⭐</span>
+      <span className="star-banner-icon">*</span>
       <a
         className="star-banner-link"
         href={GITHUB_URL}

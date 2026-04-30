@@ -783,26 +783,16 @@ html, body, #root {
   align-items: center;
   gap: 14px;
 }
-.loading-flame {
-  position: relative;
-  width: 64px;
-  height: 64px;
-  font-size: 48px;
-  line-height: 64px;
-  text-align: center;
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(201, 82, 29, 0.2);
+  border-top-color: var(--brand-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
-.flame-outline {
-  opacity: 0.25;
-}
-.flame-fill {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  animation: flameFill 1.4s ease-in-out infinite alternate;
-}
-@keyframes flameFill {
-  from { clip-path: inset(100% 0 0 0); }
-  to   { clip-path: inset(0 0 0 0); }
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 @keyframes fadeIn {
   from { opacity: 0; }
