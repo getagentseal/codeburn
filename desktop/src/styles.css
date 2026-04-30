@@ -774,8 +774,9 @@ html, body, #root {
   animation: fadeIn 0.2s ease-in-out;
 }
 @media (prefers-color-scheme: dark) {
-  .loading-overlay { background: rgba(28, 24, 22, 0.6); }
+  :root:not([data-theme="light"]) .loading-overlay { background: rgba(28, 24, 22, 0.6); }
 }
+:root[data-theme="dark"] .loading-overlay { background: rgba(28, 24, 22, 0.6); }
 .loading-content {
   display: flex;
   flex-direction: column;
