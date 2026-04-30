@@ -1,4 +1,4 @@
-import { readdir, stat } from 'fs/promises'
+import { lstat, readdir } from 'fs/promises'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
@@ -35,20 +35,24 @@ function getDesktopSessionsDir(): string {
 
 async function findDesktopProjectDirs(base: string): Promise<string[]> {
   const results: string[] = []
+  // `lstat` (not `stat`) so we never descend into symbolic links. A malicious or
+  // misconfigured session tree could otherwise redirect us anywhere on the filesystem
+  // the calling user can read — outside the Claude sessions sandbox by design.
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 8) return
     const entries = await readdir(dir).catch(() => [])
     for (const entry of entries) {
       if (entry === 'node_modules' || entry === '.git') continue
       const full = join(dir, entry)
-      const s = await stat(full).catch(() => null)
-      if (!s?.isDirectory()) continue
+      const s = await lstat(full).catch(() => null)
+      if (!s || s.isSymbolicLink() || !s.isDirectory()) continue
       if (entry === 'projects') {
         const projectDirs = await readdir(full).catch(() => [])
         for (const pd of projectDirs) {
           const pdFull = join(full, pd)
-          const pdStat = await stat(pdFull).catch(() => null)
-          if (pdStat?.isDirectory()) results.push(pdFull)
+          const pdStat = await lstat(pdFull).catch(() => null)
+          if (!pdStat || pdStat.isSymbolicLink() || !pdStat.isDirectory()) continue
+          results.push(pdFull)
         }
       } else {
         await walk(full, depth + 1)
@@ -83,10 +87,9 @@ export const claude: Provider = {
       const entries = await readdir(projectsDir)
       for (const dirName of entries) {
         const dirPath = join(projectsDir, dirName)
-        const dirStat = await stat(dirPath).catch(() => null)
-        if (dirStat?.isDirectory()) {
-          sources.push({ path: dirPath, project: dirName, provider: 'claude' })
-        }
+        const dirStat = await lstat(dirPath).catch(() => null)
+        if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue
+        sources.push({ path: dirPath, project: dirName, provider: 'claude' })
       }
     } catch {}
 
