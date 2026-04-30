@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
-import { formatCost } from '../src/format.js'
-import type { ProjectSummary, SessionSummary } from '../src/types.js'
+import { formatCost, formatTokens } from '../src/format.js'
+import type { ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
 
 const EMPTY_CATEGORY_BREAKDOWN = {
   coding: { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
@@ -108,5 +108,115 @@ describe('avg/s in ProjectBreakdown', () => {
     const sessions = [makeSession('s1', 2.0), makeSession('s2', 4.0)]
     const project = makeProject('proj', sessions)
     expect(avgCostLabel(project)).toBe(formatCost(3.0))
+  })
+})
+
+function zeroTokens(): TokenUsage {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+  }
+}
+
+function aggregateModelTotals(projects: ProjectSummary[]) {
+  const totals: Record<string, { calls: number; costUSD: number; freshInput: number; output: number; cacheRead: number; cacheWrite: number }> = {}
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [model, data] of Object.entries(session.modelBreakdown)) {
+        if (!totals[model]) totals[model] = { calls: 0, costUSD: 0, freshInput: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        totals[model].calls += data.calls
+        totals[model].costUSD += data.costUSD
+        totals[model].freshInput += data.tokens.inputTokens
+        totals[model].output += data.tokens.outputTokens
+        totals[model].cacheRead += data.tokens.cacheReadInputTokens
+        totals[model].cacheWrite += data.tokens.cacheCreationInputTokens
+      }
+    }
+  }
+  return totals
+}
+
+describe('formatTokens - size suffixes', () => {
+  it('formats billions with B suffix', () => {
+    expect(formatTokens(4_810_000_000)).toBe('4.81B')
+  })
+
+  it('formats millions with M suffix', () => {
+    expect(formatTokens(168_400_000)).toBe('168.4M')
+  })
+
+  it('formats thousands with K suffix', () => {
+    expect(formatTokens(23_500)).toBe('23.5K')
+  })
+
+  it('returns bare number for values under 1000', () => {
+    expect(formatTokens(0)).toBe('0')
+    expect(formatTokens(999)).toBe('999')
+  })
+})
+
+describe('ModelBreakdown - token aggregation', () => {
+  it('sums token fields across sessions and projects for a model', () => {
+    const session: SessionSummary = {
+      ...makeSession('s1', 10),
+      modelBreakdown: {
+        'Opus 4.6': {
+          calls: 5,
+          costUSD: 10,
+          tokens: {
+            ...zeroTokens(),
+            inputTokens: 1000,
+            outputTokens: 2000,
+            cacheReadInputTokens: 3_000_000,
+            cacheCreationInputTokens: 500_000,
+          },
+        },
+      },
+    }
+    const session2: SessionSummary = {
+      ...makeSession('s2', 5),
+      modelBreakdown: {
+        'Opus 4.6': {
+          calls: 3,
+          costUSD: 5,
+          tokens: {
+            ...zeroTokens(),
+            inputTokens: 500,
+            outputTokens: 1000,
+            cacheReadInputTokens: 1_000_000,
+            cacheCreationInputTokens: 200_000,
+          },
+        },
+      },
+    }
+    const project = makeProject('proj', [session, session2])
+    const totals = aggregateModelTotals([project])
+    const opus = totals['Opus 4.6']
+    expect(opus.calls).toBe(8)
+    expect(opus.freshInput).toBe(1500)
+    expect(opus.output).toBe(3000)
+    expect(opus.cacheRead).toBe(4_000_000)
+    expect(opus.cacheWrite).toBe(700_000)
+    const totalTokens = opus.freshInput + opus.output + opus.cacheRead + opus.cacheWrite
+    expect(formatTokens(totalTokens)).toBe('4.7M')
+  })
+
+  it('shows dash when a model has zero tokens recorded', () => {
+    const session: SessionSummary = {
+      ...makeSession('s1', 1),
+      modelBreakdown: {
+        'Empty Model': { calls: 1, costUSD: 1, tokens: zeroTokens() },
+      },
+    }
+    const totals = aggregateModelTotals([makeProject('proj', [session])])
+    const empty = totals['Empty Model']
+    const totalTokens = empty.freshInput + empty.output + empty.cacheRead + empty.cacheWrite
+    const label = totalTokens > 0 ? formatTokens(totalTokens) : '-'
+    expect(label).toBe('-')
   })
 })
