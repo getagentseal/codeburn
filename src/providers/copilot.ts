@@ -307,6 +307,9 @@ function getVSCodeWorkspaceStorageDir(): string {
   if (process.platform === 'win32') {
     return join(homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage')
   }
+  if (process.env['REMOTE_CONTAINERS'] || process.env['DEVCONTAINER'] || process.env['VSCODE_REMOTE_CONTAINERS_SESSION']) {
+    return join(homedir(), '.vscode-server', 'data', 'User', 'workspaceStorage')
+  }
   return join(homedir(), '.config', 'Code', 'User', 'workspaceStorage')
 }
 
