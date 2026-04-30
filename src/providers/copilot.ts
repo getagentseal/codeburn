@@ -300,14 +300,25 @@ function getCopilotSessionStateDir(override?: string): string {
   return override ?? join(homedir(), '.copilot', 'session-state')
 }
 
-function getVSCodeWorkspaceStorageDir(): string {
+function getVSCodeWorkspaceStorageDirs(): string[] {
   if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage')
+    return [
+      join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage'),
+      join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User', 'workspaceStorage'),
+    ]
   }
+
   if (process.platform === 'win32') {
-    return join(homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage')
+    return [
+      join(homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'),
+      join(homedir(), 'AppData', 'Roaming', 'Code - Insiders', 'User', 'workspaceStorage'),
+    ]
   }
-  return join(homedir(), '.config', 'Code', 'User', 'workspaceStorage')
+
+  return [
+    join(homedir(), '.config', 'Code', 'User', 'workspaceStorage'),
+    join(homedir(), '.config', 'Code - Insiders', 'User', 'workspaceStorage'),
+  ]
 }
 
 function parseCwd(yaml: string): string | null {
@@ -397,7 +408,7 @@ async function discoverVSCodeTranscripts(workspaceStorageDir: string): Promise<S
 
 export function createCopilotProvider(sessionStateDir?: string, workspaceStorageDirOverride?: string): Provider {
   const legacyDir = getCopilotSessionStateDir(sessionStateDir)
-  const vscodeDir = workspaceStorageDirOverride ?? getVSCodeWorkspaceStorageDir()
+  const vscodeDirs = workspaceStorageDirOverride != null ? [workspaceStorageDirOverride] : getVSCodeWorkspaceStorageDirs()
 
   return {
     name: 'copilot',
@@ -418,11 +429,11 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      const [legacy, vscode] = await Promise.all([
+      const [legacy, ...vscodeResults] = await Promise.all([
         discoverLegacySessions(legacyDir),
-        discoverVSCodeTranscripts(vscodeDir),
+        ...vscodeDirs.map(discoverVSCodeTranscripts),
       ])
-      return [...legacy, ...vscode]
+      return [...legacy, ...vscodeResults.flat()]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
