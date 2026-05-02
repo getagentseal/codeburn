@@ -11,6 +11,21 @@ import { qwen } from './qwen.js'
 import { rooCode } from './roo-code.js'
 import type { Provider, SessionSource } from './types.js'
 
+let antigravityProvider: Provider | null = null
+let antigravityLoadAttempted = false
+
+async function loadAntigravity(): Promise<Provider | null> {
+  if (antigravityLoadAttempted) return antigravityProvider
+  antigravityLoadAttempted = true
+  try {
+    const { antigravity } = await import('./antigravity.js')
+    antigravityProvider = antigravity
+    return antigravity
+  } catch {
+    return null
+  }
+}
+
 let cursorProvider: Provider | null = null
 let cursorLoadAttempted = false
 
@@ -59,8 +74,9 @@ async function loadCursorAgent(): Promise<Provider | null> {
 const coreProviders: Provider[] = [claude, codex, copilot, droid, gemini, kiloCode, kiro, openclaw, pi, omp, qwen, rooCode]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [cursor, opencode, cursorAgent] = await Promise.all([loadCursor(), loadOpenCode(), loadCursorAgent()])
+  const [ag, cursor, opencode, cursorAgent] = await Promise.all([loadAntigravity(), loadCursor(), loadOpenCode(), loadCursorAgent()])
   const all = [...coreProviders]
+  if (ag) all.push(ag)
   if (cursor) all.push(cursor)
   if (opencode) all.push(opencode)
   if (cursorAgent) all.push(cursorAgent)
@@ -83,6 +99,10 @@ export async function discoverAllSessions(providerFilter?: string): Promise<Sess
 }
 
 export async function getProvider(name: string): Promise<Provider | undefined> {
+  if (name === 'antigravity') {
+    const ag = await loadAntigravity()
+    return ag ?? undefined
+  }
   if (name === 'cursor') {
     const cursor = await loadCursor()
     return cursor ?? undefined

@@ -4,6 +4,7 @@ import { readSessionLines } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
+import { flushAntigravityCache } from './providers/antigravity.js'
 import type { ParsedProviderCall } from './providers/types.js'
 import type {
   AssistantMessageContent,
@@ -437,6 +438,10 @@ async function parseProviderSources(
     }
   } finally {
     if (providerName === 'codex') await flushCodexCache()
+    if (providerName === 'antigravity') {
+      const liveIds = new Set(sources.map(s => basename(s.path, '.pb')))
+      await flushAntigravityCache(liveIds)
+    }
   }
 
   const projectMap = new Map<string, SessionSummary[]>()
