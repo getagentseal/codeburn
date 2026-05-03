@@ -34,10 +34,20 @@ afterEach(async () => {
 })
 
 describe('claude provider — symlink protection in session discovery', () => {
-  it('skips symbolic-link entries pointing outside the projects dir', async () => {
+  it('skips symbolic-link entries pointing outside the projects dir', async ({ skip }) => {
     const realProjectDir = join(claudeDir, 'projects', 'real-project')
     await mkdir(realProjectDir, { recursive: true })
-    await symlink(realTarget, join(claudeDir, 'projects', 'shady-link'))
+    try {
+      const symlinkType = process.platform === 'win32' ? 'junction' : undefined
+      await symlink(realTarget, join(claudeDir, 'projects', 'shady-link'), symlinkType)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES') {
+        skip(`symlink creation not permitted in this environment (${code})`)
+        return
+      }
+      throw err
+    }
 
     const sources = await claude.discoverSessions()
     const claudeSources = sources.filter(s => s.provider === 'claude')
