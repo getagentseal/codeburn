@@ -4,6 +4,7 @@
 export type PeriodData = {
   label: string
   cost: number
+  estimatedCost?: number
   calls: number
   sessions: number
   inputTokens: number
@@ -50,6 +51,7 @@ export type MenubarPayload = {
   current: {
     label: string
     cost: number
+    estimatedCost?: number
     calls: number
     sessions: number
     oneShotRate: number | null
@@ -166,6 +168,7 @@ export function buildMenubarPayload(
     current: {
       label: current.label,
       cost: current.cost,
+      estimatedCost: current.estimatedCost,
       calls: current.calls,
       sessions: current.sessions,
       oneShotRate: aggregateOneShotRate(current.categories),

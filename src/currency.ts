@@ -142,15 +142,16 @@ export function convertCost(costUSD: number): number {
   return Math.round(costUSD * active.rate * factor) / factor
 }
 
-export function formatCost(costUSD: number): string {
+export function formatCost(costUSD: number, estimated?: boolean): string {
   const { rate, symbol, code } = active
   const cost = costUSD * rate
   const digits = getFractionDigits(code)
+  const prefix = estimated ? '~' : ''
 
-  if (digits === 0) return `${symbol}${Math.round(cost)}`
+  if (digits === 0) return `${prefix}${symbol}${Math.round(cost)}`
 
-  if (cost >= 1) return `${symbol}${cost.toFixed(2)}`
-  if (cost >= 0.01) return `${symbol}${cost.toFixed(3)}`
-  if (cost >= 0.0001) return `${symbol}${cost.toFixed(4)}`
-  return `${symbol}${cost.toFixed(2)}`
+  if (cost >= 1) return `${prefix}${symbol}${cost.toFixed(2)}`
+  if (cost >= 0.01) return `${prefix}${symbol}${cost.toFixed(3)}`
+  if (cost >= 0.0001) return `${prefix}${symbol}${cost.toFixed(4)}`
+  return `${prefix}${symbol}${cost.toFixed(2)}`
 }

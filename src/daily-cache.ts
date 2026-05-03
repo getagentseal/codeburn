@@ -12,6 +12,7 @@ const DAILY_CACHE_FILENAME = 'daily-cache.json'
 export type DailyEntry = {
   date: string
   cost: number
+  estimatedCost?: number
   calls: number
   sessions: number
   inputTokens: number

@@ -70,6 +70,7 @@ export type ParsedApiCall = {
   model: string
   usage: TokenUsage
   costUSD: number
+  costIsEstimated?: boolean
   tools: string[]
   mcpTools: string[]
   hasAgentSpawn: boolean
@@ -107,6 +108,7 @@ export type SessionSummary = {
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number
+  estimatedCostUSD: number
   totalInputTokens: number
   totalOutputTokens: number
   totalCacheReadTokens: number

@@ -362,9 +362,11 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
     }
   }
 
+  const estimatedCost = sessions.reduce((s, sess) => s + sess.estimatedCostUSD, 0)
   return {
     label,
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
+    estimatedCost: estimatedCost > 0 ? estimatedCost : undefined,
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
     sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
     inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,

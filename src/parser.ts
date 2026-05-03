@@ -202,6 +202,7 @@ function buildSessionSummary(
   const categoryBreakdown: SessionSummary['categoryBreakdown'] = Object.create(null)
 
   let totalCost = 0
+  let estimatedCost = 0
   let totalInput = 0
   let totalOutput = 0
   let totalCacheRead = 0
@@ -226,6 +227,7 @@ function buildSessionSummary(
 
     for (const call of turn.assistantCalls) {
       totalCost += call.costUSD
+      if (call.costIsEstimated) estimatedCost += call.costUSD
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
       totalCacheRead += call.usage.cacheReadInputTokens
@@ -272,6 +274,7 @@ function buildSessionSummary(
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
+    estimatedCostUSD: estimatedCost,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
     totalCacheReadTokens: totalCacheRead,
@@ -400,6 +403,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     model: call.model,
     usage,
     costUSD: call.costUSD,
+    costIsEstimated: call.costIsEstimated,
     tools,
     mcpTools: extractMcpTools(tools),
     hasAgentSpawn: tools.includes('Agent'),

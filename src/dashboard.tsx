@@ -171,6 +171,7 @@ function renderPlanBar(percentUsed: number, width: number): string {
 
 function Overview({ projects, label, width, planUsage }: { projects: ProjectSummary[]; label: string; width: number; planUsage?: PlanUsage }) {
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalEstimated = projects.reduce((s, p) => s + p.sessions.reduce((ss, sess) => ss + sess.estimatedCostUSD, 0), 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const allSessions = projects.flatMap(p => p.sessions)
@@ -198,8 +199,8 @@ function Overview({ projects, label, width, planUsage }: { projects: ProjectSumm
         <Text dimColor>  {label}</Text>
       </Text>
       <Text wrap="truncate-end">
-        <Text bold color={GOLD}>{formatCost(totalCost)}</Text>
-        <Text dimColor> cost   </Text>
+        <Text bold color={GOLD}>{formatCost(totalCost, totalEstimated > 0)}</Text>
+        <Text dimColor> cost{totalEstimated > 0 ? ` (incl. ${formatCost(totalEstimated)} est.)` : ''}   </Text>
         <Text bold>{totalCalls.toLocaleString()}</Text>
         <Text dimColor> calls   </Text>
         <Text bold>{String(totalSessions)}</Text>

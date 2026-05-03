@@ -29,30 +29,27 @@ export function renderStatusBar(projects: ProjectSummary[]): string {
   const today = localDateString(now)
   const monthStart = `${today.slice(0, 7)}-01`
 
-  let todayCost = 0, todayCalls = 0, monthCost = 0, monthCalls = 0
+  let todayCost = 0, todayEst = 0, todayCalls = 0
+  let monthCost = 0, monthEst = 0, monthCalls = 0
 
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
-        // Bucket by the first assistant call's local date -- the moment the cost was
-        // incurred. Bucketing by `turn.timestamp` (the user message time) drops turns
-        // that straddle midnight (user asked at 23:58, response arrived at 00:30) and
-        // disagrees with parseAllSessions' dateRange filter which is also on assistant
-        // time.
         const bucketTs = turn.assistantCalls[0]!.timestamp
         if (!bucketTs) continue
         const day = localDateString(new Date(bucketTs))
         const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+        const turnEst = turn.assistantCalls.reduce((s, c) => s + (c.costIsEstimated ? c.costUSD : 0), 0)
         const turnCalls = turn.assistantCalls.length
-        if (day === today) { todayCost += turnCost; todayCalls += turnCalls }
-        if (day >= monthStart) { monthCost += turnCost; monthCalls += turnCalls }
+        if (day === today) { todayCost += turnCost; todayEst += turnEst; todayCalls += turnCalls }
+        if (day >= monthStart) { monthCost += turnCost; monthEst += turnEst; monthCalls += turnCalls }
       }
     }
   }
 
   const lines: string[] = ['']
-  lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(`${monthCalls} calls`)}`)
+  lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost, todayEst > 0))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost, monthEst > 0))}  ${chalk.dim(`${monthCalls} calls`)}`)
   lines.push('')
 
   return lines.join('\n')

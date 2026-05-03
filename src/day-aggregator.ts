@@ -62,6 +62,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           const callDay = ensure(callDate)
 
           callDay.cost += call.costUSD
+          if (call.costIsEstimated) callDay.estimatedCost = (callDay.estimatedCost ?? 0) + call.costUSD
           callDay.calls += 1
           callDay.inputTokens += call.usage.inputTokens
           callDay.outputTokens += call.usage.outputTokens
@@ -94,13 +95,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
 }
 
 export function buildPeriodDataFromDays(days: DailyEntry[], label: string): PeriodData {
-  let cost = 0, calls = 0, sessions = 0
+  let cost = 0, estimatedCost = 0, calls = 0, sessions = 0
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
   const catTotals: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
   const modelTotals: Record<string, { calls: number; cost: number }> = {}
 
   for (const d of days) {
     cost += d.cost
+    estimatedCost += d.estimatedCost ?? 0
     calls += d.calls
     sessions += d.sessions
     inputTokens += d.inputTokens
@@ -127,6 +129,7 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
   return {
     label,
     cost,
+    estimatedCost: estimatedCost > 0 ? estimatedCost : undefined,
     calls,
     sessions,
     inputTokens,
