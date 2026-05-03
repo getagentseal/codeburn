@@ -36,7 +36,7 @@ function assistantEntry(opts: {
 }
 
 describe('dedupeStreamingMessageIds', () => {
-  it('keeps the last occurrence of each message id within the file', () => {
+  it('keeps the last occurrence content of each message id but preserves first timestamp', () => {
     const partialStart = assistantEntry({ id: 'msg_A', ts: '2026-04-25T10:00:00Z', content: [] })
     const partialMid   = assistantEntry({ id: 'msg_A', ts: '2026-04-25T10:00:01Z', content: [] })
     const finalStop    = assistantEntry({
@@ -50,7 +50,10 @@ describe('dedupeStreamingMessageIds', () => {
     const result = dedupeStreamingMessageIds([partialStart, partialMid, finalStop])
 
     expect(result).toHaveLength(1)
-    expect(result[0]).toBe(finalStop)
+    // Content (tool_use blocks, usage) comes from the last occurrence
+    expect((result[0] as typeof finalStop).message).toEqual(finalStop.message)
+    // Timestamp comes from the first occurrence so date bucketing reflects when the call started
+    expect(result[0]!.timestamp).toBe('2026-04-25T10:00:00Z')
   })
 
   it('preserves entries without a message id (user messages, tool results, sidechains)', () => {
@@ -62,7 +65,13 @@ describe('dedupeStreamingMessageIds', () => {
 
     const result = dedupeStreamingMessageIds([user1, stream1, stream2, user2, stream3])
 
-    expect(result).toEqual([user1, stream2, user2, stream3])
+    expect(result).toHaveLength(4)
+    expect(result[0]).toBe(user1)
+    expect(result[2]).toBe(user2)
+    expect(result[3]).toBe(stream3)
+    // The kept stream entry carries stream2's body but stream1's timestamp
+    expect((result[1] as typeof stream2).message).toEqual(stream2.message)
+    expect(result[1]!.timestamp).toBe('2026-04-25T10:00:01Z')
   })
 
   it('returns the input untouched when no assistant message has an id', () => {
@@ -75,7 +84,7 @@ describe('dedupeStreamingMessageIds', () => {
     expect(result).toEqual(entries)
   })
 
-  it('keeps relative ordering between distinct ids', () => {
+  it('keeps relative ordering between distinct ids and preserves each first timestamp', () => {
     const a1 = assistantEntry({ id: 'msg_A', ts: '2026-04-25T10:00:00Z' })
     const b1 = assistantEntry({ id: 'msg_B', ts: '2026-04-25T10:00:01Z' })
     const a2 = assistantEntry({ id: 'msg_A', ts: '2026-04-25T10:00:02Z' })
@@ -83,6 +92,24 @@ describe('dedupeStreamingMessageIds', () => {
 
     const result = dedupeStreamingMessageIds([a1, b1, a2, b2])
 
-    expect(result).toEqual([a2, b2])
+    expect(result).toHaveLength(2)
+    expect((result[0] as typeof a2).message).toEqual(a2.message)
+    expect(result[0]!.timestamp).toBe('2026-04-25T10:00:00Z')
+    expect((result[1] as typeof b2).message).toEqual(b2.message)
+    expect(result[1]!.timestamp).toBe('2026-04-25T10:00:01Z')
+  })
+
+  it('does not mutate the original entries (returns a new wrapper for the kept entry)', () => {
+    const a1 = assistantEntry({ id: 'msg_A', ts: '2026-04-25T10:00:00Z', content: [] })
+    const a2 = assistantEntry({
+      id: 'msg_A',
+      ts: '2026-04-25T10:00:02Z',
+      content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }],
+    })
+
+    dedupeStreamingMessageIds([a1, a2])
+
+    expect(a1.timestamp).toBe('2026-04-25T10:00:00Z')
+    expect(a2.timestamp).toBe('2026-04-25T10:00:02Z')
   })
 })

@@ -123,19 +123,29 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
 /// `message_start` with empty content, optional intermediate updates, and a final
 /// `message_stop` carrying the full `tool_use` blocks plus authoritative usage. Within a
 /// single file we keep only the LAST occurrence of each id so `tool_use` blocks (MCP, Agent,
-/// EnterPlanMode, …) and final token counts reach `groupIntoTurns`. Cross-file dedup runs
-/// downstream against `seenMsgIds` and remains keep-first-seen.
+/// EnterPlanMode, …) and final token counts reach `groupIntoTurns`, but we preserve the
+/// FIRST occurrence's timestamp on that kept entry so downstream date-range bucketing /
+/// filtering still treats the assistant call as occurring when it began. Cross-file dedup
+/// runs downstream against `seenMsgIds` and remains keep-first-seen.
 export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
+  const firstIdxById = new Map<string, number>()
   const lastIdxById = new Map<string, number>()
   for (let i = 0; i < entries.length; i++) {
     const id = getMessageId(entries[i]!)
-    if (id) lastIdxById.set(id, i)
+    if (!id) continue
+    if (!firstIdxById.has(id)) firstIdxById.set(id, i)
+    lastIdxById.set(id, i)
   }
   if (lastIdxById.size === 0) return entries
   const result: JournalEntry[] = []
   for (let i = 0; i < entries.length; i++) {
     const id = getMessageId(entries[i]!)
     if (id && lastIdxById.get(id) !== i) continue
+    if (id && firstIdxById.get(id) !== i) {
+      const firstTs = entries[firstIdxById.get(id)!]!.timestamp
+      result.push({ ...entries[i]!, timestamp: firstTs ?? entries[i]!.timestamp })
+      continue
+    }
     result.push(entries[i]!)
   }
   return result
