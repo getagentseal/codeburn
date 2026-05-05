@@ -4,16 +4,13 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import Soup from 'gi://Soup?version=3.0';
-import Pango from 'gi://Pango';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { DataClient } from './dataClient.js';
 
-const CACHE_TTL_MS = 60_000;
-const TOP_ACTIVITIES = 5;
+const CACHE_TTL_MS = 300_000;
+const TOP_ACTIVITIES = 10;
 const CHART_HEIGHT = 52;
-const CHART_BAR_WIDTH = 12;
 const BAR_TRACK_WIDTH = 240;
 
 const PERIODS = [
@@ -30,7 +27,6 @@ const INSIGHTS = [
   { id: 'forecast', label: 'Forecast' },
   { id: 'pulse', label: 'Pulse' },
   { id: 'stats', label: 'Stats' },
-  { id: 'plan', label: 'Plan' },
 ];
 
 const PROVIDERS = [
@@ -76,12 +72,14 @@ const PROVIDER_PATHS = {
   pi: '.pi/agent/sessions',
 };
 
-function formatCost(value, currency, rate = 1) {
+function formatCost(value, currency, rate = 1, exact = false) {
   const n = (Number(value) || 0) * (Number(rate) || 1);
   const abs = Math.abs(n);
   const symbol = currency?.symbol || '$';
-  if (abs >= 1000) return `${symbol}${(n / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
-  return `${symbol}${n.toFixed(2)}`;
+  if (!exact && abs >= 1000) return `${symbol}${(n / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
+  const parts = n.toFixed(2).split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${symbol}${parts.join('.')}`;
 }
 
 function formatTokensCompact(n) {
@@ -118,6 +116,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._provider = this._availableProviders.length === 1 ? this._availableProviders[0] : 'all';
 
     this._currency = this._loadCurrency();
+    this._exactCosts = this._settings.get_boolean('show-exact-costs');
     this._fxRate = 1;
     this._fxCache = { USD: 1 };
     this._soupSession = new Soup.Session();
@@ -126,6 +125,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._inFlightKeys = new Set();
     this._refreshGen = 0;
     this._refreshSourceId = 0;
+    this._chartSummaryText = '';
+    this._destroyed = false;
 
     this._themeSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
     this._themeSignal = this._themeSettings.connect('changed::color-scheme', () => this._applyThemeClass());
@@ -162,24 +163,40 @@ class CodeBurnIndicator extends PanelMenu.Button {
   // -- Popup --
 
   _buildPopup() {
-    this.menu.box.add_style_class_name('codeburn-menu');
-    this._popupHost = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
-    this._popupHost.add_style_class_name('codeburn-host');
-    this.menu.addMenuItem(this._popupHost);
+    try {
+      this.menu.box.add_style_class_name('codeburn-menu');
+      this._popupHost = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+      this._popupHost.add_style_class_name('codeburn-host');
+      this.menu.addMenuItem(this._popupHost);
 
-    this._root = new St.BoxLayout({ vertical: true, style_class: 'codeburn-root', x_expand: true });
-    this._popupHost.add_child(this._root);
+      this._root = new St.BoxLayout({ vertical: true, style_class: 'codeburn-root', x_expand: true });
+      this._popupHost.add_child(this._root);
 
-    this._buildBrandHeader();
-    this._buildAgentTabs();
-    this._buildHero();
-    this._buildPeriodTabs();
-    this._buildInsightPills();
-    this._buildTokenChart();
-    this._buildContentArea();
-    this._buildBudgetAlert();
-    this._buildFindingsSection();
-    this._buildFooter();
+      this._buildBrandHeader();
+
+      this._scrollView = new St.ScrollView({
+        style_class: 'codeburn-scroll',
+        hscrollbar_policy: St.PolicyType.NEVER,
+        vscrollbar_policy: St.PolicyType.AUTOMATIC,
+        y_expand: true,
+      });
+      this._scrollContent = new St.BoxLayout({ vertical: true, x_expand: true });
+      this._scrollView.set_child(this._scrollContent);
+      this._root.add_child(this._scrollView);
+
+      this._buildAgentTabs();
+      this._buildHero();
+      this._buildPeriodTabs();
+      this._buildInsightPills();
+      this._buildTokenChart();
+      this._buildLoadingIndicator();
+      this._buildContentArea();
+      this._buildBudgetAlert();
+      this._buildFindingsSection();
+      this._buildFooter();
+    } catch (e) {
+      log(`CodeBurn: popup build error: ${e.message}\n${e.stack}`);
+    }
   }
 
   _buildBrandHeader() {
@@ -207,13 +224,14 @@ class CodeBurnIndicator extends PanelMenu.Button {
       const badge = new St.Label({ text: tabs[0].label, style_class: 'codeburn-agent-badge' });
       const row = new St.BoxLayout({ style_class: 'codeburn-tab-row' });
       row.add_child(badge);
-      this._root.add_child(row);
+      this._scrollContent.add_child(row);
       return;
     }
 
+    const useScroll = tabs.length > 5;
     this._agentTabRow = new St.BoxLayout({ style_class: 'codeburn-tab-row' });
     for (const p of tabs) {
-      const btn = new St.Button({ label: p.label, style_class: 'codeburn-tab', can_focus: true, x_expand: true });
+      const btn = new St.Button({ label: p.label, style_class: 'codeburn-tab', can_focus: true, x_expand: !useScroll });
       btn.connect('clicked', () => {
         this._provider = p.id;
         this._updateAgentTabStyle();
@@ -222,7 +240,17 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._agentTabRow.add_child(btn);
       this._agentTabs.set(p.id, btn);
     }
-    this._root.add_child(this._agentTabRow);
+    if (useScroll) {
+      const agentScroll = new St.ScrollView({
+        style_class: 'codeburn-agent-scroll',
+        hscrollbar_policy: St.PolicyType.AUTOMATIC,
+        vscrollbar_policy: St.PolicyType.NEVER,
+      });
+      agentScroll.set_child(this._agentTabRow);
+      this._scrollContent.add_child(agentScroll);
+    } else {
+      this._scrollContent.add_child(this._agentTabRow);
+    }
     this._updateAgentTabStyle();
   }
 
@@ -245,7 +273,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     hero.add_child(topLine);
     hero.add_child(this._heroAmount);
     hero.add_child(this._heroMeta);
-    this._root.add_child(hero);
+    this._scrollContent.add_child(hero);
   }
 
   _buildPeriodTabs() {
@@ -261,7 +289,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
       row.add_child(btn);
       this._periodTabs.set(p.id, btn);
     }
-    this._root.add_child(row);
+    this._scrollContent.add_child(row);
     this._updatePeriodTabStyle();
   }
 
@@ -285,7 +313,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
       row.add_child(btn);
       this._insightPills.set(i.id, btn);
     }
-    this._root.add_child(row);
+    this._scrollContent.add_child(row);
     this._updateInsightPillStyle();
   }
 
@@ -297,26 +325,27 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _buildTokenChart() {
-    const chart = new St.BoxLayout({ vertical: true, style_class: 'codeburn-chart' });
+    this._chartContainer = new St.BoxLayout({ vertical: true, style_class: 'codeburn-chart' });
     const header = new St.BoxLayout({ style_class: 'codeburn-chart-header' });
     this._chartLabel = new St.Label({ text: 'Tokens', style_class: 'codeburn-chart-label', x_expand: true });
     this._chartTotal = new St.Label({ text: '', style_class: 'codeburn-chart-total' });
     header.add_child(this._chartLabel);
     header.add_child(this._chartTotal);
-    chart.add_child(header);
+    this._chartContainer.add_child(header);
     this._chartBars = new St.BoxLayout({ style_class: 'codeburn-chart-bars' });
-    chart.add_child(this._chartBars);
-    this._root.add_child(chart);
+    this._chartContainer.add_child(this._chartBars);
+    this._scrollContent.add_child(this._chartContainer);
   }
 
   _buildContentArea() {
+    this._scrollContent.add_child(new St.Widget({ style_class: 'codeburn-divider' }));
     this._contentArea = new St.BoxLayout({ vertical: true, style_class: 'codeburn-content' });
-    this._root.add_child(this._contentArea);
+    this._scrollContent.add_child(this._contentArea);
   }
 
   _buildBudgetAlert() {
     this._budgetLabel = new St.Label({ text: '', style_class: 'codeburn-budget-warning', visible: false });
-    this._root.add_child(this._budgetLabel);
+    this._scrollContent.add_child(this._budgetLabel);
   }
 
   _buildFindingsSection() {
@@ -328,45 +357,87 @@ class CodeBurnIndicator extends PanelMenu.Button {
     box.add_child(this._findingsSavings);
     this._findingsBtn.set_child(box);
     this._findingsBtn.connect('clicked', () => this._spawnTerminal(['codeburn', 'optimize']));
-    this._root.add_child(this._findingsBtn);
+    this._scrollContent.add_child(this._findingsBtn);
+  }
+
+  _buildLoadingIndicator() {
+    this._loadingBox = new St.BoxLayout({ vertical: true, style_class: 'codeburn-loading', visible: false, x_expand: true });
+    const widths = [0.85, 0.6, 0.92, 0.5, 0.75, 0.45];
+    for (const w of widths) {
+      const bar = new St.Widget({ style_class: 'codeburn-skeleton-bar', x_expand: false });
+      bar.set_width(Math.round(308 * w));
+      bar.set_height(10);
+      this._loadingBox.add_child(bar);
+    }
+    this._scrollContent.add_child(this._loadingBox);
+  }
+
+  _showLoading() {
+    if (!this._loadingBox) return;
+    this._loadingBox.visible = true;
+    this._loadingBox.get_children().forEach((bar, i) => {
+      bar.opacity = 255;
+      bar.ease({
+        opacity: 60,
+        duration: 900,
+        delay: i * 120,
+        mode: Clutter.AnimationMode.EASE_IN_OUT_SINE,
+        repeatCount: -1,
+        autoReverse: true,
+      });
+    });
+  }
+
+  _hideLoading() {
+    if (!this._loadingBox) return;
+    this._loadingBox.visible = false;
+    this._loadingBox.get_children().forEach(bar => {
+      bar.remove_all_transitions();
+      bar.opacity = 255;
+    });
   }
 
   _buildFooter() {
+    this._currencyPicker = new St.ScrollView({
+      style_class: 'codeburn-currency-picker',
+      visible: false,
+      hscrollbar_policy: St.PolicyType.NEVER,
+      vscrollbar_policy: St.PolicyType.AUTOMATIC,
+    });
+    const pickerList = new St.BoxLayout({ vertical: true, style_class: 'codeburn-currency-list' });
+    for (const c of CURRENCIES) {
+      const item = new St.Button({ label: `${c.symbol} ${c.code}`, style_class: 'codeburn-currency-item', can_focus: true });
+      if (c.code === this._currency.code) item.add_style_class_name('codeburn-currency-item-active');
+      item.connect('clicked', () => {
+        this._setCurrency(c.code);
+        this._currencyPicker.hide();
+        pickerList.get_children().forEach(ch => ch.remove_style_class_name('codeburn-currency-item-active'));
+        item.add_style_class_name('codeburn-currency-item-active');
+      });
+      pickerList.add_child(item);
+    }
+    this._currencyPicker.set_child(pickerList);
+    this._root.add_child(this._currencyPicker);
+
     const footer = new St.BoxLayout({ style_class: 'codeburn-footer' });
 
-    const currencyBox = new St.BoxLayout({ vertical: true, style_class: 'codeburn-currency-box' });
     this._currencyBtn = new St.Button({
       label: `${this._currency.code} ⌄`,
       style_class: 'codeburn-footer-btn codeburn-currency-btn',
       can_focus: true,
     });
     this._currencyBtn.connect('clicked', () => this._toggleCurrencyPicker());
-    currencyBox.add_child(this._currencyBtn);
-    this._currencyPicker = new St.BoxLayout({ vertical: true, style_class: 'codeburn-currency-picker', visible: false });
-    for (const c of CURRENCIES) {
-      const item = new St.Button({ label: `${c.symbol}${c.code}`, style_class: 'codeburn-currency-item', can_focus: true });
-      if (c.code === this._currency.code) item.add_style_class_name('codeburn-currency-item-active');
-      item.connect('clicked', () => {
-        this._setCurrency(c.code);
-        this._currencyPicker.hide();
-        this._currencyPicker.get_children().forEach(ch => ch.remove_style_class_name('codeburn-currency-item-active'));
-        item.add_style_class_name('codeburn-currency-item-active');
-      });
-      this._currencyPicker.add_child(item);
-    }
-    currencyBox.add_child(this._currencyPicker);
-    footer.add_child(currencyBox);
+    footer.add_child(this._currencyBtn);
 
     const refreshBtn = new St.Button({ label: 'Refresh', style_class: 'codeburn-footer-btn', can_focus: true, x_expand: true });
     refreshBtn.connect('clicked', () => this._refresh(true));
     footer.add_child(refreshBtn);
 
-    const reportBtn = new St.Button({ label: 'Open Full Report', style_class: 'codeburn-footer-btn codeburn-footer-cta', can_focus: true, x_expand: true });
+    const reportBtn = new St.Button({ label: 'Full Report', style_class: 'codeburn-footer-btn codeburn-footer-cta', can_focus: true, x_expand: true });
     reportBtn.connect('clicked', () => this._spawnTerminal(['codeburn', 'report', '--period', this._period, '--provider', this._provider]));
     footer.add_child(reportBtn);
 
-    const prefsBtn = new St.Button({ style_class: 'codeburn-footer-btn codeburn-prefs-btn', can_focus: true });
-    prefsBtn.set_child(new St.Icon({ icon_name: 'emblem-system-symbolic', style_class: 'codeburn-prefs-icon' }));
+    const prefsBtn = new St.Button({ label: '⚙', style_class: 'codeburn-footer-btn codeburn-prefs-btn', can_focus: true });
     prefsBtn.connect('clicked', () => {
       this._extension.openPreferences();
       this.menu.close();
@@ -398,6 +469,11 @@ class CodeBurnIndicator extends PanelMenu.Button {
     });
     watch('budget-threshold', () => this._updateBudget());
     watch('budget-alert-enabled', () => this._updateBudget());
+    watch('force-dark-mode', () => this._applyThemeClass());
+    watch('show-exact-costs', () => {
+      this._exactCosts = this._settings.get_boolean('show-exact-costs');
+      if (this._payload) this._render(this._payload);
+    });
     watch('disabled-providers', () => {
       if (this._payload) this._render(this._payload);
     });
@@ -450,26 +526,42 @@ class CodeBurnIndicator extends PanelMenu.Button {
   async _refresh(force = false) {
     const key = this._cacheKey();
     const cached = this._payloadCache.get(key);
-    if (!force && cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
+    const cacheAge = cached ? Date.now() - cached.fetchedAt : Infinity;
+
+    if (!force && cached && cacheAge < CACHE_TTL_MS) {
       this._payload = cached.payload;
       this._render(this._payload);
       return;
     }
+
     if (this._inFlightKeys.has(key)) return;
     this._inFlightKeys.add(key);
     const gen = ++this._refreshGen;
 
+    if (cached) {
+      this._payload = cached.payload;
+      this._render(this._payload);
+    } else {
+      this._showLoading();
+      if (this._contentArea) this._contentArea.opacity = 120;
+    }
+
     try {
       const payload = await this._dataClient.fetch(this._period, this._provider);
       this._inFlightKeys.delete(key);
-      if (gen !== this._refreshGen) return;
+      if (this._destroyed || gen !== this._refreshGen) return;
       this._payloadCache.set(key, { payload, fetchedAt: Date.now() });
       if (this._cacheKey() === key) {
         this._payload = payload;
+        this._hideLoading();
+        if (this._contentArea) this._contentArea.opacity = 255;
         this._render(this._payload);
       }
     } catch (e) {
       this._inFlightKeys.delete(key);
+      if (this._destroyed) return;
+      this._hideLoading();
+      if (this._contentArea) this._contentArea.opacity = 255;
       if (gen !== this._refreshGen) return;
       if (e.message?.includes('cancelled')) return;
       log(`CodeBurn: refresh error: ${e.message}`);
@@ -483,9 +575,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const current = payload?.current ?? {};
     const cost = Number(current.cost ?? 0);
 
-    this._panelLabel.set_text(formatCost(cost, this._currency, this._fxRate));
+    this._panelLabel.set_text(this._fmt(cost));
     this._heroLabel.set_text(current.label || '');
-    this._heroAmount.set_text(formatCost(cost, this._currency, this._fxRate));
+    this._heroAmount.set_text(this._fmt(cost));
 
     const calls = Number(current.calls ?? 0);
     const sessions = Number(current.sessions ?? 0);
@@ -504,30 +596,65 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._chartBars.destroy_all_children();
     const days = Array.isArray(daily) ? daily.slice(-19) : [];
     if (days.length === 0) {
-      this._chartTotal.set_text('no history yet');
+      this._chartContainer.visible = false;
       return;
     }
-    const totals = days.map(d => {
-      return (Number(d?.inputTokens) || 0) + (Number(d?.outputTokens) || 0) +
-        (Number(d?.cacheReadTokens) || 0) + (Number(d?.cacheWriteTokens) || 0);
-    });
+    const inTotals = days.map(d => Number(d?.inputTokens) || 0);
+    const outTotals = days.map(d => Number(d?.outputTokens) || 0);
+    const totals = inTotals.map((v, i) => v + outTotals[i]);
     let maxTotal = 1;
-    let totalAll = 0;
-    for (const t of totals) {
-      if (t > maxTotal) maxTotal = t;
-      totalAll += t;
+    let totalIn = 0;
+    let totalOut = 0;
+    let hasAnyTokens = false;
+    for (let i = 0; i < days.length; i++) {
+      if (totals[i] > maxTotal) maxTotal = totals[i];
+      if (totals[i] > 0) hasAnyTokens = true;
+      totalIn += inTotals[i];
+      totalOut += outTotals[i];
     }
-    this._chartTotal.set_text(`${formatTokensCompact(totalAll)} tokens`);
+    if (!hasAnyTokens) {
+      this._chartContainer.visible = false;
+      return;
+    }
+    this._chartContainer.visible = true;
+    const summaryText = `In: ${formatTokensCompact(totalIn)}  Out: ${formatTokensCompact(totalOut)}`;
+    this._chartTotal.set_text(summaryText);
+    this._chartSummaryText = summaryText;
+
+    const chartWidth = 308;
+    const gap = 2;
+    const barW = Math.max(4, Math.floor((chartWidth - gap * (days.length - 1)) / days.length));
+
     for (let i = 0; i < days.length; i++) {
       const h = Math.max(2, Math.round((totals[i] / maxTotal) * CHART_HEIGHT));
-      const col = new St.BoxLayout({ vertical: true, style_class: 'codeburn-chart-col' });
+      const col = new St.BoxLayout({ vertical: true, style_class: 'codeburn-chart-col', reactive: true });
+      col.set_width(barW);
+      col.set_height(CHART_HEIGHT);
       const spacer = new St.Widget({ style_class: 'codeburn-chart-spacer' });
       spacer.set_height(CHART_HEIGHT - h);
       const bar = new St.Widget({ style_class: 'codeburn-chart-bar' });
-      bar.set_width(CHART_BAR_WIDTH);
+      bar.set_width(barW);
       bar.set_height(h);
       col.add_child(spacer);
       col.add_child(bar);
+
+      const date = days[i]?.date || '';
+      const inTok = formatTokensCompact(inTotals[i]);
+      const outTok = formatTokensCompact(outTotals[i]);
+      const cost = days[i]?.cost != null ? this._fmt(days[i].cost) : '';
+      col.connect('enter-event', () => {
+        this._chartTotal.set_text(`${date}  ${inTok}/${outTok}  ${cost}`);
+        this._chartTotal.add_style_class_name('codeburn-chart-total-hover');
+        bar.add_style_class_name('codeburn-chart-bar-hover');
+        return Clutter.EVENT_PROPAGATE;
+      });
+      col.connect('leave-event', () => {
+        this._chartTotal.set_text(this._chartSummaryText);
+        this._chartTotal.remove_style_class_name('codeburn-chart-total-hover');
+        bar.remove_style_class_name('codeburn-chart-bar-hover');
+        return Clutter.EVENT_PROPAGATE;
+      });
+
       this._chartBars.add_child(col);
     }
   }
@@ -539,7 +666,6 @@ class CodeBurnIndicator extends PanelMenu.Button {
       case 'forecast': return this._renderForecastView();
       case 'pulse': return this._renderPulseView();
       case 'stats': return this._renderStatsView();
-      case 'plan': return this._renderPlanView();
       default: return this._renderActivityView();
     }
   }
@@ -549,9 +675,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._contentArea.add_child(this._sectionTitle('Activity'));
     const actHeader = new St.BoxLayout({ style_class: 'codeburn-table-header' });
     actHeader.add_child(new St.Label({ text: 'Name', style_class: 'codeburn-th', x_expand: true }));
-    actHeader.add_child(new St.Label({ text: 'Cost', style_class: 'codeburn-th codeburn-th-right', min_width: 64 }));
-    actHeader.add_child(new St.Label({ text: 'Turns', style_class: 'codeburn-th codeburn-th-right', min_width: 40 }));
-    actHeader.add_child(new St.Label({ text: '1-shot', style_class: 'codeburn-th codeburn-th-right', min_width: 40 }));
+    actHeader.add_child(new St.Label({ text: 'Cost', style_class: 'codeburn-th codeburn-th-right codeburn-th-cost' }));
+    actHeader.add_child(new St.Label({ text: 'Turns', style_class: 'codeburn-th codeburn-th-right codeburn-th-turns' }));
+    actHeader.add_child(new St.Label({ text: '1-shot', style_class: 'codeburn-th codeburn-th-right codeburn-th-turns' }));
     this._contentArea.add_child(actHeader);
     const rows = new St.BoxLayout({ vertical: true, style_class: 'codeburn-activity-rows' });
     const activities = Array.isArray(current.topActivities) ? current.topActivities : [];
@@ -570,8 +696,8 @@ class CodeBurnIndicator extends PanelMenu.Button {
       this._contentArea.add_child(this._sectionTitle('Models'));
       const modHeader = new St.BoxLayout({ style_class: 'codeburn-table-header' });
       modHeader.add_child(new St.Label({ text: 'Model', style_class: 'codeburn-th', x_expand: true }));
-      modHeader.add_child(new St.Label({ text: 'Cost', style_class: 'codeburn-th codeburn-th-right', min_width: 64 }));
-      modHeader.add_child(new St.Label({ text: 'Calls', style_class: 'codeburn-th codeburn-th-right', min_width: 50 }));
+      modHeader.add_child(new St.Label({ text: 'Cost', style_class: 'codeburn-th codeburn-th-right codeburn-th-cost' }));
+      modHeader.add_child(new St.Label({ text: 'Calls', style_class: 'codeburn-th codeburn-th-right codeburn-th-calls' }));
       this._contentArea.add_child(modHeader);
       const mrows = new St.BoxLayout({ vertical: true, style_class: 'codeburn-models-rows' });
       for (const m of models.slice(0, 3)) mrows.add_child(this._buildModelRow(m));
@@ -581,7 +707,6 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
   _renderTrendView() {
     const daily = this._payload?.history?.daily ?? [];
-    this._contentArea.add_child(this._sectionTitle('Trend'));
     if (!daily.length) {
       this._contentArea.add_child(new St.Label({ text: 'Not enough history yet', style_class: 'codeburn-empty' }));
       return;
@@ -589,15 +714,18 @@ class CodeBurnIndicator extends PanelMenu.Button {
     for (const d of daily.slice(-7).reverse()) {
       const row = new St.BoxLayout({ style_class: 'codeburn-trend-row' });
       row.add_child(new St.Label({ text: d.date, style_class: 'codeburn-trend-date', x_expand: true }));
-      row.add_child(new St.Label({ text: formatCost(d.cost, this._currency, this._fxRate), style_class: 'codeburn-trend-cost' }));
-      row.add_child(new St.Label({ text: `${Number(d.calls).toLocaleString()} calls`, style_class: 'codeburn-trend-calls' }));
+      const costLabel = new St.Label({ text: this._fmt(d.cost), style_class: 'codeburn-trend-cost' });
+      costLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+      row.add_child(costLabel);
+      const callsLabel = new St.Label({ text: `${Number(d.calls).toLocaleString()} calls`, style_class: 'codeburn-trend-calls' });
+      callsLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+      row.add_child(callsLabel);
       this._contentArea.add_child(row);
     }
   }
 
   _renderForecastView() {
     const daily = this._payload?.history?.daily ?? [];
-    this._contentArea.add_child(this._sectionTitle('Forecast'));
     if (daily.length < 3) {
       this._contentArea.add_child(new St.Label({ text: 'Need at least 3 days of history', style_class: 'codeburn-empty' }));
       return;
@@ -612,10 +740,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const dayOfMonth = now.getUTCDate();
     const daysInMonth = new Date(now.getUTCFullYear(), now.getUTCMonth() + 1, 0).getUTCDate();
 
-    this._contentArea.add_child(this._kvRow('7-day avg', formatCost(avg, this._currency, this._fxRate)));
-    this._contentArea.add_child(this._kvRow('Yesterday', yesterday ? formatCost(yestCost, this._currency, this._fxRate) : '-'));
+    this._contentArea.add_child(this._kvRow('7-day avg', this._fmt(avg)));
+    this._contentArea.add_child(this._kvRow('Yesterday', yesterday ? this._fmt(yestCost) : '-'));
     this._contentArea.add_child(this._kvRow('Day-over-day', `${dod > 0 ? '+' : ''}${dod.toFixed(1)}%`));
-    this._contentArea.add_child(this._kvRow('Month projection', formatCost(avg * daysInMonth, this._currency, this._fxRate)));
+    this._contentArea.add_child(this._kvRow('Month projection', this._fmt(avg * daysInMonth)));
     this._contentArea.add_child(this._kvRow('Days elapsed', `${dayOfMonth} of ${daysInMonth}`));
   }
 
@@ -624,7 +752,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const daily = this._payload?.history?.daily ?? [];
     this._contentArea.add_child(this._sectionTitle('Pulse'));
     const row = new St.BoxLayout({ style_class: 'codeburn-pulse-row' });
-    row.add_child(this._pulseTile(formatCost(current.cost, this._currency, this._fxRate), 'cost'));
+    row.add_child(this._pulseTile(this._fmt(current.cost), 'cost'));
     row.add_child(this._pulseTile(Number(current.calls || 0).toLocaleString(), 'calls'));
     row.add_child(this._pulseTile(`${Number(current.cacheHitPercent || 0).toFixed(0)}%`, 'cache hit'));
     this._contentArea.add_child(row);
@@ -635,9 +763,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
       const sumCost = last7.reduce((s, d) => s + Number(d.cost || 0), 0);
       const sumCalls = last7.reduce((s, d) => s + Number(d.calls || 0), 0);
       const peakDay = last7.reduce((best, d) => Number(d.cost || 0) > Number(best.cost || 0) ? d : best, last7[0]);
-      this._contentArea.add_child(this._kvRow('Total spend', formatCost(sumCost, this._currency, this._fxRate)));
+      this._contentArea.add_child(this._kvRow('Total spend', this._fmt(sumCost)));
       this._contentArea.add_child(this._kvRow('Total calls', Number(sumCalls).toLocaleString()));
-      this._contentArea.add_child(this._kvRow('Peak day', `${peakDay?.date || '-'}  ${formatCost(peakDay?.cost, this._currency, this._fxRate)}`));
+      this._contentArea.add_child(this._kvRow('Peak day', `${peakDay?.date || '-'}  ${this._fmt(peakDay?.cost)}`));
     }
   }
 
@@ -657,20 +785,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._contentArea.add_child(this._kvRow('Favorite model', favModel));
     this._contentArea.add_child(this._kvRow('Active days', `${activeDays}`));
     this._contentArea.add_child(this._kvRow('Current streak', `${streak} days`));
-    if (peakDay) this._contentArea.add_child(this._kvRow('Peak day', `${peakDay.date}  ${formatCost(peakDay.cost, this._currency, this._fxRate)}`));
-  }
-
-  _renderPlanView() {
-    this._contentArea.add_child(this._sectionTitle('Plan'));
-    const msg = new St.Label({
-      text: 'Subscription tracking coming to Linux in a future release.',
-      style_class: 'codeburn-empty',
-      x_expand: true,
-    });
-    msg.clutter_text.line_wrap = true;
-    msg.clutter_text.line_wrap_mode = Pango.WrapMode.WORD;
-    msg.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
-    this._contentArea.add_child(msg);
+    if (peakDay) this._contentArea.add_child(this._kvRow('Peak day', `${peakDay.date}  ${this._fmt(peakDay.cost)}`));
   }
 
   _renderFindings(optimize) {
@@ -681,7 +796,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     }
     const savings = Number(optimize?.savingsUSD ?? 0);
     this._findingsCount.set_text(`${count} optimize findings`);
-    this._findingsSavings.set_text(`save ~${formatCost(savings, this._currency, this._fxRate)}`);
+    this._findingsSavings.set_text(`save ~${this._fmt(savings)}`);
     this._findingsBtn.show();
   }
 
@@ -710,7 +825,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const cost = Number(this._payload.current.cost ?? 0) * this._fxRate;
     const thresholdConverted = threshold * this._fxRate;
     if (cost >= thresholdConverted) {
-      this._budgetLabel.set_text(`Budget exceeded: ${formatCost(cost, this._currency, 1)} / ${formatCost(thresholdConverted, this._currency, 1)}`);
+      this._budgetLabel.set_text(`Budget exceeded: ${this._fmt(cost)} / ${this._fmt(thresholdConverted)}`);
       this._budgetLabel.visible = true;
     } else {
       this._budgetLabel.visible = false;
@@ -759,6 +874,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const url = `https://api.frankfurter.app/latest?from=USD&to=${code}`;
     const msg = Soup.Message.new('GET', url);
     this._soupSession.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (session, result) => {
+      if (this._destroyed) return;
       try {
         const bytes = session.send_and_read_finish(result);
         if (!bytes) return;
@@ -771,6 +887,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
         }
       } catch (_) { /* FX fetch failed */ }
     });
+  }
+
+  _fmt(value) {
+    return formatCost(value, this._currency, this._fxRate, this._exactCosts);
   }
 
   // -- UI helpers --
@@ -797,10 +917,16 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const row = new St.BoxLayout({ vertical: true, style_class: 'codeburn-activity-row' });
     const topLine = new St.BoxLayout({ style_class: 'codeburn-activity-top' });
     topLine.add_child(new St.Label({ text: activity.name, style_class: 'codeburn-activity-name', x_expand: true }));
-    topLine.add_child(new St.Label({ text: formatCost(activity.cost, this._currency, this._fxRate), style_class: 'codeburn-activity-cost' }));
-    topLine.add_child(new St.Label({ text: `${Number(activity.turns) || 0}t`, style_class: 'codeburn-activity-turns' }));
+    const costLabel = new St.Label({ text: this._fmt(activity.cost), style_class: 'codeburn-activity-cost' });
+    costLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+    topLine.add_child(costLabel);
+    const turnsLabel = new St.Label({ text: `${Number(activity.turns) || 0}`, style_class: 'codeburn-activity-turns' });
+    turnsLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+    topLine.add_child(turnsLabel);
     const osText = activity.oneShotRate != null ? `${Math.round(Number(activity.oneShotRate) * 100)}%` : '--';
-    topLine.add_child(new St.Label({ text: osText, style_class: 'codeburn-activity-oneshot' }));
+    const osLabel = new St.Label({ text: osText, style_class: 'codeburn-activity-oneshot' });
+    osLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+    topLine.add_child(osLabel);
     row.add_child(topLine);
 
     const track = new St.BoxLayout({ style_class: 'codeburn-bar-track' });
@@ -815,18 +941,28 @@ class CodeBurnIndicator extends PanelMenu.Button {
   _buildModelRow(model) {
     const row = new St.BoxLayout({ style_class: 'codeburn-model-row' });
     row.add_child(new St.Label({ text: model.name, style_class: 'codeburn-model-name', x_expand: true }));
-    row.add_child(new St.Label({ text: formatCost(model.cost, this._currency, this._fxRate), style_class: 'codeburn-model-cost' }));
-    row.add_child(new St.Label({ text: `${Number(model.calls || 0).toLocaleString()}`, style_class: 'codeburn-model-calls' }));
+    const mc = new St.Label({ text: this._fmt(model.cost), style_class: 'codeburn-model-cost' });
+    mc.clutter_text.x_align = Clutter.ActorAlign.END;
+    row.add_child(mc);
+    const mcalls = new St.Label({ text: `${Number(model.calls || 0).toLocaleString()}`, style_class: 'codeburn-model-calls' });
+    mcalls.clutter_text.x_align = Clutter.ActorAlign.END;
+    row.add_child(mcalls);
     return row;
   }
 
   // -- Theme --
 
   _applyThemeClass() {
+    const forceDark = this._settings.get_boolean('force-dark-mode');
     const scheme = this._themeSettings.get_string('color-scheme');
-    const isDark = scheme === 'prefer-dark';
-    this.add_style_class_name(isDark ? 'codeburn-dark' : 'codeburn-light');
-    this.remove_style_class_name(isDark ? 'codeburn-light' : 'codeburn-dark');
+    const isDark = forceDark || scheme === 'prefer-dark';
+    if (isDark) {
+      this._root?.add_style_class_name('codeburn-dark');
+      this._root?.remove_style_class_name('codeburn-light');
+    } else {
+      this._root?.add_style_class_name('codeburn-light');
+      this._root?.remove_style_class_name('codeburn-dark');
+    }
   }
 
   // -- Terminal spawning --
@@ -844,6 +980,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
   // -- Cleanup --
 
   destroy() {
+    this._destroyed = true;
     if (this._refreshSourceId) {
       GLib.Source.remove(this._refreshSourceId);
       this._refreshSourceId = 0;
@@ -856,7 +993,10 @@ class CodeBurnIndicator extends PanelMenu.Button {
     for (const id of this._settingsChangedIds) this._settings.disconnect(id);
     this._settingsChangedIds = [];
     this._dataClient?.destroy();
-    this._soupSession = null;
+    if (this._soupSession) {
+      this._soupSession.abort();
+      this._soupSession = null;
+    }
     super.destroy();
   }
 });

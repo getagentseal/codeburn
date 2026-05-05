@@ -66,6 +66,20 @@ export default class CodeBurnPreferences extends ExtensionPreferences {
     settings.bind('compact-mode', compactRow, 'active', Gio.SettingsBindFlags.DEFAULT);
     displayGroup.add(compactRow);
 
+    const darkModeRow = new Adw.SwitchRow({
+      title: 'Force Dark Mode',
+      subtitle: 'Always use dark theme for the popup',
+    });
+    settings.bind('force-dark-mode', darkModeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    displayGroup.add(darkModeRow);
+
+    const exactCostsRow = new Adw.SwitchRow({
+      title: 'Show Exact Costs',
+      subtitle: 'Show full values like $2,655.23 instead of $2.7k',
+    });
+    settings.bind('show-exact-costs', exactCostsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+    displayGroup.add(exactCostsRow);
+
     const periodModel = new Gtk.StringList();
     for (const p of PERIODS)
       periodModel.append(p.label);

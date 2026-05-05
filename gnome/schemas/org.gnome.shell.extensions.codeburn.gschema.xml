@@ -34,6 +34,18 @@
       <description>Show only icon in panel, hide cost label</description>
     </key>
 
+    <key name="force-dark-mode" type="b">
+      <default>false</default>
+      <summary>Force dark mode</summary>
+      <description>Always use dark theme for the popup, regardless of system theme</description>
+    </key>
+
+    <key name="show-exact-costs" type="b">
+      <default>false</default>
+      <summary>Show exact costs</summary>
+      <description>Show full decimal values instead of compact notation (e.g. $2,655.23 instead of $2.7k)</description>
+    </key>
+
     <key name="codeburn-path" type="s">
       <default>''</default>
       <summary>CodeBurn CLI path</summary>

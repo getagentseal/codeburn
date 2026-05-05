@@ -1,17 +1,33 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
-const TIMEOUT_SECONDS = 45;
+const TIMEOUT_SECONDS = 15;
 const SAFE_ARG_RE = /^[A-Za-z0-9 ._/\-]+$/;
-const ADDITIONAL_PATH_ENTRIES = ['/usr/local/bin', `${GLib.get_home_dir()}/.local/bin`, `${GLib.get_home_dir()}/.npm-global/bin`];
+
+function buildAdditionalPaths() {
+  const home = GLib.get_home_dir();
+  return [
+    '/usr/local/bin',
+    `${home}/.local/bin`,
+    `${home}/.npm-global/bin`,
+    `${home}/.volta/bin`,
+    `${home}/.bun/bin`,
+    `${home}/.cargo/bin`,
+    `${home}/.asdf/shims`,
+    `${home}/.local/share/fnm/aliases/default/bin`,
+    `${home}/.local/share/pnpm`,
+  ];
+}
 
 export class DataClient {
   _cache = new Map();
   _inFlight = null;
   _codeburnPath;
+  _augmentedPath;
 
   constructor(codeburnPath) {
     this._codeburnPath = codeburnPath || '';
+    this._augmentedPath = this._buildAugmentedPath();
   }
 
   setCodeburnPath(path) {
@@ -69,39 +85,43 @@ export class DataClient {
     return args;
   }
 
-  _augmentedEnv() {
+  _buildAugmentedPath() {
     const currentPath = GLib.getenv('PATH') || '/usr/bin:/bin';
     const parts = currentPath.split(':');
-    for (const extra of ADDITIONAL_PATH_ENTRIES) {
+    for (const extra of buildAdditionalPaths()) {
       if (!parts.includes(extra))
         parts.push(extra);
     }
-    return [`PATH=${parts.join(':')}`];
+    return parts.join(':');
   }
 
   _spawn(period, provider, cancellable) {
     return new Promise((resolve, reject) => {
       const argv = this._buildArgv(period, provider);
+      let settled = false;
+
+      const settle = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        fn(value);
+      };
 
       let proc;
       try {
         const launcher = Gio.SubprocessLauncher.new(
           Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
         );
-        for (const entry of this._augmentedEnv()) {
-          const [key, val] = entry.split('=', 2);
-          launcher.setenv(key, val, true);
-        }
+        launcher.setenv('PATH', this._augmentedPath, true);
         proc = launcher.spawnv(argv);
       } catch (e) {
-        reject(new Error(`CLI not found: ${e.message}`));
+        settle(reject, new Error(`CLI not found: ${e.message}`));
         return;
       }
 
       let timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, TIMEOUT_SECONDS, () => {
         timeoutId = 0;
         proc.force_exit();
-        reject(new Error('CLI timeout'));
+        settle(reject, new Error('CLI timeout'));
         return GLib.SOURCE_REMOVE;
       });
 
@@ -116,19 +136,19 @@ export class DataClient {
 
           if (!_proc.get_successful()) {
             const msg = stderr?.trim() || 'CLI exited with error';
-            reject(new Error(msg));
+            settle(reject, new Error(msg));
             return;
           }
 
           if (!stdout || stdout.trim().length === 0) {
-            reject(new Error('CLI returned empty output'));
+            settle(reject, new Error('CLI returned empty output'));
             return;
           }
 
           const payload = JSON.parse(stdout);
-          resolve(payload);
+          settle(resolve, payload);
         } catch (e) {
-          reject(e);
+          settle(reject, e);
         }
       });
     });
