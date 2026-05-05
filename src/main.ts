@@ -16,6 +16,7 @@ import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
+import { buildRedactedShare, writeRedactedShare } from './share.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
@@ -693,6 +694,60 @@ program
 
     const exportedLabel = customRange ? formatDateRangeLabel(opts.from, opts.to) : 'Today + 7 Days + 30 Days'
     console.log(`\n  Exported (${exportedLabel}) to: ${savedPath}\n`)
+  })
+
+program
+  .command('share')
+  .description('Export a redacted local JSON bundle for debugging or support')
+  .option('-p, --period <period>', 'Share period: today, week, 30days, month, all', 'week')
+  .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
+  .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
+  .option('-o, --output <path>', 'Output file path')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--project <name>', 'Include only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .action(async (opts) => {
+    let customRange: DateRange | null = null
+    try {
+      customRange = parseDateRangeFlags(opts.from, opts.to)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exit(1)
+    }
+
+    await loadPricing()
+
+    const period = toPeriod(opts.period)
+    const rangeInfo = customRange
+      ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
+      : getDateRange(period)
+
+    const projects = filterProjectsByName(
+      await parseAllSessions(rangeInfo.range, opts.provider),
+      opts.project,
+      opts.exclude,
+    )
+
+    if (projects.length === 0) {
+      console.log('\n  No usage data found.\n')
+      return
+    }
+
+    const now = new Date()
+    const timeSuffix = `${now.toTimeString().slice(0, 8).replace(/:/g, '')}${String(now.getMilliseconds()).padStart(3, '0')}`
+    const defaultName = `codeburn-share-${toDateString(now)}-${timeSuffix}.json`
+    const outputPath = opts.output ?? defaultName
+    const share = buildRedactedShare(projects, {
+      label: rangeInfo.label,
+      range: rangeInfo.range,
+      provider: opts.provider,
+      project: opts.project,
+      exclude: opts.exclude,
+    })
+    const savedPath = await writeRedactedShare(share, outputPath)
+    console.log(`\n  Redacted share exported to: ${savedPath}`)
+    console.log('  Review before posting publicly; redaction is best-effort.\n')
   })
 
 program

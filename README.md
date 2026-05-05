@@ -78,6 +78,7 @@ codeburn status                 # compact one-liner (today + month)
 codeburn status --format json
 codeburn export                 # CSV with today, 7 days, 30 days
 codeburn export -f json         # JSON export
+codeburn share                  # redacted JSON bundle for support/debugging
 codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
@@ -127,7 +128,7 @@ Provider logos are trademarks of their respective owners. The icon set was sourc
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
-The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`.
+The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `share`, `optimize`, `compare`, `yield`.
 
 ### Provider Notes
 
@@ -333,6 +334,19 @@ codeburn today --format json | jq '.overview.cost'
 ```
 
 For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`).
+
+### Redacted Share
+
+Create a local support bundle without posting raw prompts, project labels, absolute paths, emails, or common API tokens:
+
+```bash
+codeburn share                         # 7-day redacted JSON bundle
+codeburn share -p 30days               # last 30 days
+codeburn share --provider claude       # provider-specific bundle
+codeburn share --project api -o api-share.json
+```
+
+The bundle keeps enough structure to debug provider parsing and cost attribution: pseudonymous projects, sessions, turns, models, token usage, tools, activity categories, and costs. Redaction is best-effort; review the generated file before posting it publicly.
 
 ## Menu Bar
 
