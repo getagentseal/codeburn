@@ -10,6 +10,8 @@ const FEATURE_KEYWORDS = /\b(add|create|implement|new|build|feature|introduce|se
 const REFACTOR_KEYWORDS = /\b(refactor|clean\s*up|rename|reorganize|simplify|extract|restructure|move|migrate|split)\b/i
 const BRAINSTORM_KEYWORDS = /\b(brainstorm|idea|what\s+if|explore|think\s+about|approach|strategy|design|consider|how\s+should|what\s+would|opinion|suggest|recommend)\b/i
 const RESEARCH_KEYWORDS = /\b(research|investigate|look\s+into|find\s+out|check|search|analyze|review|understand|explain|how\s+does|what\s+is|show\s+me|list|compare)\b/i
+const FEATURE_DEBUG_CONTEXTS = /\b(error\s+handling|issue\s+tracker|new\s+feature)\b/i
+const EXPLICIT_DEBUG_CONTEXTS = /\b(bug|broken|failing|crash|debug|traceback|exception|stack\s*trace|not\s+working|wrong|unexpected|status\s+code|404|500|401|403)\b/i
 
 const FILE_PATTERNS = /\.(py|js|ts|tsx|jsx|json|yaml|yml|toml|sql|sh|go|rs|java|rb|php|css|html|md|csv|xml)\b/i
 const SCRIPT_PATTERNS = /\b(run\s+\S+\.\w+|execute|scrip?t|curl|api\s+\S+|endpoint|request\s+url|fetch\s+\S+|query|database|db\s+\S+)\b/i
@@ -57,6 +59,13 @@ function getAllSkills(turn: ParsedTurn): string[] {
   return turn.assistantCalls.flatMap(c => c.skills ?? [])
 }
 
+function shouldPreferFeatureOverDebug(userMessage: string): boolean {
+  if (!FEATURE_KEYWORDS.test(userMessage)) return false
+  if (!FEATURE_DEBUG_CONTEXTS.test(userMessage)) return false
+  if (/\b(error\s+handling|issue\s+tracker)\b/i.test(userMessage)) return true
+  return !EXPLICIT_DEBUG_CONTEXTS.test(userMessage)
+}
+
 function classifyByToolPattern(turn: ParsedTurn): TaskCategory | null {
   const tools = getAllTools(turn)
   if (tools.length === 0) return null
@@ -95,6 +104,7 @@ function classifyByToolPattern(turn: ParsedTurn): TaskCategory | null {
 
 function refineByKeywords(category: TaskCategory, userMessage: string): TaskCategory {
   if (category === 'coding') {
+    if (shouldPreferFeatureOverDebug(userMessage)) return 'feature'
     if (DEBUG_KEYWORDS.test(userMessage)) return 'debugging'
     if (REFACTOR_KEYWORDS.test(userMessage)) return 'refactoring'
     if (FEATURE_KEYWORDS.test(userMessage)) return 'feature'
@@ -113,6 +123,7 @@ function refineByKeywords(category: TaskCategory, userMessage: string): TaskCate
 function classifyConversation(userMessage: string): TaskCategory {
   if (BRAINSTORM_KEYWORDS.test(userMessage)) return 'brainstorming'
   if (RESEARCH_KEYWORDS.test(userMessage)) return 'exploration'
+  if (shouldPreferFeatureOverDebug(userMessage)) return 'feature'
   if (DEBUG_KEYWORDS.test(userMessage)) return 'debugging'
   if (FEATURE_KEYWORDS.test(userMessage)) return 'feature'
   if (FILE_PATTERNS.test(userMessage)) return 'coding'

@@ -101,3 +101,35 @@ describe('classifyTurn — Skill subCategory', () => {
     expect(c.subCategory).toBeUndefined()
   })
 })
+
+describe('classifyTurn — feature prompts with debug-like words', () => {
+  it('classifies new error handling as feature work, not debugging', () => {
+    const turn = makeTurn([makeCall({ tools: ['Edit'] })], 'add error handling to the import flow')
+    expect(classifyTurn(turn).category).toBe('feature')
+  })
+
+  it('classifies issue tracker creation as feature work', () => {
+    const turn = makeTurn([makeCall({ tools: ['Edit'] })], 'create an issue tracker dashboard')
+    expect(classifyTurn(turn).category).toBe('feature')
+  })
+
+  it('classifies layout work for a new feature as feature work even when the prompt says fix', () => {
+    const turn = makeTurn([makeCall({ tools: ['Edit'] })], 'fix the layout for the new feature panel')
+    expect(classifyTurn(turn).category).toBe('feature')
+  })
+
+  it('keeps explicit bug fixes classified as debugging', () => {
+    const turn = makeTurn([makeCall({ tools: ['Edit'] })], 'fix the login bug in auth')
+    expect(classifyTurn(turn).category).toBe('debugging')
+  })
+
+  it('keeps explicit failures in new features classified as debugging', () => {
+    const turn = makeTurn([makeCall({ tools: ['Edit'] })], 'fix the 500 error in the new feature')
+    expect(classifyTurn(turn).category).toBe('debugging')
+  })
+
+  it('applies the same feature-context rule to conversation-only turns', () => {
+    const turn = makeTurn([], 'create an issue tracker')
+    expect(classifyTurn(turn).category).toBe('feature')
+  })
+})

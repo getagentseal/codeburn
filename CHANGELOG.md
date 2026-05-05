@@ -15,6 +15,10 @@
 - **Session cost outlier detector.** New `optimize` finding flags sessions costing more than 2x their peer-session average within the same project. Ignores sub-$1 outliers to avoid noise. Requires at least 3 sessions per project for a baseline.
 
 ### Fixed (CLI)
+- **Activity classification for feature work.** Prompts such as "add error
+  handling", "create an issue tracker", and "fix the layout for the new feature"
+  now classify as Feature Dev instead of Debugging while explicit bug/failure
+  fixes remain Debugging. Partially addresses #196.
 - **`all` period semantics unified between CLI and dashboard.** The dashboard treated `--period all` as all-time (epoch start) while the CLI bounded it to the last 6 months. Both now consistently mean "Last 6 months". Period helpers (`Period`, `PERIODS`, `PERIOD_LABELS`, `toPeriod`, `getDateRange`) consolidated into `cli-date.ts`. Use `--from` / `--to` for unbounded historical ranges.
 
 ### Fixed (macOS menubar)
