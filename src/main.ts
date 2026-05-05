@@ -15,6 +15,7 @@ import { renderDashboard } from './dashboard.js'
 import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
+import { buildReplayResult, findReplaySessions, renderReplayCandidates, renderReplayText } from './replay.js'
 import { getAllProviders } from './providers/index.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
@@ -989,6 +990,61 @@ program
     await loadPricing()
     const { range } = getDateRange(opts.period)
     await renderCompare(range, opts.provider)
+  })
+
+program
+  .command('replay')
+  .description('Replay a session as a turn-by-turn timeline')
+  .argument('<session-id>', 'Session id or prefix')
+  .option('-p, --period <period>', 'Search period: today, week, 30days, month, all', 'week')
+  .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
+  .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--project <name>', 'Search only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--json', 'Print machine-readable JSON')
+  .option('--no-prompts', 'Hide user prompts from output')
+  .action(async (sessionId, opts) => {
+    let customRange: DateRange | null = null
+    try {
+      customRange = parseDateRangeFlags(opts.from, opts.to)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    await loadPricing()
+
+    const period = toPeriod(opts.period)
+    const rangeInfo = customRange
+      ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
+      : getDateRange(period)
+    const projects = filterProjectsByName(
+      await parseAllSessions(rangeInfo.range, opts.provider),
+      opts.project,
+      opts.exclude,
+    )
+    const matches = findReplaySessions(projects, sessionId)
+
+    if (matches.length === 0) {
+      console.error(`\n  No session matched "${sessionId}" in ${rangeInfo.label}.\n`)
+      process.exitCode = 1
+      return
+    }
+    if (matches.length > 1) {
+      console.error(renderReplayCandidates(matches, sessionId))
+      process.exitCode = 1
+      return
+    }
+
+    const result = buildReplayResult(matches[0]!, { includePrompts: opts.prompts !== false })
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+    } else {
+      console.log(renderReplayText(result))
+    }
   })
 
 program

@@ -81,6 +81,7 @@ codeburn export -f json         # JSON export
 codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
+codeburn replay <session-id>    # turn-by-turn session timeline
 codeburn yield                  # track productive vs reverted/abandoned spend
 codeburn yield -p 30days        # yield analysis for last 30 days
 codeburn models                 # per-model token + cost table (last 30 days)
@@ -127,7 +128,7 @@ Provider logos are trademarks of their respective owners. The icon set was sourc
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
-The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`.
+The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `replay`, `yield`.
 
 ### Provider Notes
 
@@ -333,6 +334,18 @@ codeburn today --format json | jq '.overview.cost'
 ```
 
 For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`).
+
+### Session Replay
+
+```bash
+codeburn replay abc123                  # find by session id or prefix
+codeburn replay abc123 -p 30days        # search a wider period
+codeburn replay abc123 --provider claude
+codeburn replay abc123 --no-prompts     # hide user prompts in stdout
+codeburn replay abc123 --json           # structured timeline
+```
+
+`replay` turns one recorded session into a local turn-by-turn timeline. It shows each turn's prompt, category, cost, models, tools, MCP tools, skills, shell commands, retries, edit flag, and token counts. It does not upload data; output is printed locally. Use `--no-prompts` when you want timing, cost, and tool flow without exposing prompt text. This is not a full redaction mode: shell commands and tool names remain visible.
 
 ## Menu Bar
 
