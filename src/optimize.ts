@@ -78,6 +78,12 @@ const MIN_SESSIONS_FOR_OUTLIER = 3
 const SESSION_OUTLIER_MULTIPLIER = 2
 const MIN_SESSION_OUTLIER_COST_USD = 1
 const SESSION_OUTLIER_PREVIEW = 5
+const WORTH_IT_MIN_COST_USD = 2
+const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
+const WORTH_IT_MIN_RETRIES = 3
+const WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES = 2
+const WORTH_IT_PREVIEW = 5
+const WORTH_IT_TOKENS_SAVED_RATIO = 0.5
 
 // ============================================================================
 // Scoring constants
@@ -1213,6 +1219,121 @@ function sessionTokenTotal(session: ProjectSummary['sessions'][number]): number 
     + session.totalCacheWriteTokens
 }
 
+function sessionDeliveryCommand(session: ProjectSummary['sessions'][number]): string | null {
+  const commands = Object.keys(session.bashBreakdown)
+  const deliveryPatterns = [
+    /(?:^|[;&|]\s*)git\s+(?:commit|push)\b(?![^;&|]*--dry-run)/,
+    /(?:^|[;&|]\s*)gh\s+pr\s+(?:create|merge)\b(?![^;&|]*--dry-run)/,
+  ]
+  return commands.find(command => deliveryPatterns.some(pattern => pattern.test(command))) ?? null
+}
+
+function hasCategoryBreakdownData(session: ProjectSummary['sessions'][number]): boolean {
+  return Object.values(session.categoryBreakdown).some(category =>
+    category.turns > 0
+    || category.costUSD > 0
+    || category.retries > 0
+    || category.editTurns > 0
+    || category.oneShotTurns > 0
+  )
+}
+
+function sessionEditTurns(session: ProjectSummary['sessions'][number]): number {
+  const byCategory = Object.values(session.categoryBreakdown)
+    .reduce((sum, category) => sum + category.editTurns, 0)
+  if (hasCategoryBreakdownData(session)) return byCategory
+  return session.turns.filter(turn => turn.hasEdits).length
+}
+
+function sessionOneShotTurns(session: ProjectSummary['sessions'][number]): number {
+  const byCategory = Object.values(session.categoryBreakdown)
+    .reduce((sum, category) => sum + category.oneShotTurns, 0)
+  if (hasCategoryBreakdownData(session)) return byCategory
+  return session.turns.filter(turn => turn.hasEdits && turn.retries === 0).length
+}
+
+function sessionRetryCount(session: ProjectSummary['sessions'][number]): number {
+  const byCategory = Object.values(session.categoryBreakdown)
+    .reduce((sum, category) => sum + category.retries, 0)
+  if (hasCategoryBreakdownData(session)) return byCategory
+  return session.turns.reduce((sum, turn) => sum + turn.retries, 0)
+}
+
+export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding | null {
+  type LowWorthSession = {
+    project: string
+    sessionId: string
+    date: string
+    cost: number
+    tokens: number
+    reasons: string[]
+  }
+
+  const candidates: LowWorthSession[] = []
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.totalCostUSD < WORTH_IT_MIN_COST_USD) continue
+      if (sessionDeliveryCommand(session)) continue
+
+      const editTurns = sessionEditTurns(session)
+      const oneShotTurns = sessionOneShotTurns(session)
+      const retries = sessionRetryCount(session)
+      const reasons: string[] = []
+
+      if (editTurns === 0 && session.totalCostUSD >= WORTH_IT_NO_EDIT_MIN_COST_USD) {
+        reasons.push('no edit turns')
+      }
+      if (retries >= WORTH_IT_MIN_RETRIES) {
+        reasons.push(`${retries} retries`)
+      }
+      if (
+        editTurns > 0
+        && oneShotTurns === 0
+        && retries >= WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES
+      ) {
+        reasons.push('no one-shot edit turns')
+      }
+
+      if (reasons.length === 0) continue
+
+      candidates.push({
+        project: project.project,
+        sessionId: session.sessionId,
+        date: session.firstTimestamp.slice(0, 10),
+        cost: session.totalCostUSD,
+        tokens: sessionTokenTotal(session),
+        reasons,
+      })
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) => b.cost - a.cost)
+  const preview = candidates.slice(0, WORTH_IT_PREVIEW)
+  const list = preview
+    .map(s => `${s.project}/${s.sessionId} on ${s.date}: ${formatCost(s.cost)} (${s.reasons.join(', ')})`)
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  const tokensSaved = Math.round(
+    candidates.reduce((sum, s) => sum + s.tokens * WORTH_IT_TOKENS_SAVED_RATIO, 0),
+  )
+  const totalCost = candidates.reduce((sum, s) => sum + s.cost, 0)
+
+  return {
+    title: `${candidates.length} possibly low-worth expensive session${candidates.length === 1 ? '' : 's'}`,
+    explanation: `Sessions with meaningful spend but weak delivery signals: ${list}${extra}. This is a review candidate, not proof of waste: CodeBurn flags missing edit turns, repeated retries, and sessions without git delivery commands so you can tighten the next prompt before costs compound.`,
+    impact: candidates.length >= 3 || totalCost >= 10 ? 'high' : 'medium',
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      label: 'Before continuing expensive work, define the stop rule:',
+      text: 'Summarize the smallest useful next patch, then work one file/task at a time. If tests fail twice or the approach repeats, stop and ask me to choose the next direction before spending more.',
+    },
+  }
+}
+
 export function detectSessionOutliers(projects: ProjectSummary[]): WasteFinding | null {
   type Outlier = {
     project: string
@@ -1399,6 +1520,7 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
+    () => detectLowWorthSessions(projects),
     () => detectSessionOutliers(projects),
     () => detectBloatedClaudeMd(projectCwds),
     () => detectBashBloat(),

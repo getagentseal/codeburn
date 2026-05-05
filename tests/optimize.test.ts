@@ -6,6 +6,7 @@ import {
   detectLowReadEditRatio,
   detectCacheBloat,
   detectBloatedClaudeMd,
+  detectLowWorthSessions,
   detectSessionOutliers,
   computeHealth,
   computeTrend,
@@ -23,37 +24,59 @@ function emptyProjects(): ProjectSummary[] {
   return []
 }
 
-function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
-  const sessions = costs.map((cost, i) => {
-    const tokens = Math.round(cost * 1000)
-    return {
-      sessionId: `s${i + 1}`,
-      project,
-      firstTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:00:00Z`,
-      lastTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:30:00Z`,
-      totalCostUSD: cost,
-      totalInputTokens: tokens,
-      totalOutputTokens: tokens,
-      totalCacheReadTokens: 0,
-      totalCacheWriteTokens: 0,
-      apiCalls: 1,
-      turns: [],
-      modelBreakdown: {},
-      toolBreakdown: {},
-      mcpBreakdown: {},
-      bashBreakdown: {},
-      categoryBreakdown: {} as ProjectSummary['sessions'][number]['categoryBreakdown'],
-      skillBreakdown: {},
-    }
-  })
+type TestSession = ProjectSummary['sessions'][number]
+type TestTurn = TestSession['turns'][number]
 
+function turn(overrides: Partial<TestTurn> = {}): TestTurn {
+  return {
+    userMessage: 'do the work',
+    assistantCalls: [],
+    timestamp: '2026-05-01T10:00:00Z',
+    sessionId: 's1',
+    category: 'coding',
+    retries: 0,
+    hasEdits: false,
+    ...overrides,
+  }
+}
+
+function session(cost: number, i = 0, project = 'app', overrides: Partial<TestSession> = {}): TestSession {
+  const tokens = Math.round(cost * 1000)
+  const sessionId = `s${i + 1}`
+  return {
+    sessionId,
+    project,
+    firstTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:00:00Z`,
+    lastTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:30:00Z`,
+    totalCostUSD: cost,
+    totalInputTokens: tokens,
+    totalOutputTokens: tokens,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 1,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {} as TestSession['categoryBreakdown'],
+    skillBreakdown: {},
+    ...overrides,
+  }
+}
+
+function projectWithDetailedSessions(sessions: TestSession[], project = 'app'): ProjectSummary {
   return {
     project,
     projectPath: `/tmp/${project}`,
     sessions,
-    totalCostUSD: costs.reduce((sum, cost) => sum + cost, 0),
-    totalApiCalls: sessions.length,
+    totalCostUSD: sessions.reduce((sum, s) => sum + s.totalCostUSD, 0),
+    totalApiCalls: sessions.reduce((sum, s) => sum + s.apiCalls, 0),
   }
+}
+
+function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
+  return projectWithDetailedSessions(costs.map((cost, i) => session(cost, i, project)), project)
 }
 
 describe('detectJunkReads', () => {
@@ -238,6 +261,153 @@ describe('detectBloatedClaudeMd', () => {
   it('returns null for empty project set', () => {
     const result = detectBloatedClaudeMd(new Set())
     expect(result).toBeNull()
+  })
+})
+
+describe('detectLowWorthSessions', () => {
+  it('returns null for cheap sessions', () => {
+    const project = projectWithDetailedSessions([
+      session(1.99, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('flags expensive sessions with no edit turns', () => {
+    const project = projectWithDetailedSessions([
+      session(4, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+      }),
+    ])
+
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('possibly low-worth')
+    expect(finding!.explanation).toContain('app/s1')
+    expect(finding!.explanation).toContain('no edit turns')
+    expect(finding!.impact).toBe('medium')
+    expect(finding!.tokensSaved).toBe(4000)
+  })
+
+  it('flags retry-heavy sessions', () => {
+    const project = projectWithDetailedSessions([
+      session(2.5, 0, 'app', {
+        turns: [
+          turn({ hasEdits: true, retries: 1 }),
+          turn({ hasEdits: true, retries: 2 }),
+        ],
+      }),
+    ])
+
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('3 retries')
+  })
+
+  it('keeps all reasons that apply to the same session', () => {
+    const project = projectWithDetailedSessions([
+      session(4, 0, 'app', {
+        turns: [
+          turn({ hasEdits: false, retries: 1 }),
+          turn({ hasEdits: false, retries: 2 }),
+        ],
+      }),
+    ])
+
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('no edit turns')
+    expect(finding!.explanation).toContain('3 retries')
+  })
+
+  it('flags edit sessions with retries but no one-shot edit turns', () => {
+    const project = projectWithDetailedSessions([
+      session(2.25, 0, 'app', {
+        categoryBreakdown: {
+          coding: { turns: 2, costUSD: 2.25, retries: 2, editTurns: 2, oneShotTurns: 0 },
+        } as TestSession['categoryBreakdown'],
+      }),
+    ])
+
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('no one-shot edit turns')
+  })
+
+  it('does not flag sessions with git delivery commands', () => {
+    const project = projectWithDetailedSessions([
+      session(8, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+        bashBreakdown: {
+          'cd /tmp/app && git commit -m "ship fix"': { calls: 1 },
+        },
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('treats GitHub PR creation as a delivery command', () => {
+    const project = projectWithDetailedSessions([
+      session(8, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+        bashBreakdown: {
+          'gh pr create --fill': { calls: 1 },
+        },
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('does not treat read-only git commands as delivery', () => {
+    const project = projectWithDetailedSessions([
+      session(8, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+        bashBreakdown: {
+          'git tag -l': { calls: 1 },
+        },
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).not.toBeNull()
+  })
+
+  it('does not treat dry-run git commands as delivery', () => {
+    const project = projectWithDetailedSessions([
+      session(8, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+        bashBreakdown: {
+          'git push --dry-run origin main': { calls: 1 },
+        },
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).not.toBeNull()
+  })
+
+  it('does not flag the no-edit cost boundary', () => {
+    const project = projectWithDetailedSessions([
+      session(2.99, 0, 'app', {
+        turns: [turn({ hasEdits: false })],
+      }),
+    ])
+
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('summarizes additional candidates after the preview limit', () => {
+    const project = projectWithDetailedSessions(
+      Array.from({ length: 6 }, (_, i) => session(4 + i, i, 'app', {
+        turns: [turn({ hasEdits: false })],
+      })),
+    )
+
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('; +1 more')
   })
 })
 
