@@ -3,7 +3,7 @@ import type { Provider, SessionSource, SessionParser } from './types.js'
 
 const EXTENSION_ID = 'rooveterinaryinc.roo-cline'
 
-export function createRooCodeProvider(overrideDir?: string): Provider {
+export function createRooCodeProvider(overrideDir?: string | string[]): Provider {
   return {
     name: 'roo-code',
     displayName: 'Roo Code',

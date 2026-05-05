@@ -3,7 +3,7 @@ import type { Provider, SessionSource, SessionParser } from './types.js'
 
 const EXTENSION_ID = 'kilocode.kilo-code'
 
-export function createKiloCodeProvider(overrideDir?: string): Provider {
+export function createKiloCodeProvider(overrideDir?: string | string[]): Provider {
   return {
     name: 'kilo-code',
     displayName: 'KiloCode',

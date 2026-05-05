@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'fs/promises'
-import { basename, join } from 'path'
+import { basename, join, posix, win32 } from 'path'
 import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
@@ -12,19 +12,41 @@ type UiMessage = {
   ts?: number
 }
 
-export function getVSCodeGlobalStoragePath(extensionId: string): string {
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', extensionId)
+export function getVSCodeGlobalStoragePaths(extensionId: string, homeDir = homedir(), platform = process.platform): string[] {
+  const pathJoin = platform === 'win32' ? win32.join : posix.join
+
+  if (platform === 'darwin') {
+    return [
+      pathJoin(homeDir, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', extensionId),
+      pathJoin(homeDir, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage', extensionId),
+      pathJoin(homeDir, 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage', extensionId),
+    ]
   }
-  if (process.platform === 'win32') {
-    return join(homedir(), 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', extensionId)
+
+  if (platform === 'win32') {
+    return [
+      pathJoin(homeDir, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage', extensionId),
+      pathJoin(homeDir, 'AppData', 'Roaming', 'Code - Insiders', 'User', 'globalStorage', extensionId),
+      pathJoin(homeDir, 'AppData', 'Roaming', 'VSCodium', 'User', 'globalStorage', extensionId),
+    ]
   }
-  return join(homedir(), '.config', 'Code', 'User', 'globalStorage', extensionId)
+
+  return [
+    pathJoin(homeDir, '.config', 'Code', 'User', 'globalStorage', extensionId),
+    pathJoin(homeDir, '.config', 'Code - Insiders', 'User', 'globalStorage', extensionId),
+    pathJoin(homeDir, '.config', 'VSCodium', 'User', 'globalStorage', extensionId),
+  ]
 }
 
-export async function discoverClineTasks(extensionId: string, providerName: string, displayName: string, overrideDir?: string): Promise<SessionSource[]> {
-  const baseDir = overrideDir ?? getVSCodeGlobalStoragePath(extensionId)
-  return discoverClineTasksInBaseDirs([baseDir], providerName, displayName)
+export function getVSCodeGlobalStoragePath(extensionId: string): string {
+  return getVSCodeGlobalStoragePaths(extensionId)[0]!
+}
+
+export async function discoverClineTasks(extensionId: string, providerName: string, displayName: string, overrideDir?: string | string[]): Promise<SessionSource[]> {
+  const baseDirs = overrideDir
+    ? (Array.isArray(overrideDir) ? overrideDir : [overrideDir])
+    : getVSCodeGlobalStoragePaths(extensionId)
+  return discoverClineTasksInBaseDirs(baseDirs, providerName, displayName)
 }
 
 export async function discoverClineTasksInBaseDirs(baseDirs: string[], providerName: string, displayName: string): Promise<SessionSource[]> {

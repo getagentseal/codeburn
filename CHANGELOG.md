@@ -12,6 +12,10 @@
   message that used them. Claude discovery also scans direct project-level
   `subagents/*.jsonl` files, and Codex agent tool normalization is covered by
   regression tests. Addresses #336.
+- **VSCodium storage discovery for VS Code-family providers.** GitHub
+  Copilot, Roo Code, and KiloCode now scan VSCodium storage roots in addition
+  to VS Code and VS Code Insiders, so usage created from VSCodium is included
+  without a custom override path.
 - **Multiple subscription plans can be tracked at the same time.**
   `codeburn plan set` now stores plans in a provider-keyed `plans` map, so
   setting a Codex custom plan no longer overwrites an existing Claude plan.

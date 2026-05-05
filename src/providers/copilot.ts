@@ -1,6 +1,6 @@
 import { existsSync } from 'fs'
 import { readdir, readFile, stat } from 'fs/promises'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, posix, win32 } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
@@ -106,7 +106,8 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
     }
 
     if (event.type === 'user.message') {
-      pendingUserMessage = event.data.content ?? ''
+      const userEvent = event as Extract<LegacyCopilotEvent, { type: 'user.message' }>
+      pendingUserMessage = userEvent.data.content ?? ''
       continue
     }
 
@@ -330,25 +331,30 @@ function getCopilotSessionStateDir(override?: string): string {
   return override ?? join(homedir(), '.copilot', 'session-state')
 }
 
-function getVSCodeWorkspaceStorageDirs(): string[] {
-  if (process.platform === 'darwin') {
+export function getVSCodeWorkspaceStorageDirs(homeDir = homedir(), platform = process.platform): string[] {
+  const pathJoin = platform === 'win32' ? win32.join : posix.join
+
+  if (platform === 'darwin') {
     return [
-      join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage'),
-      join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'Library', 'Application Support', 'Code', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'Library', 'Application Support', 'Code - Insiders', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'Library', 'Application Support', 'VSCodium', 'User', 'workspaceStorage'),
     ]
   }
 
-  if (process.platform === 'win32') {
+  if (platform === 'win32') {
     return [
-      join(homedir(), 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'),
-      join(homedir(), 'AppData', 'Roaming', 'Code - Insiders', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'AppData', 'Roaming', 'Code', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'AppData', 'Roaming', 'Code - Insiders', 'User', 'workspaceStorage'),
+      pathJoin(homeDir, 'AppData', 'Roaming', 'VSCodium', 'User', 'workspaceStorage'),
     ]
   }
 
   return [
-    join(homedir(), '.config', 'Code', 'User', 'workspaceStorage'),
-    join(homedir(), '.config', 'Code - Insiders', 'User', 'workspaceStorage'),
-    join(homedir(), '.vscode-server', 'data', 'User', 'workspaceStorage'),
+    pathJoin(homeDir, '.config', 'Code', 'User', 'workspaceStorage'),
+    pathJoin(homeDir, '.config', 'Code - Insiders', 'User', 'workspaceStorage'),
+    pathJoin(homeDir, '.config', 'VSCodium', 'User', 'workspaceStorage'),
+    pathJoin(homeDir, '.vscode-server', 'data', 'User', 'workspaceStorage'),
   ]
 }
 

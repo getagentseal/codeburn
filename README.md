@@ -139,11 +139,11 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 
 **Kiro** stores conversations as `.chat` JSON files. Token counts are estimated from content length. The underlying model is not exposed, so sessions are labeled `kiro-auto` and costed at Sonnet rates.
 
-**GitHub Copilot** reads from both `~/.copilot/session-state/` (legacy CLI) and VS Code's `workspaceStorage/*/GitHub.copilot-chat/transcripts/`. The VS Code format has no explicit token counts; tokens are estimated from content length and the model is inferred from tool call ID prefixes.
+**GitHub Copilot** reads from both `~/.copilot/session-state/` (legacy CLI) and VS Code/VSCodium `workspaceStorage/*/GitHub.copilot-chat/transcripts/`. The editor transcript format has no explicit token counts; tokens are estimated from content length and the model is inferred from tool call ID prefixes.
 
 **OpenClaw** reads JSONL agent logs from `~/.openclaw/agents/` and also checks legacy paths (`.clawdbot`, `.moltbot`, `.moldbot`).
 
-**Roo Code and KiloCode** are Cline-family VS Code extensions. CodeBurn reads `ui_messages.json` from each task directory and extracts token usage from `api_req_started` entries.
+**Roo Code and KiloCode** are Cline-family VS Code/VSCodium extensions. CodeBurn reads `ui_messages.json` from each task directory and extracts token usage from `api_req_started` entries.
 
 **Claude with multiple config directories.** If you run Claude Code under more than one account or profile (e.g. `~/.claude-work` and `~/.claude-personal`), point `CLAUDE_CONFIG_DIRS` at all of them at once: `CLAUDE_CONFIG_DIRS=~/.claude-work:~/.claude-personal codeburn`. Sessions across every directory are merged into one row per project so the totals reflect all your Claude usage in one place. Use `:` on POSIX, `;` on Windows. Missing or unreadable directories in the list are skipped.
 
@@ -389,7 +389,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 **OpenClaw** stores agent sessions as JSONL at `~/.openclaw/agents/*.jsonl`. Also checks legacy paths `.clawdbot`, `.moltbot`, `.moldbot`. Token usage comes from assistant message `usage` blocks; model from `modelId` or `message.model` fields.
 
-**Cline / Roo Code / KiloCode** are Cline-family coding agents. CodeBurn reads `ui_messages.json` from each task directory, filtering `type: "say"` entries with `say: "api_req_started"` to extract token counts. Cline scans both VS Code's `globalStorage/saoudrizwan.claude-dev` and `~/.cline/data`.
+**Cline / Roo Code / KiloCode** are Cline-family coding agents. CodeBurn reads `ui_messages.json` from each task directory, filtering `type: "say"` entries with `say: "api_req_started"` to extract token counts. Cline scans both VS Code's `globalStorage/saoudrizwan.claude-dev` and `~/.cline/data`; Roo Code and KiloCode scan VS Code, VS Code Insiders, and VSCodium `globalStorage` roots.
 
 **IBM Bob** stores IDE task history in `User/globalStorage/ibm.bob-code/tasks/<task-id>/` under the IBM Bob application data directory. CodeBurn reads `ui_messages.json` for API request token/cost records and `api_conversation_history.json` for the selected model, with support for both GA (`IBM Bob`) and preview (`Bob-IDE`) app data folders.
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
-import { join } from 'path'
+import { join, posix, win32 } from 'path'
 import { tmpdir } from 'os'
 
-import { copilot, createCopilotProvider } from '../../src/providers/copilot.js'
+import { copilot, createCopilotProvider, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -364,6 +364,18 @@ describe('copilot provider - discoverSessions', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]!.project).toBe('myapp')
     expect(sessions[0]!.path).toContain('session-1.jsonl')
+  })
+
+  it('includes VSCodium workspaceStorage paths on all supported platforms', () => {
+    expect(getVSCodeWorkspaceStorageDirs('/Users/test', 'darwin')).toContain(
+      posix.join('/Users/test', 'Library', 'Application Support', 'VSCodium', 'User', 'workspaceStorage'),
+    )
+    expect(getVSCodeWorkspaceStorageDirs('C:\\Users\\test', 'win32')).toContain(
+      win32.join('C:\\Users\\test', 'AppData', 'Roaming', 'VSCodium', 'User', 'workspaceStorage'),
+    )
+    expect(getVSCodeWorkspaceStorageDirs('/home/test', 'linux')).toContain(
+      posix.join('/home/test', '.config', 'VSCodium', 'User', 'workspaceStorage'),
+    )
   })
 })
 
