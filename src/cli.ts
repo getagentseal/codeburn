@@ -11,7 +11,7 @@ import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateS
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
-import { parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
+import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
@@ -271,7 +271,7 @@ program
       await loadPricing()
       await hydrateCache()
       if (customRange) {
-        const label = `${opts.from ?? 'all'} to ${opts.to ?? 'today'}`
+        const label = formatDateRangeLabel(opts.from, opts.to)
         const projects = filterProjectsByName(
           await parseAllSessions(customRange, opts.provider),
           opts.project,
@@ -528,9 +528,11 @@ program
 
 program
   .command('export')
-  .description('Export usage data to CSV or JSON (includes 1 day, 7 days, 30 days)')
+  .description('Export usage data to CSV or JSON')
   .option('-f, --format <format>', 'Export format: csv, json', 'csv')
   .option('-o, --output <path>', 'Output file path')
+  .option('--from <date>', 'Start date (YYYY-MM-DD). Exports a single custom period when set')
+  .option('--to <date>', 'End date (YYYY-MM-DD). Exports a single custom period when set')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -539,11 +541,22 @@ program
     await hydrateCache()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
-    const periods: PeriodExport[] = [
-      { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range, pf)) },
-      { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range, pf)) },
-      { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range, pf)) },
-    ]
+    let customRange: DateRange | null = null
+    try {
+      customRange = parseDateRangeFlags(opts.from, opts.to)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exit(1)
+    }
+
+    const periods: PeriodExport[] = customRange
+      ? [{ label: formatDateRangeLabel(opts.from, opts.to), projects: fp(await parseAllSessions(customRange, pf)) }]
+      : [
+          { label: 'Today', projects: fp(await parseAllSessions(getDateRange('today').range, pf)) },
+          { label: '7 Days', projects: fp(await parseAllSessions(getDateRange('week').range, pf)) },
+          { label: '30 Days', projects: fp(await parseAllSessions(getDateRange('30days').range, pf)) },
+        ]
 
     if (periods.every(p => p.projects.length === 0)) {
       console.log('\n  No usage data found.\n')
@@ -569,7 +582,8 @@ program
       process.exit(1)
     }
 
-    console.log(`\n  Exported (Today + 7 Days + 30 Days) to: ${savedPath}\n`)
+    const exportedLabel = customRange ? formatDateRangeLabel(opts.from, opts.to) : 'Today + 7 Days + 30 Days'
+    console.log(`\n  Exported (${exportedLabel}) to: ${savedPath}\n`)
   })
 
 program

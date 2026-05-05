@@ -158,4 +158,20 @@ describe('exportCsv', () => {
     const entries = await readdir(folder)
     expect(entries.length).toBeGreaterThanOrEqual(0)
   })
+
+  it('describes detail files without hardcoding a 30-day window', async () => {
+    const periods: PeriodExport[] = [
+      {
+        label: '2026-04-07 to 2026-04-10',
+        projects: [makeProject('app')],
+      },
+    ]
+
+    const outputPath = join(tmpDir, 'custom.csv')
+    const folder = await exportCsv(periods, outputPath)
+    const readme = await readFile(join(folder, 'README.txt'), 'utf-8')
+
+    expect(readme).toContain('selected detail period')
+    expect(readme).not.toContain('30-day window')
+  })
 })
