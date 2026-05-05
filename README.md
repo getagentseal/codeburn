@@ -81,6 +81,7 @@ codeburn export -f json         # JSON export
 codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
+codeburn git-cost               # attribute AI spend to local git commits
 codeburn yield                  # track productive vs reverted/abandoned spend
 codeburn yield -p 30days        # yield analysis for last 30 days
 codeburn models                 # per-model token + cost table (last 30 days)
@@ -235,6 +236,21 @@ Or press `c` in the dashboard to enter compare mode. Arrow keys switch periods, 
 | Efficiency | Cache hit rate | Proportion of input from cache |
 
 Also compares per-category one-shot rates, delegation rate, planning rate, average tools per turn, and fast mode usage.
+
+### Git Cost
+
+```bash
+codeburn git-cost                       # last 7 days in the current git repo
+codeburn git-cost --since week          # same 7-day window
+codeburn git-cost --since 14days        # custom lookback window
+codeburn git-cost --provider claude     # provider-scoped attribution
+codeburn git-cost --window-minutes 60   # tighter post-session attribution window
+codeburn git-cost --json                # machine-readable output
+```
+
+`git-cost` attributes local AI spend to commits in the current repository. It matches only sessions whose recorded project path is inside the repo, then links each session to commits made between the session start and a configurable window after the session end. Commit matching uses git committer timestamps from the current checkout's `git log`, the same clock used by `git log --since/--until`. If a session maps to multiple commits, its cost is split evenly so totals are not double-counted. Sessions without matching commits are reported as unattributed spend.
+
+Attribution is intentionally heuristic: it shows which commits are close to usage sessions, not proof that a commit was AI-authored. It also depends on providers recording usable project paths. If a provider only exposes a project name, several repos share the same final directory name, or a path is normalized differently by an upstream parser, those sessions may appear as unattributed.
 
 ### Yield
 
