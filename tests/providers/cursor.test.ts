@@ -133,4 +133,75 @@ skipUnlessSqlite('cursor provider timestamps', () => {
       await rm(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('skips agentKv sessions when no timestamp exists in content', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'codeburn-cursor-test-'))
+    const dbPath = join(tempDir, 'state.vscdb')
+    try {
+      const { DatabaseSync: Database } = require('node:sqlite')
+      const db = new Database(dbPath)
+      db.prepare(`
+        CREATE TABLE cursorDiskKV (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `).run()
+
+      const agentKvNoTimestamp = JSON.stringify({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'no timestamp here' }],
+        providerOptions: { cursor: { requestId: 'req-no-ts' } },
+      })
+      db.prepare(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`).run('agentKv:blob:no-ts', agentKvNoTimestamp)
+      db.close()
+
+      const provider = createCursorProvider(dbPath)
+      const [source] = await provider.discoverSessions()
+      const calls = []
+      for await (const call of provider.createSessionParser(source!, new Set()).parse()) {
+        calls.push(call)
+      }
+
+      expect(calls).toHaveLength(0)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses timestamp from agentKv content when available', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'codeburn-cursor-test-'))
+    const dbPath = join(tempDir, 'state.vscdb')
+    try {
+      const { DatabaseSync: Database } = require('node:sqlite')
+      const db = new Database(dbPath)
+      db.prepare(`
+        CREATE TABLE cursorDiskKV (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `).run()
+
+      const ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+      const agentKvWithTimestamp = JSON.stringify({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'has timestamp', timestamp: ts, providerOptions: { cursor: { modelName: 'default' } } }],
+        providerOptions: { cursor: { requestId: 'req-ts' } },
+      })
+      db.prepare(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`).run('agentKv:blob:with-ts', agentKvWithTimestamp)
+      db.close()
+
+      const provider = createCursorProvider(dbPath)
+      const [source] = await provider.discoverSessions()
+      const calls = []
+      for await (const call of provider.createSessionParser(source!, new Set()).parse()) {
+        calls.push(call)
+      }
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.timestamp).toBe(ts)
+      expect(calls[0]!.sessionId).toBe('req-ts')
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
 })
