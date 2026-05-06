@@ -19,13 +19,27 @@ const shortNames: Record<string, string> = {
   'claude-3-5-haiku': 'Haiku 3.5',
 }
 
+type ClaudeRoot = {
+  path: string
+  account?: string
+  accountPath?: string
+}
+
+function expandHome(dir: string): string {
+  if (dir === '~') return homedir()
+  if (dir.startsWith('~/') || dir.startsWith('~\\')) {
+    return join(homedir(), dir.slice(2))
+  }
+  return dir
+}
+
 function normalizeDirs(dirs: string[]): string[] {
   const seen = new Set<string>()
   const normalized: string[] = []
   for (const dir of dirs) {
     const trimmed = dir.trim()
     if (!trimmed) continue
-    const resolved = resolve(trimmed)
+    const resolved = resolve(expandHome(trimmed))
     if (seen.has(resolved)) continue
     seen.add(resolved)
     normalized.push(resolved)
@@ -33,18 +47,42 @@ function normalizeDirs(dirs: string[]): string[] {
   return normalized
 }
 
-function getClaudeDirs(overrideDirs?: string | string[]): string[] {
+function accountLabelForClaudeDir(dir: string): string {
+  const raw = basename(dir).replace(/^\.+/, '')
+  let label = /^claude$/i.test(raw) ? 'default' : raw.replace(/^claude[-_.]/i, '')
+  if (!label) label = 'default'
+  return (label || 'default').toLowerCase()
+}
+
+function withClaudeAccounts(dirs: string[], forceLabel = false): ClaudeRoot[] {
+  const shouldLabel = forceLabel || dirs.length > 1
+  const assigned = new Set<string>()
+  return dirs.map(dir => {
+    if (!shouldLabel) return { path: dir }
+    const baseLabel = accountLabelForClaudeDir(dir)
+    let account = baseLabel
+    let suffix = 2
+    while (assigned.has(account)) {
+      account = `${baseLabel}-${suffix}`
+      suffix++
+    }
+    assigned.add(account)
+    return { path: dir, account, accountPath: dir }
+  })
+}
+
+function getClaudeRoots(overrideDirs?: string | string[]): ClaudeRoot[] {
   if (overrideDirs !== undefined) {
-    return normalizeDirs(Array.isArray(overrideDirs) ? overrideDirs : [overrideDirs])
+    return withClaudeAccounts(normalizeDirs(Array.isArray(overrideDirs) ? overrideDirs : [overrideDirs]))
   }
 
   const configDirs = process.env['CLAUDE_CONFIG_DIRS']
   if (configDirs) {
     const dirs = normalizeDirs(configDirs.split(delimiter))
-    if (dirs.length > 0) return dirs
+    if (dirs.length > 0) return withClaudeAccounts(dirs, true)
   }
 
-  return normalizeDirs([process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')])
+  return withClaudeAccounts(normalizeDirs([process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')]))
 }
 
 function getDesktopSessionsDir(): string {
@@ -100,7 +138,11 @@ export function createClaudeProvider(claudeDirs?: string | string[], desktopSess
       const sources: SessionSource[] = []
       const seenPaths = new Set<string>()
 
-      for (const claudeDir of getClaudeDirs(claudeDirs)) {
+      const roots = getClaudeRoots(claudeDirs)
+      const shouldLabelDesktop = roots.some(root => root.account)
+
+      for (const root of roots) {
+        const claudeDir = root.path
         const projectsDir = join(claudeDir, 'projects')
         try {
           const entries = await readdir(projectsDir)
@@ -109,7 +151,12 @@ export function createClaudeProvider(claudeDirs?: string | string[], desktopSess
             if (seenPaths.has(dirPath)) continue
             const dirStat = await stat(dirPath).catch(() => null)
             if (dirStat?.isDirectory()) {
-              sources.push({ path: dirPath, project: dirName, provider: 'claude' })
+              sources.push({
+                path: dirPath,
+                project: dirName,
+                provider: 'claude',
+                ...(root.account ? { account: root.account, accountPath: root.accountPath } : {}),
+              })
               seenPaths.add(dirPath)
             }
           }
@@ -119,7 +166,12 @@ export function createClaudeProvider(claudeDirs?: string | string[], desktopSess
       const desktopDirs = await findDesktopProjectDirs(desktopSessionsDir ?? getDesktopSessionsDir())
       for (const dirPath of desktopDirs) {
         if (!seenPaths.has(dirPath)) {
-          sources.push({ path: dirPath, project: basename(dirPath), provider: 'claude' })
+          sources.push({
+            path: dirPath,
+            project: basename(dirPath),
+            provider: 'claude',
+            ...(shouldLabelDesktop ? { account: 'desktop', accountPath: desktopSessionsDir ?? getDesktopSessionsDir() } : {}),
+          })
           seenPaths.add(dirPath)
         }
       }

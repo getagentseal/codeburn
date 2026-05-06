@@ -260,6 +260,16 @@ function shortProject(encoded: string): string {
   return parts.slice(-3).join('/')
 }
 
+function projectIdentity(project: ProjectSummary): string {
+  const accountKey = project.accountPath ?? project.account ?? ''
+  return accountKey ? `${accountKey}\0${project.project}` : project.project
+}
+
+function projectDisplayName(project: ProjectSummary): string {
+  const name = shortProject(project.project)
+  return project.account ? `${project.account}:${name}` : name
+}
+
 const PROJECT_COL_AVG = 7
 const PROJECT_COL_BASE_WIDTH = 30
 const PROJECT_COL_WITH_OVERHEAD_WIDTH = 40
@@ -274,14 +284,15 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
         {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
-        const budget = budgets?.get(project.project)
+        const identity = projectIdentity(project)
+        const budget = budgets?.get(identity)
         const avgCost = project.sessions.length > 0
           ? formatCost(project.totalCostUSD / project.sessions.length)
           : '-'
         return (
-          <Text key={`${project.project}-${i}`} wrap="truncate-end">
+          <Text key={`${identity}-${i}`} wrap="truncate-end">
             <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
-            <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
+            <Text dimColor> {fit(projectDisplayName(project), nw)}</Text>
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
@@ -433,7 +444,7 @@ const TOP_SESSIONS_CALLS_COL = 6
 
 function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
   const allSessions = projects.flatMap(p =>
-    p.sessions.map(s => ({ ...s, projectName: p.project }))
+    p.sessions.map(s => ({ ...s, projectLabel: projectDisplayName(p), projectKey: projectIdentity(p) }))
   )
   const top = [...allSessions].sort((a, b) => b.totalCostUSD - a.totalCostUSD).slice(0, 5)
 
@@ -451,9 +462,9 @@ function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: num
         const date = session.firstTimestamp
           ? session.firstTimestamp.slice(0, TOP_SESSIONS_DATE_LEN)
           : '----------'
-        const label = `${date} ${shortProject(session.projectName)}`
+        const label = `${date} ${session.projectLabel}`
         return (
-          <Text key={`${session.sessionId}-${i}`} wrap="truncate-end">
+          <Text key={`${session.projectKey}-${session.sessionId}-${i}`} wrap="truncate-end">
             <HBar value={session.totalCostUSD} max={maxCost} width={bw} />
             <Text dimColor> {fit(label, nw - 1)}</Text>
             <Text color={GOLD}>{formatCost(session.totalCostUSD).padStart(TOP_SESSIONS_COST_COL)}</Text>
@@ -679,9 +690,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const budgets = new Map<string, ContextBudget>()
       for (const project of projects.slice(0, 8)) {
         if (cancelled) return
-        const cwd = await discoverProjectCwd(join(claudeDir, project.project))
+        const cwd = await discoverProjectCwd(project.sourcePath ?? join(claudeDir, project.project))
         if (!cwd) continue
-        budgets.set(project.project, await estimateContextBudget(cwd))
+        budgets.set(projectIdentity(project), await estimateContextBudget(cwd))
       }
       if (!cancelled) setProjectBudgets(budgets)
     }

@@ -283,7 +283,7 @@ codeburn month --project api --project web       # include multiple projects
 codeburn export --project inventory              # export only "inventory" project data
 ```
 
-Filter by provider, project name (case-insensitive substring), or exact date range. The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+Filter by provider, project name, Claude account label, or exact date range. Matching is case-insensitive substring based. For multi-account Claude data, `--project work` matches the account label and `--project work:/users/alice/app` matches that account plus path substring. The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
 
 ```bash
 codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window
@@ -304,14 +304,14 @@ codeburn month --format json              # this month as JSON
 codeburn report -p 30days --format json   # 30-day window
 ```
 
-The JSON includes all dashboard panels: overview (cost, calls, sessions, cache hit %), daily breakdown, projects (with `avgCostPerSession`), models with token counts, activities with one-shot rates, core tools, MCP servers, and shell commands. Pipe to `jq` for filtering:
+The JSON includes all dashboard panels: overview (cost, calls, sessions, cache hit %), daily breakdown, projects (with `avgCostPerSession` and Claude account labels when present), models with token counts, activities with one-shot rates, core tools, MCP servers, and shell commands. Pipe to `jq` for filtering:
 
 ```bash
 codeburn report --format json | jq '.projects'
 codeburn today --format json | jq '.overview.cost'
 ```
 
-For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`).
+For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`). CSV exports always include an `Account` column in `projects.csv` and `sessions.csv`; it is empty when a row is not from a labelled Claude account.
 
 ## Menu Bar
 
@@ -350,7 +350,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 ## How It Reads Data
 
-**Claude Code** stores session transcripts as JSONL at `~/.claude/projects/<sanitized-path>/<session-id>.jsonl`. Each assistant entry contains model name, token usage (input, output, cache read, cache write), tool_use blocks, and timestamps.
+**Claude Code** stores session transcripts as JSONL at `~/.claude/projects/<sanitized-path>/<session-id>.jsonl`. Each assistant entry contains model name, token usage (input, output, cache read, cache write), tool_use blocks, and timestamps. If `CLAUDE_CONFIG_DIRS` points at multiple Claude directories, CodeBurn keeps the same sanitized project path separate per account instead of merging usage. Account labels are inferred from the config directory name, e.g. `.claude-work` becomes `work`.
 
 **Codex** stores sessions at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with `token_count` events containing per-call and cumulative token usage, and `function_call` entries for tool tracking.
 
@@ -372,8 +372,8 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 
 | Variable | Description |
 |----------|-------------|
-| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
-| `CLAUDE_CONFIG_DIRS` | Track multiple Claude Code data directories, separated by your OS path delimiter (`:` on macOS/Linux, `;` on Windows). Overrides `CLAUDE_CONFIG_DIR` when set |
+| `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`). Supports `~/` expansion and keeps default unlabelled behavior |
+| `CLAUDE_CONFIG_DIRS` | Track labelled Claude Code data directories, separated by your OS path delimiter (`:` on macOS/Linux, `;` on Windows). Supports `~/` expansion and overrides `CLAUDE_CONFIG_DIR` when set, even with one entry |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
 | `QWEN_DATA_DIR` | Override Qwen data directory (default: `~/.qwen/projects`) |

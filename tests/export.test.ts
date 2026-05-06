@@ -152,6 +152,31 @@ describe('exportCsv', () => {
     expect(projects).toContain("'\rcmd")
   })
 
+  it('includes Claude account labels in project and session CSVs', async () => {
+    const project = makeProject('/Users/alice/app')
+    project.account = 'work'
+    project.sessions[0]!.account = 'work'
+
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'accounts.csv'))
+    const [projects, sessions] = await Promise.all([
+      readFile(join(folder, 'projects.csv'), 'utf-8'),
+      readFile(join(folder, 'sessions.csv'), 'utf-8'),
+    ])
+
+    expect(projects).toContain('Project,Account,')
+    expect(projects).toContain('/Users/alice/app,work,')
+    expect(sessions).toContain('Project,Account,Session ID,')
+    expect(sessions).toContain('/Users/alice/app,work,sess-001,')
+  })
+
+  it('keeps the Account CSV column empty when no account label is present', async () => {
+    const folder = await exportCsv([{ label: '30 Days', projects: [makeProject('/Users/alice/app')] }], join(tmpDir, 'empty-account.csv'))
+    const projects = await readFile(join(folder, 'projects.csv'), 'utf-8')
+
+    expect(projects).toContain('Project,Account,')
+    expect(projects).toContain('/Users/alice/app,,')
+  })
+
   it('does not crash when periods array is empty', async () => {
     const outputPath = join(tmpDir, 'empty.csv')
     const folder = await exportCsv([], outputPath)

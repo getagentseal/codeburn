@@ -26,6 +26,20 @@ function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
 }
 
+type SourceAttribution = {
+  account?: string
+  accountPath?: string
+}
+
+function projectKey(project: string, attribution?: SourceAttribution): string {
+  const accountKey = attribution?.accountPath ?? attribution?.account ?? ''
+  return accountKey ? `${accountKey}\0${project}` : project
+}
+
+function projectSummaryKey(project: ProjectSummary): string {
+  return projectKey(project.project, project)
+}
+
 function parseJsonlLine(line: string): JournalEntry | null {
   try {
     return JSON.parse(line) as JournalEntry
@@ -251,6 +265,7 @@ function buildSessionSummary(
   project: string,
   turns: ClassifiedTurn[],
   mcpInventory?: string[],
+  attribution?: SourceAttribution,
 ): SessionSummary {
   const modelBreakdown: SessionSummary['modelBreakdown'] = Object.create(null)
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
@@ -340,6 +355,8 @@ function buildSessionSummary(
   return {
     sessionId,
     project,
+    ...(attribution?.account ? { account: attribution.account } : {}),
+    ...(attribution?.accountPath ? { accountPath: attribution.accountPath } : {}),
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
@@ -364,6 +381,7 @@ async function parseSessionFile(
   project: string,
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
+  attribution?: SourceAttribution,
 ): Promise<SessionSummary | null> {
   // Skip files whose mtime is older than the range start. A session file
   // can only contain entries up to its last-modified time; if that predates
@@ -414,7 +432,7 @@ async function parseSessionFile(
   // turns inside a narrow date window.
   const mcpInventory = extractMcpInventory(entries)
 
-  return buildSessionSummary(sessionId, project, classified, mcpInventory)
+  return buildSessionSummary(sessionId, project, classified, mcpInventory, attribution)
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -433,27 +451,37 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return jsonlFiles
 }
 
-async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seenMsgIds: Set<string>, dateRange?: DateRange): Promise<ProjectSummary[]> {
-  const projectMap = new Map<string, SessionSummary[]>()
+async function scanProjectDirs(
+  dirs: Array<{ path: string; name: string; account?: string; accountPath?: string }>,
+  seenMsgIds: Set<string>,
+  dateRange?: DateRange,
+): Promise<ProjectSummary[]> {
+  const projectMap = new Map<string, { dirName: string; sourcePath: string; attribution: SourceAttribution; sessions: SessionSummary[] }>()
 
-  for (const { path: dirPath, name: dirName } of dirs) {
+  for (const { path: dirPath, name: dirName, account, accountPath } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
+    const attribution = { account, accountPath }
+    const key = projectKey(dirName, attribution)
 
     for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange)
+      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, attribution)
       if (session && session.apiCalls > 0) {
-        const existing = projectMap.get(dirName) ?? []
-        existing.push(session)
-        projectMap.set(dirName, existing)
+        const existing = projectMap.get(key)
+          ?? { dirName, sourcePath: dirPath, attribution, sessions: [] }
+        existing.sessions.push(session)
+        projectMap.set(key, existing)
       }
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
+  for (const { dirName, sourcePath, attribution, sessions } of projectMap.values()) {
     projects.push({
       project: dirName,
       projectPath: unsanitizePath(dirName),
+      ...(attribution.account ? { account: attribution.account } : {}),
+      ...(attribution.accountPath ? { accountPath: attribution.accountPath } : {}),
+      sourcePath,
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
@@ -501,14 +529,14 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
 
 async function parseProviderSources(
   providerName: string,
-  sources: Array<{ path: string; project: string }>,
+  sources: Array<{ path: string; project: string; account?: string; accountPath?: string }>,
   seenKeys: Set<string>,
   dateRange?: DateRange,
 ): Promise<ProjectSummary[]> {
   const provider = await getProvider(providerName)
   if (!provider) return []
 
-  const sessionMap = new Map<string, { project: string; turns: ClassifiedTurn[] }>()
+  const sessionMap = new Map<string, { sessionId: string; project: string; sourcePath: string; attribution: SourceAttribution; turns: ClassifiedTurn[] }>()
 
   try {
     for (const source of sources) {
@@ -519,7 +547,7 @@ async function parseProviderSources(
         } catch { /* fall through; treat unknown stat as "may contain data" */ }
       }
       const parser = provider.createSessionParser(
-        { path: source.path, project: source.project, provider: providerName },
+        { path: source.path, project: source.project, provider: providerName, account: source.account, accountPath: source.accountPath },
         seenKeys,
       )
 
@@ -532,13 +560,19 @@ async function parseProviderSources(
 
         const turn = providerCallToTurn(call)
         const classified = classifyTurn(turn)
-        const key = `${providerName}:${call.sessionId}:${source.project}`
+        const key = JSON.stringify([providerName, source.accountPath ?? source.account ?? '', call.sessionId, source.project])
 
         const existing = sessionMap.get(key)
         if (existing) {
           existing.turns.push(classified)
         } else {
-          sessionMap.set(key, { project: source.project, turns: [classified] })
+          sessionMap.set(key, {
+            sessionId: call.sessionId,
+            project: source.project,
+            sourcePath: source.path,
+            attribution: { account: source.account, accountPath: source.accountPath },
+            turns: [classified],
+          })
         }
       }
     }
@@ -550,22 +584,26 @@ async function parseProviderSources(
     }
   }
 
-  const projectMap = new Map<string, SessionSummary[]>()
-  for (const [key, { project, turns }] of sessionMap) {
-    const sessionId = key.split(':')[1] ?? key
-    const session = buildSessionSummary(sessionId, project, turns)
+  const projectMap = new Map<string, { project: string; sourcePath: string; attribution: SourceAttribution; sessions: SessionSummary[] }>()
+  for (const { sessionId, project, sourcePath, attribution, turns } of sessionMap.values()) {
+    const session = buildSessionSummary(sessionId, project, turns, undefined, attribution)
     if (session.apiCalls > 0) {
-      const existing = projectMap.get(project) ?? []
-      existing.push(session)
-      projectMap.set(project, existing)
+      const projectMapKey = projectKey(project, attribution)
+      const existing = projectMap.get(projectMapKey)
+        ?? { project, sourcePath, attribution, sessions: [] }
+      existing.sessions.push(session)
+      projectMap.set(projectMapKey, existing)
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
+  for (const { project, sourcePath, attribution, sessions } of projectMap.values()) {
     projects.push({
-      project: dirName,
-      projectPath: unsanitizePath(dirName),
+      project,
+      projectPath: unsanitizePath(project),
+      ...(attribution.account ? { account: attribution.account } : {}),
+      ...(attribution.accountPath ? { accountPath: attribution.accountPath } : {}),
+      sourcePath,
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
@@ -607,7 +645,15 @@ export function filterProjectsByName(
     result = result.filter(p => {
       const name = p.project.toLowerCase()
       const path = p.projectPath.toLowerCase()
-      return patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const account = (p.account ?? '').toLowerCase()
+      const accountPath = (p.accountPath ?? '').toLowerCase()
+      return patterns.some(pat =>
+        name.includes(pat)
+        || path.includes(pat)
+        || account.includes(pat)
+        || accountPath.includes(pat)
+        || (account ? `${account}:${name}`.includes(pat) || `${account}:${path}`.includes(pat) : false)
+      )
     })
   }
   if (exclude && exclude.length > 0) {
@@ -615,7 +661,15 @@ export function filterProjectsByName(
     result = result.filter(p => {
       const name = p.project.toLowerCase()
       const path = p.projectPath.toLowerCase()
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const account = (p.account ?? '').toLowerCase()
+      const accountPath = (p.accountPath ?? '').toLowerCase()
+      return !patterns.some(pat =>
+        name.includes(pat)
+        || path.includes(pat)
+        || account.includes(pat)
+        || accountPath.includes(pat)
+        || (account ? `${account}:${name}`.includes(pat) || `${account}:${path}`.includes(pat) : false)
+      )
     })
   }
   return result
@@ -633,13 +687,13 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
-  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
+  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project, account: s.account, accountPath: s.accountPath }))
   const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange)
 
-  const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
+  const providerGroups = new Map<string, Array<{ path: string; project: string; account?: string; accountPath?: string }>>()
   for (const source of nonClaudeSources) {
     const existing = providerGroups.get(source.provider) ?? []
-    existing.push({ path: source.path, project: source.project })
+    existing.push({ path: source.path, project: source.project, account: source.account, accountPath: source.accountPath })
     providerGroups.set(source.provider, existing)
   }
 
@@ -651,13 +705,14 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
 
   const mergedMap = new Map<string, ProjectSummary>()
   for (const p of [...claudeProjects, ...otherProjects]) {
-    const existing = mergedMap.get(p.project)
+    const key = projectSummaryKey(p)
+    const existing = mergedMap.get(key)
     if (existing) {
       existing.sessions.push(...p.sessions)
       existing.totalCostUSD += p.totalCostUSD
       existing.totalApiCalls += p.totalApiCalls
     } else {
-      mergedMap.set(p.project, { ...p })
+      mergedMap.set(key, { ...p })
     }
   }
 

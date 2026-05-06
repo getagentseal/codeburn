@@ -3,10 +3,12 @@ import { describe, it, expect } from 'vitest'
 import { filterProjectsByName } from '../src/parser.js'
 import type { ProjectSummary } from '../src/types.js'
 
-function makeProject(project: string, projectPath = project): ProjectSummary {
+function makeProject(project: string, projectPath = project, account?: string, accountPath?: string): ProjectSummary {
   return {
     project,
     projectPath,
+    ...(account ? { account } : {}),
+    ...(accountPath ? { accountPath } : {}),
     sessions: [],
     totalCostUSD: 0,
     totalApiCalls: 0,
@@ -42,6 +44,24 @@ describe('filterProjectsByName', () => {
     expect(result.map(p => p.project)).toEqual(['AgentSeal'])
   })
 
+  it('include can target a Claude account label', () => {
+    const accountProjects = [
+      makeProject('-Users-alice-app', '/Users/alice/app', 'work', '/Users/alice/.claude-work'),
+      makeProject('-Users-alice-app', '/Users/alice/app', 'personal', '/Users/alice/.claude-personal'),
+    ]
+    const result = filterProjectsByName(accountProjects, ['work:/users/alice/app'])
+    expect(result.map(p => p.account)).toEqual(['work'])
+  })
+
+  it('include can match a bare Claude account label', () => {
+    const accountProjects = [
+      makeProject('-Users-alice-app', '/Users/alice/app', 'work', '/Users/alice/.claude-work'),
+      makeProject('-Users-alice-app', '/Users/alice/app', 'personal', '/Users/alice/.claude-personal'),
+    ]
+    const result = filterProjectsByName(accountProjects, ['work'])
+    expect(result.map(p => p.account)).toEqual(['work'])
+  })
+
   it('include uses OR semantics across patterns', () => {
     const result = filterProjectsByName(projects, ['codeburn', 'sandbox'])
     expect(result.map(p => p.project).sort()).toEqual(['codeburn', 'sandbox'])
@@ -55,6 +75,15 @@ describe('filterProjectsByName', () => {
   it('exclude matches path substring', () => {
     const result = filterProjectsByName(projects, undefined, ['/tmp'])
     expect(result.map(p => p.project)).not.toContain('sandbox')
+  })
+
+  it('exclude can target a Claude account label', () => {
+    const accountProjects = [
+      makeProject('-Users-alice-app', '/Users/alice/app', 'work', '/Users/alice/.claude-work'),
+      makeProject('-Users-alice-app', '/Users/alice/app', 'personal', '/Users/alice/.claude-personal'),
+    ]
+    const result = filterProjectsByName(accountProjects, undefined, ['personal'])
+    expect(result.map(p => p.account)).toEqual(['work'])
   })
 
   it('exclude is applied after include', () => {

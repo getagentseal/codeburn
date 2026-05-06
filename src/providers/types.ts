@@ -2,6 +2,8 @@ export type SessionSource = {
   path: string
   project: string
   provider: string
+  account?: string
+  accountPath?: string
 }
 
 export type SessionParser = {

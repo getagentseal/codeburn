@@ -149,6 +149,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const projectList = projects.map(p => ({
     name: p.project,
     path: p.projectPath,
+    ...(p.account ? { account: p.account } : {}),
+    ...(p.accountPath ? { accountPath: p.accountPath } : {}),
     cost: convertCost(p.totalCostUSD),
     avgCostPerSession: p.sessions.length > 0
       ? convertCost(p.totalCostUSD / p.sessions.length)
@@ -213,7 +215,14 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
 
   const topSessions = projects
-    .flatMap(p => p.sessions.map(s => ({ project: p.project, sessionId: s.sessionId, date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null, cost: convertCost(s.totalCostUSD), calls: s.apiCalls })))
+    .flatMap(p => p.sessions.map(s => ({
+      project: p.project,
+      ...(p.account ? { account: p.account } : {}),
+      sessionId: s.sessionId,
+      date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null,
+      cost: convertCost(s.totalCostUSD),
+      calls: s.apiCalls,
+    })))
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 5)
 

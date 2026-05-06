@@ -182,6 +182,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
     .map(p => ({
       Project: p.projectPath,
+      Account: p.account ?? '',
       [`Cost (${code})`]: round2(convertCost(p.totalCostUSD)),
       [`Avg/Session (${code})`]: p.sessions.length > 0 ? round2(convertCost(p.totalCostUSD / p.sessions.length)) : '',
       'Share (%)': pct(p.totalCostUSD, total),
@@ -197,6 +198,7 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
     for (const s of p.sessions) {
       rows.push({
         Project: p.projectPath,
+        Account: p.account ?? '',
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
         [`Cost (${code})`]: round2(convertCost(s.totalCostUSD)),
