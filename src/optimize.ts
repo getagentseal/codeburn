@@ -89,6 +89,15 @@ const CONTEXT_BLOAT_HIGH_MIN_CANDIDATES = 10
 const CONTEXT_BLOAT_GROWTH_RATIO = 2
 const CONTEXT_BLOAT_GROWTH_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
 const CONTEXT_BLOAT_RATIO_DISPLAY_CAP = 1000
+const WORTH_IT_MIN_COST_USD = 2
+const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
+const WORTH_IT_MIN_RETRIES = 3
+const WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES = 2
+const WORTH_IT_PREVIEW = 5
+const WORTH_IT_LOW_MAX_CANDIDATES = 2
+const WORTH_IT_LOW_MAX_TOTAL_COST_USD = 10
+const WORTH_IT_HIGH_MIN_CANDIDATES = 10
+const WORTH_IT_HIGH_TOTAL_COST_USD = 50
 
 // ============================================================================
 // Scoring constants
@@ -1235,6 +1244,179 @@ function formatContextRatio(ratio: number): string {
   return ratio.toFixed(1)
 }
 
+// ============================================================================
+// Worth-it / low-worth-session detector helpers
+// ============================================================================
+
+// Use (\s|$|--) instead of \b after commit/push so `git commit-tree` and
+// `git commit-graph` are not treated as deliveries. The `--` clause keeps
+// `git commit --amend` matching as a real delivery command.
+const DELIVERY_COMMAND_PATTERNS = [
+  /(?:^|[;&|]\s*)git\s+(?:commit|push)(?=\s|$|--)(?![^;&|]*--dry-run)/,
+  /(?:^|[;&|]\s*)gh\s+pr\s+(?:create|merge)(?=\s|$|--)(?![^;&|]*--dry-run)/,
+]
+
+function sessionDeliveryCommand(session: ProjectSummary['sessions'][number]): string | null {
+  const commands = Object.keys(session.bashBreakdown)
+  return commands.find(command => DELIVERY_COMMAND_PATTERNS.some(pattern => pattern.test(command))) ?? null
+}
+
+function hasCategoryBreakdownData(session: ProjectSummary['sessions'][number]): boolean {
+  return Object.values(session.categoryBreakdown).some(category =>
+    category.turns > 0
+    || category.costUSD > 0
+    || category.retries > 0
+    || category.editTurns > 0
+    || category.oneShotTurns > 0
+  )
+}
+
+function sessionEditTurns(session: ProjectSummary['sessions'][number]): number {
+  if (hasCategoryBreakdownData(session)) {
+    return Object.values(session.categoryBreakdown).reduce((sum, c) => sum + c.editTurns, 0)
+  }
+  return session.turns.filter(turn => turn.hasEdits).length
+}
+
+function sessionOneShotTurns(session: ProjectSummary['sessions'][number]): number {
+  if (hasCategoryBreakdownData(session)) {
+    return Object.values(session.categoryBreakdown).reduce((sum, c) => sum + c.oneShotTurns, 0)
+  }
+  return session.turns.filter(turn => turn.hasEdits && turn.retries === 0).length
+}
+
+function sessionRetryCount(session: ProjectSummary['sessions'][number]): number {
+  if (hasCategoryBreakdownData(session)) {
+    return Object.values(session.categoryBreakdown).reduce((sum, c) => sum + c.retries, 0)
+  }
+  return session.turns.reduce((sum, turn) => sum + turn.retries, 0)
+}
+
+function sessionTotalTurns(session: ProjectSummary['sessions'][number]): number {
+  if (hasCategoryBreakdownData(session)) {
+    return Object.values(session.categoryBreakdown).reduce((sum, c) => sum + c.turns, 0)
+  }
+  return session.turns.length
+}
+
+// Token-savings estimate for a low-worth candidate. Two regimes:
+//   - No-edit sessions: full session tokens are at risk (the session produced
+//     no apparent output to weigh against the spend).
+//   - Sessions with edits but with retries / no one-shot: only the retry
+//     fraction is counted as recoverable. Edits may still have been useful;
+//     we credit the model with that and only flag the retry overhead.
+// Ratio is bounded to [0, 1] so retry-heavy sessions with weird turn counts
+// can't claim more than the full session token total.
+function estimateLowWorthRecoverableTokens(
+  session: ProjectSummary['sessions'][number],
+  editTurns: number,
+  retries: number,
+): number {
+  const tokens = sessionTokenTotal(session)
+  if (editTurns === 0) return tokens
+  const totalTurns = sessionTotalTurns(session)
+  if (totalTurns === 0) return 0
+  const fraction = Math.min(1, Math.max(0, retries / totalTurns))
+  return Math.round(tokens * fraction)
+}
+
+export type LowWorthCandidate = {
+  project: string
+  sessionId: string
+  date: string
+  cost: number
+  tokens: number
+  reasons: string[]
+}
+
+export function findLowWorthCandidates(projects: ProjectSummary[]): LowWorthCandidate[] {
+  const candidates: LowWorthCandidate[] = []
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (session.totalCostUSD < WORTH_IT_MIN_COST_USD) continue
+      if (sessionDeliveryCommand(session)) continue
+
+      const editTurns = sessionEditTurns(session)
+      const oneShotTurns = sessionOneShotTurns(session)
+      const retries = sessionRetryCount(session)
+      const reasons: string[] = []
+
+      if (editTurns === 0 && session.totalCostUSD >= WORTH_IT_NO_EDIT_MIN_COST_USD) {
+        reasons.push('no edit turns')
+      }
+      if (retries >= WORTH_IT_MIN_RETRIES) {
+        reasons.push(`${retries} retries`)
+      }
+      if (
+        editTurns > 0
+        && oneShotTurns === 0
+        && retries >= WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES
+      ) {
+        reasons.push('no one-shot edit turns')
+      }
+
+      if (reasons.length === 0) continue
+
+      candidates.push({
+        project: project.project,
+        sessionId: session.sessionId,
+        date: session.firstTimestamp.slice(0, 10),
+        cost: session.totalCostUSD,
+        tokens: estimateLowWorthRecoverableTokens(session, editTurns, retries),
+        reasons,
+      })
+    }
+  }
+
+  candidates.sort((a, b) =>
+    b.cost - a.cost
+    || a.date.localeCompare(b.date)
+    || a.project.localeCompare(b.project)
+    || a.sessionId.localeCompare(b.sessionId)
+  )
+  return candidates
+}
+
+export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding | null {
+  const candidates = findLowWorthCandidates(projects)
+  if (candidates.length === 0) return null
+
+  const preview = candidates.slice(0, WORTH_IT_PREVIEW)
+  const list = preview
+    .map(s => `${s.project}/${s.sessionId} on ${s.date}: ${formatCost(s.cost)} (${s.reasons.join(', ')})`)
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  // Per-candidate `tokens` is already the recoverable estimate (full session
+  // for no-edit, retry-fraction for edit-with-retries). Sum across candidates.
+  const tokensSaved = Math.round(candidates.reduce((sum, s) => sum + s.tokens, 0))
+  const totalCost = candidates.reduce((sum, s) => sum + s.cost, 0)
+
+  // Three tiers consistent with detectContextBloat: high at >=10 candidates
+  // or >=$50 total spend at risk; low at <=2 candidates AND <$10 total;
+  // medium in between.
+  let impact: Impact
+  if (candidates.length >= WORTH_IT_HIGH_MIN_CANDIDATES || totalCost >= WORTH_IT_HIGH_TOTAL_COST_USD) {
+    impact = 'high'
+  } else if (candidates.length <= WORTH_IT_LOW_MAX_CANDIDATES && totalCost < WORTH_IT_LOW_MAX_TOTAL_COST_USD) {
+    impact = 'low'
+  } else {
+    impact = 'medium'
+  }
+
+  return {
+    title: `${candidates.length} possibly low-worth expensive session${candidates.length === 1 ? '' : 's'}`,
+    explanation: `Sessions with meaningful spend but weak delivery signals: ${list}${extra}. This is a review candidate, not proof of waste: CodeBurn flags missing edit turns, repeated retries, and sessions without git delivery commands so you can decide whether the work was worth its cost before it becomes a habit.`,
+    impact,
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      label: 'Set a delivery checkpoint at the start of the next expensive thread:',
+      text: 'Before continuing, name the deliverable in one sentence (PR title, file changed, command output you expect). Stop and check with me if (a) you spend more than 10 minutes without an edit, or (b) the same approach fails twice. Do not retry past two attempts on any single fix.',
+    },
+  }
+}
+
 export type ContextBloatCandidate = {
   project: string
   sessionId: string
@@ -1302,8 +1484,9 @@ export function findContextBloatCandidates(projects: ProjectSummary[]): ContextB
   return candidates
 }
 
-export function detectContextBloat(projects: ProjectSummary[]): WasteFinding | null {
+export function detectContextBloat(projects: ProjectSummary[], excludedSessionIds?: ReadonlySet<string>): WasteFinding | null {
   const candidates = findContextBloatCandidates(projects)
+    .filter(c => !excludedSessionIds?.has(c.sessionId))
   if (candidates.length === 0) return null
 
   const preview = candidates.slice(0, CONTEXT_BLOAT_PREVIEW)
@@ -1530,7 +1713,16 @@ export async function scanAndDetect(
   const mcpCoverage = aggregateMcpCoverage(projects)
 
   const findings: WasteFinding[] = []
-  const contextBloatSessionIds = new Set(findContextBloatCandidates(projects).map(c => c.sessionId))
+  // Priority order for the per-session findings: low-worth → context-bloat →
+  // outliers. Each later detector excludes sessions already named by an
+  // earlier one so a single session is not listed in three findings.
+  const lowWorthSessionIds = new Set(findLowWorthCandidates(projects).map(c => c.sessionId))
+  const contextBloatVisibleIds = new Set(
+    findContextBloatCandidates(projects)
+      .filter(c => !lowWorthSessionIds.has(c.sessionId))
+      .map(c => c.sessionId),
+  )
+  const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds])
   const syncDetectors: Array<() => WasteFinding | null> = [
     () => detectCacheBloat(apiCalls, projects, dateRange),
     () => detectLowReadEditRatio(toolCalls),
@@ -1538,8 +1730,9 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
-    () => detectContextBloat(projects),
-    () => detectSessionOutliers(projects, contextBloatSessionIds),
+    () => detectLowWorthSessions(projects),
+    () => detectContextBloat(projects, lowWorthSessionIds),
+    () => detectSessionOutliers(projects, outlierExclusions),
     () => detectBloatedClaudeMd(projectCwds),
     () => detectBashBloat(),
   ]

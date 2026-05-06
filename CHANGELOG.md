@@ -21,6 +21,13 @@
   and suggests starting fresh with only the current goal, relevant files,
   failing output, and constraints. Sessions flagged here are excluded from
   the cost-outlier finding so the same session is not listed twice.
+- **Worth-it score detector.** New `optimize` finding flags expensive sessions
+  with weak delivery signals: no edit turns, repeated retries, or edit work
+  that never landed in one shot, when no `git`/`gh` delivery command is
+  observed. Framed as a conservative review candidate, not proof of waste.
+  Sessions flagged here take priority and are excluded from both the
+  context-bloat and cost-outlier findings so the same session is not listed
+  more than once.
 
 ### Fixed (CLI)
 - **Windows Claude project paths.** Claude Code project rollups now prefer

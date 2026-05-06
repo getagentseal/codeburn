@@ -189,6 +189,8 @@ Scans your sessions and your `~/.claude/` setup for waste patterns:
 - Bloated `CLAUDE.md` files (with `@-import` expansion counted)
 - Cache creation overhead and junk directory reads
 - Context-heavy sessions where effective input/cache tokens swamp output
+- Possibly low-worth expensive sessions with no edit turns or repeated retries
+  when no `git`/`gh` delivery command is observed
 
 Each finding shows the estimated token and dollar savings plus a ready-to-paste fix: a `CLAUDE.md` line, an environment variable, or a `mv` command to archive unused items. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A to F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
 
