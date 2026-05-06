@@ -1830,7 +1830,8 @@ async function parseProviderSources(
 
   const projectMap = new Map<string, { project: string; projectPath?: string; source: ProviderSourceRef; sessions: SessionSummary[] }>()
   for (const [key, { project, projectPath, source, turns }] of sessionMap) {
-    const sessionId = key.split('\0')[0]!.split(':')[1] ?? key
+    const sessionKey = key.split('\0').pop() ?? key
+    const sessionId = sessionKey.split(':')[1] ?? sessionKey
     const session = buildSessionSummary(sessionId, project, turns, undefined, source)
     if (session.apiCalls > 0) {
       const mapKey = projectKey(project, source)
@@ -1903,7 +1904,8 @@ export function filterProjectsByName(
       const account = (p.account ?? '').toLowerCase()
       const accountPath = (p.accountPath ?? '').toLowerCase()
       const accountProject = account ? `${account}:${name}` : name
-      return patterns.some(pat => name.includes(pat) || path.includes(pat) || account.includes(pat) || accountPath.includes(pat) || accountProject.includes(pat))
+      const accountPathProject = account ? `${account}:${path}` : path
+      return patterns.some(pat => name.includes(pat) || path.includes(pat) || account.includes(pat) || accountPath.includes(pat) || accountProject.includes(pat) || accountPathProject.includes(pat))
     })
   }
   if (exclude && exclude.length > 0) {
@@ -1914,7 +1916,8 @@ export function filterProjectsByName(
       const account = (p.account ?? '').toLowerCase()
       const accountPath = (p.accountPath ?? '').toLowerCase()
       const accountProject = account ? `${account}:${name}` : name
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat) || account.includes(pat) || accountPath.includes(pat) || accountProject.includes(pat))
+      const accountPathProject = account ? `${account}:${path}` : path
+      return !patterns.some(pat => name.includes(pat) || path.includes(pat) || account.includes(pat) || accountPath.includes(pat) || accountProject.includes(pat) || accountPathProject.includes(pat))
     })
   }
   return result

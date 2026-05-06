@@ -5,6 +5,8 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
+import { buildAccountReport } from './accounts.js'
+import type { AccountConfig } from './config.js'
 
 function escCsv(s: string): string {
   const sanitized = /^[\t\r=+\-@]/.test(s) ? `'${s}` : s
@@ -192,6 +194,8 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .slice()
     .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
     .map(p => ({
+      Account: p.account ?? '',
+      'Account Path': p.accountPath ?? '',
       Project: p.projectPath,
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(p.totalCostUSD)),
       [`Avg/Session (${code})`]: p.sessions.length > 0 ? roundForActiveCurrency(convertCost(p.totalCostUSD / p.sessions.length)) : '',
@@ -207,6 +211,8 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
   for (const p of projects) {
     for (const s of p.sessions) {
       rows.push({
+        Account: p.account ?? '',
+        'Account Path': p.accountPath ?? '',
         Project: p.projectPath,
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
@@ -217,6 +223,30 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
     }
   }
   return rows.sort((a, b) => (b[`Cost (${code})`] as number) - (a[`Cost (${code})`] as number))
+}
+
+function buildAccountRows(projects: ProjectSummary[], accountConfig: Record<string, AccountConfig> = {}): Row[] {
+  const { code } = getCurrency()
+  const total = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  return buildAccountReport(projects, accountConfig).accounts.map(account => ({
+    Account: account.account,
+    'Account Path': account.accountPath ?? '',
+    Plan: account.configured?.plan ?? '',
+    'Monthly USD': account.configured?.monthlyUsd ?? '',
+    'Budget USD': account.configured?.budgetUsd ?? '',
+    'Subscription Used (%)': account.subscriptionUtilizationPercent ?? '',
+    'Budget Used (%)': account.budgetUtilizationPercent ?? '',
+    [`Cost (${code})`]: round2(convertCost(account.totalCostUSD)),
+    [`Avg/Session (${code})`]: account.costPerSessionUSD !== null ? round2(convertCost(account.costPerSessionUSD)) : '',
+    [`Avg/Edit (${code})`]: account.costPerEditUSD !== null ? round2(convertCost(account.costPerEditUSD)) : '',
+    'Share (%)': pct(account.totalCostUSD, total),
+    'API Calls': account.totalApiCalls,
+    Sessions: account.sessions,
+    Projects: account.projects,
+    'Edit Turns': account.editTurns,
+    'Top Model': account.topModels[0]?.name ?? '',
+    'Top Project': account.topProjects[0]?.projectPath ?? '',
+  }))
 }
 
 export type PeriodExport = {
@@ -256,6 +286,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '-----',
     '  summary.csv           One row per period. Headline totals.',
     '  daily.csv             Day-by-day breakdown, Period column distinguishes the window.',
+    '  accounts.csv          Spend, sessions, models, and projects per detected account.',
     '  activity.csv          Time spent per task category (Coding, Debugging, Exploration, etc.).',
     '  models.csv            Spend per model with token totals and cache usage.',
     '  projects.csv          Spend per project folder for the selected detail period.',
@@ -292,7 +323,11 @@ async function clearCodeburnExportFolder(path: string): Promise<void> {
 /// ends in `.csv` the extension is stripped to form the folder name. Refuses to delete a
 /// pre-existing file or a non-codeburn folder, so a typo like `-o ~/.ssh/id_ed25519` can't
 /// wipe a sensitive file (prior versions did `rm(path, { force: true })` unconditionally).
-export async function exportCsv(periods: PeriodExport[], outputPath: string): Promise<string> {
+export async function exportCsv(
+  periods: PeriodExport[],
+  outputPath: string,
+  accountConfig: Record<string, AccountConfig> = {},
+): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
   const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
 
@@ -324,6 +359,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   await writeFile(join(folder, 'README.txt'), buildReadme(periods), 'utf-8')
   await writeFile(join(folder, 'summary.csv'), rowsToCsv(buildSummaryRows(periods)), 'utf-8')
   await writeFile(join(folder, 'daily.csv'), rowsToCsv(dailyRows), 'utf-8')
+  await writeFile(join(folder, 'accounts.csv'), rowsToCsv(buildAccountRows(thirtyDayProjects, accountConfig)), 'utf-8')
   await writeFile(join(folder, 'activity.csv'), rowsToCsv(activityRows), 'utf-8')
   await writeFile(join(folder, 'models.csv'), rowsToCsv(modelRows), 'utf-8')
   await writeFile(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)), 'utf-8')
@@ -334,7 +370,11 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   return folder
 }
 
-export async function exportJson(periods: PeriodExport[], outputPath: string): Promise<string> {
+export async function exportJson(
+  periods: PeriodExport[],
+  outputPath: string,
+  accountConfig: Record<string, AccountConfig> = {},
+): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
   const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
   const { code, rate, symbol } = getCurrency()
@@ -347,9 +387,11 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     periods: periods.map(p => ({
       label: p.label,
       daily: buildDailyRows(p.projects, p.label),
+      accounts: buildAccountRows(p.projects, accountConfig),
       activity: buildActivityRows(p.projects, p.label),
       models: buildModelRows(p.projects, p.label),
     })),
+    accounts: buildAccountRows(thirtyDayProjects, accountConfig),
     projects: buildProjectRows(thirtyDayProjects),
     sessions: buildSessionRows(thirtyDayProjects),
     tools: buildToolRows(thirtyDayProjects),

@@ -6,6 +6,7 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { formatCost, formatTokens } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
+import { filterProjectsByAccount } from './accounts.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
@@ -723,7 +724,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, accountFilter }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
@@ -733,6 +734,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   excludeFilter?: string[]
   customRange?: DateRange | null
   customRangeLabel?: string
+  accountFilter?: string[]
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -819,7 +821,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const data = await parseAllSessions(range, prov)
       if (reloadGenerationRef.current !== generation) return
 
-      const filteredProjects = filterProjectsByName(data, projectFilter, excludeFilter)
+      const filteredProjects = filterProjectsByAccount(filterProjectsByName(data, projectFilter, excludeFilter), accountFilter)
       if (reloadGenerationRef.current !== generation) return
 
       setProjects(filteredProjects)
@@ -840,7 +842,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         void reloadData(pending.period, pending.provider)
       }
     }
-  }, [projectFilter, excludeFilter])
+  }, [projectFilter, excludeFilter, accountFilter])
 
   const loadOptimizeResult = useCallback(async () => {
     if (!optimizeAvailable || projects.length === 0 || optimizeLoading) return
@@ -985,16 +987,16 @@ function StaticDashboard({ projects, period, activeProvider, planUsages }: { pro
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string): Promise<void> {
+export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string, accountFilter?: string[]): Promise<void> {
   await loadPricing()
   const range = customRange ?? getPeriodRange(period)
-  const filteredProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
+  const filteredProjects = filterProjectsByAccount(filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter), accountFilter)
   const planUsages = await getPlanUsages()
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   patchStdoutForWindows()
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} />
+      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} accountFilter={accountFilter} />
     )
     await waitUntilExit()
   } else {

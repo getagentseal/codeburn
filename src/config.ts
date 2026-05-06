@@ -19,6 +19,14 @@ export type PlanConfig = Omit<Plan, 'provider' | 'setAt'> & Partial<Pick<Plan, '
 export type PlanConfigMap = Partial<Record<PlanProvider, PlanConfig>>
 export type PlanMap = Partial<Record<PlanProvider, Plan>>
 
+export type AccountConfig = {
+  plan?: string
+  monthlyUsd?: number
+  budgetUsd?: number
+  resetDay?: number
+  setAt?: string
+}
+
 export type CodeburnConfig = {
   currency?: {
     code: string
@@ -26,6 +34,7 @@ export type CodeburnConfig = {
   }
   plan?: Plan
   plans?: PlanConfigMap
+  accounts?: Record<string, AccountConfig>
   modelAliases?: Record<string, string>
 }
 

@@ -3,8 +3,9 @@ import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing, setModelAliases } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
+import { buildAccountReport, filterProjectsByAccount, projectAccount, type AccountReport } from './accounts.js'
 import { convertCost } from './currency.js'
-import { renderStatusBar } from './format.js'
+import { formatCost, renderStatusBar } from './format.js'
 import { type PeriodData, type ProviderCost } from './menubar-json.js'
 import { buildMenubarPayload } from './menubar-json.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
@@ -16,7 +17,7 @@ import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
-import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
+import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type AccountConfig, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
 import { createRequire } from 'node:module'
@@ -99,6 +100,36 @@ async function attachPlanSummaries<T extends object>(payload: T): Promise<T & { 
   return payload
 }
 
+type ProjectFilterOptions = {
+  project?: string[]
+  exclude?: string[]
+  account?: string[]
+}
+
+function applyProjectFilters(projects: ProjectSummary[], opts: ProjectFilterOptions): ProjectSummary[] {
+  return filterProjectsByAccount(
+    filterProjectsByName(projects, opts.project, opts.exclude),
+    opts.account,
+  )
+}
+
+function filterAccountConfig(
+  accountConfig: Record<string, AccountConfig> | undefined,
+  accountFilter?: string[],
+  projects?: ProjectSummary[],
+): Record<string, AccountConfig> | undefined {
+  if (!accountConfig) return undefined
+  const patterns = accountFilter?.map(s => s.trim().toLowerCase()).filter(Boolean) ?? []
+  if (patterns.length === 0) return accountConfig
+  const filteredAccounts = new Set(projects?.map(project => projectAccount(project).toLowerCase()) ?? [])
+  return Object.fromEntries(
+    Object.entries(accountConfig).filter(([account]) => {
+      const lower = account.toLowerCase()
+      return filteredAccounts.has(lower) || patterns.some(pattern => lower.includes(pattern))
+    }),
+  )
+}
+
 function planLabel(plan: Plan): string {
   const name = planDisplayName(plan.id)
   return plan.id === 'custom' ? `${name} (${plan.provider})` : name
@@ -129,11 +160,14 @@ function assertFormat(value: string, allowed: readonly string[], command: string
   }
 }
 
-async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
+async function runJsonReport(period: Period, provider: string, filters: ProjectFilterOptions): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
-  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(projects, label, period))
+  const config = await readConfig()
+  const projects = applyProjectFilters(await parseAllSessions(range, provider), filters)
+  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(
+    buildJsonReport(projects, label, period, filterAccountConfig(config.accounts, filters.account, projects)),
+  )
   console.log(JSON.stringify(report, null, 2))
 }
 
@@ -163,9 +197,10 @@ program.hook('preAction', async (thisCommand) => {
   await loadCurrency()
 })
 
-function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string) {
+function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, accountConfig: Record<string, AccountConfig> = {}) {
   const sessions = projects.flatMap(p => p.sessions)
   const { code } = getCurrency()
+  const accountReport = buildAccountReport(projects, accountConfig)
 
   const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
@@ -226,6 +261,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const projectList = projects.map(p => ({
     name: p.project,
     path: p.projectPath,
+    ...(p.account ? { account: p.account } : {}),
+    ...(p.accountPath ? { accountPath: p.accountPath } : {}),
     cost: convertCost(p.totalCostUSD),
     avgCostPerSession: p.sessions.length > 0
       ? convertCost(p.totalCostUSD / p.sessions.length)
@@ -305,7 +342,14 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
 
   const topSessions = projects
-    .flatMap(p => p.sessions.map(s => ({ project: p.project, sessionId: s.sessionId, date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null, cost: convertCost(s.totalCostUSD), calls: s.apiCalls })))
+    .flatMap(p => p.sessions.map(s => ({
+      project: p.project,
+      ...(p.account ? { account: p.account } : {}),
+      sessionId: s.sessionId,
+      date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null,
+      cost: convertCost(s.totalCostUSD),
+      calls: s.apiCalls,
+    })))
     .sort((a, b) => b.cost - a.cost)
     .slice(0, 5)
 
@@ -328,6 +372,26 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     },
     daily,
     projects: projectList,
+    accounts: accountReport.accounts.map(account => ({
+      name: account.account,
+      ...(account.accountPath ? { accountPath: account.accountPath } : {}),
+      ...(account.configured?.plan ? { plan: account.configured.plan } : {}),
+      ...(account.configured?.monthlyUsd ? { monthlyUSD: account.configured.monthlyUsd } : {}),
+      ...(account.configured?.budgetUsd ? { budgetUSD: account.configured.budgetUsd } : {}),
+      cost: convertCost(account.totalCostUSD),
+      apiEquivalentUSD: Math.round(account.totalCostUSD * 100) / 100,
+      calls: account.totalApiCalls,
+      sessions: account.sessions,
+      projects: account.projects,
+      editTurns: account.editTurns,
+      costPerSession: account.costPerSessionUSD !== null ? convertCost(account.costPerSessionUSD) : null,
+      costPerEdit: account.costPerEditUSD !== null ? convertCost(account.costPerEditUSD) : null,
+      subscriptionUtilizationPercent: account.subscriptionUtilizationPercent,
+      budgetUtilizationPercent: account.budgetUtilizationPercent,
+      topModels: account.topModels.map(model => ({ name: model.name, calls: model.calls, cost: convertCost(model.costUSD) })),
+      topProjects: account.topProjects.map(project => ({ path: project.projectPath, sessions: project.sessions, cost: convertCost(project.costUSD) })),
+    })),
+    accountRisks: accountReport.risks,
     models,
     activities,
     tools: sortedMap(toolMap),
@@ -335,6 +399,95 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     shellCommands: sortedMap(bashMap),
     topSessions,
   }
+}
+
+function accountReportToJson(report: AccountReport) {
+  const { code } = getCurrency()
+  return {
+    currency: code,
+    accounts: report.accounts.map(account => ({
+      name: account.account,
+      accountPath: account.accountPath ?? null,
+      plan: account.configured?.plan ?? null,
+      monthlyUSD: account.configured?.monthlyUsd ?? null,
+      budgetUSD: account.configured?.budgetUsd ?? null,
+      cost: convertCost(account.totalCostUSD),
+      apiEquivalentUSD: Math.round(account.totalCostUSD * 100) / 100,
+      calls: account.totalApiCalls,
+      sessions: account.sessions,
+      projects: account.projects,
+      editTurns: account.editTurns,
+      costPerSession: account.costPerSessionUSD !== null ? convertCost(account.costPerSessionUSD) : null,
+      costPerEdit: account.costPerEditUSD !== null ? convertCost(account.costPerEditUSD) : null,
+      subscriptionCostPerSessionUSD: account.subscriptionCostPerSessionUSD,
+      subscriptionCostPerEditUSD: account.subscriptionCostPerEditUSD,
+      subscriptionUtilizationPercent: account.subscriptionUtilizationPercent,
+      budgetUtilizationPercent: account.budgetUtilizationPercent,
+      topModels: account.topModels.map(model => ({ name: model.name, calls: model.calls, cost: convertCost(model.costUSD) })),
+      topProjects: account.topProjects.map(project => ({ path: project.projectPath, sessions: project.sessions, cost: convertCost(project.costUSD) })),
+    })),
+    risks: report.risks,
+  }
+}
+
+function formatPercent(value: number | null): string {
+  if (value === null) return '-'
+  return `${value.toFixed(1)}%`
+}
+
+function formatUSD(value: number): string {
+  const decimals = value > 0 && Math.abs(value) < 1 ? 3 : 2
+  return `USD ${value.toFixed(decimals)}`
+}
+
+function printAccountReport(report: AccountReport, label: string): void {
+  console.log(`\n  Accounts (${label})`)
+  if (report.accounts.length === 0) {
+    console.log('  No account-labelled usage found for this filter.')
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+    return
+  }
+
+  console.log('  Account              Cost      Sessions  Projects  Calls   Plan/Budget')
+  for (const account of report.accounts) {
+    const plan = account.configured?.plan
+      ? `${account.configured.plan}${account.configured.monthlyUsd ? ` ${formatUSD(account.configured.monthlyUsd)}/mo` : ''}`
+      : ''
+    const budget = account.configured?.budgetUsd
+      ? `budget ${formatPercent(account.budgetUtilizationPercent)}`
+      : ''
+    const right = [plan, budget].filter(Boolean).join(', ') || '-'
+    console.log(
+      `  ${account.account.padEnd(20)} ` +
+      `${formatCost(account.totalCostUSD).padStart(9)} ` +
+      `${String(account.sessions).padStart(9)} ` +
+      `${String(account.projects).padStart(8)} ` +
+      `${String(account.totalApiCalls).padStart(6)}   ` +
+      right,
+    )
+  }
+
+  const configured = report.accounts.filter(a => a.configured?.monthlyUsd || a.configured?.budgetUsd)
+  if (configured.length > 0) {
+    console.log('\n  Subscription efficiency')
+    for (const account of configured) {
+      const subSession = account.subscriptionCostPerSessionUSD !== null
+        ? `${formatUSD(account.subscriptionCostPerSessionUSD)}/session`
+        : '-'
+      const subEdit = account.subscriptionCostPerEditUSD !== null
+        ? `${formatUSD(account.subscriptionCostPerEditUSD)}/edit`
+        : '-'
+      console.log(`  ${account.account.padEnd(20)} api-equivalent ${formatPercent(account.subscriptionUtilizationPercent).padStart(7)}   ${subSession.padStart(14)}   ${subEdit.padStart(12)}`)
+    }
+  }
+
+  if (report.risks.length > 0) {
+    console.log('\n  Signals')
+    for (const risk of report.risks.slice(0, 8)) {
+      console.log(`  - ${risk.message}`)
+    }
+  }
+  console.log(`\n  Config: ${getConfigFilePath()}\n`)
 }
 
 program
@@ -347,6 +500,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
@@ -364,19 +518,16 @@ program
       await loadPricing()
       if (customRange) {
         const label = formatDateRangeLabel(opts.from, opts.to)
-        const projects = filterProjectsByName(
-          await parseAllSessions(customRange, opts.provider),
-          opts.project,
-          opts.exclude,
-        )
-        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(projects, label, 'custom')), null, 2))
+        const config = await readConfig()
+        const projects = applyProjectFilters(await parseAllSessions(customRange, opts.provider), opts)
+        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(projects, label, 'custom', filterAccountConfig(config.accounts, opts.account, projects))), null, 2))
       } else {
-        await runJsonReport(period, opts.provider, opts.project, opts.exclude)
+        await runJsonReport(period, opts.provider, opts)
       }
       return
     }
     const customRangeLabel = customRange ? formatDateRangeLabel(opts.from, opts.to) : undefined
-    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel)
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel, opts.account)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -426,13 +577,14 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
     await loadPricing()
     const pf = opts.provider
-    const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
+    const fp = (p: ProjectSummary[]) => applyProjectFilters(p, opts)
     if (opts.format === 'menubar-json') {
       const periodInfo = getDateRange(opts.period)
       const now = new Date()
@@ -672,14 +824,15 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     if (opts.format === 'json') {
-      await runJsonReport('today', opts.provider, opts.project, opts.exclude)
+      await runJsonReport('today', opts.provider, opts)
       return
     }
-    await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude)
+    await renderDashboard('today', opts.provider, opts.refresh, opts.project, opts.exclude, null, undefined, opts.account)
   })
 
 program
@@ -689,14 +842,15 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     if (opts.format === 'json') {
-      await runJsonReport('month', opts.provider, opts.project, opts.exclude)
+      await runJsonReport('month', opts.provider, opts)
       return
     }
-    await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude)
+    await renderDashboard('month', opts.provider, opts.refresh, opts.project, opts.exclude, null, undefined, opts.account)
   })
 
 program
@@ -709,11 +863,12 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['csv', 'json'], 'export')
     await loadPricing()
     const pf = opts.provider
-    const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
+    const fp = (p: ProjectSummary[]) => applyProjectFilters(p, opts)
     let customRange: DateRange | null = null
     try {
       customRange = parseDateRangeFlags(opts.from, opts.to)
@@ -744,13 +899,19 @@ program
 
     const defaultName = `codeburn-${toDateString(new Date())}`
     const outputPath = opts.output ?? `${defaultName}.${opts.format}`
+    const config = await readConfig()
+    const accountConfig = filterAccountConfig(
+      config.accounts,
+      opts.account,
+      periods.flatMap(p => p.projects),
+    ) ?? {}
 
     let savedPath: string
     try {
       if (opts.format === 'json') {
-        savedPath = await exportJson(periods, outputPath)
+        savedPath = await exportJson(periods, outputPath, accountConfig)
       } else {
-        savedPath = await exportCsv(periods, outputPath)
+        savedPath = await exportCsv(periods, outputPath, accountConfig)
       }
     } catch (err) {
       // Protection guards in export.ts (symlink refusal, non-codeburn folder refusal, etc.)
@@ -829,6 +990,159 @@ program
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('accounts [action] [account]')
+  .description('Inspect and configure per-account usage, budgets, and subscriptions')
+  .option('--format <format>', 'Output format: text or json', 'text')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'month')
+  .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
+  .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
+  .option('--plan <name>', 'Subscription/plan label for accounts set')
+  .option('--monthly-usd <n>', 'Monthly subscription cost in USD', parseNumber)
+  .option('--budget-usd <n>', 'Monthly budget/allowance in USD', parseNumber)
+  .option('--reset-day <n>', 'Day of month account budget resets (1-28)', parseInteger)
+  .action(async (
+    action?: string,
+    target?: string,
+    opts?: {
+      format?: string
+      period?: string
+      from?: string
+      to?: string
+      provider?: string
+      project?: string[]
+      exclude?: string[]
+      account?: string[]
+      plan?: string
+      monthlyUsd?: number
+      budgetUsd?: number
+      resetDay?: number
+    },
+  ) => {
+    assertFormat(opts?.format ?? 'text', ['text', 'json'], 'accounts')
+    let mode = action ?? 'show'
+    let accountFilter = opts?.account
+
+    if (!['show', 'list', 'set', 'reset'].includes(mode)) {
+      if (target) {
+        console.error('\n  Usage: codeburn accounts [show | set <account> | reset <account>]\n')
+        process.exitCode = 1
+        return
+      }
+      accountFilter = [mode, ...(accountFilter ?? [])]
+      mode = 'show'
+    }
+
+    if (mode === 'set') {
+      if (!target) {
+        console.error('\n  Usage: codeburn accounts set <account> [--plan name] [--monthly-usd n] [--budget-usd n]\n')
+        process.exitCode = 1
+        return
+      }
+      const account = target.trim().toLowerCase()
+      if (!account) {
+        console.error('\n  Account name cannot be empty.\n')
+        process.exitCode = 1
+        return
+      }
+      if (opts?.monthlyUsd !== undefined && opts.monthlyUsd < 0) {
+        console.error('\n  --monthly-usd must be >= 0.\n')
+        process.exitCode = 1
+        return
+      }
+      if (opts?.budgetUsd !== undefined && opts.budgetUsd < 0) {
+        console.error('\n  --budget-usd must be >= 0.\n')
+        process.exitCode = 1
+        return
+      }
+      if (opts?.resetDay !== undefined && (opts.resetDay < 1 || opts.resetDay > 28)) {
+        console.error('\n  --reset-day must be between 1 and 28.\n')
+        process.exitCode = 1
+        return
+      }
+
+      const config = await readConfig()
+      const existing = config.accounts?.[account] ?? {}
+      const updated: AccountConfig = {
+        ...existing,
+        ...(opts?.plan ? { plan: opts.plan } : {}),
+        ...(opts?.monthlyUsd !== undefined ? { monthlyUsd: opts.monthlyUsd } : {}),
+        ...(opts?.budgetUsd !== undefined ? { budgetUsd: opts.budgetUsd } : {}),
+        ...(opts?.resetDay !== undefined ? { resetDay: opts.resetDay } : {}),
+        setAt: new Date().toISOString(),
+      }
+      config.accounts = { ...(config.accounts ?? {}), [account]: updated }
+      await saveConfig(config)
+      console.log(`\n  Account saved: ${account}`)
+      if (updated.plan) console.log(`  Plan: ${updated.plan}`)
+      if (updated.monthlyUsd) console.log(`  Subscription: ${formatUSD(updated.monthlyUsd)}/month`)
+      if (updated.budgetUsd) console.log(`  Budget: ${formatUSD(updated.budgetUsd)}/month`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (mode === 'reset') {
+      if (!target) {
+        console.error('\n  Usage: codeburn accounts reset <account>\n')
+        process.exitCode = 1
+        return
+      }
+      const account = target.trim().toLowerCase()
+      if (!account) {
+        console.error('\n  Account name cannot be empty.\n')
+        process.exitCode = 1
+        return
+      }
+      const config = await readConfig()
+      if (config.accounts) {
+        delete config.accounts[account]
+        if (account !== target.trim()) delete config.accounts[target.trim()]
+        if (Object.keys(config.accounts).length === 0) delete config.accounts
+        await saveConfig(config)
+      }
+      console.log(`\n  Account config reset: ${account}\n`)
+      return
+    }
+
+    if (mode !== 'show' && mode !== 'list') {
+      console.error('\n  Usage: codeburn accounts [show | set <account> | reset <account>]\n')
+      process.exitCode = 1
+      return
+    }
+
+    let customRange: DateRange | null = null
+    try {
+      customRange = parseDateRangeFlags(opts?.from, opts?.to)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exit(1)
+    }
+
+    await loadPricing()
+    const period = toPeriod(opts?.period ?? 'month')
+    const { range, label } = customRange
+      ? { range: customRange, label: formatDateRangeLabel(opts?.from, opts?.to) }
+      : getDateRange(period)
+    const config = await readConfig()
+    const projects = applyProjectFilters(
+      await parseAllSessions(range, opts?.provider ?? 'all'),
+      { project: opts?.project, exclude: opts?.exclude, account: accountFilter },
+    )
+    const report = buildAccountReport(projects, filterAccountConfig(config.accounts, accountFilter, projects) ?? {})
+
+    if (opts?.format === 'json') {
+      console.log(JSON.stringify({ generated: new Date().toISOString(), period: label, ...accountReportToJson(report) }, null, 2))
+      return
+    }
+
+    printAccountReport(report, label)
   })
 
 program
@@ -1029,10 +1343,11 @@ program
   .description('Find token waste and get exact fixes')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .action(async (opts) => {
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
-    const projects = await parseAllSessions(range, opts.provider)
+    const projects = filterProjectsByAccount(await parseAllSessions(range, opts.provider), opts.account)
     await runOptimize(projects, label, range)
   })
 
@@ -1041,10 +1356,11 @@ program
   .description('Compare two AI models side-by-side')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--account <name>', 'Show only accounts matching label/path (repeatable)', collect, [])
   .action(async (opts) => {
     await loadPricing()
     const { range } = getDateRange(opts.period)
-    await renderCompare(range, opts.provider)
+    await renderCompare(range, opts.provider, opts.account)
   })
 
 program

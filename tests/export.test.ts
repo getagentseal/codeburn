@@ -193,4 +193,32 @@ describe('exportCsv', () => {
     expect(readme).toContain('selected detail period')
     expect(readme).not.toContain('30-day window')
   })
+
+  it('keeps account CSV columns even when the first row is unlabelled', async () => {
+    const unlabelled = makeProject('unlabelled')
+    unlabelled.totalCostUSD = 2
+    unlabelled.sessions[0]!.totalCostUSD = 2
+    const labelled = makeProject('labelled')
+    labelled.account = 'work'
+    labelled.accountPath = '/tmp/claude-work'
+
+    const periods: PeriodExport[] = [
+      {
+        label: '30 Days',
+        projects: [unlabelled, labelled],
+      },
+    ]
+
+    const outputPath = join(tmpDir, 'accounts-columns.csv')
+    const folder = await exportCsv(periods, outputPath)
+    const projects = await readFile(join(folder, 'projects.csv'), 'utf-8')
+    const sessions = await readFile(join(folder, 'sessions.csv'), 'utf-8')
+
+    expect(projects.split('\n')[0]).toMatch(/^Account,Account Path,Project,/)
+    expect(projects).toContain('\n,,unlabelled,')
+    expect(projects).toContain('\nwork,/tmp/claude-work,labelled,')
+    expect(sessions.split('\n')[0]).toMatch(/^Account,Account Path,Project,/)
+    expect(sessions).toContain('\n,,unlabelled,')
+    expect(sessions).toContain('\nwork,/tmp/claude-work,labelled,')
+  })
 })

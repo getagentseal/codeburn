@@ -301,10 +301,11 @@ codeburn report --project myapp                  # show only projects matching "
 codeburn report --exclude myapp                  # show everything except "myapp"
 codeburn report --exclude myapp --exclude tests  # exclude multiple projects
 codeburn month --project api --project web       # include multiple projects
+codeburn report --account work                   # show only usage from matching accounts
 codeburn export --project inventory              # export only "inventory" project data
 ```
 
-Filter by provider, project name (case-insensitive substring), or exact date range. The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+Filter by provider, project name (case-insensitive substring), account label/path, or exact date range. The `--project`, `--exclude`, and `--account` flags work on report-style commands and can be combined with `--provider`.
 
 ```bash
 codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window
@@ -333,6 +334,18 @@ codeburn today --format json | jq '.overview.cost'
 ```
 
 For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`).
+
+### Accounts
+
+When Claude usage comes from multiple config roots, CodeBurn keeps those roots separate instead of merging projects with the same sanitized path:
+
+```bash
+CLAUDE_CONFIG_DIRS="$HOME/.claude-work:$HOME/.claude-personal" codeburn accounts
+codeburn accounts set work --plan "Claude Max" --monthly-usd 200 --budget-usd 300
+codeburn accounts work --format json
+```
+
+`codeburn accounts` shows spend, sessions, projects, top models, subscription efficiency, budget utilization, duplicate-project signals, and account/path mismatch signals. Account rollups also appear in JSON reports and exports.
 
 ## Menu Bar
 

@@ -5,6 +5,7 @@ import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } f
 import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, scanSelfCorrections } from './compare-stats.js'
 import { formatCost } from './format.js'
 import { parseAllSessions } from './parser.js'
+import { filterProjectsByAccount } from './accounts.js'
 import { getAllProviders } from './providers/index.js'
 import type { ProjectSummary, DateRange } from './types.js'
 import { patchStdoutForWindows } from './ink-win.js'
@@ -466,7 +467,7 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
   )
 }
 
-export async function renderCompare(range: DateRange, provider: string): Promise<void> {
+export async function renderCompare(range: DateRange, provider: string, accountFilter?: string[]): Promise<void> {
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   if (!isTTY) {
     process.stdout.write('Model comparison requires an interactive terminal.\n')
@@ -474,7 +475,7 @@ export async function renderCompare(range: DateRange, provider: string): Promise
   }
 
   patchStdoutForWindows()
-  const projects = await parseAllSessions(range, provider)
+  const projects = filterProjectsByAccount(await parseAllSessions(range, provider), accountFilter)
   const { waitUntilExit } = render(
     <CompareView projects={projects} onBack={() => process.exit(0)} />
   )

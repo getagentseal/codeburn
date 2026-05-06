@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Account control center.** `codeburn accounts` groups usage by detected
+  Claude config account, lets users attach plan/budget metadata with
+  `accounts set`, and exposes account rollups in JSON reports and exports.
+  Account filters now work across report, today/month, status, export,
+  optimize, and compare.
 - **Multiple subscription plans can be tracked at the same time.**
   `codeburn plan set` now stores plans in a provider-keyed `plans` map, so
   setting a Codex custom plan no longer overwrites an existing Claude plan.
