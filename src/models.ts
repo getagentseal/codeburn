@@ -192,12 +192,24 @@ export function getModelCosts(model: string): ModelCosts | null {
   const canonical = resolveAlias(getCanonicalName(model))
   if (pricingCache.has(canonical)) return pricingCache.get(canonical)!
 
-  for (const [key, costs] of pricingCache) {
-    if (canonical.startsWith(key + '-') || canonical.startsWith(key)) return costs
+  // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
+  // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
+  // due to dictionary insertion order. Sorting per call is cheap relative
+  // to the JSON parse done once at startup.
+  const sortedKeys = Array.from(pricingCache.keys()).sort((a, b) => b.length - a.length)
+  for (const key of sortedKeys) {
+    if (canonical.startsWith(key + '-') || canonical === key) {
+      return pricingCache.get(key)!
+    }
   }
 
   return null
 }
+
+// Warn at most once per unknown model name per process. Without this, a model
+// missing from the pricing snapshot would silently price at $0 for every
+// session that used it, hiding real spend until the user noticed.
+const warnedUnknownModels = new Set<string>()
 
 export function calculateCost(
   model: string,
@@ -209,7 +221,20 @@ export function calculateCost(
   speed: 'standard' | 'fast' = 'standard',
 ): number {
   const costs = getModelCosts(model)
-  if (!costs) return 0
+  if (!costs) {
+    // Skip the synthetic placeholder and the auto-router pseudo-models that
+    // intentionally have no direct pricing entry; calculateCost callers
+    // resolve those through aliasing first, so an unknown here is genuinely
+    // an unmapped real model.
+    if (model && model !== '<synthetic>' && !warnedUnknownModels.has(model)) {
+      warnedUnknownModels.add(model)
+      process.stderr.write(
+        `codeburn: no pricing data for model "${model}" — costs for this model will show $0. ` +
+        `Update with: npx codeburn@latest, or report at https://github.com/getagentseal/codeburn/issues.\n`
+      )
+    }
+    return 0
+  }
 
   const multiplier = speed === 'fast' ? costs.fastMultiplier : 1
 
@@ -286,7 +311,12 @@ export function getShortModelName(model: string): string {
     'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
     'MiniMax-M2.7': 'MiniMax M2.7',
   }
-  for (const [key, name] of Object.entries(shortNames)) {
+  // Iterate longest keys first so more-specific prefixes match before
+  // shorter ones. Without this, `gpt-5-mini` could resolve to "GPT-5"
+  // (the entry for `gpt-5`) if it happened to be iterated before
+  // `gpt-5-mini`, hiding a distinct model behind the wrong display
+  // name and pricing tier.
+  for (const [key, name] of Object.entries(shortNames).sort((a, b) => b[0].length - a[0].length)) {
     if (canonical.startsWith(key)) return name
   }
   return canonical

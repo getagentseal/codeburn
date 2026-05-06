@@ -27,6 +27,7 @@ const modelDisplayNames: Record<string, string> = {
 }
 
 type BubbleRow = {
+  bubble_key: string
   input_tokens: number | null
   output_tokens: number | null
   model: string | null
@@ -100,6 +101,7 @@ function modelForDisplay(raw: string | null): string {
 
 const BUBBLE_QUERY_BASE = `
   SELECT
+    key as bubble_key,
     json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
@@ -204,7 +206,12 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
 
       const createdAt = row.created_at ?? ''
       const conversationId = row.conversation_id ?? 'unknown'
-      const dedupKey = `cursor:${conversationId}:${createdAt}:${inputTokens}:${outputTokens}`
+      // Use the SQLite row key (bubbleId:<unique>) as the dedup key.
+      // Cursor mutates token counts on the row in place when streaming
+      // completes — including tokens in the dedup key (the previous
+      // implementation) caused the same bubble to be counted twice once
+      // its tokens stabilized.
+      const dedupKey = `cursor:bubble:${row.bubble_key}`
 
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)

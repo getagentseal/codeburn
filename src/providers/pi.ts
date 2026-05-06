@@ -149,7 +149,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         if (msg.role !== 'assistant' || !msg.usage) continue
 
-        const { input, output, cacheRead, cacheWrite } = msg.usage
+        // Coerce undefined/null token fields to 0. Pi/OMP session files
+        // sometimes omit individual usage fields; the destructure used to
+        // pass undefined into calculateCost which then returned NaN, and
+        // that NaN propagated into every aggregate cost total.
+        const input = msg.usage.input ?? 0
+        const output = msg.usage.output ?? 0
+        const cacheRead = msg.usage.cacheRead ?? 0
+        const cacheWrite = msg.usage.cacheWrite ?? 0
         if (input === 0 && output === 0) continue
 
         const model = msg.model ?? 'gpt-5'
