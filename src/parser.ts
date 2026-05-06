@@ -472,6 +472,25 @@ async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seen
     }
   }
 
+  // If a slug has both cwd-keyed and slug-keyed entries (mixed sessions where
+  // some carry a canonical cwd and some don't), fold the slug-keyed sessions
+  // into the cwd-keyed entry so the canonical projectPath is preserved
+  // regardless of file iteration order.
+  const cwdKeyByDirName = new Map<string, string>()
+  for (const [key, entry] of projectMap) {
+    if (!key.startsWith('slug:') && !cwdKeyByDirName.has(entry.project)) {
+      cwdKeyByDirName.set(entry.project, key)
+    }
+  }
+  for (const [key, entry] of [...projectMap]) {
+    if (!key.startsWith('slug:')) continue
+    const cwdKey = cwdKeyByDirName.get(entry.project)
+    if (!cwdKey) continue
+    const target = projectMap.get(cwdKey)!
+    target.sessions.push(...entry.sessions)
+    projectMap.delete(key)
+  }
+
   const projects: ProjectSummary[] = []
   for (const { project, projectPath, sessions } of projectMap.values()) {
     projects.push({
