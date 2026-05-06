@@ -109,6 +109,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | Qwen | `~/.qwen/projects/<project>/chats/` | Yes |
 | Goose | `~/.local/share/goose/sessions/sessions.db` (SQLite) | Yes |
 | Antigravity | `~/.gemini/antigravity/conversations/` | Yes |
+| IBM Bob | `~/Library/Application Support/IBM Bob/User/globalStorage/ibm.bob-code/tasks/` | Yes |
 
 Paths shown are for macOS. Linux and Windows equivalents are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
 
@@ -127,6 +128,8 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 **GitHub Copilot** reads from both `~/.copilot/session-state/` (legacy CLI) and VS Code's `workspaceStorage/*/GitHub.copilot-chat/transcripts/`. The VS Code format has no explicit token counts; tokens are estimated from content length and the model is inferred from tool call ID prefixes.
 
 **OpenClaw** reads JSONL agent logs from `~/.openclaw/agents/` and also checks legacy paths (`.clawdbot`, `.moltbot`, `.moldbot`).
+
+**IBM Bob** is an AI-native IDE built on VS Code. Unlike standard VS Code extensions, Bob uses its own application directory at `~/Library/Application Support/IBM Bob/` (macOS), `~/.config/IBM Bob/` (Linux), or `%APPDATA%/IBM Bob/` (Windows). CodeBurn reads `ui_messages.json` from each task directory in `globalStorage/ibm.bob-code/tasks/` and extracts token usage from `api_req_started` entries.
 
 **Roo Code and KiloCode** are Cline-family VS Code extensions. CodeBurn reads `ui_messages.json` from each task directory and extracts token usage from `api_req_started` entries.
 
@@ -364,6 +367,8 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 **OpenClaw** stores agent sessions as JSONL at `~/.openclaw/agents/*.jsonl`. Also checks legacy paths `.clawdbot`, `.moltbot`, `.moldbot`. Token usage comes from assistant message `usage` blocks; model from `modelId` or `message.model` fields.
 
+**IBM Bob** stores sessions at `~/Library/Application Support/IBM Bob/User/globalStorage/ibm.bob-code/tasks/` (macOS), `~/.config/IBM Bob/User/globalStorage/ibm.bob-code/tasks/` (Linux), or `%APPDATA%/IBM Bob/User/globalStorage/ibm.bob-code/tasks/` (Windows). CodeBurn reads `ui_messages.json` from each task directory, filtering `type: "say"` entries with `say: "api_req_started"` to extract token counts.
+
 **Roo Code / KiloCode** are Cline-family VS Code extensions. CodeBurn reads `ui_messages.json` from each task directory in VS Code's `globalStorage`, filtering `type: "say"` entries with `say: "api_req_started"` to extract token counts.
 
 CodeBurn deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session ID for Gemini, by session+message ID for OpenCode, by responseId for Pi/OMP), filters by date range per entry, and classifies each turn.
@@ -400,6 +405,7 @@ src/
   providers/
     types.ts        Provider interface definitions
     index.ts        Provider registry
+    bob.ts          IBM Bob IDE session parsing
     claude.ts       Claude Code session discovery
     codex.ts        Codex session discovery and JSONL parsing
     copilot.ts      GitHub Copilot session parsing
