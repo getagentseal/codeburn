@@ -16,6 +16,8 @@ enum SubscriptionError: Error, LocalizedError {
     case noCredentials
     case credentialsInvalid
     case refreshFailed(Int, String?)
+    case refreshBlockedTerminal(reason: String?)
+    case refreshBlockedTransient(until: Date)
     case usageFetchFailed(Int, String?)
     case decodeFailed(Error)
 
@@ -24,9 +26,26 @@ enum SubscriptionError: Error, LocalizedError {
         case .noCredentials: "No Claude OAuth credentials found"
         case .credentialsInvalid: "Claude OAuth credentials malformed"
         case let .refreshFailed(code, body): "Token refresh failed (\(code))\(body.map { ": \($0)" } ?? "")"
+        case let .refreshBlockedTerminal(reason):
+            "Claude session expired — sign in again with `claude login`\(reason.map { " (\($0))" } ?? "")"
+        case let .refreshBlockedTransient(until):
+            "Anthropic temporarily unreachable — retrying after \(Self.formatRelative(until))"
         case let .usageFetchFailed(code, body): "Usage fetch failed (\(code))\(body.map { ": \($0)" } ?? "")"
         case let .decodeFailed(err): "Decode failed: \(err.localizedDescription)"
         }
+    }
+
+    /// Whether this error should be surfaced as a "reconnect" CTA in the UI rather than
+    /// a generic failure.
+    var isTerminalReconnect: Bool {
+        if case .refreshBlockedTerminal = self { return true }
+        return false
+    }
+
+    private static func formatRelative(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -37,14 +56,44 @@ struct SubscriptionClient {
         // Try the usage call with the existing token first. Only refresh on 401.
         do {
             let response = try await fetchUsage(token: creds.accessToken)
+            SubscriptionRefreshGate.recordSuccess()
             return mapResponse(response, rawTier: creds.rateLimitTier)
         } catch SubscriptionError.usageFetchFailed(401, _) {
             guard let refreshToken = creds.refreshToken, !refreshToken.isEmpty else {
                 throw SubscriptionError.usageFetchFailed(401, "no refresh token available")
             }
-            let newToken = try await refreshAccessToken(refreshToken: refreshToken)
-            let response = try await fetchUsage(token: newToken)
-            return mapResponse(response, rawTier: creds.rateLimitTier)
+            // Gate: skip the refresh attempt if a previous failure has put us in a
+            // terminal/transient block. The block lifts automatically when the user
+            // re-runs `claude login` (file fingerprint changes) or after backoff.
+            let fingerprint = SubscriptionRefreshGate.credentialsFingerprint()
+            if !SubscriptionRefreshGate.shouldAttempt(credentialsFingerprint: fingerprint) {
+                switch SubscriptionRefreshGate.currentStatus() {
+                case let .terminal(reason): throw SubscriptionError.refreshBlockedTerminal(reason: reason)
+                case let .transient(until): throw SubscriptionError.refreshBlockedTransient(until: until)
+                case .healthy: break
+                }
+            }
+            do {
+                let newToken = try await refreshAccessToken(refreshToken: refreshToken)
+                let response = try await fetchUsage(token: newToken)
+                SubscriptionRefreshGate.recordSuccess()
+                return mapResponse(response, rawTier: creds.rateLimitTier)
+            } catch let SubscriptionError.refreshFailed(code, body) {
+                let classification = SubscriptionRefreshGate.classifyRefreshFailure(statusCode: code, body: body)
+                switch classification {
+                case let .terminal(reason):
+                    SubscriptionRefreshGate.recordTerminalFailure(reason: reason, credentialsFingerprint: fingerprint)
+                    throw SubscriptionError.refreshBlockedTerminal(reason: reason)
+                case .transient:
+                    SubscriptionRefreshGate.recordTransientFailure()
+                    if case let .transient(until) = SubscriptionRefreshGate.currentStatus() {
+                        throw SubscriptionError.refreshBlockedTransient(until: until)
+                    }
+                    throw SubscriptionError.refreshFailed(code, body)
+                case .healthy:
+                    throw SubscriptionError.refreshFailed(code, body)
+                }
+            }
         }
     }
 
