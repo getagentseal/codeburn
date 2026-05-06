@@ -13,6 +13,12 @@
   than the call's own cache buckets could contain. Threshold:
   >10 tools available, <20% coverage, observed in ≥2 sessions. Closes #2.
 - **Session cost outlier detector.** New `optimize` finding flags sessions costing more than 2x their peer-session average within the same project. Ignores sub-$1 outliers to avoid noise. Requires at least 3 sessions per project for a baseline.
+- **Context bloat detector.** New `optimize` finding flags sessions where
+  effective input/cache tokens are large and disproportionate to output.
+  Cache reads are discounted in the estimate to avoid overstating cheap cached
+  context. The report highlights top sessions by imbalance, notes sharp
+  growth from the previous project session, and suggests starting fresh with
+  only the current goal, relevant files, failing output, and constraints.
 
 ### Fixed (CLI)
 - **`all` period semantics unified between CLI and dashboard.** The dashboard treated `--period all` as all-time (epoch start) while the CLI bounded it to the last 6 months. Both now consistently mean "Last 6 months". Period helpers (`Period`, `PERIODS`, `PERIOD_LABELS`, `toPeriod`, `getDateRange`) consolidated into `cli-date.ts`. Use `--from` / `--to` for unbounded historical ranges.

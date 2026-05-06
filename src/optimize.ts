@@ -78,6 +78,13 @@ const MIN_SESSIONS_FOR_OUTLIER = 3
 const SESSION_OUTLIER_MULTIPLIER = 2
 const MIN_SESSION_OUTLIER_COST_USD = 1
 const SESSION_OUTLIER_PREVIEW = 5
+const CONTEXT_BLOAT_MIN_INPUT_TOKENS = 75_000
+const CONTEXT_BLOAT_MIN_RATIO = 25
+const CONTEXT_BLOAT_TARGET_RATIO = 15
+const CONTEXT_BLOAT_PREVIEW = 5
+const CONTEXT_BLOAT_HIGH_INPUT_TOKENS = 500_000
+const CONTEXT_BLOAT_GROWTH_RATIO = 2
+const CONTEXT_BLOAT_RATIO_DISPLAY_CAP = 1000
 
 // ============================================================================
 // Scoring constants
@@ -1213,6 +1220,101 @@ function sessionTokenTotal(session: ProjectSummary['sessions'][number]): number 
     + session.totalCacheWriteTokens
 }
 
+function sessionEffectiveContextTokens(session: ProjectSummary['sessions'][number]): number {
+  return session.totalInputTokens
+    + session.totalCacheReadTokens * CACHE_READ_DISCOUNT
+    + session.totalCacheWriteTokens * CACHE_WRITE_MULTIPLIER
+}
+
+function formatContextRatio(ratio: number): string {
+  if (ratio >= CONTEXT_BLOAT_RATIO_DISPLAY_CAP) return `${CONTEXT_BLOAT_RATIO_DISPLAY_CAP}+`
+  return ratio.toFixed(1)
+}
+
+export function detectContextBloat(projects: ProjectSummary[]): WasteFinding | null {
+  type ContextCandidate = {
+    project: string
+    sessionId: string
+    date: string
+    effectiveInputTokens: number
+    outputTokens: number
+    ratio: number
+    excessInputTokens: number
+    growthRatio: number | null
+  }
+
+  const candidates: ContextCandidate[] = []
+
+  for (const project of projects) {
+    const sessions = [...project.sessions].sort((a, b) =>
+      new Date(a.firstTimestamp).getTime() - new Date(b.firstTimestamp).getTime()
+    )
+    let previousInputTokens: number | null = null
+
+    for (const session of sessions) {
+      const inputTokens = sessionEffectiveContextTokens(session)
+      const outputTokens = session.totalOutputTokens
+      const ratio = inputTokens / Math.max(outputTokens, 1)
+      const growthRatio = previousInputTokens !== null && previousInputTokens > 0
+        ? inputTokens / previousInputTokens
+        : null
+
+      // Anchor growth to the immediately previous project session, even if
+      // that session is below threshold and never becomes a finding.
+      previousInputTokens = inputTokens
+
+      if (inputTokens < CONTEXT_BLOAT_MIN_INPUT_TOKENS) continue
+      if (ratio < CONTEXT_BLOAT_MIN_RATIO) continue
+
+      candidates.push({
+        project: project.project,
+        sessionId: session.sessionId,
+        date: session.firstTimestamp.slice(0, 10),
+        effectiveInputTokens: inputTokens,
+        outputTokens,
+        ratio,
+        excessInputTokens: Math.max(0, inputTokens - outputTokens * CONTEXT_BLOAT_TARGET_RATIO),
+        growthRatio,
+      })
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) =>
+    b.excessInputTokens - a.excessInputTokens
+    || a.date.localeCompare(b.date)
+    || a.project.localeCompare(b.project)
+    || a.sessionId.localeCompare(b.sessionId)
+  )
+  const preview = candidates.slice(0, CONTEXT_BLOAT_PREVIEW)
+  const list = preview
+    .map(c => {
+      const growth = c.growthRatio !== null && c.growthRatio >= CONTEXT_BLOAT_GROWTH_RATIO
+        ? `, ${c.growthRatio.toFixed(1)}x previous session input`
+        : ''
+      return `${c.project}/${c.sessionId} on ${c.date}: ${formatTokens(c.effectiveInputTokens)} effective input/cache vs ${formatTokens(c.outputTokens)} output (${formatContextRatio(c.ratio)}:1${growth})`
+    })
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  // Savings estimate only counts context above a healthier 15:1 input-output ratio.
+  // Detection stays stricter at 25:1 so borderline sessions are not shown.
+  const tokensSaved = Math.round(candidates.reduce((sum, c) => sum + c.excessInputTokens, 0))
+  const totalInputTokens = candidates.reduce((sum, c) => sum + c.effectiveInputTokens, 0)
+
+  return {
+    title: `${candidates.length} context-heavy session${candidates.length === 1 ? '' : 's'}`,
+    explanation: `Effective input/cache tokens swamp output in these sessions: ${list}${extra}. This can come from stale context carryover, inherently context-heavy work, or abandoned runs that loaded too much context; starting fresh with only the current goal and relevant files can cut repeated prompt overhead.`,
+    impact: candidates.length >= 3 || totalInputTokens >= CONTEXT_BLOAT_HIGH_INPUT_TOKENS ? 'high' : 'medium',
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      label: 'Start the next expensive thread with a fresh-context constraint:',
+      text: 'Start fresh before continuing. Use only the current goal, the relevant files, the failing command/output, and the constraints below. Restate the working context in under 10 bullets before editing.',
+    },
+  }
+}
+
 export function detectSessionOutliers(projects: ProjectSummary[]): WasteFinding | null {
   type Outlier = {
     project: string
@@ -1399,6 +1501,7 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
+    () => detectContextBloat(projects),
     () => detectSessionOutliers(projects),
     () => detectBloatedClaudeMd(projectCwds),
     () => detectBashBloat(),

@@ -6,6 +6,7 @@ import {
   detectLowReadEditRatio,
   detectCacheBloat,
   detectBloatedClaudeMd,
+  detectContextBloat,
   detectSessionOutliers,
   computeHealth,
   computeTrend,
@@ -53,6 +54,45 @@ function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
     sessions,
     totalCostUSD: costs.reduce((sum, cost) => sum + cost, 0),
     totalApiCalls: sessions.length,
+  }
+}
+
+type TestSession = ProjectSummary['sessions'][number]
+
+function contextSession(
+  i: number,
+  overrides: Partial<TestSession>,
+  project = 'app',
+): TestSession {
+  return {
+    sessionId: `s${i + 1}`,
+    project,
+    firstTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:00:00Z`,
+    lastTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:30:00Z`,
+    totalCostUSD: 1,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 1,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {} as TestSession['categoryBreakdown'],
+    skillBreakdown: {},
+    ...overrides,
+  }
+}
+
+function projectWithContextSessions(sessions: TestSession[], project = 'app'): ProjectSummary {
+  return {
+    project,
+    projectPath: `/tmp/${project}`,
+    sessions,
+    totalCostUSD: sessions.reduce((sum, session) => sum + session.totalCostUSD, 0),
+    totalApiCalls: sessions.reduce((sum, session) => sum + session.apiCalls, 0),
   }
 }
 
@@ -238,6 +278,159 @@ describe('detectBloatedClaudeMd', () => {
   it('returns null for empty project set', () => {
     const result = detectBloatedClaudeMd(new Set())
     expect(result).toBeNull()
+  })
+})
+
+describe('detectContextBloat', () => {
+  it('returns null below the input/context token floor', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 74_999,
+        totalOutputTokens: 100,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('returns null when output is proportionate to input/context tokens', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 100_000,
+        totalOutputTokens: 5_000,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('discounts cache reads when estimating context pressure', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 5_000,
+        totalCacheReadTokens: 700_000,
+        totalOutputTokens: 5_000,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('weights cache writes when estimating context pressure', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 10_000,
+        totalCacheWriteTokens: 80_000,
+        totalOutputTokens: 3_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('110.0K effective input/cache')
+    expect(finding!.tokensSaved).toBe(65_000)
+  })
+
+  it('flags sessions where input/cache tokens swamp output', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 90_000,
+        totalCacheReadTokens: 30_000,
+        totalOutputTokens: 2_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('context-heavy session')
+    expect(finding!.explanation).toContain('app/s1')
+    expect(finding!.explanation).toContain('93.0K effective input/cache')
+    expect(finding!.explanation).toContain('46.5:1')
+    expect(finding!.impact).toBe('medium')
+    expect(finding!.tokensSaved).toBe(63_000)
+  })
+
+  it('includes context growth from the previous session when it is large', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 20_000,
+        totalOutputTokens: 1_000,
+      }),
+      contextSession(1, {
+        totalInputTokens: 100_000,
+        totalOutputTokens: 2_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('5.0x previous session input')
+  })
+
+  it('calculates context growth within each project only', () => {
+    const finding = detectContextBloat([
+      projectWithContextSessions([
+        contextSession(0, {
+          totalInputTokens: 20_000,
+          totalOutputTokens: 1_000,
+        }),
+        contextSession(1, {
+          totalInputTokens: 100_000,
+          totalOutputTokens: 2_000,
+        }),
+      ], 'app'),
+      projectWithContextSessions([
+        contextSession(0, {
+          totalInputTokens: 100_000,
+          totalOutputTokens: 2_000,
+        }, 'api'),
+      ], 'api'),
+    ])
+
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation.match(/previous session input/g)).toHaveLength(1)
+  })
+
+  it('summarizes additional candidates after the preview limit', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 6 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000 + i * 10_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('app/s6')
+    expect(finding!.explanation).toContain('; +1 more')
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('uses high impact for one very large context-heavy session', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 600_000,
+        totalOutputTokens: 10_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('handles zero-output sessions without dividing by zero', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 0,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('1000+:1')
+    expect(finding!.tokensSaved).toBe(80_000)
   })
 })
 
