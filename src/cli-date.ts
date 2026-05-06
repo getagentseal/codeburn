@@ -122,3 +122,7 @@ export function getDateRange(period: string): { range: DateRange; label: string 
     }
   }
 }
+
+export function formatDateRangeLabel(from: string | undefined, to: string | undefined): string {
+  return `${from ?? 'all'} to ${to ?? 'today'}`
+}

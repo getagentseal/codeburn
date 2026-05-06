@@ -75,10 +75,12 @@ final class UpdateChecker {
             let stderr = String(data: errData, encoding: .utf8) ?? ""
             Task { @MainActor in
                 guard let self else { return }
+                self.isUpdating = false
                 if proc.terminationStatus != 0 {
-                    self.isUpdating = false
                     self.updateError = stderr.isEmpty ? "Update failed (exit \(proc.terminationStatus))" : stderr
                     NSLog("CodeBurn: update failed (exit \(proc.terminationStatus)): \(stderr)")
+                } else {
+                    self.latestVersion = nil
                 }
             }
         }

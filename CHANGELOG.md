@@ -13,16 +13,38 @@
   than the call's own cache buckets could contain. Threshold:
   >10 tools available, <20% coverage, observed in ≥2 sessions. Closes #2.
 - **Session cost outlier detector.** New `optimize` finding flags sessions costing more than 2x their peer-session average within the same project. Ignores sub-$1 outliers to avoid noise. Requires at least 3 sessions per project for a baseline.
+- **Context bloat detector.** New `optimize` finding flags sessions where
+  effective input/cache tokens are large and disproportionate to output.
+  Cache reads are discounted in the estimate to avoid overstating cheap cached
+  context. The report highlights top sessions by imbalance, notes sharp
+  growth from the previous project session (within a 7-day baseline window),
+  and suggests starting fresh with only the current goal, relevant files,
+  failing output, and constraints. Sessions flagged here are excluded from
+  the cost-outlier finding so the same session is not listed twice.
+- **Worth-it score detector.** New `optimize` finding flags expensive sessions
+  with weak delivery signals: no edit turns, repeated retries, or edit work
+  that never landed in one shot, when no `git`/`gh` delivery command is
+  observed. Framed as a conservative review candidate, not proof of waste.
+  Sessions flagged here take priority and are excluded from both the
+  context-bloat and cost-outlier findings so the same session is not listed
+  more than once.
 
 ### Fixed (CLI)
 - **Activity classification for feature work.** Prompts such as "add error
   handling", "create an issue tracker", and "fix the layout for the new feature"
   now classify as Feature Dev instead of Debugging while explicit bug/failure
   fixes remain Debugging. Partially addresses #196.
+- **Windows Claude project paths.** Claude Code project rollups now prefer
+  the canonical `cwd` stored in session JSONL files instead of reconstructing
+  paths from lossy directory slugs, and group case/slash variants together.
+  Closes #217.
 - **`all` period semantics unified between CLI and dashboard.** The dashboard treated `--period all` as all-time (epoch start) while the CLI bounded it to the last 6 months. Both now consistently mean "Last 6 months". Period helpers (`Period`, `PERIODS`, `PERIOD_LABELS`, `toPeriod`, `getDateRange`) consolidated into `cli-date.ts`. Use `--from` / `--to` for unbounded historical ranges.
 
 ### Fixed (macOS menubar)
 - **Stuck loading spinner.** The menubar ran `--optimize` on every 30-second background refresh. As sessions accumulated, optimize exceeded the 45-second timeout, and the loading overlay stayed forever with no fallback. Optimize is now stripped from all menubar fetches (use `codeburn optimize` in the CLI instead). On fetch failure with empty cache, the app retries without optimize so the spinner always clears.
+- **Stale data after overnight sleep.** Cache keys used the period enum (`.today`) not a calendar date, so data from yesterday persisted after midnight. Cache now tracks the current date and clears itself on day rollover. Wake-from-sleep additionally clears all cached entries before fetching fresh data.
+- **Refresh button appeared to do nothing.** Clicking refresh with stale cached data never showed the loading overlay because loading state only triggered on empty cache. Manual refresh and wake-from-sleep now explicitly request loading feedback.
+- **Update button stuck spinning forever.** `performUpdate()` only reset `isUpdating` on failure. On success the installer kills and relaunches the app, but if the process survives (pkill fails silently), the button stayed on "Updating..." permanently. Now always resets on termination and clears the update badge on success.
 
 ## 0.9.6 - 2026-05-03
 

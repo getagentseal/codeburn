@@ -170,8 +170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard now.timeIntervalSince(lastRefreshTime) > 5 else { return }
         lastRefreshTime = now
 
+        store.invalidateCache()
         Task {
-            async let main: Void = store.refresh(includeOptimize: false, force: true)
+            async let main: Void = store.refresh(includeOptimize: false, force: true, showLoading: true)
             async let today: Void = store.refreshQuietly(period: .today)
             _ = await (main, today)
             refreshStatusButton()

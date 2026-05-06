@@ -6,6 +6,8 @@ import {
   detectLowReadEditRatio,
   detectCacheBloat,
   detectBloatedClaudeMd,
+  detectContextBloat,
+  detectLowWorthSessions,
   detectSessionOutliers,
   computeHealth,
   computeTrend,
@@ -53,6 +55,45 @@ function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
     sessions,
     totalCostUSD: costs.reduce((sum, cost) => sum + cost, 0),
     totalApiCalls: sessions.length,
+  }
+}
+
+type TestSession = ProjectSummary['sessions'][number]
+
+function contextSession(
+  i: number,
+  overrides: Partial<TestSession>,
+  project = 'app',
+): TestSession {
+  return {
+    sessionId: `s${i + 1}`,
+    project,
+    firstTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:00:00Z`,
+    lastTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:30:00Z`,
+    totalCostUSD: 1,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 1,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {} as TestSession['categoryBreakdown'],
+    skillBreakdown: {},
+    ...overrides,
+  }
+}
+
+function projectWithContextSessions(sessions: TestSession[], project = 'app'): ProjectSummary {
+  return {
+    project,
+    projectPath: `/tmp/${project}`,
+    sessions,
+    totalCostUSD: sessions.reduce((sum, session) => sum + session.totalCostUSD, 0),
+    totalApiCalls: sessions.reduce((sum, session) => sum + session.apiCalls, 0),
   }
 }
 
@@ -241,6 +282,495 @@ describe('detectBloatedClaudeMd', () => {
   })
 })
 
+describe('detectContextBloat', () => {
+  it('returns null below the input/context token floor', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 74_999,
+        totalOutputTokens: 100,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('returns null when output is proportionate to input/context tokens', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 100_000,
+        totalOutputTokens: 5_000,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('discounts cache reads when estimating context pressure', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 5_000,
+        totalCacheReadTokens: 700_000,
+        totalOutputTokens: 5_000,
+      }),
+    ])
+
+    expect(detectContextBloat([project])).toBeNull()
+  })
+
+  it('weights cache writes when estimating context pressure', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 10_000,
+        totalCacheWriteTokens: 80_000,
+        totalOutputTokens: 3_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('110.0K effective input/cache')
+    expect(finding!.tokensSaved).toBe(65_000)
+  })
+
+  it('flags sessions where input/cache tokens swamp output', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 90_000,
+        totalCacheReadTokens: 30_000,
+        totalOutputTokens: 2_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('context-heavy session')
+    expect(finding!.explanation).toContain('app/s1')
+    expect(finding!.explanation).toContain('93.0K effective input/cache')
+    expect(finding!.explanation).toContain('46.5:1')
+    expect(finding!.impact).toBe('low')
+    expect(finding!.tokensSaved).toBe(63_000)
+  })
+
+  it('uses medium impact between the low and high tiers', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 4 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('medium')
+  })
+
+  it('uses high impact at 10 or more candidates regardless of total size', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 10 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('includes context growth from the previous session when it is large', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 20_000,
+        totalOutputTokens: 1_000,
+      }),
+      contextSession(1, {
+        totalInputTokens: 100_000,
+        totalOutputTokens: 2_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('5.0x previous session input')
+  })
+
+  it('calculates context growth within each project only', () => {
+    const finding = detectContextBloat([
+      projectWithContextSessions([
+        contextSession(0, {
+          totalInputTokens: 20_000,
+          totalOutputTokens: 1_000,
+        }),
+        contextSession(1, {
+          totalInputTokens: 100_000,
+          totalOutputTokens: 2_000,
+        }),
+      ], 'app'),
+      projectWithContextSessions([
+        contextSession(0, {
+          totalInputTokens: 100_000,
+          totalOutputTokens: 2_000,
+        }, 'api'),
+      ], 'api'),
+    ])
+
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation.match(/previous session input/g)).toHaveLength(1)
+  })
+
+  it('summarizes additional candidates after the preview limit', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 6 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000 + i * 10_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('app/s6')
+    expect(finding!.explanation).toContain('; +1 more')
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('uses high impact for one very large context-heavy session', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 600_000,
+        totalOutputTokens: 10_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('handles zero-output sessions without dividing by zero', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 0,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('1000+:1')
+    expect(finding!.tokensSaved).toBe(80_000)
+  })
+
+  it('caps display ratio at 1000+:1 for non-zero-output sessions too', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 5_000_000,
+        totalOutputTokens: 100,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('1000+:1')
+  })
+
+  it('suppresses the growth ratio when the previous session is more than 7 days back', () => {
+    const project = projectWithContextSessions([
+      {
+        ...contextSession(0, { totalInputTokens: 20_000, totalOutputTokens: 1_000 }),
+        firstTimestamp: '2026-05-01T10:00:00Z',
+        lastTimestamp: '2026-05-01T10:30:00Z',
+      },
+      {
+        ...contextSession(1, { totalInputTokens: 100_000, totalOutputTokens: 2_000 }),
+        firstTimestamp: '2026-05-15T10:00:00Z',
+        lastTimestamp: '2026-05-15T10:30:00Z',
+      },
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).not.toContain('previous session input')
+  })
+
+  it('anchors growth even when the previous session is below the reporting threshold', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { totalInputTokens: 20_000, totalOutputTokens: 1_000 }),
+      contextSession(1, { totalInputTokens: 100_000, totalOutputTokens: 2_000 }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    // The first session sits below CONTEXT_BLOAT_MIN_INPUT_TOKENS (75K) and
+    // is not itself a candidate, but the growth-from-previous comparison for
+    // the second session must still anchor against it.
+    expect(finding!.explanation).toContain('5.0x previous session input')
+  })
+
+  it('honors excludedSessionIds passed by the orchestrator', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 90_000,
+        totalCacheReadTokens: 30_000,
+        totalOutputTokens: 2_000,
+      }),
+    ])
+
+    const finding = detectContextBloat([project], new Set(['s1']))
+    expect(finding).toBeNull()
+  })
+})
+
+type LowWorthTurn = TestSession['turns'][number]
+
+function lowWorthTurn(overrides: Partial<LowWorthTurn> = {}): LowWorthTurn {
+  return {
+    userMessage: 'do the work',
+    assistantCalls: [],
+    timestamp: '2026-05-01T10:00:00Z',
+    sessionId: 's1',
+    category: 'coding',
+    retries: 0,
+    hasEdits: false,
+    ...overrides,
+  }
+}
+
+function lowWorthSession(cost: number, i: number, overrides: Partial<TestSession> = {}, project = 'app'): TestSession {
+  const tokens = Math.round(cost * 1000)
+  return {
+    sessionId: `s${i + 1}`,
+    project,
+    firstTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:00:00Z`,
+    lastTimestamp: `2026-05-${String(i + 1).padStart(2, '0')}T10:30:00Z`,
+    totalCostUSD: cost,
+    totalInputTokens: tokens,
+    totalOutputTokens: tokens,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 1,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {} as TestSession['categoryBreakdown'],
+    skillBreakdown: {},
+    ...overrides,
+  }
+}
+
+function projectWithLowWorthSessions(sessions: TestSession[], project = 'app'): ProjectSummary {
+  return {
+    project,
+    projectPath: `/tmp/${project}`,
+    sessions,
+    totalCostUSD: sessions.reduce((sum, s) => sum + s.totalCostUSD, 0),
+    totalApiCalls: sessions.reduce((sum, s) => sum + s.apiCalls, 0),
+  }
+}
+
+describe('detectLowWorthSessions', () => {
+  it('returns null for cheap sessions', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(1.99, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('does not flag the no-edit cost boundary', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(2.99, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('flags expensive sessions with no edit turns', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('possibly low-worth')
+    expect(finding!.explanation).toContain('app/s1')
+    expect(finding!.explanation).toContain('no edit turns')
+    // sessionTokenTotal = input + output + cache. The lowWorthSession helper
+    // sets input=output=cost*1000, so the savings ceiling is 2x cost*1000.
+    expect(finding!.tokensSaved).toBe(8_000)
+  })
+
+  it('flags retry-heavy sessions', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(2.5, 0, {
+        turns: [
+          lowWorthTurn({ hasEdits: true, retries: 1 }),
+          lowWorthTurn({ hasEdits: true, retries: 2 }),
+        ],
+      }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('3 retries')
+  })
+
+  it('estimates recoverable tokens by retry fraction for sessions with edits', () => {
+    // 4 turns, 2 retries spread across 2 edits, 0 one-shot edits → trips the
+    // 'no one-shot edit turns' reason. totalTurns=4, fraction=2/4=0.5,
+    // sessionTokenTotal=8K, so recoverable savings ceiling is 4K — half the
+    // session, not the full ceiling that no-edit sessions get.
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, {
+        turns: [
+          lowWorthTurn({ hasEdits: true, retries: 1 }),
+          lowWorthTurn({ hasEdits: true, retries: 1 }),
+          lowWorthTurn({ hasEdits: false }),
+          lowWorthTurn({ hasEdits: false }),
+        ],
+      }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.tokensSaved).toBe(4_000)
+  })
+
+  it('uses full session tokens as the savings ceiling for no-edit sessions', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    // No edits at all -> entire session is at risk. sessionTokenTotal = 8K.
+    expect(finding!.tokensSaved).toBe(8_000)
+  })
+
+  it('keeps all reasons that apply to the same session', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, {
+        turns: [
+          lowWorthTurn({ hasEdits: false, retries: 1 }),
+          lowWorthTurn({ hasEdits: false, retries: 2 }),
+        ],
+      }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('no edit turns')
+    expect(finding!.explanation).toContain('3 retries')
+  })
+
+  it('flags edit sessions with retries but no one-shot edit turns via categoryBreakdown', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(2.25, 0, {
+        categoryBreakdown: {
+          coding: { turns: 2, costUSD: 2.25, retries: 2, editTurns: 2, oneShotTurns: 0 },
+        } as TestSession['categoryBreakdown'],
+      }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('no one-shot edit turns')
+  })
+
+  it('skips sessions with a git delivery command', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'cd /tmp/app && git commit -m "ship fix"': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('skips sessions with gh pr create', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'gh pr create --fill': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('does not treat read-only git commands as delivery', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'git tag -l': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).not.toBeNull()
+  })
+
+  it('does not treat dry-run git commands as delivery', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'git push --dry-run origin main': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).not.toBeNull()
+  })
+
+  it('does not treat git commit-tree as a delivery command', () => {
+    // Regex must match `git commit` only, not `git commit-tree` /
+    // `git commit-graph`. Without the (?:\s|$|--) lookahead this would be a
+    // false positive and the session would silently skip detection.
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'git commit-tree HEAD^{tree}': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).not.toBeNull()
+  })
+
+  it('still treats `git commit --amend` as a delivery command', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(8, 0, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+        bashBreakdown: { 'git commit --amend --no-edit': { calls: 1 } },
+      }),
+    ])
+    expect(detectLowWorthSessions([project])).toBeNull()
+  })
+
+  it('uses low impact for a single small candidate', () => {
+    const project = projectWithLowWorthSessions([
+      lowWorthSession(4, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
+    ])
+    const finding = detectLowWorthSessions([project])
+    expect(finding!.impact).toBe('low')
+  })
+
+  it('uses medium impact between low and high tiers', () => {
+    const project = projectWithLowWorthSessions(
+      Array.from({ length: 3 }, (_, i) => lowWorthSession(4, i, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+      })),
+    )
+    const finding = detectLowWorthSessions([project])
+    expect(finding!.impact).toBe('medium')
+  })
+
+  it('uses high impact at 10 or more candidates', () => {
+    const project = projectWithLowWorthSessions(
+      Array.from({ length: 10 }, (_, i) => lowWorthSession(3, i, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+      })),
+    )
+    const finding = detectLowWorthSessions([project])
+    expect(finding!.impact).toBe('high')
+  })
+
+  it('summarizes additional candidates after the preview limit', () => {
+    const project = projectWithLowWorthSessions(
+      Array.from({ length: 6 }, (_, i) => lowWorthSession(4 + i, i, {
+        turns: [lowWorthTurn({ hasEdits: false })],
+      })),
+    )
+    const finding = detectLowWorthSessions([project])
+    expect(finding!.explanation).toContain('; +1 more')
+  })
+})
+
 describe('detectSessionOutliers', () => {
   it('returns null when there are too few sessions for a project baseline', () => {
     expect(detectSessionOutliers([projectWithSessions([0.5, 4])])).toBeNull()
@@ -276,6 +806,20 @@ describe('detectSessionOutliers', () => {
     expect(finding).not.toBeNull()
     expect(finding!.explanation).toContain('api/s4')
     expect(finding!.explanation).not.toContain('web/')
+  })
+
+  it('excludes sessions already flagged by detectContextBloat', () => {
+    const project = projectWithSessions([1, 1, 1, 10])
+    const excluded = new Set(['s4'])
+    expect(detectSessionOutliers([project], excluded)).toBeNull()
+  })
+
+  it('still flags cost outliers that are not context-bloat candidates', () => {
+    const project = projectWithSessions([1, 1, 1, 10])
+    const excluded = new Set(['some-other-session'])
+    const finding = detectSessionOutliers([project], excluded)
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('app/s4')
   })
 })
 

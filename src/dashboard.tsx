@@ -4,6 +4,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
+import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
@@ -296,10 +297,13 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
 const MODEL_COL_COST = 8
 const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
+const MODEL_COL_ONESHOT = 7
 const MODEL_NAME_WIDTH = 14
+const MIN_EDIT_TURNS_FOR_RATE = 5
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
   const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelEfficiency = aggregateModelEfficiency(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
@@ -317,11 +321,15 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}{'1-shot'.padStart(MODEL_COL_ONESHOT)}</Text>
       {sorted.map(([model, data], i) => {
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
         const cacheLabel = totalInput > 0 ? `${cacheHit.toFixed(1)}%` : '-'
+        const efficiency = modelEfficiency.get(model)
+        const oneShotLabel = efficiency && efficiency.editTurns >= MIN_EDIT_TURNS_FOR_RATE && efficiency.oneShotRate !== null
+          ? `${efficiency.oneShotRate.toFixed(1)}%`
+          : '-'
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
@@ -329,6 +337,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
             <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
+            <Text>{oneShotLabel.padStart(MODEL_COL_ONESHOT)}</Text>
           </Text>
         )
       })}

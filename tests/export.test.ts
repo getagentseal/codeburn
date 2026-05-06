@@ -152,10 +152,45 @@ describe('exportCsv', () => {
     expect(projects).toContain("'\rcmd")
   })
 
+  it('includes per-model efficiency metrics', async () => {
+    const periods: PeriodExport[] = [
+      {
+        label: '30 Days',
+        projects: [makeProject('app')],
+      },
+    ]
+
+    const outputPath = join(tmpDir, 'models.csv')
+    const folder = await exportCsv(periods, outputPath)
+    const models = await readFile(join(folder, 'models.csv'), 'utf-8')
+
+    expect(models).toContain('Edit Turns')
+    expect(models).toContain('One-shot Rate (%)')
+    expect(models).toContain('Retries/Edit')
+    expect(models).toContain('Cost/Edit')
+    expect(models).toContain(',1,100,0,')
+  })
+
   it('does not crash when periods array is empty', async () => {
     const outputPath = join(tmpDir, 'empty.csv')
     const folder = await exportCsv([], outputPath)
     const entries = await readdir(folder)
     expect(entries.length).toBeGreaterThanOrEqual(0)
+  })
+
+  it('describes detail files without hardcoding a 30-day window', async () => {
+    const periods: PeriodExport[] = [
+      {
+        label: '2026-04-07 to 2026-04-10',
+        projects: [makeProject('app')],
+      },
+    ]
+
+    const outputPath = join(tmpDir, 'custom.csv')
+    const folder = await exportCsv(periods, outputPath)
+    const readme = await readFile(join(folder, 'README.txt'), 'utf-8')
+
+    expect(readme).toContain('selected detail period')
+    expect(readme).not.toContain('30-day window')
   })
 })
