@@ -139,7 +139,8 @@ const USER_MESSAGES_QUERY = `
 `
 
 const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_BASE + `
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)
+    AND json_extract(value, '$.createdAt') IS NOT NULL
+    AND json_extract(value, '$.createdAt') > ?
   ORDER BY ROWID ASC
 `
 
@@ -203,6 +204,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       }
 
       const createdAt = row.created_at ?? ''
+      if (!createdAt) continue
       const conversationId = row.conversation_id ?? 'unknown'
       const dedupKey = `cursor:${conversationId}:${createdAt}:${inputTokens}:${outputTokens}`
 
@@ -214,7 +216,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
 
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
-      const timestamp = createdAt || new Date().toISOString()
+      const timestamp = createdAt
       const convMessages = userMessages.get(conversationId) ?? []
       const userQuestion = convMessages.length > 0 ? convMessages.shift()! : ''
       const assistantText = row.user_text ?? ''

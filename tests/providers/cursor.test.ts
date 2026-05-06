@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { mkdtemp, rm } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
 import { getAllProviders } from '../../src/providers/index.js'
 import type { Provider } from '../../src/providers/types.js'
+import { isSqliteAvailable } from '../../src/sqlite.js'
+import { createCursorProvider } from '../../src/providers/cursor.js'
 
 describe('cursor provider', () => {
   let cursorProvider: Provider
@@ -73,5 +78,59 @@ describe('cursor cache', () => {
     const { readCachedResults } = await import('../../src/cursor-cache.js')
     const result = await readCachedResults('/nonexistent/path.db')
     expect(result).toBeNull()
+  })
+})
+
+const skipUnlessSqlite = isSqliteAvailable() ? describe : describe.skip
+
+skipUnlessSqlite('cursor provider timestamps', () => {
+  it('does not emit calls for rows missing createdAt', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'codeburn-cursor-test-'))
+    const dbPath = join(tempDir, 'state.vscdb')
+    try {
+      const { DatabaseSync: Database } = require('node:sqlite')
+      const db = new Database(dbPath)
+      db.prepare(`
+        CREATE TABLE cursorDiskKV (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        )
+      `).run()
+
+      const createdAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+      const withTimestamp = JSON.stringify({
+        tokenCount: { inputTokens: 10, outputTokens: 20 },
+        modelInfo: { modelName: 'default' },
+        createdAt,
+        conversationId: 'conv-a',
+        text: 'assistant reply',
+        type: 2,
+        codeBlocks: [],
+      })
+      const missingTimestamp = JSON.stringify({
+        tokenCount: { inputTokens: 99, outputTokens: 199 },
+        modelInfo: { modelName: 'default' },
+        conversationId: 'conv-b',
+        text: 'missing time',
+        type: 2,
+        codeBlocks: [],
+      })
+      db.prepare(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`).run('bubbleId:conv-a:b1', withTimestamp)
+      db.prepare(`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`).run('bubbleId:conv-b:b2', missingTimestamp)
+      db.close()
+
+      const provider = createCursorProvider(dbPath)
+      const [source] = await provider.discoverSessions()
+      const calls = []
+      for await (const call of provider.createSessionParser(source!, new Set()).parse()) {
+        calls.push(call)
+      }
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.timestamp).toBe(createdAt)
+      expect(calls[0]!.sessionId).toBe('conv-a')
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
   })
 })
