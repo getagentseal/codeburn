@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDateRangeFlags } from '../src/cli-date.js'
+import { formatDateRangeLabel, parseDateRangeFlags } from '../src/cli-date.js'
 
 describe('parseDateRangeFlags', () => {
   it('returns null when neither flag is provided', () => {
@@ -53,5 +53,11 @@ describe('parseDateRangeFlags', () => {
     expect(range).not.toBeNull()
     expect(range!.start.getDate()).toBe(10)
     expect(range!.end.getDate()).toBe(10)
+  })
+
+  it('formats custom range labels consistently', () => {
+    expect(formatDateRangeLabel('2026-04-07', '2026-04-10')).toBe('2026-04-07 to 2026-04-10')
+    expect(formatDateRangeLabel(undefined, '2026-04-10')).toBe('all to 2026-04-10')
+    expect(formatDateRangeLabel('2026-04-07', undefined)).toBe('2026-04-07 to today')
   })
 })

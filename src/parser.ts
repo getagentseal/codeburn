@@ -40,6 +40,11 @@ function projectSummaryKey(project: ProjectSummary): string {
   return projectKey(project.project, project)
 }
 
+function normalizeProjectPathKey(projectPath: string): string {
+  const normalized = projectPath.trim().replace(/\\/g, '/')
+  return (normalized.replace(/\/+$/, '') || normalized).toLowerCase()
+}
+
 function parseJsonlLine(line: string): JournalEntry | null {
   try {
     return JSON.parse(line) as JournalEntry
@@ -260,6 +265,15 @@ export function extractMcpInventory(entries: JournalEntry[]): string[] {
   return Array.from(inventory).sort()
 }
 
+function extractCanonicalCwd(entries: JournalEntry[]): string | undefined {
+  for (const entry of entries) {
+    if (typeof entry.cwd !== 'string') continue
+    const cwd = entry.cwd.trim()
+    if (cwd) return cwd
+  }
+  return undefined
+}
+
 function buildSessionSummary(
   sessionId: string,
   project: string,
@@ -382,7 +396,7 @@ async function parseSessionFile(
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
   attribution?: SourceAttribution,
-): Promise<SessionSummary | null> {
+): Promise<{ session: SessionSummary; canonicalCwd?: string } | null> {
   // Skip files whose mtime is older than the range start. A session file
   // can only contain entries up to its last-modified time; if that predates
   // the requested range, nothing in this file can match.
@@ -431,8 +445,12 @@ async function parseSessionFile(
   // and we want to reflect what was loaded even if the user only ran
   // turns inside a narrow date window.
   const mcpInventory = extractMcpInventory(entries)
+  const canonicalCwd = extractCanonicalCwd(entries)
 
-  return buildSessionSummary(sessionId, project, classified, mcpInventory, attribution)
+  return {
+    session: buildSessionSummary(sessionId, project, classified, mcpInventory, attribution),
+    ...(canonicalCwd ? { canonicalCwd } : {}),
+  }
 }
 
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
@@ -456,29 +474,66 @@ async function scanProjectDirs(
   seenMsgIds: Set<string>,
   dateRange?: DateRange,
 ): Promise<ProjectSummary[]> {
-  const projectMap = new Map<string, { dirName: string; sourcePath: string; attribution: SourceAttribution; sessions: SessionSummary[] }>()
+  const projectMap = new Map<string, {
+    project: string
+    projectPath: string
+    sourcePath: string
+    attribution: SourceAttribution
+    slugKey: boolean
+    sessions: SessionSummary[]
+  }>()
 
   for (const { path: dirPath, name: dirName, account, accountPath } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
     const attribution = { account, accountPath }
-    const key = projectKey(dirName, attribution)
 
     for (const filePath of jsonlFiles) {
-      const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, attribution)
-      if (session && session.apiCalls > 0) {
-        const existing = projectMap.get(key)
-          ?? { dirName, sourcePath: dirPath, attribution, sessions: [] }
-        existing.sessions.push(session)
-        projectMap.set(key, existing)
+      const parsed = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange, attribution)
+      if (parsed && parsed.session.apiCalls > 0) {
+        const projectPath = parsed.canonicalCwd ?? unsanitizePath(dirName)
+        const baseKey = parsed.canonicalCwd ? normalizeProjectPathKey(parsed.canonicalCwd) : `slug:${dirName}`
+        const mapKey = projectKey(baseKey, attribution)
+        const existing = projectMap.get(mapKey)
+        if (existing) {
+          existing.sessions.push(parsed.session)
+        } else {
+          projectMap.set(mapKey, {
+            project: dirName,
+            projectPath,
+            sourcePath: dirPath,
+            attribution,
+            slugKey: !parsed.canonicalCwd,
+            sessions: [parsed.session],
+          })
+        }
       }
     }
   }
 
+  // If a slug has both cwd-keyed and slug-keyed entries for the same account,
+  // fold the slug-keyed sessions into the cwd-keyed entry so the canonical
+  // projectPath is preserved regardless of file iteration order.
+  const cwdKeyByDirName = new Map<string, string>()
+  for (const [key, entry] of projectMap) {
+    const dirAccountKey = projectKey(entry.project, entry.attribution)
+    if (!entry.slugKey && !cwdKeyByDirName.has(dirAccountKey)) {
+      cwdKeyByDirName.set(dirAccountKey, key)
+    }
+  }
+  for (const [key, entry] of [...projectMap]) {
+    if (!entry.slugKey) continue
+    const cwdKey = cwdKeyByDirName.get(projectKey(entry.project, entry.attribution))
+    if (!cwdKey) continue
+    const target = projectMap.get(cwdKey)!
+    target.sessions.push(...entry.sessions)
+    projectMap.delete(key)
+  }
+
   const projects: ProjectSummary[] = []
-  for (const { dirName, sourcePath, attribution, sessions } of projectMap.values()) {
+  for (const { project, projectPath, sourcePath, attribution, sessions } of projectMap.values()) {
     projects.push({
-      project: dirName,
-      projectPath: unsanitizePath(dirName),
+      project,
+      projectPath,
       ...(attribution.account ? { account: attribution.account } : {}),
       ...(attribution.accountPath ? { accountPath: attribution.accountPath } : {}),
       sourcePath,

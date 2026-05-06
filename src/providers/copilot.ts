@@ -70,6 +70,7 @@ type LegacyCopilotEvent =
   | { type: 'session.model_change'; timestamp?: string; data: { newModel: string } }
   | { type: 'user.message'; timestamp?: string; data: { content: string; interactionId?: string } }
   | { type: 'assistant.message'; timestamp?: string; data: { messageId: string; outputTokens: number; interactionId?: string; toolRequests?: LegacyToolRequest[] } }
+  | { type: string; timestamp?: string; data: Record<string, unknown> }
 
 function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<string>): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
@@ -85,8 +86,14 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
       continue
     }
 
+    // Some newer events include the model ID explicitly.
+    const data = event.data as { newModel?: string; model?: string }
+    if (typeof data.model === 'string' && data.model) {
+      currentModel = data.model
+    }
+
     if (event.type === 'session.model_change') {
-      currentModel = event.data.newModel ?? currentModel
+      currentModel = data.newModel ?? currentModel
       continue
     }
 
@@ -158,6 +165,7 @@ const transcriptToolCallModelHints: Array<{ prefix: string; model: string }> = [
   { prefix: 'toolu_bdrk_', model: COPILOT_ANTHROPIC_AUTO },
   { prefix: 'toolu_vrtx_', model: COPILOT_ANTHROPIC_AUTO },
   { prefix: 'tooluse_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'toolu_', model: COPILOT_ANTHROPIC_AUTO },
   // OpenAI tool-call IDs.
   { prefix: 'call_', model: COPILOT_OPENAI_AUTO },
 ]
@@ -166,6 +174,12 @@ function inferModelFromToolCallIds(events: TranscriptEvent[]): string {
   const modelCounts = new Map<string, number>()
 
   for (const e of events) {
+    // Some newer events (like tool.execution_complete) explicitly include the model ID.
+    const data = e.data as { model?: string }
+    if (typeof data.model === 'string' && data.model) {
+      modelCounts.set(data.model, (modelCounts.get(data.model) ?? 0) + 100)
+    }
+
     if (e.type !== 'assistant.message') continue
     const msg = e as { data: { toolRequests?: TranscriptToolRequest[] } }
     for (const t of msg.data.toolRequests ?? []) {

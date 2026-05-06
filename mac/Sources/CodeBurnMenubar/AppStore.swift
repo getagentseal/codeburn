@@ -34,6 +34,7 @@ final class AppStore {
     var capacityEstimates: [String: CapacityEstimate] = [:]
 
     private var cache: [PayloadCacheKey: CachedPayload] = [:]
+    private var cacheDate: String = ""
     private var switchTask: Task<Void, Never>?
 
     private var currentKey: PayloadCacheKey {
@@ -99,18 +100,33 @@ final class AppStore {
 
     private var inFlightKeys: Set<PayloadCacheKey> = []
 
-    func refresh(includeOptimize: Bool, force: Bool = false) async {
+    private func invalidateStaleDayCache() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: Date())
+        if cacheDate != today {
+            cache.removeAll()
+            cacheDate = today
+        }
+    }
+
+    func invalidateCache() {
+        cache.removeAll()
+    }
+
+    func refresh(includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+        invalidateStaleDayCache()
         let key = currentKey
         if !force, cache[key]?.isFresh == true { return }
         if !force, inFlightKeys.contains(key) { return }
         inFlightKeys.insert(key)
-        let showedLoading = cache[key] == nil
-        if showedLoading {
+        let didShowLoading = showLoading || cache[key] == nil
+        if didShowLoading {
             loadingCount += 1
         }
         defer {
             inFlightKeys.remove(key)
-            if showedLoading { loadingCount = max(loadingCount - 1, 0) }
+            if didShowLoading { loadingCount = max(loadingCount - 1, 0) }
         }
         do {
             let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
@@ -145,6 +161,7 @@ final class AppStore {
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
     func refreshQuietly(period: Period) async {
+        invalidateStaleDayCache()
         do {
             let fresh = try await DataClient.fetch(period: period, provider: .all, includeOptimize: false)
             cache[PayloadCacheKey(period: period, provider: .all)] = CachedPayload(payload: fresh, fetchedAt: Date())
