@@ -49,6 +49,11 @@ type AgentKvRow = {
 type AgentKvContent = {
   type?: string
   text?: string
+  timestamp?: string | number
+  createdAt?: string | number
+  time?: string | number
+  timeCreated?: string | number
+  time_created?: string | number
   providerOptions?: {
     cursor?: {
       modelName?: string
@@ -275,6 +280,39 @@ function extractTextLength(content: AgentKvContent[]): number {
   return total
 }
 
+function normalizeTimestampCandidate(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'number') {
+    const ms = raw < 1e12 ? raw * 1000 : raw
+    const date = new Date(ms)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (/^\d+$/.test(trimmed)) {
+    const num = Number(trimmed)
+    if (!Number.isNaN(num)) {
+      const ms = num < 1e12 ? num * 1000 : num
+      const date = new Date(ms)
+      return Number.isNaN(date.getTime()) ? null : date.toISOString()
+    }
+  }
+  const parsed = new Date(trimmed)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString()
+}
+
+function extractTimestampFromAgentContent(content: AgentKvContent[]): string | null {
+  for (const block of content) {
+    const timestamp = normalizeTimestampCandidate(
+      block.timestamp ?? block.createdAt ?? block.time ?? block.timeCreated ?? block.time_created
+    )
+    if (timestamp) return timestamp
+  }
+  return null
+}
+
 function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
 
@@ -285,7 +323,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
     return { calls: results }
   }
 
-  const sessions: Map<string, { inputChars: number; outputChars: number; model: string | null; userText: string }> = new Map()
+  const sessions: Map<string, { inputChars: number; outputChars: number; model: string | null; userText: string; content: AgentKvContent[] }> = new Map()
   let currentRequestId = 'unknown'
   let turnIndex = 0
 
@@ -317,8 +355,9 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
     const model = extractModelFromContent(content)
 
     if (row.role === 'user') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '', content: [] }
       existing.inputChars += textLength
+      existing.content.push(...content)
       if (!existing.userText) {
         const text = content[0]?.text ?? row.content
         const queryMatch = text.match(/<user_query>([\s\S]*?)<\/user_query>/)
@@ -326,19 +365,23 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       }
       sessions.set(requestId, existing)
     } else if (row.role === 'assistant') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '', content: [] }
       existing.outputChars += textLength
+      existing.content.push(...content)
       if (model) existing.model = model
       sessions.set(requestId, existing)
     } else if (row.role === 'tool' || row.role === 'system') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
+      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '', content: [] }
       existing.inputChars += textLength
+      existing.content.push(...content)
       sessions.set(requestId, existing)
     }
   }
 
   for (const [requestId, session] of sessions) {
     if (session.inputChars === 0 && session.outputChars === 0) continue
+    const timestamp = extractTimestampFromAgentContent(session.content)
+    if (!timestamp) continue
 
     const inputTokens = Math.ceil(session.inputChars / CHARS_PER_TOKEN)
     const outputTokens = Math.ceil(session.outputChars / CHARS_PER_TOKEN)
@@ -364,7 +407,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       costUSD,
       tools: [],
       bashCommands: [],
-      timestamp: new Date().toISOString(),
+      timestamp,
       speed: 'standard',
       deduplicationKey: dedupKey,
       userMessage: session.userText,
