@@ -338,14 +338,19 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             reasoningTokens = (total.reasoning_output_tokens ?? 0) - prevReasoning
           }
 
-          if (!last) {
-            const total = info.total_token_usage
-            if (total) {
-              prevInput = total.input_tokens ?? 0
-              prevCached = total.cached_input_tokens ?? 0
-              prevOutput = total.output_tokens ?? 0
-              prevReasoning = total.reasoning_output_tokens ?? 0
-            }
+          // Always advance the prev counters to track the cumulative state.
+          // Previously prev was only updated on the fallback branch, so a
+          // session with mixed last_token_usage / no-last events would
+          // compute the next fallback delta against a stale prev=0 baseline,
+          // double-counting the entire cumulative window. The prev value
+          // must mirror what cumulative reports regardless of whether this
+          // event used `last` or fell back to deltas.
+          const total = info.total_token_usage
+          if (total) {
+            prevInput = total.input_tokens ?? 0
+            prevCached = total.cached_input_tokens ?? 0
+            prevOutput = total.output_tokens ?? 0
+            prevReasoning = total.reasoning_output_tokens ?? 0
           }
 
           const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens

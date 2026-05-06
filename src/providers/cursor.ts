@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -273,8 +273,20 @@ function extractTextLength(content: AgentKvContent[]): number {
   return total
 }
 
-function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
+function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
+
+  // Cursor's agentKv schema does not record per-message timestamps. Use the
+  // SQLite file's mtime as a bounded "last write" timestamp for all calls;
+  // it's at least honest (no future time, no always-now). Users running
+  // codeburn against an idle Cursor install will see agentKv calls land at
+  // the actual last activity time rather than today's date.
+  let agentKvTimestamp: string
+  try {
+    agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
+  } catch {
+    agentKvTimestamp = new Date().toISOString()
+  }
 
   let rows: AgentKvRow[]
   try {
@@ -362,7 +374,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       costUSD,
       tools: [],
       bashCommands: [],
-      timestamp: new Date().toISOString(),
+      timestamp: agentKvTimestamp,
       speed: 'standard',
       deduplicationKey: dedupKey,
       userMessage: session.userText,
@@ -406,7 +418,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         const { calls: bubbleCalls } = parseBubbles(db, seenKeys)
-        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys)
+        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys, source.path)
         const calls = [...bubbleCalls, ...agentKvCalls]
 
         await writeCachedResults(source.path, calls)

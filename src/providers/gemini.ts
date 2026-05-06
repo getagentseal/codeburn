@@ -84,7 +84,7 @@ function parseSession(data: GeminiSession, seenKeys: Set<string>): ParsedProvide
   for (const msg of geminiMessages) {
     const t = msg.tokens!
     totalInput += t.input ?? 0
-    totalOutput += (t.output ?? 0) + (t.thoughts ?? 0)
+    totalOutput += t.output ?? 0
     totalCached += t.cached ?? 0
     totalThoughts += t.thoughts ?? 0
     if (msg.model && !model) model = msg.model
@@ -119,7 +119,10 @@ function parseSession(data: GeminiSession, seenKeys: Set<string>): ParsedProvide
   const tsDate = new Date(data.startTime)
   if (isNaN(tsDate.getTime()) || tsDate.getTime() < 1_000_000_000_000) return results
 
-  const costUSD = calculateCost(model, freshInput, totalOutput, 0, totalCached, 0)
+  // Gemini bills thoughts at the output token rate; calculateCost does not
+  // accept a reasoning parameter, so fold thoughts into the output count for
+  // pricing while keeping outputTokens / reasoningTokens reported separately.
+  const costUSD = calculateCost(model, freshInput, totalOutput + totalThoughts, 0, totalCached, 0)
 
   results.push({
     provider: 'gemini',
