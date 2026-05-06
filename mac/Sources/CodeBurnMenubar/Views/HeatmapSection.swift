@@ -901,8 +901,10 @@ private struct PlanInsight: View {
                 PlanLoadingView()
             case .noCredentials:
                 PlanNoCredentialsView()
-            case .failed:
+            case .failed, .transientFailure:
                 PlanFailedView(error: store.subscriptionError)
+            case let .terminalFailure(reason):
+                PlanFailedView(error: reason ?? "Claude session expired — run `claude login` to reconnect")
             case .loaded:
                 if let usage {
                     loadedBody(usage: usage)

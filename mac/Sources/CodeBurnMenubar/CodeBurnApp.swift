@@ -212,12 +212,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func startRefreshLoop() {
         Task { [weak self] in
+            // Kick off subscription refresh eagerly so the AgentTab quota bar lights up
+            // on first paint instead of waiting for the user to open a deep view.
+            await self?.store.refreshSubscription()
             while !Task.isCancelled {
                 guard let self else { return }
                 if self.store.selectedPeriod != .today || self.store.selectedProvider != .all {
                     await self.store.refreshQuietly(period: .today)
                 }
                 await self.store.refresh(includeOptimize: false, force: true)
+                // Subscription refresh is one cheap API call gated by SubscriptionRefreshGate,
+                // so a dead token will not hammer Anthropic on every tick.
+                await self.store.refreshSubscription()
                 self.refreshStatusButton()
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
             }

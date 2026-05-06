@@ -190,9 +190,11 @@ final class AppStore {
     }
 
     /// Fetch Claude subscription usage. Sets subscription = nil on missing creds (API users / unauthenticated).
-    /// Triggered lazily when the user opens the Plan pill, so the Keychain prompt only fires on intent.
+    /// Triggered eagerly so the AgentTab quota bar lights up without requiring the user to open
+    /// any deep view; the gate prevents a dead refresh token from spamming Anthropic forever.
     func refreshSubscription() async {
-        subscriptionLoadState = .loading
+        // Don't drop to "loading" if we already have data — keeps the bar steady across ticks.
+        if subscription == nil { subscriptionLoadState = .loading }
         do {
             let usage = try await SubscriptionClient.fetch()
             subscription = usage
@@ -203,12 +205,62 @@ final class AppStore {
             subscription = nil
             subscriptionError = nil
             subscriptionLoadState = .noCredentials
+        } catch let SubscriptionError.refreshBlockedTerminal(reason) {
+            subscriptionError = reason
+            subscriptionLoadState = .terminalFailure(reason: reason)
+        } catch SubscriptionError.refreshBlockedTransient {
+            subscriptionLoadState = .transientFailure
         } catch {
-            subscription = nil
             subscriptionError = String(describing: error)
             subscriptionLoadState = .failed
             NSLog("CodeBurn: subscription fetch failed: \(error)")
         }
+    }
+
+    /// Snapshot of live quota state for a given provider, used by AgentTab to render
+    /// the inline progress bar and the hover popover. Returns nil for providers without
+    /// a quota source (today: everything except Claude).
+    func quotaSummary(for filter: ProviderFilter) -> QuotaSummary? {
+        guard filter == .claude else { return nil }
+
+        let connection: QuotaSummary.Connection = {
+            switch subscriptionLoadState {
+            case .idle, .loading: return subscription == nil ? .loading : .stale
+            case .loaded: return .connected
+            case .noCredentials: return .disconnected
+            case .failed: return subscription == nil ? .loading : .stale
+            case let .terminalFailure(reason): return .terminalFailure(reason: reason)
+            case .transientFailure: return .transientFailure
+            }
+        }()
+
+        // Build the windows. Weekly is the headline; details include all four for hover.
+        var primary: QuotaSummary.Window?
+        var details: [QuotaSummary.Window] = []
+        if let usage = subscription {
+            if let pct = usage.fiveHourPercent {
+                details.append(.init(label: "5-hour", percent: pct / 100, resetsAt: usage.fiveHourResetsAt))
+            }
+            if let pct = usage.sevenDayPercent {
+                let weekly = QuotaSummary.Window(label: "Weekly", percent: pct / 100, resetsAt: usage.sevenDayResetsAt)
+                primary = weekly
+                details.append(weekly)
+            }
+            if let pct = usage.sevenDayOpusPercent {
+                details.append(.init(label: "Weekly · Opus", percent: pct / 100, resetsAt: usage.sevenDayOpusResetsAt))
+            }
+            if let pct = usage.sevenDaySonnetPercent {
+                details.append(.init(label: "Weekly · Sonnet", percent: pct / 100, resetsAt: usage.sevenDaySonnetResetsAt))
+            }
+        }
+
+        // No data yet, no connection state worth showing → bail.
+        if primary == nil, case .disconnected = connection { return nil }
+        if primary == nil, case .loading = connection {
+            return QuotaSummary(providerFilter: filter, connection: connection, primary: nil, details: [])
+        }
+
+        return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details)
     }
 
     /// Persist one snapshot per window so we can answer "what did the prior cycle end at?"
@@ -352,7 +404,9 @@ enum SubscriptionLoadState: Sendable, Equatable {
     case loading        // fetch in progress
     case loaded         // success; subscription is populated
     case noCredentials  // tried; user has no Claude OAuth (API user / not logged in)
-    case failed         // tried; error occurred
+    case failed         // tried; non-recoverable transient error
+    case terminalFailure(reason: String?)  // refresh-token invalid; user must reconnect
+    case transientFailure                  // anthropic flaky; backing off
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {
