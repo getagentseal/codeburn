@@ -346,8 +346,34 @@ describe('detectContextBloat', () => {
     expect(finding!.explanation).toContain('app/s1')
     expect(finding!.explanation).toContain('93.0K effective input/cache')
     expect(finding!.explanation).toContain('46.5:1')
-    expect(finding!.impact).toBe('medium')
+    expect(finding!.impact).toBe('low')
     expect(finding!.tokensSaved).toBe(63_000)
+  })
+
+  it('uses medium impact between the low and high tiers', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 4 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('medium')
+  })
+
+  it('uses high impact at 10 or more candidates regardless of total size', () => {
+    const project = projectWithContextSessions(
+      Array.from({ length: 10 }, (_, i) => contextSession(i, {
+        totalInputTokens: 80_000,
+        totalOutputTokens: 1_000,
+      })),
+    )
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.impact).toBe('high')
   })
 
   it('includes context growth from the previous session when it is large', () => {
@@ -432,6 +458,52 @@ describe('detectContextBloat', () => {
     expect(finding!.explanation).toContain('1000+:1')
     expect(finding!.tokensSaved).toBe(80_000)
   })
+
+  it('caps display ratio at 1000+:1 for non-zero-output sessions too', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, {
+        totalInputTokens: 5_000_000,
+        totalOutputTokens: 100,
+      }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('1000+:1')
+  })
+
+  it('suppresses the growth ratio when the previous session is more than 7 days back', () => {
+    const project = projectWithContextSessions([
+      {
+        ...contextSession(0, { totalInputTokens: 20_000, totalOutputTokens: 1_000 }),
+        firstTimestamp: '2026-05-01T10:00:00Z',
+        lastTimestamp: '2026-05-01T10:30:00Z',
+      },
+      {
+        ...contextSession(1, { totalInputTokens: 100_000, totalOutputTokens: 2_000 }),
+        firstTimestamp: '2026-05-15T10:00:00Z',
+        lastTimestamp: '2026-05-15T10:30:00Z',
+      },
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).not.toContain('previous session input')
+  })
+
+  it('anchors growth even when the previous session is below the reporting threshold', () => {
+    const project = projectWithContextSessions([
+      contextSession(0, { totalInputTokens: 20_000, totalOutputTokens: 1_000 }),
+      contextSession(1, { totalInputTokens: 100_000, totalOutputTokens: 2_000 }),
+    ])
+
+    const finding = detectContextBloat([project])
+    expect(finding).not.toBeNull()
+    // The first session sits below CONTEXT_BLOAT_MIN_INPUT_TOKENS (75K) and
+    // is not itself a candidate, but the growth-from-previous comparison for
+    // the second session must still anchor against it.
+    expect(finding!.explanation).toContain('5.0x previous session input')
+  })
 })
 
 describe('detectSessionOutliers', () => {
@@ -469,6 +541,20 @@ describe('detectSessionOutliers', () => {
     expect(finding).not.toBeNull()
     expect(finding!.explanation).toContain('api/s4')
     expect(finding!.explanation).not.toContain('web/')
+  })
+
+  it('excludes sessions already flagged by detectContextBloat', () => {
+    const project = projectWithSessions([1, 1, 1, 10])
+    const excluded = new Set(['s4'])
+    expect(detectSessionOutliers([project], excluded)).toBeNull()
+  })
+
+  it('still flags cost outliers that are not context-bloat candidates', () => {
+    const project = projectWithSessions([1, 1, 1, 10])
+    const excluded = new Set(['some-other-session'])
+    const finding = detectSessionOutliers([project], excluded)
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('app/s4')
   })
 })
 

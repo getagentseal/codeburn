@@ -17,8 +17,10 @@
   effective input/cache tokens are large and disproportionate to output.
   Cache reads are discounted in the estimate to avoid overstating cheap cached
   context. The report highlights top sessions by imbalance, notes sharp
-  growth from the previous project session, and suggests starting fresh with
-  only the current goal, relevant files, failing output, and constraints.
+  growth from the previous project session (within a 7-day baseline window),
+  and suggests starting fresh with only the current goal, relevant files,
+  failing output, and constraints. Sessions flagged here are excluded from
+  the cost-outlier finding so the same session is not listed twice.
 
 ### Fixed (CLI)
 - **`all` period semantics unified between CLI and dashboard.** The dashboard treated `--period all` as all-time (epoch start) while the CLI bounded it to the last 6 months. Both now consistently mean "Last 6 months". Period helpers (`Period`, `PERIODS`, `PERIOD_LABELS`, `toPeriod`, `getDateRange`) consolidated into `cli-date.ts`. Use `--from` / `--to` for unbounded historical ranges.
