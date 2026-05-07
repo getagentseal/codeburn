@@ -62,9 +62,16 @@ struct DataClient {
         }
 
         // Wall-clock timeout: if the CLI hangs (parser stuck, disk stall), kill it.
+        // Log when this fires so a recurring stuck-popover state has an actual
+        // diagnostic — historically users saw "Loading..." forever with no signal
+        // about what failed; the only way to debug was to read process state at
+        // the wrong time. The log line names the subcommand so we can correlate
+        // with a specific period/provider combination.
         let timeoutTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: spawnTimeoutSeconds * 1_000_000_000)
             if process.isRunning {
+                NSLog("CodeBurn: CLI subprocess timed out after %llus for %@ — terminating",
+                      spawnTimeoutSeconds, subcommand.joined(separator: " "))
                 process.terminate()
             }
         }

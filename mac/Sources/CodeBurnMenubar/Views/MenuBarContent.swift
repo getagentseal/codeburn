@@ -43,15 +43,21 @@ struct MenuBarContent: View {
 
                 // Overlay fires only on cold cache for the current key. This
                 // avoids the 1-frame `$0.00` flash on first-time period/provider
-                // switches (the body would otherwise render the empty payload
-                // for the runloop tick before the overlay slides in). With the
-                // cache no longer being wiped on every wake/manual-refresh,
-                // hasCachedData==false now means "we have never fetched this
-                // key before in this session", which is the right time to
-                // cover the popover.
+                // switches. When the fetch fails (CLI subprocess timeout, parse
+                // error, etc.), surface a retry card instead of leaving the
+                // user stuck on a perpetual "Loading..." spinner.
                 if !store.hasCachedData {
-                    BurnLoadingOverlay(periodLabel: store.selectedPeriod.rawValue)
+                    if let err = store.lastError, !store.isLoading {
+                        FetchErrorOverlay(
+                            error: err,
+                            periodLabel: store.selectedPeriod.rawValue,
+                            retry: { Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) } }
+                        )
                         .transition(.opacity)
+                    } else {
+                        BurnLoadingOverlay(periodLabel: store.selectedPeriod.rawValue)
+                            .transition(.opacity)
+                    }
                 }
             }
             .frame(height: 520)
@@ -123,6 +129,49 @@ private struct EmptyProviderState: View {
         case .month: "this month"
         case .all: "the last 6 months"
         }
+    }
+}
+
+/// Shown when a fetch failed and the cache is still empty for this key. The
+/// user previously sat on the "Loading…" spinner forever — the popover had
+/// no path to recover beyond the next 30s tick (which would just re-fail).
+/// Now they see what broke and can retry directly.
+private struct FetchErrorOverlay: View {
+    let error: String
+    let periodLabel: String
+    let retry: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(Theme.brandAccent)
+                Text("Couldn't load \(periodLabel)")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(displayError)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+                    .lineLimit(3)
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.brandAccent)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    /// Strip the leading subprocess noise that creeps into NSError descriptions
+    /// so the visible message is the actual cause, not the framework wrapper.
+    private var displayError: String {
+        let trimmed = error.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 240 { return trimmed }
+        return String(trimmed.prefix(240)) + "…"
     }
 }
 

@@ -235,6 +235,36 @@ export function getModelCosts(model: string): ModelCosts | null {
 // session that used it, hiding real spend until the user noticed.
 const warnedUnknownModels = new Set<string>()
 
+/// Heuristic for "this looks like a local model that will never be in LiteLLM's
+/// pricing JSON". We suppress the unknown-model warning for these because the
+/// "update codeburn" advice can't help — local Ollama models, llama.cpp tags,
+/// LM Studio loads, etc. are billed locally and don't have public pricing.
+/// Users still get $0 in cost reports for them (correct — local inference is
+/// effectively free); the warning was just noise.
+function looksLikeLocalModel(name: string): boolean {
+  // Ollama and LM Studio tags include `:tag` (e.g. qwen3.6:35b-a3b-bf16).
+  if (name.includes(':') && !name.startsWith('http')) return true
+  // GGUF / quantized fingerprints commonly seen in local inference.
+  if (/[-_](q[2-8](_[a-z0-9]+)?|bf16|fp16|gguf|f16|f32)$/i.test(name)) return true
+  return false
+}
+
+function shouldWarnAboutUnknownModel(name: string): boolean {
+  if (!name || name === '<synthetic>') return false
+  if (warnedUnknownModels.has(name)) return false
+  // Suppress for local/quantized models — the "update codeburn" hint is
+  // actively misleading there. Users who need cost visibility for local
+  // inference can still set an alias via `codeburn model-alias`.
+  if (looksLikeLocalModel(name)) return false
+  // The warning fired on every CLI invocation (including the default
+  // dashboard) which made first launches look broken — three "no pricing
+  // data" lines greet a user before the dashboard even draws. Now opt-in
+  // via --verbose. The unknown model still costs $0 in reports; users who
+  // suspect missing models run `codeburn --verbose` to see the list.
+  if (process.env['CODEBURN_VERBOSE'] !== '1') return false
+  return true
+}
+
 export function calculateCost(
   model: string,
   inputTokens: number,
@@ -246,19 +276,16 @@ export function calculateCost(
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
-    // Skip the synthetic placeholder and the auto-router pseudo-models that
-    // intentionally have no direct pricing entry; calculateCost callers
-    // resolve those through aliasing first, so an unknown here is genuinely
-    // an unmapped real model.
-    if (model && model !== '<synthetic>' && !warnedUnknownModels.has(model)) {
+    if (shouldWarnAboutUnknownModel(model)) {
       warnedUnknownModels.add(model)
       // Strip control characters and cap length: model names come from JSONL
       // payloads written by external tools, so a hostile or corrupt file
       // could embed terminal escape sequences here.
       const safeName = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
+      const aliasHint = `Map it with: codeburn model-alias "${safeName}" <known-model>`
       process.stderr.write(
         `codeburn: no pricing data for model "${safeName}" — costs for this model will show $0. ` +
-        `Update with: npx codeburn@latest, or report at https://github.com/getagentseal/codeburn/issues.\n`
+        `${aliasHint}, or update with: npx codeburn@latest.\n`
       )
     }
     return 0

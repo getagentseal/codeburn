@@ -46,6 +46,17 @@ final class AppStore {
     private var cache: [PayloadCacheKey: CachedPayload] = [:]
     private var cacheDate: String = ""
     private var switchTask: Task<Void, Never>?
+    /// Tracks the last successful fetch timestamp per key for stuck-loading
+    /// diagnostics. NOT used for cache-freshness logic — `CachedPayload.fetchedAt`
+    /// is authoritative there. This map persists across cache wipes (day
+    /// rollover, etc.) so we can distinguish "fresh install, never fetched"
+    /// from "cache was wiped 10 minutes ago and we still haven't refilled".
+    private var lastSuccessByKey: [PayloadCacheKey: Date] = [:]
+
+    private func staleSecondsForKey(_ key: PayloadCacheKey) -> TimeInterval {
+        guard let last = lastSuccessByKey[key] else { return .infinity }
+        return Date().timeIntervalSince(last)
+    }
 
     private var currentKey: PayloadCacheKey {
         PayloadCacheKey(period: selectedPeriod, provider: selectedProvider)
@@ -148,19 +159,41 @@ final class AppStore {
         if didShowLoading {
             loadingCount += 1
         }
+        // Diagnostic anchor: if this key has been empty for a long time (the
+        // popover would currently be showing "Loading..."), log how stale the
+        // miss is so the next time a user reports a stuck-loading bug we have
+        // a concrete data point — "no successful fetch for (today, claude)
+        // in 14 minutes" beats squinting at unified-log noise. We deliberately
+        // skip the first-attempt case (no prior success ever, finite check
+        // below filters .infinity) — that's just the cold path, not a bug.
+        let staleSeconds = staleSecondsForKey(key)
+        if staleSeconds.isFinite, staleSeconds > 120 {
+            NSLog("CodeBurn: refresh attempt for stale key \(key.period.rawValue)/\(key.provider.rawValue) — last success was \(Int(staleSeconds))s ago")
+        }
         defer {
             inFlightKeys.remove(key)
             if didShowLoading { loadingCount = max(loadingCount - 1, 0) }
         }
         do {
             let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
-            guard !Task.isCancelled else { return }
+            if Task.isCancelled {
+                // Distinguish cancellation (user switched tabs mid-fetch) from
+                // the silent-no-result path. Without this log, a cancelled
+                // fetch leaves cache empty + lastError nil and the user sees
+                // perpetual loading with nothing in the diagnostics.
+                NSLog("CodeBurn: fetch for \(key.period.rawValue)/\(key.provider.rawValue) cancelled before result was applied")
+                return
+            }
             // Day-rollover race guard: if the calendar date changed during the
             // fetch, this payload was computed against yesterday's date and
             // would pollute today's freshly-cleared cache. Drop it; the next
             // tick will refetch with today's data.
-            if cacheDate != cacheDateAtStart { return }
+            if cacheDate != cacheDateAtStart {
+                NSLog("CodeBurn: dropping fetch result for \(key.period.rawValue)/\(key.provider.rawValue) — calendar rolled mid-fetch")
+                return
+            }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
+            lastSuccessByKey[key] = Date()
             lastError = nil
         } catch {
             if Task.isCancelled { return }
@@ -171,6 +204,7 @@ final class AppStore {
                     guard !Task.isCancelled else { return }
                     if cacheDate != cacheDateAtStart { return }
                     cache[key] = CachedPayload(payload: fallback, fetchedAt: Date())
+                    lastSuccessByKey[key] = Date()
                     lastError = nil
                     return
                 } catch {
