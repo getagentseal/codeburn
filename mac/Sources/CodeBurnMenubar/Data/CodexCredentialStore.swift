@@ -200,24 +200,20 @@ enum CodexCredentialStore {
     private static func readOurCache() throws -> CredentialRecord? {
         let url = cacheFileURL()
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
+        // Symlink-defense + size cap (same hardening as ClaudeCredentialStore).
+        let data = try SafeFile.read(from: url.path, maxBytes: maxCredentialBytes)
         return try? JSONDecoder().decode(CredentialRecord.self, from: data)
     }
 
     private static func writeOurCache(record: CredentialRecord) throws {
         let url = cacheFileURL()
-        let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
         let data = try JSONEncoder().encode(record)
-        let tmp = url.appendingPathExtension("tmp-\(UUID().uuidString.prefix(8))")
         do {
-            try data.write(to: tmp)
-            try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: tmp.path)
-            if FileManager.default.fileExists(atPath: url.path) {
-                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-            } else {
-                try FileManager.default.moveItem(at: tmp, to: url)
-            }
+            // SafeFile.write opens the temp file with O_CREAT | O_EXCL | O_NOFOLLOW
+            // and the explicit 0600 mode in a single syscall — no race window
+            // where the file briefly exists at default umask, and no chance of
+            // following a malicious symlink at the destination path.
+            try SafeFile.write(data, to: url.path, mode: 0o600)
         } catch {
             throw StoreError.fileWriteFailed(String(describing: error))
         }

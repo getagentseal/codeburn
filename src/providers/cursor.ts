@@ -140,10 +140,16 @@ const USER_MESSAGES_QUERY = `
   ORDER BY ROWID ASC
 `
 
-const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_BASE + `
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)
+// Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
+// caller can splice in an optional `ROWID >= ?` cutoff without rewriting
+// the whole template. The original combined string is preserved as
+// BUBBLE_QUERY_SINCE for any caller that doesn't want the cap.
+const BUBBLE_QUERY_SINCE_HEAD = BUBBLE_QUERY_BASE + `
+    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)`
+const BUBBLE_QUERY_SINCE_TAIL = `
   ORDER BY ROWID ASC
 `
+const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_SINCE_HEAD + BUBBLE_QUERY_SINCE_TAIL
 
 function validateSchema(db: SqliteDatabase): boolean {
   try {
@@ -158,18 +164,38 @@ function validateSchema(db: SqliteDatabase): boolean {
 
 type UserMsgRow = { conversation_id: string; created_at: string; text: string }
 
-function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, string[]> {
-  const map = new Map<string, string[]>()
+/// Per-conversation user-message buffer. We pop messages in arrival order via
+/// the `pos` cursor — a previous implementation called Array.shift() which is
+/// O(n) per call on large conversations and pinned multi-GB Cursor DBs at
+/// minutes-of-parse for power users. The cursor walk is O(1).
+type UserMessageQueue = {
+  messages: string[]
+  pos: number
+}
+
+function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, UserMessageQueue> {
+  const map = new Map<string, UserMessageQueue>()
   try {
     const rows = db.query<UserMsgRow>(USER_MESSAGES_QUERY, [timeFloor])
     for (const row of rows) {
       if (!row.conversation_id || !row.text) continue
-      const existing = map.get(row.conversation_id) ?? []
-      existing.push(row.text)
-      map.set(row.conversation_id, existing)
+      const existing = map.get(row.conversation_id)
+      if (existing) {
+        existing.messages.push(row.text)
+      } else {
+        map.set(row.conversation_id, { messages: [row.text], pos: 0 })
+      }
     }
   } catch {}
   return map
+}
+
+function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: string): string {
+  const queue = queues.get(conversationId)
+  if (!queue || queue.pos >= queue.messages.length) return ''
+  const msg = queue.messages[queue.pos]
+  queue.pos += 1
+  return msg
 }
 
 function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
@@ -179,11 +205,53 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
   const LOOKBACK_DAYS = 180
   const timeFloor = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
+  // Hard cap on rows to scan. The BUBBLE_QUERY_SINCE filter relies on
+  // json_extract over the value BLOB, which SQLite cannot serve from an
+  // index — every row is JSON-decoded. Multi-GB Cursor DBs (power users,
+  // years of usage) regularly exceed 500k bubble rows and were producing
+  // 30s+ parse stalls. Compute a ROWID cutoff that limits the scan to the
+  // MAX_BUBBLES most-recent bubbles when the user is over the cap, and
+  // warn so they know older sessions may be missing.
+  const MAX_BUBBLES = 250_000
+  let rowIdCutoff = 0
+  try {
+    const countRows = db.query<{ cnt: number }>(
+      "SELECT COUNT(*) as cnt FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
+    )
+    const total = countRows[0]?.cnt ?? 0
+    if (total > MAX_BUBBLES) {
+      // Find the ROWID of the (MAX_BUBBLES)th most-recent bubble. Anything
+      // below this rowid is older and gets skipped. Bubbles are written
+      // chronologically so ROWID order ≈ insertion order.
+      const cutoffRows = db.query<{ rid: number }>(
+        `SELECT MIN(rid) as rid FROM (
+           SELECT ROWID as rid FROM cursorDiskKV
+           WHERE key LIKE 'bubbleId:%'
+           ORDER BY ROWID DESC
+           LIMIT ?
+         )`,
+        [MAX_BUBBLES]
+      )
+      rowIdCutoff = cutoffRows[0]?.rid ?? 0
+      process.stderr.write(
+        `codeburn: Cursor database has ${total.toLocaleString()} bubbles, ` +
+        `scanning the most recent ${MAX_BUBBLES.toLocaleString()}. ` +
+        `Older sessions may be missing from this report.\n`
+      )
+    }
+  } catch { /* best-effort diagnostic */ }
+
   const userMessages = buildUserMessageMap(db, timeFloor)
+
+  // Append the rowid cutoff when active. Empty string when not capped so the
+  // query string compares identically to the un-capped version on small DBs.
+  const rowIdFilter = rowIdCutoff > 0 ? ' AND ROWID >= ?' : ''
+  const params: unknown[] = rowIdCutoff > 0 ? [timeFloor, rowIdCutoff] : [timeFloor]
+  const cappedQuery = BUBBLE_QUERY_SINCE_HEAD + rowIdFilter + BUBBLE_QUERY_SINCE_TAIL
 
   let rows: BubbleRow[]
   try {
-    rows = db.query<BubbleRow>(BUBBLE_QUERY_SINCE, [timeFloor])
+    rows = db.query<BubbleRow>(cappedQuery, params)
   } catch {
     return { calls: results }
   }
@@ -222,8 +290,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
       const timestamp = createdAt || new Date().toISOString()
-      const convMessages = userMessages.get(conversationId) ?? []
-      const userQuestion = convMessages.length > 0 ? convMessages.shift()! : ''
+      const userQuestion = takeUserMessage(userMessages, conversationId)
       const assistantText = row.user_text ?? ''
       const userText = (userQuestion + ' ' + assistantText).trim()
 

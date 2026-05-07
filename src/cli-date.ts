@@ -47,7 +47,15 @@ function parseLocalDate(s: string): Date {
     throw new Error(`Invalid date format "${s}": expected YYYY-MM-DD`)
   }
   const [y, m, d] = s.split('-').map(Number) as [number, number, number]
-  return new Date(y, m - 1, d)
+  const date = new Date(y, m - 1, d)
+  // JS Date silently rolls overflow forward (Feb 31 → Mar 3). That makes a
+  // typo like `--from 2026-02-31 --to 2026-03-15` quietly drop sessions
+  // dated Feb 28 - Mar 2. Reject overflow so the user gets a loud error
+  // instead of an off-by-N-days date range.
+  if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
+    throw new Error(`Invalid date "${s}": ${m}/${d}/${y} is not a real calendar date`)
+  }
+  return date
 }
 
 export function parseDateRangeFlags(from: string | undefined, to: string | undefined): DateRange | null {

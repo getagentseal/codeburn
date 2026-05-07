@@ -47,6 +47,13 @@ enum CodexSubscriptionService {
     }
 
     static func bootstrap() async throws -> CodexUsage {
+        // Honour the same 429 backoff that refreshIfBootstrapped respects.
+        // A user clicking Reconnect during a sustained ChatGPT rate-limit
+        // window would otherwise re-hit /wham/usage on every click and keep
+        // the backoff window pegged.
+        if let until = usageBlockedUntil(), until > Date() {
+            throw FetchError.rateLimited(retryAt: until)
+        }
         let record: CodexCredentialStore.CredentialRecord
         do {
             record = try CodexCredentialStore.bootstrap()
@@ -120,7 +127,12 @@ enum CodexSubscriptionService {
             }
             throw FetchError.usageHTTPError(401, String(data: data, encoding: .utf8))
         case 429:
-            let until = recordUsageRateLimit(retryAfterSeconds: nil)
+            // Honour the RFC Retry-After header when present — ChatGPT's quota
+            // endpoint sometimes sets it to a window shorter than our 5-min
+            // floor, and ignoring it forced users to wait longer than the
+            // server actually wanted.
+            let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
+            let until = recordUsageRateLimit(retryAfterSeconds: retryAfter)
             throw FetchError.rateLimited(retryAt: until)
         default:
             throw FetchError.usageHTTPError(http.statusCode, String(data: data, encoding: .utf8))
@@ -205,6 +217,23 @@ enum CodexSubscriptionService {
     }
 
     @discardableResult
+    /// RFC 7231 says Retry-After is either a delta-seconds or an HTTP-date.
+    /// chatgpt.com appears to send delta-seconds today; we still parse both
+    /// shapes defensively so a future change to HTTP-date doesn't drop us
+    /// onto the silent 5-minute floor.
+    private static func parseRetryAfterHeader(_ value: String?) -> Int? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = Int(value), seconds >= 0 { return seconds }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        if let date = f.date(from: value) {
+            return max(0, Int(date.timeIntervalSinceNow))
+        }
+        return nil
+    }
+
     private static func recordUsageRateLimit(retryAfterSeconds: Int?) -> Date {
         let seconds = max(retryAfterSeconds ?? 300, 60)
         let until = Date().addingTimeInterval(TimeInterval(seconds))

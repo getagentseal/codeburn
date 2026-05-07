@@ -59,6 +59,13 @@ enum ClaudeSubscriptionService {
     /// User-initiated. Reads Claude's keychain (PROMPTS), copies to our keychain,
     /// then fetches usage. Idempotent — safe to call again to "reconnect".
     static func bootstrap() async throws -> SubscriptionUsage {
+        // Honour the same 429 backoff that refreshIfBootstrapped respects.
+        // Without this, a user spamming Reconnect during a sustained
+        // rate-limit window hammers Anthropic on every click — exactly the
+        // pattern that escalates the backoff.
+        if let until = usageBlockedUntil(), until > Date() {
+            throw FetchError.rateLimited(retryAt: until)
+        }
         let record: ClaudeCredentialStore.CredentialRecord
         do {
             record = try ClaudeCredentialStore.bootstrap()

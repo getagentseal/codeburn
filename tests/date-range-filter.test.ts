@@ -56,6 +56,24 @@ describe('parseDateRangeFlags', () => {
       .toThrow('Invalid date format')
   })
 
+  it('rejects month/day overflow instead of silently rolling forward', () => {
+    // Without overflow validation, JS Date silently turns Feb 31 into Mar 3
+    // and 13/32 into 02/01 of the following year. That made `--from
+    // 2026-02-31 --to 2026-03-15` quietly drop sessions on Feb 28 - Mar 2.
+    expect(() => parseDateRangeFlags('2026-02-31', '2026-03-15'))
+      .toThrow('Invalid date "2026-02-31"')
+    expect(() => parseDateRangeFlags('2026-13-01', undefined))
+      .toThrow('Invalid date "2026-13-01"')
+    expect(() => parseDateRangeFlags('2026-04-31', undefined))
+      .toThrow('Invalid date "2026-04-31"')
+    expect(() => parseDateRangeFlags(undefined, '2026-02-30'))
+      .toThrow('Invalid date "2026-02-30"')
+    // Leap-day check: 2024 is a leap year, 2025 is not.
+    expect(parseDateRangeFlags('2024-02-29', '2024-03-01')).not.toBeNull()
+    expect(() => parseDateRangeFlags('2025-02-29', undefined))
+      .toThrow('Invalid date "2025-02-29"')
+  })
+
   it('same day is valid (start midnight, end 23:59:59)', () => {
     const range = parseDateRangeFlags('2026-04-10', '2026-04-10')
     expect(range).not.toBeNull()

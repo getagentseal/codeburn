@@ -61,11 +61,6 @@ struct DataClient {
             throw DataClientError.spawn(error.localizedDescription)
         }
 
-        // Drain both pipes concurrently so a large stderr can't deadlock stdout (the child
-        // blocks on write once the pipe buffer fills). `drain` also enforces a byte cap.
-        async let stdoutData = drain(outPipe.fileHandleForReading, limit: maxPayloadBytes)
-        async let stderrData = drain(errPipe.fileHandleForReading, limit: maxStderrBytes)
-
         // Wall-clock timeout: if the CLI hangs (parser stuck, disk stall), kill it.
         let timeoutTask = Task.detached(priority: .utility) {
             try? await Task.sleep(nanoseconds: spawnTimeoutSeconds * 1_000_000_000)
@@ -75,7 +70,25 @@ struct DataClient {
         }
         defer { timeoutTask.cancel() }
 
-        let (out, err) = await (stdoutData, stderrData)
+        // If the caller cancels its Task (rapid period/provider tab clicks
+        // cancel switchTask in AppStore), terminate the in-flight subprocess.
+        // Without this the cancelled Task returns immediately but the spawned
+        // CLI keeps running to completion, piling up zombie codeburn processes
+        // on rapid UI interactions. We hold a strong reference to the Process
+        // in the cancellation handler so the closure can find it even if the
+        // surrounding scope has gone async.
+        let (out, err) = await withTaskCancellationHandler {
+            // Drain both pipes concurrently so a large stderr can't deadlock stdout
+            // (the child blocks on write once the pipe buffer fills). `drain`
+            // also enforces a byte cap.
+            async let stdoutData = drain(outPipe.fileHandleForReading, limit: maxPayloadBytes)
+            async let stderrData = drain(errPipe.fileHandleForReading, limit: maxStderrBytes)
+            return await (stdoutData, stderrData)
+        } onCancel: {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
         process.waitUntilExit()
 
         if out.count >= maxPayloadBytes {

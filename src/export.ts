@@ -2,7 +2,7 @@ import { writeFile, mkdir, readdir, open, stat, rm } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
-import { getCurrency, convertCost } from './currency.js'
+import { getCurrency, convertCost, roundForActiveCurrency } from './currency.js'
 import { dateKey } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 
@@ -70,7 +70,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
   return Object.entries(daily).sort().map(([date, d]) => ({
     Period: period,
     Date: date,
-    [`Cost (${code})`]: round2(convertCost(d.cost)),
+    [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
     'API Calls': d.calls,
     Sessions: d.sessions.size,
     'Input Tokens': d.input,
@@ -98,7 +98,7 @@ function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
     .map(([cat, d]) => ({
       Period: period,
       Activity: CATEGORY_LABELS[cat as TaskCategory] ?? cat,
-      [`Cost (${code})`]: round2(convertCost(d.cost)),
+      [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
       'Share (%)': pct(d.cost, totalCost),
       Turns: d.turns,
     }))
@@ -130,14 +130,14 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
       return {
         Period: period,
         Model: model,
-        [`Cost (${code})`]: round2(convertCost(d.cost)),
+        [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
         'Share (%)': pct(d.cost, totalCost),
         'API Calls': d.calls,
         'Edit Turns': efficiency?.editTurns ?? 0,
         'One-shot Rate (%)': efficiency?.oneShotRate ?? '',
         'Retries/Edit': efficiency?.retriesPerEdit ?? '',
         [`Cost/Edit (${code})`]: efficiency?.costPerEditUSD !== null && efficiency?.costPerEditUSD !== undefined
-          ? round2(convertCost(efficiency.costPerEditUSD))
+          ? roundForActiveCurrency(convertCost(efficiency.costPerEditUSD))
           : '',
         'Input Tokens': d.input,
         'Output Tokens': d.output,
@@ -193,8 +193,8 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
     .map(p => ({
       Project: p.projectPath,
-      [`Cost (${code})`]: round2(convertCost(p.totalCostUSD)),
-      [`Avg/Session (${code})`]: p.sessions.length > 0 ? round2(convertCost(p.totalCostUSD / p.sessions.length)) : '',
+      [`Cost (${code})`]: roundForActiveCurrency(convertCost(p.totalCostUSD)),
+      [`Avg/Session (${code})`]: p.sessions.length > 0 ? roundForActiveCurrency(convertCost(p.totalCostUSD / p.sessions.length)) : '',
       'Share (%)': pct(p.totalCostUSD, total),
       'API Calls': p.totalApiCalls,
       Sessions: p.sessions.length,
@@ -210,7 +210,7 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
         Project: p.projectPath,
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
-        [`Cost (${code})`]: round2(convertCost(s.totalCostUSD)),
+        [`Cost (${code})`]: roundForActiveCurrency(convertCost(s.totalCostUSD)),
         'API Calls': s.apiCalls,
         Turns: s.turns.length,
       })
@@ -233,7 +233,7 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
     const projectCount = p.projects.filter(proj => proj.totalCostUSD > 0).length
     return {
       Period: p.label,
-      [`Cost (${code})`]: round2(convertCost(cost)),
+      [`Cost (${code})`]: roundForActiveCurrency(convertCost(cost)),
       'API Calls': calls,
       Sessions: sessions,
       Projects: projectCount,

@@ -285,27 +285,24 @@ enum ClaudeCredentialStore {
     private static func readOurCache() throws -> CredentialRecord? {
         let url = cacheFileURL()
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let data = try Data(contentsOf: url)
+        // Route through SafeFile.read so we lstat for symlinks before opening
+        // and bound the read with maxCredentialBytes. Without this, an
+        // attacker who can plant a symlink in ~/Library/Application Support/
+        // CodeBurn/ between disconnect and reconnect could redirect our read
+        // to /dev/zero (unbounded memory) or another file the user owns.
+        let data = try SafeFile.read(from: url.path, maxBytes: maxCredentialBytes)
         return try? JSONDecoder().decode(CredentialRecord.self, from: data)
     }
 
     private static func writeOurCache(record: CredentialRecord) throws {
         let url = cacheFileURL()
-        let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
         let data = try JSONEncoder().encode(record)
-        // Atomic temp-rename so a crash mid-write cannot leave a half-file.
-        let tmp = url.appendingPathExtension("tmp-\(UUID().uuidString.prefix(8))")
-        try data.write(to: tmp)
-        // 0600 — owner read/write only. Mirrors ~/.claude/.credentials.json's
-        // permission posture; nothing extra to protect since this is just a
-        // cached copy of credentials the user already has on disk in cleartext.
-        try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o600))], ofItemAtPath: tmp.path)
-        if FileManager.default.fileExists(atPath: url.path) {
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-        } else {
-            try FileManager.default.moveItem(at: tmp, to: url)
-        }
+        // SafeFile.write opens the temp file with O_CREAT | O_EXCL | O_NOFOLLOW
+        // and the explicit 0600 mode in a single syscall — no race window
+        // where the file briefly exists at default umask, and no chance of
+        // following a malicious symlink at the destination path. Also creates
+        // the parent dir at 0700.
+        try SafeFile.write(data, to: url.path, mode: 0o600)
     }
 
     private static func deleteOurCache() {

@@ -300,7 +300,8 @@ program
       return
     }
     await hydrateCache()
-    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange)
+    const customRangeLabel = customRange ? formatDateRangeLabel(opts.from, opts.to) : undefined
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {

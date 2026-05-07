@@ -92,18 +92,42 @@ function parseTimestamp(raw: number): string {
   return new Date(ms).toISOString()
 }
 
-function validateSchema(db: SqliteDatabase): boolean {
-  try {
-    db.query<{ cnt: number }>(
-      "SELECT COUNT(*) as cnt FROM session LIMIT 1"
-    )
-    db.query<{ cnt: number }>(
-      "SELECT COUNT(*) as cnt FROM message LIMIT 1"
-    )
-    return true
-  } catch {
-    return false
+type SchemaCheckResult =
+  | { ok: true }
+  | { ok: false; missing: string[] }
+
+/// Inspects OpenCode's SQLite schema. Returns the list of expected tables that
+/// are missing rather than just a boolean so the caller can produce an actionable
+/// warning ("missing 'part' table") instead of a generic "format not recognized".
+/// Only emits the warning when meaningful tables are absent — a brand-new
+/// OpenCode install with an empty DB but valid schema does NOT trigger it.
+function validateSchemaDetailed(db: SqliteDatabase): SchemaCheckResult {
+  const required = ['session', 'message', 'part']
+  const missing: string[] = []
+  for (const table of required) {
+    try {
+      db.query<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM ${table} LIMIT 1`)
+    } catch {
+      missing.push(table)
+    }
   }
+  return missing.length === 0 ? { ok: true } : { ok: false, missing }
+}
+
+function validateSchema(db: SqliteDatabase): boolean {
+  return validateSchemaDetailed(db).ok
+}
+
+const warnedOpenCodeSchemas = new Set<string>()
+
+function warnUnrecognizedOpenCodeSchemaOnce(missing: string[]): void {
+  const key = missing.slice().sort().join(',')
+  if (warnedOpenCodeSchemas.has(key)) return
+  warnedOpenCodeSchemas.add(key)
+  process.stderr.write(
+    `codeburn: OpenCode database is missing expected tables (${missing.join(', ')}). ` +
+    `Run OpenCode once to apply migrations, or report at https://github.com/getagentseal/codeburn/issues if this persists on a current OpenCode install.\n`
+  )
 }
 
 function createParser(
@@ -133,8 +157,14 @@ function createParser(
       }
 
       try {
-        if (!validateSchema(db)) {
-          process.stderr.write('codeburn: OpenCode storage format not recognized. You may need to update CodeBurn.\n')
+        const schema = validateSchemaDetailed(db)
+        if (!schema.ok) {
+          // Warn at most once per process per missing-table set so a directory
+          // with a half-migrated OpenCode DB doesn't spam stderr on every
+          // session iteration. Show which tables we couldn't find so the
+          // user (or a triage agent) knows whether to re-run OpenCode's
+          // migration or report a CodeBurn schema gap.
+          warnUnrecognizedOpenCodeSchemaOnce(schema.missing)
           return
         }
 

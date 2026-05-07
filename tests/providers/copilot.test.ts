@@ -126,6 +126,47 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls[0]!.tools).toEqual(['Bash', 'Read', 'Edit'])
   })
 
+  it('does not crash on malformed toolRequests (string / null / missing)', async () => {
+    // Regression guard: a corrupt session previously aborted the whole file's
+    // parse loop because .map was called on a non-array. The fix coerces any
+    // non-array shape (string, null, missing) to []. We mix one corrupt event
+    // between two healthy events and assert both healthy events still parse.
+    const corruptToolRequestsString = JSON.stringify({
+      type: 'assistant.message',
+      timestamp: '2026-04-15T10:00:15Z',
+      data: { messageId: 'corrupt-string', outputTokens: 50, toolRequests: 'not an array' },
+    })
+    const corruptToolRequestsNull = JSON.stringify({
+      type: 'assistant.message',
+      timestamp: '2026-04-15T10:00:16Z',
+      data: { messageId: 'corrupt-null', outputTokens: 50, toolRequests: null },
+    })
+    const eventsPath = await createSessionDir('sess-corrupt', [
+      modelChange('gpt-4.1'),
+      assistantMessage({ messageId: 'msg-before', outputTokens: 100 }),
+      corruptToolRequestsString,
+      corruptToolRequestsNull,
+      assistantMessage({ messageId: 'msg-after', outputTokens: 200 }),
+    ])
+
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    // The healthy messages BEFORE and AFTER the corrupt events both parse —
+    // proving that the corrupt event no longer aborts the per-file parse loop.
+    // Pre-fix, .map on a non-array threw and we'd see < 4 calls.
+    expect(calls).toHaveLength(4)
+    expect(calls.find(c => c.outputTokens === 100)).toBeDefined()  // msg-before
+    expect(calls.find(c => c.outputTokens === 200)).toBeDefined()  // msg-after
+    // Corrupt events produce calls with empty tools, not crashes.
+    const corruptCalls = calls.filter(c => c.outputTokens === 50)
+    expect(corruptCalls.length).toBe(2)
+    for (const c of corruptCalls) {
+      expect(c.tools).toEqual([])
+    }
+  })
+
   it('skips assistant messages with zero outputTokens', async () => {
     const eventsPath = await createSessionDir('sess-004', [
       modelChange('gpt-4.1'),

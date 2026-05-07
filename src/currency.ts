@@ -47,11 +47,22 @@ function resolveSymbol(code: string): string {
   return parts.find(p => p.type === 'currency')?.value ?? code
 }
 
-function getFractionDigits(code: string): number {
+export function getFractionDigits(code: string): number {
   return new Intl.NumberFormat('en', {
     style: 'currency',
     currency: code,
   }).resolvedOptions().maximumFractionDigits ?? 2
+}
+
+/// Round a converted cost to the currency's natural decimal places. JPY/KRW/CLP
+/// resolve to 0 fraction digits — exporting those with `round2` produced rows
+/// like `¥412.37` while the dashboard rendered `¥412`, breaking finance reports
+/// that compare the two surfaces.
+export function roundForActiveCurrency(value: number): number {
+  const code = getCurrency().code
+  const digits = getFractionDigits(code)
+  const factor = Math.pow(10, digits)
+  return Math.round(value * factor) / factor
 }
 
 function getCacheDir(): string {

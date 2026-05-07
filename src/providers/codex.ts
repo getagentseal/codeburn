@@ -203,7 +203,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       let sessionModel: string | undefined
       let sessionId = ''
-      let prevCumulativeTotal = 0
+      // Null sentinel rather than `0` so the FIRST event is never confused
+      // with a duplicate. A session that only emits last_token_usage (no
+      // total_token_usage) reports cumulativeTotal=0 on every event; with a
+      // 0-initialized prev, the first event would have matched and been
+      // dropped. Once we've observed any event, we record its cumulative
+      // total and dedup on equality regardless of whether it is zero.
+      let prevCumulativeTotal: number | null = null
       let prevInput = 0
       let prevCached = 0
       let prevOutput = 0
@@ -315,7 +321,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           }
 
           const cumulativeTotal = info.total_token_usage?.total_tokens ?? 0
-          if (cumulativeTotal > 0 && cumulativeTotal === prevCumulativeTotal) continue
+          // Dedup guard. Two consecutive events with cumulativeTotal=0 but
+          // non-empty last_token_usage would have been double-counted with
+          // the previous `> 0` clause. The null sentinel ensures the FIRST
+          // event always passes (so a session that never reports cumulative
+          // doesn't lose its opening turn).
+          if (prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
           prevCumulativeTotal = cumulativeTotal
 
           const last = info.last_token_usage

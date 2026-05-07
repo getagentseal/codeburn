@@ -66,11 +66,19 @@ type LegacyToolRequest = {
   type?: string
 }
 
+// Per-event-type shapes. The previous union included a permissive catch-all
+// branch (`{ type: string; data: Record<string, unknown> }`); a literal type
+// like `'user.message'` is assignable to `string`, so TS picked the catch-all
+// over the specific branches when narrowing on `type`, which propagated
+// `unknown`/`{}` into `event.data.content` etc. We now keep only the three
+// shapes we actually read from. Unknown event types fall through the if/else
+// chain without further narrowing — they are not in the union, but JSON.parse
+// returns `any` so we re-type as LegacyCopilotEvent and let the runtime type
+// guards (`event.type === 'X'`) ignore anything else.
 type LegacyCopilotEvent =
-  | { type: 'session.model_change'; timestamp?: string; data: { newModel: string } }
-  | { type: 'user.message'; timestamp?: string; data: { content: string; interactionId?: string } }
-  | { type: 'assistant.message'; timestamp?: string; data: { messageId: string; outputTokens: number; interactionId?: string; toolRequests?: LegacyToolRequest[] } }
-  | { type: string; timestamp?: string; data: Record<string, unknown> }
+  | { type: 'session.model_change'; timestamp?: string; data: { newModel: string; model?: string } }
+  | { type: 'user.message'; timestamp?: string; data: { content: string; interactionId?: string; model?: string } }
+  | { type: 'assistant.message'; timestamp?: string; data: { messageId: string; outputTokens: number; interactionId?: string; toolRequests?: LegacyToolRequest[]; model?: string } }
 
 function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<string>): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
@@ -103,7 +111,7 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
     }
 
     if (event.type === 'assistant.message') {
-      const { messageId, outputTokens, toolRequests = [] } = event.data
+      const { messageId, outputTokens, toolRequests: rawToolRequests } = event.data
       if (outputTokens === 0) continue
       if (!currentModel) continue
 
@@ -111,6 +119,11 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
+      // Defensive: legacy / corrupt sessions have shipped toolRequests as a
+      // string, null, or missing. Without this guard, .map throws and aborts
+      // the whole file's parse loop, silently dropping every legitimate call
+      // that follows the bad event.
+      const toolRequests = Array.isArray(rawToolRequests) ? rawToolRequests : []
       const tools = toolRequests
         .map(t => t.name ?? '')
         .filter(Boolean)
@@ -242,7 +255,10 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
 
       const inputTokens = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
 
-      const tools = (data.toolRequests ?? [])
+      // Same defensive guard as the modern event branch — corrupt legacy
+      // sessions have shipped toolRequests as non-array values.
+      const legacyToolRequests = Array.isArray(data.toolRequests) ? data.toolRequests : []
+      const tools = legacyToolRequests
         .map(t => t.name ?? '')
         .filter(Boolean)
         .map(n => toolNameMap[n] ?? n)

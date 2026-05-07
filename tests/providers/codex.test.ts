@@ -310,4 +310,65 @@ describe('codex provider - JSONL parsing', () => {
     expect(calls[0]!.inputTokens).toBe(500)
     expect(calls[1]!.inputTokens).toBe(300)
   })
+
+  it('does not drop the first event when total_token_usage is omitted (cumulativeTotal=0)', async () => {
+    // Regression for the prevCumulativeTotal-initialized-to-0 bug. Sessions
+    // that emit only last_token_usage (no total_token_usage) report
+    // cumulativeTotal=0 on every event. With a 0-initialized prev, the first
+    // event matched the dedup guard and was silently dropped, losing the
+    // session's opening turn. The null sentinel fixes this.
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-zero-total.jsonl', [
+      sessionMeta(),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 500, output: 200 },
+        // No `total` — info.total_token_usage will be undefined.
+      }),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:01Z',
+        last: { input: 100, output: 50 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    // Both events should produce calls — the first with input=500, second
+    // with input=100. With the buggy 0-init, only the second would survive
+    // (or neither, depending on equality timing).
+    expect(calls.length).toBeGreaterThanOrEqual(1)
+    expect(calls[0]!.inputTokens).toBe(500)
+  })
+
+  it('still dedups consecutive zero-cumulative duplicates', async () => {
+    // The other half of the regression: two consecutive events with the
+    // same cumulativeTotal (here both 0 because total_token_usage is
+    // omitted) and identical last_token_usage must NOT both ingest. The
+    // second is a duplicate.
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-zero-dup.jsonl', [
+      sessionMeta(),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 500, output: 200 },
+      }),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:01Z',
+        last: { input: 500, output: 200 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+  })
 })

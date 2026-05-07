@@ -65,13 +65,29 @@ function getCachePath(): string {
   return join(getCacheDir(), 'litellm-pricing.json')
 }
 
+/// Clamp a per-token rate to a sane non-negative value. Defense in depth
+/// against a tampered LiteLLM JSON shipping a negative `input_cost_per_token`,
+/// which would otherwise produce negative costs that subtract from totals.
+/// We use Number.isFinite to also reject NaN/Infinity, and cap at $1/token
+/// (well above the most expensive frontier model) so a stray decimal-place
+/// shift in the upstream JSON can't wildly inflate spend numbers either.
+function safePerTokenRate(n: number | undefined): number | null {
+  if (n === undefined || !Number.isFinite(n) || n < 0) return null
+  if (n > 1) return 1
+  return n
+}
+
 function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
-  if (entry.input_cost_per_token === undefined || entry.output_cost_per_token === undefined) return null
+  const inputCost = safePerTokenRate(entry.input_cost_per_token)
+  const outputCost = safePerTokenRate(entry.output_cost_per_token)
+  if (inputCost === null || outputCost === null) return null
+  const cacheWrite = safePerTokenRate(entry.cache_creation_input_token_cost) ?? inputCost * 1.25
+  const cacheRead = safePerTokenRate(entry.cache_read_input_token_cost) ?? inputCost * 0.1
   return {
-    inputCostPerToken: entry.input_cost_per_token,
-    outputCostPerToken: entry.output_cost_per_token,
-    cacheWriteCostPerToken: entry.cache_creation_input_token_cost ?? entry.input_cost_per_token * 1.25,
-    cacheReadCostPerToken: entry.cache_read_input_token_cost ?? entry.input_cost_per_token * 0.1,
+    inputCostPerToken: inputCost,
+    outputCostPerToken: outputCost,
+    cacheWriteCostPerToken: cacheWrite,
+    cacheReadCostPerToken: cacheRead,
     webSearchCostPerRequest: WEB_SEARCH_COST,
     fastMultiplier: entry.provider_specific_entry?.fast ?? 1,
   }
