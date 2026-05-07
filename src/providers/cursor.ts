@@ -194,13 +194,6 @@ function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string,
   return map
 }
 
-function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: string): string {
-  const queue = queues.get(conversationId)
-  if (!queue || queue.pos >= queue.messages.length) return ''
-  const msg = queue.messages[queue.pos]
-  queue.pos += 1
-  return msg
-}
 
 function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
@@ -525,7 +518,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         const { calls: bubbleCalls } = parseBubbles(db, seenKeys)
-        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys, source.path)
+        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys)
         const calls = [...bubbleCalls, ...agentKvCalls]
 
         await writeCachedResults(source.path, calls)
