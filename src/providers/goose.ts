@@ -1,9 +1,10 @@
 import { join } from 'path'
 import { homedir, platform } from 'os'
+import { existsSync } from 'fs'
 
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { isSqliteAvailable, getSqliteLoadError, openDatabase, warnIfSqliteUnavailable, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 type SessionRow = {
@@ -262,8 +263,9 @@ export function createGooseProvider(): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      if (!isSqliteAvailable()) return []
       const dbPath = getDbPath()
+      if (!existsSync(dbPath)) return []
+      if (warnIfSqliteUnavailable('Goose')) return []
       return discoverFromDb(dbPath)
     },
 

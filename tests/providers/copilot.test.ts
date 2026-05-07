@@ -141,6 +141,30 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls[0]!.outputTokens).toBe(42)
   })
 
+  it('skips malformed legacy assistant messages without numeric outputTokens', async () => {
+    const malformed = JSON.stringify({
+      type: 'assistant.message',
+      timestamp: '2026-04-15T10:00:15Z',
+      data: {
+        messageId: 'msg-malformed',
+        outputTokens: '42',
+        toolRequests: [{ name: 'bash' }],
+      },
+    })
+    const eventsPath = await createSessionDir('sess-malformed-legacy', [
+      modelChange('gpt-4.1'),
+      malformed,
+      assistantMessage({ messageId: 'msg-real', outputTokens: 42 }),
+    ])
+
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.deduplicationKey).toBe('copilot:sess-malformed-legacy:msg-real')
+  })
+
   it('deduplicates messages across parser runs', async () => {
     const eventsPath = await createSessionDir('sess-005', [
       modelChange('gpt-4.1'),

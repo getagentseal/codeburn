@@ -30,7 +30,7 @@
     "developer-tools"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",

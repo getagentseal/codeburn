@@ -30,6 +30,18 @@
   more than once.
 
 ### Fixed (CLI)
+- **Runtime guard for unsupported Node versions.** The published CLI now starts
+  through a tiny launcher that checks for Node 22.13+ before loading terminal
+  dependencies. Users on Node 18 or early Node 22 get an actionable upgrade
+  message instead of a dependency `SyntaxError` or silent SQLite-backed
+  provider failures. Closes #232.
+- **SQLite provider diagnostics.** Cursor, Goose, and OpenCode now warn when
+  their SQLite data exists but the `node:sqlite` driver cannot load, instead
+  of silently returning zero sessions. Closes #250.
+- **Antigravity Windows language-server discovery.** Antigravity detection now
+  supports Windows process discovery, `--extension_server_port`,
+  `--extension_server_csrf_token`, `--flag=value` syntax, and both wrapped and
+  unwrapped Connect-RPC response shapes. Closes #249.
 - **Windows Claude project paths.** Claude Code project rollups now prefer
   the canonical `cwd` stored in session JSONL files instead of reconstructing
   paths from lossy directory slugs, and group case/slash variants together.

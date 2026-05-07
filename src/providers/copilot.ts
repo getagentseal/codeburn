@@ -93,17 +93,24 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
     }
 
     if (event.type === 'session.model_change') {
-      currentModel = data.newModel ?? currentModel
+      if (typeof data.newModel === 'string') {
+        currentModel = data.newModel
+      }
       continue
     }
 
     if (event.type === 'user.message') {
-      pendingUserMessage = event.data.content ?? ''
+      const content = event.data['content']
+      pendingUserMessage = typeof content === 'string' ? content : ''
       continue
     }
 
     if (event.type === 'assistant.message') {
-      const { messageId, outputTokens, toolRequests = [] } = event.data
+      const messageId = event.data['messageId']
+      const outputTokens = event.data['outputTokens']
+      const rawToolRequests = event.data['toolRequests']
+      if (typeof messageId !== 'string') continue
+      if (typeof outputTokens !== 'number') continue
       if (outputTokens === 0) continue
       if (!currentModel) continue
 
@@ -111,6 +118,7 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
+      const toolRequests: LegacyToolRequest[] = Array.isArray(rawToolRequests) ? rawToolRequests : []
       const tools = toolRequests
         .map(t => t.name ?? '')
         .filter(Boolean)

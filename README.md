@@ -8,7 +8,7 @@
     <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/v/codeburn.svg" alt="npm version" /></a>
     <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/dt/codeburn.svg" alt="total downloads" /></a>                                                       
     <a href="https://github.com/getagentseal/codeburn/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeburn.svg" alt="license" /></a>                                            
-    <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="node version" /></a>                                        
+    <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg" alt="node version" /></a>
     <a href="https://discord.gg/pJ2DMWvtAx"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>                                     
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-ea4aaa?logo=github" alt="Sponsor" /></a>                                                  
   </p> 
@@ -38,9 +38,9 @@ Everything runs locally. No wrapper, no proxy, no API keys. CodeBurn reads sessi
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.13+
 - At least one supported AI coding tool with session data on disk
-- For Cursor and OpenCode support, `better-sqlite3` is installed automatically as an optional dependency
+- Cursor, Goose, and OpenCode support use Node's built-in `node:sqlite` module; Node 22.13+ is required because earlier Node 22 releases kept that module behind `--experimental-sqlite`
 
 ## Install
 
@@ -357,7 +357,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 **Codex** stores sessions at `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` with `token_count` events containing per-call and cumulative token usage, and `function_call` entries for tool tracking.
 
-**Cursor** stores session data in a SQLite database at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (macOS), `~/.config/Cursor/User/globalStorage/state.vscdb` (Linux), or `%APPDATA%/Cursor/User/globalStorage/state.vscdb` (Windows). Token counts are in `cursorDiskKV` table entries with `bubbleId:` key prefix. Requires `better-sqlite3` (installed as optional dependency). Parsed results are cached at `~/.cache/codeburn/cursor-results.json` and auto-invalidate when the database changes.
+**Cursor** stores session data in a SQLite database at `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (macOS), `~/.config/Cursor/User/globalStorage/state.vscdb` (Linux), or `%APPDATA%/Cursor/User/globalStorage/state.vscdb` (Windows). Token counts are in `cursorDiskKV` table entries with `bubbleId:` key prefix. Requires Node's built-in `node:sqlite` module (unflagged in Node 22.13+). Parsed results are cached at `~/.cache/codeburn/cursor-results.json` and auto-invalidate when the database changes.
 
 **OpenCode** stores sessions in SQLite databases at `~/.local/share/opencode/opencode*.db`. CodeBurn queries the `session`, `message`, and `part` tables read-only, extracts token counts and tool usage, and recalculates cost using the LiteLLM pricing engine. Falls back to OpenCode's own cost field for models not in our pricing data. Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double counting. Supports multiple channel databases and respects `XDG_DATA_HOME`.
 
@@ -398,7 +398,7 @@ src/
   export.ts         CSV/JSON multi-period export
   config.ts         Config file management (~/.config/codeburn/)
   currency.ts       Currency conversion, exchange rates
-  sqlite.ts         SQLite adapter (lazy-loads better-sqlite3)
+  sqlite.ts         SQLite adapter over Node's built-in node:sqlite
   optimize.ts       Waste pattern detection engine
   providers/
     types.ts        Provider interface definitions

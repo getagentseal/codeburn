@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 
 /// Thin SQLite read-only wrapper over Node's built-in `node:sqlite` module (stable in
-/// Node 24, experimental in Node 22 / 23). Replaces the earlier `better-sqlite3` binding
+/// Node 24, unflagged but experimental in Node 22.13+ / 23). Replaces the earlier `better-sqlite3` binding
 /// so the dependency graph no longer pulls in the deprecated `prebuild-install` package
 /// (issue #75). Works across Cursor and OpenCode session DBs, both of which we only read.
 
@@ -22,6 +22,7 @@ type DatabaseSyncCtor = new (path: string, options?: { readOnly?: boolean }) => 
 let DatabaseSync: DatabaseSyncCtor | null = null
 let loadAttempted = false
 let loadError: string | null = null
+const warnedProviders = new Set<string>()
 
 /// Lazily imports `node:sqlite`. On Node 22/23 it emits an ExperimentalWarning the first
 /// time the module is loaded; we silence that specific warning once so dashboards aren't
@@ -65,7 +66,7 @@ function loadDriver(): boolean {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     loadError =
-      'SQLite-based providers (Cursor, OpenCode) need Node 22+ with the node:sqlite module.\n' +
+      'SQLite-based providers (Cursor, Goose, OpenCode) need Node 22.13+ with the unflagged node:sqlite module.\n' +
       `Current Node: ${process.version}.\n` +
       'Upgrade Node (https://nodejs.org) and run codeburn again.\n' +
       `(underlying error: ${message})`
@@ -81,6 +82,15 @@ export function isSqliteAvailable(): boolean {
 
 export function getSqliteLoadError(): string {
   return loadError ?? 'SQLite driver not available'
+}
+
+export function warnIfSqliteUnavailable(providerName: string): boolean {
+  if (isSqliteAvailable()) return false
+  if (!warnedProviders.has(providerName)) {
+    warnedProviders.add(providerName)
+    process.stderr.write(`codeburn: ${providerName} data exists, but the SQLite driver is unavailable.\n${getSqliteLoadError()}\n`)
+  }
+  return true
 }
 
 export function openDatabase(path: string): SqliteDatabase {

@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { isSqliteAvailable, getSqliteLoadError, openDatabase, warnIfSqliteUnavailable, type SqliteDatabase } from '../sqlite.js'
 import type {
   Provider,
   SessionSource,
@@ -296,10 +296,9 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      if (!isSqliteAvailable()) return []
-
       const dbPaths = await findDbFiles(dir)
       if (dbPaths.length === 0) return []
+      if (warnIfSqliteUnavailable('OpenCode')) return []
 
       const sessions: SessionSource[] = []
       for (const dbPath of dbPaths) {
