@@ -5,7 +5,14 @@ struct AgentTabStrip: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
+            // Align chips to .top so the label baseline matches across all
+            // providers. Claude/Codex chips reserve a 6pt quota-bar slot
+            // (label + 3pt spacing + 3pt bar); chips without that slot
+            // (All / Cursor / Droid / Gemini / Copilot / etc.) are 6pt
+            // shorter, so a default .center alignment pushes their label
+            // ~3pt below the Claude/Codex labels. Top alignment makes every
+            // chip start at the same y, putting all labels on a shared line.
+            HStack(alignment: .top, spacing: 5) {
                 ForEach(visibleFilters) { filter in
                     Button {
                         store.switchTo(provider: filter)
