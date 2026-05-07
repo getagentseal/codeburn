@@ -29,12 +29,17 @@ export const PERIOD_LABELS: Record<Period, string> = {
   all: '6 Months',
 }
 
+const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all']
+
 export function toPeriod(s: string): Period {
-  if (s === 'today') return 'today'
-  if (s === 'month') return 'month'
-  if (s === '30days') return '30days'
-  if (s === 'all') return 'all'
-  return 'week'
+  if ((VALID_PERIODS as readonly string[]).includes(s)) return s as Period
+  // Fail loudly instead of silently coercing to 'week'. Previously a typo
+  // like `-p mounth` produced a quiet 7-day report and the user thought
+  // they were viewing the month.
+  process.stderr.write(
+    `codeburn: unknown period "${s}". Valid values: ${VALID_PERIODS.join(', ')}.\n`
+  )
+  process.exit(1)
 }
 
 function parseLocalDate(s: string): Date {
@@ -49,7 +54,14 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
   if (from === undefined && to === undefined) return null
 
   const now = new Date()
-  const start = from !== undefined ? parseLocalDate(from) : new Date(0)
+  // When --from is omitted, default to 6 months back (the same window the
+  // dashboard's "all" period uses) instead of epoch. Previously a bare
+  // `--to 2026-01-01` opened a 55-year scan from 1970 which is rarely what
+  // the user meant and is expensive on machines with many session files.
+  const ALL_TIME_FALLBACK_MS = 6 * 31 * 24 * 60 * 60 * 1000
+  const start = from !== undefined
+    ? parseLocalDate(from)
+    : new Date(now.getTime() - ALL_TIME_FALLBACK_MS)
 
   const endDate = to !== undefined ? parseLocalDate(to) : new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const end = new Date(

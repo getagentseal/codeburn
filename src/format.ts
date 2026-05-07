@@ -8,9 +8,13 @@ import { formatCost } from './currency.js'
 export { formatCost }
 
 export function formatTokens(n: number): string {
+  // Guard against Infinity / NaN / negatives that would otherwise leak into
+  // the UI as "Infinity" or "NaN" strings when an upstream calculation glitches.
+  if (!Number.isFinite(n)) return '?'
+  if (n < 0) return '0'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toString()
+  return Math.round(n).toString()
 }
 
 /// Returns YYYY-MM-DD for the given date in the process-local timezone. Cheaper than shelling

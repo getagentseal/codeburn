@@ -206,7 +206,12 @@ function createParser(
 
       if (assistantCalls.length === 0) return
 
-      // Distribute session-level token usage across calls
+      // KNOWN LIMITATION: Droid records token usage only at session level
+      // (settings.tokenUsage), not per-message. We split evenly across the
+      // emitted assistant calls and price all of them at settings.model
+      // (the latest model the session used). For sessions where the user
+      // switched models mid-stream, costs are approximate — we have no
+      // ground-truth breakdown to attribute tokens per model.
       const totalTokens = settings.tokenUsage
       if (!totalTokens) return
 

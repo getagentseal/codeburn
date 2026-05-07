@@ -163,6 +163,34 @@ describe('addNewDays', () => {
     const updated = addNewDays(base, [emptyDay('2026-04-05', 3)], '2026-04-05')
     expect(updated.lastComputedDate).toBe('2026-04-10')
   })
+
+  it('skips prune when newestDate is malformed (does not silently drop all days)', () => {
+    // Regression guard: a corrupt newestDate string used to produce a NaN
+    // cutoff, which made `d.date >= "Invalid Date"` always false and
+    // wiped every cached day on the next merge. The guard now leaves
+    // the entries untouched so the next valid run can prune normally.
+    const base: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      lastComputedDate: '2026-04-10',
+      days: [emptyDay('2026-04-08', 1), emptyDay('2026-04-09', 2), emptyDay('2026-04-10', 3)],
+    }
+    const updated = addNewDays(base, [], 'not-a-date')
+    expect(updated.days.map(d => d.date)).toEqual(['2026-04-08', '2026-04-09', '2026-04-10'])
+  })
+
+  it('still prunes when newestDate is valid', () => {
+    const old = '2020-01-01'
+    const recent = '2026-04-10'
+    const base: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      lastComputedDate: recent,
+      days: [emptyDay(old, 1), emptyDay(recent, 2)],
+    }
+    const updated = addNewDays(base, [], recent)
+    // 730-day retention from 2026-04-10 → cutoff ~2024-04-11; 2020-01-01 must be gone.
+    expect(updated.days.find(d => d.date === old)).toBeUndefined()
+    expect(updated.days.find(d => d.date === recent)).toBeDefined()
+  })
 })
 
 describe('getDaysInRange', () => {

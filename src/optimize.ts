@@ -111,9 +111,15 @@ const GRADE_A_MIN = 90
 const GRADE_B_MIN = 75
 const GRADE_C_MIN = 55
 const GRADE_D_MIN = 30
-const URGENCY_IMPACT_WEIGHT = 0.7
-const URGENCY_TOKEN_WEIGHT = 0.3
-const URGENCY_TOKEN_NORMALIZE = 500_000
+// Rebalanced so a high-impact finding with zero observed tokens (e.g.
+// detectGhostAgents firing on five files but tokensSaved=400) cannot
+// outrank a medium-impact finding with many millions of tokens.
+// Old: 0.7/0.3 → high+0 = 0.70, medium+1B = 0.65 (high+0 won).
+// New: 0.5/0.5 → high+0 = 0.50, medium+1B = 0.75 (medium+1B wins).
+// Token normalize lifted to 5M so the rank scales over a realistic range.
+const URGENCY_IMPACT_WEIGHT = 0.5
+const URGENCY_TOKEN_WEIGHT = 0.5
+const URGENCY_TOKEN_NORMALIZE = 5_000_000
 
 // ============================================================================
 // File system constants

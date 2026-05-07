@@ -5,6 +5,36 @@ private let trendBarWidth: CGFloat = 13
 private let trendBarGap: CGFloat = 4
 private let trendChartHeight: CGFloat = 90
 
+// Cached formatters and a calendar to avoid allocating fresh ones on every
+// SwiftUI body re-eval. Hover scrubbing on the trend bars triggers many
+// re-evals per second; a fresh DateFormatter / Calendar each time was a
+// measurable hot spot.
+private let yyyymmdd: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd"
+    f.timeZone = .current
+    return f
+}()
+
+private let prettyDayFormat: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "EEE MMM d"
+    return f
+}()
+
+private let mmmDayFormat: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MMM d"
+    f.timeZone = .current
+    return f
+}()
+
+private let gregorianCalendar: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = .current
+    return c
+}()
+
 /// Three switchable insight visualizations: Calendar (this month), Forecast (burn rate),
 /// Pulse (efficiency KPIs). Pills at top toggle between them.
 struct HeatmapSection: View {
@@ -351,13 +381,8 @@ private struct BarTooltipCard: View {
 }
 
 private func prettyDate(_ ymd: String) -> String {
-    let parser = DateFormatter()
-    parser.dateFormat = "yyyy-MM-dd"
-    parser.timeZone = .current
-    guard let date = parser.date(from: ymd) else { return ymd }
-    let display = DateFormatter()
-    display.dateFormat = "EEE MMM d"
-    return display.string(from: date)
+    guard let date = yyyymmdd.date(from: ymd) else { return ymd }
+    return prettyDayFormat.string(from: date)
 }
 
 private struct MiniStat: View {
@@ -400,14 +425,8 @@ private struct TrendStats {
 }
 
 private func buildTrendBars(from days: [DailyHistoryEntry]) -> [TrendBar] {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f
-    }()
+    let calendar = gregorianCalendar
+    let formatter = yyyymmdd
     let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
     let today = calendar.startOfDay(for: Date())
     let todayKey = formatter.string(from: today)
@@ -435,14 +454,8 @@ private func computeTrendStats(bars: [TrendBar], allDays: [DailyHistoryEntry]) -
     let avg = bars.isEmpty ? 0 : total / Double(bars.count)
     let peak = bars.filter { $0.cost > 0 }.max(by: { $0.cost < $1.cost })
 
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f
-    }()
+    let calendar = gregorianCalendar
+    let formatter = yyyymmdd
     let today = calendar.startOfDay(for: Date())
     let priorWindowStart = calendar.date(byAdding: .day, value: -(2 * trendDays - 1), to: today)
     let thisWindowStart = calendar.date(byAdding: .day, value: -(trendDays - 1), to: today)
@@ -555,14 +568,8 @@ private struct ForecastStats {
 }
 
 private func computeForecast(days: [DailyHistoryEntry]) -> ForecastStats {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f
-    }()
+    let calendar = gregorianCalendar
+    let formatter = yyyymmdd
     let now = Date()
     let comps = calendar.dateComponents([.year, .month, .day], from: now)
     guard
@@ -806,20 +813,9 @@ private struct AllStats {
     let history = payload.history.daily
     let favoriteModel = payload.current.topModels.first?.name ?? "—"
 
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return f
-    }()
-    let displayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        f.timeZone = .current
-        return f
-    }()
+    let calendar = gregorianCalendar
+    let formatter = yyyymmdd
+    let displayFormatter = mmmDayFormat
 
     let now = Date()
     let today = calendar.startOfDay(for: now)

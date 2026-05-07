@@ -87,13 +87,22 @@ async function loadCache(): Promise<AntigravityCache> {
 }
 
 async function flushCache(liveCascadeIds?: Set<string>): Promise<void> {
-  if (!memCache || !cacheDirty) return
-  try {
-    if (liveCascadeIds) {
-      for (const id of Object.keys(memCache.cascades)) {
-        if (!liveCascadeIds.has(id)) delete memCache.cascades[id]
+  if (!memCache) return
+  // If the caller supplied liveCascadeIds, we must run the eviction step
+  // even when no cascade was added or updated this run; otherwise deleted
+  // .pb files would persist in the cache forever once it stops getting
+  // dirty writes. Mark the cache dirty when an eviction happens so the
+  // file write below proceeds.
+  if (liveCascadeIds) {
+    for (const id of Object.keys(memCache.cascades)) {
+      if (!liveCascadeIds.has(id)) {
+        delete memCache.cascades[id]
+        cacheDirty = true
       }
     }
+  }
+  if (!cacheDirty) return
+  try {
 
     const dir = getCacheDir()
     await mkdir(dir, { recursive: true })

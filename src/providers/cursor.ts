@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -27,6 +27,7 @@ const modelDisplayNames: Record<string, string> = {
 }
 
 type BubbleRow = {
+  bubble_key: string
   input_tokens: number | null
   output_tokens: number | null
   model: string | null
@@ -100,6 +101,7 @@ function modelForDisplay(raw: string | null): string {
 
 const BUBBLE_QUERY_BASE = `
   SELECT
+    key as bubble_key,
     json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
@@ -204,7 +206,12 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
 
       const createdAt = row.created_at ?? ''
       const conversationId = row.conversation_id ?? 'unknown'
-      const dedupKey = `cursor:${conversationId}:${createdAt}:${inputTokens}:${outputTokens}`
+      // Use the SQLite row key (bubbleId:<unique>) as the dedup key.
+      // Cursor mutates token counts on the row in place when streaming
+      // completes — including tokens in the dedup key (the previous
+      // implementation) caused the same bubble to be counted twice once
+      // its tokens stabilized.
+      const dedupKey = `cursor:bubble:${row.bubble_key}`
 
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
@@ -273,8 +280,20 @@ function extractTextLength(content: AgentKvContent[]): number {
   return total
 }
 
-function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
+function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
+
+  // Cursor's agentKv schema does not record per-message timestamps. Use the
+  // SQLite file's mtime as a bounded "last write" timestamp for all calls;
+  // it's at least honest (no future time, no always-now). Users running
+  // codeburn against an idle Cursor install will see agentKv calls land at
+  // the actual last activity time rather than today's date.
+  let agentKvTimestamp: string
+  try {
+    agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
+  } catch {
+    agentKvTimestamp = new Date().toISOString()
+  }
 
   let rows: AgentKvRow[]
   try {
@@ -362,7 +381,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       costUSD,
       tools: [],
       bashCommands: [],
-      timestamp: new Date().toISOString(),
+      timestamp: agentKvTimestamp,
       speed: 'standard',
       deduplicationKey: dedupKey,
       userMessage: session.userText,
@@ -406,7 +425,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         const { calls: bubbleCalls } = parseBubbles(db, seenKeys)
-        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys)
+        const { calls: agentKvCalls } = parseAgentKv(db, seenKeys, source.path)
         const calls = [...bubbleCalls, ...agentKvCalls]
 
         await writeCachedResults(source.path, calls)

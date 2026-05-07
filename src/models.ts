@@ -48,6 +48,14 @@ function loadSnapshot(): Map<string, ModelCosts> {
 }
 
 let pricingCache: Map<string, ModelCosts> = loadSnapshot()
+let sortedPricingKeys: string[] | null = null
+
+function getSortedPricingKeys(): string[] {
+  if (sortedPricingKeys === null) {
+    sortedPricingKeys = Array.from(pricingCache.keys()).sort((a, b) => b.length - a.length)
+  }
+  return sortedPricingKeys
+}
 
 function getCacheDir(): string {
   return join(homedir(), '.cache', 'codeburn')
@@ -110,11 +118,13 @@ export async function loadPricing(): Promise<void> {
   const cached = await loadCachedPricing()
   if (cached) {
     pricingCache = cached
+    sortedPricingKeys = null
     return
   }
 
   try {
     pricingCache = await fetchAndCachePricing()
+    sortedPricingKeys = null
   } catch {
     // snapshot already loaded at init; nothing more to do
   }
@@ -192,12 +202,22 @@ export function getModelCosts(model: string): ModelCosts | null {
   const canonical = resolveAlias(getCanonicalName(model))
   if (pricingCache.has(canonical)) return pricingCache.get(canonical)!
 
-  for (const [key, costs] of pricingCache) {
-    if (canonical.startsWith(key + '-') || canonical.startsWith(key)) return costs
+  // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
+  // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
+  // due to dictionary insertion order.
+  for (const key of getSortedPricingKeys()) {
+    if (canonical.startsWith(key + '-') || canonical === key) {
+      return pricingCache.get(key)!
+    }
   }
 
   return null
 }
+
+// Warn at most once per unknown model name per process. Without this, a model
+// missing from the pricing snapshot would silently price at $0 for every
+// session that used it, hiding real spend until the user noticed.
+const warnedUnknownModels = new Set<string>()
 
 export function calculateCost(
   model: string,
@@ -209,16 +229,39 @@ export function calculateCost(
   speed: 'standard' | 'fast' = 'standard',
 ): number {
   const costs = getModelCosts(model)
-  if (!costs) return 0
+  if (!costs) {
+    // Skip the synthetic placeholder and the auto-router pseudo-models that
+    // intentionally have no direct pricing entry; calculateCost callers
+    // resolve those through aliasing first, so an unknown here is genuinely
+    // an unmapped real model.
+    if (model && model !== '<synthetic>' && !warnedUnknownModels.has(model)) {
+      warnedUnknownModels.add(model)
+      // Strip control characters and cap length: model names come from JSONL
+      // payloads written by external tools, so a hostile or corrupt file
+      // could embed terminal escape sequences here.
+      const safeName = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
+      process.stderr.write(
+        `codeburn: no pricing data for model "${safeName}" — costs for this model will show $0. ` +
+        `Update with: npx codeburn@latest, or report at https://github.com/getagentseal/codeburn/issues.\n`
+      )
+    }
+    return 0
+  }
 
   const multiplier = speed === 'fast' ? costs.fastMultiplier : 1
 
+  // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token
+  // count would otherwise produce a negative cost that silently subtracts
+  // from real spend in aggregate totals. NaN is also handled here; the
+  // arithmetic below short-circuits to 0 when any operand is non-finite.
+  const safe = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0)
+
   return multiplier * (
-    inputTokens * costs.inputCostPerToken +
-    outputTokens * costs.outputCostPerToken +
-    cacheCreationTokens * costs.cacheWriteCostPerToken +
-    cacheReadTokens * costs.cacheReadCostPerToken +
-    webSearchRequests * costs.webSearchCostPerRequest
+    safe(inputTokens) * costs.inputCostPerToken +
+    safe(outputTokens) * costs.outputCostPerToken +
+    safe(cacheCreationTokens) * costs.cacheWriteCostPerToken +
+    safe(cacheReadTokens) * costs.cacheReadCostPerToken +
+    safe(webSearchRequests) * costs.webSearchCostPerRequest
   )
 }
 
@@ -234,59 +277,67 @@ const autoModelNames: Record<string, string> = {
   'qwen-auto': 'Qwen (auto)',
 }
 
+const SHORT_NAMES: Record<string, string> = {
+  'claude-opus-4-7': 'Opus 4.7',
+  'claude-opus-4-6': 'Opus 4.6',
+  'claude-opus-4-5': 'Opus 4.5',
+  'claude-opus-4-1': 'Opus 4.1',
+  'claude-opus-4': 'Opus 4',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-sonnet-4-5': 'Sonnet 4.5',
+  'claude-sonnet-4': 'Sonnet 4',
+  'claude-3-7-sonnet': 'Sonnet 3.7',
+  'claude-3-5-sonnet': 'Sonnet 3.5',
+  'claude-haiku-4-5': 'Haiku 4.5',
+  'claude-3-5-haiku': 'Haiku 3.5',
+  'gpt-4o-mini': 'GPT-4o Mini',
+  'gpt-4o': 'GPT-4o',
+  'gpt-4.1-nano': 'GPT-4.1 Nano',
+  'gpt-4.1-mini': 'GPT-4.1 Mini',
+  'gpt-4.1': 'GPT-4.1',
+  'codex-auto-review': 'Codex Auto Review',
+  'gpt-5.5-pro': 'GPT-5.5 Pro',
+  'gpt-5.5': 'GPT-5.5',
+  'gpt-5.4-pro': 'GPT-5.4 Pro',
+  'gpt-5.4-nano': 'GPT-5.4 Nano',
+  'gpt-5.4-mini': 'GPT-5.4 Mini',
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5.3-codex': 'GPT-5.3 Codex',
+  'gpt-5.3': 'GPT-5.3',
+  'gpt-5.2-pro': 'GPT-5.2 Pro',
+  'gpt-5.2-low': 'GPT-5.2 Low',
+  'gpt-5.2': 'GPT-5.2',
+  'gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
+  'gpt-5.1-codex': 'GPT-5.1 Codex',
+  'gpt-5.1': 'GPT-5.1',
+  'gpt-5-pro': 'GPT-5 Pro',
+  'gpt-5-nano': 'GPT-5 Nano',
+  'gpt-5-mini': 'GPT-5 Mini',
+  'gpt-5': 'GPT-5',
+  'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
+  'gemini-3-flash-preview': 'Gemini 3 Flash',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'deepseek-coder-max': 'DeepSeek Coder Max',
+  'deepseek-coder': 'DeepSeek Coder',
+  'deepseek-r1': 'DeepSeek R1',
+  'o4-mini': 'o4-mini',
+  'o3': 'o3',
+  'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
+  'MiniMax-M2.7': 'MiniMax M2.7',
+}
+
+// Sorted longest-first so more-specific prefixes match before shorter ones.
+// Without this, `gpt-5-mini` could resolve to "GPT-5" (the entry for `gpt-5`)
+// if it happened to be iterated before `gpt-5-mini`, hiding a distinct model
+// behind the wrong display name and pricing tier.
+const SORTED_SHORT_NAMES: [string, string][] = Object.entries(SHORT_NAMES)
+  .sort((a, b) => b[0].length - a[0].length)
+
 export function getShortModelName(model: string): string {
   if (autoModelNames[model]) return autoModelNames[model]
   const canonical = resolveAlias(getCanonicalName(model))
-  const shortNames: Record<string, string> = {
-    'claude-opus-4-7': 'Opus 4.7',
-    'claude-opus-4-6': 'Opus 4.6',
-    'claude-opus-4-5': 'Opus 4.5',
-    'claude-opus-4-1': 'Opus 4.1',
-    'claude-opus-4': 'Opus 4',
-    'claude-sonnet-4-6': 'Sonnet 4.6',
-    'claude-sonnet-4-5': 'Sonnet 4.5',
-    'claude-sonnet-4': 'Sonnet 4',
-    'claude-3-7-sonnet': 'Sonnet 3.7',
-    'claude-3-5-sonnet': 'Sonnet 3.5',
-    'claude-haiku-4-5': 'Haiku 4.5',
-    'claude-3-5-haiku': 'Haiku 3.5',
-    'gpt-4o-mini': 'GPT-4o Mini',
-    'gpt-4o': 'GPT-4o',
-    'gpt-4.1-nano': 'GPT-4.1 Nano',
-    'gpt-4.1-mini': 'GPT-4.1 Mini',
-    'gpt-4.1': 'GPT-4.1',
-    'codex-auto-review': 'Codex Auto Review',
-    'gpt-5.5-pro': 'GPT-5.5 Pro',
-    'gpt-5.5': 'GPT-5.5',
-    'gpt-5.4-pro': 'GPT-5.4 Pro',
-    'gpt-5.4-nano': 'GPT-5.4 Nano',
-    'gpt-5.4-mini': 'GPT-5.4 Mini',
-    'gpt-5.4': 'GPT-5.4',
-    'gpt-5.3-codex': 'GPT-5.3 Codex',
-    'gpt-5.3': 'GPT-5.3',
-    'gpt-5.2-pro': 'GPT-5.2 Pro',
-    'gpt-5.2-low': 'GPT-5.2 Low',
-    'gpt-5.2': 'GPT-5.2',
-    'gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
-    'gpt-5.1-codex': 'GPT-5.1 Codex',
-    'gpt-5.1': 'GPT-5.1',
-    'gpt-5-pro': 'GPT-5 Pro',
-    'gpt-5-nano': 'GPT-5 Nano',
-    'gpt-5-mini': 'GPT-5 Mini',
-    'gpt-5': 'GPT-5',
-    'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
-    'gemini-3-flash-preview': 'Gemini 3 Flash',
-    'gemini-2.5-pro': 'Gemini 2.5 Pro',
-    'gemini-2.5-flash': 'Gemini 2.5 Flash',
-    'deepseek-coder-max': 'DeepSeek Coder Max',
-    'deepseek-coder': 'DeepSeek Coder',
-    'deepseek-r1': 'DeepSeek R1',
-    'o4-mini': 'o4-mini',
-    'o3': 'o3',
-    'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
-    'MiniMax-M2.7': 'MiniMax M2.7',
-  }
-  for (const [key, name] of Object.entries(shortNames)) {
+  for (const [key, name] of SORTED_SHORT_NAMES) {
     if (canonical.startsWith(key)) return name
   }
   return canonical

@@ -133,10 +133,24 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
     byDate.set(day.date, day)
   }
   const merged = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
+  // Prune entries older than the BACKFILL window so the cache file does not
+  // grow unbounded over years of daily use. The "all time" / 6-month period
+  // and the BACKFILL_DAYS bootstrap both fit comfortably inside this cap.
+  // Anchor the cap on the newestDate boundary so a stale or stuck clock
+  // can't accidentally evict everything. Skip the prune entirely if
+  // newestDate is malformed — an invalid Date would produce a NaN cutoff
+  // and `d.date >= "Invalid Date"` would silently drop every entry.
+  const cutoffDate = new Date(`${newestDate}T00:00:00Z`)
+  let pruned = merged
+  if (!isNaN(cutoffDate.getTime())) {
+    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - DAILY_CACHE_RETENTION_DAYS)
+    const cutoff = toDateString(cutoffDate)
+    pruned = merged.filter(d => d.date >= cutoff)
+  }
   const nextLast = cache.lastComputedDate && cache.lastComputedDate > newestDate
     ? cache.lastComputedDate
     : newestDate
-  return { version: DAILY_CACHE_VERSION, lastComputedDate: nextLast, days: merged }
+  return { version: DAILY_CACHE_VERSION, lastComputedDate: nextLast, days: pruned }
 }
 
 export function getDaysInRange(cache: DailyCache, start: string, end: string): DailyEntry[] {
@@ -153,6 +167,10 @@ export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
 
 export const MS_PER_DAY = 24 * 60 * 60 * 1000
 export const BACKFILL_DAYS = 365
+// Keep 2 years of history so the longest UI-exposed period (6 months
+// today, with headroom for future longer windows) always reads from
+// cache while old entries get pruned.
+export const DAILY_CACHE_RETENTION_DAYS = 730
 
 export function toDateString(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`

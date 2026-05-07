@@ -1,4 +1,4 @@
-import { writeFile, mkdir, readdir, stat, rm } from 'fs/promises'
+import { writeFile, mkdir, readdir, open, stat, rm } from 'fs/promises'
 import { dirname, join, resolve } from 'path'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
@@ -357,6 +357,33 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
   }
 
   const target = resolve(outputPath.toLowerCase().endsWith('.json') ? outputPath : `${outputPath}.json`)
+  // Refuse to overwrite an existing file that wasn't produced by codeburn
+  // export. CSV path has the same guard via the .codeburn-export marker; JSON
+  // was missing it, so a stray `-o ~/important.json` would silently clobber.
+  const existing = await stat(target).catch(() => null)
+  if (existing?.isFile()) {
+    // Read just the first 4KB to look for the schema marker. The schema key
+    // is the first field in the JSON object so a partial read is enough;
+    // loading the whole file (potentially gigabytes) into memory could OOM
+    // on Node's ~512MB string limit.
+    const fh = await open(target, 'r')
+    try {
+      const buf = Buffer.alloc(4096)
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
+      const head = buf.toString('utf-8', 0, bytesRead)
+      if (!head.includes('"schema": "codeburn.export.v')) {
+        throw new Error(
+          `Refusing to overwrite ${target}: file does not look like a codeburn export. ` +
+          `Delete it manually or pick a different -o path.`
+        )
+      }
+    } finally {
+      await fh.close()
+    }
+  }
+  if (existing?.isDirectory()) {
+    throw new Error(`Refusing to overwrite directory at ${target}. Pass a file path instead.`)
+  }
   await mkdir(dirname(target), { recursive: true })
   await writeFile(target, JSON.stringify(data, null, 2), 'utf-8')
   return target

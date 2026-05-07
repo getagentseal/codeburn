@@ -114,8 +114,20 @@ describe('toPeriod', () => {
     }
   })
 
-  it('falls back to "week" for unknown input', () => {
-    expect(toPeriod('garbage')).toBe('week')
-    expect(toPeriod('')).toBe('week')
+  it('exits with an error on unknown input instead of silently falling back', () => {
+    // Previously toPeriod silently fell back to 'week' for any unrecognized
+    // value, which let typos like `-p mounth` produce a quiet 7-day report
+    // while the user thought they were viewing the month. The new behavior
+    // is to fail loudly via process.exit(1) after writing to stderr.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit') }) as unknown as ReturnType<typeof vi.spyOn>
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      expect(() => toPeriod('garbage')).toThrow('exit')
+      expect(exitSpy).toHaveBeenCalledWith(1)
+      expect(stderrSpy).toHaveBeenCalled()
+    } finally {
+      exitSpy.mockRestore()
+      stderrSpy.mockRestore()
+    }
   })
 })

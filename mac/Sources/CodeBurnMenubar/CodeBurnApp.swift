@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// Held for the lifetime of the app to opt out of App Nap and Automatic Termination.
     private var backgroundActivity: NSObjectProtocol?
     private var pendingRefreshWork: DispatchWorkItem?
+    private var refreshLoopTask: Task<Void, Never>?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Set accessory policy before the app's focus chain forms. On macOS Tahoe
@@ -76,12 +77,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func setupWakeObservers() {
+        // Pause the refresh loop while the machine is asleep. Without this,
+        // Task.sleep keeps a wakeup pending across the suspension and the
+        // loop tick fires the same instant the wake notifications do,
+        // producing 2-3 concurrent CLI spawns within ms of every wake.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshLoopTask?.cancel()
+                self?.refreshLoopTask = nil
+            }
+        }
+
+        // didWakeNotification + screensDidWakeNotification can both fire on
+        // the same wake. forceRefresh has a 5-second rate-limit gate so the
+        // duplicate is squashed there. Restart the refresh loop too, since
+        // we cancelled it on willSleep.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.forceRefresh() }
+            Task { @MainActor in
+                self?.forceRefresh()
+                if self?.refreshLoopTask == nil { self?.startRefreshLoop() }
+            }
         }
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -229,7 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     fileprivate var lastSubscriptionRefreshAt: Date?
 
     private func startRefreshLoop() {
-        Task { [weak self] in
+        refreshLoopTask?.cancel()
+        refreshLoopTask = Task { [weak self] in
             // Provider refreshes only run when the user has explicitly connected.
             // Each refresh is a no-op until its corresponding bootstrap flag is set.
             if let self {
@@ -240,13 +264,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.store.selectedPeriod != .today || self.store.selectedProvider != .all {
-                    await self.store.refreshQuietly(period: .today)
+                // Skip the loop's tick if a wake / manual / distributed-
+                // notification refresh just ran. Without this gate, every
+                // wake produced two refreshes (forceRefresh from the wake
+                // observer plus the loop's natural tick).
+                let sinceLast = Date().timeIntervalSince(self.lastRefreshTime)
+                if sinceLast >= 5 {
+                    if self.store.selectedPeriod != .today || self.store.selectedProvider != .all {
+                        await self.store.refreshQuietly(period: .today)
+                    }
+                    await self.store.refresh(includeOptimize: false, force: true)
+                    self.lastRefreshTime = Date()
+                    self.refreshStatusButton()
                 }
-                await self.store.refresh(includeOptimize: false, force: true)
-                // Cadence anchor is the LAST SUCCESSFUL fetch, not the last attempt.
-                // Each provider gets its own anchor so a Codex 429 doesn't delay
-                // a Claude refresh that would otherwise be due.
+                // Cadence-driven live-quota refresh, anchored on LAST SUCCESS
+                // (not last attempt) so an intermittent failure doesn't reset
+                // the timer. Each provider has its own anchor so a Codex 429
+                // doesn't delay a due Claude refresh.
                 let cadence = SubscriptionRefreshCadence.current
                 if cadence != .manual {
                     let claudeElapsed = Date().timeIntervalSince(self.lastSubscriptionRefreshAt ?? .distantPast)
@@ -260,7 +294,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                         if succeeded { self.lastCodexRefreshAt = Date() }
                     }
                 }
-                self.refreshStatusButton()
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
             }
         }
@@ -296,18 +329,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func observeStore() {
-        withObservationTracking {
-            _ = store.payload
-            _ = store.todayPayload
-            // Track currency too so the menubar title catches up immediately on
+        // Read closure uses [weak self] so the implicit self capture from
+        // accessing store.* doesn't pin self for the lifetime of an
+        // unfired observation. withObservationTracking is one-shot per
+        // call: once any read property changes, onChange fires and the
+        // registration is consumed, then we re-arm. There is at most one
+        // active subscription at a time.
+        withObservationTracking { [weak self] in
+            guard let self else { return }
+            _ = self.store.payload
+            _ = self.store.todayPayload
+            // Track currency so the menubar title catches up immediately on
             // currency switch instead of waiting for the next 30s payload tick.
-            _ = store.currency
+            _ = self.store.currency
             // Track the live-quota state too so the flame icon re-tints on
             // every subscription / codex usage update, not just every 30s.
-            _ = store.subscription
-            _ = store.subscriptionLoadState
-            _ = store.codexUsage
-            _ = store.codexLoadState
+            _ = self.store.subscription
+            _ = self.store.subscriptionLoadState
+            _ = self.store.codexUsage
+            _ = self.store.codexLoadState
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }

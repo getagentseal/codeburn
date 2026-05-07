@@ -760,12 +760,18 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     if (input === 'o' && findingCount > 0 && view === 'dashboard' && optimizeAvailable) { setView('optimize'); return }
     if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); return }
     if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
+    if ((input === 'b' || key.escape) && view === 'compare') { setView('dashboard'); return }
     if (input === 'p' && multipleProviders && view !== 'compare') {
       const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
       setActiveProvider(next); setView('dashboard')
       if (debounceRef.current) clearTimeout(debounceRef.current)
       reloadData(period, next); return
     }
+    // Period switches reload the underlying data. Disable them while the
+    // compare view is mounted; the compare view re-aggregates from
+    // `projects` and would visibly change underneath the user without any
+    // affordance back to the dashboard. Press `b` or Esc to return first.
+    if (view === 'compare') return
     const idx = PERIODS.indexOf(period)
     if (key.leftArrow) switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length]!)
     else if (key.rightArrow || key.tab) switchPeriod(PERIODS[(idx + 1) % PERIODS.length]!)
