@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'fs'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -145,22 +145,15 @@ const USER_MESSAGES_QUERY = `
   ORDER BY ROWID ASC
 `
 
-<<<<<<< HEAD
 // Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
 // caller can splice in an optional `ROWID >= ?` cutoff without rewriting
-// the whole template. The original combined string is preserved as
-// BUBBLE_QUERY_SINCE for any caller that doesn't want the cap.
+// the whole template.
 const BUBBLE_QUERY_SINCE_HEAD = BUBBLE_QUERY_BASE + `
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)`
-const BUBBLE_QUERY_SINCE_TAIL = `
-=======
-const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_BASE + `
     AND json_extract(value, '$.createdAt') IS NOT NULL
-    AND json_extract(value, '$.createdAt') > ?
->>>>>>> d12876d (fix(cursor): avoid assigning missing bubble timestamps to today)
+    AND json_extract(value, '$.createdAt') > ?`
+const BUBBLE_QUERY_SINCE_TAIL = `
   ORDER BY ROWID ASC
 `
-const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_SINCE_HEAD + BUBBLE_QUERY_SINCE_TAIL
 
 function validateSchema(db: SqliteDatabase): boolean {
   try {
@@ -301,14 +294,9 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
 
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
-<<<<<<< HEAD
-      const timestamp = createdAt || new Date().toISOString()
-      const userQuestion = takeUserMessage(userMessages, conversationId)
-=======
       const timestamp = createdAt
       const convMessages = userMessages.get(conversationId) ?? []
       const userQuestion = convMessages.length > 0 ? convMessages.shift()! : ''
->>>>>>> d12876d (fix(cursor): avoid assigning missing bubble timestamps to today)
       const assistantText = row.user_text ?? ''
       const userText = (userQuestion + ' ' + assistantText).trim()
 
@@ -365,9 +353,6 @@ function extractTextLength(content: AgentKvContent[]): number {
   return total
 }
 
-<<<<<<< HEAD
-function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): { calls: ParsedProviderCall[] } {
-=======
 function normalizeTimestampCandidate(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null
   if (typeof raw === 'number') {
@@ -402,20 +387,8 @@ function extractTimestampFromAgentContent(content: AgentKvContent[]): string | n
 }
 
 function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
->>>>>>> 2fcd859 (fix(cursor): stop bucketing undated agentKv usage into current day)
   const results: ParsedProviderCall[] = []
 
-  // Cursor's agentKv schema does not record per-message timestamps. Use the
-  // SQLite file's mtime as a bounded "last write" timestamp for all calls;
-  // it's at least honest (no future time, no always-now). Users running
-  // codeburn against an idle Cursor install will see agentKv calls land at
-  // the actual last activity time rather than today's date.
-  let agentKvTimestamp: string
-  try {
-    agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
-  } catch {
-    agentKvTimestamp = new Date().toISOString()
-  }
 
   let rows: AgentKvRow[]
   try {
@@ -508,11 +481,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       costUSD,
       tools: [],
       bashCommands: [],
-<<<<<<< HEAD
-      timestamp: agentKvTimestamp,
-=======
       timestamp,
->>>>>>> 2fcd859 (fix(cursor): stop bucketing undated agentKv usage into current day)
       speed: 'standard',
       deduplicationKey: dedupKey,
       userMessage: session.userText,
