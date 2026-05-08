@@ -331,16 +331,40 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
     const newModels = aggregateModelStats(projects)
     setModels(newModels)
 
-    if (pickedNames) {
-      const hasA = newModels.some(m => m.model === pickedNames[0])
-      const hasB = newModels.some(m => m.model === pickedNames[1])
-      if (hasA && hasB) {
-        setLoadTrigger(t => t + 1)
-      } else {
-        setPickedNames(null)
-        setPhase('select')
-      }
+    if (!pickedNames) return
+    const hasA = newModels.some(m => m.model === pickedNames[0])
+    const hasB = newModels.some(m => m.model === pickedNames[1])
+    if (!hasA || !hasB) {
+      setPickedNames(null)
+      setPhase('select')
+      return
     }
+
+    // When the periodic CLI refresh updates `projects` while the user is
+    // reading the results page, recompute the comparison rows IN PLACE rather
+    // than flipping to a loading screen. Previously every 30s tick bounced the
+    // user to a loading flash and reset their scroll position; the slow part
+    // (scanSelfCorrections, which walks every provider's session dir) is
+    // skipped on these refreshes — corrections drift slowly enough that
+    // staying with the existing values until the user re-enters compare from
+    // scratch is fine.
+    if (phase === 'results') {
+      const a = newModels.find(m => m.model === pickedNames[0])
+      const b = newModels.find(m => m.model === pickedNames[1])
+      if (!a || !b) return
+      const aCopy = { ...a, selfCorrections: selectedA?.selfCorrections ?? 0 }
+      const bCopy = { ...b, selfCorrections: selectedB?.selfCorrections ?? 0 }
+      setSelectedA(aCopy)
+      setSelectedB(bCopy)
+      setRows(computeComparison(aCopy, bCopy))
+      setCategories(computeCategoryComparison(projects, a.model, b.model))
+      setStyle(computeWorkingStyle(projects, a.model, b.model))
+      return
+    }
+
+    // Initial load (or returning from select after picking) — full pipeline,
+    // including scanSelfCorrections.
+    setLoadTrigger(t => t + 1)
   }, [projects])
 
   useEffect(() => {
