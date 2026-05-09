@@ -19,6 +19,11 @@
   is yellow, provider name is dim. Inspired by tokscale's per-model table
   and ccusage's responsive cli-table3 layout, ported to plain Node with
   no new runtime dependency.
+- **Per-day one-shot data in `--format json`.** Each entry of `daily[]` now
+  carries `turns`, `editTurns`, `oneShotTurns`, and `oneShotRate` (0-100,
+  one decimal, `null` when no edit turns). Counts match the existing
+  period-level `activities[]` rollup so a consumer can sum across days and
+  reconcile. Closes #279.
 
 ### Changed (CLI)
 - **`optimize` suggestions now declare their destination.** Every paste-style

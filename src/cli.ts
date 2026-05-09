@@ -147,8 +147,14 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const dailyMap: Record<string, { cost: number; calls: number; turns: number; editTurns: number; oneShotTurns: number }> = {}
   for (const sess of sessions) {
     for (const turn of sess.turns) {
-      if (!turn.timestamp) { continue }
-      const day = dateKey(turn.timestamp)
+      // Prefer the user-message timestamp on the turn; fall back to the first
+      // assistant-call timestamp when the user line is missing (continuation
+      // sessions where the JSONL begins mid-conversation). Previously these
+      // turns dropped from daily but stayed in activities, breaking the
+      // sum(daily[].editTurns) === sum(activities[].editTurns) invariant.
+      const ts = turn.timestamp || turn.assistantCalls[0]?.timestamp
+      if (!ts) { continue }
+      const day = dateKey(ts)
       if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0, turns: 0, editTurns: 0, oneShotTurns: 0 } }
       dailyMap[day].turns += 1
       if (turn.hasEdits) {
