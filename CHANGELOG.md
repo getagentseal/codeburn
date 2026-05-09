@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed (CLI)
+- **`optimize` suggestions now declare their destination.** Every paste-style
+  fix carries an explicit destination — `claude-md` (permanent project rule),
+  `session-opener` (one-time paste at the start of a future session),
+  `prompt` (one-time ask in the current chat), or `shell-config` (append to
+  `~/.zshrc` / `~/.bashrc`). Output renders a clearly-labeled section header
+  per destination so users no longer accidentally bake one-time session
+  openers into their CLAUDE.md as permanent rules. Closes #277.
+
 ## 0.9.7 - 2026-05-07
 
 ### Added (CLI)

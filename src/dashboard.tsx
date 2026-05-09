@@ -535,9 +535,43 @@ function PeriodTabs({ active, providerName, showProvider }: { active: Period; pr
   )
 }
 
+/// Header for an action's intended destination. Helps users distinguish a
+/// permanent CLAUDE.md rule from a one-time session opener so they don't
+/// accidentally bake a single-run constraint into their project's permanent
+/// instructions. Issue #277.
+function actionDestinationHeader(action: WasteAction): string {
+  switch (action.type) {
+    case 'file-content':
+      return `── Suggested ${action.path} addition `.padEnd(64, '─')
+    case 'command':
+      return '── Run this command '.padEnd(64, '─')
+    case 'paste': {
+      switch (action.destination) {
+        case 'claude-md':
+          return '── Suggested CLAUDE.md addition (permanent rule) '.padEnd(64, '─')
+        case 'session-opener':
+          return '── One-time session opener (do not add to CLAUDE.md) '.padEnd(64, '─')
+        case 'prompt':
+          return '── Ask Claude in the current session '.padEnd(64, '─')
+        case 'shell-config':
+          return '── Add to your shell config '.padEnd(64, '─')
+        default:
+          return '── Suggested action '.padEnd(64, '─')
+      }
+    }
+  }
+}
+
 function FindingAction({ action }: { action: WasteAction }) {
   const lines = action.type === 'file-content' ? action.content.split('\n') : action.type === 'command' ? action.text.split('\n') : [action.text]
-  return (<><Text dimColor>{action.label}</Text>{lines.map((line, i) => <Text key={i} color="#5BF5E0">  {line}</Text>)}</>)
+  const header = actionDestinationHeader(action)
+  return (
+    <>
+      <Text color={ORANGE}>{header}</Text>
+      <Text dimColor>{action.label}</Text>
+      {lines.map((line, i) => <Text key={i} color="#5BF5E0">  {line}</Text>)}
+    </>
+  )
 }
 
 function FindingPanel({ index, finding, costRate, width }: { index: number; finding: WasteFinding; costRate: number; width: number }) {

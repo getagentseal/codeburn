@@ -149,8 +149,20 @@ const GHOST_CLEANUP_COMMANDS_LIMIT = 10
 export type Impact = 'high' | 'medium' | 'low'
 export type HealthGrade = 'A' | 'B' | 'C' | 'D' | 'F'
 
+/// Where a paste-style suggestion belongs. Without this, users couldn't tell
+/// whether a prompt should go into CLAUDE.md (permanent rule), be pasted at
+/// the start of a future session (one-time constraint), be asked of Claude
+/// in the current chat (one-time prompt), or be added to a shell config file.
+/// Issue #277 — users were dropping one-time session openers into CLAUDE.md
+/// permanently because the destination wasn't clearly stated.
+export type PasteDestination =
+  | 'claude-md'        // permanent project rule, append to CLAUDE.md
+  | 'session-opener'   // one-time paste at the start of a NEW session
+  | 'prompt'           // one-time ask in the current Claude conversation
+  | 'shell-config'     // append to ~/.zshrc / ~/.bashrc
+
 export type WasteAction =
-  | { type: 'paste'; label: string; text: string }
+  | { type: 'paste'; label: string; text: string; destination?: PasteDestination }
   | { type: 'command'; label: string; text: string }
   | { type: 'file-content'; label: string; path: string; content: string }
 
@@ -454,6 +466,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
     tokensSaved,
     fix: {
       type: 'paste',
+      destination: 'claude-md',
       label: 'Append to your project CLAUDE.md:',
       text: `Do not read or search files under these directories unless I explicitly ask: ${dirsToAvoid}.`,
     },
@@ -513,6 +526,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
     tokensSaved,
     fix: {
       type: 'paste',
+      destination: 'prompt',
       label: 'Point Claude at exact locations in your prompt, for example:',
       text: 'In <file> lines <start>-<end>, look at the <function> function.',
     },
@@ -960,7 +974,8 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Ask Claude to trim it:',
+      destination: 'prompt',
+      label: 'Ask Claude in the current session to trim it:',
       text: `Review CLAUDE.md and all @-imported files. Cut total expanded content to under ${CLAUDEMD_HEALTHY_LINES} lines. Remove anything Claude can figure out from the code itself. Keep only rules, gotchas, and non-obvious conventions.`,
     },
   }
@@ -1007,6 +1022,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
     tokensSaved,
     fix: {
       type: 'paste',
+      destination: 'claude-md',
       label: 'Add to your CLAUDE.md:',
       text: 'Before editing any file, read it first. Before modifying a function, grep for all callers. Research before you edit.',
     },
@@ -1077,7 +1093,8 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Check for recent Claude Code updates or heavy MCP/skill additions. As a workaround (not officially supported):',
+      destination: 'shell-config',
+      label: 'Check for recent Claude Code updates or heavy MCP/skill additions. As a workaround (not officially supported), add to ~/.zshrc or ~/.bashrc:',
       text: 'export ANTHROPIC_CUSTOM_HEADERS=\'User-Agent: claude-cli/2.1.98 (external, sdk-cli)\'',
     },
     trend,
@@ -1226,6 +1243,7 @@ export function detectBashBloat(): WasteFinding | null {
     tokensSaved,
     fix: {
       type: 'paste',
+      destination: 'shell-config',
       label: 'Add to ~/.zshrc or ~/.bashrc:',
       text: `export BASH_MAX_OUTPUT_LENGTH=${BASH_RECOMMENDED_LIMIT}`,
     },
@@ -1417,7 +1435,8 @@ export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Set a delivery checkpoint at the start of the next expensive thread:',
+      destination: 'session-opener',
+      label: 'Paste at the start of your NEXT expensive thread (one-time, do not add to CLAUDE.md):',
       text: 'Before continuing, name the deliverable in one sentence (PR title, file changed, command output you expect). Stop and check with me if (a) you spend more than 10 minutes without an edit, or (b) the same approach fails twice. Do not retry past two attempts on any single fix.',
     },
   }
@@ -1529,7 +1548,8 @@ export function detectContextBloat(projects: ProjectSummary[], excludedSessionId
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'Start the next expensive thread with a fresh-context constraint:',
+      destination: 'session-opener',
+      label: 'Paste at the start of your NEXT expensive thread (one-time, do not add to CLAUDE.md):',
       text: 'Start fresh before continuing. Use only the current goal, the relevant files, the failing command/output, and the constraints below. Restate the working context in under 10 bullets before editing.',
     },
   }
@@ -1598,7 +1618,8 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
     tokensSaved,
     fix: {
       type: 'paste',
-      label: 'For expensive work, start with a tighter operating constraint:',
+      destination: 'session-opener',
+      label: 'Paste at the start of your NEXT expensive thread (one-time, do not add to CLAUDE.md):',
       text: 'Before making changes, summarize the smallest viable plan. Keep context narrow, avoid broad searches, and stop after the first working patch so I can review before continuing.',
     },
   }
@@ -1786,6 +1807,33 @@ function wrap(text: string, width: number, indent: string): string {
   return lines.join('\n')
 }
 
+/// Section header for a finding's fix block, declaring its intended
+/// destination. Issue #277: users were dropping one-time session openers
+/// into CLAUDE.md as permanent rules because the prompts had no labeled
+/// home in the output.
+function renderActionHeader(action: WasteAction): string {
+  const headerWidth = PANEL_WIDTH - 4
+  const fillTo = (label: string): string => {
+    const inner = ` ${label} `
+    const trailing = Math.max(2, headerWidth - inner.length - 4)
+    return `--${inner}${SEP.repeat(trailing)}`.padEnd(headerWidth)
+  }
+  switch (action.type) {
+    case 'file-content':
+      return fillTo(`Suggested ${action.path} addition`)
+    case 'command':
+      return fillTo('Run this command')
+    case 'paste':
+      switch (action.destination) {
+        case 'claude-md':       return fillTo('Suggested CLAUDE.md addition (permanent rule)')
+        case 'session-opener':  return fillTo('One-time session opener (do NOT add to CLAUDE.md)')
+        case 'prompt':          return fillTo('Ask Claude in the current session')
+        case 'shell-config':    return fillTo('Add to your shell config')
+        default:                return fillTo('Suggested action')
+      }
+  }
+}
+
 function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
   const lines: string[] = []
   const costSaved = f.tokensSaved * costRate
@@ -1807,16 +1855,19 @@ function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
   lines.push(chalk.hex(GOLD)(`  Potential savings: ${savings}`))
   lines.push('')
 
+  // Destination header — issue #277. Tells the user where each suggestion
+  // belongs (CLAUDE.md / session opener / current chat / shell config) so
+  // permanent rules and one-time prompts are no longer interchangeable in
+  // the output.
   const a = f.fix
+  lines.push(chalk.hex(ORANGE)(`  ${renderActionHeader(a)}`))
+  lines.push(chalk.hex(DIM)(`  ${a.label}`))
   if (a.type === 'file-content') {
-    lines.push(chalk.hex(DIM)(`  ${a.label}`))
     for (const line of a.content.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
   } else if (a.type === 'command') {
-    lines.push(chalk.hex(DIM)(`  ${a.label}`))
     for (const line of a.text.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
   } else {
-    lines.push(chalk.hex(DIM)(`  ${a.label}`))
-    lines.push(chalk.hex(CYAN)(`    ${a.text}`))
+    for (const line of a.text.split('\n')) lines.push(chalk.hex(CYAN)(`    ${line}`))
   }
   lines.push('')
   return lines

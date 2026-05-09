@@ -157,6 +157,10 @@ describe('detectJunkReads', () => {
     expect(finding.fix.type).toBe('paste')
     if (finding.fix.type === 'paste') {
       expect(finding.fix.text).toContain('node_modules')
+      // Issue #277: every paste-style fix should declare its destination so
+      // users can tell a permanent CLAUDE.md rule from a one-time session
+      // opener at a glance.
+      expect(finding.fix.destination).toBe('claude-md')
     }
     expect(finding.fix.label).toContain('CLAUDE.md')
   })
@@ -913,5 +917,50 @@ describe('computeTrend', () => {
       hasRecentActivity: true,
     })
     expect(trend).toBe('active')
+  })
+})
+
+describe('paste-fix destination tagging (issue #277)', () => {
+  // Walks every emitted finding's fix and asserts that `paste`-type actions
+  // declare a destination. Future detectors that ship a paste fix without a
+  // destination get caught here so users never see an unlabeled "here's a
+  // suggestion" block again.
+  function checkAllPasteFixesHaveDestination(findings: WasteFinding[]) {
+    for (const f of findings) {
+      if (f.fix.type === 'paste') {
+        expect(
+          f.fix.destination,
+          `finding "${f.title}" has paste fix without destination — pick one of: claude-md / session-opener / prompt / shell-config`
+        ).toBeDefined()
+        expect(['claude-md', 'session-opener', 'prompt', 'shell-config'])
+          .toContain(f.fix.destination)
+      }
+    }
+  }
+
+  it('detectJunkReads emits a tagged paste fix', () => {
+    const calls = Array.from({ length: 5 }, () => call('Read', { file_path: '/x/node_modules/a.js' }))
+    checkAllPasteFixesHaveDestination([detectJunkReads(calls)!])
+  })
+
+  it('detectDuplicateReads emits a tagged paste fix', () => {
+    const calls = [
+      ...Array.from({ length: 6 }, () => call('Read', { file_path: '/src/a.ts' }, 's1')),
+      ...Array.from({ length: 6 }, () => call('Read', { file_path: '/src/b.ts' }, 's1')),
+      ...Array.from({ length: 6 }, () => call('Read', { file_path: '/src/c.ts' }, 's1')),
+    ]
+    checkAllPasteFixesHaveDestination([detectDuplicateReads(calls)!])
+  })
+
+  it('detectLowReadEditRatio emits a tagged paste fix', () => {
+    const calls = [
+      ...Array.from({ length: 5 }, () => call('Edit', { file_path: '/src/a.ts' })),
+      ...Array.from({ length: 5 }, () => call('Edit', { file_path: '/src/b.ts' })),
+      ...Array.from({ length: 5 }, () => call('Edit', { file_path: '/src/c.ts' })),
+      ...Array.from({ length: 5 }, () => call('Edit', { file_path: '/src/d.ts' })),
+      ...Array.from({ length: 5 }, () => call('Edit', { file_path: '/src/e.ts' })),
+    ]
+    const finding = detectLowReadEditRatio(calls)
+    if (finding) checkAllPasteFixesHaveDestination([finding])
   })
 })
