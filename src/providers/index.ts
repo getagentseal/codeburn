@@ -11,6 +11,21 @@ import { qwen } from './qwen.js'
 import { rooCode } from './roo-code.js'
 import type { Provider, SessionSource } from './types.js'
 
+let kiloCliProvider: Provider | null = null
+let kiloCliLoadAttempted = false
+
+async function loadKiloCli(): Promise<Provider | null> {
+  if (kiloCliLoadAttempted) return kiloCliProvider
+  kiloCliLoadAttempted = true
+  try {
+    const { kilo_cli } = await import('./kilo-cli.js')
+    kiloCliProvider = kilo_cli
+    return kilo_cli
+  } catch {
+    return null
+  }
+}
+
 let antigravityProvider: Provider | null = null
 let antigravityLoadAttempted = false
 
@@ -89,13 +104,14 @@ async function loadCursorAgent(): Promise<Provider | null> {
 const coreProviders: Provider[] = [claude, codex, copilot, droid, gemini, kiloCode, kiro, openclaw, pi, omp, qwen, rooCode]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [ag, gs, cursor, opencode, cursorAgent] = await Promise.all([loadAntigravity(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent()])
+  const [ag, gs, cursor, opencode, cursorAgent, kilo] = await Promise.all([loadAntigravity(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadKiloCli()])
   const all = [...coreProviders]
   if (ag) all.push(ag)
   if (gs) all.push(gs)
   if (cursor) all.push(cursor)
   if (opencode) all.push(opencode)
   if (cursorAgent) all.push(cursorAgent)
+  if (kilo) all.push(kilo)
   return all
 }
 
@@ -134,6 +150,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'cursor-agent') {
     const ca = await loadCursorAgent()
     return ca ?? undefined
+  }
+  if (name === 'kilo-cli') {
+    const kc = await loadKiloCli()
+    return kc ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }
