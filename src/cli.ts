@@ -138,12 +138,23 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const cacheHitDenom = totalInput + totalCacheRead
   const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
 
-  const dailyMap: Record<string, { cost: number; calls: number }> = {}
+  // Per-day rollup. Mirrors parser.ts categoryBreakdown semantics so a
+  // consumer summing daily[].editTurns over a period gets the same total as
+  // sum(activities[].editTurns) for that period: every turn counts once for
+  // `turns`, edit turns count for `editTurns`, edit turns with zero retries
+  // count for `oneShotTurns`. Issue #279 — daily-resolution efficiency
+  // dashboards need this without re-deriving from activity-level rollups.
+  const dailyMap: Record<string, { cost: number; calls: number; turns: number; editTurns: number; oneShotTurns: number }> = {}
   for (const sess of sessions) {
     for (const turn of sess.turns) {
       if (!turn.timestamp) { continue }
       const day = dateKey(turn.timestamp)
-      if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0 } }
+      if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0, turns: 0, editTurns: 0, oneShotTurns: 0 } }
+      dailyMap[day].turns += 1
+      if (turn.hasEdits) {
+        dailyMap[day].editTurns += 1
+        if (turn.retries === 0) dailyMap[day].oneShotTurns += 1
+      }
       for (const call of turn.assistantCalls) {
         dailyMap[day].cost += call.costUSD
         dailyMap[day].calls += 1
@@ -154,6 +165,15 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     date,
     cost: convertCost(d.cost),
     calls: d.calls,
+    turns: d.turns,
+    editTurns: d.editTurns,
+    oneShotTurns: d.oneShotTurns,
+    // Pre-computed convenience for dashboards that don't want to do the math.
+    // null when there are no edit turns (the rate is undefined, not zero —
+    // a day where the user only had Q&A turns shouldn't read as 0% one-shot).
+    oneShotRate: d.editTurns > 0
+      ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10
+      : null,
   }))
 
   const projectList = projects.map(p => ({
