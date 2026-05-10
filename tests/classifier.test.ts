@@ -101,3 +101,53 @@ describe('classifyTurn — Skill subCategory', () => {
     expect(c.subCategory).toBeUndefined()
   })
 })
+
+// Regression coverage for issue #196: feature verbs that lead a message
+// were previously hijacked into 'debugging' just because the message contained
+// an incidental "error" / "fix" / "issue" word later in the same sentence.
+// Now whichever keyword pattern matches earliest wins.
+describe('classifyTurn — feature vs debugging precedence (#196)', () => {
+  function codingTurn(userMessage: string): ParsedTurn {
+    return makeTurn([makeCall({ tools: ['Edit'] })], userMessage)
+  }
+
+  it('classifies "add error handling" as feature, not debugging', () => {
+    const c = classifyTurn(codingTurn('add error handling to the auth module'))
+    expect(c.category).toBe('feature')
+  })
+
+  it('classifies "create an issue tracker" as feature, not debugging', () => {
+    const c = classifyTurn(codingTurn('create an issue tracker page in the dashboard'))
+    expect(c.category).toBe('feature')
+  })
+
+  it('classifies "implement the 404 page" as feature, not debugging', () => {
+    const c = classifyTurn(codingTurn('implement the 404 page with a friendly redirect'))
+    expect(c.category).toBe('feature')
+  })
+
+  it('still classifies "fix the layout for the new feature" as debugging', () => {
+    const c = classifyTurn(codingTurn('fix the layout for the new feature'))
+    expect(c.category).toBe('debugging')
+  })
+
+  it('still classifies a plain bug report as debugging', () => {
+    const c = classifyTurn(codingTurn('login is broken, traceback below'))
+    expect(c.category).toBe('debugging')
+  })
+
+  it('classifies "refactor the error handling" as refactoring', () => {
+    const c = classifyTurn(codingTurn('refactor the error handling so it is cleaner'))
+    expect(c.category).toBe('refactoring')
+  })
+
+  it('chat-only message starting with "add" stays feature even with "fix" later', () => {
+    const c = classifyTurn(makeTurn([], 'add a setting page; we will fix the styles after'))
+    expect(c.category).toBe('feature')
+  })
+
+  it('chat-only message starting with "fix" stays debugging even with "add" later', () => {
+    const c = classifyTurn(makeTurn([], 'fix the bug introduced when we added the new flag'))
+    expect(c.category).toBe('debugging')
+  })
+})

@@ -40,6 +40,17 @@
   period-level `activities[]` rollup so a consumer can sum across days and
   reconcile. Closes #279.
 
+### Fixed (CLI)
+- **Activity classifier no longer mislabels feature work as debugging.**
+  Messages like "add error handling", "create an issue tracker", or
+  "implement the 404 page" used to land in the Debugging bucket because
+  the classifier checked the debug-keyword regex (which matches `error`,
+  `issue`, `404`) before the feature regex. Now the keyword that appears
+  earliest in the user message wins, so "add" beats "error", "create"
+  beats "issue", etc. A real bug report ("login is broken, traceback
+  below") still classifies as debugging because the debug word leads.
+  Fixes the activity-misattribution half of #196.
+
 ### Changed (CLI)
 - **`optimize` suggestions now declare their destination.** Every paste-style
   fix carries an explicit destination — `claude-md` (permanent project rule),

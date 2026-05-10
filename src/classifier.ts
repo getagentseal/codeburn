@@ -93,12 +93,38 @@ function classifyByToolPattern(turn: ParsedTurn): TaskCategory | null {
   return null
 }
 
+/// Picks the category whose keyword pattern matches earliest in the message.
+/// On a tie (same start index) the candidate listed first in `candidates` wins,
+/// so callers control tie-break priority by ordering. Returns null when no
+/// pattern matches. The first-match heuristic fixes the long-standing problem
+/// where "add error handling" was tagged Debugging because the DEBUG regex was
+/// checked before FEATURE; now FEATURE wins because "add" appears before
+/// "error". Issue #196.
+function firstMatchingCategory(
+  text: string,
+  candidates: ReadonlyArray<{ regex: RegExp; category: TaskCategory }>,
+): TaskCategory | null {
+  let best: { index: number; order: number; category: TaskCategory } | null = null
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i]!
+    const m = c.regex.exec(text)
+    if (!m) continue
+    if (!best || m.index < best.index || (m.index === best.index && i < best.order)) {
+      best = { index: m.index, order: i, category: c.category }
+    }
+  }
+  return best?.category ?? null
+}
+
 function refineByKeywords(category: TaskCategory, userMessage: string): TaskCategory {
   if (category === 'coding') {
-    if (DEBUG_KEYWORDS.test(userMessage)) return 'debugging'
-    if (REFACTOR_KEYWORDS.test(userMessage)) return 'refactoring'
-    if (FEATURE_KEYWORDS.test(userMessage)) return 'feature'
-    return 'coding'
+    // Tie-break order (when two keywords match at the same index): refactoring
+    // first because its words are the most specific, then feature, then debug.
+    return firstMatchingCategory(userMessage, [
+      { regex: REFACTOR_KEYWORDS, category: 'refactoring' },
+      { regex: FEATURE_KEYWORDS, category: 'feature' },
+      { regex: DEBUG_KEYWORDS, category: 'debugging' },
+    ]) ?? 'coding'
   }
 
   if (category === 'exploration') {
@@ -113,8 +139,14 @@ function refineByKeywords(category: TaskCategory, userMessage: string): TaskCate
 function classifyConversation(userMessage: string): TaskCategory {
   if (BRAINSTORM_KEYWORDS.test(userMessage)) return 'brainstorming'
   if (RESEARCH_KEYWORDS.test(userMessage)) return 'exploration'
-  if (DEBUG_KEYWORDS.test(userMessage)) return 'debugging'
-  if (FEATURE_KEYWORDS.test(userMessage)) return 'feature'
+  // Same first-match-wins logic as refineByKeywords so a chat-only message
+  // starting with a feature verb does not flip to debugging because of an
+  // incidental "error" or "fix" word later in the same sentence.
+  const debugOrFeature = firstMatchingCategory(userMessage, [
+    { regex: FEATURE_KEYWORDS, category: 'feature' },
+    { regex: DEBUG_KEYWORDS, category: 'debugging' },
+  ])
+  if (debugOrFeature) return debugOrFeature
   if (FILE_PATTERNS.test(userMessage)) return 'coding'
   if (SCRIPT_PATTERNS.test(userMessage)) return 'coding'
   if (URL_PATTERN.test(userMessage)) return 'exploration'
