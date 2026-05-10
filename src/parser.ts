@@ -623,7 +623,15 @@ const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
 
 function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
   const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
-  return `${s}:${providerFilter ?? 'all'}`
+  // Include the Claude config-dir env so a config change in a long-lived
+  // process (menubar / GNOME extension / test workers) does not return
+  // stale data keyed under a previous configuration.
+  const claudeEnv = (process.env['CLAUDE_CONFIG_DIRS'] ?? '') + '|' + (process.env['CLAUDE_CONFIG_DIR'] ?? '')
+  return `${s}:${providerFilter ?? 'all'}:${claudeEnv}`
+}
+
+export function clearSessionCache(): void {
+  sessionCache.clear()
 }
 
 function cachePut(key: string, data: ProjectSummary[]) {

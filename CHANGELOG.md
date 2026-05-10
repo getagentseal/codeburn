@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Multiple Claude config directories.** Set `CLAUDE_CONFIG_DIRS` to an
+  OS-delimited list of paths (`:`-separated on POSIX, `;`-separated on
+  Windows) to scan more than one Claude data directory in a single run.
+  Sessions across every configured directory roll up into one project row
+  per project, so a user with `~/.claude-work` and `~/.claude-personal`
+  who works on the same repo from both accounts sees one combined row
+  rather than two split rows. `~` is expanded; missing or unreadable
+  directories in the list are skipped instead of aborting the scan; if
+  every listed entry is unreadable a one-line hint is written to stderr
+  so a misplaced delimiter does not silently produce zero rows.
+  Precedence: `CLAUDE_CONFIG_DIRS` > `CLAUDE_CONFIG_DIR` > `~/.claude`.
+  As part of this change `~` and `~/foo` are now also expanded in
+  `CLAUDE_CONFIG_DIR` (previously the value was passed through verbatim,
+  which only worked when the shell expanded `~` before exporting).
+  Closes #208.
 - **`codeburn models` command.** Per-model breakdown across all providers,
   one row per (provider, model), sorted by cost. Each row carries Input,
   Output, Cache Write, Cache Read, Total, and Cost columns plus a Top Task

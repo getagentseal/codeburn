@@ -1,5 +1,5 @@
 import { readdir, stat } from 'fs/promises'
-import { basename, join } from 'path'
+import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
 
 import type { Provider, SessionSource, SessionParser } from './types.js'
@@ -19,12 +19,42 @@ const shortNames: Record<string, string> = {
   'claude-3-5-haiku': 'Haiku 3.5',
 }
 
-function getClaudeDir(): string {
-  return process.env['CLAUDE_CONFIG_DIR'] || join(homedir(), '.claude')
+function expandHome(p: string): string {
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2))
+  return p
 }
 
-function getProjectsDir(): string {
-  return join(getClaudeDir(), 'projects')
+/// Returns every Claude config dir to scan, in priority order with duplicates
+/// removed (resolved-path equality). Precedence: `CLAUDE_CONFIG_DIRS` (a
+/// `path.delimiter`-separated list, ":" on POSIX, ";" on Windows), then
+/// `CLAUDE_CONFIG_DIR` (single dir), then `~/.claude`. Sessions from every
+/// returned dir are merged into one ProjectSummary per project name in
+/// `src/parser.ts:scanProjectDirs`, so two dirs holding the same sanitized
+/// project slug naturally aggregate (issue #208 option 1).
+function getClaudeConfigDirs(): string[] {
+  const multi = process.env['CLAUDE_CONFIG_DIRS']
+  if (multi !== undefined && multi !== '') {
+    const dirs = multi
+      .split(pathDelimiter)
+      .map(s => s.trim())
+      .filter(s => s.length > 0)
+      .map(s => resolve(expandHome(s)))
+    if (dirs.length > 0) {
+      const seen = new Set<string>()
+      const out: string[] = []
+      for (const d of dirs) {
+        if (!seen.has(d)) {
+          seen.add(d)
+          out.push(d)
+        }
+      }
+      return out
+    }
+  }
+  const single = process.env['CLAUDE_CONFIG_DIR']
+  if (single !== undefined && single !== '') return [resolve(expandHome(single))]
+  return [join(homedir(), '.claude')]
 }
 
 function getDesktopSessionsDir(): string {
@@ -77,21 +107,57 @@ export const claude: Provider = {
 
   async discoverSessions(): Promise<SessionSource[]> {
     const sources: SessionSource[] = []
+    const seenProjectDirs = new Set<string>()
+    const configDirs = getClaudeConfigDirs()
+    let anyDirReadable = false
 
-    const projectsDir = getProjectsDir()
-    try {
-      const entries = await readdir(projectsDir)
+    for (const claudeDir of configDirs) {
+      const projectsDir = join(claudeDir, 'projects')
+      let entries: string[]
+      try {
+        entries = await readdir(projectsDir)
+        anyDirReadable = true
+      } catch {
+        // Missing or unreadable dir is not fatal: a user can configure both
+        // a real and a stale path in CLAUDE_CONFIG_DIRS without breaking.
+        continue
+      }
       for (const dirName of entries) {
         const dirPath = join(projectsDir, dirName)
+        // Resolve before deduping so two CLAUDE_CONFIG_DIRS entries that
+        // reach the same projects/<slug> directory (via symlinks or
+        // overlapping configs) emit only one SessionSource.
+        const resolved = resolve(dirPath)
+        if (seenProjectDirs.has(resolved)) continue
         const dirStat = await stat(dirPath).catch(() => null)
-        if (dirStat?.isDirectory()) {
-          sources.push({ path: dirPath, project: dirName, provider: 'claude' })
-        }
+        if (!dirStat?.isDirectory()) continue
+        seenProjectDirs.add(resolved)
+        // `project: dirName` is identical across config dirs for the same
+        // sanitized slug, which is exactly what makes the parser merge
+        // their sessions into a single ProjectSummary.
+        sources.push({ path: dirPath, project: dirName, provider: 'claude' })
       }
-    } catch {}
+    }
+
+    // If the user explicitly set CLAUDE_CONFIG_DIRS and every entry was
+    // unreadable, emit a one-line stderr hint. Catches the most common
+    // misconfiguration: a Windows user typing `:` (POSIX delimiter) when
+    // the platform expects `;`, which produces a single bogus path that
+    // silently resolves to nothing on disk.
+    const explicitMulti = process.env['CLAUDE_CONFIG_DIRS']
+    if (!anyDirReadable && explicitMulti !== undefined && explicitMulti !== '' && configDirs.length > 0) {
+      process.stderr.write(
+        `codeburn: CLAUDE_CONFIG_DIRS was set but no listed directory could be read. ` +
+        `Tried: ${configDirs.join(', ')}. ` +
+        `Use "${pathDelimiter}" as the separator on this platform.\n`,
+      )
+    }
 
     const desktopDirs = await findDesktopProjectDirs(getDesktopSessionsDir())
     for (const dirPath of desktopDirs) {
+      const resolved = resolve(dirPath)
+      if (seenProjectDirs.has(resolved)) continue
+      seenProjectDirs.add(resolved)
       sources.push({ path: dirPath, project: basename(dirPath), provider: 'claude' })
     }
 

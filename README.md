@@ -139,6 +139,8 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 
 **Roo Code and KiloCode** are Cline-family VS Code extensions. CodeBurn reads `ui_messages.json` from each task directory and extracts token usage from `api_req_started` entries.
 
+**Claude with multiple config directories.** If you run Claude Code under more than one account or profile (e.g. `~/.claude-work` and `~/.claude-personal`), point `CLAUDE_CONFIG_DIRS` at all of them at once: `CLAUDE_CONFIG_DIRS=~/.claude-work:~/.claude-personal codeburn`. Sessions across every directory are merged into one row per project so the totals reflect all your Claude usage in one place. Use `:` on POSIX, `;` on Windows. Missing or unreadable directories in the list are skipped.
+
 Adding a new provider is a single file. See `src/providers/codex.ts` for an example.
 
 ## Features
@@ -385,6 +387,7 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
+| `CLAUDE_CONFIG_DIRS` | OS-delimited list of Claude data directories to scan together (e.g. `~/.claude-work:~/.claude-personal`). Sessions merge into one row per project. Overrides `CLAUDE_CONFIG_DIR` when set. |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
 | `QWEN_DATA_DIR` | Override Qwen data directory (default: `~/.qwen/projects`) |
