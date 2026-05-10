@@ -10,10 +10,19 @@ import type { DateRange, ProjectSummary } from './types.js'
 // label. After the upgrade, the breakdown produces per-workspace project
 // labels for new days; without invalidation the dashboard would show
 // 'cursor' for historical days and `-Users-you-myproject` for new ones
-// in the same window, producing a confusing mixed projection. v5 forces a
-// full recompute.
+// in the same window, producing a confusing mixed projection.
 export const DAILY_CACHE_VERSION = 5
-const MIN_SUPPORTED_VERSION = 2
+// MIN_SUPPORTED_VERSION bumped to 5 too. The migration path
+// (isMigratableCache + migrateDays) only fills in missing default fields;
+// it does NOT recompute the providers / categories / models rollups from
+// session data, because those raw sessions are not stored in the cache.
+// So a migrated v2/v3/v4 cache would carry forward stale provider totals
+// (single 'cursor' bucket instead of per-workspace) for the full cache
+// retention window. Setting the floor to 5 forces those older caches to
+// be discarded and recomputed cleanly. Confirmed by live test:
+// menubar-json --period all reported cursor=$3.78 against a migrated
+// v4 cache but $4.08 (correct) after the cache was discarded.
+const MIN_SUPPORTED_VERSION = 5
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {

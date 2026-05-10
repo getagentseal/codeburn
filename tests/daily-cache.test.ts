@@ -77,7 +77,13 @@ describe('loadDailyCache', () => {
     expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v1.bak'))).toBe(true)
   })
 
-  it('migrates an older supported version by filling missing fields', async () => {
+  it('discards a v2 cache and starts fresh (provider rollups would be stale)', async () => {
+    // MIN_SUPPORTED_VERSION was raised to DAILY_CACHE_VERSION because the
+    // migration path cannot recompute the providers / categories / models
+    // rollups from session data (the cache does not retain raw sessions),
+    // so a migrated old cache would carry forward stale provider totals
+    // for the full retention window. Older caches now get discarded and
+    // recomputed from scratch on next run.
     const saved = {
       version: 2,
       lastComputedDate: '2026-04-10',
@@ -92,14 +98,10 @@ describe('loadDailyCache', () => {
     await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
     const cache = await loadDailyCache()
     expect(cache.version).toBe(DAILY_CACHE_VERSION)
-    expect(cache.days).toHaveLength(1)
-    expect(cache.days[0].date).toBe('2026-04-10')
-    expect(cache.days[0].cost).toBe(10)
-    expect(cache.days[0].editTurns).toBe(0)
-    expect(cache.days[0].oneShotTurns).toBe(0)
-    expect(cache.days[0].categories).toEqual({})
-    expect(cache.days[0].providers).toEqual({})
-    expect(cache.days[0].models['claude-opus-4-6'].calls).toBe(5)
+    expect(cache.days).toEqual([])
+    expect(cache.lastComputedDate).toBeNull()
+    // Old cache is renamed to .v2.bak rather than deleted.
+    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v2.bak'))).toBe(true)
   })
 
   it('round-trips a valid cache through save and load', async () => {
