@@ -392,46 +392,13 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
 | `QWEN_DATA_DIR` | Override Qwen data directory (default: `~/.qwen/projects`) |
 
-## Project Structure
+## Sponsoring CodeBurn
 
-```
-src/
-  cli.ts            Commander.js entry point
-  dashboard.tsx     Ink TUI (React for terminals)
-  parser.ts         JSONL reader, dedup, date filter, provider orchestration
-  models.ts         LiteLLM pricing, cost calculation
-  classifier.ts     13-category task classifier
-  compare-stats.ts  Model comparison engine
-  daily-cache.ts    Persistent daily cache with migration
-  day-aggregator.ts Daily aggregation from session data
-  types.ts          Type definitions
-  format.ts         Text rendering (status bar)
-  menubar-json.ts   Payload builder for the macOS menubar app
-  export.ts         CSV/JSON multi-period export
-  config.ts         Config file management (~/.config/codeburn/)
-  currency.ts       Currency conversion, exchange rates
-  sqlite.ts         SQLite adapter (lazy-loads better-sqlite3)
-  optimize.ts       Waste pattern detection engine
-  providers/
-    types.ts        Provider interface definitions
-    index.ts        Provider registry
-    claude.ts       Claude Code session discovery
-    codex.ts        Codex session discovery and JSONL parsing
-    copilot.ts      GitHub Copilot session parsing
-    cursor.ts       Cursor SQLite parsing, language extraction
-    cursor-agent.ts cursor-agent CLI session parsing
-    droid.ts        Droid session discovery
-    gemini.ts       Gemini CLI session JSON parsing
-    kilo-code.ts    KiloCode VS Code extension parsing
-    kiro.ts         Kiro .chat JSON session parsing
-    openclaw.ts     OpenClaw agent JSONL parsing
-    opencode.ts     OpenCode SQLite session parsing
-    pi.ts           Pi/OMP agent JSONL session parsing
-    qwen.ts         Qwen CLI JSONL session parsing
-    roo-code.ts     Roo Code VS Code extension parsing
-    goose.ts        Goose SQLite session parsing
-    antigravity.ts  Antigravity conversation parsing
-```
+If CodeBurn is useful to you or your team, consider sponsoring development.
+
+Sponsorship helps support the time spent building and maintaining the project, the providers we add, and the bug-fix turnaround on issues like Cursor schema drift and Claude config-dir support.
+
+[Sponsor on GitHub](https://github.com/sponsors/iamtoruk)
 
 ## Star History
 
