@@ -83,6 +83,12 @@ codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
 codeburn yield                  # track productive vs reverted/abandoned spend
 codeburn yield -p 30days        # yield analysis for last 30 days
+codeburn models                 # per-model token + cost table (last 30 days)
+codeburn models --by-task       # explode each model into per-task-type rows
+codeburn models --top 10        # only the top 10 by cost
+codeburn models --format markdown      # paste-friendly markdown table
+codeburn models --task feature         # filter to feature-development work
+codeburn models --provider claude      # filter to one provider
 ```
 
 Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.

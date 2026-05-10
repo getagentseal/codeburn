@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added (CLI)
+- **`codeburn models` command.** Per-model breakdown across all providers,
+  one row per (provider, model), sorted by cost. Each row carries Input,
+  Output, Cache Write, Cache Read, Total, and Cost columns plus a Top Task
+  cell showing the dominant task category and its cost share (e.g.
+  `Coding (42%)`). Pass `--by-task` to explode each model into one row per
+  task type, with provider/model cells blanked on subsequent rows of the
+  same group and a horizontal divider between groups. Filters: `--period`
+  (default `30days`), `--from/--to`, `--provider`, `--task`, `--top`,
+  `--min-cost`, `--no-totals`. Output formats: `table` (Unicode box-drawn,
+  default), `markdown` (GitHub-flavored, copy-paste friendly), `json`,
+  `csv`. The table renderer auto-sizes every column to its content and
+  drops cache columns first, then input/output, then top-task when the
+  terminal is too narrow to fit the full set. Headers are cyan, totals row
+  is yellow, provider name is dim. Inspired by tokscale's per-model table
+  and ccusage's responsive cli-table3 layout, ported to plain Node with
+  no new runtime dependency.
+
 ### Changed (CLI)
 - **`optimize` suggestions now declare their destination.** Every paste-style
   fix carries an explicit destination — `claude-md` (permanent project rule),
