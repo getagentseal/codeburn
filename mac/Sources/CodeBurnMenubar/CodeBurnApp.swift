@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Observation
+import ServiceManagement
 
 private let refreshIntervalSeconds: UInt64 = 30
 private let nanosPerSecond: UInt64 = 1_000_000_000
@@ -79,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         setupDistributedNotificationListener()
         installLaunchAgentIfNeeded()
         registerLoginItemIfNeeded()
+        startSocketListener()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
     }
@@ -161,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let agentName = "com.codeburn.refresh.plist"
         let home = fm.homeDirectoryForCurrentUser.path
         let destPath = "\(home)/Library/LaunchAgents/\(agentName)"
+        let agentPath = (Bundle.main.resourcePath ?? "") + "/CodeBurnRefreshAgent"
 
         let plist = """
 <?xml version="1.0" encoding="UTF-8"?>
@@ -171,11 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     <string>com.codeburn.refresh</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/osascript</string>
-        <string>-l</string>
-        <string>JavaScript</string>
-        <string>-e</string>
-        <string>ObjC.import("Foundation"); $.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately("com.codeburn.refresh", $(), $(), true)</string>
+        <string>\(agentPath)</string>
     </array>
     <key>StartInterval</key>
     <integer>30</integer>
@@ -209,26 +208,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func registerLoginItemIfNeeded() {
-        let key = "codeburn.loginItemRegistered"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-
-        let appPath = Bundle.main.bundlePath
-        let script = "tell application \"System Events\" to make login item at end with properties {path:\"\(appPath)\", hidden:false}"
-
-        let process = Process()
-        process.launchPath = "/usr/bin/osascript"
-        process.arguments = ["-e", script]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
+        guard SMAppService.mainApp.status != .enabled else { return }
         do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                UserDefaults.standard.set(true, forKey: key)
-            }
+            try SMAppService.mainApp.register()
         } catch {
             NSLog("CodeBurn: Login item registration failed: \(error)")
+        }
+    }
+
+    private func startSocketListener() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let cacheDir = "\(home)/.cache/codeburn"
+        let socketPath = "\(cacheDir)/menubar.sock"
+
+        try? fm.createDirectory(atPath: cacheDir, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: socketPath) {
+            try? fm.removeItem(atPath: socketPath)
+        }
+
+        let socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard socketFD >= 0 else {
+            NSLog("CodeBurn: failed to create socket")
+            return
+        }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let socketPathC = (socketPath as NSString).fileSystemRepresentation
+        withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+            _ = strcpy(ptr, socketPathC)
+        }
+
+        let addrSize = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let bindResult = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(socketFD, $0, addrSize)
+            }
+        }
+        guard bindResult == 0 else {
+            NSLog("CodeBurn: failed to bind socket at \(socketPath)")
+            Darwin.close(socketFD)
+            return
+        }
+
+        Darwin.listen(socketFD, 5)
+
+        DispatchQueue.global(qos: .background).async { [weak self, socketFD] in
+            while true {
+                let clientFD = Darwin.accept(socketFD, nil, nil)
+                guard clientFD >= 0 else { continue }
+                var buf: [UInt8] = Array(repeating: 0, count: 1024)
+                let n = Darwin.read(clientFD, &buf, buf.count)
+                if n > 0 {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.forceRefresh()
+                    }
+                }
+                Darwin.close(clientFD)
+            }
         }
     }
 

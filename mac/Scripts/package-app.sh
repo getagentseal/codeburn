@@ -43,6 +43,7 @@ BUNDLE="${DIST_DIR}/${BUNDLE_NAME}"
 mkdir -p "${BUNDLE}/Contents/MacOS"
 mkdir -p "${BUNDLE}/Contents/Resources"
 cp "${BUILT_BINARY}" "${BUNDLE}/Contents/MacOS/${EXECUTABLE_NAME}"
+cp "${BIN_PATH}/CodeBurnRefreshAgent" "${BUNDLE}/Contents/Resources/CodeBurnRefreshAgent"
 
 cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

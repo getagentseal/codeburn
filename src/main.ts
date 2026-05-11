@@ -1,5 +1,6 @@
 import { Command } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
+import { notifyMenubar } from './menubar-socket.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing, setModelAliases } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
@@ -515,6 +516,7 @@ program
 
       const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
       console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory)))
+      notifyMenubar()
       return
     }
 

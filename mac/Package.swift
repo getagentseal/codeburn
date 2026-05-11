@@ -7,7 +7,8 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "CodeBurnMenubar", targets: ["CodeBurnMenubar"])
+        .executable(name: "CodeBurnMenubar", targets: ["CodeBurnMenubar"]),
+        .executable(name: "CodeBurnRefreshAgent", targets: ["CodeBurnRefreshAgent"])
     ],
     targets: [
         .executableTarget(
@@ -16,6 +17,10 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ]
+        ),
+        .executableTarget(
+            name: "CodeBurnRefreshAgent",
+            path: "Sources/CodeBurnRefreshAgent"
         ),
         .testTarget(
             name: "CodeBurnMenubarTests",
