@@ -28,6 +28,13 @@
   `Shell`, `ReadFile`, and `WriteFile`, and maps hidden managed Kimi Code
   model aliases to priced Kimi K2 entries.
 
+### Added (macOS menubar)
+- **Configurable status period.** The always-visible menubar status item can
+  track Today, Week, Month, or 6 Months independently from the popover's active
+  period/provider filters. The setting is persisted in `UserDefaults` under
+  `CodeBurnMenubarPeriod`, can be changed from Settings, and uses compact
+  suffixes for non-today periods. Closes #291.
+
 ## 0.9.9 - 2026-05-15
 
 ### Added (CLI)

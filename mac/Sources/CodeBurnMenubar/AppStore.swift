@@ -3,6 +3,7 @@ import Observation
 
 private let cacheTTLSeconds: TimeInterval = 30
 private let interactiveRefreshResetSeconds: TimeInterval = 120
+private let menubarPeriodDefaultsKey = "CodeBurnMenubarPeriod"
 
 struct CachedPayload {
     let payload: MenubarPayload
@@ -20,6 +21,9 @@ struct PayloadCacheKey: Hashable {
 final class AppStore {
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
+    private(set) var menubarPeriod: Period = Period.savedMenubarPeriod() {
+        didSet { menubarPeriod.persistAsMenubarDefault() }
+    }
     var selectedInsight: InsightMode = .trend
     var accentPreset: AccentPreset = ThemeState.shared.preset {
         didSet { ThemeState.shared.preset = accentPreset }
@@ -69,6 +73,10 @@ final class AppStore {
         PayloadCacheKey(period: .today, provider: .all)
     }
 
+    private var menubarStatusKey: PayloadCacheKey {
+        PayloadCacheKey(period: menubarPeriod, provider: .all)
+    }
+
     private var currentKey: PayloadCacheKey {
         PayloadCacheKey(period: selectedPeriod, provider: selectedProvider)
     }
@@ -77,8 +85,7 @@ final class AppStore {
         cache[currentKey]?.payload ?? .empty
     }
 
-    /// Today (across all providers) is pinned for the always-visible menubar icon, independent of
-    /// the popover's selected period or provider.
+    /// Today (across all providers) backs day-specific views in the popover.
     var todayPayload: MenubarPayload? {
         cache[todayAllKey]?.payload
     }
@@ -88,8 +95,19 @@ final class AppStore {
         return Int(Date().timeIntervalSince(cached.fetchedAt))
     }
 
+    var menubarPayloadAgeSeconds: Int? {
+        guard let cached = cache[menubarStatusKey] else { return nil }
+        return Int(Date().timeIntervalSince(cached.fetchedAt))
+    }
+
     var needsStatusPayloadRefresh: Bool {
-        cache[todayAllKey]?.isFresh != true
+        cache[menubarStatusKey]?.isFresh != true
+    }
+
+    /// All-provider payload for the user-selected menubar status metric. The
+    /// popover's visible period/provider can differ from this setting.
+    var menubarPayload: MenubarPayload? {
+        cache[menubarStatusKey]?.payload
     }
 
     /// All-provider payload for the selected period. Used by the tab strip to show
@@ -190,6 +208,15 @@ final class AppStore {
                 async let all: Void = refreshQuietly(period: period)
                 _ = await (main, all)
             }
+        }
+    }
+
+    func setMenubarPeriod(_ period: Period) {
+        guard Period.menubarMetricCases.contains(period) else { return }
+        guard menubarPeriod != period else { return }
+        menubarPeriod = period
+        Task { [weak self] in
+            await self?.refreshQuietly(period: period)
         }
     }
 
@@ -960,6 +987,59 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "all"
+        }
+    }
+
+    /// Status item metrics intentionally stay to the coarse Settings choices.
+    /// The popover still offers 30 Days, but it is not a persisted status metric.
+    static let menubarMetricCases: [Period] = [.today, .sevenDays, .month, .all]
+
+    var menubarMetricLabel: String {
+        switch self {
+        case .today: "Today"
+        case .sevenDays: "Week"
+        case .thirtyDays: "30 Days"
+        case .month: "Month"
+        case .all: "6 Months"
+        }
+    }
+
+    var menubarDefaultsValue: String {
+        switch self {
+        case .today: "today"
+        case .sevenDays: "week"
+        case .thirtyDays: "30days"
+        case .month: "month"
+        case .all: "sixMonths"
+        }
+    }
+
+    init(menubarDefaultsValue: String?) {
+        switch menubarDefaultsValue {
+        case "today": self = .today
+        case "week", "sevenDays": self = .sevenDays
+        case "month": self = .month
+        case "sixMonths", "all": self = .all
+        default: self = .today
+        }
+    }
+
+    static func savedMenubarPeriod(defaults: UserDefaults = .standard) -> Period {
+        Period(menubarDefaultsValue: defaults.string(forKey: menubarPeriodDefaultsKey))
+    }
+
+    func persistAsMenubarDefault(defaults: UserDefaults = .standard) {
+        let period = Period.menubarMetricCases.contains(self) ? self : Period.today
+        defaults.set(period.menubarDefaultsValue, forKey: menubarPeriodDefaultsKey)
+    }
+
+    func menubarSuffix(compact: Bool) -> String {
+        switch self {
+        case .today: ""
+        case .sevenDays: compact ? "/wk" : " / wk"
+        case .thirtyDays: compact ? "/30d" : " / 30d"
+        case .month: compact ? "/mo" : " / mo"
+        case .all: compact ? "/6mo" : " / 6mo"
         }
     }
 }

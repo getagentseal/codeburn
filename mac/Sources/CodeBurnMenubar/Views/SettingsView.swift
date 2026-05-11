@@ -40,6 +40,15 @@ private struct GeneralSettingsTab: View {
                         Text(code).tag(code)
                     }
                 }
+                Picker("Menubar metric", selection: Binding(
+                    get: { store.menubarPeriod },
+                    set: { store.setMenubarPeriod($0) }
+                )) {
+                    ForEach(Period.menubarMetricCases) { period in
+                        Text(period.menubarMetricLabel).tag(period)
+                    }
+                }
+                .pickerStyle(.menu)
                 Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }

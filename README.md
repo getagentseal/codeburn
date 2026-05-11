@@ -342,7 +342,15 @@ codeburn menubar
 
 One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
 
-The menubar icon always shows today's spend (so $0 is normal if you have not used AI tools today). Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
+The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
+
+You can also set the menubar status period from Terminal:
+
+```bash
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarPeriod -string month
+```
+
+Allowed values are `today`, `week`, `month`, and `sixMonths`. Relaunch the app to apply external defaults changes.
 
 **Compact mode** shrinks the menubar item to fit the text, dropping decimals (e.g. `$110` instead of `$110.20`):
 
