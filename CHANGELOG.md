@@ -132,6 +132,12 @@
   period-level `activities[]` rollup so a consumer can sum across days and
   reconcile. Closes #279.
 
+### Added (macOS menubar)
+- **Quota notifications.** Optional local notifications alert when connected
+  Claude or Codex quota windows cross 80% or 100%. Alerts are deduplicated in
+  `UserDefaults` by provider, window, threshold, and reset day, with an
+  in-memory pending set to avoid duplicate sends during rapid refreshes.
+
 ### Fixed (CLI)
 - **Cursor sessions break down by project, not one row called "cursor".**
   Cursor's chat history sat under a single dashboard row labeled `cursor`
