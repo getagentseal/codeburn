@@ -9,10 +9,18 @@ const CHARS_PER_TOKEN = 4
 const SYSTEM_BASE_TOKENS = 10400
 const TOOL_TOKENS_OVERHEAD = 400
 const SKILL_FRONTMATTER_TOKENS = 80
+const TOOLS_PER_MCP_SERVER = 5
 
 export type ContextBudget = {
   systemBase: number
-  mcpTools: { count: number; tokens: number }
+  mcpTools: {
+    count: number
+    tokens: number
+    declared: number
+    used: number
+    unused: string[]
+    unusedTokens: number
+  }
   skills: { count: number; tokens: number }
   memory: { count: number; tokens: number; files: Array<{ name: string; tokens: number }> }
   total: number
@@ -30,7 +38,15 @@ async function readConfigFile(path: string): Promise<Record<string, unknown> | n
   try { return JSON.parse(raw) } catch { return null }
 }
 
-async function countMcpTools(projectPath?: string): Promise<number> {
+type McpCount = {
+  toolCount: number
+  declared: number
+  used: number
+  unused: string[]
+  unusedTokens: number
+}
+
+async function countMcpTools(projectPath?: string, calledServers?: Set<string>): Promise<McpCount> {
   const home = homedir()
   const configPaths = [
     join(home, '.claude', 'settings.json'),
@@ -42,21 +58,63 @@ async function countMcpTools(projectPath?: string): Promise<number> {
     configPaths.push(join(projectPath, '.claude', 'settings.local.json'))
   }
 
-  const servers = new Set<string>()
-  let toolCount = 0
+  const normalizedSeen = new Set<string>()
+  const serverNames: string[] = []
+
+  const pushServers = (serversObj: Record<string, unknown>): void => {
+    for (const name of Object.keys(serversObj)) {
+      const normalized = name.replace(/:/g, '_')
+      if (normalizedSeen.has(normalized)) continue
+      normalizedSeen.add(normalized)
+      serverNames.push(name)
+    }
+  }
 
   for (const p of configPaths) {
     const config = await readConfigFile(p)
     if (!config) continue
-    const mcpServers = (config.mcpServers ?? {}) as Record<string, unknown>
-    for (const name of Object.keys(mcpServers)) {
-      if (servers.has(name)) continue
-      servers.add(name)
-      toolCount += 5
+    pushServers((config.mcpServers ?? {}) as Record<string, unknown>)
+  }
+
+  // `claude mcp add` writes to ~/.claude.json (top-level for user-scope,
+  // projects[cwd].mcpServers for project-local scope). This is the common config
+  // path and was missed by settings.json-only discovery.
+  const claudeJson = await readConfigFile(join(home, '.claude.json'))
+  if (claudeJson) {
+    pushServers((claudeJson.mcpServers ?? {}) as Record<string, unknown>)
+    if (projectPath) {
+      const projects = (claudeJson.projects ?? {}) as Record<string, { mcpServers?: Record<string, unknown> }>
+      const projectEntry = projects[projectPath] ?? projects[projectPath.replace(/\\/g, '/')]
+      if (projectEntry?.mcpServers) {
+        pushServers(projectEntry.mcpServers)
+      }
     }
   }
 
-  return toolCount
+  const toolCount = normalizedSeen.size * TOOLS_PER_MCP_SERVER
+  const declared = normalizedSeen.size
+
+  if (!calledServers) {
+    return { toolCount, declared, used: 0, unused: [], unusedTokens: 0 }
+  }
+  if (calledServers.size === 0) {
+    const unusedTokens = serverNames.length * TOOLS_PER_MCP_SERVER * TOOL_TOKENS_OVERHEAD
+    return { toolCount, declared, used: 0, unused: serverNames, unusedTokens }
+  }
+
+  let usedCount = 0
+  const unused: string[] = []
+  for (const name of serverNames) {
+    const normalized = name.replace(/:/g, '_')
+    if (calledServers.has(normalized)) {
+      usedCount++
+    } else {
+      unused.push(name)
+    }
+  }
+
+  const unusedTokens = unused.length * TOOLS_PER_MCP_SERVER * TOOL_TOKENS_OVERHEAD
+  return { toolCount, declared, used: usedCount, unused, unusedTokens }
 }
 
 async function countSkills(projectPath?: string): Promise<number> {
@@ -101,19 +159,30 @@ async function scanMemoryFiles(projectPath?: string): Promise<Array<{ name: stri
   return files
 }
 
-export async function estimateContextBudget(projectPath?: string, modelContext = 1_000_000): Promise<ContextBudget> {
-  const mcpToolCount = await countMcpTools(projectPath)
+export async function estimateContextBudget(
+  projectPath?: string,
+  modelContext = 1_000_000,
+  calledServers?: Set<string>,
+): Promise<ContextBudget> {
+  const mcpCount = await countMcpTools(projectPath, calledServers)
   const skillCount = await countSkills(projectPath)
   const memoryFiles = await scanMemoryFiles(projectPath)
 
-  const mcpTokens = mcpToolCount * TOOL_TOKENS_OVERHEAD
+  const mcpTokens = mcpCount.toolCount * TOOL_TOKENS_OVERHEAD
   const skillTokens = skillCount * SKILL_FRONTMATTER_TOKENS
   const memoryTokens = memoryFiles.reduce((s, f) => s + f.tokens, 0)
   const total = SYSTEM_BASE_TOKENS + mcpTokens + skillTokens + memoryTokens
 
   return {
     systemBase: SYSTEM_BASE_TOKENS,
-    mcpTools: { count: mcpToolCount, tokens: mcpTokens },
+    mcpTools: {
+      count: mcpCount.toolCount,
+      tokens: mcpTokens,
+      declared: mcpCount.declared,
+      used: mcpCount.used,
+      unused: mcpCount.unused,
+      unusedTokens: mcpCount.unusedTokens,
+    },
     skills: { count: skillCount, tokens: skillTokens },
     memory: { count: memoryFiles.length, tokens: memoryTokens, files: memoryFiles },
     total,

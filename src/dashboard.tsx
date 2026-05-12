@@ -290,7 +290,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
-            {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
+            {hasBudgets && <Text color={budget?.mcpTools.unused.length ? ORANGE : '#7B9EF5'}>{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
           </Text>
         )
       })}
@@ -755,7 +755,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         if (cancelled) return
         const cwd = await discoverProjectCwd(join(claudeDir, project.project))
         if (!cwd) continue
-        budgets.set(project.project, await estimateContextBudget(cwd))
+        const calledServers = new Set<string>()
+        for (const session of project.sessions) {
+          for (const server of Object.keys(session.mcpBreakdown)) {
+            calledServers.add(server)
+          }
+        }
+        budgets.set(project.project, await estimateContextBudget(cwd, 1_000_000, calledServers))
       }
       if (!cancelled) setProjectBudgets(budgets)
     }

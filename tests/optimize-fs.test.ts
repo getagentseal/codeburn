@@ -49,6 +49,10 @@ function writeFile(path: string, content: string): void {
   writeFileSync(path, content)
 }
 
+beforeEach(() => {
+  rmSync(join(FAKE_HOME_FOR_MOCK, '.claude.json'), { force: true })
+})
+
 function touchOld(path: string, daysAgo: number): void {
   const past = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
   utimesSync(path, past, past)
@@ -170,6 +174,58 @@ describe('loadMcpConfigs', () => {
     expect(() => loadMcpConfigs([projectDir])).not.toThrow()
     expect(loadMcpConfigs([projectDir]).size).toBe(0)
   })
+
+  describe('~/.claude.json support (claude mcp add flow)', () => {
+    const claudeJsonPath = join(FAKE_HOME_FOR_MOCK, '.claude.json')
+
+    beforeEach(() => {
+      rmSync(claudeJsonPath, { force: true })
+    })
+
+    it('reads user-scope mcpServers from ~/.claude.json top-level', () => {
+      writeFile(claudeJsonPath, JSON.stringify({
+        mcpServers: { docker: { command: 'x' }, vault: { command: 'y' } },
+      }))
+      const servers = loadMcpConfigs([])
+      expect(servers.has('docker')).toBe(true)
+      expect(servers.has('vault')).toBe(true)
+    })
+
+    it('reads project-scope mcpServers from ~/.claude.json projects map', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(claudeJsonPath, JSON.stringify({
+        projects: { [projectDir]: { mcpServers: { local: { command: 'x' } } } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('local')).toBe(true)
+    })
+
+    it('matches projects map key with forward slashes on Windows paths', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(claudeJsonPath, JSON.stringify({
+        projects: { [projectDir.replace(/\\/g, '/')]: { mcpServers: { win: { command: 'x' } } } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('win')).toBe(true)
+    })
+
+    it('merges ~/.claude.json user-scope with project .mcp.json', () => {
+      const projectDir = join(makeFixtureRoot(), 'proj')
+      mkdirSync(projectDir, { recursive: true })
+      writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+        mcpServers: { proj_only: { command: 'x' } },
+      }))
+      writeFile(claudeJsonPath, JSON.stringify({
+        mcpServers: { user_wide: { command: 'y' } },
+      }))
+      const servers = loadMcpConfigs([projectDir])
+      expect(servers.has('proj_only')).toBe(true)
+      expect(servers.has('user_wide')).toBe(true)
+      expect(servers.size).toBe(2)
+    })
+  })
 })
 
 describe('detectUnusedMcp', () => {
@@ -209,6 +265,19 @@ describe('detectUnusedMcp', () => {
       { name: 'mcp__used__some_tool', input: {}, sessionId: 's1', project: 'p1' },
     ]
     expect(detectUnusedMcp(calls, [], new Set([projectDir]))).toBeNull()
+  })
+
+  it('explanation mentions tokens/session', () => {
+    const root = makeFixtureRoot()
+    const projectDir = join(root, 'myapp')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+      mcpServers: { ghost: { command: 'x' } },
+    }))
+    touchOld(join(projectDir, '.mcp.json'), 30)
+    const finding = detectUnusedMcp([], [], new Set([projectDir]))
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toMatch(/tokens\/session/)
   })
 })
 
@@ -433,5 +502,128 @@ describe('discoverProjectCwd', () => {
     const entry = JSON.stringify({ type: 'assistant', cwd: '/Users/test/project', timestamp: new Date().toISOString() })
     writeFile(join(root, 'session.jsonl'), entry + '\n')
     expect(await discoverProjectCwd(root)).toBe('/Users/test/project')
+  })
+})
+
+// ============================================================================
+// estimateContextBudget with calledServers
+// ============================================================================
+
+describe('estimateContextBudget with calledServers', () => {
+  it('reports unused servers when calledServers provided', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { used: { command: 'x' }, ghost: { command: 'y' } },
+    }))
+    const budget = await estimateContextBudget(root, 1_000_000, new Set(['used']))
+    expect(budget.mcpTools.declared).toBe(2)
+    expect(budget.mcpTools.used).toBe(1)
+    expect(budget.mcpTools.unused).toEqual(['ghost'])
+    expect(budget.mcpTools.unusedTokens).toBe(1 * 5 * 400)
+  })
+
+  it('reports zero unused when all called', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { a: { command: 'x' }, b: { command: 'y' } },
+    }))
+    const budget = await estimateContextBudget(root, 1_000_000, new Set(['a', 'b']))
+    expect(budget.mcpTools.unused).toEqual([])
+    expect(budget.mcpTools.unusedTokens).toBe(0)
+  })
+
+  it('treats calledServers=undefined as no usage data (backward compat)', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { x: { command: 'x' } },
+    }))
+    const budget = await estimateContextBudget(root)
+    expect(budget.mcpTools.declared).toBe(1)
+    expect(budget.mcpTools.used).toBe(0)
+    expect(budget.mcpTools.unused).toEqual([])
+    expect(budget.mcpTools.count).toBe(5)
+    expect(budget.mcpTools.tokens).toBe(2000)
+  })
+
+  it('reports all servers unused when calledServers is empty set', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { alpha: { command: 'a' }, beta: { command: 'b' } },
+    }))
+    const budget = await estimateContextBudget(root, 1_000_000, new Set())
+    expect(budget.mcpTools.declared).toBe(2)
+    expect(budget.mcpTools.used).toBe(0)
+    expect(budget.mcpTools.unused).toEqual(['alpha', 'beta'])
+    expect(budget.mcpTools.unusedTokens).toBe(2 * 5 * 400)
+  })
+
+  it('normalizes plugin:foo:bar names before comparison', async () => {
+    const root = makeFixtureRoot()
+    writeFile(join(root, '.mcp.json'), JSON.stringify({
+      mcpServers: { 'plugin:context7:context7': { command: 'ctx' } },
+    }))
+    const budget = await estimateContextBudget(root, 1_000_000, new Set(['plugin_context7_context7']))
+    expect(budget.mcpTools.used).toBe(1)
+    expect(budget.mcpTools.unused).toEqual([])
+  })
+})
+
+describe('estimateContextBudget reading ~/.claude.json (claude mcp add flow)', () => {
+  const claudeJsonPath = join(FAKE_HOME_FOR_MOCK, '.claude.json')
+
+  beforeEach(() => {
+    rmSync(claudeJsonPath, { force: true })
+  })
+
+  it('reads user-scope mcpServers from ~/.claude.json top-level', async () => {
+    writeFile(claudeJsonPath, JSON.stringify({
+      mcpServers: { docker: { command: 'x' }, vault: { command: 'y' } },
+    }))
+    const budget = await estimateContextBudget(undefined, 1_000_000, new Set(['docker']))
+    expect(budget.mcpTools.declared).toBe(2)
+    expect(budget.mcpTools.used).toBe(1)
+    expect(budget.mcpTools.unused).toEqual(['vault'])
+  })
+
+  it('reads project-scope mcpServers from ~/.claude.json projects map', async () => {
+    const projectDir = join(makeFixtureRoot(), 'proj')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(claudeJsonPath, JSON.stringify({
+      mcpServers: {},
+      projects: { [projectDir]: { mcpServers: { local: { command: 'x' } } } },
+    }))
+    const budget = await estimateContextBudget(projectDir, 1_000_000, new Set(['other']))
+    expect(budget.mcpTools.declared).toBe(1)
+    expect(budget.mcpTools.unused).toEqual(['local'])
+  })
+
+  it('matches projects map key with forward slashes on Windows paths', async () => {
+    const projectDir = join(makeFixtureRoot(), 'proj')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(claudeJsonPath, JSON.stringify({
+      projects: { [projectDir.replace(/\\/g, '/')]: { mcpServers: { win: { command: 'x' } } } },
+    }))
+    const budget = await estimateContextBudget(projectDir, 1_000_000, new Set(['other']))
+    expect(budget.mcpTools.declared).toBe(1)
+  })
+
+  it('merges ~/.claude.json top-level with .mcp.json at project root', async () => {
+    const projectDir = join(makeFixtureRoot(), 'proj')
+    mkdirSync(projectDir, { recursive: true })
+    writeFile(join(projectDir, '.mcp.json'), JSON.stringify({
+      mcpServers: { proj_only: { command: 'x' } },
+    }))
+    writeFile(claudeJsonPath, JSON.stringify({
+      mcpServers: { user_wide: { command: 'y' } },
+    }))
+    const budget = await estimateContextBudget(projectDir, 1_000_000, new Set(['proj_only']))
+    expect(budget.mcpTools.declared).toBe(2)
+    expect(budget.mcpTools.used).toBe(1)
+    expect(budget.mcpTools.unused).toEqual(['user_wide'])
+  })
+
+  it('does nothing when ~/.claude.json is missing', async () => {
+    const budget = await estimateContextBudget(undefined, 1_000_000, new Set())
+    expect(budget.mcpTools.declared).toBe(0)
   })
 })

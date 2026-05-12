@@ -397,19 +397,15 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
     join(homedir(), '.claude', 'settings.json'),
     join(homedir(), '.claude', 'settings.local.json'),
   ]
+  const projectCwdList: string[] = []
   for (const cwd of projectCwds) {
+    projectCwdList.push(cwd)
     configPaths.push(join(cwd, '.mcp.json'))
     configPaths.push(join(cwd, '.claude', 'settings.json'))
     configPaths.push(join(cwd, '.claude', 'settings.local.json'))
   }
 
-  for (const p of configPaths) {
-    if (!existsSync(p)) continue
-    const config = readJsonFile(p)
-    if (!config) continue
-    let mtime = 0
-    try { mtime = statSync(p).mtimeMs } catch {}
-    const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
+  const pushServers = (serversObj: Record<string, unknown>, mtime: number): void => {
     for (const name of Object.keys(serversObj)) {
       const normalized = name.replace(/:/g, '_')
       const existing = servers.get(normalized)
@@ -418,6 +414,36 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
       }
     }
   }
+
+  for (const p of configPaths) {
+    if (!existsSync(p)) continue
+    const config = readJsonFile(p)
+    if (!config) continue
+    let mtime = 0
+    try { mtime = statSync(p).mtimeMs } catch {}
+    pushServers((config.mcpServers ?? {}) as Record<string, unknown>, mtime)
+  }
+
+  // `claude mcp add` writes to ~/.claude.json (top-level for user-scope,
+  // projects[cwd].mcpServers for project-local scope). This is the common config
+  // path and was missed by settings.json-only discovery.
+  const claudeJsonPath = join(homedir(), '.claude.json')
+  if (existsSync(claudeJsonPath)) {
+    const config = readJsonFile(claudeJsonPath)
+    if (config) {
+      let mtime = 0
+      try { mtime = statSync(claudeJsonPath).mtimeMs } catch {}
+      pushServers((config.mcpServers ?? {}) as Record<string, unknown>, mtime)
+      const projectsObj = (config.projects ?? {}) as Record<string, { mcpServers?: Record<string, unknown> }>
+      for (const cwd of projectCwdList) {
+        const entry = projectsObj[cwd] ?? projectsObj[cwd.replace(/\\/g, '/')]
+        if (entry?.mcpServers) {
+          pushServers(entry.mcpServers, mtime)
+        }
+      }
+    }
+  }
+
   return servers
 }
 
@@ -901,12 +927,12 @@ export function detectUnusedMcp(
   if (unused.length === 0) return null
 
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const schemaTokensPerSession = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
-  const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
+  const perSessionTokens = unused.length * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
+  const tokensSaved = perSessionTokens * Math.max(totalSessions, 1)
 
   return {
     title: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never used`,
-    explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
+    explanation: `Never called in this period: ${unused.join(', ')}. Estimated overhead: ~${formatTokens(perSessionTokens)} tokens/session (${formatTokens(tokensSaved)} tokens total across ${totalSessions} session${totalSessions !== 1 ? 's' : ''}).`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
     fix: {
