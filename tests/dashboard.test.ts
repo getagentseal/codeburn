@@ -1,5 +1,8 @@
+import { homedir } from 'os'
+
 import { describe, it, expect } from 'vitest'
 
+import { shortProject } from '../src/dashboard.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
@@ -53,7 +56,7 @@ function makeProject(name: string, sessions: SessionSummary[]): ProjectSummary {
 
 // Logic replicated from TopSessions component
 function getTopSessions(projects: ProjectSummary[], n = 5) {
-  const all = projects.flatMap(p => p.sessions.map(s => ({ ...s, projectName: p.project })))
+  const all = projects.flatMap(p => p.sessions.map(s => ({ ...s, projectPath: p.projectPath })))
   return [...all].sort((a, b) => b.totalCostUSD - a.totalCostUSD).slice(0, n)
 }
 
@@ -96,6 +99,36 @@ describe('TopSessions - top-5 selection', () => {
     const project = makeProject('proj', sessions)
     const top = getTopSessions([project])
     expect(top.map(s => s.sessionId)).toEqual(['s1', 's2', 's3'])
+  })
+})
+
+describe('shortProject - path shortening', () => {
+  const home = homedir()
+
+  it('preserves directory names containing dashes', () => {
+    expect(shortProject(`${home}/work/my-project`)).toBe('work/my-project')
+  })
+
+  it('preserves directory names containing dots', () => {
+    expect(shortProject(`${home}/work/my.app.io`)).toBe('work/my.app.io')
+  })
+
+  it('returns "home" for the home dir itself', () => {
+    expect(shortProject(home)).toBe('home')
+  })
+
+  it('does not strip a sibling whose name shares the home prefix', () => {
+    const sibling = `${home}-backup/proj`
+    expect(shortProject(sibling).endsWith('proj')).toBe(true)
+    expect(shortProject(sibling)).not.toMatch(/^-/)
+  })
+
+  it('keeps only the last 3 segments for deeply nested paths', () => {
+    expect(shortProject(`${home}/a/b/c/d/e/f`)).toBe('d/e/f')
+  })
+
+  it('handles paths outside the home dir', () => {
+    expect(shortProject('/opt/myproject')).toBe('opt/myproject')
   })
 })
 
