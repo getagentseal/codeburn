@@ -32,7 +32,10 @@ async function hydrateCache() {
       (range) => parseAllSessions(range, 'all'),
       aggregateProjectsIntoDays,
     )
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error && err.stack ? `\n${err.stack}` : ''
+    process.stderr.write(`codeburn: hydrateCache failed, returning empty cache: ${message}${stack}\n`)
     return emptyCache()
   }
 }

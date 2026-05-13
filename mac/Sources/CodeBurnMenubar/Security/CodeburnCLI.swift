@@ -59,6 +59,64 @@ enum CodeburnCLI {
         for extra in additionalPathEntries where !parts.contains(extra) {
             parts.append(extra)
         }
+        for dir in discoverNodeManagerBinDirs() where !parts.contains(dir) {
+            parts.append(dir)
+        }
         return parts.joined(separator: ":")
+    }
+
+    /// Login-item launches don't source .zshrc, so nvm / fnm / volta / asdf bin
+    /// directories are absent from PATH. Scan common version-manager locations
+    /// and add the latest Node version's bin dir so `codeburn` can be found.
+    private static func discoverNodeManagerBinDirs() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let fm = FileManager.default
+
+        // fnm: ~/.local/share/fnm/node-versions/<version>/installation/bin
+        let fnmVersionsDir = "\(home)/.local/share/fnm/node-versions"
+        if let latest = latestVersionDir(in: fnmVersionsDir) {
+            let binDir = "\(fnmVersionsDir)/\(latest)/installation/bin"
+            if fm.fileExists(atPath: "\(binDir)/node") {
+                return [binDir]
+            }
+        }
+
+        // nvm: ~/.nvm/versions/node/<version>/bin
+        let nvmVersionsDir = "\(home)/.nvm/versions/node"
+        if let latest = latestVersionDir(in: nvmVersionsDir) {
+            let binDir = "\(nvmVersionsDir)/\(latest)/bin"
+            if fm.fileExists(atPath: "\(binDir)/node") {
+                return [binDir]
+            }
+        }
+
+        // volta: ~/.volta/bin (flat, no version dirs)
+        let voltaBin = "\(home)/.volta/bin"
+        if fm.fileExists(atPath: "\(voltaBin)/node") {
+            return [voltaBin]
+        }
+
+        // asdf: ~/.asdf/shims (flat shim dir)
+        let asdfShims = "\(home)/.asdf/shims"
+        if fm.fileExists(atPath: "\(asdfShims)/node") {
+            return [asdfShims]
+        }
+
+        return []
+    }
+
+    /// Returns the latest version directory name (e.g. "v22.15.0") from a
+    /// parent directory containing version-named subdirectories.
+    private static func latestVersionDir(in parent: String) -> String? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: parent, isDirectory: &isDir), isDir.boolValue,
+              let entries = try? fm.contentsOfDirectory(atPath: parent) else {
+            return nil
+        }
+        return entries
+            .filter { $0.hasPrefix("v") }
+            .sorted()
+            .last
     }
 }

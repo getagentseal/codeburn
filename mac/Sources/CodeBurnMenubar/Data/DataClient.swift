@@ -58,6 +58,8 @@ struct DataClient {
         do {
             try process.run()
         } catch {
+            let path = ProcessInfo.processInfo.environment["PATH"] ?? "(no PATH)"
+            NSLog("CodeBurn: CLI spawn failed. PATH=%@ error=%@", path, error.localizedDescription)
             throw DataClientError.spawn(error.localizedDescription)
         }
 
