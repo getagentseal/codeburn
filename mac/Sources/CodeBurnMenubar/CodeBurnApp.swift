@@ -374,8 +374,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func refreshPayloadForPopoverOpen() {
         guard store.needsInteractivePayloadRefresh else { return }
+        let shouldResetPipeline = store.shouldResetInteractiveRefreshPipeline
+        if shouldResetPipeline, let age = store.staleInteractivePayloadAgeSeconds {
+            NSLog("CodeBurn: popover opened with %ds stale payload cache - resetting refresh pipeline", age)
+        }
         recoverRefreshPipelineAfterInterruption(
-            resetLoading: store.hasStaleLoading,
+            resetLoading: shouldResetPipeline,
             reason: "popover open"
         )
     }
@@ -383,38 +387,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func startRefreshLoop() {
         refreshLoopTask?.cancel()
         refreshLoopHeartbeatAt = Date()
+        forceRefresh(bypassRateLimit: true, forceQuota: true)
         refreshLoopTask = Task { [weak self] in
-            // Provider refreshes only run when the user has explicitly connected.
-            // Each refresh is a no-op until its corresponding bootstrap flag is set.
-            if let self {
-                await self.refreshLiveQuotaProgressIfDue(force: true)
-            }
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshLoopHeartbeatAt = Date()
                 let clearedStaleForceRefresh = self.clearStaleForceRefreshIfNeeded()
                 let clearedStaleLoading = self.store.clearStaleLoadingIfNeeded()
-                // Skip the loop's tick if a wake / manual / distributed-
-                // notification refresh just ran. Without this gate, every
-                // wake produced two refreshes (forceRefresh from the wake
-                // observer plus the loop's natural tick).
                 let sinceLast = Date().timeIntervalSince(self.lastRefreshTime)
-                if self.forceRefreshTask == nil && (clearedStaleForceRefresh || clearedStaleLoading || sinceLast >= 5) {
-                    if self.store.selectedPeriod != .today || self.store.selectedProvider != .all {
-                        async let quiet: Void = self.store.refreshQuietly(period: .today)
-                        async let main: Void = self.store.refresh(includeOptimize: false, force: true)
-                        _ = await (quiet, main)
-                    } else {
-                        await self.store.refresh(includeOptimize: false, force: true)
-                    }
-                    self.lastRefreshTime = Date()
-                    self.refreshStatusButton()
+                if clearedStaleForceRefresh || clearedStaleLoading || sinceLast >= TimeInterval(refreshIntervalSeconds) {
+                    self.forceRefresh(bypassRateLimit: true)
                 }
-                // Cadence-driven live-quota refresh, anchored on LAST SUCCESS
-                // (not last attempt) so an intermittent failure doesn't reset
-                // the timer. Each provider has its own anchor so a Codex 429
-                // doesn't delay a due Claude refresh.
-                await self.refreshLiveQuotaProgressIfDue()
                 try? await Task.sleep(nanoseconds: refreshIntervalNanos)
             }
         }

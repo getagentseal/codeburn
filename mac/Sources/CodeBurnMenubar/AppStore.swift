@@ -2,6 +2,7 @@ import Foundation
 import Observation
 
 private let cacheTTLSeconds: TimeInterval = 30
+private let interactiveRefreshResetSeconds: TimeInterval = 120
 
 struct CachedPayload {
     let payload: MenubarPayload
@@ -95,10 +96,34 @@ final class AppStore {
         }
     }
 
+    var hasStaleInteractivePayload: Bool {
+        staleInteractivePayloadAgeSeconds != nil
+    }
+
+    var shouldResetInteractiveRefreshPipeline: Bool {
+        hasStaleLoading || hasStaleInteractivePayload
+    }
+
+    var staleInteractivePayloadAgeSeconds: Int? {
+        let keys = Set([
+            currentKey,
+            PayloadCacheKey(period: .today, provider: .all),
+            PayloadCacheKey(period: selectedPeriod, provider: .all),
+        ])
+        let staleAges = keys.compactMap { key -> TimeInterval? in
+            guard let cached = cache[key] else { return nil }
+            let age = Date().timeIntervalSince(cached.fetchedAt)
+            return age > interactiveRefreshResetSeconds ? age : nil
+        }
+        return staleAges.max().map(Int.init)
+    }
+
     var needsInteractivePayloadRefresh: Bool {
         let todayKey = PayloadCacheKey(period: .today, provider: .all)
+        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all)
         return cache[currentKey]?.isFresh != true ||
             cache[todayKey]?.isFresh != true ||
+            cache[periodAllKey]?.isFresh != true ||
             hasStaleLoading
     }
 
@@ -109,6 +134,12 @@ final class AppStore {
     var hasAnyProvidersInCache: Bool {
         cache.values.contains { !$0.payload.current.providers.isEmpty }
     }
+
+#if DEBUG
+    func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, fetchedAt: Date) {
+        cache[PayloadCacheKey(period: period, provider: provider)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+    }
+#endif
 
     var findingsCount: Int {
         payload.optimize.findingCount
@@ -213,8 +244,15 @@ final class AppStore {
         formatter.dateFormat = "yyyy-MM-dd"
         let today = formatter.string(from: Date())
         if cacheDate != today {
+            payloadRefreshGeneration &+= 1
             cache.removeAll()
+            loadingCountsByKey.removeAll()
+            loadingStartedAtByKey.removeAll()
+            inFlightKeys.removeAll()
+            attemptedKeys.removeAll()
+            lastErrorByKey.removeAll()
             cacheDate = today
+            NSLog("CodeBurn: reset menubar payload cache for new day %@", today)
         }
     }
 
