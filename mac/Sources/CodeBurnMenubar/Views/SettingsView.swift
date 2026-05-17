@@ -133,7 +133,7 @@ private struct ClaudeConnectionRow: View {
         case .terminalFailure: return "exclamationmark.triangle.fill"
         case .transientFailure: return "clock.arrow.circlepath"
         case .bootstrapping, .loading: return "ellipsis.circle"
-        case .notBootstrapped, .noCredentials: return "link.circle"
+        case .notBootstrapped, .dormant, .noCredentials: return "link.circle"
         case .failed: return "xmark.circle"
         }
     }
@@ -154,6 +154,7 @@ private struct ClaudeConnectionRow: View {
         case .transientFailure: return "Backing off"
         case .bootstrapping: return "Connecting…"
         case .loading: return "Refreshing…"
+        case .dormant: return "Ready"
         case .notBootstrapped, .noCredentials: return "Not connected"
         case .failed: return "Couldn't load plan data"
         }
@@ -170,6 +171,7 @@ private struct ClaudeConnectionRow: View {
         case .transientFailure: return store.subscriptionError ?? "Anthropic rate-limited; auto-retrying."
         case .bootstrapping: return "macOS may ask permission to read your credentials."
         case .loading: return "Background refresh in progress."
+        case .dormant: return "Tap Load Quota to fetch live usage from Anthropic."
         case .notBootstrapped, .noCredentials: return "Click Connect to read your Claude Code credentials and start tracking quota."
         case .failed: return store.subscriptionError ?? ""
         }
@@ -193,6 +195,9 @@ private struct ClaudeConnectionRow: View {
                 }
         case .terminalFailure, .noCredentials, .failed:
             Button("Reconnect") { Task { await store.bootstrapSubscription() } }
+                .buttonStyle(.borderedProminent)
+        case .dormant:
+            Button("Load Quota") { Task { await store.activateClaudeFromDormant() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
             Button("Connect") { Task { await store.bootstrapSubscription() } }
@@ -256,7 +261,7 @@ private struct CodexConnectionRow: View {
         case .terminalFailure: return "exclamationmark.triangle.fill"
         case .transientFailure: return "clock.arrow.circlepath"
         case .bootstrapping, .loading: return "ellipsis.circle"
-        case .notBootstrapped, .noCredentials: return "link.circle"
+        case .notBootstrapped, .dormant, .noCredentials: return "link.circle"
         case .failed: return "xmark.circle"
         }
     }
@@ -277,6 +282,7 @@ private struct CodexConnectionRow: View {
         case .transientFailure: return "Backing off"
         case .bootstrapping: return "Connecting…"
         case .loading: return "Refreshing…"
+        case .dormant: return "Ready"
         case .notBootstrapped, .noCredentials: return "Not connected"
         case .failed: return "Couldn't load Codex quota"
         }
@@ -300,6 +306,7 @@ private struct CodexConnectionRow: View {
         case .transientFailure: return store.codexError ?? "ChatGPT rate-limited; auto-retrying."
         case .bootstrapping: return "Reading ~/.codex/auth.json."
         case .loading: return "Background refresh in progress."
+        case .dormant: return "Tap Load Quota to fetch live usage from chatgpt.com."
         case .notBootstrapped, .noCredentials:
             return "Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json."
         case .failed: return store.codexError ?? ""
@@ -324,6 +331,9 @@ private struct CodexConnectionRow: View {
                 }
         case .terminalFailure, .noCredentials, .failed:
             Button("Reconnect") { Task { await store.bootstrapCodex() } }
+                .buttonStyle(.borderedProminent)
+        case .dormant:
+            Button("Load Quota") { Task { await store.activateCodexFromDormant() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
             Button("Connect") { Task { await store.bootstrapCodex() } }

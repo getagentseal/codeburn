@@ -900,7 +900,7 @@ private struct PlanInsight: View {
     var body: some View {
         Group {
             switch store.subscriptionLoadState {
-            case .notBootstrapped:
+            case .notBootstrapped, .dormant:
                 PlanConnectView { Task { await store.bootstrapSubscription() } }
             case .bootstrapping:
                 PlanLoadingView()
@@ -1174,7 +1174,7 @@ private struct CodexPlanInsight: View {
     var body: some View {
         Group {
             switch store.codexLoadState {
-            case .notBootstrapped:
+            case .notBootstrapped, .dormant:
                 PlanConnectView { Task { await store.bootstrapCodex() } }
             case .bootstrapping:
                 PlanLoadingView()
