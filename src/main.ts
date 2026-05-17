@@ -706,6 +706,7 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Include only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--include-prompts', 'Include redacted user prompts. By default prompts are omitted.')
   .action(async (opts) => {
     let customRange: DateRange | null = null
     try {
@@ -744,6 +745,7 @@ program
       provider: opts.provider,
       project: opts.project,
       exclude: opts.exclude,
+      includePrompts: opts.includePrompts === true,
     })
     const savedPath = await writeRedactedShare(share, outputPath)
     console.log(`\n  Redacted share exported to: ${savedPath}`)

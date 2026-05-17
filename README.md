@@ -78,7 +78,7 @@ codeburn status                 # compact one-liner (today + month)
 codeburn status --format json
 codeburn export                 # CSV with today, 7 days, 30 days
 codeburn export -f json         # JSON export
-codeburn share                  # redacted JSON bundle for support/debugging
+codeburn share                  # redacted JSON bundle; prompts omitted by default
 codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
@@ -344,9 +344,10 @@ codeburn share                         # 7-day redacted JSON bundle
 codeburn share -p 30days               # last 30 days
 codeburn share --provider claude       # provider-specific bundle
 codeburn share --project api -o api-share.json
+codeburn share --include-prompts       # opt in to redacted prompt text
 ```
 
-The bundle keeps enough structure to debug provider parsing and cost attribution: pseudonymous projects, sessions, turns, models, token usage, tools, activity categories, and costs. Redaction is best-effort; review the generated file before posting it publicly.
+The default bundle omits prompt text (`userMessage: null`) and keeps enough structure to debug provider parsing and cost attribution: pseudonymous projects, sessions, turns, models, token usage, tools, activity categories, and costs. `--include-prompts` keeps best-effort redacted prompt text for cases where maintainers explicitly need it. Review the generated file before posting it publicly.
 
 ## Menu Bar
 

@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added (CLI)
-- **Redacted share bundles.** New `codeburn share` command writes a local JSON support bundle with project/session/turn structure while pseudonymizing project labels and redacting common emails, local paths, credentials, bearer tokens, and API keys. Supports period, date range, provider, project, exclude, and output-path filters.
+- **Redacted share bundles.** New `codeburn share` command writes a local JSON support bundle with project/session/turn structure while pseudonymizing project labels and redacting common emails, local paths, credentials, bearer tokens, and API keys. Prompt text is omitted by default and can be explicitly included with `--include-prompts`. Supports period, date range, provider, project, exclude, and output-path filters.
 - **Multiple subscription plans can be tracked at the same time.**
   `codeburn plan set` now stores plans in a provider-keyed `plans` map, so
   setting a Codex custom plan no longer overwrites an existing Claude plan.

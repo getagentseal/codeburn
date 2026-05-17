@@ -77,7 +77,7 @@ describe('redacted share', () => {
     }
   })
 
-  it('builds a useful redacted support bundle', () => {
+  it('omits user prompts from support bundles by default', () => {
     const projects: ProjectSummary[] = [{
       project: 'client-a',
       projectPath: '/Users/husam/work/client-a',
@@ -147,8 +147,60 @@ describe('redacted share', () => {
     expect(share.projects[0]!.project).toBe('[project:1]')
     expect(share.projects[0]!.projectPath).toBe('[path:1]')
     expect(share.projects[0]!.sessions[0]!.totalCostUSD).toBe(1.2346)
-    const message = share.projects[0]!.sessions[0]!.turns[0]!.userMessage
     const call = share.projects[0]!.sessions[0]!.turns[0]!.assistantCalls[0]!
+    expect(share.redaction.prompts).toBe('omitted')
+    expect(share.projects[0]!.sessions[0]!.turns[0]!.userMessage).toBeNull()
+    expect(call.skills).toEqual(['browser-use'])
+    expect(call.hasAgentSpawn).toBe(true)
+    expect(call.hasPlanMode).toBe(true)
+  })
+
+  it('can include redacted prompts when explicitly requested', () => {
+    const projects: ProjectSummary[] = [{
+      project: 'client-a',
+      projectPath: '/Users/husam/work/client-a',
+      totalCostUSD: 1.23456,
+      totalApiCalls: 1,
+      sessions: [{
+        sessionId: 'session-1',
+        project: 'client-a',
+        firstTimestamp: '2026-05-05T10:00:00.000Z',
+        lastTimestamp: '2026-05-05T10:01:00.000Z',
+        totalCostUSD: 1.23456,
+        totalInputTokens: 1000,
+        totalOutputTokens: 200,
+        totalCacheReadTokens: 50,
+        totalCacheWriteTokens: 25,
+        apiCalls: 1,
+        turns: [{
+          userMessage: 'fix client-a at /Users/husam/work/client-a for husam@example.com with token=secret-token-12345',
+          assistantCalls: [],
+          timestamp: '2026-05-05T10:00:00.000Z',
+          sessionId: 'session-1',
+          category: 'debugging',
+          retries: 1,
+          hasEdits: true,
+        }],
+        modelBreakdown: {},
+        toolBreakdown: {},
+        mcpBreakdown: {},
+        bashBreakdown: {},
+        categoryBreakdown: {},
+        skillBreakdown: {},
+      }],
+    }]
+
+    const share = buildRedactedShare(projects, {
+      label: '7 Days',
+      range: { start: new Date('2026-05-01T00:00:00.000Z'), end: new Date('2026-05-07T23:59:59.999Z') },
+      provider: 'all',
+      project: [],
+      exclude: [],
+      includePrompts: true,
+    })
+
+    const message = share.projects[0]!.sessions[0]!.turns[0]!.userMessage
+    expect(share.redaction.prompts).toBe('redacted')
     expect(message).not.toContain('/Users/husam')
     expect(message).not.toContain('husam@example.com')
     expect(message).not.toContain('secret-token-12345')
@@ -157,9 +209,54 @@ describe('redacted share', () => {
     expect(message).toContain('[email:1]')
     expect(message).toContain('[project:1]')
     expect(message).toContain('[secret:1]')
-    expect(call.skills).toEqual(['browser-use'])
-    expect(call.hasAgentSpawn).toBe(true)
-    expect(call.hasPlanMode).toBe(true)
+  })
+
+  it('keeps null user prompts null even when prompt redaction is enabled', () => {
+    const projects = [{
+      project: 'client-a',
+      projectPath: '/Users/husam/work/client-a',
+      totalCostUSD: 0.01,
+      totalApiCalls: 1,
+      sessions: [{
+        sessionId: 'session-1',
+        project: 'client-a',
+        firstTimestamp: '2026-05-05T10:00:00.000Z',
+        lastTimestamp: '2026-05-05T10:01:00.000Z',
+        totalCostUSD: 0.01,
+        totalInputTokens: 10,
+        totalOutputTokens: 5,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        apiCalls: 1,
+        turns: [{
+          userMessage: null,
+          assistantCalls: [],
+          timestamp: '2026-05-05T10:00:00.000Z',
+          sessionId: 'session-1',
+          category: 'debugging',
+          retries: 0,
+          hasEdits: false,
+        }],
+        modelBreakdown: {},
+        toolBreakdown: {},
+        mcpBreakdown: {},
+        bashBreakdown: {},
+        categoryBreakdown: {},
+        skillBreakdown: {},
+      }],
+    }] as unknown as ProjectSummary[]
+
+    const share = buildRedactedShare(projects, {
+      label: '7 Days',
+      range: { start: new Date('2026-05-01T00:00:00.000Z'), end: new Date('2026-05-07T23:59:59.999Z') },
+      provider: 'all',
+      project: [],
+      exclude: [],
+      includePrompts: true,
+    })
+
+    expect(share.redaction.prompts).toBe('redacted')
+    expect(share.projects[0]!.sessions[0]!.turns[0]!.userMessage).toBeNull()
   })
 
   it('redacts project labels without mangling unrelated substrings', () => {
@@ -203,6 +300,7 @@ describe('redacted share', () => {
       provider: 'all',
       project: ['api'],
       exclude: ['client-a'],
+      includePrompts: true,
     })
 
     const message = share.projects[0]!.sessions[0]!.turns[0]!.userMessage
@@ -256,6 +354,7 @@ describe('redacted share', () => {
       provider: 'all',
       project: [],
       exclude: [],
+      includePrompts: true,
     })
 
     expect(share.projects[0]!.sessions[0]!.turns[0]!.userMessage).toBe('[project:1] uses token=[secret:1]')

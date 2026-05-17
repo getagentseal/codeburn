@@ -13,6 +13,7 @@ export type RedactedShareOptions = {
   provider: string
   project: string[]
   exclude: string[]
+  includePrompts?: boolean
 }
 
 type RedactedCall = {
@@ -37,7 +38,7 @@ type RedactedTurn = {
   subCategory?: string
   retries: number
   hasEdits: boolean
-  userMessage: string
+  userMessage: string | null
   assistantCalls: RedactedCall[]
 }
 
@@ -78,6 +79,7 @@ export type RedactedShare = {
   redaction: {
     applied: true
     placeholders: Record<RedactionKind, string>
+    prompts: 'omitted' | 'redacted'
     uniqueReplacements: RedactionStats
   }
   summary: {
@@ -241,7 +243,7 @@ function redactCall(call: ParsedApiCall, redactor: StableRedactor): RedactedCall
   }
 }
 
-function redactTurn(turn: ClassifiedTurn, redactor: StableRedactor): RedactedTurn {
+function redactTurn(turn: ClassifiedTurn, redactor: StableRedactor, includePrompts: boolean): RedactedTurn {
   return {
     timestamp: turn.timestamp,
     sessionId: redactor.redactText(turn.sessionId),
@@ -249,12 +251,12 @@ function redactTurn(turn: ClassifiedTurn, redactor: StableRedactor): RedactedTur
     ...(turn.subCategory ? { subCategory: redactor.redactText(turn.subCategory) } : {}),
     retries: turn.retries,
     hasEdits: turn.hasEdits,
-    userMessage: redactor.redactText(turn.userMessage),
+    userMessage: includePrompts && turn.userMessage ? redactor.redactText(turn.userMessage) : null,
     assistantCalls: turn.assistantCalls.map(call => redactCall(call, redactor)),
   }
 }
 
-function redactSession(session: SessionSummary, redactor: StableRedactor): RedactedSession {
+function redactSession(session: SessionSummary, redactor: StableRedactor, includePrompts: boolean): RedactedSession {
   return {
     sessionId: redactor.redactText(session.sessionId),
     firstTimestamp: session.firstTimestamp,
@@ -265,12 +267,13 @@ function redactSession(session: SessionSummary, redactor: StableRedactor): Redac
     totalCacheReadTokens: session.totalCacheReadTokens,
     totalCacheWriteTokens: session.totalCacheWriteTokens,
     apiCalls: session.apiCalls,
-    turns: session.turns.map(turn => redactTurn(turn, redactor)),
+    turns: session.turns.map(turn => redactTurn(turn, redactor, includePrompts)),
   }
 }
 
 export function buildRedactedShare(projects: ProjectSummary[], options: RedactedShareOptions): RedactedShare {
   const redactor = new StableRedactor()
+  const includePrompts = options.includePrompts ?? false
   const sessions = projects.flatMap(project => project.sessions)
   const turns = sessions.flatMap(session => session.turns)
 
@@ -283,7 +286,7 @@ export function buildRedactedShare(projects: ProjectSummary[], options: Redacted
     projectPath: redactor.redactText(project.projectPath),
     totalCostUSD: roundCost(project.totalCostUSD),
     totalApiCalls: project.totalApiCalls,
-    sessions: project.sessions.map(session => redactSession(session, redactor)),
+    sessions: project.sessions.map(session => redactSession(session, redactor, includePrompts)),
   }))
 
   const uniqueReplacements = redactor.stats()
@@ -309,6 +312,7 @@ export function buildRedactedShare(projects: ProjectSummary[], options: Redacted
         project: '[project:<index>]',
         secret: '[secret:<index>]',
       },
+      prompts: includePrompts ? 'redacted' : 'omitted',
       uniqueReplacements,
     },
     summary: {
