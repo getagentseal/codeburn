@@ -7,7 +7,7 @@ import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { type PeriodData, type ProviderCost } from './menubar-json.js'
 import { buildMenubarPayload } from './menubar-json.js'
-import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
+import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry } from './daily-cache.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -442,6 +442,25 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
   }
 }
 
+function dayForProvider(day: DailyEntry, providerName: string): DailyEntry {
+  const provider = day.providers[providerName]
+  return {
+    date: day.date,
+    cost: provider?.cost ?? 0,
+    calls: provider?.calls ?? 0,
+    sessions: provider?.sessions ?? 0,
+    inputTokens: provider?.inputTokens ?? 0,
+    outputTokens: provider?.outputTokens ?? 0,
+    cacheReadTokens: provider?.cacheReadTokens ?? 0,
+    cacheWriteTokens: provider?.cacheWriteTokens ?? 0,
+    editTurns: provider?.editTurns ?? 0,
+    oneShotTurns: provider?.oneShotTurns ?? 0,
+    models: provider?.models ?? {},
+    categories: provider?.categories ?? {},
+    providers: provider ? { [providerName]: provider } : {},
+  }
+}
+
 program
   .command('status')
   .description('Compact status output (today + month)')
@@ -488,11 +507,9 @@ program
       let scanProjects: ProjectSummary[]
       let scanRange: DateRange
       let cache: DailyCache
-      let todayProviderData: PeriodData | null = null
-      let usedPerProviderCachePath = false
 
+      cache = await hydrateCache()
       if (isAllProviders) {
-        cache = await hydrateCache()
         const todayProjects = await getTodayAllProjects()
         const todayDays = await getTodayAllDays()
         const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
@@ -502,14 +519,18 @@ program
         scanProjects = todayProjects
         scanRange = todayRange
       } else {
-        // Per-provider token mode needs the full period scan because the daily
-        // cache stores provider cost/calls but not provider-scoped token buckets.
-        cache = await loadDailyCache()
-        const projects = fp(await parseAllSessions(periodInfo.range, pf))
-        todayProviderData = buildPeriodData(periodInfo.label, projects)
-        currentData = todayProviderData
-        scanProjects = projects
-        scanRange = periodInfo.range
+        // Provider-scoped history comes from the daily cache so the menubar
+        // preserves the fast path added for provider tabs. Only today is
+        // reparsed because the cache intentionally excludes the in-progress
+        // local day.
+        const todayProjects = fp(await parseAllSessions(todayRange, pf))
+        const todayProviderDays = aggregateProjectsIntoDays(todayProjects).map(d => dayForProvider(d, pf))
+        const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr).map(d => dayForProvider(d, pf))
+        const todayInRange = todayProviderDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
+        const providerDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
+        currentData = buildPeriodDataFromDays(providerDays, periodInfo.label)
+        scanProjects = todayProjects
+        scanRange = todayRange
       }
 
       // PROVIDERS
@@ -543,14 +564,13 @@ program
       }
 
       // DAILY HISTORY (last 365 days)
-      // Cache stores per-provider cost+calls per day in DailyEntry.providers, so we can derive
-      // a provider-filtered history without re-parsing. Tokens aren't broken down per provider
-      // in the cache, so the filtered view shows zero tokens (heatmap/trend still works on cost).
+      // Cache stores per-provider cost/calls/tokens per day, so provider tabs
+      // can derive historical trend data without reparsing every session file.
       const historyStartStr = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS))
-      const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
 
       let dailyHistory
       if (isAllProviders) {
+        const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
         const todayDays = (await getTodayAllDays()).filter(d => d.date === todayStr)
         const fullHistory = [...allCacheDays, ...todayDays]
         dailyHistory = fullHistory.map(d => {
@@ -576,64 +596,34 @@ program
             topModels,
           }
         })
-      } else if (usedPerProviderCachePath) {
-        const historyFromCache = allCacheDays.map(d => {
-          const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
-          return {
-            date: d.date,
-            cost: prov.cost,
-            calls: prov.calls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
-          }
-        })
-        const todayCost = todayProviderData!.cost
-        const todayCalls = todayProviderData!.calls
-        if (todayCost > 0 || todayCalls > 0) {
-          historyFromCache.push({
-            date: todayStr,
-            cost: todayCost,
-            calls: todayCalls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [],
-          })
-        }
-        dailyHistory = historyFromCache
       } else {
-        const histFromCache = allCacheDays.map(d => {
-          const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
+        const historyDays = [
+          ...getDaysInRange(cache, historyStartStr, yesterdayStr).map(d => dayForProvider(d, pf)),
+          ...aggregateProjectsIntoDays(scanProjects).map(d => dayForProvider(d, pf)).filter(d => d.date === todayStr),
+        ]
+        dailyHistory = historyDays.map(d => {
+          const topModels = Object.entries(d.models)
+            .filter(([name]) => name !== '<synthetic>')
+            .sort(([, a], [, b]) => b.cost - a.cost)
+            .slice(0, 5)
+            .map(([name, m]) => ({
+              name,
+              cost: m.cost,
+              calls: m.calls,
+              inputTokens: m.inputTokens,
+              outputTokens: m.outputTokens,
+            }))
           return {
             date: d.date,
-            cost: prov.cost,
-            calls: prov.calls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
+            cost: d.cost,
+            calls: d.calls,
+            inputTokens: d.inputTokens,
+            outputTokens: d.outputTokens,
+            cacheReadTokens: d.cacheReadTokens,
+            cacheWriteTokens: d.cacheWriteTokens,
+            topModels,
           }
         })
-        const fallbackDays = aggregateProjectsIntoDays(scanProjects)
-        const liveDays = fallbackDays.map(d => {
-          const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
-          return {
-            date: d.date,
-            cost: prov.cost,
-            calls: prov.calls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
-          }
-        })
-        dailyHistory = [...histFromCache, ...liveDays]
       }
 
       const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)

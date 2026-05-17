@@ -199,8 +199,46 @@ describe('aggregateProjectsIntoDays', () => {
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
-    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7 })
-    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3 })
+    expect(day.providers['claude']).toMatchObject({
+      calls: 1,
+      cost: 7,
+      sessions: 1,
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0,
+      categories: {
+        coding: {
+          turns: 1,
+          cost: 7,
+          editTurns: 0,
+          oneShotTurns: 0,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadTokens: 50,
+          cacheWriteTokens: 0,
+        },
+      },
+      models: {
+        'Opus 4.7': {
+          calls: 1,
+          cost: 7,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadTokens: 50,
+          cacheWriteTokens: 0,
+        },
+      },
+    })
+    expect(day.providers['codex']).toMatchObject({
+      calls: 1,
+      cost: 3,
+      sessions: 1,
+      inputTokens: 100,
+      outputTokens: 200,
+      cacheReadTokens: 50,
+      cacheWriteTokens: 0,
+    })
   })
 })
 
@@ -233,7 +271,35 @@ describe('buildPeriodDataFromDays', () => {
           cacheWriteTokens: 25,
         },
       },
-      providers: { 'claude': { calls: 10, cost } },
+      providers: {
+        'claude': {
+          calls: 10,
+          cost,
+          sessions: 2,
+          editTurns: 2,
+          oneShotTurns: 1,
+          inputTokens: 100,
+          outputTokens: 200,
+          cacheReadTokens: 300,
+          cacheWriteTokens: 50,
+          models: {
+            'Opus 4.7': { calls: 8, cost: cost * 0.8, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            'Haiku 4.5': { calls: 2, cost: cost * 0.2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          },
+          categories: {
+            'coding': {
+              turns: 2,
+              cost: cost * 0.5,
+              editTurns: 2,
+              oneShotTurns: 1,
+              inputTokens: 50,
+              outputTokens: 100,
+              cacheReadTokens: 150,
+              cacheWriteTokens: 25,
+            },
+          },
+        },
+      },
     }
   }
 

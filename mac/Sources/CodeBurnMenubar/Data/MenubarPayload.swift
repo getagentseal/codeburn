@@ -74,7 +74,7 @@ struct CurrentBlock: Codable, Sendable {
     let providers: [String: Double]
 
     var totalTokens: Int {
-        inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+        inputTokens + outputTokens
     }
 }
 
@@ -89,7 +89,7 @@ struct ActivityEntry: Codable, Sendable {
     let oneShotRate: Double?
 
     var totalTokens: Int {
-        inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+        inputTokens + outputTokens
     }
 }
 

@@ -20,6 +20,46 @@ function emptyEntry(date: string): DailyEntry {
   }
 }
 
+function emptyProviderEntry(): DailyEntry['providers'][string] {
+  return {
+    calls: 0,
+    cost: 0,
+    sessions: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    models: {},
+    categories: {},
+  }
+}
+
+function emptyCategoryEntry(): DailyEntry['categories'][string] {
+  return {
+    turns: 0,
+    cost: 0,
+    editTurns: 0,
+    oneShotTurns: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  }
+}
+
+function emptyModelEntry(): DailyEntry['models'][string] {
+  return {
+    calls: 0,
+    cost: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  }
+}
+
 export function dateKey(iso: string): string {
   const d = new Date(iso)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -36,7 +76,14 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
   for (const project of projects) {
     for (const session of project.sessions) {
       const sessionDate = dateKey(session.firstTimestamp)
-      ensure(sessionDate).sessions += 1
+      const sessionDay = ensure(sessionDate)
+      sessionDay.sessions += 1
+      const sessionProviders = new Set(session.turns.flatMap(turn => turn.assistantCalls.map(call => call.provider)))
+      for (const providerName of sessionProviders) {
+        const provider = sessionDay.providers[providerName] ?? emptyProviderEntry()
+        provider.sessions += 1
+        sessionDay.providers[providerName] = provider
+      }
 
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
@@ -57,10 +104,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         turnDay.editTurns += editTurns
         turnDay.oneShotTurns += oneShotTurns
 
-        const cat = turnDay.categories[turn.category] ?? {
-          turns: 0, cost: 0, editTurns: 0, oneShotTurns: 0,
-          inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-        }
+        const cat = turnDay.categories[turn.category] ?? emptyCategoryEntry()
         cat.turns += 1
         cat.cost += turnTotals.cost
         cat.editTurns += editTurns
@@ -70,6 +114,15 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         cat.cacheReadTokens += turnTotals.cacheReadTokens
         cat.cacheWriteTokens += turnTotals.cacheWriteTokens
         turnDay.categories[turn.category] = cat
+
+        const turnProviderTotals = new Map<string, {
+          cost: number
+          calls: number
+          inputTokens: number
+          outputTokens: number
+          cacheReadTokens: number
+          cacheWriteTokens: number
+        }>()
 
         for (const call of turn.assistantCalls) {
           const callDate = dateKey(call.timestamp)
@@ -82,11 +135,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           callDay.cacheReadTokens += call.usage.cacheReadInputTokens
           callDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
-          const model = callDay.models[call.model] ?? {
-            calls: 0, cost: 0,
-            inputTokens: 0, outputTokens: 0,
-            cacheReadTokens: 0, cacheWriteTokens: 0,
-          }
+          const model = callDay.models[call.model] ?? emptyModelEntry()
           model.calls += 1
           model.cost += call.costUSD
           model.inputTokens += call.usage.inputTokens
@@ -95,10 +144,57 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
           callDay.models[call.model] = model
 
-          const provider = callDay.providers[call.provider] ?? { calls: 0, cost: 0 }
+          const provider = callDay.providers[call.provider] ?? emptyProviderEntry()
           provider.calls += 1
           provider.cost += call.costUSD
+          provider.inputTokens += call.usage.inputTokens
+          provider.outputTokens += call.usage.outputTokens
+          provider.cacheReadTokens += call.usage.cacheReadInputTokens
+          provider.cacheWriteTokens += call.usage.cacheCreationInputTokens
+
+          const providerModel = provider.models[call.model] ?? emptyModelEntry()
+          providerModel.calls += 1
+          providerModel.cost += call.costUSD
+          providerModel.inputTokens += call.usage.inputTokens
+          providerModel.outputTokens += call.usage.outputTokens
+          providerModel.cacheReadTokens += call.usage.cacheReadInputTokens
+          providerModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          provider.models[call.model] = providerModel
+
           callDay.providers[call.provider] = provider
+
+          const providerTurn = turnProviderTotals.get(call.provider) ?? {
+            cost: 0,
+            calls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          }
+          providerTurn.calls += 1
+          providerTurn.cost += call.costUSD
+          providerTurn.inputTokens += call.usage.inputTokens
+          providerTurn.outputTokens += call.usage.outputTokens
+          providerTurn.cacheReadTokens += call.usage.cacheReadInputTokens
+          providerTurn.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          turnProviderTotals.set(call.provider, providerTurn)
+        }
+
+        for (const [providerName, totals] of turnProviderTotals) {
+          const provider = turnDay.providers[providerName] ?? emptyProviderEntry()
+          const providerCat = provider.categories[turn.category] ?? emptyCategoryEntry()
+          providerCat.turns += 1
+          providerCat.cost += totals.cost
+          providerCat.editTurns += editTurns
+          providerCat.oneShotTurns += oneShotTurns
+          providerCat.inputTokens += totals.inputTokens
+          providerCat.outputTokens += totals.outputTokens
+          providerCat.cacheReadTokens += totals.cacheReadTokens
+          providerCat.cacheWriteTokens += totals.cacheWriteTokens
+          provider.categories[turn.category] = providerCat
+          provider.editTurns += editTurns
+          provider.oneShotTurns += oneShotTurns
+          turnDay.providers[providerName] = provider
         }
       }
     }

@@ -17,6 +17,40 @@ export const DAILY_CACHE_VERSION = 8
 const MIN_SUPPORTED_VERSION = DAILY_CACHE_VERSION
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
+export type DailyModelEntry = {
+  calls: number
+  cost: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+export type DailyCategoryEntry = {
+  turns: number
+  cost: number
+  editTurns: number
+  oneShotTurns: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+export type DailyProviderEntry = {
+  calls: number
+  cost: number
+  sessions: number
+  editTurns: number
+  oneShotTurns: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  models: Record<string, DailyModelEntry>
+  categories: Record<string, DailyCategoryEntry>
+}
+
 export type DailyEntry = {
   date: string
   cost: number
@@ -28,25 +62,9 @@ export type DailyEntry = {
   cacheWriteTokens: number
   editTurns: number
   oneShotTurns: number
-  models: Record<string, {
-    calls: number
-    cost: number
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWriteTokens: number
-  }>
-  categories: Record<string, {
-    turns: number
-    cost: number
-    editTurns: number
-    oneShotTurns: number
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWriteTokens: number
-  }>
-  providers: Record<string, { calls: number; cost: number }>
+  models: Record<string, DailyModelEntry>
+  categories: Record<string, DailyCategoryEntry>
+  providers: Record<string, DailyProviderEntry>
 }
 
 export type DailyCache = {
@@ -89,7 +107,19 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
     oneShotTurns: (d.oneShotTurns as number) ?? 0,
     models: (d.models as DailyEntry['models']) ?? {},
     categories: (d.categories as DailyEntry['categories']) ?? {},
-    providers: (d.providers as DailyEntry['providers']) ?? {},
+    providers: Object.fromEntries(Object.entries((d.providers as Record<string, Partial<DailyProviderEntry>>) ?? {}).map(([name, provider]) => [name, {
+      calls: provider.calls ?? 0,
+      cost: provider.cost ?? 0,
+      sessions: provider.sessions ?? 0,
+      editTurns: provider.editTurns ?? 0,
+      oneShotTurns: provider.oneShotTurns ?? 0,
+      inputTokens: provider.inputTokens ?? 0,
+      outputTokens: provider.outputTokens ?? 0,
+      cacheReadTokens: provider.cacheReadTokens ?? 0,
+      cacheWriteTokens: provider.cacheWriteTokens ?? 0,
+      models: provider.models ?? {},
+      categories: provider.categories ?? {},
+    }])),
   }))
 }
 
