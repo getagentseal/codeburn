@@ -15,6 +15,7 @@ import { renderDashboard } from './dashboard.js'
 import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
+import { computeGitCost, getGitCommits, getGitRepoRoot, parseGitSince, renderGitCostText } from './git-cost.js'
 import { getAllProviders } from './providers/index.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
@@ -1058,6 +1059,57 @@ program
     console.log(`\n  Analyzing yield for ${label}...\n`)
     const summary = await computeYield(range, process.cwd())
     console.log(formatYieldSummary(summary))
+  })
+
+program
+  .command('git-cost')
+  .description('Attribute AI coding spend to local git commits')
+  .option('--since <period>', 'Lookback window: today, week/7days/7d, 30days/30d, month, or Nd/Nday/Ndays', '7days')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--window-minutes <n>', 'Minutes after a session ends to attribute commits', parseNumber, 120)
+  .option('--json', 'Print machine-readable JSON')
+  .action(async (opts) => {
+    const repoRoot = getGitRepoRoot(process.cwd())
+    if (!repoRoot) {
+      console.error('\n  git-cost must be run inside a git repository.\n')
+      process.exitCode = 1
+      return
+    }
+
+    if (!Number.isInteger(opts.windowMinutes) || opts.windowMinutes < 0) {
+      console.error(`\n  --window-minutes must be a non-negative integer; got ${opts.windowMinutes}.\n`)
+      process.exitCode = 1
+      return
+    }
+
+    let parsedSince: ReturnType<typeof parseGitSince>
+    try {
+      parsedSince = parseGitSince(opts.since)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Error: ${message}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    await loadPricing()
+    const projects = await parseAllSessions(parsedSince.range, opts.provider)
+    const commitRange = {
+      start: parsedSince.range.start,
+      end: new Date(parsedSince.range.end.getTime() + opts.windowMinutes * 60 * 1000),
+    }
+    const commits = getGitCommits(repoRoot, commitRange)
+    const result = computeGitCost(projects, commits, {
+      label: parsedSince.label,
+      repoRoot,
+      windowMinutes: opts.windowMinutes,
+    })
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+    } else {
+      console.log(renderGitCostText(result))
+    }
   })
 
 program.parse()

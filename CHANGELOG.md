@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Git cost attribution.** New `codeburn git-cost` command attributes local
+  AI coding spend to commits in the current git repository using a configurable
+  post-session attribution window, with text and JSON output for attributed
+  commits and unattributed sessions.
 - **Multiple subscription plans can be tracked at the same time.**
   `codeburn plan set` now stores plans in a provider-keyed `plans` map, so
   setting a Codex custom plan no longer overwrites an existing Claude plan.
