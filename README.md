@@ -81,6 +81,7 @@ codeburn export -f json         # JSON export
 codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 codeburn compare                # side-by-side model comparison
+codeburn compare --reprice claude-sonnet-4-5  # what-if pricing
 codeburn yield                  # track productive vs reverted/abandoned spend
 codeburn yield -p 30days        # yield analysis for last 30 days
 codeburn models                 # per-model token + cost table (last 30 days)
@@ -220,6 +221,8 @@ codeburn compare                        # interactive model picker (default: las
 codeburn compare -p week                # last 7 days
 codeburn compare -p today               # today only
 codeburn compare --provider claude      # Claude Code sessions only
+codeburn compare --reprice gpt-5.3-codex
+codeburn compare --reprice claude-sonnet-4-5 --json
 ```
 
 Or press `c` in the dashboard to enter compare mode. Arrow keys switch periods, `b` to return.
@@ -235,6 +238,8 @@ Or press `c` in the dashboard to enter compare mode. Arrow keys switch periods, 
 | Efficiency | Cache hit rate | Proportion of input from cache |
 
 Also compares per-category one-shot rates, delegation rate, planning rate, average tools per turn, and fast mode usage.
+
+For pricing-only what-if analysis, `--reprice <model>` recalculates the selected period as if every recorded call used the target model's current pricing. It keeps the original token counts, cache reads/writes, web-search usage, and fast-mode flags, then shows total difference plus the biggest session, project, and source-model impacts. It does not simulate quality changes or different output lengths.
 
 ### Yield
 

@@ -15,6 +15,7 @@ import { renderDashboard } from './dashboard.js'
 import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
+import { analyzeReprice, canRepriceToModel, renderRepriceText } from './reprice.js'
 import { getAllProviders } from './providers/index.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
@@ -982,12 +983,37 @@ program
 
 program
   .command('compare')
-  .description('Compare two AI models side-by-side')
+  .description('Compare models and run what-if pricing')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--reprice <model>', 'Recalculate spend as if every call used this model')
+  .option('--json', 'Print machine-readable JSON for --reprice')
   .action(async (opts) => {
     await loadPricing()
-    const { range } = getDateRange(opts.period)
+    const { range, label } = getDateRange(opts.period)
+
+    if (opts.reprice) {
+      if (!canRepriceToModel(opts.reprice)) {
+        console.error(`\n  Unknown pricing model: ${opts.reprice}\n`)
+        process.exitCode = 1
+        return
+      }
+      const projects = await parseAllSessions(range, opts.provider)
+      const result = analyzeReprice(projects, label, opts.reprice)
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2))
+      } else {
+        console.log(renderRepriceText(result))
+      }
+      return
+    }
+
+    if (opts.json) {
+      console.error('\n  --json is only supported with --reprice.\n')
+      process.exitCode = 1
+      return
+    }
+
     await renderCompare(range, opts.provider)
   })
 
