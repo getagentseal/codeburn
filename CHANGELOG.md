@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Session replay.** New `codeburn replay <session-id>` command renders a
+  local turn-by-turn timeline for a recorded session, including per-turn cost,
+  category, models, tools, MCP tools, skills, shell commands, retries, edit
+  flags, and token counts. Supports period, date range, provider, project,
+  exclude filters, `--json`, and `--no-prompts` for metadata-only output.
 - **Multiple subscription plans can be tracked at the same time.**
   `codeburn plan set` now stores plans in a provider-keyed `plans` map, so
   setting a Codex custom plan no longer overwrites an existing Claude plan.
