@@ -49,6 +49,34 @@ function makeChatFile(opts: {
   })
 }
 
+function makeModernExecutionFile(opts: {
+  executionId?: string
+  sessionId?: string
+  modelId?: string
+  startTime?: number | string
+  userPrompt?: string
+  assistantResponse?: string
+}) {
+  const startTime = opts.startTime ?? 1777333000000
+  return JSON.stringify({
+    executionId: opts.executionId ?? 'exec-modern-001',
+    sessionId: opts.sessionId ?? 'session-modern-001',
+    workflowType: 'chat-agent',
+    status: 'succeed',
+    startTime,
+    endTime: typeof startTime === 'number' ? startTime + 10000 : 1777333010000,
+    modelId: opts.modelId ?? 'claude-sonnet-4.5',
+    messages: [
+      { role: 'user', content: opts.userPrompt ?? 'explain the new kiro storage layout' },
+      {
+        role: 'assistant',
+        content: opts.assistantResponse ?? 'Done. <tool_use><name>runCommand</name></tool_use>',
+        toolCalls: [{ name: 'readFile' }],
+      },
+    ],
+  })
+}
+
 describe('kiro provider - chat file parsing', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'kiro-test-'))
@@ -227,6 +255,232 @@ describe('kiro provider - chat file parsing', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.sessionId).toBe('my-workflow-id')
   })
+
+  it('parses a post-February extensionless execution file', async () => {
+    const wsHash = 'i'.repeat(32)
+    const sessionHash = 'session-modern'
+    const wsDir = join(tmpDir, wsHash, sessionHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-modern')
+    await writeFile(executionPath, makeModernExecutionFile({
+      executionId: 'exec-modern',
+      sessionId: 'session-modern',
+      modelId: 'claude-sonnet-4.5',
+      userPrompt: 'summarize this workspace',
+      assistantResponse: 'I reviewed it. <tool_use><name>runCommand</name></tool_use>',
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.provider).toBe('kiro')
+    expect(call.model).toBe('claude-sonnet-4-5')
+    expect(call.sessionId).toBe('session-modern')
+    expect(call.userMessage).toBe('summarize this workspace')
+    expect(call.inputTokens).toBeGreaterThan(0)
+    expect(call.outputTokens).toBeGreaterThan(0)
+    expect(call.tools).toEqual(['Bash', 'Read'])
+    expect(call.costUSD).toBeGreaterThan(0)
+  })
+
+  it('skips session index files without conversation content', async () => {
+    const wsHash = 'j'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const indexPath = join(wsDir, 'session-index')
+    await writeFile(indexPath, JSON.stringify({
+      executions: [{
+        executionId: 'exec-indexed',
+        type: 'chat-agent',
+        status: 'succeed',
+        startTime: 1777333000000,
+        endTime: 1777333010000,
+      }],
+    }))
+
+    const source = { path: indexPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(0)
+  })
+
+  it('parses direct prompt and response fields from modern execution files', async () => {
+    const wsHash = 'k'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-direct')
+    await writeFile(executionPath, JSON.stringify({
+      executionId: 'exec-direct',
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      model: { id: 'auto' },
+      prompt: 'make a small change',
+      response: 'Changed it. <tool_use><name>writeFile</name></tool_use>',
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('kiro-auto')
+    expect(calls[0]!.userMessage).toBe('make a small change')
+    expect(calls[0]!.tools).toEqual(['Edit'])
+  })
+
+  it('accepts second-based modern timestamps', async () => {
+    const wsHash = 'n'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-seconds')
+    await writeFile(executionPath, makeModernExecutionFile({
+      executionId: 'exec-seconds',
+      startTime: 1777333000,
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.timestamp).toBe('2026-04-27T23:36:40.000Z')
+  })
+
+  it('accepts numeric-string modern timestamps', async () => {
+    const wsHash = 'o'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-string-time')
+    await writeFile(executionPath, makeModernExecutionFile({
+      executionId: 'exec-string-time',
+      startTime: '1777333000000',
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.timestamp).toBe('2026-04-27T23:36:40.000Z')
+  })
+
+  it('does not poison dedup keys when a modern execution has an invalid timestamp', async () => {
+    const wsHash = 'p'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const invalidPath = join(wsDir, 'execution-invalid-time')
+    const validPath = join(wsDir, 'execution-valid-time')
+    const shared = {
+      executionId: 'exec-recovered',
+      sessionId: 'session-recovered',
+    }
+    await writeFile(invalidPath, makeModernExecutionFile({
+      ...shared,
+      startTime: 'not-a-timestamp',
+    }))
+    await writeFile(validPath, makeModernExecutionFile({
+      ...shared,
+      startTime: 1777333000000,
+    }))
+
+    const seenKeys = new Set<string>()
+    const invalidCalls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser({ path: invalidPath, project: 'test', provider: 'kiro' }, seenKeys).parse()) {
+      invalidCalls.push(call)
+    }
+    const validCalls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser({ path: validPath, project: 'test', provider: 'kiro' }, seenKeys).parse()) {
+      validCalls.push(call)
+    }
+
+    expect(invalidCalls).toHaveLength(0)
+    expect(validCalls).toHaveLength(1)
+  })
+
+  it.each(['conversation', 'chat', 'transcript', 'entries', 'events'])('parses modern execution conversation arrays from %s', async (key) => {
+    const wsHash = 'q'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, `execution-${key}`)
+    await writeFile(executionPath, JSON.stringify({
+      executionId: `exec-${key}`,
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      modelId: 'claude-sonnet-4.5',
+      [key]: [
+        { role: 'user', content: `request from ${key}` },
+        { role: 'assistant', content: `response from ${key}`, toolCalls: [{ name: 'readFile' }] },
+      ],
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.userMessage).toBe(`request from ${key}`)
+    expect(calls[0]!.tools).toEqual(['Read'])
+  })
+
+  it('keeps modern executions with structured assistant tool calls and no assistant text', async () => {
+    const wsHash = 'l'.repeat(32)
+    const wsDir = join(tmpDir, wsHash, 'session-tools')
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-tools')
+    await writeFile(executionPath, JSON.stringify({
+      executionId: 'exec-tools',
+      sessionId: 'session-tools',
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      modelId: 'claude-sonnet-4.5',
+      messages: [
+        { role: 'user', content: 'run the test suite' },
+        { role: 'assistant', toolCalls: [{ name: 'runCommand' }] },
+      ],
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['Bash'])
+    expect(calls[0]!.inputTokens).toBeGreaterThan(0)
+    expect(calls[0]!.outputTokens).toBe(0)
+  })
+
+  it('keeps direct modern executions with root tool calls and no response text', async () => {
+    const wsHash = 'm'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const executionPath = join(wsDir, 'execution-root-tools')
+    await writeFile(executionPath, JSON.stringify({
+      executionId: 'exec-root-tools',
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      model: { id: 'auto' },
+      name: 'workflow-name',
+      prompt: 'edit a file',
+      toolCalls: [{ name: 'writeFile' }],
+    }))
+
+    const source = { path: executionPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['Edit'])
+    expect(calls[0]!.tools).not.toContain('workflow-name')
+    expect(calls[0]!.outputTokens).toBe(0)
+  })
 })
 
 describe('kiro provider - discoverSessions', () => {
@@ -251,6 +505,30 @@ describe('kiro provider - discoverSessions', () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every(s => s.provider === 'kiro')).toBe(true)
     expect(sessions.every(s => s.path.endsWith('.chat'))).toBe(true)
+  })
+
+  it('discovers extensionless session index files and nested execution files', async () => {
+    const wsHash = 'd'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    const sessionDir = join(wsDir, 'session-dir')
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(join(wsDir, 'session-index'), JSON.stringify({ executions: [] }))
+    await writeFile(join(wsDir, 'legacy.chat'), makeChatFile({}))
+    await writeFile(join(wsDir, 'ignored.json'), '{}')
+    await writeFile(join(wsDir, '.DS_Store'), 'ignored')
+    await writeFile(join(sessionDir, 'execution-1'), makeModernExecutionFile({}))
+    await writeFile(join(sessionDir, '.hidden'), 'ignored')
+    await writeFile(join(sessionDir, 'ignored.txt'), 'hello')
+
+    const provider = createKiroProvider(tmpDir, '/nonexistent/ws')
+    const sessions = await provider.discoverSessions()
+    const paths = sessions.map(s => s.path).sort()
+
+    expect(paths).toEqual([
+      join(sessionDir, 'execution-1'),
+      join(wsDir, 'legacy.chat'),
+      join(wsDir, 'session-index'),
+    ].sort())
   })
 
   it('reads project name from workspace.json', async () => {
@@ -287,7 +565,7 @@ describe('kiro provider - discoverSessions', () => {
     expect(sessions).toHaveLength(0)
   })
 
-  it('skips files without .chat extension', async () => {
+  it('skips files with unsupported extensions', async () => {
     const wsHash = 'c'.repeat(32)
     const wsDir = join(tmpDir, wsHash)
     await mkdir(wsDir, { recursive: true })

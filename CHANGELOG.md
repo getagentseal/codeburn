@@ -48,6 +48,11 @@
   with text or tool activity but zero token and cost fields. The OpenCode
   parser now keeps those turns as zero-cost calls instead of dropping the
   session entirely. Closes #341.
+- **Kiro post-February 2026 storage discovery.** The Kiro provider now keeps
+  legacy `.chat` support while also discovering extensionless session index
+  files and nested execution files. Modern execution JSON is parsed for
+  identifiers, timestamps, model IDs, conversation text, structured tools, and
+  estimated token usage. Closes #329.
 
 ## 0.9.9 - 2026-05-15
 
