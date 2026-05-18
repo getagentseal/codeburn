@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Observation
+import UserNotifications
 
 private let refreshIntervalSeconds: UInt64 = 30
 private let forceRefreshWatchdogSeconds: TimeInterval = 90
@@ -29,7 +30,7 @@ struct CodeBurnApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     fileprivate let store = AppStore()
@@ -50,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var codexQuotaRefreshTask: Task<Bool, Never>?
     private var refreshLoopHeartbeatAt: Date = .distantPast
     private var lastLaunchAgentHeartbeatAt: Date = .distantPast
+    private let quotaNotifications = QuotaNotificationCoordinator()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Set accessory policy before the app's focus chain forms. On macOS Tahoe
@@ -81,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         restorePersistedCurrency()
         setupStatusItem()
         setupPopover()
+        UNUserNotificationCenter.current().delegate = self
         observeStore()
         startRefreshLoop()
         setupWakeObservers()
@@ -634,9 +637,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingRefreshWork?.cancel()
-                let work = DispatchWorkItem { [weak self] in
-                    self?.refreshStatusButton()
-                    self?.observeStore()
+                let work = DispatchWorkItem {
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.refreshStatusButton()
+                        self.quotaNotifications.evaluate(store: self.store)
+                        self.observeStore()
+                    }
                 }
                 self.pendingRefreshWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
@@ -912,5 +919,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Catch up on any menubar title updates that were skipped while the
         // popover was anchored.
         refreshStatusButton()
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 }

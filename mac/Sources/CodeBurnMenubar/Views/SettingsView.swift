@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 /// macOS-standard tabbed Settings window. New per-provider sections (Codex,
 /// Cursor, Copilot, etc.) plug in as additional tabs. Each tab owns its own
@@ -28,6 +29,8 @@ struct SettingsView: View {
 
 private struct GeneralSettingsTab: View {
     @Environment(AppStore.self) private var store
+    @State private var quotaAlertsEnabled = QuotaNotificationPreferences.isEnabled
+    @State private var quotaAlertsDenied = false
 
     var body: some View {
         Form {
@@ -49,9 +52,53 @@ private struct GeneralSettingsTab: View {
                     }
                 }
             }
+            Section("Notifications") {
+                Toggle("Quota alerts", isOn: Binding(
+                    get: { quotaAlertsEnabled },
+                    set: { enabled in
+                        quotaAlertsEnabled = enabled
+                        Task {
+                            let applied = await QuotaNotificationPreferences.setEnabled(enabled)
+                            quotaAlertsEnabled = applied
+                            quotaAlertsDenied = enabled && !applied
+                        }
+                    }
+                ))
+                Text("Local alerts when connected quota windows reach 80% or 100%.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                if quotaAlertsDenied {
+                    Text("Notifications are blocked in System Settings.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                }
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            Task { await syncQuotaNotificationSettings() }
+        }
+    }
+
+    @MainActor
+    private func syncQuotaNotificationSettings() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            quotaAlertsEnabled = QuotaNotificationPreferences.isEnabled
+            quotaAlertsDenied = false
+        case .denied:
+            QuotaNotificationPreferences.isEnabled = false
+            quotaAlertsEnabled = false
+            quotaAlertsDenied = true
+        case .notDetermined:
+            quotaAlertsEnabled = QuotaNotificationPreferences.isEnabled
+            quotaAlertsDenied = false
+        @unknown default:
+            quotaAlertsEnabled = false
+            quotaAlertsDenied = false
+        }
     }
 
     private func applyCurrency(code: String) {
