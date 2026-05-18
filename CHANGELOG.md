@@ -38,6 +38,10 @@
   model aliases to priced Kimi K2 entries.
 
 ### Fixed (CLI)
+- **OpenCode session cache keys now use real database paths.** Discovery now
+  emits one source per `opencode*.db` file and the parser iterates root sessions
+  inside that database, so shared session-cache fingerprinting stats the actual
+  SQLite file instead of a synthetic `<dbPath>:<sessionId>` identifier.
 - **OpenCode child sessions are attributed to their root session.** The
   OpenCode parser now walks the unarchived `session.parent_id` subtree so
   child and grandchild agent sessions contribute token and tool usage under

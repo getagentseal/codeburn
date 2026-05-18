@@ -112,6 +112,36 @@ function parseTimestamp(raw: number): string {
   return new Date(ms).toISOString()
 }
 
+function projectFromSession(row: SessionRow): string {
+  const dir = blobToText(row.directory)
+  const title = blobToText(row.title)
+  return dir ? sanitize(dir) : sanitize(title)
+}
+
+function parseSourcePath(path: string): { dbPath: string; rootSessionId?: string } {
+  const segments = path.split(':')
+  if (segments.length > 1) {
+    const rootSessionId = segments[segments.length - 1]
+    const dbPath = segments.slice(0, -1).join(':')
+    if (rootSessionId && dbPath.endsWith('.db')) return { dbPath, rootSessionId }
+  }
+  return { dbPath: path }
+}
+
+function getRootSessions(db: SqliteDatabase, rootSessionId?: string): SessionRow[] {
+  const select =
+    'SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created FROM session'
+  if (rootSessionId) {
+    return db.query<SessionRow>(
+      `${select} WHERE id = ? AND time_archived IS NULL ORDER BY time_created DESC`,
+      [rootSessionId],
+    )
+  }
+  return db.query<SessionRow>(
+    `${select} WHERE time_archived IS NULL AND parent_id IS NULL ORDER BY time_created DESC`,
+  )
+}
+
 type SchemaCheckResult =
   | { ok: true }
   | { ok: false; missing: string[] }
@@ -162,12 +192,7 @@ function createParser(
         return
       }
 
-      // Path is encoded as `${dbPath}:${sessionId}`. Session IDs are UUIDs
-      // (no colons), so the last segment after splitting on ':' is always
-      // the session ID. Rejoining handles Windows drive letters (C:\...).
-      const segments = source.path.split(':')
-      const sessionId = segments[segments.length - 1]!
-      const dbPath = segments.slice(0, -1).join(':')
+      const { dbPath, rootSessionId } = parseSourcePath(source.path)
 
       let db: SqliteDatabase
       try {
@@ -189,170 +214,148 @@ function createParser(
           return
         }
 
-        const messages = db.query<MessageRow>(
-          `WITH RECURSIVE session_tree(id) AS (
-            SELECT id FROM session WHERE id = ?
-            UNION
-            SELECT child.id
-            FROM session child
-            JOIN session_tree parent ON child.parent_id = parent.id
-            WHERE child.time_archived IS NULL
+        const roots = getRootSessions(db, rootSessionId)
+        for (const root of roots) {
+          const sessionId = root.id
+          const project = projectFromSession(root) || source.project
+
+          const messages = db.query<MessageRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session child
+              JOIN session_tree parent ON child.parent_id = parent.id
+              WHERE child.time_archived IS NULL
+            )
+            SELECT session_id, id, time_created, CAST(data AS BLOB) AS data
+            FROM message
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY time_created ASC, id ASC`,
+            [sessionId],
           )
-          SELECT session_id, id, time_created, CAST(data AS BLOB) AS data
-          FROM message
-          WHERE session_id IN (SELECT id FROM session_tree)
-          ORDER BY time_created ASC, id ASC`,
-          [sessionId],
-        )
 
-        const parts = db.query<PartRow>(
-          `WITH RECURSIVE session_tree(id) AS (
-            SELECT id FROM session WHERE id = ?
-            UNION
-            SELECT child.id
-            FROM session child
-            JOIN session_tree parent ON child.parent_id = parent.id
-            WHERE child.time_archived IS NULL
+          const parts = db.query<PartRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session child
+              JOIN session_tree parent ON child.parent_id = parent.id
+              WHERE child.time_archived IS NULL
+            )
+            SELECT message_id, CAST(data AS BLOB) AS data
+            FROM part
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY message_id, id`,
+            [sessionId],
           )
-          SELECT message_id, CAST(data AS BLOB) AS data
-          FROM part
-          WHERE session_id IN (SELECT id FROM session_tree)
-          ORDER BY message_id, id`,
-          [sessionId],
-        )
 
-        const partsByMsg = new Map<string, PartData[]>()
-        for (const part of parts) {
-          try {
-            const parsed = JSON.parse(blobToText(part.data)) as PartData
-            const list = partsByMsg.get(part.message_id) ?? []
-            list.push(parsed)
-            partsByMsg.set(part.message_id, list)
-          } catch {
-            // skip corrupt part data
-          }
-        }
-
-        const currentUserMessageBySession = new Map<string, string>()
-
-        for (const msg of messages) {
-          let data: MessageData
-          try {
-            data = JSON.parse(blobToText(msg.data)) as MessageData
-          } catch {
-            continue
-          }
-
-          if (data.role === 'user') {
-            const textParts = (partsByMsg.get(msg.id) ?? [])
-              .filter((p) => p.type === 'text')
-              .map((p) => p.text ?? '')
-              .filter(Boolean)
-            if (textParts.length > 0) {
-              currentUserMessageBySession.set(msg.session_id, textParts.join(' '))
+          const partsByMsg = new Map<string, PartData[]>()
+          for (const part of parts) {
+            try {
+              const parsed = JSON.parse(blobToText(part.data)) as PartData
+              const list = partsByMsg.get(part.message_id) ?? []
+              list.push(parsed)
+              partsByMsg.set(part.message_id, list)
+            } catch {
+              // skip corrupt part data
             }
-            continue
           }
 
-          if (data.role !== 'assistant') continue
+          const currentUserMessageBySession = new Map<string, string>()
 
-          const tokens = {
-            input: data.tokens?.input ?? 0,
-            output: data.tokens?.output ?? 0,
-            reasoning: data.tokens?.reasoning ?? 0,
-            cacheRead: data.tokens?.cache?.read ?? 0,
-            cacheWrite: data.tokens?.cache?.write ?? 0,
-          }
+          for (const msg of messages) {
+            let data: MessageData
+            try {
+              data = JSON.parse(blobToText(msg.data)) as MessageData
+            } catch {
+              continue
+            }
 
-          const allZero =
-            tokens.input === 0 &&
-            tokens.output === 0 &&
-            tokens.reasoning === 0 &&
-            tokens.cacheRead === 0 &&
-            tokens.cacheWrite === 0
-          if (allZero && (data.cost ?? 0) === 0) continue
+            if (data.role === 'user') {
+              const textParts = (partsByMsg.get(msg.id) ?? [])
+                .filter((p) => p.type === 'text')
+                .map((p) => p.text ?? '')
+                .filter(Boolean)
+              if (textParts.length > 0) {
+                currentUserMessageBySession.set(msg.session_id, textParts.join(' '))
+              }
+              continue
+            }
 
-          const msgParts = partsByMsg.get(msg.id) ?? []
-          const toolParts = msgParts.filter((p) => p.type === 'tool')
-          const tools = toolParts
-            .map((p) => normalizeToolName(p.tool))
-            .filter(Boolean)
+            if (data.role !== 'assistant') continue
 
-          const bashCommands = toolParts
-            .filter((p) => p.tool === 'bash' && typeof p.state?.input?.command === 'string')
-            .flatMap((p) => extractBashCommands(p.state!.input!.command!))
+            const tokens = {
+              input: data.tokens?.input ?? 0,
+              output: data.tokens?.output ?? 0,
+              reasoning: data.tokens?.reasoning ?? 0,
+              cacheRead: data.tokens?.cache?.read ?? 0,
+              cacheWrite: data.tokens?.cache?.write ?? 0,
+            }
 
-          const dedupKey = `opencode:${msg.session_id}:${msg.id}`
-          if (seenKeys.has(dedupKey)) continue
-          seenKeys.add(dedupKey)
+            const allZero =
+              tokens.input === 0 &&
+              tokens.output === 0 &&
+              tokens.reasoning === 0 &&
+              tokens.cacheRead === 0 &&
+              tokens.cacheWrite === 0
+            if (allZero && (data.cost ?? 0) === 0) continue
 
-          const model = data.modelID ?? 'unknown'
-          let costUSD = calculateCost(
-            model,
-            tokens.input,
-            tokens.output + tokens.reasoning,
-            tokens.cacheWrite,
-            tokens.cacheRead,
-            0,
-          )
+            const msgParts = partsByMsg.get(msg.id) ?? []
+            const toolParts = msgParts.filter((p) => p.type === 'tool')
+            const tools = toolParts
+              .map((p) => normalizeToolName(p.tool))
+              .filter(Boolean)
 
-          if (costUSD === 0 && typeof data.cost === 'number' && data.cost > 0) {
-            costUSD = data.cost
-          }
+            const bashCommands = toolParts
+              .filter((p) => p.tool === 'bash' && typeof p.state?.input?.command === 'string')
+              .flatMap((p) => extractBashCommands(p.state!.input!.command!))
 
-          yield {
-            provider: 'opencode',
-            model,
-            inputTokens: tokens.input,
-            outputTokens: tokens.output,
-            cacheCreationInputTokens: tokens.cacheWrite,
-            cacheReadInputTokens: tokens.cacheRead,
-            cachedInputTokens: tokens.cacheRead,
-            reasoningTokens: tokens.reasoning,
-            webSearchRequests: 0,
-            costUSD,
-            tools,
-            bashCommands,
-            timestamp: parseTimestamp(msg.time_created),
-            speed: 'standard',
-            deduplicationKey: dedupKey,
-            userMessage: currentUserMessageBySession.get(msg.session_id) ?? '',
-            sessionId,
+            const dedupKey = `opencode:${msg.session_id}:${msg.id}`
+            if (seenKeys.has(dedupKey)) continue
+            seenKeys.add(dedupKey)
+
+            const model = data.modelID ?? 'unknown'
+            let costUSD = calculateCost(
+              model,
+              tokens.input,
+              tokens.output + tokens.reasoning,
+              tokens.cacheWrite,
+              tokens.cacheRead,
+              0,
+            )
+
+            if (costUSD === 0 && typeof data.cost === 'number' && data.cost > 0) {
+              costUSD = data.cost
+            }
+
+            yield {
+              provider: 'opencode',
+              model,
+              inputTokens: tokens.input,
+              outputTokens: tokens.output,
+              cacheCreationInputTokens: tokens.cacheWrite,
+              cacheReadInputTokens: tokens.cacheRead,
+              cachedInputTokens: tokens.cacheRead,
+              reasoningTokens: tokens.reasoning,
+              webSearchRequests: 0,
+              costUSD,
+              tools,
+              bashCommands,
+              timestamp: parseTimestamp(msg.time_created),
+              speed: 'standard',
+              deduplicationKey: dedupKey,
+              userMessage: currentUserMessageBySession.get(msg.session_id) ?? '',
+              sessionId,
+              project,
+            }
           }
         }
       } finally {
         db.close()
       }
     },
-  }
-}
-
-async function discoverFromDb(dbPath: string): Promise<SessionSource[]> {
-  let db: SqliteDatabase
-  try {
-    db = openDatabase(dbPath)
-  } catch {
-    return []
-  }
-
-  try {
-    const rows = db.query<SessionRow>(
-      'SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created FROM session WHERE time_archived IS NULL AND parent_id IS NULL ORDER BY time_created DESC',
-    )
-
-    return rows.map((row) => {
-      const dir = blobToText(row.directory)
-      const title = blobToText(row.title)
-      return {
-        path: `${dbPath}:${row.id}`,
-        project: dir ? sanitize(dir) : sanitize(title),
-        provider: 'opencode',
-      }
-    })
-  } catch {
-    return []
-  } finally {
-    db.close()
   }
 }
 
@@ -378,11 +381,11 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
       const dbPaths = await findDbFiles(dir)
       if (dbPaths.length === 0) return []
 
-      const sessions: SessionSource[] = []
-      for (const dbPath of dbPaths) {
-        sessions.push(...await discoverFromDb(dbPath))
-      }
-      return sessions
+      return dbPaths.map((dbPath) => ({
+        path: dbPath,
+        project: 'opencode',
+        provider: 'opencode',
+      }))
     },
 
     createSessionParser(
