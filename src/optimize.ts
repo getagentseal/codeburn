@@ -61,6 +61,12 @@ const MCP_COVERAGE_MIN_TOOLS = 10
 const MCP_COVERAGE_MIN_SESSIONS = 2
 const MCP_COVERAGE_LOW_THRESHOLD = 0.20
 const MCP_COVERAGE_HIGH_IMPACT_TOKENS = 200_000
+const MCP_PROFILE_MIN_PROJECTS = 3
+const MCP_PROFILE_MIN_HOT_INVOCATIONS = 2
+const MCP_PROFILE_HOT_INVOCATION_SHARE = 0.80
+const MCP_PROFILE_MIN_COLD_LOADED_SESSIONS = 2
+const MCP_PROFILE_HIGH_IMPACT_TOKENS = 200_000
+const MCP_PROFILE_PREVIEW = 3
 // Anthropic prices cache writes at 125% of base input and cache reads at
 // roughly 10% of base input. We use these to keep overhead estimates honest:
 // most MCP schema bytes live in the cached prefix and only get charged at
@@ -891,6 +897,253 @@ export function detectMcpToolCoverage(
         ? 'Remove the underused server, or trim its tools in your MCP config:'
         : 'Remove underused servers, or trim their tools in your MCP config:',
       text: removeCommands.join('\n'),
+    },
+  }
+}
+
+type McpProjectProfileStats = {
+  project: string
+  projectKey: string
+  projectPath: string
+  loadedSessions: number
+  invocations: number
+}
+
+type McpProfileCandidate = {
+  server: string
+  toolsAvailable: number
+  hotProjects: McpProjectProfileStats[]
+  coldProjects: McpProjectProfileStats[]
+  coldProjectKeys: Set<string>
+  loadedProjects: number
+  loadedSessions: number
+  invocations: number
+  hotShare: number
+  estimatedTokensSaved: number
+}
+
+function projectProfileLabel(project: ProjectSummary): string {
+  return project.projectPath || project.project
+}
+
+function projectProfileKey(project: ProjectSummary): string {
+  return projectProfileLabel(project)
+}
+
+function sessionLoadedMcpServer(
+  session: ProjectSummary['sessions'][number],
+  server: string,
+): boolean {
+  for (const fqn of session.mcpInventory ?? []) {
+    const parts = fqn.split('__')
+    if (parts.length >= 3 && parts[0] === 'mcp' && parts[1] === server) return true
+  }
+  return false
+}
+
+function lowCoverageMcpServers(coverage: McpServerCoverage[]): Set<string> {
+  return new Set(
+    coverage
+      .filter(c =>
+        c.toolsAvailable > MCP_COVERAGE_MIN_TOOLS
+        && c.loadedSessions >= MCP_COVERAGE_MIN_SESSIONS
+        && c.coverageRatio < MCP_COVERAGE_LOW_THRESHOLD,
+      )
+      .map(c => c.server),
+  )
+}
+
+function estimateMcpProfileColdSchemaCost(
+  projects: ProjectSummary[],
+  serverToolCounts: Map<string, number>,
+  coldProjectKeysByServer: Map<string, Set<string>>,
+): McpSchemaCostEstimate {
+  if (serverToolCounts.size === 0 || coldProjectKeysByServer.size === 0) {
+    return { cacheWriteTokens: 0, cacheReadTokens: 0, effectiveInputTokens: 0 }
+  }
+
+  let cacheWriteTokens = 0
+  let cacheReadTokens = 0
+  for (const project of projects) {
+    const projectKey = projectProfileKey(project)
+    for (const session of project.sessions) {
+      let schemaTokens = 0
+      for (const [server, toolsAvailable] of serverToolCounts) {
+        if (!coldProjectKeysByServer.get(server)?.has(projectKey)) continue
+        if (!sessionLoadedMcpServer(session, server)) continue
+        schemaTokens += toolsAvailable * TOKENS_PER_MCP_TOOL
+      }
+      if (schemaTokens === 0) continue
+
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          if (call.usage.cacheCreationInputTokens > 0) {
+            cacheWriteTokens += Math.min(schemaTokens, call.usage.cacheCreationInputTokens)
+          }
+          if (call.usage.cacheReadInputTokens > 0) {
+            cacheReadTokens += Math.min(schemaTokens, call.usage.cacheReadInputTokens)
+          }
+        }
+      }
+    }
+  }
+
+  const effectiveInputTokens = cacheWriteTokens * CACHE_WRITE_MULTIPLIER + cacheReadTokens * CACHE_READ_DISCOUNT
+  return { cacheWriteTokens, cacheReadTokens, effectiveInputTokens }
+}
+
+function collectMcpProjectProfiles(
+  projects: ProjectSummary[],
+  coverage: McpServerCoverage[],
+): McpProfileCandidate[] {
+  const suppressedServers = lowCoverageMcpServers(coverage)
+  const coverageByServer = new Map(coverage.map(c => [c.server, c]))
+  const byServer = new Map<string, Map<string, McpProjectProfileStats>>()
+
+  function getProjectStats(server: string, project: ProjectSummary): McpProjectProfileStats {
+    let serverProjects = byServer.get(server)
+    if (!serverProjects) {
+      serverProjects = new Map()
+      byServer.set(server, serverProjects)
+    }
+    const key = projectProfileKey(project)
+    let stats = serverProjects.get(key)
+    if (!stats) {
+      stats = {
+        project: project.project,
+        projectKey: key,
+        projectPath: projectProfileLabel(project),
+        loadedSessions: 0,
+        invocations: 0,
+      }
+      serverProjects.set(key, stats)
+    }
+    return stats
+  }
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      const loadedServers = new Set<string>()
+      for (const fqn of session.mcpInventory ?? []) {
+        const parts = fqn.split('__')
+        if (parts.length >= 3 && parts[0] === 'mcp' && parts[1]) loadedServers.add(parts[1])
+      }
+      for (const server of loadedServers) {
+        getProjectStats(server, project).loadedSessions++
+      }
+      for (const [server, data] of Object.entries(session.mcpBreakdown)) {
+        getProjectStats(server, project).invocations += data.calls
+      }
+    }
+  }
+
+  const candidates: McpProfileCandidate[] = []
+  for (const [server, projectStats] of byServer) {
+    if (suppressedServers.has(server)) continue
+    const coverageStats = coverageByServer.get(server)
+    if (!coverageStats) continue
+    if (coverageStats.toolsAvailable === 0) continue
+
+    const loaded = Array.from(projectStats.values()).filter(p => p.loadedSessions > 0)
+    if (loaded.length < MCP_PROFILE_MIN_PROJECTS) continue
+    const invocations = loaded.reduce((sum, p) => sum + p.invocations, 0)
+    if (invocations < MCP_PROFILE_MIN_HOT_INVOCATIONS) continue
+
+    loaded.sort((a, b) =>
+      b.invocations - a.invocations
+      || b.loadedSessions - a.loadedSessions
+      || a.projectPath.localeCompare(b.projectPath),
+    )
+    const invokedProjects = loaded.filter(p => p.invocations > 0)
+    if (invokedProjects.length === 0) continue
+    const hotProjects = invokedProjects.slice(0, 2)
+    const hotInvocations = hotProjects.reduce((sum, p) => sum + p.invocations, 0)
+    const hotShare = hotInvocations / invocations
+    if (hotShare < MCP_PROFILE_HOT_INVOCATION_SHARE) continue
+
+    const coldProjects = loaded.filter(p => p.invocations === 0)
+    const coldLoadedSessions = coldProjects.reduce((sum, p) => sum + p.loadedSessions, 0)
+    if (coldLoadedSessions < MCP_PROFILE_MIN_COLD_LOADED_SESSIONS) continue
+
+    const coldProjectKeys = new Set(coldProjects.map(project => project.projectKey))
+    const cost = estimateMcpProfileColdSchemaCost(
+      projects,
+      new Map([[server, coverageStats.toolsAvailable]]),
+      new Map([[server, coldProjectKeys]]),
+    )
+
+    candidates.push({
+      server,
+      toolsAvailable: coverageStats.toolsAvailable,
+      hotProjects,
+      coldProjects,
+      coldProjectKeys,
+      loadedProjects: loaded.length,
+      loadedSessions: loaded.reduce((sum, p) => sum + p.loadedSessions, 0),
+      invocations,
+      hotShare,
+      estimatedTokensSaved: Math.round(cost.effectiveInputTokens),
+    })
+  }
+
+  candidates.sort((a, b) =>
+    b.estimatedTokensSaved - a.estimatedTokensSaved
+    || b.coldProjects.length - a.coldProjects.length
+    || b.loadedSessions - a.loadedSessions
+    || a.server.localeCompare(b.server),
+  )
+  return candidates
+}
+
+export function detectMcpProfileAdvisor(
+  projects: ProjectSummary[],
+  coverage = aggregateMcpCoverage(projects),
+): WasteFinding | null {
+  const candidates = collectMcpProjectProfiles(projects, coverage)
+  if (candidates.length === 0) return null
+
+  const preview = candidates.slice(0, MCP_PROFILE_PREVIEW)
+  const lines = preview.map(candidate => {
+    const hot = candidate.hotProjects
+      .slice(0, 2)
+      .map(p => `${p.projectPath} (${p.invocations} call${p.invocations === 1 ? '' : 's'})`)
+      .join(', ')
+    const cold = candidate.coldProjects
+      .slice(0, 3)
+      .map(p => `${p.projectPath} (${p.loadedSessions} loaded session${p.loadedSessions === 1 ? '' : 's'})`)
+      .join(', ')
+    const coldExtra = candidate.coldProjects.length > 3 ? `, +${candidate.coldProjects.length - 3} more` : ''
+    return `${candidate.server}: ${Math.round(candidate.hotShare * 100)}% of ${candidate.invocations} calls in ${hot}; loaded but unused in ${cold}${coldExtra}`
+  })
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  const serverToolCounts = new Map(candidates.map(c => [c.server, c.toolsAvailable]))
+  const coldProjectKeysByServer = new Map(candidates.map(c => [c.server, c.coldProjectKeys]))
+  const combinedCost = estimateMcpProfileColdSchemaCost(projects, serverToolCounts, coldProjectKeysByServer)
+  const tokensSaved = Math.round(combinedCost.effectiveInputTokens)
+  const impact: Impact = tokensSaved >= MCP_PROFILE_HIGH_IMPACT_TOKENS
+    || candidates.length >= UNUSED_MCP_HIGH_THRESHOLD
+    ? 'high'
+    : 'medium'
+
+  return {
+    title: `${candidates.length} MCP server${candidates.length === 1 ? '' : 's'} should be project-scoped`,
+    explanation:
+      `These MCP servers look useful in a small set of projects but are loaded into other projects where they are not invoked. ` +
+      `Project-scoping them keeps the hot-project workflow while avoiding schema overhead elsewhere. ${lines.join('; ')}${extra}.`,
+    impact,
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to turn this into a project-scoped MCP profile:',
+      text: [
+        `Review these MCP profile recommendations before changing config (${preview.length} of ${candidates.length} shown):`,
+        ...preview.map(candidate => {
+          const hot = candidate.hotProjects.map(p => p.projectPath).join(', ')
+          const cold = candidate.coldProjects.slice(0, 3).map(p => p.projectPath).join(', ')
+          return `- Keep ${candidate.server} available for ${hot}; remove or project-scope it away from ${cold}. Re-add it only in projects that actually need it.`
+        }),
+      ].join('\n'),
     },
   }
 }
@@ -1800,6 +2053,7 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
+    () => detectMcpProfileAdvisor(projects, mcpCoverage),
     () => detectLowWorthSessions(projects),
     () => detectContextBloat(projects, lowWorthSessionIds),
     () => detectSessionOutliers(projects, outlierExclusions),

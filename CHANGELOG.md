@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added (CLI)
+- **MCP project profile advisor in `optimize`.** CodeBurn now flags MCP
+  servers that are useful in one project but loaded into other projects where
+  they are never invoked, with a project-scoping prompt that preserves the hot
+  workflow while reducing cold-project schema overhead.
 - **Agent and subagent tracking coverage.** Gemini sessions now emit one
   provider call per assistant message with token usage instead of one aggregate
   call per session, preserving per-message tools, bash commands, timestamps,

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   aggregateMcpCoverage,
+  detectMcpProfileAdvisor,
   detectMcpToolCoverage,
   estimateMcpSchemaCost,
 } from '../src/optimize.js'
@@ -100,9 +101,13 @@ function makeSession(opts: {
 }
 
 function project(sessions: SessionSummary[]): ProjectSummary {
+  return projectNamed('p', sessions)
+}
+
+function projectNamed(name: string, sessions: SessionSummary[]): ProjectSummary {
   return {
-    project: 'p',
-    projectPath: '/tmp/p',
+    project: name,
+    projectPath: `/tmp/${name}`,
     sessions,
     totalCostUSD: 0,
     totalApiCalls: sessions.reduce((s, ses) => s + ses.apiCalls, 0),
@@ -446,5 +451,212 @@ describe('detectMcpToolCoverage', () => {
     expect(finding).not.toBeNull()
     expect(finding!.title).toContain('2 MCP servers')
     expect((finding!.fix as { text: string }).text.split('\n')).toHaveLength(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// detectMcpProfileAdvisor — project-scoping recommendations
+// ---------------------------------------------------------------------------
+
+describe('detectMcpProfileAdvisor', () => {
+  const smallInventory = Array.from({ length: 4 }, (_, i) => `mcp__github__t${i}`)
+
+  it('flags a server loaded across projects but invoked only in one hot project', () => {
+    const hotTurns = [makeTurn([
+      makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 }),
+      makeCall({ tools: ['mcp__github__t1'], cacheCreation: 10_000 }),
+    ])]
+    const coldTurns = [makeTurn([makeCall({ cacheCreation: 10_000 })])]
+    const projects = [
+      projectNamed('api', [
+        makeSession({ inventory: smallInventory, turns: hotTurns, mcpBreakdown: { github: { calls: 2 } } }),
+      ]),
+      projectNamed('web', [
+        makeSession({ inventory: smallInventory, turns: coldTurns, mcpBreakdown: { github: { calls: 0 } } }),
+      ]),
+      projectNamed('docs', [
+        makeSession({ inventory: smallInventory, turns: coldTurns, mcpBreakdown: { github: { calls: 0 } } }),
+      ]),
+    ]
+
+    const finding = detectMcpProfileAdvisor(projects)
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('project-scoped')
+    expect(finding!.explanation).toContain('github')
+    expect(finding!.explanation).toContain('/tmp/api')
+    expect(finding!.explanation).toContain('/tmp/web')
+    expect(finding!.explanation).toContain('/tmp/docs')
+    // Cold projects each loaded 4 tools. 4 * 400 = 1,600 schema tokens;
+    // cache write pricing is 1.25x, across two cold sessions = 4,000.
+    expect(finding!.tokensSaved).toBe(4000)
+    expect(finding!.fix.type).toBe('paste')
+    if (finding!.fix.type === 'paste') {
+      expect(finding!.fix.destination).toBe('prompt')
+      expect(finding!.fix.text).toContain('Keep github available for /tmp/api')
+      expect(finding!.fix.text).toContain('/tmp/web')
+      expect(finding!.fix.text).toContain('/tmp/docs')
+    }
+  })
+
+  it('does not flag servers used evenly across loaded projects', () => {
+    const projects = ['api', 'web', 'docs'].map(name => projectNamed(name, [
+      makeSession({
+        inventory: smallInventory,
+        turns: [makeTurn([makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 })])],
+        mcpBreakdown: { github: { calls: 2 } },
+      }),
+    ]))
+
+    expect(detectMcpProfileAdvisor(projects)).toBeNull()
+  })
+
+  it('allows a hot profile shared by two projects', () => {
+    const projects = [
+      projectNamed('api', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([
+            makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 }),
+            makeCall({ tools: ['mcp__github__t1'], cacheCreation: 10_000 }),
+          ])],
+          mcpBreakdown: { github: { calls: 2 } },
+        }),
+      ]),
+      projectNamed('web', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([
+            makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 }),
+            makeCall({ tools: ['mcp__github__t1'], cacheCreation: 10_000 }),
+          ])],
+          mcpBreakdown: { github: { calls: 2 } },
+        }),
+      ]),
+      projectNamed('docs', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 10_000 })])],
+          mcpBreakdown: { github: { calls: 0 } },
+        }),
+      ]),
+      projectNamed('playground', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 10_000 })])],
+          mcpBreakdown: { github: { calls: 0 } },
+        }),
+      ]),
+    ]
+
+    const finding = detectMcpProfileAdvisor(projects)
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('/tmp/api')
+    expect(finding!.explanation).toContain('/tmp/web')
+    expect(finding!.explanation).toContain('/tmp/docs')
+    expect(finding!.explanation).toContain('/tmp/playground')
+  })
+
+  it('caps profile savings once when multiple candidate servers share cold sessions', () => {
+    const githubInventory = Array.from({ length: 4 }, (_, i) => `mcp__github__t${i}`)
+    const slackInventory = Array.from({ length: 4 }, (_, i) => `mcp__slack__t${i}`)
+    const inventory = [...githubInventory, ...slackInventory]
+    const projects = [
+      projectNamed('api', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([
+            makeCall({ tools: ['mcp__github__t0'] }),
+            makeCall({ tools: ['mcp__github__t1'] }),
+            makeCall({ tools: ['mcp__slack__t0'] }),
+            makeCall({ tools: ['mcp__slack__t1'] }),
+          ])],
+          mcpBreakdown: { github: { calls: 2 }, slack: { calls: 2 } },
+        }),
+      ]),
+      projectNamed('web', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 2_000 })])],
+          mcpBreakdown: { github: { calls: 0 }, slack: { calls: 0 } },
+        }),
+      ]),
+      projectNamed('docs', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 2_000 })])],
+          mcpBreakdown: { github: { calls: 0 }, slack: { calls: 0 } },
+        }),
+      ]),
+    ]
+
+    const finding = detectMcpProfileAdvisor(projects)
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('2 MCP servers')
+    expect(finding!.explanation).toContain('github')
+    expect(finding!.explanation).toContain('slack')
+    // Each server has 4 tools (1,600 schema tokens), but both servers share
+    // the same cold session calls. The combined budget is 3,200 per cold
+    // call capped by the 2,000-token cache bucket, not 1,600 + 1,600.
+    // 2 cold calls * 2,000 capped write tokens * 1.25 = 5,000.
+    expect(finding!.tokensSaved).toBe(5000)
+  })
+
+  it('requires at least three loaded projects before recommending a profile', () => {
+    const projects = [
+      projectNamed('api', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([makeCall({ tools: ['mcp__github__t0'], cacheCreation: 10_000 })])],
+          mcpBreakdown: { github: { calls: 2 } },
+        }),
+      ]),
+      projectNamed('web', [
+        makeSession({
+          inventory: smallInventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 10_000 })])],
+          mcpBreakdown: { github: { calls: 0 } },
+        }),
+      ]),
+    ]
+
+    expect(detectMcpProfileAdvisor(projects)).toBeNull()
+  })
+
+  it('does not duplicate low tool coverage findings for the same server', () => {
+    const inventory = Array.from({ length: 12 }, (_, i) => `mcp__huge__t${i}`)
+    const projects = [
+      projectNamed('api', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([makeCall({ tools: ['mcp__huge__t0'], cacheCreation: 20_000 })])],
+          mcpBreakdown: { huge: { calls: 3 } },
+        }),
+      ]),
+      projectNamed('web', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 20_000 })])],
+          mcpBreakdown: { huge: { calls: 0 } },
+        }),
+      ]),
+      projectNamed('docs', [
+        makeSession({
+          inventory,
+          turns: [makeTurn([makeCall({ cacheCreation: 20_000 })])],
+          mcpBreakdown: { huge: { calls: 0 } },
+        }),
+      ]),
+    ]
+    const coverage = [{
+      server: 'huge',
+      toolsAvailable: 12,
+      toolsInvoked: 1,
+      unusedTools: Array.from({ length: 11 }, (_, i) => `mcp__huge__t${i + 1}`),
+      invocations: 3,
+      loadedSessions: 3,
+      coverageRatio: 1 / 12,
+    }]
+
+    expect(detectMcpProfileAdvisor(projects, coverage)).toBeNull()
   })
 })
