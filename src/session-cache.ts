@@ -235,6 +235,15 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     const s = await stat(filePath)
     return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
   } catch {
+    const colonIdx = filePath.lastIndexOf(':')
+    if (colonIdx > 0) {
+      try {
+        const s = await stat(filePath.slice(0, colonIdx))
+        return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+      } catch {
+        return null
+      }
+    }
     return null
   }
 }

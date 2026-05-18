@@ -41,5 +41,8 @@ assets/discord-*.png
 # Desktop app experiments
 desktop/
 
+# Mac App Store app (private)
+appstore/
+
 # WIP / not ready
 src/summit.ts
