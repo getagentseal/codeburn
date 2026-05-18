@@ -7,6 +7,7 @@ import {
   detectCacheBloat,
   detectBloatedClaudeMd,
   detectContextBloat,
+  detectCapabilityReliability,
   detectLowWorthSessions,
   detectSessionOutliers,
   computeHealth,
@@ -772,6 +773,156 @@ describe('detectLowWorthSessions', () => {
     )
     const finding = detectLowWorthSessions([project])
     expect(finding!.explanation).toContain('; +1 more')
+  })
+})
+
+type ReliabilityCall = LowWorthTurn['assistantCalls'][number]
+
+function reliabilityCall(overrides: Partial<ReliabilityCall> = {}): ReliabilityCall {
+  return {
+    provider: 'claude',
+    model: 'claude-sonnet-4-5',
+    usage: {
+      inputTokens: 1000,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: 0,
+    },
+    costUSD: 0.01,
+    tools: ['Edit'],
+    mcpTools: [],
+    skills: [],
+    hasAgentSpawn: false,
+    hasPlanMode: false,
+    speed: 'standard',
+    timestamp: '2026-05-01T10:00:00Z',
+    bashCommands: [],
+    deduplicationKey: 'call',
+    ...overrides,
+  }
+}
+
+function reliabilityTurn(
+  i: number,
+  overrides: Partial<LowWorthTurn> & { call?: Partial<ReliabilityCall> } = {},
+): LowWorthTurn {
+  const { call: callOverrides, ...turnOverrides } = overrides
+  return lowWorthTurn({
+    userMessage: `turn ${i}`,
+    assistantCalls: [reliabilityCall({
+      timestamp: `2026-05-01T10:${String(i).padStart(2, '0')}:00Z`,
+      deduplicationKey: `call-${i}`,
+      ...callOverrides,
+    })],
+    timestamp: `2026-05-01T10:${String(i).padStart(2, '0')}:00Z`,
+    sessionId: 's1',
+    hasEdits: true,
+    retries: 0,
+    ...turnOverrides,
+  })
+}
+
+function projectWithReliabilityTurns(turns: LowWorthTurn[], project = 'app'): ProjectSummary {
+  return projectWithLowWorthSessions([
+    lowWorthSession(1, 0, {
+      turns,
+      totalInputTokens: turns.length * 1000,
+      totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      apiCalls: turns.length,
+    }, project),
+  ], project)
+}
+
+describe('detectCapabilityReliability', () => {
+  it('flags retry-heavy skills from actual Skill call metadata', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: i < 3 ? 1 : 0,
+      call: { tools: ['Edit', 'Skill'], skills: ['reviewer'] },
+    }))
+
+    const finding = detectCapabilityReliability([projectWithReliabilityTurns(turns)])
+
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('skill')
+    expect(finding!.explanation).toContain('skill reviewer')
+    expect(finding!.explanation).toContain('3/5 edit turns retried (60%)')
+    expect(finding!.explanation).toContain('correlation report')
+    expect(finding!.tokensSaved).toBe(1500)
+    expect(finding!.fix.type).toBe('paste')
+    if (finding!.fix.type === 'paste') expect(finding!.fix.destination).toBe('prompt')
+  })
+
+  it('flags retry-heavy MCP servers from invoked MCP tools', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: i < 3 ? 1 : 0,
+      call: {
+        tools: ['Edit', 'mcp__ci__run'],
+        mcpTools: ['mcp__ci__run'],
+      },
+    }))
+
+    const finding = detectCapabilityReliability([projectWithReliabilityTurns(turns)])
+
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('MCP server')
+    expect(finding!.explanation).toContain('MCP server ci')
+    expect(finding!.explanation).toContain('3 retries')
+  })
+
+  it('does not flag healthy capabilities with mostly one-shot edit turns', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: i === 0 ? 1 : 0,
+      call: { tools: ['Edit', 'Skill'], skills: ['healthy'] },
+    }))
+
+    expect(detectCapabilityReliability([projectWithReliabilityTurns(turns)])).toBeNull()
+  })
+
+  it('does not treat subCategory alone as skill evidence', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: 1,
+      subCategory: 'legacy-skill-label',
+      call: { tools: ['Edit'], skills: [] },
+    }))
+
+    expect(detectCapabilityReliability([projectWithReliabilityTurns(turns)])).toBeNull()
+  })
+
+  it('does not double-count the same retry-heavy turn across MCP and skill candidates', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      retries: i < 3 ? 1 : 0,
+      call: {
+        tools: ['Edit', 'Skill', 'mcp__ci__run'],
+        mcpTools: ['mcp__ci__run'],
+        skills: ['reviewer'],
+      },
+    }))
+
+    const finding = detectCapabilityReliability([projectWithReliabilityTurns(turns)])
+
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('2 MCP/skill capabilities')
+    expect(finding!.explanation).toContain('MCP server ci')
+    expect(finding!.explanation).toContain('skill reviewer')
+    // Three retry-heavy turns at 1K effective tokens each, counted once at
+    // the 50% recoverable ceiling even though two flagged capabilities share
+    // every turn.
+    expect(finding!.tokensSaved).toBe(1500)
+  })
+
+  it('ignores read-only retry turns for capability reliability', () => {
+    const turns = Array.from({ length: 5 }, (_, i) => reliabilityTurn(i, {
+      hasEdits: false,
+      retries: 1,
+      call: { tools: ['Read', 'Skill'], skills: ['reader'] },
+    }))
+
+    expect(detectCapabilityReliability([projectWithReliabilityTurns(turns)])).toBeNull()
   })
 })
 

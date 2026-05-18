@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added (CLI)
+- **MCP and skill reliability report.** `codeburn optimize` now detects MCP
+  servers and skills whose edit turns are disproportionately retry-heavy,
+  using turn-level MCP/Skill call evidence and a shared-turn token estimate so
+  one retry-heavy turn is not double-counted across multiple capabilities.
 - **Agent and subagent tracking coverage.** Gemini sessions now emit one
   provider call per assistant message with token usage instead of one aggregate
   call per session, preserving per-message tools, bash commands, timestamps,

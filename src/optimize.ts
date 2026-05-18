@@ -99,6 +99,15 @@ const WORTH_IT_LOW_MAX_CANDIDATES = 2
 const WORTH_IT_LOW_MAX_TOTAL_COST_USD = 10
 const WORTH_IT_HIGH_MIN_CANDIDATES = 10
 const WORTH_IT_HIGH_TOTAL_COST_USD = 50
+const CAPABILITY_RELIABILITY_MIN_EDIT_TURNS = 5
+const CAPABILITY_RELIABILITY_MIN_RETRY_TURNS = 3
+const CAPABILITY_RELIABILITY_MIN_RETRY_RATE = 0.50
+const CAPABILITY_RELIABILITY_RECOVERY_FRACTION = 0.50
+const CAPABILITY_RELIABILITY_PREVIEW = 5
+const CAPABILITY_RELIABILITY_LOW_MAX_CANDIDATES = 1
+const CAPABILITY_RELIABILITY_LOW_MAX_TOKENS = 50_000
+const CAPABILITY_RELIABILITY_HIGH_MIN_CANDIDATES = 5
+const CAPABILITY_RELIABILITY_HIGH_IMPACT_TOKENS = 200_000
 
 // ============================================================================
 // Scoring constants
@@ -891,6 +900,245 @@ export function detectMcpToolCoverage(
         ? 'Remove the underused server, or trim its tools in your MCP config:'
         : 'Remove underused servers, or trim their tools in your MCP config:',
       text: removeCommands.join('\n'),
+    },
+  }
+}
+
+type CapabilityKind = 'mcp' | 'skill'
+
+type CapabilityRef = {
+  kind: CapabilityKind
+  name: string
+}
+
+type CapabilityReliabilityAccumulator = CapabilityRef & {
+  editTurns: number
+  retryTurns: number
+  oneShotTurns: number
+  retries: number
+  tokensTouched: number
+  projects: Set<string>
+  retryTurnSavings: Map<string, number>
+}
+
+export type CapabilityReliabilityCandidate = {
+  kind: CapabilityKind
+  name: string
+  editTurns: number
+  retryTurns: number
+  oneShotTurns: number
+  retries: number
+  retryRate: number
+  tokensTouched: number
+  tokensSaved: number
+  projects: string[]
+}
+
+function capabilityKey(ref: CapabilityRef): string {
+  return `${ref.kind}:${ref.name}`
+}
+
+function formatCapabilityKind(kind: CapabilityKind): string {
+  return kind === 'mcp' ? 'MCP server' : 'skill'
+}
+
+function mcpServerFromToolName(fqn: string): string | null {
+  const parts = fqn.split('__')
+  if (parts.length < 3 || parts[0] !== 'mcp') return null
+  return parts[1] || null
+}
+
+function collectReliabilityCapabilities(turn: ProjectSummary['sessions'][number]['turns'][number]): Map<string, CapabilityRef> {
+  const capabilities = new Map<string, CapabilityRef>()
+
+  for (const call of turn.assistantCalls) {
+    for (const fqn of call.mcpTools) {
+      const server = mcpServerFromToolName(fqn)
+      if (!server) continue
+      const ref: CapabilityRef = { kind: 'mcp', name: server }
+      capabilities.set(capabilityKey(ref), ref)
+    }
+    for (const rawSkill of call.skills ?? []) {
+      const skill = rawSkill.trim()
+      if (!skill) continue
+      const ref: CapabilityRef = { kind: 'skill', name: skill }
+      capabilities.set(capabilityKey(ref), ref)
+    }
+  }
+
+  return capabilities
+}
+
+function turnEffectiveTokenTotal(turn: ProjectSummary['sessions'][number]['turns'][number]): number {
+  return Math.round(turn.assistantCalls.reduce((sum, call) =>
+    sum
+    + call.usage.inputTokens
+    + call.usage.outputTokens
+    + call.usage.cacheCreationInputTokens * CACHE_WRITE_MULTIPLIER
+    + call.usage.cacheReadInputTokens * CACHE_READ_DISCOUNT,
+  0))
+}
+
+function reliabilityTurnKey(
+  project: ProjectSummary,
+  session: ProjectSummary['sessions'][number],
+  turn: ProjectSummary['sessions'][number]['turns'][number],
+  turnIndex: number,
+): string {
+  return `${project.projectPath || project.project}:${session.sessionId}:${turn.timestamp}:${turnIndex}`
+}
+
+function getReliabilityAccumulator(
+  stats: Map<string, CapabilityReliabilityAccumulator>,
+  ref: CapabilityRef,
+): CapabilityReliabilityAccumulator {
+  const key = capabilityKey(ref)
+  let acc = stats.get(key)
+  if (!acc) {
+    acc = {
+      ...ref,
+      editTurns: 0,
+      retryTurns: 0,
+      oneShotTurns: 0,
+      retries: 0,
+      tokensTouched: 0,
+      projects: new Set(),
+      retryTurnSavings: new Map(),
+    }
+    stats.set(key, acc)
+  }
+  return acc
+}
+
+function findCapabilityReliabilityCandidates(projects: ProjectSummary[]): CapabilityReliabilityCandidate[] {
+  const stats = new Map<string, CapabilityReliabilityAccumulator>()
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (let turnIndex = 0; turnIndex < session.turns.length; turnIndex++) {
+        const turn = session.turns[turnIndex]!
+        if (!turn.hasEdits) continue
+
+        const capabilities = collectReliabilityCapabilities(turn)
+        if (capabilities.size === 0) continue
+
+        const turnTokens = turnEffectiveTokenTotal(turn)
+        const turnKey = reliabilityTurnKey(project, session, turn, turnIndex)
+        const recoverableTokens = turn.retries > 0
+          ? Math.round(turnTokens * CAPABILITY_RELIABILITY_RECOVERY_FRACTION)
+          : 0
+
+        for (const ref of capabilities.values()) {
+          const acc = getReliabilityAccumulator(stats, ref)
+          acc.editTurns++
+          acc.tokensTouched += turnTokens
+          acc.projects.add(project.project)
+          if (turn.retries > 0) {
+            acc.retryTurns++
+            acc.retries += turn.retries
+            acc.retryTurnSavings.set(turnKey, recoverableTokens)
+          } else {
+            acc.oneShotTurns++
+          }
+        }
+      }
+    }
+  }
+
+  const candidates: CapabilityReliabilityCandidate[] = []
+  for (const acc of stats.values()) {
+    if (acc.editTurns < CAPABILITY_RELIABILITY_MIN_EDIT_TURNS) continue
+    if (acc.retryTurns < CAPABILITY_RELIABILITY_MIN_RETRY_TURNS) continue
+    const retryRate = acc.retryTurns / acc.editTurns
+    if (retryRate < CAPABILITY_RELIABILITY_MIN_RETRY_RATE) continue
+
+    candidates.push({
+      kind: acc.kind,
+      name: acc.name,
+      editTurns: acc.editTurns,
+      retryTurns: acc.retryTurns,
+      oneShotTurns: acc.oneShotTurns,
+      retries: acc.retries,
+      retryRate,
+      tokensTouched: acc.tokensTouched,
+      tokensSaved: Array.from(acc.retryTurnSavings.values()).reduce((sum, tokens) => sum + tokens, 0),
+      projects: Array.from(acc.projects).sort(),
+    })
+  }
+
+  candidates.sort((a, b) =>
+    b.retryRate - a.retryRate
+    || b.retries - a.retries
+    || b.tokensSaved - a.tokensSaved
+    || a.kind.localeCompare(b.kind)
+    || a.name.localeCompare(b.name)
+  )
+  return candidates
+}
+
+export function detectCapabilityReliability(projects: ProjectSummary[]): WasteFinding | null {
+  const candidates = findCapabilityReliabilityCandidates(projects)
+  if (candidates.length === 0) return null
+
+  const candidateKeys = new Set(candidates.map(c => capabilityKey(c)))
+  const uniqueRetryTurnSavings = new Map<string, number>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (let turnIndex = 0; turnIndex < session.turns.length; turnIndex++) {
+        const turn = session.turns[turnIndex]!
+        if (!turn.hasEdits || turn.retries <= 0) continue
+        const capabilities = collectReliabilityCapabilities(turn)
+        if (capabilities.size === 0) continue
+
+        const hasFlaggedCapability = Array.from(capabilities.keys()).some(key => candidateKeys.has(key))
+        if (!hasFlaggedCapability) continue
+
+        const key = reliabilityTurnKey(project, session, turn, turnIndex)
+        const tokens = Math.round(turnEffectiveTokenTotal(turn) * CAPABILITY_RELIABILITY_RECOVERY_FRACTION)
+        uniqueRetryTurnSavings.set(key, Math.max(uniqueRetryTurnSavings.get(key) ?? 0, tokens))
+      }
+    }
+  }
+
+  const tokensSaved = Array.from(uniqueRetryTurnSavings.values()).reduce((sum, tokens) => sum + tokens, 0)
+  const preview = candidates.slice(0, CAPABILITY_RELIABILITY_PREVIEW)
+  const list = preview.map(c => {
+    const percent = Math.round(c.retryRate * 100)
+    const projects = c.projects.length > 1 ? ` across ${c.projects.length} projects` : ` in ${c.projects[0] ?? 'one project'}`
+    return `${formatCapabilityKind(c.kind)} ${c.name}: ${c.retryTurns}/${c.editTurns} edit turns retried (${percent}%), ${c.retries} retries${projects}`
+  }).join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+
+  const names = preview
+    .map(c => `${formatCapabilityKind(c.kind)} ${c.name}`)
+    .join(', ')
+
+  let impact: Impact
+  if (candidates.length >= CAPABILITY_RELIABILITY_HIGH_MIN_CANDIDATES || tokensSaved >= CAPABILITY_RELIABILITY_HIGH_IMPACT_TOKENS) {
+    impact = 'high'
+  } else if (candidates.length <= CAPABILITY_RELIABILITY_LOW_MAX_CANDIDATES && tokensSaved < CAPABILITY_RELIABILITY_LOW_MAX_TOKENS) {
+    impact = 'low'
+  } else {
+    impact = 'medium'
+  }
+
+  const kindSet = new Set(candidates.map(c => c.kind))
+  const noun = kindSet.size === 1
+    ? (kindSet.has('mcp') ? 'MCP server' : 'skill')
+    : 'MCP/skill capability'
+  const pluralNoun = noun === 'MCP/skill capability' ? 'MCP/skill capabilities' : `${noun}s`
+  const verb = candidates.length === 1 ? 'correlates' : 'correlate'
+
+  return {
+    title: `${candidates.length} ${candidates.length === 1 ? noun : pluralNoun} ${verb} with retry-heavy edits`,
+    explanation: `Edit turns using these capabilities are retry-heavy: ${list}${extra}. This is a correlation report, not proof of causation; compare the retry-heavy turns with one-shot turns before changing MCP scope or skill instructions.`,
+    impact,
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to audit the retry-heavy capability before changing config:',
+      text: `Investigate these retry-correlated capabilities: ${names}. Compare edit turns with retries against one-shot edit turns, identify whether the MCP server or skill actually caused rework, then propose a scoped MCP config or skill-instruction change with session evidence. Do not remove a capability solely because it appears in this report.`,
     },
   }
 }
@@ -1800,6 +2048,7 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
+    () => detectCapabilityReliability(projects),
     () => detectLowWorthSessions(projects),
     () => detectContextBloat(projects, lowWorthSessionIds),
     () => detectSessionOutliers(projects, outlierExclusions),
