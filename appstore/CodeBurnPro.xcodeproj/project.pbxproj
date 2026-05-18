@@ -1,0 +1,492 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2ECF1C27FA4DDA36495BA68C /* litellm-snapshot.json in Resources */ = {isa = PBXBuildFile; fileRef = 8AAE65B7A750492C322FA5E7 /* litellm-snapshot.json */; };
+		3007410303C4D0434669B50E /* ProviderData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E37160EB1A5432B8293AA2D /* ProviderData.swift */; };
+		3DB70769F5E327B7D81A4A2F /* ParserFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166E0C0CE8503D3A2D2879E0 /* ParserFactory.swift */; };
+		3F6F4EDBAB788441F22F21D4 /* PricingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C4B76B18A1F16C3BFEA8852 /* PricingEngine.swift */; };
+		493862507A93C42271509F33 /* MenuBarPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 505DEE70935AC5B6EFD96342 /* MenuBarPopover.swift */; };
+		4D9E1DC41999837FD6234105 /* SessionDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE26E7C025F9E9B76F1EF5E2 /* SessionDiscovery.swift */; };
+		81BDD9D51CF36753E4DE4039 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A081AEB9C62823EA049C381 /* Theme.swift */; };
+		8FF7627DBD6A1925F25B6998 /* DashboardSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D18497715889FD2E28988D6 /* DashboardSections.swift */; };
+		A9920B49759503DA503CDAE6 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016A43AF196CE6A493C7538 /* SessionStore.swift */; };
+		CA53CB4F02B48520B5632AAF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F460B9E6390F3FB1E15FD87 /* Assets.xcassets */; };
+		DFEEF70015C2BDAECF8380BB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC1764E5E823EB826E9A95BA /* SettingsView.swift */; };
+		FFDB0DFF1ED97F07AB94BA08 /* CodeBurnProApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1E8B2BAC761E675B36E779 /* CodeBurnProApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		BE21D11E0B437BB5CC92D560 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98C12FE29026B86BB7691704 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4644213E89A759CA3536CE98;
+			remoteInfo = CodeBurnPro;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0E37160EB1A5432B8293AA2D /* ProviderData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderData.swift; sourceTree = "<group>"; };
+		166E0C0CE8503D3A2D2879E0 /* ParserFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserFactory.swift; sourceTree = "<group>"; };
+		1A081AEB9C62823EA049C381 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		1D18497715889FD2E28988D6 /* DashboardSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSections.swift; sourceTree = "<group>"; };
+		3C4B76B18A1F16C3BFEA8852 /* PricingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PricingEngine.swift; sourceTree = "<group>"; };
+		40A6F8098AC554850CC48A55 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		505DEE70935AC5B6EFD96342 /* MenuBarPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPopover.swift; sourceTree = "<group>"; };
+		5A1E8B2BAC761E675B36E779 /* CodeBurnProApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBurnProApp.swift; sourceTree = "<group>"; };
+		8AAE65B7A750492C322FA5E7 /* litellm-snapshot.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "litellm-snapshot.json"; sourceTree = "<group>"; };
+		8F460B9E6390F3FB1E15FD87 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B016A43AF196CE6A493C7538 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		B81E89E9FB0BDF09FBAD945C /* CodeBurnPro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeBurnPro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D8D13C20D2180A5466744F05 /* CodeBurnProTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CodeBurnProTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC63231DAA219A843397A91C /* CodeBurnPro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CodeBurnPro.entitlements; sourceTree = "<group>"; };
+		DE26E7C025F9E9B76F1EF5E2 /* SessionDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDiscovery.swift; sourceTree = "<group>"; };
+		FC1764E5E823EB826E9A95BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		010E84A815B086F865EE139D /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		2743809DB6BC37FB231BF136 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				1D18497715889FD2E28988D6 /* DashboardSections.swift */,
+				505DEE70935AC5B6EFD96342 /* MenuBarPopover.swift */,
+				FC1764E5E823EB826E9A95BA /* SettingsView.swift */,
+				1A081AEB9C62823EA049C381 /* Theme.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		354902BC5C1D6FA2706BB87B /* App */ = {
+			isa = PBXGroup;
+			children = (
+				DC63231DAA219A843397A91C /* CodeBurnPro.entitlements */,
+				5A1E8B2BAC761E675B36E779 /* CodeBurnProApp.swift */,
+				40A6F8098AC554850CC48A55 /* Info.plist */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		370A693B64F8F4F443EA6F75 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				354902BC5C1D6FA2706BB87B /* App */,
+				49E1E2079DE6A12CA955D709 /* Core */,
+				A8136629A97D7302328F9226 /* Models */,
+				B53474647E57314BBB4A5BF9 /* Resources */,
+				2743809DB6BC37FB231BF136 /* Views */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		49E1E2079DE6A12CA955D709 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				166E0C0CE8503D3A2D2879E0 /* ParserFactory.swift */,
+				3C4B76B18A1F16C3BFEA8852 /* PricingEngine.swift */,
+				DE26E7C025F9E9B76F1EF5E2 /* SessionDiscovery.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		A8136629A97D7302328F9226 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				0E37160EB1A5432B8293AA2D /* ProviderData.swift */,
+				B016A43AF196CE6A493C7538 /* SessionStore.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		AE4CF1BC0160C3FD593C6DD6 = {
+			isa = PBXGroup;
+			children = (
+				370A693B64F8F4F443EA6F75 /* Sources */,
+				010E84A815B086F865EE139D /* Tests */,
+				D5B44508B31DEDE68BF93CE7 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B53474647E57314BBB4A5BF9 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				8F460B9E6390F3FB1E15FD87 /* Assets.xcassets */,
+				8AAE65B7A750492C322FA5E7 /* litellm-snapshot.json */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		D5B44508B31DEDE68BF93CE7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B81E89E9FB0BDF09FBAD945C /* CodeBurnPro.app */,
+				D8D13C20D2180A5466744F05 /* CodeBurnProTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4644213E89A759CA3536CE98 /* CodeBurnPro */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 39BA4438AB143ED6916F0111 /* Build configuration list for PBXNativeTarget "CodeBurnPro" */;
+			buildPhases = (
+				C9DC56CFCB5B5C9F97B3143E /* Sources */,
+				7325A33B9C9197DA66E1F3BE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CodeBurnPro;
+			packageProductDependencies = (
+			);
+			productName = CodeBurnPro;
+			productReference = B81E89E9FB0BDF09FBAD945C /* CodeBurnPro.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C1F291F2AC223737AE163858 /* CodeBurnProTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 27D48476E54F490BB2D51D5D /* Build configuration list for PBXNativeTarget "CodeBurnProTests" */;
+			buildPhases = (
+				4AAAA6AF0579CE4D2C32BF22 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				90669F9181C61FA9ED854A6E /* PBXTargetDependency */,
+			);
+			name = CodeBurnProTests;
+			packageProductDependencies = (
+			);
+			productName = CodeBurnProTests;
+			productReference = D8D13C20D2180A5466744F05 /* CodeBurnProTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98C12FE29026B86BB7691704 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					4644213E89A759CA3536CE98 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = 82F59EE0DDE26D399B09396D /* Build configuration list for PBXProject "CodeBurnPro" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = AE4CF1BC0160C3FD593C6DD6;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = D5B44508B31DEDE68BF93CE7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4644213E89A759CA3536CE98 /* CodeBurnPro */,
+				C1F291F2AC223737AE163858 /* CodeBurnProTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7325A33B9C9197DA66E1F3BE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CA53CB4F02B48520B5632AAF /* Assets.xcassets in Resources */,
+				2ECF1C27FA4DDA36495BA68C /* litellm-snapshot.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4AAAA6AF0579CE4D2C32BF22 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C9DC56CFCB5B5C9F97B3143E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FFDB0DFF1ED97F07AB94BA08 /* CodeBurnProApp.swift in Sources */,
+				8FF7627DBD6A1925F25B6998 /* DashboardSections.swift in Sources */,
+				493862507A93C42271509F33 /* MenuBarPopover.swift in Sources */,
+				3DB70769F5E327B7D81A4A2F /* ParserFactory.swift in Sources */,
+				3F6F4EDBAB788441F22F21D4 /* PricingEngine.swift in Sources */,
+				3007410303C4D0434669B50E /* ProviderData.swift in Sources */,
+				4D9E1DC41999837FD6234105 /* SessionDiscovery.swift in Sources */,
+				A9920B49759503DA503CDAE6 /* SessionStore.swift in Sources */,
+				DFEEF70015C2BDAECF8380BB /* SettingsView.swift in Sources */,
+				81BDD9D51CF36753E4DE4039 /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		90669F9181C61FA9ED854A6E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4644213E89A759CA3536CE98 /* CodeBurnPro */;
+			targetProxy = BE21D11E0B437BB5CC92D560 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		16636C9409E6025D87CC6B93 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/App/CodeBurnPro.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development: toruk_makto1406@icloud.com (T3289GPL2P)";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Sources/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.agentseal.codeburn-pro";
+				PRODUCT_NAME = "CodeBurn Pro";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		28D3BCE119F61F0FC7E45532 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.agentseal.codeburn-pro-tests";
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodeBurnPro.app/Contents/MacOS/CodeBurnPro";
+			};
+			name = Debug;
+		};
+		669A9FA55E2ED179ED72D24A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		6B26F1606268EC787A0BEF18 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/App/CodeBurnPro.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development: toruk_makto1406@icloud.com (T3289GPL2P)";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Sources/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.agentseal.codeburn-pro";
+				PRODUCT_NAME = "CodeBurn Pro";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		6C4287EB5F1EF379F9E640B0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A63E55710D34F3B756F6E463 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.agentseal.codeburn-pro-tests";
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CodeBurnPro.app/Contents/MacOS/CodeBurnPro";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		27D48476E54F490BB2D51D5D /* Build configuration list for PBXNativeTarget "CodeBurnProTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28D3BCE119F61F0FC7E45532 /* Debug */,
+				A63E55710D34F3B756F6E463 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		39BA4438AB143ED6916F0111 /* Build configuration list for PBXNativeTarget "CodeBurnPro" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				16636C9409E6025D87CC6B93 /* Debug */,
+				6B26F1606268EC787A0BEF18 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		82F59EE0DDE26D399B09396D /* Build configuration list for PBXProject "CodeBurnPro" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6C4287EB5F1EF379F9E640B0 /* Debug */,
+				669A9FA55E2ED179ED72D24A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 98C12FE29026B86BB7691704 /* Project object */;
+}

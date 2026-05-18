@@ -1,0 +1,47 @@
+name: CodeBurnPro
+options:
+  bundleIdPrefix: com.agentseal
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  CodeBurnPro:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    resources:
+      - path: Sources/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agentseal.codeburn-pro
+        PRODUCT_NAME: CodeBurn Pro
+        CODE_SIGN_ENTITLEMENTS: Sources/App/CodeBurnPro.entitlements
+        INFOPLIST_FILE: Sources/App/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: true
+        CODE_SIGN_IDENTITY: "Apple Development: toruk_makto1406@icloud.com (T3289GPL2P)"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+    entitlements:
+      path: Sources/App/CodeBurnPro.entitlements
+
+  CodeBurnProTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: CodeBurnPro
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agentseal.codeburn-pro-tests
