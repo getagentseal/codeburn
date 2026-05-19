@@ -467,7 +467,6 @@ program
       let scanRange: DateRange
       let cache: DailyCache
       let todayProviderData: PeriodData | null = null
-      let usedPerProviderCachePath = false
 
       if (isAllProviders) {
         cache = await hydrateCache()
@@ -487,32 +486,11 @@ program
         }
       } else {
         cache = await loadDailyCache()
-        const cacheIsCurrent = cache.lastComputedDate !== null
-          && cache.lastComputedDate >= yesterdayStr
-        if (cacheIsCurrent && rangeStartStr < todayStr) {
-          const todayProviderProjects = fp(await parseAllSessions(todayRange, pf))
-          todayProviderData = buildPeriodData(periodInfo.label, todayProviderProjects)
-          const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
-          let histCost = 0, histCalls = 0
-          for (const d of historicalDays) {
-            const prov = d.providers[pf]
-            if (prov) { histCost += prov.cost; histCalls += prov.calls }
-          }
-          currentData = {
-            ...todayProviderData,
-            cost: todayProviderData.cost + histCost,
-            calls: todayProviderData.calls + histCalls,
-          }
-          scanProjects = todayProviderProjects
-          scanRange = todayRange
-          usedPerProviderCachePath = true
-        } else {
-          const fullProjects = fp(await parseAllSessions(periodInfo.range, pf))
-          todayProviderData = buildPeriodData(periodInfo.label, fullProjects)
-          currentData = todayProviderData
-          scanProjects = fullProjects
-          scanRange = periodInfo.range
-        }
+        const fullProjects = fp(await parseAllSessions(periodInfo.range, pf))
+        todayProviderData = buildPeriodData(periodInfo.label, fullProjects)
+        currentData = todayProviderData
+        scanProjects = fullProjects
+        scanRange = periodInfo.range
       }
 
       // PROVIDERS
@@ -579,51 +557,9 @@ program
             topModels,
           }
         })
-      } else if (usedPerProviderCachePath) {
-        const historyFromCache = allCacheDays.map(d => {
-          const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
-          return {
-            date: d.date,
-            cost: prov.cost,
-            calls: prov.calls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
-          }
-        })
-        const todayCost = todayProviderData!.cost
-        const todayCalls = todayProviderData!.calls
-        if (todayCost > 0 || todayCalls > 0) {
-          historyFromCache.push({
-            date: todayStr,
-            cost: todayCost,
-            calls: todayCalls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [],
-          })
-        }
-        dailyHistory = historyFromCache
       } else {
-        const histFromCache = allCacheDays.map(d => {
-          const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
-          return {
-            date: d.date,
-            cost: prov.cost,
-            calls: prov.calls,
-            inputTokens: 0,
-            outputTokens: 0,
-            cacheReadTokens: 0,
-            cacheWriteTokens: 0,
-            topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
-          }
-        })
         const fallbackDays = aggregateProjectsIntoDays(scanProjects)
-        const liveDays = fallbackDays.map(d => {
+        dailyHistory = fallbackDays.map(d => {
           const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
           return {
             date: d.date,
@@ -636,7 +572,6 @@ program
             topModels: [] as { name: string; cost: number; calls: number; inputTokens: number; outputTokens: number }[],
           }
         })
-        dailyHistory = [...histFromCache, ...liveDays]
       }
 
       const home = homedir()

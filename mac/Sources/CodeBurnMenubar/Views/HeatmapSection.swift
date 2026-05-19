@@ -373,7 +373,7 @@ private struct BarTooltipCard: View {
 
             if !bar.topModels.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
-                    ForEach(Array(bar.topModels.prefix(4).enumerated()), id: \.element.name) { idx, m in
+                    ForEach(Array(bar.topModels.prefix(4).enumerated()), id: \.offset) { idx, m in
                         HStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: 1)
                                 .fill(Theme.brandAccent.opacity(0.75 - Double(idx) * 0.12))

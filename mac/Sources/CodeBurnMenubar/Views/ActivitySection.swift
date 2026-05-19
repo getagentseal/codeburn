@@ -20,7 +20,7 @@ struct ActivitySection: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 7) {
-                let maxCost = store.payload.current.topActivities.map(\.cost).max() ?? 1
+                let maxCost = max(store.payload.current.topActivities.map(\.cost).max() ?? 1, 0.01)
                 ForEach(store.payload.current.topActivities, id: \.name) { activity in
                     ActivityRow(activity: activity, maxCost: maxCost)
                 }

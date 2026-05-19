@@ -19,7 +19,7 @@ struct ModelsSection: View {
             }
         ) {
             VStack(alignment: .leading, spacing: 7) {
-                let maxCost = store.payload.current.topModels.map(\.cost).max() ?? 1
+                let maxCost = max(store.payload.current.topModels.map(\.cost).max() ?? 1, 0.01)
                 ForEach(store.payload.current.topModels, id: \.name) { model in
                     ModelRow(model: model, maxCost: maxCost)
                 }

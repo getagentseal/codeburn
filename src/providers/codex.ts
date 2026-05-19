@@ -370,7 +370,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             .filter(c => c.type === 'input_text')
             .map(c => c.text ?? '')
             .filter(Boolean)
-          if (texts.length > 0) pendingUserMessage = texts.join(' ')
+          if (texts.length > 0) pendingUserMessage = texts.join(' ').slice(0, 500)
           continue
         }
 
