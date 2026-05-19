@@ -399,6 +399,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             provider: 'warp',
             model,
             inputTokens,
+            // Warp exposes only conversation-level usage totals in these tables,
+            // so we cannot reliably split per-exchange input vs output tokens.
             outputTokens: 0,
             cacheCreationInputTokens: 0,
             cacheReadInputTokens: 0,
