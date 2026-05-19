@@ -185,6 +185,42 @@ describe('fingerprintFile', () => {
     const fp = await fingerprintFile('/no/such/file')
     expect(fp).toBeNull()
   })
+
+  it('resolves compound path with # separator (Cursor workspace)', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const filePath = join(TMP_DIR, 'state.vscdb')
+    await writeFile(filePath, 'cursor-data')
+
+    const fp = await fingerprintFile(`${filePath}#cursor-ws=__orphan__`)
+    expect(fp).not.toBeNull()
+    expect(fp!.sizeBytes).toBe(11)
+  })
+
+  it('resolves compound path with : separator (OpenCode session)', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const filePath = join(TMP_DIR, 'opencode.db')
+    await writeFile(filePath, 'opencode-data')
+
+    const fp = await fingerprintFile(`${filePath}:ses_abc123`)
+    expect(fp).not.toBeNull()
+    expect(fp!.sizeBytes).toBe(13)
+  })
+
+  it('returns null when base file does not exist for compound path', async () => {
+    const fp = await fingerprintFile('/no/such/file.db#cursor-ws=workspace')
+    expect(fp).toBeNull()
+  })
+
+  it('prefers # separator over : when both present', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const filePath = join(TMP_DIR, 'state.vscdb')
+    await writeFile(filePath, 'both-seps')
+
+    // Path has both # and : — should strip at # first and find the base file
+    const fp = await fingerprintFile(`${filePath}#cursor-ws=ws:extra-colon`)
+    expect(fp).not.toBeNull()
+    expect(fp!.sizeBytes).toBe(9)
+  })
 })
 
 // ── reconcileFile ──────────────────────────────────────────────────────

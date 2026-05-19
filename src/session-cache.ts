@@ -239,6 +239,21 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     const s = await stat(filePath)
     return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
   } catch {
+    // Providers encode extra context into source paths using virtual suffixes:
+    // - Cursor: `<dbPath>#cursor-ws=<workspace>` (workspace-aware routing)
+    // - OpenCode: `<dbPath>:<sessionId>` (session scoping)
+    // These compound paths don't exist on disk; strip the suffix to stat the
+    // underlying file. Try `#` first (rare in real paths), then `:` (must use
+    // lastIndexOf to tolerate Windows drive letters like C:\...).
+    const hashIdx = filePath.indexOf('#')
+    if (hashIdx > 0) {
+      try {
+        const s = await stat(filePath.slice(0, hashIdx))
+        return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+      } catch {
+        // fall through to colon check
+      }
+    }
     const colonIdx = filePath.lastIndexOf(':')
     if (colonIdx > 0) {
       try {
