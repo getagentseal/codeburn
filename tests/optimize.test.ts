@@ -9,13 +9,15 @@ import {
   detectContextBloat,
   detectLowWorthSessions,
   detectSessionOutliers,
+  detectCapabilityRoi,
+  detectCapabilityRetryImpact,
   computeHealth,
   computeTrend,
   type ToolCall,
   type ApiCallMeta,
   type WasteFinding,
 } from '../src/optimize.js'
-import type { ProjectSummary } from '../src/types.js'
+import type { ParsedApiCall, ProjectSummary, TokenUsage } from '../src/types.js'
 
 function call(name: string, input: Record<string, unknown>, sessionId = 's1', project = 'p1'): ToolCall {
   return { name, input, sessionId, project }
@@ -526,6 +528,55 @@ describe('detectContextBloat', () => {
 
 type LowWorthTurn = TestSession['turns'][number]
 
+const ZERO_USAGE: TokenUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheCreationInputTokens: 0,
+  cacheReadInputTokens: 0,
+  cachedInputTokens: 0,
+  reasoningTokens: 0,
+  webSearchRequests: 0,
+}
+
+function capabilityCall(opts: {
+  tools?: string[]
+  mcpTools?: string[]
+  skills?: string[]
+  cost?: number
+  inputTokens?: number
+  outputTokens?: number
+  cacheCreationTokens?: number
+  cacheReadTokens?: number
+  key?: string
+} = {}): ParsedApiCall {
+  const skills = opts.skills ?? []
+  const tools = opts.tools ?? [
+    ...(opts.mcpTools ?? []),
+    ...(skills.length > 0 ? ['Skill'] : []),
+  ]
+  return {
+    provider: 'claude',
+    model: 'Opus 4.7',
+    usage: {
+      ...ZERO_USAGE,
+      inputTokens: opts.inputTokens ?? 2000,
+      outputTokens: opts.outputTokens ?? 200,
+      cacheCreationInputTokens: opts.cacheCreationTokens ?? 0,
+      cacheReadInputTokens: opts.cacheReadTokens ?? 0,
+    },
+    costUSD: opts.cost ?? 0.5,
+    tools,
+    mcpTools: opts.mcpTools ?? tools.filter(t => t.startsWith('mcp__')),
+    skills,
+    hasAgentSpawn: false,
+    hasPlanMode: false,
+    speed: 'standard',
+    timestamp: '2026-05-01T10:00:00Z',
+    bashCommands: [],
+    deduplicationKey: opts.key ?? 'capability-call',
+  }
+}
+
 function lowWorthTurn(overrides: Partial<LowWorthTurn> = {}): LowWorthTurn {
   return {
     userMessage: 'do the work',
@@ -537,6 +588,16 @@ function lowWorthTurn(overrides: Partial<LowWorthTurn> = {}): LowWorthTurn {
     hasEdits: false,
     ...overrides,
   }
+}
+
+function capabilityTurn(
+  overrides: Partial<LowWorthTurn> = {},
+  assistantCalls = [capabilityCall()],
+): LowWorthTurn {
+  return lowWorthTurn({
+    assistantCalls,
+    ...overrides,
+  })
 }
 
 function lowWorthSession(cost: number, i: number, overrides: Partial<TestSession> = {}, project = 'app'): TestSession {
@@ -563,6 +624,20 @@ function lowWorthSession(cost: number, i: number, overrides: Partial<TestSession
   }
 }
 
+function capabilitySession(turns: LowWorthTurn[], i: number, project = 'app'): TestSession {
+  const calls = turns.flatMap(turn => turn.assistantCalls)
+  const totalCost = calls.reduce((sum, call) => sum + call.costUSD, 0)
+  return lowWorthSession(totalCost, i, {
+    turns,
+    totalCostUSD: totalCost,
+    totalInputTokens: calls.reduce((sum, call) => sum + call.usage.inputTokens, 0),
+    totalOutputTokens: calls.reduce((sum, call) => sum + call.usage.outputTokens, 0),
+    totalCacheReadTokens: calls.reduce((sum, call) => sum + call.usage.cacheReadInputTokens, 0),
+    totalCacheWriteTokens: calls.reduce((sum, call) => sum + call.usage.cacheCreationInputTokens, 0),
+    apiCalls: calls.length,
+  }, project)
+}
+
 function projectWithLowWorthSessions(sessions: TestSession[], project = 'app'): ProjectSummary {
   return {
     project,
@@ -572,6 +647,280 @@ function projectWithLowWorthSessions(sessions: TestSession[], project = 'app'): 
     totalApiCalls: sessions.reduce((sum, s) => sum + s.apiCalls, 0),
   }
 }
+
+describe('detectCapabilityRoi', () => {
+  it('returns null below the implementation-turn sample threshold', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'] })],
+        ),
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'] })],
+        ),
+      ], 0),
+    ])
+
+    expect(detectCapabilityRoi([project])).toBeNull()
+  })
+
+  it('flags invoked MCP servers and skills with low edit ROI on implementation turns', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'], key: 'mcp-1' })],
+        ),
+        capabilityTurn(
+          { hasEdits: false, category: 'debugging' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'], key: 'mcp-2' })],
+        ),
+        capabilityTurn(
+          { hasEdits: false, category: 'feature' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'], key: 'mcp-3' })],
+        ),
+        capabilityTurn(
+          { hasEdits: true, category: 'coding' },
+          [capabilityCall({ mcpTools: ['mcp__docs__search'], key: 'mcp-4' })],
+        ),
+      ], 0),
+      capabilitySession([
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({ skills: ['api-review'], key: 'skill-1' })],
+        ),
+        capabilityTurn(
+          { hasEdits: false, category: 'refactoring' },
+          [capabilityCall({ skills: ['api-review'], key: 'skill-2' })],
+        ),
+        capabilityTurn(
+          { hasEdits: false, category: 'testing' },
+          [capabilityCall({ skills: ['api-review'], key: 'skill-3' })],
+        ),
+      ], 1),
+    ])
+
+    const finding = detectCapabilityRoi([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.title).toContain('MCP/skill')
+    expect(finding!.explanation).toContain('MCP docs')
+    expect(finding!.explanation).toContain('skill api-review')
+    expect(finding!.explanation).toContain('review signal, not proof of waste')
+    expect(finding!.tokensSaved).toBeGreaterThan(0)
+    expect(finding!.fix.type).toBe('paste')
+    if (finding!.fix.type === 'paste') {
+      expect(finding!.fix.destination).toBe('prompt')
+    }
+  })
+
+  it('counts a repeated MCP server at most once per turn', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession(Array.from({ length: 3 }, (_, i) =>
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [
+            capabilityCall({ mcpTools: ['mcp__github__search'], key: `github-${i}-a`, cost: 0.25 }),
+            capabilityCall({ mcpTools: ['mcp__github__issue_read'], key: `github-${i}-b`, cost: 0.25 }),
+          ],
+        )
+      ), 0),
+    ])
+
+    const finding = detectCapabilityRoi([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('0/3 implementation turns')
+    expect(finding!.explanation).not.toContain('0/6 implementation turns')
+  })
+
+  it('caps ROI savings once when multiple candidate capabilities share the same turn', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession(Array.from({ length: 3 }, (_, i) =>
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({
+            mcpTools: ['mcp__combo__search'],
+            skills: ['combo-skill'],
+            key: `combo-${i}`,
+          })],
+        )
+      ), 0),
+    ])
+
+    const finding = detectCapabilityRoi([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('MCP combo')
+    expect(finding!.explanation).toContain('skill combo-skill')
+    // One shared turn is 2,200 effective tokens. Three non-edit turns at the
+    // 25% recovery fraction = 1,650. A per-capability sum would double this.
+    expect(finding!.tokensSaved).toBe(1650)
+  })
+
+  it('does not treat generic turn subCategory labels as skills', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession(Array.from({ length: 3 }, () =>
+        lowWorthTurn({
+          hasEdits: false,
+          category: 'coding',
+          subCategory: 'frontend',
+          assistantCalls: [capabilityCall({ tools: ['Read'] })],
+        })
+      ), 0),
+    ])
+
+    expect(detectCapabilityRoi([project])).toBeNull()
+  })
+
+  it('suppresses MCP servers already covered by the low-tool-coverage finding', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession(Array.from({ length: 3 }, (_, i) =>
+        capabilityTurn(
+          { hasEdits: false, category: 'coding' },
+          [capabilityCall({ mcpTools: ['mcp__huge__search'], key: `huge-${i}` })],
+        )
+      ), 0),
+    ])
+    const coverage = [{
+      server: 'huge',
+      toolsAvailable: 12,
+      toolsInvoked: 1,
+      unusedTools: Array.from({ length: 11 }, (_, i) => `mcp__huge__tool_${i}`),
+      invocations: 3,
+      loadedSessions: 2,
+      coverageRatio: 1 / 12,
+    }]
+
+    expect(detectCapabilityRoi([project], coverage)).toBeNull()
+  })
+})
+
+describe('detectCapabilityRetryImpact', () => {
+  it('returns null without enough same-category baseline edit turns', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession(Array.from({ length: 3 }, (_, i) =>
+        capabilityTurn(
+          { hasEdits: true, category: 'coding', retries: 2 },
+          [capabilityCall({ skills: ['planner'], key: `planner-${i}` })],
+        )
+      ), 0),
+    ])
+
+    expect(detectCapabilityRetryImpact([project])).toBeNull()
+  })
+
+  it('flags capabilities with materially higher retry rates than same-category baseline', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 2 },
+            [capabilityCall({ skills: ['planner'], key: `planner-${i}` })],
+          )
+        ),
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 0 },
+            [capabilityCall({ tools: ['Edit'], key: `baseline-${i}` })],
+          )
+        ),
+      ], 0),
+    ])
+
+    const finding = detectCapabilityRetryImpact([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('skill planner')
+    expect(finding!.explanation).toContain('2.0 retries/edit turn vs 0.0 baseline')
+    expect(finding!.explanation).toContain('correlation, not causation')
+    expect(finding!.tokensSaved).toBeGreaterThan(0)
+    expect(finding!.fix.type).toBe('paste')
+    if (finding!.fix.type === 'paste') {
+      expect(finding!.fix.destination).toBe('prompt')
+    }
+  })
+
+  it('uses same-category retry baselines instead of all edit turns globally', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 2 },
+            [capabilityCall({ mcpTools: ['mcp__ci__run'], key: `ci-${i}` })],
+          )
+        ),
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 0 },
+            [capabilityCall({ tools: ['Edit'], key: `coding-baseline-${i}` })],
+          )
+        ),
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'debugging', retries: 10 },
+            [capabilityCall({ tools: ['Edit'], key: `debug-baseline-${i}` })],
+          )
+        ),
+      ], 0),
+    ])
+
+    const finding = detectCapabilityRetryImpact([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('MCP ci')
+    expect(finding!.explanation).toContain('vs 0.0 baseline')
+  })
+
+  it('caps retry savings once when multiple candidate capabilities share the same edit turns', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 2 },
+            [capabilityCall({
+              mcpTools: ['mcp__combo__run'],
+              skills: ['combo-skill'],
+              key: `retry-combo-${i}`,
+            })],
+          )
+        ),
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 0 },
+            [capabilityCall({ tools: ['Edit'], key: `retry-baseline-${i}` })],
+          )
+        ),
+      ], 0),
+    ])
+
+    const finding = detectCapabilityRetryImpact([project])
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('MCP combo')
+    expect(finding!.explanation).toContain('skill combo-skill')
+    // Three shared edit turns * 2,200 effective tokens * 50% retry cap.
+    // A per-capability sum would double this.
+    expect(finding!.tokensSaved).toBe(3300)
+  })
+
+  it('returns null below the capability edit-turn sample threshold', () => {
+    const project = projectWithLowWorthSessions([
+      capabilitySession([
+        ...Array.from({ length: 2 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 3 },
+            [capabilityCall({ skills: ['tiny-skill'], key: `tiny-${i}` })],
+          )
+        ),
+        ...Array.from({ length: 3 }, (_, i) =>
+          capabilityTurn(
+            { hasEdits: true, category: 'coding', retries: 0 },
+            [capabilityCall({ tools: ['Edit'], key: `baseline-${i}` })],
+          )
+        ),
+      ], 0),
+    ])
+
+    expect(detectCapabilityRetryImpact([project])).toBeNull()
+  })
+})
 
 describe('detectLowWorthSessions', () => {
   it('returns null for cheap sessions', () => {

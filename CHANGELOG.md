@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added (CLI)
+- **MCP and skill ROI insights in `optimize`.** The optimizer now looks for
+  MCP servers and skills that are invoked in implementation-like turns but
+  rarely lead to edit turns, plus capabilities whose edit turns need materially
+  more retries than the same task-category baseline. Both findings are
+  correlation-based review signals, not automatic disable/remove advice.
 - **Agent and subagent tracking coverage.** Gemini sessions now emit one
   provider call per assistant message with token usage instead of one aggregate
   call per session, preserving per-message tools, bash commands, timestamps,

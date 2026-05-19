@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
-import type { DateRange, ProjectSummary } from './types.js'
+import type { DateRange, ProjectSummary, TaskCategory } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 
@@ -99,6 +99,25 @@ const WORTH_IT_LOW_MAX_CANDIDATES = 2
 const WORTH_IT_LOW_MAX_TOTAL_COST_USD = 10
 const WORTH_IT_HIGH_MIN_CANDIDATES = 10
 const WORTH_IT_HIGH_TOTAL_COST_USD = 50
+const CAPABILITY_ROI_MIN_TURNS = 3
+const CAPABILITY_ROI_MIN_COST_USD = 1
+const CAPABILITY_ROI_MAX_EDIT_RATE = 0.25
+const CAPABILITY_ROI_RECOVERABLE_FRACTION = 0.25
+const CAPABILITY_ROI_MEDIUM_TOKENS = 100_000
+const CAPABILITY_ROI_HIGH_TOKENS = 500_000
+const CAPABILITY_ROI_MEDIUM_COST_USD = 5
+const CAPABILITY_ROI_HIGH_COST_USD = 20
+const CAPABILITY_ROI_HIGH_MIN_CANDIDATES = 5
+const CAPABILITY_RETRY_MIN_EDIT_TURNS = 3
+const CAPABILITY_RETRY_MIN_BASELINE_EDIT_TURNS = 3
+const CAPABILITY_RETRY_MIN_LIFT = 0.5
+const CAPABILITY_RETRY_MIN_RATE = 1
+const CAPABILITY_RETRY_RECOVERABLE_CAP = 0.5
+const CAPABILITY_RETRY_MEDIUM_EXCESS = 4
+const CAPABILITY_RETRY_HIGH_EXCESS = 8
+const CAPABILITY_RETRY_MEDIUM_TOKENS = 100_000
+const CAPABILITY_RETRY_HIGH_TOKENS = 500_000
+const CAPABILITY_PREVIEW = 5
 
 // ============================================================================
 // Scoring constants
@@ -891,6 +910,475 @@ export function detectMcpToolCoverage(
         ? 'Remove the underused server, or trim its tools in your MCP config:'
         : 'Remove underused servers, or trim their tools in your MCP config:',
       text: removeCommands.join('\n'),
+    },
+  }
+}
+
+type CapabilityKind = 'MCP' | 'skill'
+
+type CapabilityRef = {
+  kind: CapabilityKind
+  name: string
+}
+
+type CapabilityCategoryStats = {
+  editTurns: number
+  retries: number
+}
+
+type CapabilityStats = CapabilityRef & {
+  turns: number
+  editTurns: number
+  retries: number
+  costUSD: number
+  tokensTouched: number
+  nonEditTokensTouched: number
+  editTokensTouched: number
+  implementationTurns: number
+  implementationEditTurns: number
+  implementationCostUSD: number
+  implementationTokensTouched: number
+  implementationNonEditTokensTouched: number
+  implementationTurnKeys: Set<string>
+  implementationNonEditTurnKeys: Set<string>
+  editTurnKeys: Set<string>
+  categories: Map<TaskCategory, CapabilityCategoryStats>
+}
+
+type CapabilityTurnRecord = {
+  costUSD: number
+  tokensTouched: number
+  retries: number
+}
+
+type CapabilityAggregate = {
+  capabilities: Map<string, CapabilityStats>
+  categoryBaselines: Map<TaskCategory, CapabilityCategoryStats>
+  turns: Map<string, CapabilityTurnRecord>
+}
+
+const CAPABILITY_IMPLEMENTATION_CATEGORIES = new Set<TaskCategory>([
+  'coding',
+  'debugging',
+  'feature',
+  'refactoring',
+  'testing',
+])
+
+function capabilityKey(kind: CapabilityKind, name: string): string {
+  return `${kind}:${name}`
+}
+
+function normalizeCapabilityName(name: string): string {
+  return name.trim()
+}
+
+function mcpServerFromToolName(fqn: string): string | null {
+  const parts = fqn.split('__')
+  if (parts.length < 3 || parts[0] !== 'mcp') return null
+  return parts[1] || null
+}
+
+function formatCapabilityName(capability: CapabilityRef): string {
+  return capability.kind === 'MCP' ? `MCP ${capability.name}` : `skill ${capability.name}`
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`
+}
+
+function formatRetryRate(value: number): string {
+  if (value > 0 && value < 0.1) return '<0.1'
+  return value.toFixed(1)
+}
+
+function compareCapabilityNames(a: CapabilityRef, b: CapabilityRef): number {
+  const left = formatCapabilityName(a)
+  const right = formatCapabilityName(b)
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
+function makeCapabilityStats(kind: CapabilityKind, name: string): CapabilityStats {
+  return {
+    kind,
+    name,
+    turns: 0,
+    editTurns: 0,
+    retries: 0,
+    costUSD: 0,
+    tokensTouched: 0,
+    nonEditTokensTouched: 0,
+    editTokensTouched: 0,
+    implementationTurns: 0,
+    implementationEditTurns: 0,
+    implementationCostUSD: 0,
+    implementationTokensTouched: 0,
+    implementationNonEditTokensTouched: 0,
+    implementationTurnKeys: new Set(),
+    implementationNonEditTurnKeys: new Set(),
+    editTurnKeys: new Set(),
+    categories: new Map(),
+  }
+}
+
+function getCapabilityStats(
+  capabilities: Map<string, CapabilityStats>,
+  kind: CapabilityKind,
+  name: string,
+): CapabilityStats {
+  const key = capabilityKey(kind, name)
+  let stats = capabilities.get(key)
+  if (!stats) {
+    stats = makeCapabilityStats(kind, name)
+    capabilities.set(key, stats)
+  }
+  return stats
+}
+
+function addCapabilityCategoryStats(
+  categories: Map<TaskCategory, CapabilityCategoryStats>,
+  category: TaskCategory,
+  retries: number,
+): void {
+  let stats = categories.get(category)
+  if (!stats) {
+    stats = { editTurns: 0, retries: 0 }
+    categories.set(category, stats)
+  }
+  stats.editTurns++
+  stats.retries += retries
+}
+
+function turnCostUSD(turn: ProjectSummary['sessions'][number]['turns'][number]): number {
+  return turn.assistantCalls.reduce((sum, call) => sum + call.costUSD, 0)
+}
+
+function callEffectiveTokens(call: ProjectSummary['sessions'][number]['turns'][number]['assistantCalls'][number]): number {
+  return call.usage.inputTokens
+    + call.usage.outputTokens
+    + call.usage.cacheCreationInputTokens * CACHE_WRITE_MULTIPLIER
+    + call.usage.cacheReadInputTokens * CACHE_READ_DISCOUNT
+}
+
+function turnEffectiveTokens(turn: ProjectSummary['sessions'][number]['turns'][number]): number {
+  return Math.round(turn.assistantCalls.reduce((sum, call) => sum + callEffectiveTokens(call), 0))
+}
+
+function collectTurnCapabilities(turn: ProjectSummary['sessions'][number]['turns'][number]): CapabilityRef[] {
+  const mcpServers = new Set<string>()
+  const skills = new Set<string>()
+
+  for (const call of turn.assistantCalls) {
+    for (const tool of call.mcpTools ?? []) {
+      const server = mcpServerFromToolName(tool)
+      if (server) mcpServers.add(server)
+    }
+    for (const skill of call.skills ?? []) {
+      const normalized = normalizeCapabilityName(skill)
+      if (normalized) skills.add(normalized)
+    }
+  }
+
+  return [
+    ...Array.from(mcpServers).sort().map(name => ({ kind: 'MCP' as const, name })),
+    ...Array.from(skills).sort().map(name => ({ kind: 'skill' as const, name })),
+  ]
+}
+
+function aggregateCapabilityStats(projects: ProjectSummary[]): CapabilityAggregate {
+  const capabilities = new Map<string, CapabilityStats>()
+  const categoryBaselines = new Map<TaskCategory, CapabilityCategoryStats>()
+  const turns = new Map<string, CapabilityTurnRecord>()
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (let turnIndex = 0; turnIndex < session.turns.length; turnIndex++) {
+        const turn = session.turns[turnIndex]!
+        const turnKey = `${project.project}\u0000${session.sessionId}\u0000${turnIndex}`
+        const refs = collectTurnCapabilities(turn)
+        if (turn.hasEdits) {
+          addCapabilityCategoryStats(categoryBaselines, turn.category, turn.retries)
+        }
+        if (refs.length === 0) continue
+
+        const costUSD = turnCostUSD(turn)
+        const tokensTouched = turnEffectiveTokens(turn)
+        const isImplementationTurn = CAPABILITY_IMPLEMENTATION_CATEGORIES.has(turn.category)
+        turns.set(turnKey, { costUSD, tokensTouched, retries: turn.retries })
+
+        for (const ref of refs) {
+          const stats = getCapabilityStats(capabilities, ref.kind, ref.name)
+          stats.turns++
+          stats.costUSD += costUSD
+          stats.tokensTouched += tokensTouched
+
+          if (turn.hasEdits) {
+            stats.editTurns++
+            stats.retries += turn.retries
+            stats.editTokensTouched += tokensTouched
+            stats.editTurnKeys.add(turnKey)
+            addCapabilityCategoryStats(stats.categories, turn.category, turn.retries)
+          } else {
+            stats.nonEditTokensTouched += tokensTouched
+          }
+
+          if (isImplementationTurn) {
+            stats.implementationTurns++
+            stats.implementationCostUSD += costUSD
+            stats.implementationTokensTouched += tokensTouched
+            stats.implementationTurnKeys.add(turnKey)
+            if (turn.hasEdits) {
+              stats.implementationEditTurns++
+            } else {
+              stats.implementationNonEditTokensTouched += tokensTouched
+              stats.implementationNonEditTurnKeys.add(turnKey)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { capabilities, categoryBaselines, turns }
+}
+
+function lowCoverageMcpServers(coverage: McpServerCoverage[]): Set<string> {
+  return new Set(
+    coverage
+      .filter(c =>
+        c.toolsAvailable > MCP_COVERAGE_MIN_TOOLS
+        && c.loadedSessions >= MCP_COVERAGE_MIN_SESSIONS
+        && c.coverageRatio < MCP_COVERAGE_LOW_THRESHOLD,
+      )
+      .map(c => c.server),
+  )
+}
+
+function sumUniqueTurnTokens(
+  turnKeys: Iterable<string>,
+  turns: Map<string, CapabilityTurnRecord>,
+  tokenFraction: number,
+): number {
+  const unique = new Set(turnKeys)
+  let tokens = 0
+  for (const key of unique) {
+    tokens += (turns.get(key)?.tokensTouched ?? 0) * tokenFraction
+  }
+  return Math.round(tokens)
+}
+
+function sumUniqueTurnCost(
+  turnKeys: Iterable<string>,
+  turns: Map<string, CapabilityTurnRecord>,
+): number {
+  const unique = new Set(turnKeys)
+  let cost = 0
+  for (const key of unique) cost += turns.get(key)?.costUSD ?? 0
+  return cost
+}
+
+type CapabilityRoiCandidate = {
+  stats: CapabilityStats
+  editRate: number
+  recoverableTokens: number
+}
+
+export function detectCapabilityRoi(
+  projects: ProjectSummary[],
+  coverage = aggregateMcpCoverage(projects),
+  aggregate = aggregateCapabilityStats(projects),
+): WasteFinding | null {
+  const { capabilities, turns } = aggregate
+  if (capabilities.size === 0) return null
+
+  const suppressedMcpServers = lowCoverageMcpServers(coverage)
+  const candidates: CapabilityRoiCandidate[] = []
+
+  for (const stats of capabilities.values()) {
+    if (stats.kind === 'MCP' && suppressedMcpServers.has(stats.name)) continue
+    if (stats.implementationTurns < CAPABILITY_ROI_MIN_TURNS) continue
+    if (stats.implementationCostUSD < CAPABILITY_ROI_MIN_COST_USD) continue
+
+    const editRate = stats.implementationEditTurns / stats.implementationTurns
+    if (editRate > CAPABILITY_ROI_MAX_EDIT_RATE) continue
+    if (stats.implementationNonEditTokensTouched <= 0) continue
+
+    candidates.push({
+      stats,
+      editRate,
+      recoverableTokens: Math.round(stats.implementationNonEditTokensTouched * CAPABILITY_ROI_RECOVERABLE_FRACTION),
+    })
+  }
+
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) =>
+    b.recoverableTokens - a.recoverableTokens
+    || b.stats.implementationCostUSD - a.stats.implementationCostUSD
+    || b.stats.implementationTurns - a.stats.implementationTurns
+    || compareCapabilityNames(a.stats, b.stats)
+  )
+
+  const preview = candidates.slice(0, CAPABILITY_PREVIEW)
+  const list = preview
+    .map(c =>
+      `${formatCapabilityName(c.stats)}: ` +
+      `${c.stats.implementationEditTurns}/${c.stats.implementationTurns} implementation turns produced edits ` +
+      `(${formatPercent(c.editRate)} edit rate), ${formatCost(c.stats.implementationCostUSD)} touched`,
+    )
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  const uniqueNonEditTurnKeys = candidates.flatMap(c => Array.from(c.stats.implementationNonEditTurnKeys))
+  const uniqueImplementationTurnKeys = candidates.flatMap(c => Array.from(c.stats.implementationTurnKeys))
+  const tokensSaved = sumUniqueTurnTokens(uniqueNonEditTurnKeys, turns, CAPABILITY_ROI_RECOVERABLE_FRACTION)
+  const totalCost = sumUniqueTurnCost(uniqueImplementationTurnKeys, turns)
+  const impact: Impact = tokensSaved >= CAPABILITY_ROI_HIGH_TOKENS
+    || totalCost >= CAPABILITY_ROI_HIGH_COST_USD
+    || candidates.length >= CAPABILITY_ROI_HIGH_MIN_CANDIDATES
+    ? 'high'
+    : tokensSaved >= CAPABILITY_ROI_MEDIUM_TOKENS || totalCost >= CAPABILITY_ROI_MEDIUM_COST_USD
+      ? 'medium'
+      : 'low'
+
+  return {
+    title: `${candidates.length} MCP/skill capabilit${candidates.length === 1 ? 'y' : 'ies'} with low edit ROI`,
+    explanation:
+      `These invoked capabilities showed up in implementation-like turns but rarely led to edit turns. ` +
+      `Cost is attributed as "touched" because multiple capabilities can appear in the same turn; savings and impact cap shared turns once. ` +
+      `This is a review signal, not proof of waste. ` +
+      `${list}${extra}.`,
+    impact,
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to audit these capabilities before disabling anything:',
+      text: [
+        'Review these MCP/skill capabilities before disabling anything:',
+        ...preview.map(c =>
+          `- ${formatCapabilityName(c.stats)}: inspect recent sessions where it was invoked but produced no edit turn; decide whether to narrow the MCP tool set, improve the skill prompt, or remove/archive it.`,
+        ),
+        candidates.length > preview.length ? `- Also review ${candidates.length - preview.length} additional capability candidate(s) from the CodeBurn output.` : '',
+      ].filter(Boolean).join('\n'),
+    },
+  }
+}
+
+type CapabilityRetryCandidate = {
+  stats: CapabilityStats
+  retryRate: number
+  baselineRate: number
+  baselineEditTurns: number
+  excessRetries: number
+  recoverableTokens: number
+}
+
+export function detectCapabilityRetryImpact(
+  projects: ProjectSummary[],
+  aggregate = aggregateCapabilityStats(projects),
+): WasteFinding | null {
+  const { capabilities, categoryBaselines, turns } = aggregate
+  if (capabilities.size === 0) return null
+
+  const candidates: CapabilityRetryCandidate[] = []
+
+  for (const stats of capabilities.values()) {
+    if (stats.editTurns < CAPABILITY_RETRY_MIN_EDIT_TURNS) continue
+
+    let baselineEditTurns = 0
+    let baselineRetries = 0
+    for (const [category, capabilityCategory] of stats.categories) {
+      const baseline = categoryBaselines.get(category)
+      if (!baseline) continue
+      baselineEditTurns += Math.max(0, baseline.editTurns - capabilityCategory.editTurns)
+      baselineRetries += Math.max(0, baseline.retries - capabilityCategory.retries)
+    }
+    if (baselineEditTurns < CAPABILITY_RETRY_MIN_BASELINE_EDIT_TURNS) continue
+
+    const retryRate = stats.retries / stats.editTurns
+    const baselineRate = baselineRetries / baselineEditTurns
+    if (retryRate < CAPABILITY_RETRY_MIN_RATE) continue
+    if (retryRate < baselineRate + CAPABILITY_RETRY_MIN_LIFT) continue
+
+    const excessRetries = Math.max(0, stats.retries - baselineRate * stats.editTurns)
+    if (excessRetries <= 0) continue
+    const recoverableFraction = Math.min(
+      CAPABILITY_RETRY_RECOVERABLE_CAP,
+      excessRetries / Math.max(stats.retries, 1),
+    )
+    candidates.push({
+      stats,
+      retryRate,
+      baselineRate,
+      baselineEditTurns,
+      excessRetries,
+      recoverableTokens: Math.round(stats.editTokensTouched * recoverableFraction),
+    })
+  }
+
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) =>
+    b.excessRetries - a.excessRetries
+    || b.recoverableTokens - a.recoverableTokens
+    || compareCapabilityNames(a.stats, b.stats)
+  )
+
+  const preview = candidates.slice(0, CAPABILITY_PREVIEW)
+  const list = preview
+    .map(c =>
+      `${formatCapabilityName(c.stats)}: ` +
+      `${formatRetryRate(c.retryRate)} retries/edit turn vs ${formatRetryRate(c.baselineRate)} baseline ` +
+      `in the same task categories (${c.stats.editTurns} edit turns, baseline ${c.baselineEditTurns})`,
+    )
+    .join('; ')
+  const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
+  const turnRecoveryFractions = new Map<string, number>()
+  const turnExcessFractions = new Map<string, number>()
+  for (const candidate of candidates) {
+    const excessFraction = Math.min(1, candidate.excessRetries / Math.max(candidate.stats.retries, 1))
+    const recoverableFraction = Math.min(CAPABILITY_RETRY_RECOVERABLE_CAP, excessFraction)
+    for (const key of candidate.stats.editTurnKeys) {
+      turnRecoveryFractions.set(key, Math.max(turnRecoveryFractions.get(key) ?? 0, recoverableFraction))
+      turnExcessFractions.set(key, Math.max(turnExcessFractions.get(key) ?? 0, excessFraction))
+    }
+  }
+  let tokensSaved = 0
+  let totalExcessRetries = 0
+  for (const [key, fraction] of turnRecoveryFractions) {
+    tokensSaved += (turns.get(key)?.tokensTouched ?? 0) * fraction
+  }
+  for (const [key, fraction] of turnExcessFractions) {
+    totalExcessRetries += (turns.get(key)?.retries ?? 0) * fraction
+  }
+  tokensSaved = Math.round(tokensSaved)
+  const impact: Impact = totalExcessRetries >= CAPABILITY_RETRY_HIGH_EXCESS
+    || tokensSaved >= CAPABILITY_RETRY_HIGH_TOKENS
+    || candidates.length >= 3
+    ? 'high'
+    : totalExcessRetries >= CAPABILITY_RETRY_MEDIUM_EXCESS || tokensSaved >= CAPABILITY_RETRY_MEDIUM_TOKENS
+      ? 'medium'
+      : 'low'
+
+  return {
+    title: `${candidates.length} MCP/skill capabilit${candidates.length === 1 ? 'y' : 'ies'} correlated with high retries`,
+    explanation:
+      `Turns using these capabilities needed materially more retry loops than other edit turns in the same task categories. ` +
+      `This is correlation, not causation: use it to inspect config, prompt shape, and tool scope before disabling anything. ` +
+      `${list}${extra}.`,
+    impact,
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to inspect the retry-prone capability path:',
+      text: [
+        'Audit these MCP/skill retry hotspots before changing config:',
+        ...preview.map(c =>
+          `- ${formatCapabilityName(c.stats)}: compare successful one-shot edit turns against retry-heavy turns, then tighten tool scope or skill instructions only if the sessions show the capability is causing rework.`,
+        ),
+        'Cap retries at two attempts while testing the change, then re-run CodeBurn optimize to compare the same-category baseline.',
+      ].join('\n'),
     },
   }
 }
@@ -1781,6 +2269,7 @@ export async function scanAndDetect(
   const costRate = computeInputCostRate(projects)
   const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
   const mcpCoverage = aggregateMcpCoverage(projects)
+  const capabilityStats = aggregateCapabilityStats(projects)
 
   const findings: WasteFinding[] = []
   // Priority order for the per-session findings: low-worth → context-bloat →
@@ -1800,6 +2289,8 @@ export async function scanAndDetect(
     () => detectDuplicateReads(toolCalls, dateRange),
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
+    () => detectCapabilityRoi(projects, mcpCoverage, capabilityStats),
+    () => detectCapabilityRetryImpact(projects, capabilityStats),
     () => detectLowWorthSessions(projects),
     () => detectContextBloat(projects, lowWorthSessionIds),
     () => detectSessionOutliers(projects, outlierExclusions),
