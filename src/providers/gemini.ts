@@ -1,7 +1,8 @@
-import { readdir, readFile, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 
+import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -185,12 +186,8 @@ function parseJsonl(raw: string): GeminiSession | null {
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      let raw: string
-      try {
-        raw = await readFile(source.path, 'utf-8')
-      } catch {
-        return
-      }
+      const raw = await readSessionFile(source.path)
+      if (raw === null) return
 
       let data: GeminiSession | null = null
 

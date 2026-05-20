@@ -122,10 +122,10 @@ extension CurrentBlock {
         oneShotRate = try c.decodeIfPresent(Double.self, forKey: .oneShotRate)
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
         outputTokens = try c.decode(Int.self, forKey: .outputTokens)
-        cacheHitPercent = try c.decode(Double.self, forKey: .cacheHitPercent)
-        topActivities = try c.decode([ActivityEntry].self, forKey: .topActivities)
-        topModels = try c.decode([ModelEntry].self, forKey: .topModels)
-        providers = try c.decode([String: Double].self, forKey: .providers)
+        cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
+        topActivities = try c.decodeIfPresent([ActivityEntry].self, forKey: .topActivities) ?? []
+        topModels = try c.decodeIfPresent([ModelEntry].self, forKey: .topModels) ?? []
+        providers = try c.decodeIfPresent([String: Double].self, forKey: .providers) ?? [:]
         topProjects = try c.decodeIfPresent([ProjectEntry].self, forKey: .topProjects) ?? []
         modelEfficiency = try c.decodeIfPresent([ModelEfficiencyEntry].self, forKey: .modelEfficiency) ?? []
         topSessions = try c.decodeIfPresent([TopSessionEntry].self, forKey: .topSessions) ?? []

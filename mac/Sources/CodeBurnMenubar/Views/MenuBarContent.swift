@@ -653,8 +653,10 @@ struct FooterBar: View {
             }
 
             let fresh = await FXRateCache.shared.rate(for: code)
-            store.currency = code
-            CurrencyState.shared.apply(code: code, rate: fresh ?? cached, symbol: symbol)
+            if let rate = fresh ?? cached {
+                store.currency = code
+                CurrencyState.shared.apply(code: code, rate: rate, symbol: symbol)
+            }
         }
 
         CLICurrencyConfig.persist(code: code)
