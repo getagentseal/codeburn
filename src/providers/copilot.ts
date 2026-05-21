@@ -52,6 +52,37 @@ const toolNameMap: Record<string, string> = {
   kill_terminal: 'Bash',
 }
 
+function normalizeMcpSegment(segment: string): string {
+  return segment
+    .replace(/[^a-zA-Z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function normalizeCopilotMcpTool(rawTool: string): string | null {
+  const serverSeparator = rawTool.lastIndexOf('-')
+  if (serverSeparator <= 0 || serverSeparator >= rawTool.length - 1) return null
+
+  const server = normalizeMcpSegment(rawTool.slice(0, serverSeparator))
+  const tool = normalizeMcpSegment(rawTool.slice(serverSeparator + 1))
+  if (!server || !tool) return null
+
+  return `mcp__${server}__${tool}`
+}
+
+function normalizeToolName(rawTool?: unknown): string {
+  if (typeof rawTool !== 'string') return ''
+  if (!rawTool) return ''
+  if (rawTool.startsWith('mcp__')) return rawTool
+
+  const builtIn = toolNameMap[rawTool]
+  if (builtIn) return builtIn
+
+  // Copilot records MCP tools as `<server>-<tool>` instead of Claude's
+  // `mcp__server__tool`; built-ins are handled above before this heuristic.
+  return normalizeCopilotMcpTool(rawTool) ?? rawTool
+}
+
 const CHARS_PER_TOKEN = 4
 const COPILOT_OPENAI_AUTO = 'copilot-openai-auto'
 const COPILOT_ANTHROPIC_AUTO = 'copilot-anthropic-auto'
@@ -125,9 +156,8 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
       // that follows the bad event.
       const toolRequests = Array.isArray(rawToolRequests) ? rawToolRequests : []
       const tools = toolRequests
-        .map(t => t.name ?? '')
+        .map(t => normalizeToolName(t?.name))
         .filter(Boolean)
-        .map(n => toolNameMap[n] ?? n)
 
       const costUSD = calculateCost(currentModel, 0, outputTokens, 0, 0, 0)
 
@@ -259,9 +289,8 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
       // sessions have shipped toolRequests as non-array values.
       const legacyToolRequests = Array.isArray(data.toolRequests) ? data.toolRequests : []
       const tools = legacyToolRequests
-        .map(t => t.name ?? '')
+        .map(t => normalizeToolName(t?.name))
         .filter(Boolean)
-        .map(n => toolNameMap[n] ?? n)
 
       const costUSD = calculateCost(model, inputTokens, outputTokens + reasoningTokens, 0, 0, 0)
 
@@ -456,7 +485,7 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
     },
 
     toolDisplayName(rawTool: string): string {
-      return toolNameMap[rawTool] ?? rawTool
+      return normalizeToolName(rawTool)
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

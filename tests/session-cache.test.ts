@@ -166,6 +166,7 @@ describe('computeEnvFingerprint', () => {
 
   it('includes parser versions in provider fingerprints', () => {
     expect(computeEnvFingerprint('claude')).not.toBe(computeEnvFingerprint('unknown-provider'))
+    expect(computeEnvFingerprint('copilot')).not.toBe(computeEnvFingerprint('unknown-provider'))
     expect(computeEnvFingerprint('warp')).not.toBe(computeEnvFingerprint('unknown-provider'))
   })
 })

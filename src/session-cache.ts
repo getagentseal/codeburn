@@ -94,6 +94,7 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'worktree-project-grouping-v1',
   cline: 'worktree-project-grouping-v1',
+  copilot: 'mcp-tool-normalization-v1',
   'ibm-bob': 'worktree-project-grouping-v1',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
@@ -373,3 +374,4 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
     }
   } catch {}
 }
+

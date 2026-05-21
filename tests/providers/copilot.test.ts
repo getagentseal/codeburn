@@ -45,7 +45,7 @@ function transcriptUserMessage(content: string) {
   return JSON.stringify({ type: 'user.message', data: { content, attachments: [] } })
 }
 
-function transcriptAssistantMessage(opts: { messageId: string; content?: string; reasoningText?: string; toolCallIds?: string[] }) {
+function transcriptAssistantMessage(opts: { messageId: string; content?: string; reasoningText?: string; toolCallIds?: string[]; toolNames?: string[] }) {
   return JSON.stringify({
     type: 'assistant.message',
     data: {
@@ -54,7 +54,7 @@ function transcriptAssistantMessage(opts: { messageId: string; content?: string;
       reasoningText: opts.reasoningText ?? '',
       toolRequests: (opts.toolCallIds ?? []).map((id, i) => ({
         toolCallId: id,
-        name: i === 0 ? 'read_file' : 'run_in_terminal',
+        name: opts.toolNames?.[i] ?? (i === 0 ? 'read_file' : 'run_in_terminal'),
         type: 'function',
       })),
     },
@@ -126,6 +126,29 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls[0]!.tools).toEqual(['Bash', 'Read', 'Edit'])
   })
 
+  it('normalizes Copilot MCP tool names from toolRequests', async () => {
+    const eventsPath = await createSessionDir('sess-mcp-tools', [
+      modelChange('gpt-4.1'),
+      userMessage('list MCP-backed tasks and issues'),
+      assistantMessage({
+        messageId: 'msg-1',
+        outputTokens: 60,
+        tools: ['github-mcp-server-list_issues', 'cyberday-get_tasks', 'mempalace-mempalace_search', 'bash'],
+      }),
+    ])
+
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls[0]!.tools).toEqual([
+      'mcp__github_mcp_server__list_issues',
+      'mcp__cyberday__get_tasks',
+      'mcp__mempalace__mempalace_search',
+      'Bash',
+    ])
+  })
+
   it('does not crash on malformed toolRequests (string / null / missing)', async () => {
     // Regression guard: a corrupt session previously aborted the whole file's
     // parse loop because .map was called on a non-array. The fix coerces any
@@ -165,6 +188,31 @@ describe('copilot provider - JSONL parsing', () => {
     for (const c of corruptCalls) {
       expect(c.tools).toEqual([])
     }
+  })
+
+  it('ignores malformed non-string tool names', async () => {
+    const malformedToolName = JSON.stringify({
+      type: 'assistant.message',
+      timestamp: '2026-04-15T10:00:15Z',
+      data: {
+        messageId: 'malformed-tool-name',
+        outputTokens: 50,
+        toolRequests: [null, { name: 123, toolCallId: 'call-bad', type: 'function' }],
+      },
+    })
+    const eventsPath = await createSessionDir('sess-malformed-tool-name', [
+      modelChange('gpt-4.1'),
+      malformedToolName,
+      assistantMessage({ messageId: 'msg-after', outputTokens: 100, tools: ['github-mcp-server-list_issues'] }),
+    ])
+
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.tools).toEqual([])
+    expect(calls[1]!.tools).toEqual(['mcp__github_mcp_server__list_issues'])
   })
 
   it('skips assistant messages with zero outputTokens', async () => {
@@ -290,6 +338,26 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls).toHaveLength(3)
     expect(calls.every(c => c.model === 'copilot-openai-auto')).toBe(true)
   })
+
+  it('normalizes Copilot MCP tool names from VS Code transcripts', async () => {
+    const eventsPath = await createSessionDir('sess-tr-mcp-tools', [
+      transcriptSessionStart('sess-tr-mcp-tools'),
+      transcriptUserMessage('use GitHub MCP'),
+      transcriptAssistantMessage({
+        messageId: 'msg-1',
+        content: 'done',
+        toolCallIds: ['call_abc123', 'call_def456'],
+        toolNames: ['github-mcp-server-list_issues', 'read_file'],
+      }),
+    ])
+
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__github_mcp_server__list_issues', 'Read'])
+  })
 })
 
 describe('copilot provider - discoverSessions', () => {
@@ -378,6 +446,7 @@ describe('copilot provider - metadata', () => {
     expect(copilot.toolDisplayName('read_file')).toBe('Read')
     expect(copilot.toolDisplayName('write_file')).toBe('Edit')
     expect(copilot.toolDisplayName('web_search')).toBe('WebSearch')
+    expect(copilot.toolDisplayName('github-mcp-server-list_issues')).toBe('mcp__github_mcp_server__list_issues')
     expect(copilot.toolDisplayName('unknown_tool')).toBe('unknown_tool')
   })
 
