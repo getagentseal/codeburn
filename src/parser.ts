@@ -31,9 +31,10 @@ import type {
   ProjectSummary,
   SessionSummary,
   TokenUsage,
+  ToolCall,
   ToolUseBlock,
 } from './types.js'
-import { classifyTurn, BASH_TOOLS } from './classifier.js'
+import { classifyTurn, BASH_TOOLS, EDIT_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
 
 function unsanitizePath(dirName: string): string {
@@ -263,7 +264,7 @@ function extractLargeToolBlocks(source: string, contentBounds: JsonValueBounds |
           const skillName = readJsonString(source, findObjectFieldValue(source, inputBounds.start, inputBounds.end, 'name'), 200)
           if (skill !== undefined) input['skill'] = skill
           if (skillName !== undefined) input['name'] = skillName
-        } else if (name === 'Read' || name === 'FileReadTool') {
+        } else if (name === 'Read' || name === 'FileReadTool' || EDIT_TOOLS.has(name)) {
           const filePath = readJsonString(source, findObjectFieldValue(source, inputBounds.start, inputBounds.end, 'file_path'), BASH_COMMAND_CAP)
           if (filePath !== undefined) input['file_path'] = filePath
         } else if (name === 'Agent' || name === 'Task') {
@@ -608,7 +609,7 @@ function extractLargeToolBlocksBuffer(source: Buffer, contentBounds: BufferJsonV
           const skillName = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'name'), 200)
           if (skill !== undefined) input['skill'] = skill
           if (skillName !== undefined) input['name'] = skillName
-        } else if (name === 'Read' || name === 'FileReadTool') {
+        } else if (name === 'Read' || name === 'FileReadTool' || EDIT_TOOLS.has(name)) {
           const filePath = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'file_path'), BASH_COMMAND_CAP)
           if (filePath !== undefined) input['file_path'] = filePath
         } else if (name === 'Agent' || name === 'Task') {
@@ -839,7 +840,7 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
       const ri = (tb.input ?? {}) as Record<string, unknown>
       if (typeof ri['skill'] === 'string') input['skill'] = (ri['skill'] as string).slice(0, 200)
       if (typeof ri['name'] === 'string') input['name'] = (ri['name'] as string).slice(0, 200)
-    } else if (tb.name === 'Read' || tb.name === 'FileReadTool') {
+    } else if (tb.name === 'Read' || tb.name === 'FileReadTool' || EDIT_TOOLS.has(tb.name)) {
       const ri = (tb.input ?? {}) as Record<string, unknown>
       if (typeof ri['file_path'] === 'string') input['file_path'] = (ri['file_path'] as string).slice(0, BASH_COMMAND_CAP)
     } else if (tb.name === 'Agent' || tb.name === 'Task') {
@@ -1006,6 +1007,16 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
 
   const bashCmds = extractBashCommandsFromContent(msg.content ?? [])
 
+  const toolSeq: ToolCall[][] = (msg.content ?? [])
+    .filter((b): b is ToolUseBlock => b.type === 'tool_use')
+    .map(b => {
+      const call: ToolCall = { tool: b.name }
+      const inp = (b.input ?? {}) as Record<string, unknown>
+      if (typeof inp['file_path'] === 'string') call.file = inp['file_path'] as string
+      if (typeof inp['command'] === 'string') call.command = inp['command'] as string
+      return [call]
+    })
+
   return {
     provider: 'claude',
     model: msg.model,
@@ -1022,6 +1033,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     bashCommands: bashCmds,
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
+    toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
   }
 }
 
@@ -1578,6 +1590,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     skills: call.skills,
     subagentTypes: call.subagentTypes,
     deduplicationKey: call.deduplicationKey,
+    toolSequence: call.toolSequence,
   }
 }
 

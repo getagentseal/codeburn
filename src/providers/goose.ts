@@ -4,6 +4,7 @@ import { homedir, platform } from 'os'
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
+import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 type SessionRow = {
@@ -80,11 +81,11 @@ function parseModelConfig(raw: string | null): ModelConfig {
   }
 }
 
-function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tools: string[]; bashCommands: string[]; toolSequence: string[][] } {
+function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tools: string[]; bashCommands: string[]; toolSequence: ToolCall[][] } {
   const tools: string[] = []
   const bashCommands: string[] = []
   const seen = new Set<string>()
-  const toolSequence: string[][] = []
+  const toolSequence: ToolCall[][] = []
 
   try {
     const rows = db.query<{ content_json: Uint8Array | string }>(
@@ -99,7 +100,7 @@ function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tool
       } catch {
         continue
       }
-      const msgTools: string[] = []
+      const msgCalls: ToolCall[] = []
       for (const item of items) {
         if (item.type !== 'toolRequest') continue
         const rawName = item.toolCall?.value?.name ?? ''
@@ -109,7 +110,15 @@ function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tool
           seen.add(mapped)
           tools.push(mapped)
         }
-        msgTools.push(mapped)
+        const call: ToolCall = { tool: mapped }
+        const args = item.toolCall?.value?.arguments
+        if (args && typeof args === 'object') {
+          const fp = (args as Record<string, unknown>)['file_path']
+          if (typeof fp === 'string') call.file = fp
+          const cmd = (args as Record<string, unknown>)['command']
+          if (typeof cmd === 'string') call.command = cmd
+        }
+        msgCalls.push(call)
         if (mapped === 'Bash') {
           const cmd = item.toolCall?.value?.arguments?.command
           if (typeof cmd === 'string') {
@@ -119,7 +128,7 @@ function extractToolsFromMessages(db: SqliteDatabase, sessionId: string): { tool
           }
         }
       }
-      if (msgTools.length > 0) toolSequence.push(msgTools)
+      if (msgCalls.length > 0) toolSequence.push(msgCalls)
     }
   } catch { /* best-effort */ }
 

@@ -7,6 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
+import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const modelDisplayNames: Record<string, string> = {
@@ -331,7 +332,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let prevOutput = 0
       let prevReasoning = 0
       let pendingTools: string[] = []
-      let pendingToolSequence: string[][] = []
+      let pendingToolSequence: ToolCall[][] = []
       let pendingUserMessage = ''
       let pendingOutputChars = 0
       let estCounter = 0
@@ -369,13 +370,26 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const rawName = entry.payload.name ?? ''
           const mapped = toolNameMap[rawName] ?? rawName
           pendingTools.push(mapped)
-          pendingToolSequence.push([mapped])
+          const call: ToolCall = { tool: mapped }
+          const p = entry.payload as Record<string, unknown>
+          const args = p['arguments']
+          if (typeof args === 'object' && args) {
+            const fp = (args as Record<string, unknown>)['file_path']
+            if (typeof fp === 'string') call.file = fp
+            const cmd = (args as Record<string, unknown>)['command']
+            if (typeof cmd === 'string') call.command = cmd
+          }
+          pendingToolSequence.push([call])
           continue
         }
 
         if (entry.type === 'event_msg' && entry.payload?.type === 'patch_apply_end') {
           pendingTools.push('Edit')
-          pendingToolSequence.push(['Edit'])
+          const call: ToolCall = { tool: 'Edit' }
+          const p = entry.payload as Record<string, unknown>
+          const fp = p['file_path'] ?? p['filePath']
+          if (typeof fp === 'string') call.file = fp
+          pendingToolSequence.push([call])
           continue
         }
 

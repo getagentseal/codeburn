@@ -4,6 +4,8 @@ import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 import { homedir } from 'os'
 
+import type { ToolCall } from './types.js'
+
 // ── Types ──────────────────────────────────────────────────────────────
 
 export type CachedUsage = {
@@ -31,7 +33,7 @@ export type CachedCall = {
   deduplicationKey: string
   project?: string
   projectPath?: string
-  toolSequence?: string[][]
+  toolSequence?: ToolCall[][]
 }
 
 export type CachedTurn = {
@@ -68,7 +70,7 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 2
+export const CACHE_VERSION = 3
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -128,6 +130,18 @@ function isOptionalNum(v: unknown): boolean {
   return v === undefined || isNum(v)
 }
 
+function isToolCall(v: unknown): boolean {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  return typeof o['tool'] === 'string'
+    && isOptionalString(o['file'])
+    && isOptionalString(o['command'])
+}
+
+function isToolCallArray(v: unknown): boolean {
+  return Array.isArray(v) && (v as unknown[]).every(isToolCall)
+}
+
 function validateFingerprint(fp: unknown): fp is FileFingerprint {
   if (!fp || typeof fp !== 'object') return false
   const f = fp as Record<string, unknown>
@@ -157,7 +171,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isStringArray(o['skills'])
     && isOptionalString(o['project'])
     && isOptionalString(o['projectPath'])
-    && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isStringArray(s))))
+    && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isToolCallArray(s))))
     && validateUsage(o['usage'])
 }
 

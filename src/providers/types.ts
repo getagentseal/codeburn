@@ -1,3 +1,5 @@
+import type { ToolCall } from '../types.js'
+
 export type SessionSource = {
   path: string
   project: string
@@ -26,7 +28,7 @@ export type ParsedProviderCall = {
   speed: 'standard' | 'fast'
   deduplicationKey: string
   turnId?: string
-  toolSequence?: string[][]
+  toolSequence?: ToolCall[][]
   userMessage: string
   sessionId: string
   project?: string

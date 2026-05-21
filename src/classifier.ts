@@ -1,4 +1,4 @@
-import type { ClassifiedTurn, ParsedTurn, TaskCategory } from './types.js'
+import type { ClassifiedTurn, ParsedTurn, TaskCategory, ToolCall } from './types.js'
 
 const TEST_PATTERNS = /\b(test|pytest|vitest|jest|mocha|spec|coverage|npm\s+test|npx\s+vitest|npx\s+jest)\b/i
 const GIT_PATTERNS = /\bgit\s+(push|pull|commit|merge|rebase|checkout|branch|stash|log|diff|status|add|reset|cherry-pick|tag)\b/i
@@ -15,7 +15,7 @@ const FILE_PATTERNS = /\.(py|js|ts|tsx|jsx|json|yaml|yml|toml|sql|sh|go|rs|java|
 const SCRIPT_PATTERNS = /\b(run\s+\S+\.\w+|execute|scrip?t|curl|api\s+\S+|endpoint|request\s+url|fetch\s+\S+|query|database|db\s+\S+)\b/i
 const URL_PATTERN = /https?:\/\/\S+/i
 
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit', 'cursor:edit'])
+export const EDIT_TOOLS = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit', 'cursor:edit'])
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
 export const BASH_TOOLS = new Set(['Bash', 'BashTool', 'PowerShellTool'])
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TodoWrite'])
@@ -154,32 +154,33 @@ function classifyConversation(userMessage: string): TaskCategory {
 }
 
 function countRetries(turn: ParsedTurn): number {
-  const steps: string[][] = []
+  const steps: ToolCall[][] = []
   for (const call of turn.assistantCalls) {
     if (call.toolSequence && call.toolSequence.length > 0) {
       steps.push(...call.toolSequence)
     } else if (call.tools.length > 0) {
-      steps.push(call.tools)
+      steps.push(call.tools.map(t => ({ tool: t })))
     }
   }
 
-  let sawEditBeforeBash = false
-  let sawBashAfterEdit = false
+  const lastEditStep = new Map<string, number>()
+  let lastVerifyStep = -1
   let retries = 0
 
-  for (const tools of steps) {
-    const hasEdit = tools.some(t => EDIT_TOOLS.has(t))
-    const hasBash = tools.some(t => BASH_TOOLS.has(t))
-
-    if (hasEdit) {
-      if (sawBashAfterEdit) retries++
-      sawEditBeforeBash = true
-      sawBashAfterEdit = false
+  steps.forEach((step, i) => {
+    for (const call of step) {
+      if (BASH_TOOLS.has(call.tool)) {
+        lastVerifyStep = i
+      }
+      if (EDIT_TOOLS.has(call.tool) && call.file) {
+        const prevStep = lastEditStep.get(call.file)
+        if (prevStep !== undefined && lastVerifyStep > prevStep && lastVerifyStep < i) {
+          retries++
+        }
+        lastEditStep.set(call.file, i)
+      }
     }
-    if (hasBash && sawEditBeforeBash) {
-      sawBashAfterEdit = true
-    }
-  }
+  })
 
   return retries
 }

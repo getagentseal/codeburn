@@ -6,7 +6,7 @@ import { homedir } from 'os'
 
 import type { ParsedProviderCall } from './providers/types.js'
 
-const CODEX_CACHE_VERSION = 2
+const CODEX_CACHE_VERSION = 3
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }

@@ -4,6 +4,7 @@ import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
+import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const CHARS_PER_TOKEN = 4
@@ -86,7 +87,7 @@ function parseChatFile(data: KiroChatFile, sessionId: string, project: string, s
 
   let pendingUserMessage = ''
   const allTools: string[] = []
-  const toolSequence: string[][] = []
+  const toolSequence: ToolCall[][] = []
 
   for (const msg of chat) {
     if (msg.role === 'human') {
@@ -96,7 +97,7 @@ function parseChatFile(data: KiroChatFile, sessionId: string, project: string, s
     if (msg.role === 'bot') {
       const msgTools = extractToolNames(msg.content)
       allTools.push(...msgTools)
-      if (msgTools.length > 0) toolSequence.push(msgTools)
+      if (msgTools.length > 0) toolSequence.push(msgTools.map(t => ({ tool: t })))
     }
   }
 
