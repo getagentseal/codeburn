@@ -52,6 +52,7 @@ export type CachedFile = {
   fingerprint: FileFingerprint
   lastCompleteLineOffset?: number
   canonicalCwd?: string
+  canonicalProjectName?: string
   mcpInventory: string[]
   turns: CachedTurn[]
 }
@@ -88,6 +89,15 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
   'ibm-bob': ['XDG_CONFIG_HOME'],
 }
 
+const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
+  claude: 'worktree-project-grouping-v1',
+  cline: 'worktree-project-grouping-v1',
+  'ibm-bob': 'worktree-project-grouping-v1',
+  'kilo-code': 'worktree-project-grouping-v1',
+  'roo-code': 'worktree-project-grouping-v1',
+  warp: 'worktree-project-grouping-v1',
+}
+
 // ── Cache Dir ──────────────────────────────────────────────────────────
 
 function getCacheDir(): string {
@@ -103,6 +113,8 @@ function getCachePath(): string {
 export function computeEnvFingerprint(provider: string): string {
   const vars = PROVIDER_ENV_VARS[provider] ?? []
   const parts = vars.map(v => `${v}=${process.env[v] ?? ''}`)
+  const parseVersion = PROVIDER_PARSE_VERSIONS[provider]
+  if (parseVersion) parts.push(`parser=${parseVersion}`)
   return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
 }
 
@@ -177,6 +189,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
   return validateFingerprint(o['fingerprint'])
     && isOptionalNum(o['lastCompleteLineOffset'])
     && isOptionalString(o['canonicalCwd'])
+    && isOptionalString(o['canonicalProjectName'])
     && isStringArray(o['mcpInventory'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
@@ -346,5 +359,3 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
     }
   } catch {}
 }
-
-

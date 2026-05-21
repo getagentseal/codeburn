@@ -1,5 +1,5 @@
-import { readdir, stat } from 'fs/promises'
-import { basename, join } from 'path'
+import { lstat, readFile, readdir, stat } from 'fs/promises'
+import { basename, join, resolve } from 'path'
 import { readSessionLines } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
@@ -43,6 +43,36 @@ function unsanitizePath(dirName: string): string {
 function normalizeProjectPathKey(projectPath: string): string {
   const normalized = projectPath.trim().replace(/\\/g, '/')
   return (normalized.replace(/\/+$/, '') || normalized).toLowerCase()
+}
+
+function projectNameFromPath(projectPath: string, fallback: string): string {
+  const normalized = projectPath.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized.split('/').filter(Boolean).pop() ?? fallback
+}
+
+async function resolveCanonicalProjectPath(cwd: string): Promise<{ path: string; isWorktree: boolean }> {
+  const trimmed = cwd.trim()
+  if (!trimmed) return { path: cwd, isWorktree: false }
+
+  const gitEntry = join(trimmed, '.git')
+  const entryStat = await lstat(gitEntry).catch(() => null)
+  if (!entryStat) return { path: cwd, isWorktree: false }
+  if (entryStat.isDirectory()) return { path: cwd, isWorktree: false }
+  if (!entryStat.isFile()) return { path: cwd, isWorktree: false }
+
+  const gitFile = await readFile(gitEntry, 'utf-8').catch(() => null)
+  if (gitFile === null) return { path: cwd, isWorktree: false }
+
+  const match = gitFile.match(/^gitdir:\s*(.+?)\s*$/m)
+  if (!match?.[1]) return { path: cwd, isWorktree: false }
+
+  const gitDir = resolve(trimmed, match[1])
+  const normalizedGitDir = gitDir.replace(/\\/g, '/')
+  const worktreeMarker = '/.git/worktrees/'
+  const markerIndex = normalizedGitDir.lastIndexOf(worktreeMarker)
+  if (markerIndex === -1) return { path: cwd, isWorktree: false }
+
+  return { path: normalizedGitDir.slice(0, markerIndex), isWorktree: true }
 }
 
 const LARGE_JSONL_LINE_BYTES = 32 * 1024
@@ -1407,10 +1437,13 @@ async function scanProjectDirs(
     if (!entries) continue
 
     const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
+    const cwd = extractCanonicalCwd(entries)
+    const canonical = cwd ? await resolveCanonicalProjectPath(cwd) : undefined
     section.files[filePath] = {
       fingerprint: info.fp,
       lastCompleteLineOffset: tracker.lastCompleteLineOffset,
-      canonicalCwd: extractCanonicalCwd(entries),
+      canonicalCwd: canonical?.path,
+      canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
       mcpInventory: extractMcpInventory(entries),
       turns: turns.map(parsedTurnToCachedTurn),
     }
@@ -1426,7 +1459,7 @@ async function scanProjectDirs(
     }
   }
 
-  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[] }>()
+  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
     ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName })),
@@ -1453,8 +1486,9 @@ async function scanProjectDirs(
 
     const sessionId = basename(filePath, '.jsonl')
     const projectPath = cachedFile.canonicalCwd ?? unsanitizePath(dirName)
+    const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
-    const session = buildSessionSummary(sessionId, dirName, classifiedTurns, mcpInv)
+    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
@@ -1463,8 +1497,9 @@ async function scanProjectDirs(
       const existing = projectMap.get(projectKey)
       if (existing) {
         existing.sessions.push(session)
+        existing.dirNames.add(dirName)
       } else {
-        projectMap.set(projectKey, { project: dirName, projectPath, sessions: [session] })
+        projectMap.set(projectKey, { project: projectName, projectPath, sessions: [session], dirNames: new Set([dirName]) })
       }
     }
   }
@@ -1472,8 +1507,9 @@ async function scanProjectDirs(
   // Fold slug-keyed entries into cwd-keyed entries
   const cwdKeyByDirName = new Map<string, string>()
   for (const [key, entry] of projectMap) {
-    if (!key.startsWith('slug:') && !cwdKeyByDirName.has(entry.project)) {
-      cwdKeyByDirName.set(entry.project, key)
+    if (key.startsWith('slug:')) continue
+    for (const dirName of entry.dirNames) {
+      if (!cwdKeyByDirName.has(dirName)) cwdKeyByDirName.set(dirName, key)
     }
   }
   for (const [key, entry] of [...projectMap]) {
@@ -1563,6 +1599,19 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     project: call.project,
     projectPath: call.projectPath,
     toolSequence: call.toolSequence,
+  }
+}
+
+async function canonicalizeProviderCallProject(call: ParsedProviderCall): Promise<ParsedProviderCall> {
+  if (!call.projectPath) return call
+
+  const canonical = await resolveCanonicalProjectPath(call.projectPath)
+  if (!canonical.isWorktree) return call
+
+  return {
+    ...call,
+    project: projectNameFromPath(canonical.path, call.project ?? canonical.path),
+    projectPath: canonical.path,
   }
 }
 
@@ -1792,7 +1841,8 @@ async function parseProviderSources(
         for await (const call of parser.parse()) {
           providerCalls.push(call)
         }
-        const turns = providerCallsToCachedTurns(providerCalls)
+        const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
+        const turns = providerCallsToCachedTurns(canonicalCalls)
         section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns }
         didParse = true
         ;(diskCache as { _dirty?: boolean })._dirty = true

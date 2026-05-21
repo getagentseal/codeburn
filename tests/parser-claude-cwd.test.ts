@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'fs/promises'
-import { join } from 'path'
+import { join, relative } from 'path'
 import { tmpdir } from 'os'
 
 import { parseAllSessions } from '../src/parser.js'
@@ -160,6 +160,64 @@ describe('Claude cwd project paths', () => {
     expect(projects).toHaveLength(1)
     expect(projects[0]!.sessions).toHaveLength(4)
     expect(projects[0]!.projectPath).toBe('fallback/slug')
+  })
+
+  it('groups git worktrees under the main repository project', async () => {
+    const mainRepo = join(tmpDir, 'repos', 'codeburn')
+    const worktreeA = join(tmpDir, 'worktrees', 'codeburn-feature-a')
+    const worktreeB = join(tmpDir, 'worktrees', 'codeburn-feature-b')
+    await mkdir(join(mainRepo, '.git', 'worktrees', 'feature-a'), { recursive: true })
+    await mkdir(join(mainRepo, '.git', 'worktrees', 'feature-b'), { recursive: true })
+    await mkdir(worktreeA, { recursive: true })
+    await mkdir(worktreeB, { recursive: true })
+    await writeFile(join(worktreeA, '.git'), `gitdir: ${join(mainRepo, '.git', 'worktrees', 'feature-a')}\n`)
+    await writeFile(join(worktreeB, '.git'), `gitdir: ${relative(worktreeB, join(mainRepo, '.git', 'worktrees', 'feature-b'))}\n`)
+
+    await writeClaudeSession(
+      'tmp-worktrees-codeburn-feature-a',
+      'worktree-a-session',
+      worktreeA,
+      '2099-05-07T10:00:00.000Z',
+    )
+    await writeClaudeSession(
+      'tmp-worktrees-codeburn-feature-b',
+      'worktree-b-session',
+      worktreeB,
+      '2099-05-07T11:00:00.000Z',
+    )
+
+    const projects = await parseAllSessions(dayRange('2099-05-07'), 'claude')
+
+    expect(projects).toHaveLength(1)
+    expect(projects[0]!.project).toBe('codeburn')
+    expect(projects[0]!.projectPath).toBe(mainRepo)
+    expect(projects[0]!.sessions).toHaveLength(2)
+    expect(projects[0]!.totalApiCalls).toBe(2)
+    expect(projects[0]!.sessions.map(s => s.sessionId).sort()).toEqual([
+      'worktree-a-session',
+      'worktree-b-session',
+    ])
+  })
+
+  it('does not group separate-git-dir projects that are not git worktrees', async () => {
+    const externalGitDir = join(tmpDir, 'external-git-dirs', 'project.git')
+    const projectDir = join(tmpDir, 'standalone', 'separate-git-dir')
+    await mkdir(externalGitDir, { recursive: true })
+    await mkdir(projectDir, { recursive: true })
+    await writeFile(join(projectDir, '.git'), `gitdir: ${externalGitDir}\n`)
+
+    await writeClaudeSession(
+      'tmp-standalone-separate-git-dir',
+      'separate-git-dir-session',
+      projectDir,
+      '2099-05-08T10:00:00.000Z',
+    )
+
+    const projects = await parseAllSessions(dayRange('2099-05-08'), 'claude')
+
+    expect(projects).toHaveLength(1)
+    expect(projects[0]!.projectPath).toBe(projectDir)
+    expect(projects[0]!.project).toBe('tmp-standalone-separate-git-dir')
   })
 })
 
