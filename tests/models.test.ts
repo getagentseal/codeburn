@@ -161,6 +161,33 @@ describe('calculateCost - OMP names produce non-zero cost', () => {
   })
 })
 
+describe('Warp Claude variants resolve to pricing', () => {
+  const cases: Array<[string, string]> = [
+    ['claude-4-6-sonnet-high', 'claude-sonnet-4-6'],
+    ['claude-4-6-sonnet-low', 'claude-sonnet-4-6'],
+    ['claude-4-6-sonnet-medium', 'claude-sonnet-4-6'],
+    ['claude-4-6-sonnet-high-fast', 'claude-sonnet-4-6'],
+    ['claude-4-7-opus-xhigh', 'claude-opus-4-7'],
+    ['claude-4-7-opus-xhigh-fast', 'claude-opus-4-7'],
+  ]
+
+  for (const [input, expectedAlias] of cases) {
+    it(`${input} resolves to ${expectedAlias} pricing`, () => {
+      const costs = getModelCosts(input)
+      expect(costs).not.toBeNull()
+      expect(costs!.inputCostPerToken).toBeGreaterThan(0)
+      const expected = getModelCosts(expectedAlias)
+      expect(expected).not.toBeNull()
+      expect(costs!.inputCostPerToken).toBe(expected!.inputCostPerToken)
+      expect(costs!.outputCostPerToken).toBe(expected!.outputCostPerToken)
+    })
+
+    it(`${input} calculates non-zero cost`, () => {
+      expect(calculateCost(input, 1000, 200, 0, 0, 0)).toBeGreaterThan(0)
+    })
+  }
+})
+
 describe('calculateCost - Claude cache write durations', () => {
   it('prices 1-hour cache writes at 1.6x the 5-minute cache write rate', () => {
     const fiveMinute = calculateCost('claude-opus-4-7', 0, 0, 1_000_000, 0, 0)
