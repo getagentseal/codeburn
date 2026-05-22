@@ -128,6 +128,27 @@ describe('builtin aliases - getShortModelName', () => {
   })
 })
 
+describe('Antigravity Gemini 3.5 Flash variants resolve to pricing', () => {
+  const variants = [
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-high',
+    'gemini-3.5-flash-medium',
+    'gemini-3.5-flash-low',
+    'Gemini 3.5 Flash (High)',
+  ]
+
+  for (const variant of variants) {
+    it(`${variant} resolves to Gemini 3.5 Flash`, () => {
+      expect(getModelCosts(variant)).toEqual(getModelCosts('gemini-3.5-flash'))
+      expect(getShortModelName(variant)).toBe('Gemini 3.5 Flash')
+    })
+  }
+
+  it('calculates non-zero cost for high thinking labels', () => {
+    expect(calculateCost('gemini-3.5-flash-high', 1000, 100, 0, 0, 0)).toBeGreaterThan(0)
+  })
+})
+
 describe('user aliases via setModelAliases', () => {
   it('user alias resolves for getModelCosts', () => {
     setModelAliases({ 'my-internal-model': 'claude-sonnet-4-6' })

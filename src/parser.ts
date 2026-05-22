@@ -4,7 +4,7 @@ import { readSessionLines } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
-import { flushAntigravityCache } from './providers/antigravity.js'
+import { antigravityCascadeIdFromPath, flushAntigravityCache } from './providers/antigravity.js'
 import { isSqliteBusyError } from './sqlite.js'
 import {
   type CachedCall,
@@ -1705,7 +1705,7 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
 }
 
 function cachedFileNeedsProviderReparse(providerName: string, cached: CachedFile): boolean {
-  // Antigravity data comes from the live server, not from the .pb file.
+  // Antigravity data comes from the live server, not from the conversation file.
   // A 0-turn cache entry may just mean the server was unavailable last run.
   if (providerName === 'antigravity' && cached.turns.length === 0) return true
 
@@ -1807,7 +1807,7 @@ async function parseProviderSources(
   } finally {
     if (didParse && providerName === 'codex') await flushCodexCache()
     if (didParse && providerName === 'antigravity') {
-      const liveIds = new Set(sources.map(s => basename(s.path, '.pb')))
+      const liveIds = new Set(sources.map(s => antigravityCascadeIdFromPath(s.path)))
       await flushAntigravityCache(liveIds)
     }
   }

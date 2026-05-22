@@ -8,7 +8,29 @@ import https from 'https'
 import { calculateCost } from '../models.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
-const CONVERSATIONS_DIR = join(homedir(), '.gemini', 'antigravity', 'conversations')
+type AntigravityConversationRoot = {
+  dir: string
+  project: string
+  extensions: readonly string[]
+}
+
+const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
+  {
+    dir: join(homedir(), '.gemini', 'antigravity', 'conversations'),
+    project: 'antigravity',
+    extensions: ['.pb', '.db'],
+  },
+  {
+    dir: join(homedir(), '.gemini', 'antigravity-cli', 'conversations'),
+    project: 'antigravity-cli',
+    extensions: ['.pb'],
+  },
+  {
+    dir: join(homedir(), '.gemini', 'antigravity-cli', 'implicit'),
+    project: 'antigravity-cli',
+    extensions: ['.pb'],
+  },
+] as const
 const CACHE_VERSION = 2
 
 const RPC_TIMEOUT_MS = 5000
@@ -17,6 +39,10 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 export type ServerInfo = {
   port: number
   csrfToken: string
+}
+
+type ServerCandidate = ServerInfo & {
+  appDataDir?: 'antigravity' | 'antigravity-cli'
 }
 
 type ModelMap = Record<string, string>
@@ -67,14 +93,15 @@ type AntigravityCache = {
   cascades: Record<string, CachedCascade>
 }
 
-let cachedServer: ServerInfo | null | undefined
-let cachedModelMap: ModelMap | undefined
+const cachedServers = new Map<string, ServerInfo | null>()
+const cachedModelMaps = new Map<string, ModelMap>()
 let memCache: AntigravityCache | null = null
 let cacheDirty = false
 let httpsAgent: https.Agent | undefined
 
 const SERVER_PORT_FLAGS = ['https_server_port', 'extension_server_port']
 const CSRF_TOKEN_FLAGS = ['csrf_token', 'extension_server_csrf_token']
+const APP_DATA_DIR_FLAGS = ['app_data_dir']
 
 function getAgent(): https.Agent {
   if (!httpsAgent) httpsAgent = new https.Agent({ rejectUnauthorized: false })
@@ -111,7 +138,19 @@ function isLikelyCsrfToken(value: string): boolean {
   return value.length >= 16 && /^[A-Za-z0-9._~:/+=-]+$/.test(value)
 }
 
-export function parseAntigravityServerInfoFromLine(line: string): ServerInfo | { port: 0; csrfToken: string } | null {
+function normalizeAppDataDir(value: string | null): 'antigravity' | 'antigravity-cli' | undefined {
+  if (!value) return undefined
+  const normalized = value.replace(/\\/g, '/').toLowerCase()
+  if (normalized.includes('antigravity-cli')) return 'antigravity-cli'
+  if (normalized.includes('antigravity')) return 'antigravity'
+  return undefined
+}
+
+export function extractAntigravityAppDataDirFromLine(line: string): 'antigravity' | 'antigravity-cli' | undefined {
+  return normalizeAppDataDir(getFlagValue(line, APP_DATA_DIR_FLAGS))
+}
+
+function parseAntigravityServerCandidateFromLine(line: string): ServerCandidate | null {
   const lower = line.toLowerCase()
   if (!lower.includes('language_server') || !lower.includes('antigravity')) return null
 
@@ -123,7 +162,16 @@ export function parseAntigravityServerInfoFromLine(line: string): ServerInfo | {
   const port = Number(rawPort)
   if (!Number.isInteger(port) || port < 0 || port > 65535) return null
 
-  return { port, csrfToken }
+  return {
+    port,
+    csrfToken,
+    appDataDir: extractAntigravityAppDataDirFromLine(line),
+  }
+}
+
+export function parseAntigravityServerInfoFromLine(line: string): ServerInfo | { port: 0; csrfToken: string } | null {
+  const candidate = parseAntigravityServerCandidateFromLine(line)
+  return candidate ? { port: candidate.port, csrfToken: candidate.csrfToken } : null
 }
 
 export function parseAntigravityServerInfo(lines: string[]): ServerInfo | null {
@@ -132,6 +180,12 @@ export function parseAntigravityServerInfo(lines: string[]): ServerInfo | null {
     if (server) return server
   }
   return null
+}
+
+function parseAntigravityServerCandidates(lines: string[]): ServerCandidate[] {
+  return lines
+    .map(parseAntigravityServerCandidateFromLine)
+    .filter((server): server is ServerCandidate => server !== null)
 }
 
 export function extractAntigravityModelMap(resp: unknown): ModelMap {
@@ -222,11 +276,21 @@ async function readProcessCommandLines(): Promise<string[]> {
   return output.split('\n')
 }
 
-async function resolveEphemeralPort(csrfToken: string): Promise<ServerInfo | null> {
+async function resolveEphemeralPort(csrfToken: string, appDataDir?: 'antigravity' | 'antigravity-cli'): Promise<ServerInfo | null> {
   if (process.platform === 'win32') return null
   try {
-    const pidOutput = await execFileText('pgrep', ['-f', 'language_server.*antigravity'])
-    const pid = pidOutput.trim().split('\n')[0]
+    const processOutput = await execFileText('ps', ['-ww', '-eo', 'pid=,args='])
+    let pid = ''
+    for (const line of processOutput.split('\n')) {
+      const match = line.trim().match(/^(\d+)\s+(.+)$/)
+      if (!match) continue
+      const candidate = parseAntigravityServerCandidateFromLine(match[2]!)
+      if (!candidate) continue
+      if (candidate.csrfToken !== csrfToken) continue
+      if (appDataDir && candidate.appDataDir && candidate.appDataDir !== appDataDir) continue
+      pid = match[1]!
+      break
+    }
     if (!pid) return null
     const lsofOutput = await execFileText('lsof', ['-a', '-i', '-P', '-n', '-p', pid])
     for (const line of lsofOutput.split('\n')) {
@@ -241,20 +305,29 @@ async function resolveEphemeralPort(csrfToken: string): Promise<ServerInfo | nul
   return null
 }
 
-async function detectServer(): Promise<ServerInfo | null> {
-  if (cachedServer !== undefined) return cachedServer
+export function antigravityAppDataDirFromSourcePath(path: string): 'antigravity' | 'antigravity-cli' {
+  return path.replace(/\\/g, '/').toLowerCase().includes('/.gemini/antigravity-cli/')
+    ? 'antigravity-cli'
+    : 'antigravity'
+}
+
+async function detectServer(appDataDir: 'antigravity' | 'antigravity-cli' = 'antigravity'): Promise<ServerInfo | null> {
+  if (cachedServers.has(appDataDir)) return cachedServers.get(appDataDir)!
   try {
-    const info = parseAntigravityServerInfo(await readProcessCommandLines())
+    const candidates = parseAntigravityServerCandidates(await readProcessCommandLines())
+    const info = candidates.find(candidate => candidate.appDataDir === appDataDir)
+      ?? (appDataDir === 'antigravity' ? candidates.find(candidate => candidate.appDataDir === undefined) : undefined)
+      ?? null
     if (info && info.port > 0) {
-      cachedServer = info as ServerInfo
+      cachedServers.set(appDataDir, { port: info.port, csrfToken: info.csrfToken })
     } else if (info && info.port === 0) {
-      cachedServer = await resolveEphemeralPort(info.csrfToken)
+      cachedServers.set(appDataDir, await resolveEphemeralPort(info.csrfToken, appDataDir))
     } else {
-      cachedServer = null
+      cachedServers.set(appDataDir, null)
     }
-    return cachedServer
+    return cachedServers.get(appDataDir)!
   } catch { /* process discovery failed or timed out */ }
-  cachedServer = null
+  cachedServers.set(appDataDir, null)
   return null
 }
 
@@ -307,13 +380,16 @@ async function rpc(server: ServerInfo, method: string, body: Record<string, unkn
 }
 
 async function getModelMap(server: ServerInfo): Promise<ModelMap> {
+  const cacheKey = `${server.port}:${server.csrfToken}`
+  const cachedModelMap = cachedModelMaps.get(cacheKey)
   if (cachedModelMap) return cachedModelMap
   try {
-    cachedModelMap = extractAntigravityModelMap(await rpc(server, 'GetAvailableModels'))
-    return cachedModelMap
+    const modelMap = extractAntigravityModelMap(await rpc(server, 'GetAvailableModels'))
+    cachedModelMaps.set(cacheKey, modelMap)
+    return modelMap
   } catch { /* best-effort */ }
-  cachedModelMap = {}
-  return cachedModelMap
+  cachedModelMaps.set(cacheKey, {})
+  return {}
 }
 
 // Strip Antigravity-specific suffixes so the pricing DB can match
@@ -322,26 +398,42 @@ const PRICING_ALIASES: Record<string, string> = {
 }
 
 function normalizePricingModel(model: string): string {
-  const stripped = model.replace(/-(high|low|agent)$/, '')
+  const stripped = model.replace(/-(high|medium|low|agent)$/, '')
   return PRICING_ALIASES[stripped] ?? stripped
 }
 
-async function discoverSessions(): Promise<SessionSource[]> {
-  const sources: SessionSource[] = []
-  let files: string[]
-  try {
-    files = await readdir(CONVERSATIONS_DIR)
-  } catch {
-    return sources
-  }
+export function antigravityCascadeIdFromPath(path: string): string {
+  return basename(path).replace(/\.(pb|db)$/i, '')
+}
 
-  for (const file of files) {
-    if (!file.endsWith('.pb')) continue
-    sources.push({
-      path: join(CONVERSATIONS_DIR, file),
-      project: 'antigravity',
-      provider: 'antigravity',
-    })
+function isConversationFile(file: string, extensions: readonly string[]): boolean {
+  const lowerFile = file.toLowerCase()
+  return extensions.some(ext => lowerFile.endsWith(ext))
+}
+
+export async function discoverAntigravitySessionSources(
+  roots: readonly AntigravityConversationRoot[] = CONVERSATION_ROOTS,
+): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+  for (const root of roots) {
+    let files: string[]
+    try {
+      files = await readdir(root.dir)
+    } catch {
+      continue
+    }
+
+    for (const file of files.sort()) {
+      if (!isConversationFile(file, root.extensions)) continue
+      const path = join(root.dir, file)
+      const s = await stat(path).catch(() => null)
+      if (!s?.isFile()) continue
+      sources.push({
+        path,
+        project: root.project,
+        provider: 'antigravity',
+      })
+    }
   }
   return sources
 }
@@ -349,7 +441,7 @@ async function discoverSessions(): Promise<SessionSource[]> {
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      const cascadeId = basename(source.path, '.pb')
+      const cascadeId = antigravityCascadeIdFromPath(source.path)
       const cache = await loadCache()
 
       const s = await stat(source.path).catch(() => null)
@@ -365,7 +457,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         return
       }
 
-      const server = await detectServer()
+      const server = await detectServer(antigravityAppDataDirFromSourcePath(source.path))
       if (!server) {
         if (cached) {
           for (const call of cached.calls) {
@@ -461,6 +553,9 @@ const modelDisplayNames: Record<string, string> = {
   'gemini-3.1-pro-low': 'Gemini 3.1 Pro (Low)',
   'gemini-3-flash': 'Gemini 3 Flash',
   'gemini-3-flash-agent': 'Gemini 3 Flash',
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
+  'gemini-3.5-flash-high': 'Gemini 3.5 Flash',
+  'gemini-3.5-flash-medium': 'Gemini 3.5 Flash',
   'gemini-3.5-flash-low': 'Gemini 3.5 Flash',
   'gemini-3.1-flash-image': 'Gemini 3.1 Flash',
   'gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
@@ -482,7 +577,7 @@ export function createAntigravityProvider(): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions()
+      return discoverAntigravitySessionSources()
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
