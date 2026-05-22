@@ -13,7 +13,7 @@ import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './d
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { renderDashboard } from './dashboard.js'
-import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type Period } from './cli-date.js'
+import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
@@ -356,6 +356,7 @@ program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
   .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all', 'week')
+  .option('--day <date>', 'Single day to review (YYYY-MM-DD, today, or yesterday). Overrides --period when set')
   .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
   .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
@@ -366,7 +367,12 @@ program
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
     let customRange: DateRange | null = null
+    let daySelection: ReturnType<typeof parseDayFlag> = null
     try {
+      if (opts.day && (opts.from || opts.to)) {
+        throw new Error('--day cannot be combined with --from or --to')
+      }
+      daySelection = parseDayFlag(opts.day)
       customRange = parseDateRangeFlags(opts.from, opts.to)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -377,21 +383,23 @@ program
     const period = toPeriod(opts.period)
     if (opts.format === 'json') {
       await loadPricing()
-      if (customRange) {
-        const label = formatDateRangeLabel(opts.from, opts.to)
+      if (daySelection || customRange) {
+        const range = daySelection?.range ?? customRange!
+        const label = daySelection?.label ?? formatDateRangeLabel(opts.from, opts.to)
+        const periodKey = daySelection ? 'day' : 'custom'
         const projects = filterProjectsByName(
-          await parseAllSessions(customRange, opts.provider),
+          await parseAllSessions(range, opts.provider),
           opts.project,
           opts.exclude,
         )
-        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(projects, label, 'custom')), null, 2))
+        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(projects, label, periodKey)), null, 2))
       } else {
         await runJsonReport(period, opts.provider, opts.project, opts.exclude)
       }
       return
     }
     const customRangeLabel = customRange ? formatDateRangeLabel(opts.from, opts.to) : undefined
-    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel)
+    await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel, daySelection?.day)
   })
 
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -442,6 +450,7 @@ program
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
+  .option('--day <date>', 'Single day for menubar-json (YYYY-MM-DD, today, or yesterday). Overrides --period when set')
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
@@ -449,7 +458,8 @@ program
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
     if (opts.format === 'menubar-json') {
-      const periodInfo = getDateRange(opts.period)
+      const daySelection = parseDayFlag(opts.day)
+      const periodInfo = daySelection ?? getDateRange(opts.period)
       const now = new Date()
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
       const todayRange: DateRange = { start: todayStart, end: now }
@@ -457,6 +467,7 @@ program
       const yesterdayStr = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
       const rangeStartStr = toDateString(periodInfo.range.start)
       const rangeEndStr = toDateString(periodInfo.range.end)
+      const historicalRangeEndStr = rangeEndStr < yesterdayStr ? rangeEndStr : yesterdayStr
       const isAllProviders = pf === 'all'
 
       let todayAllProjects: ProjectSummary[] | null = null
@@ -486,11 +497,13 @@ program
         cache = await hydrateCache()
         const todayProjects = await getTodayAllProjects()
         const todayDays = await getTodayAllDays()
-        const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
+        const historicalDays = rangeStartStr <= historicalRangeEndStr
+          ? getDaysInRange(cache, rangeStartStr, historicalRangeEndStr)
+          : []
         const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
         const allDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
         currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
-        const isTodayOnly = opts.period === 'today'
+        const isTodayOnly = rangeStartStr === todayStr && rangeEndStr === todayStr
         if (isTodayOnly) {
           scanProjects = todayProjects
           scanRange = todayRange
@@ -506,6 +519,9 @@ program
         scanProjects = fullProjects
         scanRange = periodInfo.range
       }
+      if (isAllProviders) {
+        currentData = buildPeriodData(periodInfo.label, scanProjects)
+      }
 
       // PROVIDERS
       // For .all: enumerate every provider with cost across the period (from cache) + installed-but-zero.
@@ -515,8 +531,8 @@ program
       const providers: ProviderCost[] = []
       if (isAllProviders) {
         const allDaysForProviders = [
-          ...getDaysInRange(cache, rangeStartStr, yesterdayStr),
-          ...(await getTodayAllDays()).filter(d => d.date === todayStr),
+          ...(rangeStartStr <= historicalRangeEndStr ? getDaysInRange(cache, rangeStartStr, historicalRangeEndStr) : []),
+          ...(await getTodayAllDays()).filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr),
         ]
         const providerTotals: Record<string, number> = {}
         for (const d of allDaysForProviders) {

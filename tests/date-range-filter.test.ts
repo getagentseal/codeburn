@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { formatDateRangeLabel, parseDateRangeFlags } from '../src/cli-date.js'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { formatDateRangeLabel, formatDayRangeLabel, parseDateRangeFlags, parseDayFlag, shiftDay } from '../src/cli-date.js'
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('parseDateRangeFlags', () => {
   it('returns null when neither flag is provided', () => {
@@ -85,5 +89,53 @@ describe('parseDateRangeFlags', () => {
     expect(formatDateRangeLabel('2026-04-07', '2026-04-10')).toBe('2026-04-07 to 2026-04-10')
     expect(formatDateRangeLabel(undefined, '2026-04-10')).toBe('all to 2026-04-10')
     expect(formatDateRangeLabel('2026-04-07', undefined)).toBe('2026-04-07 to today')
+  })
+})
+
+describe('parseDayFlag', () => {
+  it('returns null when no day is provided', () => {
+    expect(parseDayFlag(undefined)).toBeNull()
+  })
+
+  it('parses an explicit day as local midnight through end of day', () => {
+    const selected = parseDayFlag('2026-04-10')
+    expect(selected).not.toBeNull()
+    expect(selected!.day).toBe('2026-04-10')
+    expect(selected!.label).toBe('Day (2026-04-10)')
+    expect(selected!.range.start.getFullYear()).toBe(2026)
+    expect(selected!.range.start.getMonth()).toBe(3)
+    expect(selected!.range.start.getDate()).toBe(10)
+    expect(selected!.range.start.getHours()).toBe(0)
+    expect(selected!.range.end.getDate()).toBe(10)
+    expect(selected!.range.end.getHours()).toBe(23)
+    expect(selected!.range.end.getMinutes()).toBe(59)
+    expect(selected!.range.end.getSeconds()).toBe(59)
+  })
+
+  it('resolves yesterday as the previous local calendar day after midnight', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 23, 0, 5, 0))
+
+    const selected = parseDayFlag('yesterday')
+
+    expect(selected!.day).toBe('2026-05-22')
+    expect(selected!.range.start.getDate()).toBe(22)
+    expect(selected!.range.end.getDate()).toBe(22)
+  })
+
+  it('supports today and day shifting', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 23, 12, 0, 0))
+
+    expect(parseDayFlag('today')!.day).toBe('2026-05-23')
+    expect(formatDayRangeLabel('2026-05-22')).toBe('Day (2026-05-22)')
+    expect(shiftDay('2026-05-22', -1)).toBe('2026-05-21')
+    expect(shiftDay('2026-05-22', 1)).toBe('2026-05-23')
+  })
+
+  it('rejects malformed or overflowing day values', () => {
+    expect(() => parseDayFlag('May 22')).toThrow('Invalid date format')
+    expect(() => parseDayFlag('2026-02-31')).toThrow('Invalid date "2026-02-31"')
+    expect(() => shiftDay('2026-13-01', 1)).toThrow('Invalid date "2026-13-01"')
   })
 })

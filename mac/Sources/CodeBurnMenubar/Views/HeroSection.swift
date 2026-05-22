@@ -53,7 +53,8 @@ struct HeroSection: View {
                 }
             }
 
-            if store.selectedPeriod == .today,
+            if !store.isDayMode,
+               store.selectedPeriod == .today,
                store.dailyBudget > 0,
                let todayCost = store.todayPayload?.current.cost,
                todayCost >= store.dailyBudget {
@@ -92,7 +93,7 @@ struct HeroSection: View {
 
     private var caption: String {
         let label = store.payload.current.label.isEmpty ? store.selectedPeriod.rawValue : store.payload.current.label
-        if store.selectedPeriod == .today {
+        if !store.isDayMode && store.selectedPeriod == .today {
             return "\(label) · \(todayDate)"
         }
         return label

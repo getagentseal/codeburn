@@ -13,6 +13,11 @@ struct CachedPayload {
 struct PayloadCacheKey: Hashable {
     let period: Period
     let provider: ProviderFilter
+    let day: String?
+
+    var label: String {
+        day.map { "Day(\($0))" } ?? period.rawValue
+    }
 }
 
 @MainActor
@@ -20,6 +25,7 @@ struct PayloadCacheKey: Hashable {
 final class AppStore {
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
+    var selectedDay: String?
     var selectedInsight: InsightMode = .trend
     var accentPreset: AccentPreset = ThemeState.shared.preset {
         didSet { ThemeState.shared.preset = accentPreset }
@@ -66,17 +72,28 @@ final class AppStore {
     /// from "cache was wiped 10 minutes ago and we still haven't refilled".
     private var lastSuccessByKey: [PayloadCacheKey: Date] = [:]
 
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = .current
+        return formatter
+    }()
+
+    static func dayString(from date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+
     private func staleSecondsForKey(_ key: PayloadCacheKey) -> TimeInterval {
         guard let last = lastSuccessByKey[key] else { return .infinity }
         return Date().timeIntervalSince(last)
     }
 
     private var todayAllKey: PayloadCacheKey {
-        PayloadCacheKey(period: .today, provider: .all)
+        PayloadCacheKey(period: .today, provider: .all, day: nil)
     }
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider)
+        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay)
     }
 
     var payload: MenubarPayload {
@@ -101,7 +118,19 @@ final class AppStore {
     /// All-provider payload for the selected period. Used by the tab strip to show
     /// per-provider costs that match the active period, not just today.
     var periodAllPayload: MenubarPayload? {
-        cache[PayloadCacheKey(period: selectedPeriod, provider: .all)]?.payload
+        cache[PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay)]?.payload
+    }
+
+    var isDayMode: Bool {
+        selectedDay != nil
+    }
+
+    var selectionLabel: String {
+        selectedDay.map { "Day (\($0))" } ?? selectedPeriod.rawValue
+    }
+
+    var trendPeriod: Period {
+        isDayMode ? .today : selectedPeriod
     }
 
     var hasCachedData: Bool {
@@ -131,7 +160,7 @@ final class AppStore {
         let keys = Set([
             currentKey,
             todayAllKey,
-            PayloadCacheKey(period: selectedPeriod, provider: .all),
+            PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay),
         ])
         let staleAges = keys.compactMap { key -> TimeInterval? in
             guard let cached = cache[key] else { return nil }
@@ -142,7 +171,7 @@ final class AppStore {
     }
 
     var needsInteractivePayloadRefresh: Bool {
-        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all)
+        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay)
         return cache[currentKey]?.isFresh != true ||
             cache[todayAllKey]?.isFresh != true ||
             cache[periodAllKey]?.isFresh != true ||
@@ -158,8 +187,8 @@ final class AppStore {
     }
 
 #if DEBUG
-    func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, fetchedAt: Date) {
-        cache[PayloadCacheKey(period: period, provider: provider)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+    func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, day: String? = nil, fetchedAt: Date) {
+        cache[PayloadCacheKey(period: period, provider: provider, day: day)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
     }
 #endif
 
@@ -171,7 +200,35 @@ final class AppStore {
     /// all-provider data in parallel so tab strip costs stay in sync with the hero.
     func switchTo(period: Period) {
         selectedPeriod = period
+        selectedDay = nil
         startInteractiveSelectionRefresh()
+    }
+
+    func switchToYesterday() {
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+        switchTo(day: yesterday)
+    }
+
+    func switchTo(day: Date) {
+        let clamped = min(Calendar.current.startOfDay(for: day), Calendar.current.startOfDay(for: Date()))
+        selectedDay = Self.dayString(from: clamped)
+        startInteractiveSelectionRefresh()
+    }
+
+    func shiftSelectedDay(by delta: Int) {
+        let base = selectedDayDate ?? Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+        let shifted = Calendar.current.date(byAdding: .day, value: delta, to: base) ?? base
+        switchTo(day: shifted)
+    }
+
+    var selectedDayDate: Date? {
+        guard let selectedDay else { return nil }
+        return Self.dayFormatter.date(from: selectedDay)
+    }
+
+    var canShiftSelectedDayForward: Bool {
+        guard let selectedDayDate else { return false }
+        return Calendar.current.startOfDay(for: selectedDayDate) < Calendar.current.startOfDay(for: Date())
     }
 
     /// Switch to a provider filter. Cancels any in-flight switch so rapid tab tapping only
@@ -187,13 +244,15 @@ final class AppStore {
         resetLoadingState()
         let period = selectedPeriod
         let provider = selectedProvider
-        lastErrorByKey[PayloadCacheKey(period: period, provider: provider)] = nil
+        let day = selectedDay
+        let key = PayloadCacheKey(period: period, provider: provider, day: day)
+        lastErrorByKey[key] = nil
         switchTask = Task {
             if provider == .all {
-                await refresh(includeOptimize: false, force: true, showLoading: true)
+                await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
             } else {
-                async let main: Void = refresh(includeOptimize: false, force: true, showLoading: true)
-                async let all: Void = refreshQuietly(period: period)
+                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let all: Void = refreshQuietly(period: period, day: day)
                 _ = await (main, all)
             }
         }
@@ -206,6 +265,7 @@ final class AppStore {
         loadingCountsByKey.removeAll()
         loadingStartedAtByKey.removeAll()
         inFlightKeys.removeAll()
+        attemptedKeys.removeAll()
     }
 
     func resetRefreshState(clearCache: Bool = false) {
@@ -232,7 +292,7 @@ final class AppStore {
         payloadRefreshGeneration &+= 1
         for (key, started) in staleEntries {
             NSLog("CodeBurn: loading stuck for %ds on %@/%@ — auto-clearing",
-                  Int(now.timeIntervalSince(started)), key.period.rawValue, key.provider.rawValue)
+                  Int(now.timeIntervalSince(started)), key.label, key.provider.rawValue)
             loadingCountsByKey[key] = nil
             loadingStartedAtByKey[key] = nil
             inFlightKeys.remove(key)
@@ -286,10 +346,14 @@ final class AppStore {
     }
 
     func refresh(includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+        await refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+    }
+
+    private func refresh(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
         invalidateStaleDayCache()
-        let key = currentKey
         let cacheDateAtStart = cacheDate
         let generationAtStart = payloadRefreshGeneration
+        if Task.isCancelled { return }
         if !force, cache[key]?.isFresh == true { return }
         if inFlightKeys.contains(key) { return }
         inFlightKeys.insert(key)
@@ -308,18 +372,22 @@ final class AppStore {
         // below filters .infinity) — that's just the cold path, not a bug.
         let staleSeconds = staleSecondsForKey(key)
         if staleSeconds.isFinite, staleSeconds > 120 {
-            NSLog("CodeBurn: refresh attempt for stale key \(key.period.rawValue)/\(key.provider.rawValue) — last success was \(Int(staleSeconds))s ago")
+            NSLog("CodeBurn: refresh attempt for stale key \(key.label)/\(key.provider.rawValue) — last success was \(Int(staleSeconds))s ago")
         }
         defer {
+            let abandonedAttempt = Task.isCancelled || generationAtStart != payloadRefreshGeneration
             inFlightKeys.remove(key)
             if didShowLoading {
                 finishLoading(for: key)
             }
+            if abandonedAttempt && cache[key] == nil && lastErrorByKey[key] == nil {
+                attemptedKeys.remove(key)
+            }
         }
         do {
-            let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
+            let fresh = try await DataClient.fetch(period: key.period, day: key.day, provider: key.provider, includeOptimize: includeOptimize)
             if generationAtStart != payloadRefreshGeneration {
-                NSLog("CodeBurn: dropping fetch result for \(key.period.rawValue)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
+                NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
                 return
             }
             if Task.isCancelled {
@@ -327,7 +395,7 @@ final class AppStore {
                 // the silent-no-result path. Without this log, a cancelled
                 // fetch leaves cache empty + lastError nil and the user sees
                 // perpetual loading with nothing in the diagnostics.
-                NSLog("CodeBurn: fetch for \(key.period.rawValue)/\(key.provider.rawValue) cancelled before result was applied")
+                NSLog("CodeBurn: fetch for \(key.label)/\(key.provider.rawValue) cancelled before result was applied")
                 return
             }
             // Day-rollover race guard: if the calendar date changed during the
@@ -336,7 +404,7 @@ final class AppStore {
             // tick will refetch with today's data.
             if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                 invalidateStaleDayCache()
-                NSLog("CodeBurn: dropping fetch result for \(key.period.rawValue)/\(key.provider.rawValue) — calendar rolled mid-fetch")
+                NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — calendar rolled mid-fetch")
                 return
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
@@ -344,10 +412,10 @@ final class AppStore {
             lastErrorByKey[key] = nil
         } catch {
             if Task.isCancelled { return }
-            NSLog("CodeBurn: fetch failed for \(key.period.rawValue)/\(key.provider.rawValue): \(error)")
+            NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
-                    let fallback = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: false)
+                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, provider: key.provider, includeOptimize: false)
                     guard !Task.isCancelled else { return }
                     if generationAtStart != payloadRefreshGeneration { return }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
@@ -366,34 +434,34 @@ final class AppStore {
             lastErrorByKey[key] = String(describing: error)
         }
 
-        let allKey = PayloadCacheKey(period: selectedPeriod, provider: .all)
+        let allKey = PayloadCacheKey(period: key.period, provider: .all, day: key.day)
         if key != allKey, cache[allKey]?.isFresh != true {
-            await refreshQuietly(period: selectedPeriod)
+            await refreshQuietly(period: key.period, day: key.day)
         }
     }
 
     /// Background refresh for a period other than the visible one (e.g. keeping today fresh for the menubar badge).
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
-    func refreshQuietly(period: Period, force: Bool = false) async {
+    func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
         invalidateStaleDayCache()
-        let key = PayloadCacheKey(period: period, provider: .all)
+        let key = PayloadCacheKey(period: period, provider: .all, day: day)
         if !force, cache[key]?.isFresh == true { return }
         if inFlightKeys.contains(key) { return }
         inFlightKeys.insert(key)
         attemptedKeys.insert(key)
         let cacheDateAtStart = cacheDate
         let generationAtStart = payloadRefreshGeneration
-        if period == .today, let age = todayPayloadAgeSeconds, age > 120 {
+        if day == nil && period == .today, let age = todayPayloadAgeSeconds, age > 120 {
             NSLog("CodeBurn: refreshing stale today status payload after %ds", age)
         }
         defer {
             inFlightKeys.remove(key)
         }
         do {
-            let fresh = try await DataClient.fetch(period: period, provider: .all, includeOptimize: false)
+            let fresh = try await DataClient.fetch(period: period, day: day, provider: .all, includeOptimize: false)
             if generationAtStart != payloadRefreshGeneration {
-                NSLog("CodeBurn: dropping quiet fetch result for \(period.rawValue) — refresh pipeline reset mid-fetch")
+                NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
                 return
             }
             // Same day-rollover guard as refresh(): drop yesterday's payload if
@@ -406,7 +474,7 @@ final class AppStore {
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
         } catch {
-            NSLog("CodeBurn: quiet refresh failed for \(period.rawValue): \(error)")
+            NSLog("CodeBurn: quiet refresh failed for \(key.label): \(error)")
         }
     }
 
