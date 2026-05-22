@@ -172,12 +172,13 @@ function countRetries(turn: ParsedTurn): number {
       if (BASH_TOOLS.has(call.tool)) {
         lastVerifyStep = i
       }
-      if (EDIT_TOOLS.has(call.tool) && call.file) {
-        const prevStep = lastEditStep.get(call.file)
+      if (EDIT_TOOLS.has(call.tool)) {
+        const fileKey = call.file ?? '__no_file__'
+        const prevStep = lastEditStep.get(fileKey)
         if (prevStep !== undefined && lastVerifyStep > prevStep && lastVerifyStep < i) {
           retries++
         }
-        lastEditStep.set(call.file, i)
+        lastEditStep.set(fileKey, i)
       }
     }
   })

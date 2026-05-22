@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added (CLI)
+- **Tooling breakdowns in dashboard and menubar.** New panels showing core
+  tools, MCP servers, and shell command usage per session and across periods.
+- **File-aware retry detection with typed ToolCall.** One-shot rate now tracks
+  which file was edited, so editing file A then file B after a shell step no
+  longer counts as a retry. Claude and Codex extract file paths from tool
+  inputs; Codex also parses `patch_apply_end` changes and JSON-encoded
+  `function_call` arguments. Providers without file path data fall back to
+  tool-name-based detection.
+
+### Fixed (CLI)
+- **Codex 100% one-shot rate.** Codex function_call arguments are JSON strings,
+  not objects, and `patch_apply_end` stores file paths in `changes` object keys.
+  Both are now parsed correctly.
+- **Claude toolSequence missing from session cache.** `apiCallToCachedCall` was
+  not forwarding the `toolSequence` field, so all cached Claude sessions lost
+  their tool ordering data.
+
 ## 0.9.10 - 2026-05-20
 
 ### Added (CLI)

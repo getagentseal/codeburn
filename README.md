@@ -184,7 +184,7 @@ Daily cost chart, per-project, per-model (Opus, Sonnet, Haiku, GPT-5, GPT-4o, Ge
 
 ### One-Shot Rate
 
-For categories that involve code edits, CodeBurn detects edit/test/fix retry cycles (Edit, Bash, Edit patterns). The one-shot column shows the percentage of edit turns that succeeded without retries. Coding at 90% means the AI got it right first try 9 out of 10 times.
+For categories that involve code edits, CodeBurn tracks file-aware retry cycles. A retry is when the same file is re-edited after a shell command in between (Edit foo.ts, Bash, Edit foo.ts). Editing different files across shell steps is not a retry. The one-shot column shows the percentage of edit turns that succeeded without retries. Coding at 90% means the AI got it right first try 9 out of 10 times. File-level tracking is available for Claude, Codex, and Goose; other providers fall back to tool-name-based detection.
 
 ### Pricing
 

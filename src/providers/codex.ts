@@ -436,7 +436,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             const timestamp = entry.timestamp ?? ''
             const dedupKey = `codex:${sessionId}:${timestamp}:est${estCounter++}`
 
-            if (seenKeys.has(dedupKey)) { pendingTools = []; pendingUserMessage = ''; pendingOutputChars = 0; continue }
+            if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingUserMessage = ''; pendingOutputChars = 0; continue }
             seenKeys.add(dedupKey)
 
             const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0)
