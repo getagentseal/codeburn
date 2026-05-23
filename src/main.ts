@@ -17,6 +17,11 @@ import { formatDateRangeLabel, parseDateRangeFlags, getDateRange, toPeriod, type
 import { runOptimize, scanAndDetect } from './optimize.js'
 import { renderCompare } from './compare.js'
 import { getAllProviders } from './providers/index.js'
+import {
+  installAntigravityStatusLineHook,
+  runAgyStatusLineHook,
+  uninstallAntigravityStatusLineHook,
+} from './antigravity-statusline.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
@@ -859,6 +864,45 @@ program
       console.error(`\n  Menubar install failed: ${message}\n`)
       process.exit(1)
     }
+  })
+
+program
+  .command('antigravity-hook')
+  .description('Install or remove exact Antigravity CLI usage capture')
+  .argument('<action>', 'install or uninstall')
+  .option('--force', 'Replace an existing custom Antigravity CLI statusLine command')
+  .action(async (action: string, opts: { force?: boolean }) => {
+    try {
+      if (action === 'install') {
+        const result = await installAntigravityStatusLineHook(!!opts.force)
+        console.log(result === 'already-installed'
+          ? '\n  Antigravity CLI usage capture is already installed.\n'
+          : '\n  Antigravity CLI usage capture installed.\n')
+        return
+      }
+      if (action === 'uninstall') {
+        const result = await uninstallAntigravityStatusLineHook()
+        console.log(result === 'not-installed'
+          ? '\n  Antigravity CLI usage capture is not installed.\n'
+          : result === 'restored'
+            ? '\n  Antigravity CLI usage capture removed; previous statusLine restored.\n'
+          : '\n  Antigravity CLI usage capture removed.\n')
+        return
+      }
+      console.error('\n  Usage: codeburn antigravity-hook <install|uninstall>\n')
+      process.exit(1)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`\n  Antigravity hook failed: ${message}\n`)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('agy-statusline-hook', { hidden: true })
+  .description('Internal Antigravity CLI statusLine hook')
+  .action(async () => {
+    await runAgyStatusLineHook()
   })
 
 program

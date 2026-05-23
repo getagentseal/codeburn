@@ -23,6 +23,13 @@ builds can expose `--extension_server_port` and
 forms are supported.
 
 If the language server is not running, the parser falls back to the cached results file.
+For Antigravity CLI (`agy`), CodeBurn can also install an opt-in status line
+hook with `codeburn antigravity-hook install`. The hook records the CLI's
+sanitized `context_window.current_usage` payload while `agy` is still alive,
+without prompts or local working-directory paths. It also attempts a best-effort
+RPC snapshot for full response metadata. Remove it with
+`codeburn antigravity-hook uninstall`; if `--force` replaced an existing
+statusLine command, uninstall restores that previous command.
 
 ## Storage format
 
@@ -34,11 +41,19 @@ Custom file cache at `$CODEBURN_CACHE_DIR/antigravity-results.json` (defaults to
 
 ## Deduplication
 
-Per `<cascadeId>:<responseId>`.
+Per `<cascadeId>:<responseId>` for RPC data. The status line fallback collapses
+repeated identical usage snapshots, ignores singleton intermediate snapshots
+when a later stabilized usage total is observed for the same conversation, and
+uses positive deltas for monotonic snapshots so cumulative counters are not
+double-counted.
 
 ## Quirks
 
 - **Antigravity is the only provider that requires a live process.** A user who closes Antigravity loses the most-recent data until next launch (the cache covers older runs).
+- **Antigravity CLI has a shorter capture window than the desktop app.** `agy`
+  exposes its language server only while the CLI session is active. The status
+  line hook closes that gap for future sessions; older CLI `.pb` files still
+  cannot be priced exactly unless an RPC snapshot was captured.
 - The 16 MB cap on RPC responses is necessary because individual cascades can balloon. Raising it risks OOM on the user's machine.
 - Token types are split across `inputTokens`, `responseOutputTokens`, and `thinkingOutputTokens`. Thinking is billed at output rate.
 

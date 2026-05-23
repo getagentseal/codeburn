@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, expect, it } from 'vitest'
@@ -11,8 +11,11 @@ import {
   extractAntigravityAppDataDirFromLine,
   extractAntigravityGeneratorMetadata,
   extractAntigravityModelMap,
+  getAntigravityStatusLineEventsPath,
   parseAntigravityServerInfo,
   parseAntigravityServerInfoFromLine,
+  recordAntigravityStatusLinePayload,
+  shouldReparseAntigravitySource,
 } from '../../src/providers/antigravity.js'
 
 describe('antigravity provider helpers', () => {
@@ -207,5 +210,217 @@ describe('antigravity provider helpers', () => {
     expect(provider.modelDisplayName('gemini-3.5-flash-high')).toBe('Gemini 3.5 Flash')
     expect(provider.modelDisplayName('gemini-3.5-flash-medium')).toBe('Gemini 3.5 Flash')
     expect(provider.modelDisplayName('gemini-3.5-flash-low')).toBe('Gemini 3.5 Flash')
+    expect(provider.modelDisplayName('Gemini 3.5 Flash (High)')).toBe('Gemini 3.5 Flash')
+  })
+
+  it('captures exact Antigravity CLI statusLine usage as fallback calls', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-'))
+    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    try {
+      const payload = {
+        conversation_id: 'ce061468-2e2b-4c6f-bf4f-e072bd5fa986',
+        session_id: 'session-1',
+        cwd: '/workspace/project',
+        model: {
+          id: 'Gemini 3.5 Flash (High)',
+          display_name: 'Gemini 3.5 Flash (High)',
+        },
+        context_window: {
+          current_usage: {
+            input_tokens: 28407,
+            output_tokens: 137,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      }
+
+      expect(await recordAntigravityStatusLinePayload(payload)).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(payload)).toBe(true)
+
+      const recorded = await readFile(getAntigravityStatusLineEventsPath(), 'utf-8')
+      expect(recorded).not.toContain('/workspace/project')
+      expect(JSON.parse(recorded.split(/\r?\n/)[0]!)).not.toHaveProperty('cwd')
+
+      const source = {
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }
+
+      const parser = createAntigravityProvider().createSessionParser(source, new Set())
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({
+        provider: 'antigravity',
+        model: 'Gemini 3.5 Flash (High)',
+        inputTokens: 28407,
+        outputTokens: 137,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        sessionId: 'ce061468-2e2b-4c6f-bf4f-e072bd5fa986',
+        project: 'antigravity-cli',
+      })
+      expect(calls[0]!.projectPath).toBeUndefined()
+      expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    } finally {
+      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips statusLine fallback calls when RPC cache already covered the conversation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-rpc-dedup-'))
+    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    try {
+      expect(await recordAntigravityStatusLinePayload({
+        conversation_id: 'rpc-covered-conversation',
+        session_id: 'session-1',
+        model: 'Gemini 3.5 Flash (High)',
+        context_window: {
+          current_usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      })).toBe(true)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, new Set(['antigravity:rpc-covered-conversation:0']))
+
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toEqual([])
+    } finally {
+      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips singleton statusLine snapshots and deltas monotonic usage', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-runs-'))
+    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    const basePayload = {
+      conversation_id: 'statusline-runs',
+      session_id: 'session-1',
+      model: 'Gemini 3.5 Flash (High)',
+    }
+
+    const withUsage = (
+      input_tokens: number,
+      output_tokens: number,
+      cache_read_input_tokens = 0,
+    ) => ({
+      ...basePayload,
+      context_window: {
+        current_usage: {
+          input_tokens,
+          output_tokens,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens,
+        },
+      },
+    })
+
+    try {
+      expect(await recordAntigravityStatusLinePayload(withUsage(100, 10))).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(withUsage(200, 20))).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(withUsage(200, 20))).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(withUsage(300, 30, 50))).toBe(true)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, new Set())
+
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toHaveLength(2)
+      expect(calls.map(call => [call.inputTokens, call.outputTokens, call.cacheReadInputTokens])).toEqual([
+        [200, 20, 0],
+        [100, 10, 50],
+      ])
+      expect(calls.map(call => call.cachedInputTokens)).toEqual([0, 0])
+    } finally {
+      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('treats non-monotonic statusLine usage as a new request snapshot', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-reset-'))
+    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    const payload = (
+      input_tokens: number,
+      output_tokens: number,
+      cache_read_input_tokens = 0,
+    ) => ({
+      conversation_id: 'statusline-reset',
+      session_id: 'session-1',
+      model: 'Gemini 3.5 Flash (High)',
+      context_window: {
+        current_usage: {
+          input_tokens,
+          output_tokens,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens,
+        },
+      },
+    })
+
+    try {
+      expect(await recordAntigravityStatusLinePayload(payload(1000, 100))).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(payload(1000, 100))).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(payload(200, 30, 500))).toBe(true)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, new Set())
+
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toHaveLength(2)
+      expect(calls.map(call => [call.inputTokens, call.outputTokens, call.cacheReadInputTokens])).toEqual([
+        [1000, 100, 0],
+        [200, 30, 500],
+      ])
+    } finally {
+      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('always reparses append-only statusLine sources but not unchanged cached cascades', () => {
+    const statusLinePath = getAntigravityStatusLineEventsPath()
+
+    expect(shouldReparseAntigravitySource(statusLinePath, 1)).toBe(true)
+    expect(shouldReparseAntigravitySource('/tmp/antigravity/conversation.pb', 0)).toBe(true)
+    expect(shouldReparseAntigravitySource('/tmp/antigravity/conversation.pb', 1)).toBe(false)
   })
 })
