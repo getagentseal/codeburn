@@ -16,6 +16,7 @@ For the architectural picture, see `../architecture.md`.
 | [Copilot](copilot.md) | JSONL | `src/providers/copilot.ts` | `tests/providers/copilot.test.ts` |
 | [Droid](droid.md) | JSONL | `src/providers/droid.ts` | `tests/providers/droid.test.ts` |
 | [Gemini](gemini.md) | JSON / JSONL | `src/providers/gemini.ts` | none |
+| [Hermes Agent](hermes.md) | SQLite | `src/providers/hermes.ts` | `tests/providers/hermes.test.ts` |
 | [IBM Bob](ibm-bob.md) | JSON | `src/providers/ibm-bob.ts` | `tests/providers/ibm-bob.test.ts` |
 | [KiloCode](kilo-code.md) | JSON | `src/providers/kilo-code.ts` | `tests/providers/kilo-code.test.ts` |
 | [Kiro](kiro.md) | JSON | `src/providers/kiro.ts` | `tests/providers/kiro.test.ts` |
