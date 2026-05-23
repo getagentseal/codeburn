@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm } from 'fs/promises'
-import { join } from 'path'
+import { basename, dirname, join } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
@@ -378,5 +378,54 @@ skipUnlessSqlite('hermes provider', () => {
     const modelTokens = sessions.flatMap(session => Object.values(session.modelBreakdown).map(model => model.tokens))
     expect(modelTokens.reduce((sum, tokens) => sum + tokens.outputTokens, 0)).toBe(90)
     expect(modelTokens.reduce((sum, tokens) => sum + tokens.reasoningTokens, 0)).toBe(22)
+  })
+
+  it('treats sibling profile-like directories as default sessions', async () => {
+    const profileLikeDir = join(dirname(tmpDir), `${basename(tmpDir)}-profiles_backup`, 'coder')
+    await mkdir(profileLikeDir, { recursive: true })
+    const dbPath = createHermesDb(profileLikeDir)
+
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'sibling-session',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        startedAt: 1779549200,
+      })
+      db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+        .run('sibling-session', 'user', 'Sibling profile-like directory', 1779549201)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=sibling-session`)
+    expect(calls[0]).toMatchObject({
+      deduplicationKey: 'hermes:default:sibling-session',
+      project: 'default',
+    })
+  })
+
+  it('infers projects from Windows current working directory messages', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'windows-cwd-session',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        startedAt: 1779549200,
+      })
+      db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+        .run('windows-cwd-session', 'user', 'Current working directory: C:\\AI_LAB\\OPENCLAW\nAdd Windows path support', 1779549201)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=windows-cwd-session`)
+    expect(calls[0]).toMatchObject({
+      project: 'C:\\AI_LAB\\OPENCLAW',
+      projectPath: 'C:\\AI_LAB\\OPENCLAW',
+    })
   })
 })

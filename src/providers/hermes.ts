@@ -90,7 +90,7 @@ function sanitizeProject(raw: string): string {
 function parseProfileName(dbPath: string, hermesHome: string): string {
   const profilesDir = join(hermesHome, 'profiles')
   const dir = dirname(dbPath)
-  if (dir.startsWith(profilesDir)) return basename(dir)
+  if (dirname(dir) === profilesDir) return basename(dir)
   return 'default'
 }
 
@@ -241,7 +241,7 @@ function collectTools(messages: HermesMessageRow[]): { tools: string[]; toolSequ
 }
 
 function inferProject(messages: HermesMessageRow[], fallback: string): { project: string; projectPath?: string } {
-  const cwdPattern = /^Current working directory:\s*(\/[^\r\n`"\\]+)/m
+  const cwdPattern = /^Current working directory:\s*([a-zA-Z]:\\[^\r\n`"]+|\/[^\r\n`"\\]+)/m
   for (const msg of messages) {
     const text = msg.content ?? ''
     const match = cwdPattern.exec(text)
@@ -284,7 +284,8 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
       project: sanitizeProject(profile),
       provider: 'hermes',
     }))
-  } catch {
+  } catch (err) {
+    process.stderr.write(`codeburn: error querying Hermes database: ${err instanceof Error ? err.message : err}\n`)
     return []
   } finally {
     db.close()
@@ -311,6 +312,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
         return
       }
 
+      let result: ParsedProviderCall | undefined
       try {
         if (!validateSchema(db)) return
         const columns = getSessionColumns(db)
@@ -380,7 +382,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
         const actualCost = row.actual_cost_usd ?? row.estimated_cost_usd ?? 0
         const costUSD = actualCost > 0 ? actualCost : calculatedCost
 
-        yield {
+        result = {
           provider: 'hermes',
           model,
           inputTokens,
@@ -403,11 +405,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
           project: projectInfo.project,
           projectPath: projectInfo.projectPath,
         }
-      } catch {
+      } catch (err) {
+        process.stderr.write(`codeburn: error querying Hermes database: ${err instanceof Error ? err.message : err}\n`)
         return
       } finally {
         db.close()
       }
+
+      if (result) yield result
     },
   }
 }
