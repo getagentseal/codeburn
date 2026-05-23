@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Hermes Agent provider.** Track token usage, cost, and tool breakdowns
+  for Hermes Agent sessions. Reads from `~/.hermes/state.db` and per-profile
+  databases. Supports session-level accounting with actual/estimated costs
+  from Hermes, falling back to CodeBurn's model pricing table.
 - **Tooling breakdowns in dashboard and menubar.** New panels showing core
   tools, MCP servers, and shell command usage per session and across periods.
 - **File-aware retry detection with typed ToolCall.** One-shot rate now tracks
