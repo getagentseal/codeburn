@@ -27,6 +27,7 @@ type HermesSessionRow = {
 }
 
 type HermesMessageRow = {
+  id: number | null
   role: string
   content: string | null
   tool_calls: string | null
@@ -45,6 +46,12 @@ type ProfileDb = {
   dbPath: string
   profile: string
 }
+
+type TableInfoRow = {
+  name: string
+}
+
+type TableColumn = keyof HermesSessionRow | keyof HermesMessageRow
 
 const toolNameMap: Record<string, string> = {
   terminal: 'Bash',
@@ -120,13 +127,43 @@ function decodeSourcePath(path: string): { dbPath: string; sessionId: string } |
 
 function validateSchema(db: SqliteDatabase): boolean {
   try {
-    db.query('SELECT id, model, input_tokens, output_tokens FROM sessions LIMIT 1')
     db.query('SELECT session_id, role, content, tool_calls FROM messages LIMIT 1')
-    return true
+    const columns = getSessionColumns(db)
+    return columns.has('id') && columns.has('input_tokens') && columns.has('output_tokens')
   } catch (err) {
     if (isSqliteBusyError(err)) throw err
     return false
   }
+}
+
+function getSessionColumns(db: SqliteDatabase): Set<string> {
+  return new Set(db.query<TableInfoRow>('PRAGMA table_info(sessions)').map(row => row.name))
+}
+
+function numberColumn(columns: Set<string>, name: TableColumn): string {
+  return columns.has(name) ? `coalesce(${name}, 0) AS ${name}` : `0 AS ${name}`
+}
+
+function nullableColumn(columns: Set<string>, name: TableColumn): string {
+  return columns.has(name) ? name : `NULL AS ${name}`
+}
+
+function getMessageColumns(db: SqliteDatabase): Set<string> {
+  return new Set(db.query<TableInfoRow>('PRAGMA table_info(messages)').map(row => row.name))
+}
+
+function usageExpression(columns: Set<string>): string {
+  const usageColumns: Array<keyof HermesSessionRow> = [
+    'input_tokens',
+    'output_tokens',
+    'cache_read_tokens',
+    'cache_write_tokens',
+    'reasoning_tokens',
+  ]
+  const parts = usageColumns
+    .filter(name => columns.has(name))
+    .map(name => `coalesce(${name}, 0)`)
+  return parts.length > 0 ? parts.join(' + ') : '0'
 }
 
 function parseTimestamp(raw: number | null): string {
@@ -141,8 +178,8 @@ function firstUserMessage(messages: HermesMessageRow[]): string {
 }
 
 function mapToolName(raw: string): string {
-  if (raw.startsWith('mcp_') || raw.startsWith('mcp__')) return raw
   if (raw.startsWith('mcp_composio_')) return 'MCP'
+  if (raw.startsWith('mcp_') || raw.startsWith('mcp__')) return raw
   if (raw.startsWith('browser_')) return 'Browser'
   return toolNameMap[raw] ?? raw
 }
@@ -226,11 +263,20 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
 
   try {
     if (!validateSchema(db)) return []
+    const columns = getSessionColumns(db)
+    const usage = usageExpression(columns)
+    const orderBy = columns.has('started_at') ? 'started_at DESC' : 'id DESC'
     const rows = db.query<HermesSessionRow>(
-      `SELECT id, title, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens
+      `SELECT id,
+              ${nullableColumn(columns, 'title')},
+              ${numberColumn(columns, 'input_tokens')},
+              ${numberColumn(columns, 'output_tokens')},
+              ${numberColumn(columns, 'cache_read_tokens')},
+              ${numberColumn(columns, 'cache_write_tokens')},
+              ${numberColumn(columns, 'reasoning_tokens')}
        FROM sessions
-       WHERE coalesce(input_tokens, 0) + coalesce(output_tokens, 0) + coalesce(cache_read_tokens, 0) + coalesce(cache_write_tokens, 0) + coalesce(reasoning_tokens, 0) > 0
-       ORDER BY started_at DESC`,
+       WHERE ${usage} > 0
+       ORDER BY ${orderBy}`,
     )
 
     return rows.map(row => ({
@@ -267,11 +313,24 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
 
       try {
         if (!validateSchema(db)) return
+        const columns = getSessionColumns(db)
         const rows = db.query<HermesSessionRow>(
-          `SELECT id, source, model, billing_provider, input_tokens, output_tokens,
-                  cache_read_tokens, cache_write_tokens, reasoning_tokens,
-                  estimated_cost_usd, actual_cost_usd, api_call_count, tool_call_count,
-                  started_at, ended_at, title
+          `SELECT id,
+                  ${nullableColumn(columns, 'source')},
+                  ${nullableColumn(columns, 'model')},
+                  ${nullableColumn(columns, 'billing_provider')},
+                  ${numberColumn(columns, 'input_tokens')},
+                  ${numberColumn(columns, 'output_tokens')},
+                  ${numberColumn(columns, 'cache_read_tokens')},
+                  ${numberColumn(columns, 'cache_write_tokens')},
+                  ${numberColumn(columns, 'reasoning_tokens')},
+                  ${nullableColumn(columns, 'estimated_cost_usd')},
+                  ${nullableColumn(columns, 'actual_cost_usd')},
+                  ${numberColumn(columns, 'api_call_count')},
+                  ${numberColumn(columns, 'tool_call_count')},
+                  ${nullableColumn(columns, 'started_at')},
+                  ${nullableColumn(columns, 'ended_at')},
+                  ${nullableColumn(columns, 'title')}
            FROM sessions
            WHERE id = ?`,
           [decoded.sessionId],
@@ -279,11 +338,19 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
         const row = rows[0]
         if (!row) return
 
+        const messageColumns = getMessageColumns(db)
+        const orderColumns = ['timestamp', 'id'].filter(name => messageColumns.has(name))
+        const orderBy = orderColumns.length > 0 ? `ORDER BY ${orderColumns.join(' ASC, ')} ASC` : ''
         const messages = db.query<HermesMessageRow>(
-          `SELECT role, content, tool_calls, tool_name, timestamp
+          `SELECT ${numberColumn(messageColumns, 'id')},
+                  role,
+                  content,
+                  tool_calls,
+                  ${nullableColumn(messageColumns, 'tool_name')},
+                  ${nullableColumn(messageColumns, 'timestamp')}
            FROM messages
            WHERE session_id = ?
-           ORDER BY timestamp ASC, id ASC`,
+           ${orderBy}`,
           [decoded.sessionId],
         )
 

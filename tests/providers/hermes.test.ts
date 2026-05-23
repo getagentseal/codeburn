@@ -82,6 +82,33 @@ function createHermesDb(homeDir: string): string {
   return dbPath
 }
 
+function createLegacyHermesDb(homeDir: string): string {
+  const { DatabaseSync: Database } = requireForTest('node:sqlite')
+  const dbPath = join(homeDir, 'state.db')
+  const db = new Database(dbPath)
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      model TEXT,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      started_at REAL
+    )
+  `)
+  db.exec(`
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT,
+      tool_calls TEXT,
+      timestamp REAL NOT NULL
+    )
+  `)
+  db.close()
+  return dbPath
+}
+
 async function createProfileHermesDb(hermesHome: string, profile: string): Promise<string> {
   const profileDir = join(hermesHome, 'profiles', profile)
   await mkdir(profileDir, { recursive: true })
@@ -247,6 +274,40 @@ skipUnlessSqlite('hermes provider', () => {
     expect(calls[0]!.toolSequence).toEqual([
       [{ tool: 'Read', file: '/tmp/file.ts' }, { tool: 'Bash', command: 'npm test' }],
     ])
+  })
+
+
+  it('maps composio MCP tools before generic MCP prefixes', () => {
+    const provider = createHermesProvider(tmpDir)
+    expect(provider.toolDisplayName('mcp_composio_GMAIL_SEND_EMAIL')).toBe('MCP')
+    expect(provider.toolDisplayName('mcp__github__create_issue')).toBe('mcp__github__create_issue')
+  })
+
+  it('parses legacy databases that predate optional accounting columns', async () => {
+    const dbPath = createLegacyHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.prepare(
+        `INSERT INTO sessions (id, model, input_tokens, output_tokens, started_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run('legacy-session', 'gpt-5.5', 12, 34, 1779549200)
+      db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+        .run('legacy-session', 'user', 'Legacy Hermes DB', 1779549201)
+    })
+
+    const provider = createHermesProvider(tmpDir)
+    const discovered = await provider.discoverSessions()
+    expect(discovered.map(s => s.path)).toEqual([`${dbPath}#hermes-session=legacy-session`])
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=legacy-session`)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      inputTokens: 12,
+      outputTokens: 34,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      reasoningTokens: 0,
+      userMessage: 'Legacy Hermes DB',
+    })
   })
 
   it('discovers root and profile databases and preserves Hermes DB accounting through parser aggregation', async () => {

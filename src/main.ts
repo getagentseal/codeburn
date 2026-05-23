@@ -173,10 +173,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
   const totalReasoning = sessions.reduce((s, sess) => s + sess.totalReasoningTokens, 0)
-  // CodeBurn reports output as billable completion-side tokens. Reasoning is
-  // tracked separately for transparency but included in output because the
-  // cost model prices reasoning as output tokens.
-  const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0) + totalReasoning
+  // CodeBurn reports output as billable completion-side tokens. Providers keep
+  // reasoning separate, and their cost math prices it as output, so JSON
+  // presentation combines raw output + reasoning while exposing reasoning too.
+  const totalOutput = sessions.reduce((s, sess) => s + billableOutputTokens(sess.totalOutputTokens, sess.totalReasoningTokens), 0)
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
   // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
@@ -247,7 +247,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       modelMap[model].calls += d.calls
       modelMap[model].cost += d.costUSD
       modelMap[model].inputTokens += d.tokens.inputTokens
-      modelMap[model].outputTokens += d.tokens.outputTokens + d.tokens.reasoningTokens
+      modelMap[model].outputTokens += billableOutputTokens(d.tokens.outputTokens, d.tokens.reasoningTokens)
       modelMap[model].reasoningTokens += d.tokens.reasoningTokens
       modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
       modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens
@@ -356,6 +356,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     subagents: Object.entries(subagentMap).sort(([, a], [, b]) => b.cost - a.cost).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost) })),
     topSessions,
   }
+}
+
+function billableOutputTokens(outputTokens: number, reasoningTokens: number): number {
+  return outputTokens + reasoningTokens
 }
 
 program
