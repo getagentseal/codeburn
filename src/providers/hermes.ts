@@ -89,7 +89,7 @@ function getHermesHome(override?: string): string {
 function sanitizeProject(raw: string): string {
   const trimmed = raw.trim()
   if (!trimmed) return 'hermes'
-  return trimmed.replace(/^\//, '').replace(/\//g, '-')
+  return trimmed.replace(/^[/\\]/, '').replace(/[:/\\]/g, '-')
 }
 
 function parseProfileName(dbPath: string, hermesHome: string): string {
@@ -179,7 +179,7 @@ function parseTimestamp(raw: number | null): string {
 
 function firstUserMessage(messages: HermesMessageRow[]): string {
   const msg = messages.find(m => m.role === 'user' && typeof m.content === 'string' && m.content.trim().length > 0)
-  return (msg?.content ?? '').slice(0, 500)
+  return Array.from(msg?.content ?? '').slice(0, 500).join('')
 }
 
 function mapToolName(raw: string): string {
@@ -381,7 +381,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
         const calculatedCost = calculateCost(
           model,
           inputTokens,
-          outputTokens + reasoningTokens,
+          outputTokens,
           cacheWriteTokens,
           cacheReadTokens,
           0,

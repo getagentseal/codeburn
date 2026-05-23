@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { calculateCost } from '../../src/models.js'
 import { createHermesProvider } from '../../src/providers/hermes.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
@@ -283,6 +284,55 @@ skipUnlessSqlite('hermes provider', () => {
     expect(provider.toolDisplayName('mcp__github__create_issue')).toBe('mcp__github__create_issue')
   })
 
+  it('falls back to calculateCost when no actual or estimated cost is recorded', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'no-cost-session',
+        model: 'claude-sonnet-4-20250514',
+        inputTokens: 1000,
+        outputTokens: 200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 50,
+        estimatedCost: null,
+        actualCost: null,
+        startedAt: 1779549200,
+      })
+      db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+        .run('no-cost-session', 'user', 'Test calculateCost fallback', 1779549201)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=no-cost-session`)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 200, 0, 0, 0))
+    expect(calls[0]!.costUSD).not.toBe(calculateCost('claude-sonnet-4-20250514', 1000, 250, 0, 0, 0))
+    expect(calls[0]!.reasoningTokens).toBe(50)
+  })
+
+  it('does not split multibyte characters when truncating the first user message', async () => {
+    const dbPath = createHermesDb(tmpDir)
+    const message = `${'a'.repeat(499)}😀truncated tail`
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'emoji-session',
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        estimatedCost: 0.01,
+        startedAt: 1779549200,
+      })
+      db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)')
+        .run('emoji-session', 'user', message, 1779549201)
+    })
+
+    const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=emoji-session`)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.userMessage).toBe(`${'a'.repeat(499)}😀`)
+  })
+
   it('parses legacy databases that predate optional accounting columns', async () => {
     const dbPath = createLegacyHermesDb(tmpDir)
     withTestDb(dbPath, (db) => {
@@ -424,7 +474,7 @@ skipUnlessSqlite('hermes provider', () => {
 
     const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=windows-cwd-session`)
     expect(calls[0]).toMatchObject({
-      project: 'C:\\AI_LAB\\OPENCLAW',
+      project: 'C--AI_LAB-OPENCLAW',
       projectPath: 'C:\\AI_LAB\\OPENCLAW',
     })
   })
