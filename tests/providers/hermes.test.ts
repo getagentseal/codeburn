@@ -245,8 +245,7 @@ skipUnlessSqlite('hermes provider', () => {
     expect(calls[0]!.tools).toEqual(['Read', 'Bash'])
     expect(calls[0]!.bashCommands).toEqual(['npm test'])
     expect(calls[0]!.toolSequence).toEqual([
-      [{ tool: 'Read', file: '/tmp/file.ts' }],
-      [{ tool: 'Bash', command: 'npm test' }],
+      [{ tool: 'Read', file: '/tmp/file.ts' }, { tool: 'Bash', command: 'npm test' }],
     ])
   })
 
@@ -316,7 +315,7 @@ skipUnlessSqlite('hermes provider', () => {
     expect(projects.map(project => project.project).sort()).toEqual(['tmp-profile-project', 'tmp-root-project'])
 
     const modelTokens = sessions.flatMap(session => Object.values(session.modelBreakdown).map(model => model.tokens))
-    expect(modelTokens.reduce((sum, tokens) => sum + tokens.outputTokens, 0)).toBe(112)
+    expect(modelTokens.reduce((sum, tokens) => sum + tokens.outputTokens, 0)).toBe(90)
     expect(modelTokens.reduce((sum, tokens) => sum + tokens.reasoningTokens, 0)).toBe(22)
   })
 })

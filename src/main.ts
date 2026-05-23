@@ -247,7 +247,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       modelMap[model].calls += d.calls
       modelMap[model].cost += d.costUSD
       modelMap[model].inputTokens += d.tokens.inputTokens
-      modelMap[model].outputTokens += d.tokens.outputTokens
+      modelMap[model].outputTokens += d.tokens.outputTokens + d.tokens.reasoningTokens
       modelMap[model].reasoningTokens += d.tokens.reasoningTokens
       modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
       modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens

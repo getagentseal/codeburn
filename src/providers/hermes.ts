@@ -164,6 +164,7 @@ function collectTools(messages: HermesMessageRow[]): { tools: string[]; toolSequ
 
   for (const msg of messages) {
     if (msg.role === 'assistant') {
+      const currentTurnTools: ToolCall[] = []
       for (const call of parseToolCalls(msg.tool_calls)) {
         const rawName = call.function?.name ?? ''
         if (!rawName) continue
@@ -185,7 +186,10 @@ function collectTools(messages: HermesMessageRow[]): { tools: string[]; toolSequ
             // Ignore malformed arguments from historical sessions.
           }
         }
-        toolSequence.push([toolCall])
+        currentTurnTools.push(toolCall)
+      }
+      if (currentTurnTools.length > 0) {
+        toolSequence.push(currentTurnTools)
       }
     } else if (msg.role === 'tool' && msg.tool_name) {
       tools.push(mapToolName(msg.tool_name))
@@ -332,6 +336,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
           project: projectInfo.project,
           projectPath: projectInfo.projectPath,
         }
+      } catch {
+        return
       } finally {
         db.close()
       }

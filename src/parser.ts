@@ -1259,7 +1259,7 @@ function buildSessionSummary(
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
-      modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens + call.usage.reasoningTokens
+      modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.reasoningTokens += call.usage.reasoningTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
       modelBreakdown[modelKey].tokens.cacheCreationInputTokens += call.usage.cacheCreationInputTokens
