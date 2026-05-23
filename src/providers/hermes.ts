@@ -381,7 +381,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
         const calculatedCost = calculateCost(
           model,
           inputTokens,
-          outputTokens,
+          outputTokens + reasoningTokens,
           cacheWriteTokens,
           cacheReadTokens,
           0,

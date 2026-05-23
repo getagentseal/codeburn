@@ -305,8 +305,7 @@ skipUnlessSqlite('hermes provider', () => {
 
     const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=no-cost-session`)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 200, 0, 0, 0))
-    expect(calls[0]!.costUSD).not.toBe(calculateCost('claude-sonnet-4-20250514', 1000, 250, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBe(calculateCost('claude-sonnet-4-20250514', 1000, 250, 0, 0, 0))
     expect(calls[0]!.reasoningTokens).toBe(50)
   })
 
