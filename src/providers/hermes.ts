@@ -68,11 +68,16 @@ const toolNameMap: Record<string, string> = {
   browser_snapshot: 'Browser',
   browser_vision: 'Vision',
   browser_console: 'Browser',
+  browser_get_images: 'Browser',
   web_search: 'WebSearch',
   web_extract: 'WebFetch',
+  delegate_task: 'Agent',
+  vision_analyze: 'Vision',
+  process: 'Bash',
   todo: 'TodoWrite',
   skill_view: 'Skill',
   skill_manage: 'Skill',
+  skills_list: 'Skill',
   memory: 'Memory',
   session_search: 'SessionSearch',
 }
@@ -178,6 +183,8 @@ function firstUserMessage(messages: HermesMessageRow[]): string {
 }
 
 function mapToolName(raw: string): string {
+  // Composio MCP tools are matched first — the generic mcp_ prefix on line
+  // below would also match composio names, so order matters here.
   if (raw.startsWith('mcp_composio_')) return 'MCP'
   if (raw.startsWith('mcp_') || raw.startsWith('mcp__')) return raw
   if (raw.startsWith('browser_')) return 'Browser'
