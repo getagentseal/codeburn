@@ -71,7 +71,7 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 3
+export const CACHE_VERSION = 4
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -95,6 +95,7 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'worktree-project-grouping-v1',
   cline: 'worktree-project-grouping-v1',
+  hermes: 'reasoning-output-accounting-v1',
   'ibm-bob': 'worktree-project-grouping-v1',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',

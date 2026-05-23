@@ -172,7 +172,11 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
-  const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
+  const totalReasoning = sessions.reduce((s, sess) => s + sess.totalReasoningTokens, 0)
+  // CodeBurn reports output as billable completion-side tokens. Reasoning is
+  // tracked separately for transparency but included in output because the
+  // cost model prices reasoning as output tokens.
+  const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0) + totalReasoning
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
   // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
@@ -235,15 +239,16 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     sessions: p.sessions.length,
   }))
 
-  const modelMap: Record<string, { calls: number; cost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> = {}
+  const modelMap: Record<string, { calls: number; cost: number; inputTokens: number; outputTokens: number; reasoningTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const sess of sessions) {
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
       modelMap[model].calls += d.calls
       modelMap[model].cost += d.costUSD
       modelMap[model].inputTokens += d.tokens.inputTokens
       modelMap[model].outputTokens += d.tokens.outputTokens
+      modelMap[model].reasoningTokens += d.tokens.reasoningTokens
       modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
       modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens
     }
@@ -335,6 +340,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       tokens: {
         input: totalInput,
         output: totalOutput,
+        reasoning: totalReasoning,
         cacheRead: totalCacheRead,
         cacheWrite: totalCacheWrite,
       },

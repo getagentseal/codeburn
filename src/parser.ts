@@ -1205,6 +1205,7 @@ function buildSessionSummary(
   let totalCost = 0
   let totalInput = 0
   let totalOutput = 0
+  let totalReasoning = 0
   let totalCacheRead = 0
   let totalCacheWrite = 0
   let apiCalls = 0
@@ -1242,6 +1243,7 @@ function buildSessionSummary(
       totalCost += call.costUSD
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
+      totalReasoning += call.usage.reasoningTokens
       totalCacheRead += call.usage.cacheReadInputTokens
       totalCacheWrite += call.usage.cacheCreationInputTokens
       apiCalls++
@@ -1257,7 +1259,8 @@ function buildSessionSummary(
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
-      modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
+      modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens + call.usage.reasoningTokens
+      modelBreakdown[modelKey].tokens.reasoningTokens += call.usage.reasoningTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
       modelBreakdown[modelKey].tokens.cacheCreationInputTokens += call.usage.cacheCreationInputTokens
 
@@ -1293,6 +1296,7 @@ function buildSessionSummary(
     totalCostUSD: totalCost,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
+    totalReasoningTokens: totalReasoning,
     totalCacheReadTokens: totalCacheRead,
     totalCacheWriteTokens: totalCacheWrite,
     apiCalls,
@@ -1600,7 +1604,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       webSearchRequests: call.webSearchRequests,
       cacheCreationOneHourTokens: 0,
     },
-    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity') ? call.costUSD : undefined,
+    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'hermes') ? call.costUSD : undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
