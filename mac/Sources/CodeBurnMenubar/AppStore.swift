@@ -44,6 +44,7 @@ final class AppStore {
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
+    var refreshPauseMessage: String?
 
     var codexUsage: CodexUsage?
     var codexError: String?
@@ -217,6 +218,17 @@ final class AppStore {
         if clearCache {
             cache.removeAll()
         }
+    }
+
+    func pauseAutomaticRefresh(until: Date, consecutiveStalls: Int) {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        refreshPauseMessage = "Refresh paused until \(formatter.string(from: until)) after \(consecutiveStalls) stalled attempts. Click retry to resume."
+    }
+
+    func clearRefreshPause() {
+        refreshPauseMessage = nil
     }
 
     private let loadingWatchdogSeconds: TimeInterval = 60
@@ -472,10 +484,12 @@ final class AppStore {
             await captureSnapshots(for: usage)
             return true
         } catch let err as ClaudeSubscriptionService.FetchError {
+            if Task.isCancelled { return false }
             guard gen == claudeRefreshGen else { return false }
             applyFetchError(err)
             return false
         } catch {
+            if Task.isCancelled { return false }
             guard gen == claudeRefreshGen else { return false }
             subscriptionError = sanitizeForUI(String(describing: error))
             subscriptionLoadState = .failed
@@ -543,10 +557,12 @@ final class AppStore {
             codexLoadState = .loaded
             return true
         } catch let err as CodexSubscriptionService.FetchError {
+            if Task.isCancelled { return false }
             guard gen == codexRefreshGen else { return false }
             applyCodexFetchError(err)
             return false
         } catch {
+            if Task.isCancelled { return false }
             guard gen == codexRefreshGen else { return false }
             codexError = sanitizeForUI(String(describing: error))
             codexLoadState = .failed

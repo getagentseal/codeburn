@@ -16,7 +16,16 @@ private func menubarPayload(cost: Double) -> MenubarPayload {
             cacheHitPercent: 0,
             topActivities: [],
             topModels: [],
-            providers: ["claude": cost]
+            providers: ["claude": cost],
+            topProjects: [],
+            modelEfficiency: [],
+            topSessions: [],
+            retryTax: RetryTax(totalUSD: 0, retries: 0, editTurns: 0, byModel: []),
+            routingWaste: RoutingWaste(totalSavingsUSD: 0, baselineModel: "", baselineCostPerEdit: 0, byModel: []),
+            tools: [],
+            skills: [],
+            subagents: [],
+            mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
         history: HistoryBlock(daily: [])
@@ -80,5 +89,17 @@ struct AppStoreRefreshRecoveryTests {
         #expect(store.needsInteractivePayloadRefresh)
         #expect(store.hasMissingInteractivePayloadWithoutAttempt)
         #expect(store.shouldResetInteractiveRefreshPipeline)
+    }
+
+    @Test("refresh pause message is visible and clearable")
+    func refreshPauseMessageIsVisibleAndClearable() {
+        let store = AppStore()
+
+        store.pauseAutomaticRefresh(until: Date(timeIntervalSince1970: 4_000), consecutiveStalls: 3)
+        #expect(store.refreshPauseMessage?.contains("Refresh paused") == true)
+        #expect(store.refreshPauseMessage?.contains("3 stalled attempts") == true)
+
+        store.clearRefreshPause()
+        #expect(store.refreshPauseMessage == nil)
     }
 }

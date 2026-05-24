@@ -58,6 +58,7 @@ final class UpdateChecker {
         updateError = nil
         guard let url = URL(string: releasesAPI) else { return }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 30
         request.setValue("codeburn-menubar-updater", forHTTPHeaderField: "User-Agent")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
 

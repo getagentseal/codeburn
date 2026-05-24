@@ -11,6 +11,14 @@ struct MenuBarContent: View {
 
             Divider()
 
+            if let message = store.refreshPauseMessage {
+                RefreshPausedBanner(
+                    message: message,
+                    retry: { refreshNow() }
+                )
+                Divider()
+            }
+
             if showAgentTabs {
                 AgentTabStrip()
                 Divider()
@@ -110,6 +118,32 @@ struct MenuBarContent: View {
         return !payload.current.providers.isEmpty
     }
 
+}
+
+private struct RefreshPausedBanner: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pause.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.brandAccent)
+            Text(message)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 6)
+            Button("Retry", action: retry)
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.brandAccent)
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.secondary.opacity(0.08))
+    }
 }
 
 private struct EmptyProviderState: View {
@@ -594,11 +628,7 @@ struct FooterBar: View {
     }
 
     private func refreshNow() {
-        if let delegate = NSApp.delegate as? AppDelegate {
-            delegate.refreshSubscriptionNow()
-        } else {
-            Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
-        }
+        MenuBarContent.refreshNow(store: store)
     }
 
     private enum ExportFormat {
@@ -662,5 +692,19 @@ struct FooterBar: View {
         }
 
         CLICurrencyConfig.persist(code: code)
+    }
+}
+
+private extension MenuBarContent {
+    static func refreshNow(store: AppStore) {
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.refreshSubscriptionNow()
+        } else {
+            Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
+        }
+    }
+
+    func refreshNow() {
+        Self.refreshNow(store: store)
     }
 }
