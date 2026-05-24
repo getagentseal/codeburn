@@ -813,4 +813,89 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
     expect(calls).toHaveLength(0)
   })
+
+  it('falls back to session-level tokens when per-message data yields nothing', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.exec(`ALTER TABLE session ADD COLUMN cost REAL`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_input INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_output INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_reasoning INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_read INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_write INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN model_id TEXT`)
+
+      insertSession(db, 'sess-1')
+      db.prepare(`UPDATE session SET cost = 0.15, tokens_input = 5000, tokens_output = 2000, tokens_reasoning = 0, tokens_cache_read = 3000, tokens_cache_write = 1000, model_id = 'claude-sonnet-4-20250514' WHERE id = 'sess-1'`).run()
+
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant', modelID: 'claude-sonnet-4-20250514',
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(5000)
+    expect(calls[0]!.outputTokens).toBe(2000)
+    expect(calls[0]!.cacheReadInputTokens).toBe(3000)
+    expect(calls[0]!.cacheCreationInputTokens).toBe(1000)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[0]!.model).toBe('claude-sonnet-4-20250514')
+    expect(calls[0]!.deduplicationKey).toBe('opencode:sess-1:session-level')
+  })
+
+  it('accepts role "model" as equivalent to "assistant"', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1')
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'model', modelID: 'gemini-2.5-pro', cost: 0.03,
+        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+      } as any)
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gemini-2.5-pro')
+  })
+
+  it('recognizes tool-call and tool_call part types', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1')
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant', modelID: 'claude-opus-4-6',
+      })
+      insertPart(db, 'part-1', 'msg-1', 'sess-1', {
+        type: 'tool-call', tool: 'bash',
+        state: { status: 'completed', input: { command: 'ls' } },
+      } as any)
+      insertPart(db, 'part-2', 'msg-1', 'sess-1', {
+        type: 'tool_call', tool: 'edit',
+        state: { status: 'completed', input: {} },
+      } as any)
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['Bash', 'Edit'])
+  })
+
+  it('counts reasoning/file parts as activity even without text or tool parts', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1')
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant', modelID: 'claude-opus-4-6',
+      })
+      insertPart(db, 'part-1', 'msg-1', 'sess-1', {
+        type: 'reasoning',
+      } as any)
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costUSD).toBe(0)
+    expect(calls[0]!.tools).toEqual([])
+  })
 })
