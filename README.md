@@ -66,6 +66,7 @@ dx codeburn
 
 ```bash
 codeburn                        # interactive dashboard (default: 7 days)
+codeburn -p lifetime            # full history dashboard (uncapped)
 codeburn today                  # today's usage
 codeburn month                  # this month's usage
 codeburn report -p 30days       # rolling 30-day window
@@ -90,7 +91,7 @@ codeburn models --task feature         # filter to feature-development work
 codeburn models --provider claude      # filter to one provider
 ```
 
-Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, and Lifetime (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` `6` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
 ## Supported Providers
 
@@ -127,7 +128,7 @@ Provider logos are trademarks of their respective owners. The icon set was sourc
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
-The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`.
+The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all supported usage commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`, `models`.
 
 ### Provider Notes
 
@@ -346,7 +347,7 @@ codeburn menubar
 
 One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
 
-The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
+The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, 6 Months, and Lifetime are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, 6 Months, Lifetime), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
 
 You can also set the menubar status period from Terminal:
 
@@ -354,7 +355,7 @@ You can also set the menubar status period from Terminal:
 defaults write org.agentseal.codeburn-menubar CodeBurnMenubarPeriod -string month
 ```
 
-Allowed values are `today`, `week`, `month`, and `sixMonths`. Relaunch the app to apply external defaults changes.
+Allowed values are `today`, `week`, `month`, `sixMonths`, and `lifetime`. Relaunch the app to apply external defaults changes.
 
 **Compact mode** shrinks the menubar item to fit the text, dropping decimals (e.g. `$110` instead of `$110.20`):
 

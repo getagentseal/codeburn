@@ -204,8 +204,40 @@ describe('buildMenubarPayload', () => {
     })
     const payload = buildMenubarPayload(emptyPeriod('Today'), [], null, history)
     expect(payload.history.daily).toHaveLength(365)
+    expect(payload.history.intraday).toEqual([])
     expect(payload.history.daily[0]!.date < payload.history.daily[364]!.date).toBe(true)
     expect(payload.history.daily[364]!.date).toBe(history[399]!.date)
+  })
+
+  it('preserves intraday history entries sorted by bucket start hour', () => {
+    const intraday = [
+      {
+        bucketStartHour: 20,
+        bucketEndHour: 24,
+        cost: 2,
+        calls: 1,
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        topModels: [],
+      },
+      {
+        bucketStartHour: 0,
+        bucketEndHour: 4,
+        cost: 1,
+        calls: 1,
+        inputTokens: 5,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        topModels: [],
+      },
+    ]
+
+    const payload = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, intraday)
+
+    expect(payload.history.intraday.map(bucket => bucket.bucketStartHour)).toEqual([0, 20])
   })
 
   it('preserves token fields in dailyHistory entries', () => {
@@ -221,6 +253,15 @@ describe('buildMenubarPayload', () => {
   it('returns empty history when none supplied', () => {
     const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
     expect(payload.history.daily).toEqual([])
+    expect(payload.history.intraday).toEqual([])
+    expect(payload.stats).toEqual({
+      trackedSpend: 0,
+      trackedDays: 0,
+      mostActiveDay: null,
+      peakDaySpend: null,
+      currentStreakDays: 0,
+      longestStreakDays: 0,
+    })
   })
 
   it('drops providers with negative cost defensively', () => {
@@ -230,5 +271,56 @@ describe('buildMenubarPayload', () => {
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45 })
+  })
+
+  it('computes stats from the full selected-period history even when chart history is trimmed', () => {
+    const statsHistory = Array.from({ length: 500 }, (_, i) => {
+      const d = new Date(2025, 0, 1)
+      d.setDate(d.getDate() + i)
+      return {
+        date: d.toISOString().slice(0, 10),
+        cost: i === 499 ? 50 : 1,
+      }
+    })
+    const chartHistory = statsHistory.map(day => ({
+      ...day,
+      calls: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      topModels: [],
+    }))
+
+    const payload = buildMenubarPayload(emptyPeriod('Lifetime'), [], null, chartHistory, undefined, statsHistory)
+
+    expect(payload.history.daily).toHaveLength(365)
+    expect(payload.stats.trackedDays).toBe(500)
+    expect(payload.stats.trackedSpend).toBe(549)
+    expect(payload.stats.mostActiveDay).toBe(statsHistory[499]!.date)
+    expect(payload.stats.peakDaySpend).toBe(50)
+  })
+
+  it('can retain full daily history for lifetime trend aggregation', () => {
+    const dailyHistory = Array.from({ length: 500 }, (_, i) => {
+      const d = new Date(2024, 0, 1)
+      d.setDate(d.getDate() + i)
+      return {
+        date: d.toISOString().slice(0, 10),
+        cost: 1,
+        calls: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        topModels: [],
+      }
+    })
+
+    const payload = buildMenubarPayload(emptyPeriod('Lifetime'), [], null, dailyHistory, undefined, undefined, undefined, undefined, true)
+
+    expect(payload.history.daily).toHaveLength(500)
+    expect(payload.history.daily[0]!.date).toBe(dailyHistory[0]!.date)
+    expect(payload.history.daily[499]!.date).toBe(dailyHistory[499]!.date)
   })
 })

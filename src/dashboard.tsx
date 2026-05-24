@@ -24,7 +24,7 @@ const ORANGE = '#FF8C42'
 const DIM = '#555555'
 const GOLD = '#FFD700'
 const PLAN_BAR_WIDTH = 10
-const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all'])
+const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all', 'lifetime'])
 
 const LANG_DISPLAY_NAMES: Record<string, string> = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
@@ -665,7 +665,8 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
             <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
             <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
             <Text color={ORANGE} bold>4</Text><Text dimColor> month   </Text>
-            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months</Text>
+            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months   </Text>
+            <Text color={ORANGE} bold>6</Text><Text dimColor> lifetime</Text>
           </>
         )}
         {!isOptimize && optimizeAvailable && (
@@ -690,7 +691,9 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   const isCursor = activeProvider === 'cursor'
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
-  const days = period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
+  const days = period === 'all' || period === 'lifetime'
+    ? undefined
+    : (period === 'month' || period === '30days' ? 31 : 14)
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} planUsages={planUsages} />
@@ -908,6 +911,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
     else if (input === '5') switchPeriodImmediate('all')
+    else if (input === '6') switchPeriodImmediate('lifetime')
   })
 
   const headerLabel = customRangeLabel ?? PERIOD_LABELS[period]

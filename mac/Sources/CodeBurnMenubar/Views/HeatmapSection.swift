@@ -79,10 +79,10 @@ struct HeatmapSection: View {
             } else {
                 PlanInsight(usage: store.subscription)
             }
-        case .trend: TrendInsight(days: store.payload.history.daily, period: store.selectedPeriod)
+        case .trend: TrendInsight(history: store.payload.history, period: store.selectedPeriod)
         case .forecast: ForecastInsight(days: store.payload.history.daily)
         case .pulse: PulseInsight(payload: store.payload)
-        case .stats: StatsInsight(payload: store.payload)
+        case .stats: StatsInsight(payload: store.payload, period: store.selectedPeriod)
         case .optimize: OptimizeInsight(payload: store.payload)
         }
     }
@@ -119,29 +119,99 @@ private struct InsightPillSwitcher: View {
     }
 }
 
-// MARK: - Trend (14-day bar chart with peak + average)
+// MARK: - Trend (period-aware bar chart with peak + average)
 
 private struct TrendInsight: View {
-    let days: [DailyHistoryEntry]
+    let history: HistoryBlock
     let period: Period
 
-    private var trendDayCount: Int {
+    private var descriptor: TrendDescriptor {
+        let calendar = gregorianCalendar
         switch period {
-        case .today, .sevenDays: return 19
-        case .thirtyDays: return 30
-        case .month: return 31
-        case .all: return min(days.count, 90)
+        case .today:
+            return TrendDescriptor(
+                cadence: .intraday4Hour,
+                windowLabel: "Today",
+                comparisonLabel: "prior day",
+                averageLabel: "Avg/4h",
+                peakLabel: "Peak slot",
+                latestLabel: "Current 4h",
+                comparisonDaySpan: 1,
+                latestMode: .current,
+                peakJoiner: "in"
+            )
+        case .sevenDays:
+            return TrendDescriptor(
+                cadence: .daily(7),
+                windowLabel: "Last 7 days",
+                comparisonLabel: "prior 7d",
+                averageLabel: "Avg/day",
+                peakLabel: "Peak day",
+                latestLabel: "Yesterday",
+                comparisonDaySpan: 7,
+                latestMode: .previousDay,
+                peakJoiner: "on"
+            )
+        case .thirtyDays:
+            return TrendDescriptor(
+                cadence: .daily(30),
+                windowLabel: "Last 30 days",
+                comparisonLabel: "prior 30d",
+                averageLabel: "Avg/day",
+                peakLabel: "Peak day",
+                latestLabel: "Yesterday",
+                comparisonDaySpan: 30,
+                latestMode: .previousDay,
+                peakJoiner: "on"
+            )
+        case .month:
+            let daysElapsed = max(calendar.component(.day, from: Date()), 1)
+            return TrendDescriptor(
+                cadence: .daily(daysElapsed),
+                windowLabel: "Month to date",
+                comparisonLabel: "prior \(daysElapsed)d",
+                averageLabel: "Avg/day",
+                peakLabel: "Peak day",
+                latestLabel: "Yesterday",
+                comparisonDaySpan: daysElapsed,
+                latestMode: .previousDay,
+                peakJoiner: "on"
+            )
+        case .all:
+            return TrendDescriptor(
+                cadence: .weekly(26),
+                windowLabel: "Recent 26 weeks",
+                comparisonLabel: "prior 26w",
+                averageLabel: "Avg/week",
+                peakLabel: "Peak week",
+                latestLabel: "This week",
+                comparisonDaySpan: 26 * 7,
+                latestMode: .current,
+                peakJoiner: "in"
+            )
+        case .lifetime:
+            return lifetimeDescriptor(calendar: calendar)
         }
     }
 
     private var barGap: CGFloat {
-        trendDayCount > 45 ? 2 : 4
+        let count = bars.count
+        if count > 24 { return 2 }
+        if count > 12 { return 3 }
+        return 4
+    }
+
+    private var bars: [TrendBar] {
+        buildTrendBars(history: history, descriptor: descriptor)
     }
 
     var body: some View {
-        let dayCount = trendDayCount
-        let bars = buildTrendBars(from: days, dayCount: dayCount)
-        let stats = computeTrendStats(bars: bars, allDays: days, dayCount: dayCount)
+        let stats = computeTrendStats(
+            bars: bars,
+            allDays: history.daily,
+            comparisonDaySpan: descriptor.comparisonDaySpan,
+            latestMode: descriptor.latestMode
+        )
         // Tokens are real for the .all-providers view; per-provider history doesn't carry
         // token breakdown yet, so fall back to $ when no tokens are present.
         let totalTokens = bars.reduce(0.0) { $0 + $1.tokens }
@@ -150,12 +220,12 @@ private struct TrendInsight: View {
         let maxValue = max(bars.map(metric).max() ?? 1, 0.01)
         let avgValue = bars.isEmpty ? 0 : bars.map(metric).reduce(0, +) / Double(bars.count)
         let peakValue = bars.filter({ metric($0) > 0 }).max(by: { metric($0) < metric($1) })
-        let yesterdayValue = stats.yesterdayBar.map(metric)
+        let latestValue = stats.latestBar.map(metric)
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Last \(dayCount) days")
+                    Text(descriptor.windowLabel)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
                     Text(formatHero(useTokens: useTokens, tokens: totalTokens, dollars: stats.totalThisWindow))
@@ -164,11 +234,11 @@ private struct TrendInsight: View {
                         .foregroundStyle(.primary)
                 }
                 Spacer()
-                if let delta = stats.deltaPercent {
+                if let delta = stats.deltaPercent, let comparisonLabel = descriptor.comparisonLabel {
                     HStack(spacing: 3) {
                         Image(systemName: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
                             .font(.system(size: 9, weight: .bold))
-                        Text("\(delta >= 0 ? "+" : "")\(String(format: "%.0f", delta))% vs prior \(dayCount)d")
+                        Text("\(delta >= 0 ? "+" : "")\(String(format: "%.0f", delta))% vs \(comparisonLabel)")
                             .font(.system(size: 10.5))
                             .monospacedDigit()
                     }
@@ -187,9 +257,9 @@ private struct TrendInsight: View {
             .zIndex(1)
 
             HStack(spacing: 14) {
-                MiniStat(label: "Avg/day", value: formatValue(avgValue, useTokens: useTokens))
-                MiniStat(label: "Peak", value: peakLabel(peakValue, metric: metric, useTokens: useTokens))
-                MiniStat(label: "Yesterday", value: yesterdayValue.map { formatValue($0, useTokens: useTokens) } ?? "—")
+                MiniStat(label: descriptor.averageLabel, value: formatValue(avgValue, useTokens: useTokens))
+                MiniStat(label: descriptor.peakLabel, value: peakLabel(peakValue, metric: metric, useTokens: useTokens, joiner: descriptor.peakJoiner))
+                MiniStat(label: descriptor.latestLabel, value: latestValue.map { formatValue($0, useTokens: useTokens) } ?? "—")
             }
         }
     }
@@ -202,9 +272,9 @@ private struct TrendInsight: View {
         useTokens ? "\(formatTokens(v)) tok" : v.asCompactCurrency()
     }
 
-    private func peakLabel(_ peak: TrendBar?, metric: (TrendBar) -> Double, useTokens: Bool) -> String {
+    private func peakLabel(_ peak: TrendBar?, metric: (TrendBar) -> Double, useTokens: Bool, joiner: String) -> String {
         guard let peak, metric(peak) > 0 else { return "—" }
-        return "\(formatValue(metric(peak), useTokens: useTokens)) on \(shortDate(peak.date))"
+        return "\(formatValue(metric(peak), useTokens: useTokens)) \(joiner) \(peak.shortLabel)"
     }
 
     private func formatTokens(_ n: Double) -> String {
@@ -213,10 +283,8 @@ private struct TrendInsight: View {
         return String(format: "%.0f", n)
     }
 
-    private func shortDate(_ ymd: String) -> String {
-        let parts = ymd.split(separator: "-")
-        guard parts.count == 3 else { return ymd }
-        return "\(parts[1])/\(parts[2])"
+    private func lifetimeDescriptor(calendar: Calendar) -> TrendDescriptor {
+        makeLifetimeDescriptor(days: history.daily, calendar: calendar)
     }
 }
 
@@ -320,7 +388,7 @@ private struct BarColumn: View {
     }
 
     private var barColor: Color {
-        if bar.isToday { return Theme.brandAccent }
+        if bar.isCurrent { return Theme.brandAccent }
         if value <= 0 { return Color.secondary.opacity(0.15) }
         if isHovered { return Theme.brandAccent.opacity(0.85) }
         let ratio = maxValue > 0 ? value / maxValue : 0
@@ -362,7 +430,7 @@ private struct BarTooltipCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Text(prettyDate(bar.date))
+                Text(bar.label)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(primaryText)
                 Spacer()
@@ -446,12 +514,14 @@ private struct MiniStat: View {
 }
 
 private struct TrendBar: Identifiable {
-    var id: String { date }
-    let date: String
+    let id: String
+    let label: String
+    let shortLabel: String
+    let anchorDateKey: String
     let cost: Double
     let inputTokens: Double
     let outputTokens: Double
-    let isToday: Bool
+    let isCurrent: Bool
     let topModels: [DailyModelBreakdown]
 
     var tokens: Double { inputTokens + outputTokens }
@@ -459,18 +529,65 @@ private struct TrendBar: Identifiable {
 
 private struct TrendStats {
     let totalThisWindow: Double
-    let avgPerDay: Double
-    let peak: TrendBar?
-    let activeDays: Int
     let deltaPercent: Double?
-    let yesterdayBar: TrendBar?
+    let latestBar: TrendBar?
 }
 
-private func buildTrendBars(from days: [DailyHistoryEntry], dayCount: Int) -> [TrendBar] {
+private enum TrendCadence {
+    case intraday4Hour
+    case daily(Int)
+    case weekly(Int)
+    case monthly(Int)
+    case quarterly(Int)
+    case yearly(Int)
+}
+
+private enum TrendLatestMode {
+    case current
+    case previousDay
+}
+
+private struct TrendDescriptor {
+    let cadence: TrendCadence
+    let windowLabel: String
+    let comparisonLabel: String?
+    let averageLabel: String
+    let peakLabel: String
+    let latestLabel: String
+    let comparisonDaySpan: Int?
+    let latestMode: TrendLatestMode
+    let peakJoiner: String
+}
+
+private struct TrendAggregate {
+    let cost: Double
+    let inputTokens: Double
+    let outputTokens: Double
+    let topModels: [DailyModelBreakdown]
+}
+
+private func buildTrendBars(history: HistoryBlock, descriptor: TrendDescriptor, now: Date = Date()) -> [TrendBar] {
+    switch descriptor.cadence {
+    case .intraday4Hour:
+        return buildIntradayTrendBars(from: history.intraday, now: now)
+    case .daily(let dayCount):
+        return buildDailyTrendBars(from: history.daily, dayCount: dayCount, now: now)
+    case .weekly(let weekCount):
+        return buildWeeklyTrendBars(from: history.daily, weekCount: weekCount, now: now)
+    case .monthly(let monthCount):
+        return buildMonthlyTrendBars(from: history.daily, monthCount: monthCount, now: now)
+    case .quarterly(let quarterCount):
+        return buildQuarterlyTrendBars(from: history.daily, quarterCount: quarterCount, now: now)
+    case .yearly(let yearCount):
+        return buildYearlyTrendBars(from: history.daily, yearCount: yearCount, now: now)
+    }
+}
+
+private func buildDailyTrendBars(from days: [DailyHistoryEntry], dayCount: Int, now: Date = Date()) -> [TrendBar] {
     let calendar = gregorianCalendar
     let formatter = yyyymmdd
     let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
-    let today = calendar.startOfDay(for: Date())
+    let today = calendar.startOfDay(for: now)
     let todayKey = formatter.string(from: today)
 
     var bars: [TrendBar] = []
@@ -479,30 +596,211 @@ private func buildTrendBars(from days: [DailyHistoryEntry], dayCount: Int) -> [T
         let key = formatter.string(from: d)
         let entry = entryByDate[key]
         bars.append(TrendBar(
-            date: key,
+            id: key,
+            label: prettyDate(key),
+            shortLabel: shortDate(key),
+            anchorDateKey: key,
             cost: entry?.cost ?? 0,
             inputTokens: Double(entry?.inputTokens ?? 0),
             outputTokens: Double(entry?.outputTokens ?? 0),
-            isToday: key == todayKey,
+            isCurrent: key == todayKey,
             topModels: entry?.topModels ?? []
         ))
     }
     return bars
 }
 
-private func computeTrendStats(bars: [TrendBar], allDays: [DailyHistoryEntry], dayCount: Int) -> TrendStats {
+private func buildIntradayTrendBars(from buckets: [IntradayHistoryEntry], now: Date = Date()) -> [TrendBar] {
+    let currentHour = gregorianCalendar.component(.hour, from: now)
+    let today = gregorianCalendar.startOfDay(for: now)
+    let todayKey = yyyymmdd.string(from: today)
+
+    return buckets.map { bucket in
+        TrendBar(
+            id: "hour-\(bucket.bucketStartHour)",
+            label: hourRangeLabel(startHour: bucket.bucketStartHour, endHour: bucket.bucketEndHour, compact: false),
+            shortLabel: hourRangeLabel(startHour: bucket.bucketStartHour, endHour: bucket.bucketEndHour, compact: true),
+            anchorDateKey: todayKey,
+            cost: bucket.cost,
+            inputTokens: Double(bucket.inputTokens),
+            outputTokens: Double(bucket.outputTokens),
+            isCurrent: currentHour >= bucket.bucketStartHour && currentHour < bucket.bucketEndHour,
+            topModels: bucket.topModels
+        )
+    }
+}
+
+private func buildWeeklyTrendBars(from days: [DailyHistoryEntry], weekCount: Int, now: Date = Date()) -> [TrendBar] {
+    let calendar = gregorianCalendar
+    let today = calendar.startOfDay(for: now)
+    guard let currentWeek = calendar.dateInterval(of: .weekOfYear, for: today) else { return [] }
+    let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
+    let formatter = yyyymmdd
+
+    return (0..<weekCount).reversed().compactMap { offset in
+        guard let start = calendar.date(byAdding: .weekOfYear, value: -offset, to: currentWeek.start),
+              let end = calendar.date(byAdding: .day, value: 7, to: start) else { return nil }
+        let aggregate = aggregateTrendRange(entryByDate: entryByDate, start: start, end: end)
+        let key = formatter.string(from: start)
+        return TrendBar(
+            id: "week-\(key)",
+            label: "Week of \(shortDate(key))",
+            shortLabel: "wk of \(shortDate(key))",
+            anchorDateKey: key,
+            cost: aggregate.cost,
+            inputTokens: aggregate.inputTokens,
+            outputTokens: aggregate.outputTokens,
+            isCurrent: offset == 0,
+            topModels: aggregate.topModels
+        )
+    }
+}
+
+private func buildMonthlyTrendBars(from days: [DailyHistoryEntry], monthCount: Int, now: Date = Date()) -> [TrendBar] {
+    let calendar = gregorianCalendar
+    let today = calendar.startOfDay(for: now)
+    let currentMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: today)) ?? today
+    let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
+    let formatter = yyyymmdd
+
+    return (0..<monthCount).reversed().compactMap { offset in
+        guard let start = calendar.date(byAdding: .month, value: -offset, to: currentMonthStart),
+              let end = calendar.date(byAdding: .month, value: 1, to: start) else { return nil }
+        let aggregate = aggregateTrendRange(entryByDate: entryByDate, start: start, end: end)
+        let key = formatter.string(from: start)
+        return TrendBar(
+            id: "month-\(key)",
+            label: monthYearLabel(start),
+            shortLabel: monthYearLabel(start),
+            anchorDateKey: key,
+            cost: aggregate.cost,
+            inputTokens: aggregate.inputTokens,
+            outputTokens: aggregate.outputTokens,
+            isCurrent: offset == 0,
+            topModels: aggregate.topModels
+        )
+    }
+}
+
+private func buildQuarterlyTrendBars(from days: [DailyHistoryEntry], quarterCount: Int, now: Date = Date()) -> [TrendBar] {
+    let calendar = gregorianCalendar
+    let today = calendar.startOfDay(for: now)
+    let currentQuarterStart = quarterStart(for: today, calendar: calendar)
+    let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
+    let formatter = yyyymmdd
+
+    return (0..<quarterCount).reversed().compactMap { offset in
+        guard let start = calendar.date(byAdding: .month, value: -(offset * 3), to: currentQuarterStart),
+              let end = calendar.date(byAdding: .month, value: 3, to: start) else { return nil }
+        let aggregate = aggregateTrendRange(entryByDate: entryByDate, start: start, end: end)
+        let key = formatter.string(from: start)
+        return TrendBar(
+            id: "quarter-\(key)",
+            label: quarterLabel(start, calendar: calendar),
+            shortLabel: quarterLabel(start, calendar: calendar),
+            anchorDateKey: key,
+            cost: aggregate.cost,
+            inputTokens: aggregate.inputTokens,
+            outputTokens: aggregate.outputTokens,
+            isCurrent: offset == 0,
+            topModels: aggregate.topModels
+        )
+    }
+}
+
+private func buildYearlyTrendBars(from days: [DailyHistoryEntry], yearCount: Int, now: Date = Date()) -> [TrendBar] {
+    let calendar = gregorianCalendar
+    let today = calendar.startOfDay(for: now)
+    let currentYearStart = calendar.date(from: calendar.dateComponents([.year], from: today)) ?? today
+    let entryByDate = Dictionary(days.map { ($0.date, $0) }, uniquingKeysWith: { _, new in new })
+    let formatter = yyyymmdd
+
+    return (0..<yearCount).reversed().compactMap { offset in
+        guard let start = calendar.date(byAdding: .year, value: -offset, to: currentYearStart),
+              let end = calendar.date(byAdding: .year, value: 1, to: start) else { return nil }
+        let aggregate = aggregateTrendRange(entryByDate: entryByDate, start: start, end: end)
+        let key = formatter.string(from: start)
+        return TrendBar(
+            id: "year-\(key)",
+            label: yearLabel(start, calendar: calendar),
+            shortLabel: yearLabel(start, calendar: calendar),
+            anchorDateKey: key,
+            cost: aggregate.cost,
+            inputTokens: aggregate.inputTokens,
+            outputTokens: aggregate.outputTokens,
+            isCurrent: offset == 0,
+            topModels: aggregate.topModels
+        )
+    }
+}
+
+private func aggregateTrendRange(entryByDate: [String: DailyHistoryEntry], start: Date, end: Date) -> TrendAggregate {
+    let calendar = gregorianCalendar
+    let formatter = yyyymmdd
+    var cursor = start
+    var cost = 0.0
+    var inputTokens = 0.0
+    var outputTokens = 0.0
+    var topModelTotals: [String: (calls: Int, cost: Double, inputTokens: Int, outputTokens: Int)] = [:]
+
+    while cursor < end {
+        let key = formatter.string(from: cursor)
+        if let entry = entryByDate[key] {
+            cost += entry.cost
+            inputTokens += Double(entry.inputTokens)
+            outputTokens += Double(entry.outputTokens)
+
+            for model in entry.topModels {
+                let existing = topModelTotals[model.name] ?? (calls: 0, cost: 0, inputTokens: 0, outputTokens: 0)
+                topModelTotals[model.name] = (
+                    calls: existing.calls + model.calls,
+                    cost: existing.cost + model.cost,
+                    inputTokens: existing.inputTokens + model.inputTokens,
+                    outputTokens: existing.outputTokens + model.outputTokens
+                )
+            }
+        }
+
+        guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+        cursor = next
+    }
+
+    let topModels = topModelTotals
+        .map { name, total in
+            DailyModelBreakdown(
+                name: name,
+                cost: total.cost,
+                calls: total.calls,
+                inputTokens: total.inputTokens,
+                outputTokens: total.outputTokens
+            )
+        }
+        .sorted { $0.cost > $1.cost }
+        .prefix(5)
+
+    return TrendAggregate(
+        cost: cost,
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        topModels: Array(topModels)
+    )
+}
+
+private func computeTrendStats(
+    bars: [TrendBar],
+    allDays: [DailyHistoryEntry],
+    comparisonDaySpan: Int?,
+    latestMode: TrendLatestMode
+) -> TrendStats {
     let total = bars.reduce(0.0) { $0 + $1.cost }
-    let active = bars.filter { $0.cost > 0 }.count
-    let avg = bars.isEmpty ? 0 : total / Double(bars.count)
-    let peak = bars.filter { $0.cost > 0 }.max(by: { $0.cost < $1.cost })
 
     let calendar = gregorianCalendar
     let formatter = yyyymmdd
     let today = calendar.startOfDay(for: Date())
-    let priorWindowStart = calendar.date(byAdding: .day, value: -(2 * dayCount - 1), to: today)
-    let thisWindowStart = calendar.date(byAdding: .day, value: -(dayCount - 1), to: today)
     var deltaPercent: Double? = nil
-    if let priorStart = priorWindowStart, let thisStart = thisWindowStart {
+    if let comparisonDaySpan,
+       let priorStart = calendar.date(byAdding: .day, value: -(2 * comparisonDaySpan - 1), to: today),
+       let thisStart = calendar.date(byAdding: .day, value: -(comparisonDaySpan - 1), to: today) {
         let priorStartStr = formatter.string(from: priorStart)
         let thisStartStr = formatter.string(from: thisStart)
         let priorTotal = allDays
@@ -513,18 +811,142 @@ private func computeTrendStats(bars: [TrendBar], allDays: [DailyHistoryEntry], d
         }
     }
 
-    let yesterdayDate = calendar.date(byAdding: .day, value: -1, to: today)
-    let yesterdayKey = yesterdayDate.map { formatter.string(from: $0) }
-    let yesterdayBar = bars.first(where: { $0.date == yesterdayKey })
+    let latestBar: TrendBar?
+    switch latestMode {
+    case .current:
+        latestBar = bars.last(where: { $0.isCurrent })
+    case .previousDay:
+        let yesterdayDate = calendar.date(byAdding: .day, value: -1, to: today)
+        let yesterdayKey = yesterdayDate.map { formatter.string(from: $0) }
+        latestBar = bars.first(where: { $0.anchorDateKey == yesterdayKey })
+    }
 
     return TrendStats(
         totalThisWindow: total,
-        avgPerDay: avg,
-        peak: peak,
-        activeDays: active,
         deltaPercent: deltaPercent,
-        yesterdayBar: yesterdayBar
+        latestBar: latestBar
     )
+}
+
+private func hourRangeLabel(startHour: Int, endHour: Int, compact: Bool) -> String {
+    let start = hourLabel(startHour, compact: compact)
+    let end = hourLabel(endHour % 24, compact: compact)
+    return compact ? "\(start)-\(end)" : "\(start) - \(end)"
+}
+
+private func hourLabel(_ hour: Int, compact: Bool) -> String {
+    let normalized = (hour + 24) % 24
+    let value = normalized == 0 ? 12 : (normalized > 12 ? normalized - 12 : normalized)
+    let suffix = normalized < 12 ? (compact ? "a" : "AM") : (compact ? "p" : "PM")
+    return compact ? "\(value)\(suffix)" : "\(value) \(suffix)"
+}
+
+private func monthYearLabel(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "MMM yyyy"
+    return formatter.string(from: date)
+}
+
+private func lifetimeMonthSpan(calendar: Calendar, days: [DailyHistoryEntry], now: Date = Date()) -> Int {
+    let today = calendar.startOfDay(for: now)
+    let currentMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: today)) ?? today
+
+    guard let firstDateKey = days.map(\ .date).min(),
+          let firstDate = yyyymmdd.date(from: firstDateKey) else {
+        return 1
+    }
+
+    let firstMonthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: firstDate)) ?? firstDate
+    let firstComponents = calendar.dateComponents([.year, .month], from: firstMonthStart)
+    let currentComponents = calendar.dateComponents([.year, .month], from: currentMonthStart)
+    let firstYear = firstComponents.year ?? currentComponents.year ?? 0
+    let firstMonth = firstComponents.month ?? currentComponents.month ?? 1
+    let currentYear = currentComponents.year ?? firstYear
+    let currentMonth = currentComponents.month ?? firstMonth
+    let diff = (currentYear - firstYear) * 12 + (currentMonth - firstMonth)
+    return max(diff + 1, 1)
+}
+
+private func makeLifetimeDescriptor(days: [DailyHistoryEntry], calendar: Calendar, now: Date = Date()) -> TrendDescriptor {
+    let monthSpan = lifetimeMonthSpan(calendar: calendar, days: days, now: now)
+    if monthSpan <= 24 {
+        return TrendDescriptor(
+            cadence: .monthly(monthSpan),
+            windowLabel: "All time by month",
+            comparisonLabel: nil,
+            averageLabel: "Avg/month",
+            peakLabel: "Peak month",
+            latestLabel: "This month",
+            comparisonDaySpan: nil,
+            latestMode: .current,
+            peakJoiner: "in"
+        )
+    }
+
+    if monthSpan <= 60 {
+        let quarterCount = Int(ceil(Double(monthSpan) / 3.0))
+        return TrendDescriptor(
+            cadence: .quarterly(quarterCount),
+            windowLabel: "All time by quarter",
+            comparisonLabel: nil,
+            averageLabel: "Avg/quarter",
+            peakLabel: "Peak quarter",
+            latestLabel: "This quarter",
+            comparisonDaySpan: nil,
+            latestMode: .current,
+            peakJoiner: "in"
+        )
+    }
+
+    let yearCount = Int(ceil(Double(monthSpan) / 12.0))
+    return TrendDescriptor(
+        cadence: .yearly(yearCount),
+        windowLabel: "All time by year",
+        comparisonLabel: nil,
+        averageLabel: "Avg/year",
+        peakLabel: "Peak year",
+        latestLabel: "This year",
+        comparisonDaySpan: nil,
+        latestMode: .current,
+        peakJoiner: "in"
+    )
+}
+
+struct LifetimeTrendTestSummary: Equatable {
+    let windowLabel: String
+    let labels: [String]
+}
+
+func makeLifetimeTrendTestSummary(days: [DailyHistoryEntry], now: Date) -> LifetimeTrendTestSummary {
+    let descriptor = makeLifetimeDescriptor(days: days, calendar: gregorianCalendar, now: now)
+    let bars = buildTrendBars(history: HistoryBlock(daily: days, intraday: []), descriptor: descriptor, now: now)
+    return LifetimeTrendTestSummary(windowLabel: descriptor.windowLabel, labels: bars.map(\.label))
+}
+
+private func quarterStart(for date: Date, calendar: Calendar) -> Date {
+    let components = calendar.dateComponents([.year, .month], from: date)
+    let month = components.month ?? 1
+    let quarterMonth = ((month - 1) / 3) * 3 + 1
+    return calendar.date(from: DateComponents(year: components.year, month: quarterMonth, day: 1)) ?? date
+}
+
+private func quarterLabel(_ date: Date, calendar: Calendar) -> String {
+    let components = calendar.dateComponents([.year, .month], from: date)
+    let month = components.month ?? 1
+    let quarter = ((month - 1) / 3) + 1
+    let year = components.year ?? 0
+    return "Q\(quarter) \(year)"
+}
+
+private func yearLabel(_ date: Date, calendar: Calendar) -> String {
+    String(calendar.component(.year, from: date))
+}
+
+private func shortDate(_ ymd: String) -> String {
+    let parts = ymd.split(separator: "-")
+    guard parts.count == 3 else { return ymd }
+    return "\(parts[1])/\(parts[2])"
 }
 
 // MARK: - Forecast
@@ -833,9 +1255,10 @@ private struct OptimizeSavingsBadge: View {
 
 private struct StatsInsight: View {
     let payload: MenubarPayload
+    let period: Period
 
     var body: some View {
-        let stats = computeAllStats(payload: payload)
+        let stats = computeAllStats(payload: payload, period: period)
 
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
@@ -848,22 +1271,22 @@ private struct StatsInsight: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    StatRow(label: "Sessions today", value: "\(payload.current.sessions)")
-                    StatRow(label: "Calls today", value: payload.current.calls.asThousandsSeparated())
+                    StatRow(label: stats.sessionsLabel, value: "\(payload.current.sessions)")
+                    StatRow(label: stats.callsLabel, value: payload.current.calls.asThousandsSeparated())
                     StatRow(label: "Current streak", value: stats.currentStreak)
                     StatRow(label: "Longest streak", value: stats.longestStreak)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if let lifetime = stats.lifetimeTotal {
+            if let trackedSpend = stats.trackedSpend {
                 Divider().opacity(0.5)
                 HStack {
-                    Text("Tracked spend (last \(stats.historyDayCount) days)")
+                    Text(stats.trackedSpendLabel)
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(.tertiary)
                     Spacer()
-                    Text(lifetime.asCurrency())
+                    Text(trackedSpend.asCurrency())
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Theme.brandAccent)
@@ -1024,8 +1447,9 @@ private struct TopProjectsList: View {
                             .lineLimit(1)
                         Spacer()
                         Text("\(project.sessions) sess")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.quaternary)
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
                         Text(project.cost.asCompactCurrency())
                             .font(.codeMono(size: 10.5, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -1254,11 +1678,13 @@ private struct AllStats {
     let peakDaySpend: String
     let currentStreak: String
     let longestStreak: String
-    let lifetimeTotal: Double?
-    let historyDayCount: Int
+    let trackedSpend: Double?
+    let trackedSpendLabel: String
+    let sessionsLabel: String
+    let callsLabel: String
 }
 
-@MainActor private func computeAllStats(payload: MenubarPayload) -> AllStats {
+@MainActor private func computeAllStats(payload: MenubarPayload, period: Period) -> AllStats {
     let history = payload.history.daily
     let favoriteModel = payload.current.topModels.first?.name ?? "—"
 
@@ -1267,7 +1693,6 @@ private struct AllStats {
     let displayFormatter = mmmDayFormat
 
     let now = Date()
-    let today = calendar.startOfDay(for: now)
     let comps = calendar.dateComponents([.year, .month, .day], from: now)
 
     var activeDaysFraction = "—"
@@ -1280,57 +1705,61 @@ private struct AllStats {
         activeDaysFraction = "\(mtdActive)/\(rangeOfMonth.count)"
     }
 
-    let peak = history.max(by: { $0.cost < $1.cost })
     let mostActiveDay: String
     let peakDaySpend: String
-    if let peak, peak.cost > 0, let date = formatter.date(from: peak.date) {
+    if let peakDate = payload.stats.mostActiveDay,
+       let peakValue = payload.stats.peakDaySpend,
+       peakValue > 0,
+       let date = formatter.date(from: peakDate) {
         mostActiveDay = displayFormatter.string(from: date)
-        peakDaySpend = peak.cost.asCompactCurrency()
+        peakDaySpend = peakValue.asCompactCurrency()
     } else {
         mostActiveDay = "—"
         peakDaySpend = "—"
     }
 
-    let costByDate = Dictionary(history.map { ($0.date, $0.cost) }, uniquingKeysWith: +)
-
-    var currentStreak = 0
-    for offset in 0..<400 {
-        guard let d = calendar.date(byAdding: .day, value: -offset, to: today) else { break }
-        let key = formatter.string(from: d)
-        if (costByDate[key] ?? 0) > 0 { currentStreak += 1 } else { break }
+    let trackedSpend: Double? = payload.stats.trackedSpend > 0 ? payload.stats.trackedSpend : nil
+    let trackedSpendLabel: String
+    let sessionsLabel: String
+    let callsLabel: String
+    switch period {
+    case .today:
+        trackedSpendLabel = "Tracked spend (today)"
+        sessionsLabel = "Sessions today"
+        callsLabel = "Calls today"
+    case .sevenDays:
+        trackedSpendLabel = "Tracked spend (last 7 days)"
+        sessionsLabel = "Sessions (last 7 days)"
+        callsLabel = "Calls (last 7 days)"
+    case .thirtyDays:
+        trackedSpendLabel = "Tracked spend (last 30 days)"
+        sessionsLabel = "Sessions (last 30 days)"
+        callsLabel = "Calls (last 30 days)"
+    case .month:
+        trackedSpendLabel = "Tracked spend (this month)"
+        sessionsLabel = "Sessions (this month)"
+        callsLabel = "Calls (this month)"
+    case .all:
+        trackedSpendLabel = "Tracked spend (last 6 months)"
+        sessionsLabel = "Sessions (last 6 months)"
+        callsLabel = "Calls (last 6 months)"
+    case .lifetime:
+        trackedSpendLabel = "Tracked spend (all time)"
+        sessionsLabel = "Sessions (all time)"
+        callsLabel = "Calls (all time)"
     }
-
-    var longestStreak = 0
-    var running = 0
-    if let firstDate = history.map(\.date).min(),
-       let lastDate = history.map(\.date).max(),
-       let start = formatter.date(from: firstDate),
-       let end = formatter.date(from: lastDate) {
-        var cursor = start
-        while cursor <= end {
-            let key = formatter.string(from: cursor)
-            if (costByDate[key] ?? 0) > 0 {
-                running += 1
-                longestStreak = max(longestStreak, running)
-            } else {
-                running = 0
-            }
-            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
-            cursor = next
-        }
-    }
-
-    let lifetimeTotal: Double? = history.isEmpty ? nil : history.reduce(0.0) { $0 + $1.cost }
 
     return AllStats(
         favoriteModel: favoriteModel,
         activeDaysFraction: activeDaysFraction,
         mostActiveDay: mostActiveDay,
         peakDaySpend: peakDaySpend,
-        currentStreak: currentStreak == 0 ? "—" : "\(currentStreak) days",
-        longestStreak: longestStreak == 0 ? "—" : "\(longestStreak) days",
-        lifetimeTotal: lifetimeTotal,
-        historyDayCount: history.count
+        currentStreak: payload.stats.currentStreakDays == 0 ? "—" : "\(payload.stats.currentStreakDays) days",
+        longestStreak: payload.stats.longestStreakDays == 0 ? "—" : "\(payload.stats.longestStreakDays) days",
+        trackedSpend: trackedSpend,
+        trackedSpendLabel: trackedSpendLabel,
+        sessionsLabel: sessionsLabel,
+        callsLabel: callsLabel
     )
 }
 
