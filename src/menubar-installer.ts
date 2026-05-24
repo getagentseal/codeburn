@@ -216,14 +216,7 @@ async function resolvePersistentCodeburnPath(): Promise<string> {
     throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
   }
 
-  const path = resolvePersistentCodeburnPathFromWhichOutput(output)
-  if (!path.startsWith('/')) {
-    throw new Error('Resolved codeburn path is not absolute.')
-  }
-  if (isTransientNpxPath(path)) {
-    throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
-  }
-  return path
+  return resolvePersistentCodeburnPathFromWhichOutput(output)
 }
 
 async function persistCodeburnPath(): Promise<void> {
