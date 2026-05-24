@@ -34,12 +34,19 @@ type SessionRow = {
 type MessageData = {
   role: string
   modelID?: string
+  model?: string
   cost?: number
   tokens?: {
     input?: number
     output?: number
     reasoning?: number
     cache?: { read?: number; write?: number }
+  }
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
   }
 }
 
@@ -110,6 +117,41 @@ async function findDbFiles(dir: string): Promise<string[]> {
 function parseTimestamp(raw: number): string {
   const ms = raw < 1e12 ? raw * 1000 : raw
   return new Date(ms).toISOString()
+}
+
+type SessionTokenRow = {
+  cost?: number
+  tokens_input?: number
+  tokens_output?: number
+  tokens_reasoning?: number
+  tokens_cache_read?: number
+  tokens_cache_write?: number
+  model_id?: string
+}
+
+function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string): {
+  cost: number; input: number; output: number; reasoning: number
+  cacheRead: number; cacheWrite: number; model: string | undefined
+} | null {
+  try {
+    const rows = db.query<SessionTokenRow>(
+      `SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model_id FROM session WHERE id = ?`,
+      [sessionId],
+    )
+    if (rows.length === 0) return null
+    const r = rows[0]!
+    return {
+      cost: r.cost ?? 0,
+      input: r.tokens_input ?? 0,
+      output: r.tokens_output ?? 0,
+      reasoning: r.tokens_reasoning ?? 0,
+      cacheRead: r.tokens_cache_read ?? 0,
+      cacheWrite: r.tokens_cache_write ?? 0,
+      model: r.model_id ?? undefined,
+    }
+  } catch {
+    return null
+  }
 }
 
 type SchemaCheckResult =
@@ -234,12 +276,16 @@ function createParser(
         }
 
         const currentUserMessageBySession = new Map<string, string>()
+        let yieldCount = 0
+        let parseFailCount = 0
+        let roleSkipCount = 0
 
         for (const msg of messages) {
           let data: MessageData
           try {
             data = JSON.parse(blobToText(msg.data)) as MessageData
           } catch {
+            parseFailCount++
             continue
           }
 
@@ -254,20 +300,28 @@ function createParser(
             continue
           }
 
-          if (data.role !== 'assistant') continue
+          if (data.role !== 'assistant' && data.role !== 'model') {
+            if (data.role !== 'user') roleSkipCount++
+            continue
+          }
 
           const tokens = {
-            input: data.tokens?.input ?? 0,
-            output: data.tokens?.output ?? 0,
+            input: data.tokens?.input ?? data.usage?.input_tokens ?? 0,
+            output: data.tokens?.output ?? data.usage?.output_tokens ?? 0,
             reasoning: data.tokens?.reasoning ?? 0,
-            cacheRead: data.tokens?.cache?.read ?? 0,
-            cacheWrite: data.tokens?.cache?.write ?? 0,
+            cacheRead: data.tokens?.cache?.read ?? data.usage?.cache_read_input_tokens ?? 0,
+            cacheWrite: data.tokens?.cache?.write ?? data.usage?.cache_creation_input_tokens ?? 0,
           }
 
           const msgParts = partsByMsg.get(msg.id) ?? []
-          const toolParts = msgParts.filter((p) => p.type === 'tool' && normalizeToolName(p.tool))
+          const toolParts = msgParts.filter((p) => (p.type === 'tool' || p.type === 'tool-call' || p.type === 'tool_call') && normalizeToolName(p.tool))
           const hasTextOutput = msgParts.some((p) => p.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0)
-          const hasActivity = hasTextOutput || toolParts.length > 0
+          const hasToolOrTextParts = hasTextOutput || toolParts.length > 0
+          const hasAnySubstantiveParts = msgParts.some((p) =>
+            p.type === 'text' || p.type === 'tool' || p.type === 'tool-call' || p.type === 'tool_call' ||
+            p.type === 'tool-result' || p.type === 'tool_result' || p.type === 'reasoning' || p.type === 'file'
+          )
+          const hasActivity = hasToolOrTextParts || hasAnySubstantiveParts
 
           const allZero =
             tokens.input === 0 &&
@@ -289,7 +343,7 @@ function createParser(
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
 
-          const model = data.modelID ?? 'unknown'
+          const model = data.modelID ?? data.model ?? 'unknown'
           let costUSD = calculateCost(
             model,
             tokens.input,
@@ -303,6 +357,7 @@ function createParser(
             costUSD = data.cost
           }
 
+          yieldCount++
           yield {
             provider: 'opencode',
             model,
@@ -321,6 +376,49 @@ function createParser(
             deduplicationKey: dedupKey,
             userMessage: currentUserMessageBySession.get(msg.session_id) ?? '',
             sessionId,
+          }
+        }
+
+        if (yieldCount === 0 && messages.length > 0) {
+          // Fallback: try session-level token columns (newer OpenCode schemas
+          // store aggregated tokens on the session row rather than per-message).
+          const sessionTokens = tryQuerySessionTokens(db, sessionId)
+          if (sessionTokens && (sessionTokens.cost > 0 || sessionTokens.input > 0 || sessionTokens.output > 0)) {
+            const dedupKey = `opencode:${sessionId}:session-level`
+            if (!seenKeys.has(dedupKey)) {
+              seenKeys.add(dedupKey)
+              const model = sessionTokens.model ?? 'unknown'
+              let costUSD = calculateCost(model, sessionTokens.input, sessionTokens.output, sessionTokens.cacheWrite, sessionTokens.cacheRead, 0)
+              if (costUSD === 0 && sessionTokens.cost > 0) costUSD = sessionTokens.cost
+              yield {
+                provider: 'opencode',
+                model,
+                inputTokens: sessionTokens.input,
+                outputTokens: sessionTokens.output,
+                cacheCreationInputTokens: sessionTokens.cacheWrite,
+                cacheReadInputTokens: sessionTokens.cacheRead,
+                cachedInputTokens: sessionTokens.cacheRead,
+                reasoningTokens: sessionTokens.reasoning,
+                webSearchRequests: 0,
+                costUSD,
+                tools: [],
+                bashCommands: [],
+                timestamp: parseTimestamp(messages[0]!.time_created),
+                speed: 'standard',
+                deduplicationKey: dedupKey,
+                userMessage: '',
+                sessionId,
+              }
+              yieldCount++
+            }
+          }
+
+          if (yieldCount === 0 && process.env['CODEBURN_VERBOSE'] === '1') {
+            process.stderr.write(
+              `codeburn: OpenCode session ${sessionId} has ${messages.length} messages ` +
+              `(${parseFailCount} unparseable, ${roleSkipCount} non-user/assistant roles) ` +
+              `but yielded 0 calls. Parts: ${parts.length}.\n`
+            )
           }
         }
       } finally {
