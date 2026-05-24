@@ -7,10 +7,89 @@ struct MenubarPayload: Codable, Sendable {
     let current: CurrentBlock
     let optimize: OptimizeBlock
     let history: HistoryBlock
+    let stats: StatsSummary
+
+    enum CodingKeys: String, CodingKey {
+        case generated, current, optimize, history, stats
+    }
+
+    init(generated: String, current: CurrentBlock, optimize: OptimizeBlock, history: HistoryBlock, stats: StatsSummary) {
+        self.generated = generated
+        self.current = current
+        self.optimize = optimize
+        self.history = history
+        self.stats = stats
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated = try c.decode(String.self, forKey: .generated)
+        current = try c.decode(CurrentBlock.self, forKey: .current)
+        optimize = try c.decode(OptimizeBlock.self, forKey: .optimize)
+        history = try c.decode(HistoryBlock.self, forKey: .history)
+        stats = try c.decodeIfPresent(StatsSummary.self, forKey: .stats)
+            ?? StatsSummary(trackedSpend: 0, trackedDays: 0, mostActiveDay: nil, peakDaySpend: nil, currentStreakDays: 0, longestStreakDays: 0)
+    }
+}
+
+struct StatsSummary: Codable, Sendable {
+    let trackedSpend: Double
+    let trackedDays: Int
+    let mostActiveDay: String?
+    let peakDaySpend: Double?
+    let currentStreakDays: Int
+    let longestStreakDays: Int
 }
 
 struct HistoryBlock: Codable, Sendable {
     let daily: [DailyHistoryEntry]
+    let intraday: [IntradayHistoryEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case daily, intraday
+    }
+
+    init(daily: [DailyHistoryEntry], intraday: [IntradayHistoryEntry]) {
+        self.daily = daily
+        self.intraday = intraday
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        daily = try c.decodeIfPresent([DailyHistoryEntry].self, forKey: .daily) ?? []
+        intraday = try c.decodeIfPresent([IntradayHistoryEntry].self, forKey: .intraday) ?? []
+    }
+}
+
+struct IntradayHistoryEntry: Codable, Sendable {
+    let bucketStartHour: Int
+    let bucketEndHour: Int
+    let cost: Double
+    let calls: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheReadTokens: Int
+    let cacheWriteTokens: Int
+    let topModels: [DailyModelBreakdown]
+}
+
+extension IntradayHistoryEntry {
+    enum CodingKeys: String, CodingKey {
+        case bucketStartHour, bucketEndHour, cost, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, topModels
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bucketStartHour = try c.decode(Int.self, forKey: .bucketStartHour)
+        bucketEndHour = try c.decode(Int.self, forKey: .bucketEndHour)
+        cost = try c.decode(Double.self, forKey: .cost)
+        calls = try c.decode(Int.self, forKey: .calls)
+        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
+        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        cacheReadTokens = try c.decode(Int.self, forKey: .cacheReadTokens)
+        cacheWriteTokens = try c.decode(Int.self, forKey: .cacheWriteTokens)
+        topModels = try c.decodeIfPresent([DailyModelBreakdown].self, forKey: .topModels) ?? []
+    }
 }
 
 struct DailyModelBreakdown: Codable, Sendable {
@@ -268,6 +347,7 @@ extension MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: [], intraday: []),
+        stats: StatsSummary(trackedSpend: 0, trackedDays: 0, mostActiveDay: nil, peakDaySpend: nil, currentStreakDays: 0, longestStreakDays: 0)
     )
 }

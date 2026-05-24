@@ -13,7 +13,7 @@
     <key name="default-period" type="s">
       <default>'today'</default>
       <summary>Default time period</summary>
-      <description>Period shown when extension opens (today, week, 30days, month, all)</description>
+      <description>Period shown when extension opens (today, week, 30days, month, all, lifetime)</description>
     </key>
 
     <key name="budget-threshold" type="d">

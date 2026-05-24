@@ -11,11 +11,14 @@ struct PeriodSegmentedControl: View {
                 } label: {
                     Text(period.rawValue)
                         .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .foregroundStyle(store.selectedPeriod == period ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
                 }
+                .frame(maxWidth: .infinity)
                 .buttonStyle(.plain)
                 .background(
                     RoundedRectangle(cornerRadius: 5)

@@ -1003,6 +1003,7 @@ enum Period: String, CaseIterable, Identifiable {
     case thirtyDays = "30 Days"
     case month = "Month"
     case all = "6 Months"
+    case lifetime = "Lifetime"
 
     var id: String { rawValue }
 
@@ -1014,12 +1015,13 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "all"
+        case .lifetime: "lifetime"
         }
     }
 
     /// Status item metrics intentionally stay to the coarse Settings choices.
     /// The popover still offers 30 Days, but it is not a persisted status metric.
-    static let menubarMetricCases: [Period] = [.today, .sevenDays, .month, .all]
+    static let menubarMetricCases: [Period] = [.today, .sevenDays, .month, .all, .lifetime]
 
     var menubarMetricLabel: String {
         switch self {
@@ -1028,6 +1030,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30 Days"
         case .month: "Month"
         case .all: "6 Months"
+        case .lifetime: "Lifetime"
         }
     }
 
@@ -1038,6 +1041,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "sixMonths"
+        case .lifetime: "lifetime"
         }
     }
 
@@ -1047,6 +1051,7 @@ enum Period: String, CaseIterable, Identifiable {
         case "week", "sevenDays": self = .sevenDays
         case "month": self = .month
         case "sixMonths", "all": self = .all
+        case "lifetime": self = .lifetime
         default: self = .today
         }
     }
@@ -1067,6 +1072,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: compact ? "/30d" : " / 30d"
         case .month: compact ? "/mo" : " / mo"
         case .all: compact ? "/6mo" : " / 6mo"
+        case .lifetime: compact ? "/all" : " / all"
         }
     }
 }

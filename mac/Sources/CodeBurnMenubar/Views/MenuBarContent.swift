@@ -171,6 +171,7 @@ private struct EmptyProviderState: View {
         case .thirtyDays: "the last 30 days"
         case .month: "this month"
         case .all: "the last 6 months"
+        case .lifetime: "all time"
         }
     }
 }

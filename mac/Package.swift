@@ -9,6 +9,9 @@ let package = Package(
     products: [
         .executable(name: "CodeBurnMenubar", targets: ["CodeBurnMenubar"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-testing.git", from: "6.2.3")
+    ],
     targets: [
         .executableTarget(
             name: "CodeBurnMenubar",
@@ -19,7 +22,10 @@ let package = Package(
         ),
         .testTarget(
             name: "CodeBurnMenubarTests",
-            dependencies: ["CodeBurnMenubar"],
+            dependencies: [
+                "CodeBurnMenubar",
+                .product(name: "Testing", package: "swift-testing")
+            ],
             path: "Tests/CodeBurnMenubarTests"
         )
     ]
