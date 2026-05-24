@@ -421,7 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         forceRefreshTask = Task {
             async let main: Void = store.refresh(includeOptimize: false, force: true, showLoading: true)
             async let quotas: Bool = refreshLiveQuotaProgressIfDue(force: forceQuota)
-            if store.selectedPeriod != .today || store.selectedProvider != .all {
+            if store.selectedDay != nil || store.selectedPeriod != .today || store.selectedProvider != .all {
                 await store.refreshQuietly(period: .today)
             }
             _ = await main
@@ -632,7 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             // "Refresh Now" should refresh the menubar payload AND every
             // connected provider's live quota. The user's intent is "make
             // this match reality right now."
-            let needsTodayTotal = self.store.selectedPeriod != .today || self.store.selectedProvider != .all
+            let needsTodayTotal = self.store.selectedDay != nil || self.store.selectedPeriod != .today || self.store.selectedProvider != .all
             async let payload: Void = self.store.refresh(includeOptimize: false, force: true, showLoading: true)
             async let quotas: Bool = self.refreshLiveQuotaProgressIfDue(force: true)
             if needsTodayTotal {

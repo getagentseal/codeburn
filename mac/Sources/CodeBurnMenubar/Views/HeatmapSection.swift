@@ -79,7 +79,7 @@ struct HeatmapSection: View {
             } else {
                 PlanInsight(usage: store.subscription)
             }
-        case .trend: TrendInsight(days: store.payload.history.daily, period: store.selectedPeriod)
+        case .trend: TrendInsight(days: store.payload.history.daily, period: store.trendPeriod)
         case .forecast: ForecastInsight(days: store.payload.history.daily)
         case .pulse: PulseInsight(payload: store.payload)
         case .stats: StatsInsight(payload: store.payload)
@@ -1839,4 +1839,3 @@ private func relativeReset(_ date: Date) -> String {
     let days = Int(ceil(hours / 24))
     return "in \(days)d"
 }
-

@@ -70,6 +70,8 @@ codeburn today                  # today's usage
 codeburn month                  # this month's usage
 codeburn report -p 30days       # rolling 30-day window
 codeburn report -p all          # every recorded session
+codeburn report --day yesterday # review one calendar day
+codeburn status --format menubar-json --day yesterday # menubar payload for one day
 codeburn report --from 2026-04-01 --to 2026-04-10  # exact date range
 codeburn report --format json   # full dashboard data as JSON
 codeburn report --refresh 60    # auto-refresh every 60s (default: 30s)
@@ -90,7 +92,7 @@ codeburn models --task feature         # filter to feature-development work
 codeburn models --provider claude      # filter to one provider
 ```
 
-Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `d` to review yesterday as a single day, then use the arrow keys to move day by day. Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
 ## Supported Providers
 
@@ -314,9 +316,12 @@ Filter by provider, project name (case-insensitive substring), or exact date ran
 codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window
 codeburn report --from 2026-04-01                    # this date through today
 codeburn report --to 2026-04-10                      # earliest data through this date
+codeburn report --day 2026-04-10                     # one calendar day
+codeburn report --day yesterday                      # previous local calendar day
+codeburn status --format menubar-json --day yesterday # menubar JSON for one calendar day
 ```
 
-Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only; pressing `1` through `5` switches back to predefined periods.
+Either `--from` / `--to` flag alone is valid. `--day` accepts `YYYY-MM-DD`, `today`, or `yesterday` and cannot be combined with `--from` / `--to` on `report`. Inverted or malformed dates exit with a clear error. In the TUI, `--day` starts in day mode; custom `--from` / `--to` ranges stay fixed. The menubar app uses the same `--day` path for its single-day popover view.
 
 ### JSON Output
 
@@ -346,7 +351,7 @@ codeburn menubar
 
 One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
 
-The menubar icon always shows today's spend (so $0 is normal if you have not used AI tools today). Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
+The menubar icon always shows today's spend (so $0 is normal if you have not used AI tools today). Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), single-day date selector with a Today shortcut, Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
 
 **Compact mode** shrinks the menubar item to fit the text, dropping decimals (e.g. `$110` instead of `$110.20`):
 

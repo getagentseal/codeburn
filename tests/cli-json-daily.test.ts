@@ -169,4 +169,69 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('filters a single review day with --day', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-day-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'app')
+      await mkdir(projectDir, { recursive: true })
+
+      // runCli pins TZ=UTC, so these exact boundaries exercise the inclusive
+      // start/end of the selected calendar day without local-offset drift.
+      await writeFile(
+        join(projectDir, 'day-selector.jsonl'),
+        [
+          userLine('day-before', '2026-04-09T23:59:00Z'),
+          assistantNoEditLine('day-before', '2026-04-09T23:59:30Z', 'm-before'),
+          userLine('day-selected', '2026-04-10T00:00:00Z'),
+          assistantEditLine('day-selected', '2026-04-10T23:59:59Z', 'm-selected'),
+          userLine('day-after', '2026-04-11T00:00:00Z'),
+          assistantNoEditLine('day-after', '2026-04-11T00:00:30Z', 'm-after'),
+        ].join('\n'),
+      )
+
+      const result = runCli([
+        '--format', 'json',
+        '--day', '2026-04-10',
+        '--provider', 'claude',
+      ], home)
+
+      expect(result.status).toBe(0)
+      const report = JSON.parse(result.stdout) as {
+        period: string
+        periodKey: string
+        daily: Array<{ date: string; calls: number; editTurns: number }>
+        projects: Array<{ sessions: number; calls: number }>
+      }
+
+      expect(report.period).toBe('Day (2026-04-10)')
+      expect(report.periodKey).toBe('day')
+      expect(report.daily.map(d => d.date)).toEqual(['2026-04-10'])
+      expect(report.daily[0]?.calls).toBe(1)
+      expect(report.daily[0]?.editTurns).toBe(1)
+      expect(report.projects[0]?.sessions).toBe(1)
+      expect(report.projects[0]?.calls).toBe(1)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects --day combined with --from/--to', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-day-'))
+
+    try {
+      const result = runCli([
+        '--format', 'json',
+        '--day', '2026-04-10',
+        '--from', '2026-04-10',
+        '--provider', 'claude',
+      ], home)
+
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('--day cannot be combined with --from or --to')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

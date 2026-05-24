@@ -105,4 +105,53 @@ describe('codeburn status --format menubar-json', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('filters menubar payloads to a selected review day with --day', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-day-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [
+          userLine('before', '2026-04-09T23:58:00Z'),
+          assistantLine('before', '2026-04-09T23:59:00Z', 'msg-before'),
+          userLine('selected', '2026-04-10T11:59:00Z'),
+          assistantLine('selected', '2026-04-10T12:00:00Z', 'msg-selected'),
+          userLine('after', '2026-04-11T00:00:00Z'),
+          assistantLine('after', '2026-04-11T00:01:00Z', 'msg-after'),
+        ].join('\n'),
+      )
+
+      const result = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--day', '2026-04-10',
+        '--provider', 'all',
+        '--no-optimize',
+      ], home)
+
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+
+      const payload = JSON.parse(result.stdout) as {
+        current: {
+          label: string
+          calls: number
+          sessions: number
+          topProjects: Array<{ sessions: number; sessionDetails: Array<{ date: string }> }>
+        }
+      }
+
+      expect(payload.current.label).toBe('Day (2026-04-10)')
+      expect(payload.current.calls).toBe(1)
+      expect(payload.current.sessions).toBe(1)
+      expect(payload.current.topProjects).toHaveLength(1)
+      expect(payload.current.topProjects[0]?.sessions).toBe(1)
+      expect(payload.current.topProjects[0]?.sessionDetails.map(s => s.date)).toEqual(['2026-04-10'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

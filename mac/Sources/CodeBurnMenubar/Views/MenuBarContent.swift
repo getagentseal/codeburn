@@ -32,7 +32,7 @@ struct MenuBarContent: View {
                         PeriodSegmentedControl()
                         Divider().opacity(0.5)
                         if isFilteredEmpty {
-                            EmptyProviderState(provider: store.selectedProvider, period: store.selectedPeriod)
+                            EmptyProviderState(provider: store.selectedProvider, periodLabel: store.selectionLabel)
                         } else {
                             HeatmapSection()
                                 .padding(.horizontal, 14)
@@ -57,22 +57,15 @@ struct MenuBarContent: View {
                 // error, etc.), surface a retry card instead of leaving the
                 // user stuck on a perpetual "Loading..." spinner.
                 if !store.hasCachedData {
-                    if store.isCurrentKeyLoading || !store.hasAttemptedCurrentKeyLoad {
-                        BurnLoadingOverlay(periodLabel: store.selectedPeriod.rawValue)
-                            .transition(.opacity)
-                    } else if let err = store.lastError {
+                    if let err = store.lastError {
                         FetchErrorOverlay(
                             error: err,
-                            periodLabel: store.selectedPeriod.rawValue,
+                            periodLabel: store.selectionLabel,
                             retry: { Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) } }
                         )
                         .transition(.opacity)
                     } else {
-                        FetchErrorOverlay(
-                            error: "The last refresh stopped before returning data. CodeBurn will keep retrying, or you can retry now.",
-                            periodLabel: store.selectedPeriod.rawValue,
-                            retry: { Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) } }
-                        )
+                        BurnLoadingOverlay(periodLabel: store.selectionLabel)
                             .transition(.opacity)
                     }
                 }
@@ -148,14 +141,14 @@ private struct RefreshPausedBanner: View {
 
 private struct EmptyProviderState: View {
     let provider: ProviderFilter
-    let period: Period
+    let periodLabel: String
 
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "tray")
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
-            Text("No \(provider.rawValue) data for \(periodPhrase)")
+            Text("No \(provider.rawValue) data for \(periodLabel)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -164,15 +157,6 @@ private struct EmptyProviderState: View {
         .padding(.vertical, 60)
     }
 
-    private var periodPhrase: String {
-        switch period {
-        case .today: "today"
-        case .sevenDays: "the last 7 days"
-        case .thirtyDays: "the last 30 days"
-        case .month: "this month"
-        case .all: "the last 6 months"
-        }
-    }
 }
 
 /// Shown when a fetch failed and the cache is still empty for this key. The
