@@ -47,6 +47,7 @@ private struct GeneralSettingsTab: View {
                     Text("Cost ($)").tag(DisplayMetric.cost)
                     Text("Tokens (↑↓)").tag(DisplayMetric.tokens)
                     Text("Total Tokens").tag(DisplayMetric.totalTokens)
+                    Text("Icon Only").tag(DisplayMetric.iconOnly)
                 }
                 Picker("Period", selection: Binding(
                     get: { store.menubarPeriod },

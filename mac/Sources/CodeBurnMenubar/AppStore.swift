@@ -1058,7 +1058,7 @@ enum SubscriptionLoadState: Sendable, Equatable {
 }
 
 enum DisplayMetric: String {
-    case cost, tokens, totalTokens
+    case cost, tokens, totalTokens, iconOnly
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {

@@ -746,31 +746,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let menubarPayload = store.menubarPayload
         let hasPayload = menubarPayload != nil
         let compact = isCompact
-        let suffix = menubarPeriod.menubarSuffix(compact: compact)
-        let valueText: String
-        if store.displayMetric == .tokens, let p = menubarPayload?.current {
-            let out = formatTokensMenubar(Double(p.outputTokens))
-            let inp = formatTokensMenubar(Double(p.inputTokens))
-            valueText = compact ? "↑\(out)↓\(inp)\(suffix)" : " ↑\(out) ↓\(inp)\(suffix)"
-        } else if store.displayMetric == .totalTokens, let p = menubarPayload?.current {
-            let total = formatTokensMenubar(Double(p.inputTokens + p.outputTokens))
-            valueText = compact ? "\(total)\(suffix)" : " \(total) tok\(suffix)"
-        } else {
-            let fallback = compact ? "$-" : "$—"
-            let formatted = menubarPayload?.current.cost
-            valueText = compact
-                ? (formatted?.asCompactCurrencyWhole() ?? fallback) + suffix
-                : " " + (formatted?.asCompactCurrency() ?? fallback) + suffix
-        }
-
-        var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: -1.0]
-        if !hasPayload {
-            textAttrs[.foregroundColor] = NSColor.secondaryLabelColor
-        }
 
         let composed = NSMutableAttributedString()
         composed.append(NSAttributedString(attachment: attachment))
-        composed.append(NSAttributedString(string: valueText, attributes: textAttrs))
+
+        if store.displayMetric != .iconOnly {
+            let suffix = menubarPeriod.menubarSuffix(compact: compact)
+            let valueText: String
+            if store.displayMetric == .tokens, let p = menubarPayload?.current {
+                let out = formatTokensMenubar(Double(p.outputTokens))
+                let inp = formatTokensMenubar(Double(p.inputTokens))
+                valueText = compact ? "↑\(out)↓\(inp)\(suffix)" : " ↑\(out) ↓\(inp)\(suffix)"
+            } else if store.displayMetric == .totalTokens, let p = menubarPayload?.current {
+                let total = formatTokensMenubar(Double(p.inputTokens + p.outputTokens))
+                valueText = compact ? "\(total)\(suffix)" : " \(total) tok\(suffix)"
+            } else {
+                let fallback = compact ? "$-" : "$—"
+                let formatted = menubarPayload?.current.cost
+                valueText = compact
+                    ? (formatted?.asCompactCurrencyWhole() ?? fallback) + suffix
+                    : " " + (formatted?.asCompactCurrency() ?? fallback) + suffix
+            }
+
+            var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: -1.0]
+            if !hasPayload {
+                textAttrs[.foregroundColor] = NSColor.secondaryLabelColor
+            }
+            composed.append(NSAttributedString(string: valueText, attributes: textAttrs))
+        }
+
         button.attributedTitle = composed
         button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
     }
