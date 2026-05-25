@@ -460,6 +460,47 @@ describe('Claude Cowork local-agent-mode session grouping', () => {
     expect(projects[0]!.sessions).toHaveLength(1)
   })
 
+  it('groups container-mode sessions (cwd=/sessions/<name>) under the space name', async () => {
+    const desktopSessionsDir = join(tmpDir, 'desktop-sessions')
+    const workspaceDir = join(desktopSessionsDir, 'app-abc', 'ws-006')
+    const sessionId = 'local_hhhh'
+
+    // Set up workspace metadata (spaces.json + session .json with spaceId)
+    await mkdir(workspaceDir, { recursive: true })
+    await writeFile(join(workspaceDir, 'spaces.json'), JSON.stringify({
+      spaces: [{ id: 'space-001', name: 'Project1', folders: [], projects: [] }],
+    }))
+    const containerCwd = '/sessions/trusting-inspiring-ritchie'
+    await writeFile(join(workspaceDir, `${sessionId}.json`), JSON.stringify({
+      sessionId, spaceId: 'space-001', cwd: containerCwd, title: 'Container session',
+    }))
+
+    // Container-mode: project slug is derived from the container cwd, not outputs/
+    const containerSlug = containerCwd.replace(/\//g, '-').replace(/^-/, '')
+    const projectDir = join(workspaceDir, sessionId, '.claude', 'projects', containerSlug)
+    await mkdir(projectDir, { recursive: true })
+    const filePath = join(projectDir, 'container-session.jsonl')
+    await writeFile(filePath, JSON.stringify({
+      type: 'assistant',
+      sessionId: 'container-session',
+      timestamp: '2099-06-06T10:00:00.000Z',
+      cwd: containerCwd,
+      message: {
+        id: 'msg-container', type: 'message', role: 'assistant',
+        model: 'claude-sonnet-4-5', content: [],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    }) + '\n')
+    await utimes(filePath, new Date('2099-06-06T10:00:00.000Z'), new Date('2099-06-06T10:00:00.000Z'))
+
+    const projects = await parseAllSessions(dayRange('2099-06-06'), 'claude')
+
+    expect(projects).toHaveLength(1)
+    expect(projects[0]!.project).toBe('Project1')
+    expect(projects[0]!.projectPath).toBe('Project1')
+    expect(projects[0]!.sessions).toHaveLength(1)
+  })
+
   it('falls back to sanitized directory slug when no session metadata exists', async () => {
     const desktopSessionsDir = join(tmpDir, 'desktop-sessions')
     const workspaceDir = join(desktopSessionsDir, 'app-abc', 'ws-005')

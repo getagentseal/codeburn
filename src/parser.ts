@@ -62,14 +62,21 @@ function getDesktopSessionsDir(): string {
   return join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')
 }
 
-// Returns true when a session cwd is inside the desktop local-agent-mode
-// sessions directory. Those paths are ephemeral per-session output directories;
-// the canonical project grouping comes from the Cowork space name (set on the
-// SessionSource in claude.ts), so we must not use the cwd as the project key.
-function isCoworkOutputPath(cwd: string): boolean {
+// Returns true for sessions whose canonical project key must NOT be derived
+// from the cwd. Cowork sessions come in two flavours:
+//   1. Local-mode: cwd is an ephemeral per-session outputs/ dir inside the
+//      desktop sessions directory (detected by checking the cwd).
+//   2. Container-mode: the session runs inside a Docker container so cwd is
+//      something like /sessions/<adjective-name> — not a real path on the host.
+//      We detect these by checking the JSONL file path instead: if the file
+//      lives inside the desktop sessions directory, the cwd is container-local
+//      and must not become the canonical project key.
+// In both cases the grouping key comes from the Cowork space name resolved in
+// claude.ts::discoverSessions().
+function isCoworkSession(cwd: string, filePath: string): boolean {
   const base = resolve(getDesktopSessionsDir())
-  const normalized = resolve(cwd)
-  return normalized.startsWith(base + sep) || normalized.startsWith(base + '/')
+  const inBase = (p: string) => p.startsWith(base + sep) || p.startsWith(base + '/')
+  return inBase(resolve(cwd)) || inBase(resolve(filePath))
 }
 
 async function resolveCanonicalProjectPath(cwd: string): Promise<{ path: string; isWorktree: boolean }> {
@@ -1471,11 +1478,7 @@ async function scanProjectDirs(
 
     const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
     const cwd = extractCanonicalCwd(entries)
-    // Cowork sessions use an ephemeral per-session outputs dir as the cwd. If we
-    // stored that as canonicalCwd it would give every session a unique project
-    // key and prevent them from grouping under the shared space name. Skip the
-    // canonical resolution for these paths so the slug-based key is used instead.
-    const canonical = (cwd && !isCoworkOutputPath(cwd)) ? await resolveCanonicalProjectPath(cwd) : undefined
+    const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
     section.files[filePath] = {
       fingerprint: info.fp,
       lastCompleteLineOffset: tracker.lastCompleteLineOffset,
