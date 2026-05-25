@@ -2133,16 +2133,32 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
 
   // Merge across providers by normalised project path so the same repository
   // is not double-counted when it was worked on with more than one tool
-  // (e.g. both Claude Code and Codex). Codex's sanitizeProject strips the
-  // leading '/' from cwds, so "Users/carlo/foo" and "/Users/carlo/foo" must
-  // compare equal. Strip leading slashes and lowercase before keying; fall
-  // back to the project name for non-path identifiers like Cowork space names.
+  // (e.g. both Claude Code and Codex). Two sub-problems:
+  //
+  // 1. Codex's sanitizeProject strips the leading '/' from cwds, so
+  //    "Users/carlo/foo" and "/Users/carlo/foo" must compare equal. We
+  //    normalise by stripping leading slashes before keying.
+  //
+  // 2. Codex worktrees (e.g. ~/.codex/worktrees/e55f/Repo) are not resolved
+  //    to their main-repo path by canonicalizeProviderCallProject because that
+  //    function only operates on call.projectPath, which Codex doesn't set.
+  //    Resolve at the ProjectSummary level here: prepend '/' if needed to get
+  //    an absolute path, then run the same worktree-detection logic.
+  const resolvedOtherProjects = await Promise.all(otherProjects.map(async p => {
+    const absPath = p.projectPath.startsWith('/') || p.projectPath.startsWith('\\')
+      ? p.projectPath
+      : '/' + p.projectPath
+    const canonical = await resolveCanonicalProjectPath(absPath)
+    if (!canonical.isWorktree) return p
+    return { ...p, project: projectNameFromPath(canonical.path, p.project), projectPath: canonical.path }
+  }))
+
   const crossProviderKey = (p: ProjectSummary): string => {
     const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
     return path.includes('/') ? path : p.project.toLowerCase()
   }
   const mergedMap = new Map<string, ProjectSummary>()
-  for (const p of [...claudeProjects, ...otherProjects]) {
+  for (const p of [...claudeProjects, ...resolvedOtherProjects]) {
     const key = crossProviderKey(p)
     const existing = mergedMap.get(key)
     if (existing) {
