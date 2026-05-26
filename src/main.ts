@@ -25,6 +25,14 @@ import {
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
+import {
+  ClaudeQuotaError,
+  fetchClaudeQuota,
+  quotaToJSON,
+  tierDisplayName,
+  type QuotaWindow,
+  type SubscriptionQuota,
+} from './claude-quota.js'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -1229,6 +1237,63 @@ program
     console.log(`\n  Analyzing yield for ${label}...\n`)
     const summary = await computeYield(range, process.cwd())
     console.log(formatYieldSummary(summary))
+  })
+
+program
+  .command('quota')
+  .description('Show live Anthropic subscription quota for the connected Claude account')
+  .option('--format <format>', 'Output format: text or json', 'text')
+  .action(async (opts: { format?: string }) => {
+    assertFormat(opts?.format ?? 'text', ['text', 'json'], 'quota')
+    const format = opts?.format ?? 'text'
+
+    let quota: SubscriptionQuota | null
+    try {
+      quota = await fetchClaudeQuota()
+    } catch (err) {
+      if (err instanceof ClaudeQuotaError) {
+        if (format === 'json') {
+          console.log(JSON.stringify({ ok: false, code: err.code, message: err.message }))
+        } else {
+          console.error(`\n  Quota fetch failed: ${err.message}\n`)
+        }
+        process.exit(1)
+      }
+      throw err
+    }
+
+    if (!quota) {
+      if (format === 'json') {
+        console.log(JSON.stringify({ ok: false, code: 'not_connected', message: 'No Claude credentials found. Sign in with `claude` first.' }))
+      } else {
+        console.error('\n  No Claude credentials found. Sign in with `claude` first.\n')
+      }
+      process.exit(1)
+    }
+
+    if (format === 'json') {
+      console.log(JSON.stringify(quotaToJSON(quota)))
+      return
+    }
+
+    console.log(`\n  ${tierDisplayName(quota.tier)} quota`)
+    console.log(`  Fetched: ${quota.fetchedAt.toISOString()}`)
+    const rows: Array<[string, QuotaWindow | null]> = [
+      ['5-hour', quota.fiveHour],
+      ['7-day', quota.sevenDay],
+      ['7-day (Opus)', quota.sevenDayOpus],
+      ['7-day (Sonnet)', quota.sevenDaySonnet],
+    ]
+    for (const [label, window] of rows) {
+      if (!window) {
+        console.log(`  ${label.padEnd(16)} -`)
+        continue
+      }
+      const pct = `${window.utilization.toFixed(1)}%`.padStart(7)
+      const reset = window.resetsAt ? ` (resets ${window.resetsAt.toISOString()})` : ''
+      console.log(`  ${label.padEnd(16)} ${pct}${reset}`)
+    }
+    console.log('')
   })
 
 program

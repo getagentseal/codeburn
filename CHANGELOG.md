@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added (CLI)
+- **Live Claude quota.** New `codeburn quota` command (and `--format json`)
+  shows the real 5-hour, weekly, weekly-Opus and weekly-Sonnet utilisation
+  from Anthropic's OAuth usage endpoint, using the access token the local
+  `claude` CLI already manages. Reads credentials from
+  `~/.claude/.credentials.json` on Linux/Windows and the macOS Keychain on
+  macOS; refreshes the access token transparently on 401 and persists the
+  rotated token to `~/.cache/codeburn/`. 429 backoff is persisted so back-to-
+  back invocations honour Anthropic's retry window. Thanks @ozymandiashh.
 - **MCP project profile advisor.** `codeburn optimize` now flags MCP servers
   that are useful in one project but loaded into other projects where they are
   never invoked, with a project-scoping prompt that preserves the hot workflow
