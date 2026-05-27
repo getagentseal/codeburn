@@ -61,7 +61,7 @@ struct HeroSection: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text("Daily budget of \(store.dailyBudget.asCurrency()) exceeded")
+                    Text("Daily quota of \(store.dailyBudget.asCurrency()) exceeded")
                         .font(.system(size: 11, weight: .medium))
                 }
                 .foregroundStyle(.orange)
@@ -74,6 +74,9 @@ struct HeroSection: View {
     }
 
     private var heroText: String {
+        if store.displayMetric == .quotaRemaining {
+            return store.quotaRemainingLabel ?? "--% left"
+        }
         if store.displayMetric == .tokens || store.displayMetric == .totalTokens {
             let total = Double(store.payload.current.inputTokens + store.payload.current.outputTokens)
             if total >= 1_000_000_000 { return String(format: "%.2fB tok", total / 1_000_000_000) }

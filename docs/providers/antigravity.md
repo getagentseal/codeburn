@@ -16,6 +16,11 @@ A local HTTPS RPC endpoint exposed by Antigravity's language server. The parser:
 3. Calls `GetCascadeTrajectoryGeneratorMetadata` over HTTPS.
 4. Validates the response (capped at 16 MB).
 
+This covers both Antigravity IDE (`~/.gemini/antigravity/...`) and Antigravity
+CLI (`~/.gemini/antigravity-cli/...`). If the CLI authenticates through Vertex
+ADC, CodeBurn still reads only Antigravity's local usage metadata; it does not
+call Vertex or inspect ADC credentials.
+
 Antigravity exposes slightly different process flags across platforms:
 POSIX builds have used `--https_server_port` and `--csrf_token`; Windows
 builds can expose `--extension_server_port` and
@@ -34,6 +39,22 @@ statusLine command, uninstall restores that previous command.
 ## Storage format
 
 Protobuf. Cascade and response objects map to `ParsedProviderCall` directly.
+
+## Backend pricing
+
+Antigravity response metadata includes `apiProvider`. CodeBurn keeps the model
+label shown by Antigravity, but uses `apiProvider` to choose the pricing key
+when the model is not already provider-prefixed:
+
+- `groq` -> `groq/<model>`
+- `cerebras` -> `cerebras/<model>`
+- `speechmatics` -> `speechmatics/<model>`
+- Google, Vertex, and Vertex AI keep the Gemini model key
+
+Groq and Cerebras resolve through the bundled LiteLLM pricing snapshot.
+Speechmatics is duration-priced rather than token-priced, so Speechmatics
+entries remain visible but cost `$0` unless the user maps a custom token-price
+alias with `codeburn model-alias`.
 
 ## Caching
 

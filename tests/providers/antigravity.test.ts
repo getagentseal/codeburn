@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   antigravityAppDataDirFromSourcePath,
+  buildAntigravityCallsFromGeneratorMetadata,
   antigravityCascadeIdFromPath,
   createAntigravityProvider,
   discoverAntigravitySessionSources,
@@ -12,13 +13,86 @@ import {
   extractAntigravityGeneratorMetadata,
   extractAntigravityModelMap,
   getAntigravityStatusLineEventsPath,
+  normalizeAntigravityPricingModel,
   parseAntigravityServerInfo,
   parseAntigravityServerInfoFromLine,
   recordAntigravityStatusLinePayload,
   shouldReparseAntigravitySource,
 } from '../../src/providers/antigravity.js'
+import { calculateCost } from '../../src/models.js'
 
 describe('antigravity provider helpers', () => {
+  it('normalizes backend-specific Antigravity pricing models', () => {
+    expect(normalizeAntigravityPricingModel('llama-3.1-8b-instant', 'groq')).toBe('groq/llama-3.1-8b-instant')
+    expect(normalizeAntigravityPricingModel('qwen-3-32b', 'cerebras')).toBe('cerebras/qwen-3-32b')
+    expect(normalizeAntigravityPricingModel('groq/openai/gpt-oss-20b', 'groq')).toBe('groq/openai/gpt-oss-20b')
+    expect(normalizeAntigravityPricingModel('gemini-3.5-flash-high', 'vertex-ai')).toBe('gemini-3.5-flash')
+    expect(normalizeAntigravityPricingModel('transcription', 'speechmatics')).toBe('speechmatics/transcription')
+  })
+
+  it('prices Groq-backed Antigravity metadata with Groq model costs', () => {
+    const calls = buildAntigravityCallsFromGeneratorMetadata('groq-cascade', [{
+      chatModel: {
+        model: 'llama-3.1-8b-instant',
+        usage: {
+          model: 'llama-3.1-8b-instant',
+          inputTokens: '1000',
+          outputTokens: '100',
+          responseOutputTokens: '100',
+          apiProvider: 'groq',
+          responseId: 'groq-response',
+        },
+      },
+    }], {})
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('llama-3.1-8b-instant')
+    expect(calls[0]!.costUSD).toBe(calculateCost('groq/llama-3.1-8b-instant', 1000, 100, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('prices Cerebras-backed Antigravity metadata with Cerebras model costs', () => {
+    const calls = buildAntigravityCallsFromGeneratorMetadata('cerebras-cascade', [{
+      chatModel: {
+        model: 'qwen-3-32b',
+        usage: {
+          model: 'qwen-3-32b',
+          inputTokens: '1000',
+          outputTokens: '100',
+          responseOutputTokens: '100',
+          apiProvider: 'cerebras',
+          responseId: 'cerebras-response',
+        },
+      },
+    }], {})
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('qwen-3-32b')
+    expect(calls[0]!.costUSD).toBe(calculateCost('cerebras/qwen-3-32b', 1000, 100, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('does not double-prefix already-prefixed Antigravity backend model ids', () => {
+    const calls = buildAntigravityCallsFromGeneratorMetadata('prefixed-cascade', [{
+      chatModel: {
+        model: 'groq/openai/gpt-oss-20b',
+        usage: {
+          model: 'groq/openai/gpt-oss-20b',
+          inputTokens: '1000',
+          outputTokens: '100',
+          responseOutputTokens: '100',
+          apiProvider: 'groq',
+          responseId: 'prefixed-response',
+        },
+      },
+    }], {})
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('groq/openai/gpt-oss-20b')
+    expect(calls[0]!.costUSD).toBe(calculateCost('groq/openai/gpt-oss-20b', 1000, 100, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
   it('parses legacy https server flags from POSIX process args', () => {
     const server = parseAntigravityServerInfoFromLine(
       '/Applications/Antigravity.app/language_server_macos_arm --app_data_dir antigravity --https_server_port 57101 --csrf_token 01234567-89ab-cdef-0123-456789abcdef',

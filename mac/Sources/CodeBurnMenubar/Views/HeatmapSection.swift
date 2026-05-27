@@ -832,6 +832,7 @@ private struct OptimizeSavingsBadge: View {
 // MARK: - Stats
 
 private struct StatsInsight: View {
+    @Environment(AppStore.self) private var store
     let payload: MenubarPayload
 
     var body: some View {
@@ -888,7 +889,7 @@ private struct StatsInsight: View {
                         .font(.codeMono(size: 10.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
-                    Text("· \(projectDisplayName(top.project))")
+                    Text("· \(projectDisplayName(top.project, hidePersonalInformation: store.hidePersonalInformation))")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -996,11 +997,13 @@ private struct StatRow: View {
     }
 }
 
-private func projectDisplayName(_ path: String) -> String {
-    path.split(separator: "/").last.map(String.init) ?? path
+private func projectDisplayName(_ path: String, hidePersonalInformation: Bool) -> String {
+    let name = path.split(separator: "/").last.map(String.init) ?? path
+    return PrivacyRedactor.redact(name, enabled: hidePersonalInformation)
 }
 
 private struct TopProjectsList: View {
+    @Environment(AppStore.self) private var store
     let projects: [ProjectEntry]
     @State private var expanded: String?
 
@@ -1018,7 +1021,7 @@ private struct TopProjectsList: View {
                             .font(.system(size: 7, weight: .bold))
                             .foregroundStyle(.quaternary)
                             .rotationEffect(.degrees(isOpen ? 90 : 0))
-                        Text(projectDisplayName(project.name))
+                        Text(projectDisplayName(project.name, hidePersonalInformation: store.hidePersonalInformation))
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -1350,7 +1353,7 @@ private struct PlanInsight: View {
         Group {
             switch store.subscriptionLoadState {
             case .notBootstrapped, .dormant:
-                PlanConnectView { Task { await store.bootstrapSubscription() } }
+                PlanConnectView(providerName: "Claude") { Task { await store.bootstrapSubscription() } }
             case .bootstrapping:
                 PlanLoadingView()
             case .loading:
@@ -1549,10 +1552,13 @@ private struct PlanFailedView: View {
     }
 }
 
-/// Shown the very first time a user opens the Plan tab. Clicking Connect is the
-/// only path to triggering the macOS keychain prompt for Claude Code credentials —
-/// the menubar app does not touch the keychain at startup.
+/// Shown the very first time a user opens a provider's Plan tab. Clicking
+/// Connect is the only path that reads provider credentials; the menubar app
+/// does not touch those sources at startup.
 private struct PlanConnectView: View {
+    @Environment(AppStore.self) private var store
+    let providerName: String
+    var detail: String? = nil
     let onConnect: () -> Void
 
     var body: some View {
@@ -1560,10 +1566,10 @@ private struct PlanConnectView: View {
             Image(systemName: "link.circle")
                 .font(.system(size: 26))
                 .foregroundStyle(Theme.brandAccent)
-            Text("Connect Claude subscription")
+            Text("Connect \(providerName) subscription")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically.")
+            Text(connectDetail)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1575,6 +1581,14 @@ private struct PlanConnectView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)
+    }
+
+    private var connectDetail: String {
+        if let detail { return detail }
+        if store.keychainAccessEnabled {
+            return "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically."
+        }
+        return "Keychain access is disabled. CodeBurn will only read ~/.claude/.credentials.json and will not prompt macOS Keychain."
     }
 }
 
@@ -1624,7 +1638,10 @@ private struct CodexPlanInsight: View {
         Group {
             switch store.codexLoadState {
             case .notBootstrapped, .dormant:
-                PlanConnectView { Task { await store.bootstrapCodex() } }
+                PlanConnectView(
+                    providerName: "Codex",
+                    detail: "CodeBurn will read ~/.codex/auth.json once, then keep a local token cache for live quota refreshes."
+                ) { Task { await store.bootstrapCodex() } }
             case .bootstrapping:
                 PlanLoadingView()
             case .loading:

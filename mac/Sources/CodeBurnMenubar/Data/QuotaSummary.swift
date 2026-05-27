@@ -46,11 +46,20 @@ struct QuotaSummary: Equatable {
         return .normal
     }
 
-    enum Severity {
+    enum Severity: Equatable {
         case normal     // <70%
         case warning    // 70-90%
         case critical   // 90-100%
         case danger     // >=100%
+
+        var notificationKey: String {
+            switch self {
+            case .normal: return "normal"
+            case .warning: return "warning"
+            case .critical: return "critical"
+            case .danger: return "danger"
+            }
+        }
     }
 }
 

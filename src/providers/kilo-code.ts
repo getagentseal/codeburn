@@ -34,8 +34,12 @@ export function createKiloCodeProvider(overrideDir?: string | string[]): Provide
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
+      if (overrideDir !== undefined) {
+        return discoverClineTasks(EXTENSION_ID, PROVIDER_NAME, 'KiloCode', overrideDir)
+      }
+
       const [oldSessions, dbSessions] = await Promise.all([
-        discoverClineTasks(EXTENSION_ID, PROVIDER_NAME, 'KiloCode', overrideDir),
+        discoverClineTasks(EXTENSION_ID, PROVIDER_NAME, 'KiloCode'),
         discoverSqliteSessions(sqliteConfig),
       ])
       return [...oldSessions, ...dbSessions]

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// macOS-standard tabbed Settings window. New per-provider sections (Codex,
@@ -17,10 +18,13 @@ struct SettingsView: View {
             CodexSettingsTab()
                 .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
 
+            DebugSettingsTab()
+                .tabItem { Label("Debug", systemImage: "wrench.and.screwdriver") }
+
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 560, height: 500)
     }
 }
 
@@ -47,8 +51,19 @@ private struct GeneralSettingsTab: View {
                     Text("Cost ($)").tag(DisplayMetric.cost)
                     Text("Tokens (↑↓)").tag(DisplayMetric.tokens)
                     Text("Total Tokens").tag(DisplayMetric.totalTokens)
+                    Text("Quota Left (%)").tag(DisplayMetric.quotaRemaining)
                     Text("Icon Only").tag(DisplayMetric.iconOnly)
                 }
+                Toggle("Show quota left in menu bar", isOn: Binding(
+                    get: { store.displayMetric == .quotaRemaining },
+                    set: { enabled in
+                        if enabled {
+                            store.displayMetric = .quotaRemaining
+                        } else if store.displayMetric == .quotaRemaining {
+                            store.displayMetric = .cost
+                        }
+                    }
+                ))
                 Picker("Period", selection: Binding(
                     get: { store.menubarPeriod },
                     set: { store.setMenubarPeriod($0) }
@@ -68,8 +83,34 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
+            Section("Refresh") {
+                Picker("Auto refresh", selection: Binding(
+                    get: { store.usageRefreshCadence },
+                    set: { store.usageRefreshCadence = $0 }
+                )) {
+                    ForEach(UsageRefreshCadence.allCases) { cadence in
+                        Text(cadence.label).tag(cadence)
+                    }
+                }
+                .pickerStyle(.menu)
+                Toggle("Auto-show most-used provider", isOn: Binding(
+                    get: { store.autoShowMostUsedProvider },
+                    set: { store.autoShowMostUsedProvider = $0 }
+                ))
+                Button("Refresh Now") {
+                    refreshNow()
+                }
+            }
+
+            Section("Launch") {
+                Toggle("Start at login", isOn: Binding(
+                    get: { store.startAtLoginEnabled },
+                    set: { store.startAtLoginEnabled = $0 }
+                ))
+            }
+
             Section("Alerts") {
-                Picker("Daily budget", selection: Binding(
+                Picker("Daily quota", selection: Binding(
                     get: { store.dailyBudget },
                     set: { store.dailyBudget = $0 }
                 )) {
@@ -80,7 +121,62 @@ private struct GeneralSettingsTab: View {
                     Text("$200").tag(200.0)
                     Text("$500").tag(500.0)
                 }
-                Text("Flame icon turns yellow when you pass the daily budget.")
+                TextField("Custom daily quota USD", value: Binding(
+                    get: { store.dailyBudget },
+                    set: { store.dailyBudget = max(0, $0) }
+                ), formatter: Self.quotaFormatter)
+                Picker("Monthly quota", selection: Binding(
+                    get: { store.monthlyQuota },
+                    set: { store.monthlyQuota = $0 }
+                )) {
+                    Text("Off").tag(0.0)
+                    Text("$50").tag(50.0)
+                    Text("$100").tag(100.0)
+                    Text("$200").tag(200.0)
+                    Text("$500").tag(500.0)
+                    Text("$1,000").tag(1000.0)
+                    Text("$2,000").tag(2000.0)
+                }
+                TextField("Custom monthly quota USD", value: Binding(
+                    get: { store.monthlyQuota },
+                    set: { store.monthlyQuota = max(0, $0) }
+                ), formatter: Self.quotaFormatter)
+                Picker("Warn at", selection: Binding(
+                    get: { store.quotaWarningThreshold },
+                    set: { store.quotaWarningThreshold = $0 }
+                )) {
+                    Text("70%").tag(0.7)
+                    Text("80%").tag(0.8)
+                    Text("90%").tag(0.9)
+                    Text("100%").tag(1.0)
+                }
+                Picker("Quota labels", selection: Binding(
+                    get: { store.quotaDisplayMode },
+                    set: { store.quotaDisplayMode = $0 }
+                )) {
+                    ForEach(QuotaDisplayMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                Toggle("Quota warning notifications", isOn: Binding(
+                    get: { store.quotaNotificationsEnabled },
+                    set: { store.quotaNotificationsEnabled = $0 }
+                ))
+                Text("Flame icon and notifications follow the warning threshold for live provider quota and spend quotas.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Privacy") {
+                Toggle("Hide personal information", isOn: Binding(
+                    get: { store.hidePersonalInformation },
+                    set: { store.hidePersonalInformation = $0 }
+                ))
+                Toggle("Allow Claude Keychain access", isOn: Binding(
+                    get: { store.keychainAccessEnabled },
+                    set: { store.keychainAccessEnabled = $0 }
+                ))
+                Text("Privacy mode obscures email addresses in visible project labels. Disabling Keychain access makes Claude Connect use file credentials only.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -88,6 +184,15 @@ private struct GeneralSettingsTab: View {
         .formStyle(.grouped)
         .padding()
     }
+
+    private static let quotaFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
 
     private func applyCurrency(code: String) {
         let symbol = CurrencyState.symbolForCode(code)
@@ -102,6 +207,14 @@ private struct GeneralSettingsTab: View {
             CurrencyState.shared.apply(code: code, rate: fresh ?? cached, symbol: symbol)
         }
         CLICurrencyConfig.persist(code: code)
+    }
+
+    private func refreshNow() {
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.refreshSubscriptionNow()
+        } else {
+            Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
+        }
     }
 }
 
@@ -204,10 +317,16 @@ private struct ClaudeConnectionRow: View {
             return "Live quota tracked from Anthropic."
         case .terminalFailure: return "Open Claude Code in your terminal and type `/login`, then click Reconnect."
         case .transientFailure: return store.subscriptionError ?? "Anthropic rate-limited; auto-retrying."
-        case .bootstrapping: return "macOS may ask permission to read your credentials."
+        case .bootstrapping:
+            return store.keychainAccessEnabled
+                ? "macOS may ask permission to read your credentials."
+                : "Reading ~/.claude/.credentials.json only; Keychain access is disabled."
         case .loading: return "Background refresh in progress."
         case .dormant: return "Tap Load Quota to fetch live usage from Anthropic."
-        case .notBootstrapped, .noCredentials: return "Click Connect to read your Claude Code credentials and start tracking quota."
+        case .notBootstrapped, .noCredentials:
+            return store.keychainAccessEnabled
+                ? "Click Connect to read your Claude Code credentials and start tracking quota."
+                : "Keychain access is disabled; Connect only works if ~/.claude/.credentials.json exists."
         case .failed: return store.subscriptionError ?? ""
         }
     }
@@ -376,6 +495,166 @@ private struct CodexConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Debug
+
+private struct DebugSettingsTab: View {
+    @State private var storageEntries: [ProviderStorageEntry] = []
+    @State private var isLoadingStorage = false
+
+    var body: some View {
+        Form {
+            Section("CLI") {
+                LabeledContent("Command") {
+                    Text(CodeburnCLI.baseArgv().joined(separator: " "))
+                        .font(.codeMono(size: 10.5))
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Open Report") {
+                        TerminalLauncher.open(subcommand: ["report"])
+                    }
+                    Button("CLI Help") {
+                        TerminalLauncher.open(subcommand: ["--help"])
+                    }
+                    Button("Storage CLI") {
+                        TerminalLauncher.open(subcommand: ["debug", "storage"])
+                    }
+                    Button("Reveal Support") {
+                        revealApplicationSupport()
+                    }
+                }
+            }
+
+            Section("Shortcuts") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), alignment: .leading)], alignment: .leading, spacing: 8) {
+                    Button("History") {
+                        (NSApp.delegate as? AppDelegate)?.openHistory()
+                    }
+                    Button("Claude Folder") {
+                        revealPath("~/.claude")
+                    }
+                    Button("Codex Folder") {
+                        revealPath("~/.codex")
+                    }
+                    Button("Cursor Data") {
+                        revealPath("~/Library/Application Support/Cursor/User")
+                    }
+                    Button("Cline Extension") {
+                        openVSCodeExtension("saoudrizwan.claude-dev")
+                    }
+                    Button("Roo Extension") {
+                        openVSCodeExtension("RooVeterinaryInc.roo-cline")
+                    }
+                    Button("Kilo Extension") {
+                        openVSCodeExtension("kilocode.kilo-code")
+                    }
+                    Button("Antigravity CLI") {
+                        revealPath("~/.gemini/antigravity-cli")
+                    }
+                    Button("Antigravity IDE") {
+                        revealPath("~/Library/Application Support/Google/Antigravity")
+                    }
+                    Button("Install AG Hook") {
+                        TerminalLauncher.open(subcommand: ["antigravity-hook", "install"])
+                    }
+                    Button("Uninstall AG Hook") {
+                        TerminalLauncher.open(subcommand: ["antigravity-hook", "uninstall"])
+                    }
+                }
+            }
+
+            Section("Storage") {
+                HStack {
+                    Text(storageSummary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(isLoadingStorage ? "Refreshing..." : "Refresh Storage") {
+                        Task { await refreshStorage() }
+                    }
+                    .disabled(isLoadingStorage)
+                }
+
+                ForEach(storageEntries) { entry in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(entry.provider) · \(entry.label)")
+                                .font(.system(size: 11, weight: .medium))
+                            Text(entry.path)
+                                .font(.codeMono(size: 9.5))
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer()
+                        Text(entry.sizeLabel)
+                            .font(.codeMono(size: 10.5, weight: .medium))
+                            .foregroundStyle(entry.exists ? .secondary : .tertiary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task {
+            if storageEntries.isEmpty {
+                await refreshStorage()
+            }
+        }
+    }
+
+    private var storageSummary: String {
+        let found = storageEntries.filter(\.exists).count
+        return storageEntries.isEmpty ? "Provider storage has not been scanned." : "\(found) storage locations found."
+    }
+
+    @MainActor
+    private func refreshStorage() async {
+        isLoadingStorage = true
+        let entries = await ProviderStorageProbe.load()
+        storageEntries = entries
+        isLoadingStorage = false
+    }
+
+    private func revealApplicationSupport() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        let codeburn = support.appendingPathComponent("CodeBurn", isDirectory: true)
+        try? FileManager.default.createDirectory(at: codeburn, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([codeburn])
+    }
+
+    private func revealPath(_ path: String) {
+        let expanded: String
+        if path.hasPrefix("~/") {
+            expanded = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(String(path.dropFirst(2)))
+                .path
+        } else {
+            expanded = path
+        }
+        let url = URL(fileURLWithPath: expanded)
+        if FileManager.default.fileExists(atPath: expanded) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
+    }
+
+    private func openURL(_ raw: String) {
+        guard let url = URL(string: raw) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openVSCodeExtension(_ extensionID: String) {
+        if let url = URL(string: "vscode:extension/\(extensionID)"),
+           NSWorkspace.shared.open(url) {
+            return
+        }
+        openURL("https://marketplace.visualstudio.com/items?itemName=\(extensionID)")
     }
 }
 

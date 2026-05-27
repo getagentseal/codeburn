@@ -26,6 +26,7 @@ import Security
 ///      cycle don't even hit the keychain.
 enum ClaudeCredentialStore {
     private static let bootstrapCompletedKey = "codeburn.claude.bootstrapCompleted"
+    private static let keychainAccessEnabledKey = "codeburn.claude.keychainAccessEnabled"
     private static let inMemoryTTL: TimeInterval = 5 * 60
     private static let proactiveRefreshMargin: TimeInterval = 5 * 60
 
@@ -58,6 +59,7 @@ enum ClaudeCredentialStore {
 
     enum StoreError: Error, LocalizedError {
         case bootstrapNoSource           // neither file nor Claude keychain has credentials
+        case keychainAccessDisabled
         case bootstrapDecodeFailed
         case keychainWriteFailed(OSStatus)
         case keychainReadFailed(OSStatus)
@@ -70,6 +72,8 @@ enum ClaudeCredentialStore {
             switch self {
             case .bootstrapNoSource:
                 return "No Claude credentials found. Sign in with `claude` first."
+            case .keychainAccessDisabled:
+                return "Claude Keychain access is disabled in CodeBurn settings."
             case .bootstrapDecodeFailed:
                 return "Claude credentials are malformed."
             case let .keychainWriteFailed(status):
@@ -99,6 +103,7 @@ enum ClaudeCredentialStore {
                 return true   // 4xx other than rate-limiting is terminal too
             }
             if case .noRefreshToken = self { return true }
+            if case .keychainAccessDisabled = self { return true }
             return false
         }
     }
@@ -110,6 +115,16 @@ enum ClaudeCredentialStore {
     static var isBootstrapCompleted: Bool {
         get { UserDefaults.standard.bool(forKey: bootstrapCompletedKey) }
         set { UserDefaults.standard.set(newValue, forKey: bootstrapCompletedKey) }
+    }
+
+    static var keychainAccessEnabled: Bool {
+        get {
+            guard UserDefaults.standard.object(forKey: keychainAccessEnabledKey) != nil else {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: keychainAccessEnabledKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: keychainAccessEnabledKey) }
     }
 
     /// Reset bootstrap state. Used when the user explicitly wants to disconnect
@@ -182,6 +197,7 @@ enum ClaudeCredentialStore {
 
     private static func readClaudeSource() throws -> CredentialRecord {
         if let fromFile = try? readClaudeFile() { return fromFile }
+        guard keychainAccessEnabled else { throw StoreError.keychainAccessDisabled }
         if let fromKeychain = try readClaudeKeychain() { return fromKeychain }
         throw StoreError.bootstrapNoSource
     }

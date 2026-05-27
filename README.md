@@ -88,6 +88,8 @@ codeburn models --top 10        # only the top 10 by cost
 codeburn models --format markdown      # paste-friendly markdown table
 codeburn models --task feature         # filter to feature-development work
 codeburn models --provider claude      # filter to one provider
+codeburn debug storage                 # show provider storage usage and paths
+codeburn debug storage --provider codex --format json
 ```
 
 Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
@@ -136,7 +138,7 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 
 **Gemini CLI** stores sessions as single JSON files. Each session embeds real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Gemini reports input tokens inclusive of cached; CodeBurn subtracts cached from input before pricing to avoid double charging.
 
-**Antigravity CLI** exposes exact usage through a short-lived local process while `agy` is running. Install the optional live hook with `codeburn antigravity-hook install` to capture short CLI sessions even when the menubar's 30-second refresh misses that window. The hook stores sanitized usage totals only, not prompts or local working-directory paths. Remove it with `codeburn antigravity-hook uninstall`; if `--force` replaced an existing statusLine command, uninstall restores that previous command.
+**Antigravity IDE and CLI** expose exact usage through Antigravity's local language-server RPC endpoint. The CLI can use Vertex ADC for runtime authentication; CodeBurn reads the resulting local usage metadata and does not call Vertex directly. Install the optional live hook with `codeburn antigravity-hook install` to capture short `agy` sessions even when the menubar's 30-second refresh misses that window. Groq and Cerebras Antigravity backends are priced with their provider-specific model entries. Speechmatics backend labels are preserved for reporting, but Speechmatics is duration-priced rather than token-priced, so costs remain `$0` unless you map a custom alias. Remove the hook with `codeburn antigravity-hook uninstall`; if `--force` replaced an existing statusLine command, uninstall restores that previous command.
 
 **Mistral Vibe** stores sessions as folders under `~/.vibe/logs/session/` (or `$VIBE_HOME/logs/session/`). CodeBurn reads cumulative prompt/completion totals and model pricing from `meta.json`, then reads `messages.jsonl` for the first user prompt and assistant tool calls. Subagent sessions under `agents/` are counted as separate Vibe sessions.
 
@@ -349,7 +351,7 @@ codeburn menubar
 
 One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
 
-The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
+The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Settings include refresh cadence, start at login, daily/monthly quotas, quota-warning notifications, privacy redaction, quota-left display, history, provider storage usage, and debug shortcuts.
 
 You can also set the menubar status period from Terminal:
 

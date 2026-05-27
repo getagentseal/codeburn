@@ -1,14 +1,23 @@
 import Foundation
 import Observation
 
-private let cacheTTLSeconds: TimeInterval = 30
 private let interactiveRefreshResetSeconds: TimeInterval = 120
 private let menubarPeriodDefaultsKey = "CodeBurnMenubarPeriod"
+
+private func defaultsBool(_ key: String, default defaultValue: Bool) -> Bool {
+    guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+    return UserDefaults.standard.bool(forKey: key)
+}
+
+private func defaultsDouble(_ key: String, default defaultValue: Double) -> Double {
+    guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+    return UserDefaults.standard.double(forKey: key)
+}
 
 struct CachedPayload {
     let payload: MenubarPayload
     let fetchedAt: Date
-    var isFresh: Bool { Date().timeIntervalSince(fetchedAt) < cacheTTLSeconds }
+    var isFresh: Bool { Date().timeIntervalSince(fetchedAt) < UsageRefreshCadence.current.cacheTTLSeconds }
 }
 
 struct PayloadCacheKey: Hashable {
@@ -58,10 +67,46 @@ final class AppStore {
     var dailyBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyBudget") {
         didSet { UserDefaults.standard.set(dailyBudget, forKey: "CodeBurnDailyBudget") }
     }
+    var monthlyQuota: Double = UserDefaults.standard.double(forKey: "CodeBurnMonthlyQuota") {
+        didSet { UserDefaults.standard.set(monthlyQuota, forKey: "CodeBurnMonthlyQuota") }
+    }
+    var quotaWarningThreshold: Double = defaultsDouble("CodeBurnQuotaWarningThreshold", default: 0.8) {
+        didSet { UserDefaults.standard.set(quotaWarningThreshold, forKey: "CodeBurnQuotaWarningThreshold") }
+    }
+    var quotaNotificationsEnabled: Bool = defaultsBool("CodeBurnQuotaNotificationsEnabled", default: false) {
+        didSet { UserDefaults.standard.set(quotaNotificationsEnabled, forKey: "CodeBurnQuotaNotificationsEnabled") }
+    }
+    var usageRefreshCadence: UsageRefreshCadence = UsageRefreshCadence.current {
+        didSet { UsageRefreshCadence.current = usageRefreshCadence }
+    }
+    var startAtLoginEnabled: Bool = StartAtLoginController.isEnabled {
+        didSet { StartAtLoginController.isEnabled = startAtLoginEnabled }
+    }
+    var hidePersonalInformation: Bool = UserDefaults.standard.bool(forKey: "CodeBurnHidePersonalInformation") {
+        didSet { UserDefaults.standard.set(hidePersonalInformation, forKey: "CodeBurnHidePersonalInformation") }
+    }
+    var keychainAccessEnabled: Bool = ClaudeCredentialStore.keychainAccessEnabled {
+        didSet { ClaudeCredentialStore.keychainAccessEnabled = keychainAccessEnabled }
+    }
+    var autoShowMostUsedProvider: Bool = UserDefaults.standard.bool(forKey: "CodeBurnAutoShowMostUsedProvider") {
+        didSet { UserDefaults.standard.set(autoShowMostUsedProvider, forKey: "CodeBurnAutoShowMostUsedProvider") }
+    }
+    var quotaDisplayMode: QuotaDisplayMode = QuotaDisplayMode.current {
+        didSet { QuotaDisplayMode.current = quotaDisplayMode }
+    }
     var isLoading: Bool { loadingCountsByKey.values.contains { $0 > 0 } }
     var isCurrentKeyLoading: Bool { loadingCountsByKey[currentKey, default: 0] > 0 }
     var hasAttemptedCurrentKeyLoad: Bool { attemptedKeys.contains(currentKey) }
     var lastError: String? { lastErrorByKey[currentKey] }
+    private var automaticRefreshPausedUntil: Date?
+    private var automaticRefreshConsecutiveStalls: Int = 0
+    var refreshPauseMessage: String? {
+        guard let until = automaticRefreshPausedUntil, until > Date() else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        let retry = formatter.localizedString(for: until, relativeTo: Date())
+        return "Refresh paused until \(retry) after \(automaticRefreshConsecutiveStalls) stalled attempts."
+    }
     private var loadingCountsByKey: [PayloadCacheKey: Int] = [:]
     private var loadingStartedAtByKey: [PayloadCacheKey: Date] = [:]
     private var attemptedKeys: Set<PayloadCacheKey> = []
@@ -116,6 +161,10 @@ final class AppStore {
         PayloadCacheKey(period: menubarPeriod, provider: .all, day: nil)
     }
 
+    private var monthAllKey: PayloadCacheKey {
+        PayloadCacheKey(period: .month, provider: .all, day: nil)
+    }
+
     private var currentKey: PayloadCacheKey {
         PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
     }
@@ -145,6 +194,14 @@ final class AppStore {
 
     var menubarPayload: MenubarPayload? {
         cache[menubarStatusKey]?.payload
+    }
+
+    var monthPayload: MenubarPayload? {
+        cache[monthAllKey]?.payload
+    }
+
+    var needsMonthlyQuotaPayloadRefresh: Bool {
+        monthlyQuota > 0 && cache[monthAllKey]?.isFresh != true
     }
 
     /// All-provider payload for the selected period. Used by the tab strip to show
@@ -219,6 +276,32 @@ final class AppStore {
     /// before the new fetch lands).
     var hasAnyProvidersInCache: Bool {
         cache.values.contains { !$0.payload.current.providers.isEmpty }
+    }
+
+    var mostUsedProviderFilter: ProviderFilter? {
+        let data = periodAllPayload ?? todayPayload ?? menubarPayload ?? payload
+        guard !data.current.providers.isEmpty else { return nil }
+        let providers = Dictionary(
+            data.current.providers.map { ($0.key.lowercased(), $0.value) },
+            uniquingKeysWith: +
+        )
+        let ranked = ProviderFilter.allCases
+            .filter { $0 != .all }
+            .map { filter in
+                (filter, filter.providerKeys.reduce(0.0) { $0 + (providers[$1] ?? 0) })
+            }
+            .filter { $0.1 > 0 }
+            .sorted {
+                if $0.1 != $1.1 { return $0.1 > $1.1 }
+                return $0.0.rawValue < $1.0.rawValue
+            }
+        return ranked.first?.0
+    }
+
+    func switchToMostUsedProviderIfAvailable() {
+        guard autoShowMostUsedProvider, selectedProvider == .all else { return }
+        guard let provider = mostUsedProviderFilter else { return }
+        switchTo(provider: provider)
     }
 
 #if DEBUG
@@ -324,9 +407,20 @@ final class AppStore {
         resetLoadingState()
         attemptedKeys.removeAll()
         lastErrorByKey.removeAll()
+        clearRefreshPause()
         if clearCache {
             cache.removeAll()
         }
+    }
+
+    func pauseAutomaticRefresh(until: Date, consecutiveStalls: Int) {
+        automaticRefreshPausedUntil = until
+        automaticRefreshConsecutiveStalls = consecutiveStalls
+    }
+
+    func clearRefreshPause() {
+        automaticRefreshPausedUntil = nil
+        automaticRefreshConsecutiveStalls = 0
     }
 
     private let loadingWatchdogSeconds: TimeInterval = 60
@@ -763,8 +857,8 @@ final class AppStore {
     /// so it doesn't flicker on every refresh tick.
     /// Aggregate quota status across all connected providers, used by the menu
     /// bar flame icon (color) and the popover warning row. Severity = worst
-    /// observed across any provider's worst window. Warning providers are
-    /// every connected provider at >= 70% utilization.
+    /// observed across any provider's worst window. Warning providers follow
+    /// the user-configured quota warning threshold.
     struct AggregateQuotaStatus {
         let severity: QuotaSummary.Severity
         let warnings: [(name: String, percent: Double)]   // sorted desc by percent
@@ -786,10 +880,130 @@ final class AppStore {
             if worst > 0 { providers.append(("Codex", worst)) }
         }
         let worst = providers.map(\.percent).max() ?? 0
-        let severity = QuotaSummary.severity(for: worst / 100)
         let sorted = providers.sorted { $0.percent > $1.percent }
-        let warnings = sorted.filter { $0.percent >= 70 }
+        let warningFloor = max(0, min(1, quotaWarningThreshold)) * 100
+        let severity = worst >= warningFloor ? QuotaSummary.severity(for: worst / 100) : .normal
+        let warnings = sorted.filter { $0.percent >= warningFloor }
         return AggregateQuotaStatus(severity: severity, warnings: warnings)
+    }
+
+    var aggregateQuotaRemainingPercent: Double? {
+        var usedPercents = aggregateConnectedQuotaPercents().map(\.percent)
+        if dailyBudget > 0 {
+            usedPercents.append((todaySpendForQuotaWarning() / dailyBudget) * 100)
+        }
+        if monthlyQuota > 0 {
+            usedPercents.append((monthSpendForQuotaWarning() / monthlyQuota) * 100)
+        }
+        guard let worst = usedPercents.max() else { return nil }
+        return max(0, 100 - worst)
+    }
+
+    var quotaRemainingLabel: String? {
+        guard let remaining = aggregateQuotaRemainingPercent else { return nil }
+        return "\(Int(remaining.rounded()))% left"
+    }
+
+    var quotaWarningEvents: [QuotaWarningEvent] {
+        let today = Self.dayString(from: Date())
+        let month = Self.monthString(from: Date())
+        let threshold = max(0, min(1, quotaWarningThreshold))
+        var events: [QuotaWarningEvent] = []
+
+        for provider in aggregateQuotaStatus.warnings {
+            let severity = QuotaSummary.severity(for: provider.percent / 100)
+            let used = Int(provider.percent.rounded())
+            let remaining = max(0, 100 - used)
+            let title = provider.percent >= 100 ? "\(provider.name) quota exhausted" : "\(provider.name) quota warning"
+            let body = quotaDisplayMode == .remaining
+                ? "\(remaining)% left in the tightest \(provider.name) quota window."
+                : "\(used)% used in the tightest \(provider.name) quota window."
+            events.append(QuotaWarningEvent(
+                id: "provider:\(provider.name):\(severity.notificationKey)",
+                title: title,
+                body: body,
+                severity: severity
+            ))
+        }
+
+        let todayCost = todaySpendForQuotaWarning()
+        if dailyBudget > 0 {
+            let fraction = todayCost / dailyBudget
+            if fraction >= threshold {
+                let severity = QuotaSummary.severity(for: fraction)
+                events.append(QuotaWarningEvent(
+                    id: "daily:\(today):\(severity.notificationKey)",
+                    title: "Daily spend quota warning",
+                    body: spendQuotaWarningBody(spent: todayCost, quota: dailyBudget, remainingWindow: "today's", usedWindow: "today"),
+                    severity: severity
+                ))
+            }
+        }
+
+        let monthCost = monthSpendForQuotaWarning()
+        if monthlyQuota > 0 {
+            let fraction = monthCost / monthlyQuota
+            if fraction >= threshold {
+                let severity = QuotaSummary.severity(for: fraction)
+                events.append(QuotaWarningEvent(
+                    id: "monthly:\(month):\(severity.notificationKey)",
+                    title: "Monthly spend quota warning",
+                    body: spendQuotaWarningBody(spent: monthCost, quota: monthlyQuota, remainingWindow: "this month's", usedWindow: "this month"),
+                    severity: severity
+                ))
+            }
+        }
+
+        return events
+    }
+
+    private func spendQuotaWarningBody(spent: Double, quota: Double, remainingWindow: String, usedWindow: String) -> String {
+        if quotaDisplayMode == .remaining {
+            let remaining = max(0, 100 - Int(((spent / quota) * 100).rounded()))
+            return "\(remaining)% left in \(remainingWindow) spend quota."
+        }
+        return "\(spent.asCurrency()) of \(quota.asCurrency()) used \(usedWindow)."
+    }
+
+    private static func monthString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM"
+        formatter.timeZone = .current
+        return formatter.string(from: date)
+    }
+
+    private func aggregateConnectedQuotaPercents() -> [(name: String, percent: Double)] {
+        var providers: [(name: String, percent: Double)] = []
+        if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
+            let worst = [
+                usage.fiveHourPercent,
+                usage.sevenDayPercent,
+                usage.sevenDayOpusPercent,
+                usage.sevenDaySonnetPercent,
+            ].compactMap { $0 }.max() ?? 0
+            if worst > 0 { providers.append(("Claude", worst)) }
+        }
+        if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
+            let worst = max(usage.primary?.usedPercent ?? 0, usage.secondary?.usedPercent ?? 0)
+            if worst > 0 { providers.append(("Codex", worst)) }
+        }
+        return providers
+    }
+
+    private func todaySpendForQuotaWarning() -> Double {
+        if let todayPayload { return todayPayload.current.cost }
+        if selectedProvider == .all, selectedPeriod == .today, !isDayMode {
+            return payload.current.cost
+        }
+        return 0
+    }
+
+    private func monthSpendForQuotaWarning() -> Double {
+        if let monthPayload { return monthPayload.current.cost }
+        if selectedProvider == .all, selectedPeriod == .month, !isDayMode {
+            return payload.current.cost
+        }
+        return 0
     }
 
     private func shouldIncludeCachedQuota(loadState: SubscriptionLoadState) -> Bool {
@@ -997,16 +1211,19 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case all = "All"
     case claude = "Claude"
     case cline = "Cline"
+    case codebuff = "Codebuff"
     case codex = "Codex"
     case cursor = "Cursor"
     case cursorAgent = "Cursor Agent"
     case copilot = "Copilot"
     case droid = "Droid"
+    case forge = "Forge"
     case gemini = "Gemini"
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
     case kiloCode = "KiloCode"
+    case mistralVibe = "Mistral Vibe"
     case openclaw = "OpenClaw"
     case opencode = "OpenCode"
     case pi = "Pi"
@@ -1016,6 +1233,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case crush = "Crush"
     case antigravity = "Antigravity"
     case goose = "Goose"
+    case warp = "Warp"
 
     var id: String { rawValue }
 
@@ -1024,9 +1242,11 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursor: ["cursor"]
         case .cursorAgent: ["cursor-agent", "cursor agent"]
         case .cline: ["cline"]
+        case .codebuff: ["codebuff"]
         case .rooCode: ["roo-code", "roo code"]
         case .kiloCode: ["kilo-code", "kilocode"]
         case .ibmBob: ["ibm-bob", "ibm bob"]
+        case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
         case .antigravity: ["antigravity"]
         case .goose: ["goose"]
@@ -1039,16 +1259,19 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .all: "all"
         case .claude: "claude"
         case .cline: "cline"
+        case .codebuff: "codebuff"
         case .codex: "codex"
         case .cursor: "cursor"
         case .cursorAgent: "cursor-agent"
         case .copilot: "copilot"
         case .droid: "droid"
+        case .forge: "forge"
         case .gemini: "gemini"
         case .ibmBob: "ibm-bob"
         case .kiloCode: "kilo-code"
         case .kiro: "kiro"
         case .kimi: "kimi"
+        case .mistralVibe: "mistral-vibe"
         case .openclaw: "openclaw"
         case .opencode: "opencode"
         case .pi: "pi"
@@ -1058,6 +1281,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .crush: "crush"
         case .antigravity: "antigravity"
         case .goose: "goose"
+        case .warp: "warp"
         }
     }
 }
@@ -1079,7 +1303,7 @@ enum SubscriptionLoadState: Sendable, Equatable {
 }
 
 enum DisplayMetric: String {
-    case cost, tokens, totalTokens, iconOnly
+    case cost, tokens, totalTokens, quotaRemaining, iconOnly
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {

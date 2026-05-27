@@ -45,4 +45,22 @@ final class MenubarPeriodSettingsTests: XCTestCase {
         XCTAssertEqual(Period.month.menubarSuffix(compact: true), "/mo")
         XCTAssertEqual(Period.all.menubarSuffix(compact: true), "/6mo")
     }
+
+    func testUsageRefreshCadenceDefaults() {
+        XCTAssertEqual(UsageRefreshCadence.default, .thirtySeconds)
+        XCTAssertEqual(UsageRefreshCadence.thirtySeconds.seconds, 30)
+        XCTAssertNil(UsageRefreshCadence.manual.seconds)
+        XCTAssertEqual(UsageRefreshCadence.manual.cacheTTLSeconds, .greatestFiniteMagnitude)
+    }
+
+    func testPrivacyRedactorMasksEmailAddressesWhenEnabled() {
+        XCTAssertEqual(
+            PrivacyRedactor.redact("repo-owner@example.com", enabled: true),
+            "r***@example.com"
+        )
+        XCTAssertEqual(
+            PrivacyRedactor.redact("repo-owner@example.com", enabled: false),
+            "repo-owner@example.com"
+        )
+    }
 }

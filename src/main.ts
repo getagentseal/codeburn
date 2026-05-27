@@ -22,6 +22,7 @@ import {
   runAgyStatusLineHook,
   uninstallAntigravityStatusLineHook,
 } from './antigravity-statusline.js'
+import { collectStorageEntries, formatStorageTable, isStorageProvider, storageProviderNames } from './storage-debug.js'
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
@@ -1237,6 +1238,31 @@ program
     console.log(`\n  Analyzing yield for ${label}...\n`)
     const summary = await computeYield(range, process.cwd())
     console.log(formatYieldSummary(summary))
+  })
+
+const debug = program
+  .command('debug')
+  .description('Inspect CodeBurn local state')
+
+debug
+  .command('storage')
+  .description('Show provider storage usage and paths')
+  .option('--provider <provider>', 'Provider to inspect (default: all)', 'all')
+  .option('--format <format>', 'Output format: table or json', 'table')
+  .action(async (opts) => {
+    assertFormat(opts.format, ['table', 'json'], 'debug storage')
+    if (!isStorageProvider(opts.provider)) {
+      process.stderr.write(
+        `codeburn debug storage: unknown provider "${opts.provider}". Valid values: all, ${storageProviderNames().join(', ')}.\n`
+      )
+      process.exit(1)
+    }
+    const entries = await collectStorageEntries(opts.provider)
+    if (opts.format === 'json') {
+      console.log(JSON.stringify({ generated: new Date().toISOString(), entries }, null, 2))
+      return
+    }
+    console.log(formatStorageTable(entries))
   })
 
 program

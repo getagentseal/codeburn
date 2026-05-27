@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 import Observation
+import UserNotifications
 
-private let refreshIntervalSeconds: UInt64 = 30
 private let forceRefreshWatchdogSeconds: TimeInterval = 90
 private let refreshLoopWatchdogSeconds: TimeInterval = 90
 private let statusPayloadRefreshWatchdogSeconds: TimeInterval = 60
@@ -50,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var codexQuotaRefreshTask: Task<Bool, Never>?
     private var refreshLoopHeartbeatAt: Date = .distantPast
     private var lastLaunchAgentHeartbeatAt: Date = .distantPast
+    private var lastAppliedUsageRefreshCadence: UsageRefreshCadence?
+    private var notifiedQuotaEventIDs: Set<String> = []
+    private var quotaNotificationAuthorizationRequested = false
+    private var historyWindowController: NSWindowController?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Set accessory policy before the app's focus chain forms. On macOS Tahoe
@@ -85,8 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         startRefreshLoop()
         setupWakeObservers()
         setupDistributedNotificationListener()
-        installLaunchAgentIfNeeded()
-        registerLoginItemIfNeeded()
+        applyLaunchAgentSetting()
+        StartAtLoginController.applyCurrentSetting()
+        prepareQuotaNotificationsIfNeeded()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
     }
@@ -144,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func handleLaunchAgentHeartbeat() {
+        guard store.usageRefreshCadence.seconds != nil else { return }
         let now = Date()
         guard now.timeIntervalSince(lastLaunchAgentHeartbeatAt) >= refreshRateLimitSeconds else { return }
         lastLaunchAgentHeartbeatAt = now
@@ -207,7 +213,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func installLaunchAgentIfNeeded() {
+    private func applyLaunchAgentSetting() {
+        let cadence = store.usageRefreshCadence
+        guard lastAppliedUsageRefreshCadence != cadence else { return }
+        lastAppliedUsageRefreshCadence = cadence
+
+        guard let seconds = cadence.seconds else {
+            removeLaunchAgentIfNeeded()
+            return
+        }
+
         let fm = FileManager.default
         let agentName = "com.codeburn.refresh.plist"
         let home = fm.homeDirectoryForCurrentUser.path
@@ -229,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         <string>ObjC.import("Foundation"); $.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately("com.codeburn.refresh", $(), $(), true)</string>
     </array>
     <key>StartInterval</key>
-    <integer>30</integer>
+    <integer>\(Int(seconds))</integer>
     <key>RunAtLoad</key>
     <true/>
 </dict>
@@ -259,36 +274,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func registerLoginItemIfNeeded() {
-        let key = "codeburn.loginItemRegistered"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
+    private func removeLaunchAgentIfNeeded() {
+        let fm = FileManager.default
+        let agentName = "com.codeburn.refresh.plist"
+        let home = fm.homeDirectoryForCurrentUser.path
+        let destPath = "\(home)/Library/LaunchAgents/\(agentName)"
+        guard fm.fileExists(atPath: destPath) else { return }
 
-        let appPath = Bundle.main.bundlePath
-        let script = "tell application \"System Events\" to make login item at end with properties {path:\(appleScriptStringLiteral(appPath)), hidden:false}"
-
-        let process = Process()
-        process.launchPath = "/usr/bin/osascript"
-        process.arguments = ["-e", script]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                UserDefaults.standard.set(true, forKey: key)
-            }
-        } catch {
-            NSLog("CodeBurn: Login item registration failed: \(error)")
-        }
+        let unload = Process()
+        unload.launchPath = "/bin/launchctl"
+        unload.arguments = ["unload", destPath]
+        try? unload.run()
+        unload.waitUntilExit()
+        try? fm.removeItem(atPath: destPath)
     }
 
-    private func appleScriptStringLiteral(_ value: String) -> String {
-        var escaped = value.replacingOccurrences(of: "\\", with: "\\\\")
-        escaped = escaped.replacingOccurrences(of: "\"", with: "\\\"")
-        escaped = escaped.replacingOccurrences(of: "\r", with: "")
-        escaped = escaped.replacingOccurrences(of: "\n", with: "")
-        return "\"\(escaped)\""
+    private var currentRefreshIntervalSeconds: UInt64? {
+        store.usageRefreshCadence.seconds.map { UInt64($0) }
     }
 
     private var lastRefreshTime: Date = .distantPast
@@ -382,6 +384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             async let main: Void = refreshUsagePayloads(force: true, showLoading: true)
             async let quotas: Bool = refreshLiveQuotaProgressIfDue(force: forceQuota)
             _ = await main
+            if popover.isShown {
+                store.switchToMostUsedProviderIfAvailable()
+            }
             refreshStatusButton()
             _ = await quotas
             await MainActor.run { [weak self] in
@@ -397,6 +402,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let menubarPeriod = store.menubarPeriod
         let needsMenubarPayload = store.selectedPeriod != menubarPeriod || store.selectedProvider != .all
         let needsTodayPayload = (store.selectedPeriod != .today || store.selectedProvider != .all) && menubarPeriod != .today
+        let needsMonthPayload = store.needsMonthlyQuotaPayloadRefresh &&
+            store.selectedPeriod != .month &&
+            menubarPeriod != .month
 
         async let visible: Void = store.refresh(includeOptimize: false, force: force, showLoading: showLoading)
         async let menubar: Void = needsMenubarPayload
@@ -405,7 +413,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         async let today: Void = needsTodayPayload
             ? store.refreshQuietly(period: .today, force: force)
             : ()
-        _ = await (visible, menubar, today)
+        async let month: Void = needsMonthPayload
+            ? store.refreshQuietly(period: .month, force: force)
+            : ()
+        _ = await (visible, menubar, today, month)
     }
 
     /// Loads the currency code persisted by `codeburn currency` so a relaunch picks up where
@@ -533,10 +544,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let clearedStaleLoading = store.clearStaleLoadingIfNeeded()
         let statusPayloadStale = store.needsStatusPayloadRefresh
         let sinceLast = Date().timeIntervalSince(lastRefreshTime)
+        let interval = currentRefreshIntervalSeconds.map(TimeInterval.init) ?? .greatestFiniteMagnitude
         let shouldForceRefresh = forcePayload ||
             clearedStaleForceRefresh ||
             clearedStaleLoading ||
-            sinceLast >= TimeInterval(refreshIntervalSeconds)
+            sinceLast >= interval
 
         if shouldForceRefresh {
             forceRefresh(bypassRateLimit: true, forceQuota: forceQuota)
@@ -548,9 +560,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func startRefreshLoop(forceQuotaOnStart: Bool = false) {
+    private func startRefreshLoop(forceQuotaOnStart: Bool = false, refreshImmediately: Bool = true) {
         stopRefreshTimer()
-        runRefreshLoopTick(reason: "start", forcePayload: true, forceQuota: forceQuotaOnStart)
+        if refreshImmediately {
+            runRefreshLoopTick(reason: "start", forcePayload: true, forceQuota: forceQuotaOnStart)
+        } else {
+            refreshLoopHeartbeatAt = Date()
+        }
+        guard let refreshIntervalSeconds = currentRefreshIntervalSeconds else {
+            refreshLoopHeartbeatAt = Date()
+            return
+        }
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(
@@ -598,12 +618,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = await payload
             guard self.manualRefreshGeneration == generation, !Task.isCancelled else { return }
             self.lastRefreshTime = Date()
+            if self.popover.isShown {
+                self.store.switchToMostUsedProviderIfAvailable()
+            }
             self.refreshStatusButton()
             _ = await quotas
             guard self.manualRefreshGeneration == generation, !Task.isCancelled else { return }
             self.manualRefreshTask = nil
             if self.refreshTimer == nil {
-                self.startRefreshLoop()
+                self.startRefreshLoop(refreshImmediately: false)
             }
         }
     }
@@ -636,6 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = self.store.currency
             _ = self.store.displayMetric
             _ = self.store.dailyBudget
+            _ = self.store.monthlyQuota
+            _ = self.store.quotaWarningThreshold
+            _ = self.store.quotaNotificationsEnabled
+            _ = self.store.usageRefreshCadence
+            _ = self.store.startAtLoginEnabled
+            _ = self.store.hidePersonalInformation
+            _ = self.store.keychainAccessEnabled
+            _ = self.store.autoShowMostUsedProvider
+            _ = self.store.quotaDisplayMode
+            _ = self.store.quotaWarningEvents
             // Track the live-quota state too so the flame icon re-tints on
             // every subscription / codex usage update, not just every 30s.
             _ = self.store.subscription
@@ -647,12 +680,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 guard let self else { return }
                 self.pendingRefreshWork?.cancel()
                 let work = DispatchWorkItem { [weak self] in
-                    self?.refreshStatusButton()
-                    self?.observeStore()
+                    guard let self else { return }
+                    self.applyRefreshSettingsIfNeeded()
+                    self.prepareQuotaNotificationsIfNeeded()
+                    self.deliverQuotaNotificationsIfNeeded()
+                    self.refreshStatusButton()
+                    self.observeStore()
                 }
                 self.pendingRefreshWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
             }
+        }
+    }
+
+    private func applyRefreshSettingsIfNeeded() {
+        guard lastAppliedUsageRefreshCadence != store.usageRefreshCadence else { return }
+        applyLaunchAgentSetting()
+        startRefreshLoop(forceQuotaOnStart: false)
+    }
+
+    private func prepareQuotaNotificationsIfNeeded() {
+        guard store.quotaNotificationsEnabled else { return }
+        guard !quotaNotificationAuthorizationRequested else { return }
+        quotaNotificationAuthorizationRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
+            if let error {
+                NSLog("CodeBurn: quota notification authorization failed: %@", String(describing: error))
+            } else if !granted {
+                NSLog("CodeBurn: quota notification authorization was not granted")
+            } else {
+                Task { @MainActor [weak self] in
+                    self?.deliverQuotaNotificationsIfNeeded()
+                }
+            }
+        }
+    }
+
+    private func deliverQuotaNotificationsIfNeeded() {
+        guard store.quotaNotificationsEnabled else { return }
+        let events = store.quotaWarningEvents
+        notifiedQuotaEventIDs.formIntersection(Set(events.map(\.id)))
+        for event in events where !notifiedQuotaEventIDs.contains(event.id) {
+            notifiedQuotaEventIDs.insert(event.id)
+            let content = UNMutableNotificationContent()
+            content.title = event.title
+            content.body = event.body
+            content.sound = notificationSound(for: event.severity)
+            let request = UNNotificationRequest(
+                identifier: "codeburn.quota.\(event.id)",
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error {
+                    NSLog("CodeBurn: quota notification delivery failed: %@", String(describing: error))
+                }
+            }
+        }
+    }
+
+    private func notificationSound(for severity: QuotaSummary.Severity) -> UNNotificationSound? {
+        switch severity {
+        case .normal: return nil
+        case .warning, .critical, .danger: return .default
         }
     }
 
@@ -716,14 +806,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let font = NSFont.monospacedDigitSystemFont(ofSize: menubarTitleFontSize, weight: .medium)
         let baseConfig = NSImage.SymbolConfiguration(pointSize: menubarTitleFontSize, weight: .medium)
-        // Tint the flame based on the worst-affected connected provider's quota.
-        // Normal (<70%) keeps the template (auto white-on-dark / black-on-light);
-        // warning/critical/danger override with a fixed palette color so the
-        // user gets a glanceable signal even when the menu bar is busy.
+        // Tint the flame based on the worst connected-provider or spend quota
+        // that crossed the user's warning threshold. Normal keeps the template
+        // so the icon follows the menu bar appearance.
         let aggregate = store.aggregateQuotaStatus
         var tint = Self.flameTint(for: aggregate.severity)
-        if tint == nil, store.dailyBudget > 0,
-           let todayCost = store.todayPayload?.current.cost, todayCost >= store.dailyBudget {
+        if tint == nil, store.quotaWarningEvents.contains(where: { $0.id.hasPrefix("daily:") || $0.id.hasPrefix("monthly:") }) {
             tint = NSColor.systemYellow
         }
         let flameConfig: NSImage.SymbolConfiguration
@@ -744,7 +832,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let menubarPeriod = store.menubarPeriod
         let menubarPayload = store.menubarPayload
-        let hasPayload = menubarPayload != nil
+        let hasPayload = menubarPayload != nil || (store.displayMetric == .quotaRemaining && store.quotaRemainingLabel != nil)
         let compact = isCompact
 
         let composed = NSMutableAttributedString()
@@ -760,6 +848,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } else if store.displayMetric == .totalTokens, let p = menubarPayload?.current {
                 let total = formatTokensMenubar(Double(p.inputTokens + p.outputTokens))
                 valueText = compact ? "\(total)\(suffix)" : " \(total) tok\(suffix)"
+            } else if store.displayMetric == .quotaRemaining {
+                let quota = store.quotaRemainingLabel ?? "--% left"
+                valueText = compact ? quota.replacingOccurrences(of: " ", with: "") : " \(quota)"
             } else {
                 let fallback = compact ? "$-" : "$—"
                 let formatted = menubarPayload?.current.cost
@@ -836,6 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
             refreshPayloadForPopoverOpen()
             refreshLiveQuotaProgressForPopoverOpen()
+            store.switchToMostUsedProviderIfAvailable()
         }
     }
 
@@ -849,6 +941,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let refreshNow = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "r")
         refreshNow.target = self
         menu.addItem(refreshNow)
+
+        let historyItem = NSMenuItem(title: "History…", action: #selector(openHistory), keyEquivalent: "h")
+        historyItem.target = self
+        menu.addItem(historyItem)
 
         menu.addItem(.separator())
         let updateItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "")
@@ -881,7 +977,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             rootView: SettingsView().environment(store)
         )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 380),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 500),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -892,6 +988,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.isReleasedWhenClosed = false
         let controller = NSWindowController(window: window)
         settingsWindowController = controller
+        NSApp.activate(ignoringOtherApps: true)
+        controller.showWindow(nil)
+    }
+
+    @objc func openHistory() {
+        if let controller = historyWindowController {
+            NSApp.activate(ignoringOtherApps: true)
+            controller.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let hosting = NSHostingController(
+            rootView: HistoryWindowView().environment(store)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "CodeBurn History"
+        window.contentViewController = hosting
+        window.center()
+        window.isReleasedWhenClosed = false
+        let controller = NSWindowController(window: window)
+        historyWindowController = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
     }

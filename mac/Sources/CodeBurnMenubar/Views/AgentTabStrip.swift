@@ -442,6 +442,7 @@ private struct QuotaDetailPopover: View {
 }
 
 private struct QuotaDetailRow: View {
+    @Environment(AppStore.self) private var store
     let window: QuotaSummary.Window
 
     var body: some View {
@@ -458,7 +459,7 @@ private struct QuotaDetailRow: View {
                 }
             }
             .frame(height: 4)
-            Text(window.percentLabel)
+            Text(percentLabel)
                 .font(.codeMono(size: 10.5, weight: .medium))
                 .frame(width: 36, alignment: .trailing)
             if !window.resetsInLabel.isEmpty {
@@ -478,6 +479,14 @@ private struct QuotaDetailRow: View {
         case .danger:   return Color.red
         }
     }
+
+    private var percentLabel: String {
+        let used = Int((window.percent * 100).rounded())
+        if store.quotaDisplayMode == .remaining {
+            return "\(max(0, 100 - used))%"
+        }
+        return "\(used)%"
+    }
 }
 
 extension ProviderFilter {
@@ -486,16 +495,19 @@ extension ProviderFilter {
         case .all: return Theme.brandAccent
         case .claude: return Theme.categoricalClaude
         case .cline: return Color(red: 0x23/255.0, green: 0x8A/255.0, blue: 0x7E/255.0)
+        case .codebuff: return Color(red: 0xEA/255.0, green: 0x7A/255.0, blue: 0x57/255.0)
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .cursorAgent: return Color(red: 0x4E/255.0, green: 0xC9/255.0, blue: 0xB0/255.0)
         case .copilot: return Color(red: 0x6D/255.0, green: 0x8F/255.0, blue: 0xA6/255.0)
         case .droid: return Color(red: 0x7C/255.0, green: 0x3A/255.0, blue: 0xED/255.0)
+        case .forge: return Color(red: 0xD0/255.0, green: 0x5A/255.0, blue: 0x34/255.0)
         case .gemini: return Color(red: 0x44/255.0, green: 0x85/255.0, blue: 0xF4/255.0)
         case .ibmBob: return Color(red: 0x0F/255.0, green: 0x62/255.0, blue: 0xFE/255.0)
         case .kiloCode: return Color(red: 0x00/255.0, green: 0x96/255.0, blue: 0x88/255.0)
         case .kiro: return Color(red: 0x4A/255.0, green: 0x9E/255.0, blue: 0xC4/255.0)
         case .kimi: return Color(red: 0xA4/255.0, green: 0xC6/255.0, blue: 0x39/255.0)
+        case .mistralVibe: return Color(red: 0xFA/255.0, green: 0x52/255.0, blue: 0x5A/255.0)
         case .openclaw: return Color(red: 0xDA/255.0, green: 0x70/255.0, blue: 0x56/255.0)
         case .opencode: return Color(red: 0x5B/255.0, green: 0x83/255.0, blue: 0x5B/255.0)
         case .pi: return Color(red: 0xB2/255.0, green: 0x6B/255.0, blue: 0x3D/255.0)
@@ -505,6 +517,7 @@ extension ProviderFilter {
         case .crush: return Color(red: 0xE0/255.0, green: 0x6C/255.0, blue: 0x9F/255.0)
         case .antigravity: return Color(red: 0xFF/255.0, green: 0x7A/255.0, blue: 0x45/255.0)
         case .goose: return Color(red: 0xB7/255.0, green: 0x8D/255.0, blue: 0x52/255.0)
+        case .warp: return Color(red: 0x8C/255.0, green: 0x6F/255.0, blue: 0xFF/255.0)
         }
     }
 }

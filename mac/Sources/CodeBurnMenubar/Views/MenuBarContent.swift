@@ -297,6 +297,7 @@ private struct Header: View {
 }
 
 private struct QuotaWarningRow: View {
+    @Environment(AppStore.self) private var store
     let status: AppStore.AggregateQuotaStatus
 
     var body: some View {
@@ -320,14 +321,20 @@ private struct QuotaWarningRow: View {
     }
 
     private var message: String {
-        let parts = status.warnings.map { "\($0.name) \(Int($0.percent.rounded()))%" }
+        let parts = status.warnings.map { warning in
+            let used = Int(warning.percent.rounded())
+            if store.quotaDisplayMode == .remaining {
+                return "\(warning.name) \(max(0, 100 - used))% left"
+            }
+            return "\(warning.name) \(used)%"
+        }
         if parts.count == 1 {
             // Reads "Claude over limit (105%)" when any provider exceeds the
             // quota cap, instead of the awkward "Claude 105% of quota used".
             if case .danger = status.severity {
                 return "\(status.warnings[0].name) over limit (\(Int(status.warnings[0].percent.rounded()))%)"
             }
-            return "\(parts[0]) of quota used"
+            return store.quotaDisplayMode == .remaining ? parts[0] : "\(parts[0]) of quota used"
         }
         return parts.joined(separator: " · ")
     }
@@ -598,6 +605,16 @@ struct FooterBar: View {
             .controlSize(.small)
             .disabled(store.isLoading)
 
+            Button {
+                openHistory()
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Open history")
+
             Menu {
                 Button("CSV (folder)") { runExport(format: .csv) }
                 Button("JSON") { runExport(format: .json) }
@@ -641,6 +658,10 @@ struct FooterBar: View {
         } else {
             Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
         }
+    }
+
+    private func openHistory() {
+        (NSApp.delegate as? AppDelegate)?.openHistory()
     }
 
     private enum ExportFormat {

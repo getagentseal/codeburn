@@ -433,9 +433,24 @@ const PRICING_ALIASES: Record<string, string> = {
   'gemini-pro': 'gemini-3.1-pro',
 }
 
+const PROVIDER_PRICING_PREFIXES: Record<string, string> = {
+  cerebras: 'cerebras',
+  groq: 'groq',
+  speechmatics: 'speechmatics',
+}
+
 function normalizePricingModel(model: string): string {
   const stripped = model.replace(/-(high|medium|low|agent)$/, '')
   return PRICING_ALIASES[stripped] ?? stripped
+}
+
+export function normalizeAntigravityPricingModel(model: string, apiProvider: string): string {
+  const normalizedModel = normalizePricingModel(model)
+  if (normalizedModel.includes('/')) return normalizedModel
+
+  const provider = apiProvider.toLowerCase().trim()
+  const prefix = PROVIDER_PRICING_PREFIXES[provider]
+  return prefix ? `${prefix}/${normalizedModel}` : normalizedModel
 }
 
 function parseFiniteToken(value: unknown): number {
@@ -486,7 +501,7 @@ export function antigravityCascadeIdFromPath(path: string): string {
   return basename(path).replace(/\.(pb|db)$/i, '')
 }
 
-function buildCallsFromGeneratorMetadata(
+export function buildAntigravityCallsFromGeneratorMetadata(
   cascadeId: string,
   metadata: GeneratorMetadata[],
   modelMap: ModelMap,
@@ -509,7 +524,7 @@ function buildCallsFromGeneratorMetadata(
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
 
     const model = modelMap[usage.model] ?? usage.model
-    const pricingModel = normalizePricingModel(model)
+    const pricingModel = normalizeAntigravityPricingModel(model, usage.apiProvider)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
     const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
 
@@ -803,7 +818,7 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
     cache.cascades[cascadeId] = {
       mtimeMs: s.mtimeMs,
       sizeBytes: s.size,
-      calls: buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap),
+      calls: buildAntigravityCallsFromGeneratorMetadata(cascadeId, metadata, modelMap),
     }
     cacheDirty = true
     await flushCache()
@@ -870,7 +885,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         return
       }
 
-      const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+      const results = buildAntigravityCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
 
       cache.cascades[cascadeId] = {
         mtimeMs: s.mtimeMs,
