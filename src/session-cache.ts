@@ -1,5 +1,4 @@
 import { readFile, stat, open, rename, unlink, readdir, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -240,7 +239,7 @@ export async function loadCache(): Promise<SessionCache> {
 
 export async function saveCache(cache: SessionCache): Promise<void> {
   const dir = getCacheDir()
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+  await mkdir(dir, { recursive: true })
 
   const finalPath = getCachePath()
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
@@ -356,23 +355,25 @@ export function mergeCallByDedupKey(
 
 export async function cleanupOrphanedTempFiles(): Promise<void> {
   const dir = getCacheDir()
-  if (!existsSync(dir)) return
 
+  let entries: string[]
   try {
-    const entries = await readdir(dir)
-    const now = Date.now()
+    entries = await readdir(dir)
+  } catch {
+    return
+  }
+  const now = Date.now()
 
-    const prefix = 'session-cache.json.'
-    for (const entry of entries) {
-      if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
-      try {
-        const fullPath = join(dir, entry)
-        const s = await stat(fullPath)
-        if (now - s.mtimeMs > TEMP_FILE_MAX_AGE_MS) {
-          await unlink(fullPath)
-        }
-      } catch {}
-    }
-  } catch {}
+  const prefix = 'session-cache.json.'
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
+    try {
+      const fullPath = join(dir, entry)
+      const s = await stat(fullPath)
+      if (now - s.mtimeMs > TEMP_FILE_MAX_AGE_MS) {
+        await unlink(fullPath)
+      }
+    } catch {}
+  }
 }
 

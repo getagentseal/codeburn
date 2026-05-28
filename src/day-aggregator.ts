@@ -40,7 +40,8 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
 
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
-        const turnDate = dateKey(turn.assistantCalls[0]!.timestamp)
+        const firstTs = turn.assistantCalls[0]!.timestamp
+        const turnDate = dateKey(firstTs)
         const turnDay = ensure(turnDate)
 
         const editTurns = turn.hasEdits ? 1 : 0
@@ -57,9 +58,15 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         cat.oneShotTurns += oneShotTurns
         turnDay.categories[turn.category] = cat
 
+        // Most calls share the same day as the turn; only recompute dateKey when timestamp differs
+        let prevTs = firstTs
+        let callDay = turnDay
         for (const call of turn.assistantCalls) {
-          const callDate = dateKey(call.timestamp)
-          const callDay = ensure(callDate)
+          if (call.timestamp !== prevTs) {
+            const callDate = dateKey(call.timestamp)
+            callDay = callDate === turnDate ? turnDay : ensure(callDate)
+            prevTs = call.timestamp
+          }
 
           callDay.cost += call.costUSD
           callDay.calls += 1

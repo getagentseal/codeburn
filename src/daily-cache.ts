@@ -1,5 +1,4 @@
 import { randomBytes } from 'crypto'
-import { existsSync } from 'fs'
 import { mkdir, open, readFile, rename, unlink } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -86,7 +85,6 @@ async function backupOldCache(path: string, version: number): Promise<void> {
 
 export async function loadDailyCache(): Promise<DailyCache> {
   const path = getCachePath()
-  if (!existsSync(path)) return emptyCache()
   try {
     const raw = await readFile(path, 'utf-8')
     const parsed: unknown = JSON.parse(raw)
@@ -111,7 +109,7 @@ export async function loadDailyCache(): Promise<DailyCache> {
 
 export async function saveDailyCache(cache: DailyCache): Promise<void> {
   const dir = getCacheDir()
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+  await mkdir(dir, { recursive: true })
   const finalPath = getCachePath()
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const payload = JSON.stringify(cache)

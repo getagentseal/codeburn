@@ -131,6 +131,11 @@ export function parseJsonlLine(line: string | Buffer): JournalEntry | null {
   }
 }
 
+// Fast inline whitespace check — avoids regex engine overhead in hot scanner loops
+function isWs(ch: number): boolean {
+  return ch === 0x20 || ch === 0x09 || ch === 0x0a || ch === 0x0d
+}
+
 const RAW_HEAD_BYTES = 2048
 
 type JsonValueBounds = {
@@ -178,7 +183,7 @@ function findJsonContainerEnd(source: string, start: number, open: number, close
 
 function findJsonValueBounds(source: string, start: number, limit = source.length): JsonValueBounds | null {
   let i = start
-  while (i < limit && /\s/.test(source[i]!)) i++
+  while (i < limit && isWs(source.charCodeAt(i))) i++
   if (i >= limit) return null
   const ch = source.charCodeAt(i)
   if (ch === 0x22) {
@@ -196,7 +201,7 @@ function findJsonValueBounds(source: string, start: number, limit = source.lengt
   let end = i
   while (end < limit) {
     const c = source.charCodeAt(end)
-    if (c === 0x2c || c === 0x7d || c === 0x5d || /\s/.test(source[end]!)) break
+    if (c === 0x2c || c === 0x7d || c === 0x5d || isWs(source.charCodeAt(end))) break
     end++
   }
   return { start: i, end, kind: 'scalar' }
@@ -206,7 +211,7 @@ function findObjectFieldValue(source: string, objectStart: number, objectEnd: nu
   if (source.charCodeAt(objectStart) !== 0x7b) return null
   let i = objectStart + 1
   while (i < objectEnd - 1) {
-    while (i < objectEnd && /\s/.test(source[i]!)) i++
+    while (i < objectEnd && isWs(source.charCodeAt(i))) i++
     if (source.charCodeAt(i) === 0x2c) {
       i++
       continue
@@ -219,7 +224,7 @@ function findObjectFieldValue(source: string, objectStart: number, objectEnd: nu
     if (keyEnd === -1) return null
     const key = source.slice(i + 1, keyEnd)
     i = keyEnd + 1
-    while (i < objectEnd && /\s/.test(source[i]!)) i++
+    while (i < objectEnd && isWs(source.charCodeAt(i))) i++
     if (source.charCodeAt(i) !== 0x3a) continue
     const value = findJsonValueBounds(source, i + 1, objectEnd)
     if (!value) return null
@@ -306,7 +311,7 @@ function extractLargeToolBlocks(source: string, contentBounds: JsonValueBounds |
   const tools: ToolUseBlock[] = []
   let i = contentBounds.start + 1
   while (i < contentBounds.end - 1 && tools.length < MAX_TOOL_BLOCKS) {
-    while (i < contentBounds.end && /\s/.test(source[i]!)) i++
+    while (i < contentBounds.end && isWs(source.charCodeAt(i))) i++
     if (source.charCodeAt(i) === 0x2c) {
       i++
       continue
@@ -356,7 +361,7 @@ function extractLargeUserText(source: string, contentBounds: JsonValueBounds | n
   let text = ''
   let i = contentBounds.start + 1
   while (i < contentBounds.end - 1 && text.length < USER_TEXT_CAP) {
-    while (i < contentBounds.end && /\s/.test(source[i]!)) i++
+    while (i < contentBounds.end && isWs(source.charCodeAt(i))) i++
     if (source.charCodeAt(i) === 0x2c) {
       i++
       continue
@@ -391,7 +396,7 @@ function extractLargeAddedNames(source: string, attachmentBounds: JsonValueBound
   const names: string[] = []
   let i = addedNames.start + 1
   while (i < addedNames.end - 1 && names.length < MAX_ADDED_NAMES) {
-    while (i < addedNames.end && /\s/.test(source[i]!)) i++
+    while (i < addedNames.end && isWs(source.charCodeAt(i))) i++
     if (source.charCodeAt(i) === 0x2c) {
       i++
       continue
@@ -812,11 +817,11 @@ function parseLargeJsonlBuffer(line: Buffer): JournalEntry | null {
 
 function getTopLevelRawJsonStringField(head: string, field: string): string | null {
   let i = 0
-  while (i < head.length && /\s/.test(head[i]!)) i++
+  while (i < head.length && isWs(head.charCodeAt(i))) i++
   if (head.charCodeAt(i) !== 0x7b) return null
   i++
   while (i < head.length) {
-    while (i < head.length && /\s/.test(head[i]!)) i++
+    while (i < head.length && isWs(head.charCodeAt(i))) i++
     if (head.charCodeAt(i) === 0x2c) {
       i++
       continue
@@ -827,7 +832,7 @@ function getTopLevelRawJsonStringField(head: string, field: string): string | nu
     if (keyEnd === -1) return null
     const key = head.slice(i + 1, keyEnd)
     i = keyEnd + 1
-    while (i < head.length && /\s/.test(head[i]!)) i++
+    while (i < head.length && isWs(head.charCodeAt(i))) i++
     if (head.charCodeAt(i) !== 0x3a) return null
     const value = findJsonValueBounds(head, i + 1)
     if (!value) return null

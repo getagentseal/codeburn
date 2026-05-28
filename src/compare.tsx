@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { render, Box, Text, useInput, useApp, useStdout } from 'ink'
 
 import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } from './compare-stats.js'
@@ -202,15 +202,18 @@ function ComparisonResults({ modelA, modelB, rows, categories, workingStyle, onB
     if (key.escape) { onBack(); return }
   })
 
-  const sectionOrder: string[] = []
-  const sectionRows = new Map<string, ComparisonRow[]>()
-  for (const row of rows) {
-    if (!sectionRows.has(row.section)) {
-      sectionOrder.push(row.section)
-      sectionRows.set(row.section, [])
+  const { sectionOrder, sectionRows } = useMemo(() => {
+    const order: string[] = []
+    const rowMap = new Map<string, ComparisonRow[]>()
+    for (const row of rows) {
+      if (!rowMap.has(row.section)) {
+        order.push(row.section)
+        rowMap.set(row.section, [])
+      }
+      rowMap.get(row.section)!.push(row)
     }
-    sectionRows.get(row.section)!.push(row)
-  }
+    return { sectionOrder: order, sectionRows: rowMap }
+  }, [rows])
 
   const fmtTokens = (n: number) => {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -218,7 +221,7 @@ function ComparisonResults({ modelA, modelB, rows, categories, workingStyle, onB
     return String(n)
   }
 
-  const contextRows: { label: string; valueA: string; valueB: string }[] = [
+  const contextRows = useMemo(() => [
     { label: 'Calls', valueA: modelA.calls.toLocaleString(), valueB: modelB.calls.toLocaleString() },
     { label: 'Total cost', valueA: formatCost(modelA.cost), valueB: formatCost(modelB.cost) },
     { label: 'Input tokens', valueA: fmtTokens(modelA.inputTokens), valueB: fmtTokens(modelB.inputTokens) },
@@ -226,7 +229,7 @@ function ComparisonResults({ modelA, modelB, rows, categories, workingStyle, onB
     { label: 'Days of data', valueA: String(daysOfData(modelA.firstSeen, modelA.lastSeen)), valueB: String(daysOfData(modelB.firstSeen, modelB.lastSeen)) },
     { label: 'Edit turns', valueA: modelA.editTurns.toLocaleString(), valueB: modelB.editTurns.toLocaleString() },
     { label: 'Self-corrections', valueA: modelA.selfCorrections.toLocaleString(), valueB: modelB.selfCorrections.toLocaleString() },
-  ]
+  ], [modelA, modelB])
 
   const lowDataWarning = (lowDataA || lowDataB)
     ? `Note: ${[lowDataA && shortName(modelA.model), lowDataB && shortName(modelB.model)].filter(Boolean).join(' and ')} ha${lowDataA && lowDataB ? 've' : 's'} fewer than ${LOW_DATA_THRESHOLD} calls`
