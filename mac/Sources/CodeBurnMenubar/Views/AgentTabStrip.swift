@@ -516,6 +516,7 @@ extension ProviderFilter {
         case .rooCode: return Color(red: 0x4C/255.0, green: 0xAF/255.0, blue: 0x50/255.0)
         case .crush: return Color(red: 0xE0/255.0, green: 0x6C/255.0, blue: 0x9F/255.0)
         case .antigravity: return Color(red: 0xFF/255.0, green: 0x7A/255.0, blue: 0x45/255.0)
+        case .vertex: return Color(red: 0x34/255.0, green: 0xA8/255.0, blue: 0x53/255.0)
         case .goose: return Color(red: 0xB7/255.0, green: 0x8D/255.0, blue: 0x52/255.0)
         case .warp: return Color(red: 0x8C/255.0, green: 0x6F/255.0, blue: 0xFF/255.0)
         }

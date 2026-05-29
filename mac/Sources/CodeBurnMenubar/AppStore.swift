@@ -91,6 +91,12 @@ final class AppStore {
     var autoShowMostUsedProvider: Bool = UserDefaults.standard.bool(forKey: "CodeBurnAutoShowMostUsedProvider") {
         didSet { UserDefaults.standard.set(autoShowMostUsedProvider, forKey: "CodeBurnAutoShowMostUsedProvider") }
     }
+    var disabledProviders: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "CodeBurnDisabledProviders") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(disabledProviders), forKey: "CodeBurnDisabledProviders")
+            syncDisabledProvidersToCLI()
+        }
+    }
     var quotaDisplayMode: QuotaDisplayMode = QuotaDisplayMode.current {
         didSet { QuotaDisplayMode.current = quotaDisplayMode }
     }
@@ -827,6 +833,25 @@ final class AppStore {
         }
     }
 
+    // MARK: - Provider Toggle Sync
+
+    private func syncDisabledProvidersToCLI() {
+        Task.detached { [disabledProviders] in
+            let configURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/codeburn/config.json")
+            var config: [String: Any] = [:]
+            if let data = try? Data(contentsOf: configURL),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                config = json
+            }
+            config["disabledProviders"] = Array(disabledProviders).sorted()
+            if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
+                try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: configURL)
+            }
+        }
+    }
+
     /// Strip control characters and any token-shaped substrings from server-error
     /// strings before they land in NSLog or the UI. Anthropic / OpenAI error
     /// envelopes don't typically echo tokens, but we also surface this in
@@ -1232,6 +1257,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case rooCode = "Roo Code"
     case crush = "Crush"
     case antigravity = "Antigravity"
+    case vertex = "Vertex AI"
     case goose = "Goose"
     case warp = "Warp"
 
@@ -1249,6 +1275,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
         case .antigravity: ["antigravity"]
+        case .vertex: ["vertex"]
         case .goose: ["goose"]
         default: [rawValue.lowercased()]
         }
@@ -1280,6 +1307,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .rooCode: "roo-code"
         case .crush: "crush"
         case .antigravity: "antigravity"
+        case .vertex: "vertex"
         case .goose: "goose"
         case .warp: "warp"
         }
