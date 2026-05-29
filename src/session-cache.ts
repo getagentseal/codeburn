@@ -70,7 +70,7 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 3
+export const CACHE_VERSION = 4
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
