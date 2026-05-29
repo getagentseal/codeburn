@@ -1,9 +1,9 @@
 import type { Dirent } from 'fs'
-import { readdir, readFile } from 'fs/promises'
+import { readdir, readFile, stat } from 'fs/promises'
 import { basename, dirname, extname, join } from 'path'
 import { homedir } from 'os'
 
-import { readSessionFile } from '../fs-utils.js'
+import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -50,6 +50,226 @@ const toolNameMap: Record<string, string> = {
 type KiroChatMessage = {
   role: 'human' | 'bot' | 'tool'
   content: string
+}
+
+// --- Kiro CLI support ---
+
+/** Built-in tools in Kiro CLI; anything else is assumed to be an MCP tool. */
+const CLI_BUILTIN_TOOLS = new Set([
+  'code', 'glob', 'grep', 'introspect', 'knowledge', 'read', 'shell',
+  'subagent', 'summary', 'switch_to_execution', 'todo_list', 'web_fetch',
+  'web_search', 'write', 'dummy',
+])
+
+/** Map Kiro CLI built-in tool names to CodeBurn canonical names. */
+const cliToolNameMap: Record<string, string> = {
+  read: 'Read',
+  write: 'Edit',
+  shell: 'Bash',
+  grep: 'Grep',
+  glob: 'Glob',
+  web_search: 'WebSearch',
+  web_fetch: 'WebFetch',
+  code: 'Read',
+  subagent: 'Agent',
+}
+
+type CliJsonlEntry = {
+  version?: string
+  kind: string
+  data?: {
+    message_id?: string
+    content?: Array<{ kind: string; data?: unknown }>
+  }
+}
+
+type CliSessionMeta = {
+  session_id: string
+  cwd?: string
+  created_at?: string
+  updated_at?: string
+  title?: string
+  session_state?: {
+    rts_model_state?: {
+      model_info?: { model_id?: string }
+    }
+  }
+}
+
+function getKiroCliSessionsDir(override?: string): string {
+  if (override) return override
+  return join(homedir(), '.kiro', 'sessions', 'cli')
+}
+
+async function loadCliMcpServerName(): Promise<string> {
+  const mcpPath = join(homedir(), '.kiro', 'settings', 'mcp.json')
+  try {
+    const raw = await readFile(mcpPath, 'utf-8')
+    const data = JSON.parse(raw) as { mcpServers?: Record<string, unknown> }
+    const servers = Object.keys(data.mcpServers ?? {})
+    if (servers.length > 0) return servers[0]!
+  } catch {}
+  return 'mcp-server'
+}
+
+function normalizeCliToolName(name: string, mcpServer: string): string {
+  if (CLI_BUILTIN_TOOLS.has(name)) {
+    return cliToolNameMap[name] ?? name
+  }
+  return `mcp__${mcpServer}__${name}`
+}
+
+function parseCliJsonlSession(
+  lines: string[],
+  sessionId: string,
+  project: string,
+  modelId: string,
+  timestamp: string,
+  mcpServer: string,
+  seenKeys: Set<string>,
+): ParsedProviderCall[] {
+  const results: ParsedProviderCall[] = []
+  const chat: Array<{ role: 'human' | 'bot'; content: string; tools: string[] }> = []
+
+  for (const line of lines) {
+    let entry: CliJsonlEntry
+    try { entry = JSON.parse(line) } catch { continue }
+
+    if (entry.kind === 'Prompt') {
+      const text = (entry.data?.content ?? [])
+        .filter(c => c.kind === 'text')
+        .map(c => c.data as string)
+        .join('\n')
+      if (text) chat.push({ role: 'human', content: text, tools: [] })
+    }
+
+    if (entry.kind === 'AssistantMessage') {
+      const parts = entry.data?.content ?? []
+      let text = ''
+      const tools: string[] = []
+      for (const part of parts) {
+        if (part.kind === 'text') text += part.data as string
+        else if (part.kind === 'toolUse') {
+          const toolData = part.data as { name?: string } | undefined
+          const rawName = toolData?.name ?? 'unknown'
+          tools.push(normalizeCliToolName(rawName, mcpServer))
+        }
+      }
+      if (text || tools.length > 0) chat.push({ role: 'bot', content: text, tools })
+    }
+  }
+
+  const botMessages = chat.filter(m => m.role === 'bot')
+  const totalOutputChars = botMessages.reduce((sum, m) => sum + m.content.length, 0)
+  const allTools = botMessages.flatMap(m => m.tools)
+  const hasActivity = totalOutputChars > 0 || allTools.length > 0
+  if (!hasActivity) return results
+
+  const dedupKey = `kiro-cli:${sessionId}`
+  if (seenKeys.has(dedupKey)) return results
+
+  const pendingUserMessage = chat.find(m => m.role === 'human')?.content.slice(0, 500) ?? ''
+  const inputChars = chat.filter(m => m.role === 'human').reduce((sum, m) => sum + m.content.length, 0)
+  const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
+  const outputTokens = Math.ceil(totalOutputChars / CHARS_PER_TOKEN)
+
+  let resolvedModel = normalizeModelId(modelId)
+  if (resolvedModel === 'auto' || !resolvedModel) resolvedModel = 'kiro-auto'
+
+  const costUSD = calculateCost(resolvedModel, inputTokens, outputTokens, 0, 0, 0)
+  seenKeys.add(dedupKey)
+
+  const toolSequence: ToolCall[][] = botMessages
+    .filter(m => m.tools.length > 0)
+    .map(m => m.tools.map(t => ({ tool: t })))
+
+  results.push({
+    provider: 'kiro',
+    model: resolvedModel,
+    inputTokens,
+    outputTokens,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+    costUSD,
+    tools: [...new Set(allTools)],
+    bashCommands: [],
+    toolSequence: toolSequence.length > 1 ? toolSequence : undefined,
+    timestamp,
+    speed: 'standard',
+    deduplicationKey: dedupKey,
+    userMessage: pendingUserMessage,
+    sessionId,
+  })
+
+  return results
+}
+
+function createCliParser(source: SessionSource, seenKeys: Set<string>, mcpServerPromise: Promise<string>): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      // source.path points to the .jsonl file; metadata is in the sibling .json
+      const jsonlPath = source.path
+      const jsonPath = jsonlPath.replace(/\.jsonl$/, '.json')
+
+      let meta: CliSessionMeta
+      try {
+        const raw = await readFile(jsonPath, 'utf-8')
+        meta = JSON.parse(raw)
+      } catch { return }
+
+      const sessionId = meta.session_id ?? basename(jsonlPath, '.jsonl')
+      const modelId = meta.session_state?.rts_model_state?.model_info?.model_id ?? 'auto'
+      const timestamp = meta.created_at ?? new Date().toISOString()
+
+      const tsDate = parseKiroTimestamp(timestamp)
+      if (!tsDate) return
+
+      const mcpServer = await mcpServerPromise
+
+      const lines: string[] = []
+      for await (const line of readSessionLines(jsonlPath)) {
+        lines.push(line)
+      }
+
+      const calls = parseCliJsonlSession(lines, sessionId, source.project, modelId, tsDate.toISOString(), mcpServer, seenKeys)
+      for (const call of calls) {
+        yield call
+      }
+    },
+  }
+}
+
+async function discoverCliSessions(cliDir: string): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+
+  let files: string[]
+  try {
+    const entries = await readdir(cliDir)
+    files = entries.filter(f => f.endsWith('.jsonl'))
+  } catch { return sources }
+
+  for (const file of files) {
+    const sessionId = file.replace('.jsonl', '')
+    const jsonPath = join(cliDir, `${sessionId}.json`)
+
+    let meta: CliSessionMeta
+    try {
+      const raw = await readFile(jsonPath, 'utf-8')
+      meta = JSON.parse(raw)
+    } catch { continue }
+
+    const filePath = join(cliDir, file)
+    const s = await stat(filePath).catch(() => null)
+    if (!s?.isFile() || s.size === 0) continue
+
+    const project = meta.cwd ? basename(meta.cwd) : 'kiro-cli'
+    sources.push({ path: filePath, project, provider: 'kiro' })
+  }
+
+  return sources
 }
 
 type KiroChatFile = {
@@ -468,9 +688,11 @@ async function discoverSessions(agentDir: string, workspaceStorageDir: string): 
   return sources
 }
 
-export function createKiroProvider(agentDirOverride?: string, workspaceStorageDirOverride?: string): Provider {
+export function createKiroProvider(agentDirOverride?: string, workspaceStorageDirOverride?: string, cliDirOverride?: string): Provider {
   const agentDir = getKiroAgentDir(agentDirOverride)
   const wsDir = getKiroWorkspaceStorageDir(workspaceStorageDirOverride)
+  const cliDir = getKiroCliSessionsDir(cliDirOverride)
+  const mcpServerPromise = loadCliMcpServerName()
 
   return {
     name: 'kiro',
@@ -485,14 +707,22 @@ export function createKiroProvider(agentDirOverride?: string, workspaceStorageDi
     },
 
     toolDisplayName(rawTool: string): string {
+      if (rawTool.startsWith('mcp__')) return rawTool
       return toolNameMap[rawTool] ?? rawTool
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(agentDir, wsDir)
+      const [ideSessions, cliSessions] = await Promise.all([
+        discoverSessions(agentDir, wsDir),
+        discoverCliSessions(cliDir),
+      ])
+      return [...ideSessions, ...cliSessions]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      if (source.path.endsWith('.jsonl')) {
+        return createCliParser(source, seenKeys, mcpServerPromise)
+      }
       return createParser(source, seenKeys)
     },
   }
