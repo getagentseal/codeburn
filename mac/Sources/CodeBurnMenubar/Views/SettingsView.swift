@@ -540,6 +540,7 @@ private struct ProvidersSettingsTab: View {
         ("Cline", "cline", "terminal"),
         ("Roo Code", "roo-code", "hare"),
         ("KiloCode", "kilocode", "k.circle"),
+        ("OpenCode", "opencode", "chevron.left.slash.chevron.right"),
         ("Forge", "forge", "hammer"),
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
