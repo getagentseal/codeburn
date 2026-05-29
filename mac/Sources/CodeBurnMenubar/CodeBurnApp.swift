@@ -18,13 +18,12 @@ struct CodeBurnApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {
-        // The Settings scene gives us a real macOS Settings window with the
-        // standard ⌘, shortcut and the menubar "Settings…" item. Provider tabs
-        // (Claude today, Codex/Cursor/etc. in follow-ups) live inside SettingsView.
-        Settings {
-            SettingsView()
-                .environment(delegate.store)
-        }
+        // Empty Settings scene satisfies SwiftUI's "at least one Scene" requirement
+        // without creating visible windows. The actual settings UI is presented via
+        // openSettings() which uses its own NSWindow + NavigationSplitView sidebar.
+        // DO NOT put SettingsView() here — macOS auto-converts NavigationSplitView
+        // sidebar items into toolbar tabs that overflow into a >> chevron.
+        Settings { EmptyView() }
     }
 }
 
