@@ -5,9 +5,9 @@ import SwiftUI
 /// (which overflow into a >> chevron on narrow windows).
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
-    @State private var selected: SettingsPane? = .general
+    @State private var selected: SidebarItem? = .settings(.general)
 
-    enum SettingsPane: String, CaseIterable, Identifiable {
+    enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case general, providers, debug, about
         var id: String { rawValue }
 
@@ -30,22 +30,76 @@ struct SettingsView: View {
         }
     }
 
-    var body: some View {
-        NavigationSplitView {
-            List(SettingsPane.allCases, selection: $selected) { pane in
-                Label(pane.label, systemImage: pane.icon)
-            }
-            .navigationSplitViewColumnWidth(140)
-            .listStyle(.sidebar)
-        } detail: {
-            switch selected {
-            case .general, .none: GeneralSettingsTab()
-            case .providers: ProvidersSettingsTab()
-            case .debug: DebugSettingsTab()
-            case .about: AboutSettingsTab()
+    enum SidebarItem: Hashable, Identifiable {
+        case settings(SettingsPane)
+        case provider(String)
+
+        var id: String {
+            switch self {
+            case .settings(let pane): "s-\(pane.rawValue)"
+            case .provider(let key): "p-\(key)"
             }
         }
-        .frame(width: 600, height: 500)
+    }
+
+    static let providerMeta: [(name: String, key: String, icon: String)] = [
+        ("Claude", "claude", "brain"),
+        ("Codex", "codex", "chevron.left.forwardslash.chevron.right"),
+        ("Copilot", "copilot", "airplane"),
+        ("Vertex AI", "vertex", "cloud"),
+        ("Antigravity", "antigravity", "atom"),
+        ("Cursor", "cursor", "cursorarrow.rays"),
+        ("Cline", "cline", "terminal"),
+        ("Roo Code", "roo-code", "hare"),
+        ("KiloCode", "kilocode", "k.circle"),
+        ("Forge", "forge", "hammer"),
+        ("Gemini", "gemini", "sparkles"),
+        ("Goose", "goose", "bird"),
+        ("Warp", "warp", "wand.and.rays"),
+    ]
+
+    private var activeProviders: [(name: String, key: String, icon: String)] {
+        Self.providerMeta.filter { !store.disabledProviders.contains($0.key) }
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: $selected) {
+                Section("Settings") {
+                    ForEach(SettingsPane.allCases) { pane in
+                        Label(pane.label, systemImage: pane.icon)
+                            .tag(SidebarItem.settings(pane))
+                    }
+                }
+                Section("Providers") {
+                    ForEach(activeProviders, id: \.key) { p in
+                        Label(p.name, systemImage: p.icon)
+                            .tag(SidebarItem.provider(p.key))
+                    }
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 150, ideal: 160, max: 200)
+            .listStyle(.sidebar)
+        } detail: {
+            detailView
+        }
+        .frame(width: 650, height: 520)
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selected {
+        case .settings(.general), .none:
+            GeneralSettingsTab()
+        case .settings(.providers):
+            ProvidersSettingsTab()
+        case .settings(.debug):
+            DebugSettingsTab()
+        case .settings(.about):
+            AboutSettingsTab()
+        case .provider(let key):
+            ProviderDetailView(providerKey: key)
+        }
     }
 }
 
@@ -556,6 +610,81 @@ private struct ProvidersSettingsTab: View {
                     store.disabledProviders.remove(key)
                 } else {
                     store.disabledProviders.insert(key)
+                }
+            }
+        )
+    }
+}
+
+// MARK: - Provider Detail (per-provider sidebar item)
+
+private struct ProviderDetailView: View {
+    @Environment(AppStore.self) private var store
+    let providerKey: String
+
+    private var providerName: String {
+        SettingsView.providerMeta.first { $0.key == providerKey }?.name ?? providerKey.capitalized
+    }
+
+    private var providerIcon: String {
+        SettingsView.providerMeta.first { $0.key == providerKey }?.icon ?? "cpu"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Image(systemName: providerIcon)
+                        .font(.title2)
+                    VStack(alignment: .leading) {
+                        Text(providerName).font(.headline)
+                        Text("Active").font(.caption).foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Toggle("Enabled", isOn: enabledBinding)
+                        .labelsHidden()
+                }
+            }
+
+            if providerKey == "claude" {
+                Section("Connection") {
+                    ClaudeConnectionRow()
+                    Picker("Quota refresh", selection: Binding(
+                        get: { SubscriptionRefreshCadence.current },
+                        set: { SubscriptionRefreshCadence.current = $0 }
+                    )) {
+                        ForEach(SubscriptionRefreshCadence.allCases) { cadence in
+                            Text(cadence.label).tag(cadence)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
+            if providerKey == "codex" {
+                Section("Connection") {
+                    CodexConnectionRow()
+                }
+            }
+
+            Section("Usage") {
+                Text("Select this provider in the menubar dropdown to see live usage data.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { !store.disabledProviders.contains(providerKey) },
+            set: { enabled in
+                if enabled {
+                    store.disabledProviders.remove(providerKey)
+                } else {
+                    store.disabledProviders.insert(providerKey)
                 }
             }
         )
