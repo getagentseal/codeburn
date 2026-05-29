@@ -5,7 +5,7 @@ import SwiftUI
 /// (which overflow into a >> chevron on narrow windows).
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
-    @State private var selected: SettingsPane = .general
+    @State private var selected: SettingsPane? = .general
 
     enum SettingsPane: String, CaseIterable, Identifiable {
         case general, providers, debug, about
@@ -39,7 +39,7 @@ struct SettingsView: View {
             .listStyle(.sidebar)
         } detail: {
             switch selected {
-            case .general: GeneralSettingsTab()
+            case .general, .none: GeneralSettingsTab()
             case .providers: ProvidersSettingsTab()
             case .debug: DebugSettingsTab()
             case .about: AboutSettingsTab()
