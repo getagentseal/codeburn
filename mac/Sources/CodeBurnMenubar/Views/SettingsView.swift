@@ -21,19 +21,13 @@ struct SettingsView: View {
             CodexSettingsTab()
                 .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
 
-            CopilotSettingsTab()
-                .tabItem { Label("Copilot", systemImage: "airplane") }
-
-            VertexSettingsTab()
-                .tabItem { Label("Vertex", systemImage: "cloud") }
-
             DebugSettingsTab()
                 .tabItem { Label("Debug", systemImage: "wrench.and.screwdriver") }
 
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 560, height: 500)
+        .frame(width: 520, height: 500)
     }
 }
 
@@ -507,10 +501,13 @@ private struct CodexConnectionRow: View {
     }
 }
 
-// MARK: - Providers (Toggle)
+// MARK: - Providers (Toggle + Detection)
 
 private struct ProvidersSettingsTab: View {
     @Environment(AppStore.self) private var store
+    @State private var copilotDetected = false
+    @State private var vertexDetected = false
+    @State private var vertexPath: String = ""
 
     private let toggleableProviders: [(name: String, key: String, icon: String)] = [
         ("Claude", "claude", "brain"),
@@ -529,20 +526,72 @@ private struct ProvidersSettingsTab: View {
     var body: some View {
         Form {
             Section {
-                Text("Toggle providers on or off. Disabled providers are excluded from cost tracking and the menubar summary.")
+                Text("Disabled providers are excluded from cost tracking and the menubar.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             Section("Active Providers") {
                 ForEach(toggleableProviders, id: \.key) { provider in
-                    Toggle(isOn: providerBinding(for: provider.key)) {
-                        Label(provider.name, systemImage: provider.icon)
+                    HStack {
+                        Toggle(isOn: providerBinding(for: provider.key)) {
+                            Label(provider.name, systemImage: provider.icon)
+                        }
+                        if provider.key == "copilot" {
+                            detectionDot(detected: copilotDetected)
+                        } else if provider.key == "vertex" {
+                            detectionDot(detected: vertexDetected)
+                        }
+                    }
+                }
+            }
+            if vertexDetected || copilotDetected {
+                Section("Detection") {
+                    if copilotDetected {
+                        Label("Copilot sessions found", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.green)
+                    }
+                    if vertexDetected {
+                        Label("Vertex AI at: \(vertexPath)", systemImage: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
             }
         }
         .formStyle(.grouped)
         .padding()
+        .task { detectProviders() }
+    }
+
+    private func detectionDot(detected: Bool) -> some View {
+        Circle()
+            .fill(detected ? Color.green : Color.secondary.opacity(0.3))
+            .frame(width: 7, height: 7)
+    }
+
+    private func detectProviders() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let copilotPaths = [
+            home.appendingPathComponent(".copilot").path,
+            home.appendingPathComponent("Library/Application Support/GitHub Copilot").path,
+        ]
+        copilotDetected = copilotPaths.contains { FileManager.default.fileExists(atPath: $0) }
+
+        let vertexPaths = [
+            home.appendingPathComponent(".config/google-cloud-sdk/ai/sessions").path,
+            home.appendingPathComponent(".vertex-ai/sessions").path,
+            home.appendingPathComponent(".config/gemini-code-assist/sessions").path,
+        ]
+        for path in vertexPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                vertexDetected = true
+                vertexPath = path
+                break
+            }
+        }
     }
 
     private func providerBinding(for key: String) -> Binding<Bool> {
@@ -556,120 +605,6 @@ private struct ProvidersSettingsTab: View {
                 }
             }
         )
-    }
-}
-
-// MARK: - Copilot
-
-private struct CopilotSettingsTab: View {
-    @Environment(AppStore.self) private var store
-    @State private var copilotDetected = false
-    @State private var checkDone = false
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: copilotDetected ? "checkmark.circle.fill" : "link.circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(copilotDetected ? .green : .secondary)
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(copilotDetected ? "Detected" : (checkDone ? "Not found" : "Checking…"))
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(copilotDetected
-                            ? "GitHub Copilot sessions detected. Cost is estimated from session transcripts."
-                            : "Looking for ~/.copilot/ session data.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-            }
-            Section {
-                Text("Copilot CLI usage is tracked as a shared provider (IDE + CLI combined). Cost estimates are derived from session transcripts using token heuristics — actual billing may differ.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("How it works")
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .task {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let paths = [
-                home.appendingPathComponent(".copilot").path,
-                home.appendingPathComponent("Library/Application Support/GitHub Copilot").path,
-            ]
-            copilotDetected = paths.contains { FileManager.default.fileExists(atPath: $0) }
-            checkDone = true
-        }
-    }
-}
-
-// MARK: - Vertex AI
-
-private struct VertexSettingsTab: View {
-    @Environment(AppStore.self) private var store
-    @State private var vertexDetected = false
-    @State private var detectedPath: String = ""
-    @State private var checkDone = false
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: vertexDetected ? "checkmark.circle.fill" : "link.circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(vertexDetected ? .green : .secondary)
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(vertexDetected ? "Detected" : (checkDone ? "Not found" : "Checking…"))
-                            .font(.system(size: 12, weight: .semibold))
-                        if vertexDetected {
-                            Text("Session data at: \(detectedPath)")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        } else if checkDone {
-                            Text("No Vertex AI / gcloud session data found. Sessions should appear in ~/.config/google-cloud-sdk/ai/ or ~/.vertex-ai/.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-            }
-            Section {
-                Text("Vertex AI tracks gcloud CLI and Antigravity CLI sessions. Costs are estimated from Gemini model pricing. If you use `gcloud ai` or the Antigravity CLI, sessions are discovered automatically.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("How it works")
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .task {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let paths = [
-                home.appendingPathComponent(".config/google-cloud-sdk/ai/sessions").path,
-                home.appendingPathComponent(".vertex-ai/sessions").path,
-                home.appendingPathComponent(".config/gemini-code-assist/sessions").path,
-            ]
-            for path in paths {
-                if FileManager.default.fileExists(atPath: path) {
-                    vertexDetected = true
-                    detectedPath = path
-                    break
-                }
-            }
-            checkDone = true
-        }
     }
 }
 

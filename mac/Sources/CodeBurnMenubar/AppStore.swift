@@ -379,18 +379,26 @@ final class AppStore {
 
     private func startInteractiveSelectionRefresh() {
         switchTask?.cancel()
-        resetLoadingState()
         let period = selectedPeriod
         let provider = selectedProvider
         let day = selectedDay
         let days = selectedDays
         let key = PayloadCacheKey(period: period, provider: provider, day: day, days: days)
         lastErrorByKey[key] = nil
+
+        // If we already have data for this key, skip the loading overlay entirely
+        // and refresh silently in the background. This eliminates the perceived
+        // half-second delay on period/provider switches.
+        let hasCached = cache[key] != nil
+        if !hasCached {
+            resetLoadingState()
+        }
+
         switchTask = Task {
             if provider == .all {
-                await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                await refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
                 async let all: Void = refreshQuietly(period: period, day: day)
                 _ = await (main, all)
             }

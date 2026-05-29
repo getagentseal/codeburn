@@ -120,8 +120,11 @@ struct AgentTabStrip: View {
         let detectedKeys = Set(
             todayAll.current.providers.keys.map { $0.lowercased() }
         )
+        let disabled = store.disabledProviders
         let detected = ProviderFilter.allCases.filter { filter in
             if filter == .all { return true }
+            // Hide providers the user disabled in Settings → Providers
+            if filter.providerKeys.contains(where: { disabled.contains($0) }) { return false }
             return filter.providerKeys.contains(where: detectedKeys.contains)
         }
         let costs = Dictionary(uniqueKeysWithValues: detected.map { ($0, cost(for: $0) ?? 0) })
