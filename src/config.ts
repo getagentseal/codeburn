@@ -27,6 +27,7 @@ export type CodeburnConfig = {
   plan?: Plan
   plans?: PlanConfigMap
   modelAliases?: Record<string, string>
+  disabledProviders?: string[]
 }
 
 function getConfigDir(): string {

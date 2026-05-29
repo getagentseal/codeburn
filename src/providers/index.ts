@@ -14,7 +14,9 @@ import { openclaw } from './openclaw.js'
 import { pi, omp } from './pi.js'
 import { qwen } from './qwen.js'
 import { rooCode } from './roo-code.js'
+import { vertex } from './vertex.js'
 import type { Provider, SessionSource } from './types.js'
+import { readConfig } from '../config.js'
 
 let antigravityProvider: Provider | null = null
 let antigravityLoadAttempted = false
@@ -135,7 +137,7 @@ async function loadCrush(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode]
+const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode, vertex]
 
 export async function getAllProviders(): Promise<Provider[]> {
   const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp] = await Promise.all([loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp()])
@@ -155,9 +157,11 @@ export const providers = coreProviders
 
 export async function discoverAllSessions(providerFilter?: string): Promise<SessionSource[]> {
   const allProviders = await getAllProviders()
+  const config = await readConfig()
+  const disabled = new Set(config.disabledProviders ?? [])
   const filtered = providerFilter && providerFilter !== 'all'
     ? allProviders.filter(p => p.name === providerFilter)
-    : allProviders
+    : allProviders.filter(p => !disabled.has(p.name))
   const all: SessionSource[] = []
   for (const provider of filtered) {
     const sessions = await provider.discoverSessions()

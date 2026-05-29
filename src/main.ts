@@ -1259,6 +1259,68 @@ debug
   })
 
 program
+  .command('providers')
+  .description('List, enable, or disable providers')
+  .argument('[action]', 'list (default), enable, or disable')
+  .argument('[names...]', 'Provider names to enable/disable')
+  .action(async (action: string | undefined, names: string[]) => {
+    const config = await readConfig()
+    const disabled = new Set(config.disabledProviders ?? [])
+    const allProviders = await getAllProviders()
+
+    if (!action || action === 'list') {
+      console.log('\n  Providers:\n')
+      for (const p of allProviders) {
+        const status = disabled.has(p.name) ? '\x1b[31m✗ disabled\x1b[0m' : '\x1b[32m✓ enabled\x1b[0m'
+        console.log(`    ${p.displayName.padEnd(20)} (${p.name.padEnd(16)}) ${status}`)
+      }
+      console.log(`\n  Use: codeburn providers enable <name>  or  codeburn providers disable <name>\n`)
+      return
+    }
+
+    if (action === 'enable') {
+      if (names.length === 0) {
+        console.error('\n  Usage: codeburn providers enable <provider-name> [provider-name...]\n')
+        process.exit(1)
+      }
+      const validNames = new Set(allProviders.map(p => p.name))
+      for (const name of names) {
+        if (!validNames.has(name)) {
+          console.error(`\n  Unknown provider: "${name}". Run \`codeburn providers\` to see available providers.\n`)
+          process.exit(1)
+        }
+        disabled.delete(name)
+      }
+      config.disabledProviders = disabled.size > 0 ? [...disabled] : undefined
+      await saveConfig(config)
+      console.log(`\n  Enabled: ${names.join(', ')}\n`)
+      return
+    }
+
+    if (action === 'disable') {
+      if (names.length === 0) {
+        console.error('\n  Usage: codeburn providers disable <provider-name> [provider-name...]\n')
+        process.exit(1)
+      }
+      const validNames = new Set(allProviders.map(p => p.name))
+      for (const name of names) {
+        if (!validNames.has(name)) {
+          console.error(`\n  Unknown provider: "${name}". Run \`codeburn providers\` to see available providers.\n`)
+          process.exit(1)
+        }
+        disabled.add(name)
+      }
+      config.disabledProviders = [...disabled]
+      await saveConfig(config)
+      console.log(`\n  Disabled: ${names.join(', ')}\n`)
+      return
+    }
+
+    console.error(`\n  Unknown action: "${action}". Use: list, enable, or disable.\n`)
+    process.exit(1)
+  })
+
+program
   .command('antigravity-hook')
   .description('Install or remove exact Antigravity CLI usage capture')
   .argument('<action>', 'install or uninstall')

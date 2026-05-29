@@ -540,11 +540,14 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   all: 'All',
   claude: 'Claude',
   codex: 'Codex',
+  copilot: 'Copilot',
   cursor: 'Cursor',
   'ibm-bob': 'IBM Bob',
   opencode: 'OpenCode',
   pi: 'Pi',
   kimi: 'Kimi',
+  vertex: 'Vertex AI',
+  antigravity: 'Antigravity',
 }
 function getProviderDisplayName(name: string): string { return PROVIDER_DISPLAY_NAMES[name] ?? name }
 
