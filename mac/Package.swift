@@ -9,6 +9,9 @@ let package = Package(
     products: [
         .executable(name: "CodeBurnMenubar", targets: ["CodeBurnMenubar"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/nalexn/ViewInspector.git", from: "0.10.0"),
+    ],
     targets: [
         .executableTarget(
             name: "CodeBurnMenubar",
@@ -21,6 +24,11 @@ let package = Package(
             name: "CodeBurnMenubarTests",
             dependencies: ["CodeBurnMenubar"],
             path: "Tests/CodeBurnMenubarTests"
+        ),
+        .testTarget(
+            name: "CodeBurnMenubarViewTests",
+            dependencies: ["CodeBurnMenubar", "ViewInspector"],
+            path: "Tests/CodeBurnMenubarViewTests"
         )
     ]
 )
