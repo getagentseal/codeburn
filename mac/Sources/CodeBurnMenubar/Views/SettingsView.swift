@@ -1,33 +1,51 @@
 import AppKit
 import SwiftUI
 
-/// macOS-standard tabbed Settings window. New per-provider sections (Codex,
-/// Cursor, Copilot, etc.) plug in as additional tabs. Each tab owns its own
-/// concerns; this top-level view only hosts the TabView shell.
+/// Settings window using a sidebar list for navigation instead of toolbar tabs
+/// (which overflow into a >> chevron on narrow windows).
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
+    @State private var selected: SettingsPane = .general
+
+    enum SettingsPane: String, CaseIterable, Identifiable {
+        case general, providers, debug, about
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .general: "General"
+            case .providers: "Providers"
+            case .debug: "Debug"
+            case .about: "About"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .general: "gearshape"
+            case .providers: "switch.2"
+            case .debug: "wrench.and.screwdriver"
+            case .about: "info.circle"
+            }
+        }
+    }
 
     var body: some View {
-        TabView {
-            GeneralSettingsTab()
-                .tabItem { Label("General", systemImage: "gearshape") }
-
-            ProvidersSettingsTab()
-                .tabItem { Label("Providers", systemImage: "switch.2") }
-
-            ClaudeSettingsTab()
-                .tabItem { Label("Claude", systemImage: "brain") }
-
-            CodexSettingsTab()
-                .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
-
-            DebugSettingsTab()
-                .tabItem { Label("Debug", systemImage: "wrench.and.screwdriver") }
-
-            AboutSettingsTab()
-                .tabItem { Label("About", systemImage: "info.circle") }
+        NavigationSplitView {
+            List(SettingsPane.allCases, selection: $selected) { pane in
+                Label(pane.label, systemImage: pane.icon)
+            }
+            .navigationSplitViewColumnWidth(140)
+            .listStyle(.sidebar)
+        } detail: {
+            switch selected {
+            case .general: GeneralSettingsTab()
+            case .providers: ProvidersSettingsTab()
+            case .debug: DebugSettingsTab()
+            case .about: AboutSettingsTab()
+            }
         }
-        .frame(width: 520, height: 500)
+        .frame(width: 600, height: 500)
     }
 }
 
@@ -221,38 +239,7 @@ private struct GeneralSettingsTab: View {
     }
 }
 
-// MARK: - Claude
-
-private struct ClaudeSettingsTab: View {
-    @Environment(AppStore.self) private var store
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                ClaudeConnectionRow()
-            }
-            Section("Quota Refresh") {
-                Picker("Update every", selection: Binding(
-                    get: { SubscriptionRefreshCadence.current },
-                    set: { SubscriptionRefreshCadence.current = $0 }
-                )) {
-                    ForEach(SubscriptionRefreshCadence.allCases) { cadence in
-                        Text(cadence.label).tag(cadence)
-                    }
-                }
-                .pickerStyle(.menu)
-                Text("Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Button("Refresh Now") {
-                    Task { await store.refreshSubscription() }
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-}
+// MARK: - Claude Connection
 
 private struct ClaudeConnectionRow: View {
     @Environment(AppStore.self) private var store
@@ -365,28 +352,7 @@ private struct ClaudeConnectionRow: View {
     }
 }
 
-// MARK: - Codex
-
-private struct CodexSettingsTab: View {
-    @Environment(AppStore.self) private var store
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                CodexConnectionRow()
-            }
-            Section {
-                Text("Codex live-quota tracking reads `~/.codex/auth.json` once on Connect, then keeps a local copy under Application Support so subsequent quota fetches don't re-read the original. Only ChatGPT-mode auth (Plus / Pro / Team / Business) is supported — API-key users are billed per request and have a different reporting surface.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("How it works")
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-}
+// MARK: - Codex Connection
 
 private struct CodexConnectionRow: View {
     @Environment(AppStore.self) private var store
@@ -501,7 +467,7 @@ private struct CodexConnectionRow: View {
     }
 }
 
-// MARK: - Providers (Toggle + Detection)
+// MARK: - Providers (Toggles + Connections)
 
 private struct ProvidersSettingsTab: View {
     @Environment(AppStore.self) private var store
@@ -518,9 +484,11 @@ private struct ProvidersSettingsTab: View {
         ("Cursor", "cursor", "cursorarrow.rays"),
         ("Cline", "cline", "terminal"),
         ("Roo Code", "roo-code", "hare"),
+        ("KiloCode", "kilocode", "k.circle"),
         ("Forge", "forge", "hammer"),
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
+        ("Warp", "warp", "wand.and.rays"),
     ]
 
     var body: some View {
@@ -532,44 +500,30 @@ private struct ProvidersSettingsTab: View {
             }
             Section("Active Providers") {
                 ForEach(toggleableProviders, id: \.key) { provider in
-                    HStack {
-                        Toggle(isOn: providerBinding(for: provider.key)) {
-                            Label(provider.name, systemImage: provider.icon)
-                        }
-                        if provider.key == "copilot" {
-                            detectionDot(detected: copilotDetected)
-                        } else if provider.key == "vertex" {
-                            detectionDot(detected: vertexDetected)
-                        }
+                    Toggle(isOn: providerBinding(for: provider.key)) {
+                        Label(provider.name, systemImage: provider.icon)
                     }
                 }
             }
-            if vertexDetected || copilotDetected {
-                Section("Detection") {
-                    if copilotDetected {
-                        Label("Copilot sessions found", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.green)
-                    }
-                    if vertexDetected {
-                        Label("Vertex AI at: \(vertexPath)", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.green)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+            Section("Claude Connection") {
+                ClaudeConnectionRow()
+                Picker("Quota refresh", selection: Binding(
+                    get: { SubscriptionRefreshCadence.current },
+                    set: { SubscriptionRefreshCadence.current = $0 }
+                )) {
+                    ForEach(SubscriptionRefreshCadence.allCases) { cadence in
+                        Text(cadence.label).tag(cadence)
                     }
                 }
+                .pickerStyle(.menu)
+            }
+            Section("Codex Connection") {
+                CodexConnectionRow()
             }
         }
         .formStyle(.grouped)
         .padding()
         .task { detectProviders() }
-    }
-
-    private func detectionDot(detected: Bool) -> some View {
-        Circle()
-            .fill(detected ? Color.green : Color.secondary.opacity(0.3))
-            .frame(width: 7, height: 7)
     }
 
     private func detectProviders() {
