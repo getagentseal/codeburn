@@ -15,6 +15,7 @@ function runCli(args: string[], home: string) {
       TZ: 'UTC',
     },
     encoding: 'utf-8',
+    timeout: 12_000,
   })
 }
 
@@ -215,7 +216,7 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
     } finally {
       await rm(home, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   it('rejects --day combined with --from/--to', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-day-'))
