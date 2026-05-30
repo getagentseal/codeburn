@@ -280,7 +280,7 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
       const contentText = data.content ?? ''
       const reasoningText = data.reasoningText ?? ''
 
-      if (contentText.length === 0 && reasoningText.length === 0 && (data.toolRequests ?? []).length === 0) continue
+      if (contentText.length === 0 && reasoningText.length === 0 && (data.toolRequests ?? []).length === 0 && (data.outputTokens ?? 0) === 0) continue
 
       const dedupKey = `copilot:${sessionId}:${data.messageId}`
       if (seenKeys.has(dedupKey)) continue

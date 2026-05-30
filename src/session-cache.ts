@@ -237,29 +237,71 @@ export async function loadCache(): Promise<SessionCache> {
   }
 }
 
-export async function saveCache(cache: SessionCache): Promise<void> {
+async function withCacheLock<T>(fn: () => Promise<T>): Promise<T> {
   const dir = getCacheDir()
   await mkdir(dir, { recursive: true })
+  const lockPath = join(dir, 'session-cache.lock')
+  let lockHandle: Awaited<ReturnType<typeof open>> | null = null
 
-  const finalPath = getCachePath()
-  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
-  delete (cache as { _dirty?: boolean })._dirty
-  const payload = JSON.stringify(cache)
+  const maxAttempts = 10
+  const delayMs = 200
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      lockHandle = await open(lockPath, 'wx')
+      break
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      // Check if lock is stale (older than 30s)
+      try {
+        const lockStat = await stat(lockPath)
+        if (Date.now() - lockStat.mtimeMs > 30_000) {
+          await unlink(lockPath).catch(() => {})
+          continue
+        }
+      } catch { /* lock disappeared, retry */ continue }
+      if (i === maxAttempts - 1) {
+        // Force break stale lock on last attempt
+        await unlink(lockPath).catch(() => {})
+        lockHandle = await open(lockPath, 'wx').catch(() => null)
+        break
+      }
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)))
+    }
+  }
 
-  const handle = await open(tempPath, 'w', 0o600)
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
-    await handle.sync()
+    return await fn()
   } finally {
-    await handle.close()
+    if (lockHandle) await lockHandle.close().catch(() => {})
+    await unlink(lockPath).catch(() => {})
   }
+}
 
-  try {
-    await rename(tempPath, finalPath)
-  } catch (err) {
-    try { await unlink(tempPath) } catch {}
-    throw err
-  }
+export async function saveCache(cache: SessionCache): Promise<void> {
+  await withCacheLock(async () => {
+    const dir = getCacheDir()
+    await mkdir(dir, { recursive: true })
+
+    const finalPath = getCachePath()
+    const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
+    delete (cache as { _dirty?: boolean })._dirty
+    const payload = JSON.stringify(cache)
+
+    const handle = await open(tempPath, 'w', 0o600)
+    try {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+
+    try {
+      await rename(tempPath, finalPath)
+    } catch (err) {
+      try { await unlink(tempPath) } catch {}
+      throw err
+    }
+  })
 }
 
 // ── File Fingerprinting ────────────────────────────────────────────────

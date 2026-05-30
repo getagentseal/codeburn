@@ -642,19 +642,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func observeStore() {
-        // Read closure uses [weak self] so the implicit self capture from
-        // accessing store.* doesn't pin self for the lifetime of an
-        // unfired observation. withObservationTracking is one-shot per
-        // call: once any read property changes, onChange fires and the
-        // registration is consumed, then we re-arm. There is at most one
-        // active subscription at a time.
+        // Only track properties that affect the menubar title or notifications.
+        // Settings-only changes (keychainAccess, hidePersonalInfo, startAtLogin)
+        // don't need to trigger a menubar refresh.
         withObservationTracking { [weak self] in
             guard let self else { return }
             _ = self.store.payload
             _ = self.store.menubarPeriod
             _ = self.store.menubarPayload
-            // Track currency so the menubar title catches up immediately on
-            // currency switch instead of waiting for the next 30s payload tick.
             _ = self.store.currency
             _ = self.store.displayMetric
             _ = self.store.dailyBudget
@@ -662,14 +657,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = self.store.quotaWarningThreshold
             _ = self.store.quotaNotificationsEnabled
             _ = self.store.usageRefreshCadence
-            _ = self.store.startAtLoginEnabled
-            _ = self.store.hidePersonalInformation
-            _ = self.store.keychainAccessEnabled
             _ = self.store.autoShowMostUsedProvider
             _ = self.store.quotaDisplayMode
             _ = self.store.quotaWarningEvents
-            // Track the live-quota state too so the flame icon re-tints on
-            // every subscription / codex usage update, not just every 30s.
             _ = self.store.subscription
             _ = self.store.subscriptionLoadState
             _ = self.store.codexUsage
@@ -789,6 +779,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    // Cached inputs for refreshStatusButton to avoid redundant NSAttributedString rebuilds
+    private var lastMenubarInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?)?
+
     private func refreshStatusButton() {
         guard let button = statusItem.button else { return }
         // Skip while the popover is anchored to this button. Rewriting the
@@ -798,6 +791,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // popoverDidClose delegate calls back through here once the popover
         // is dismissed so the menubar cost catches up immediately on close.
         if popover != nil && popover.isShown { return }
+
+        // Skip rebuild if the inputs that affect the rendered title are unchanged
+        let currentInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?) = (
+            store.displayMetric,
+            store.menubarPeriod,
+            store.menubarPayload?.current.cost,
+            store.aggregateQuotaStatus.severity,
+            isCompact,
+            store.quotaRemainingLabel
+        )
+        if let last = lastMenubarInputs,
+           last.metric == currentInputs.metric,
+           last.period == currentInputs.period,
+           last.cost == currentInputs.cost,
+           last.severity == currentInputs.severity,
+           last.compact == currentInputs.compact,
+           last.quotaLabel == currentInputs.quotaLabel {
+            return
+        }
+        lastMenubarInputs = currentInputs
 
         // Clear any previously-set image so the attachment is the only glyph rendered.
         button.image = nil

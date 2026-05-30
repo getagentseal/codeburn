@@ -38,10 +38,11 @@ describe('parseDateRangeFlags', () => {
     const range = parseDateRangeFlags(undefined, '2026-04-10')
     expect(range).not.toBeNull()
     expect(range!.start.getTime()).toBeGreaterThan(new Date(0).getTime())
-    const sixMonthsMs = 6 * 31 * 24 * 60 * 60 * 1000
-    const ageMs = Date.now() - range!.start.getTime()
-    expect(ageMs).toBeLessThanOrEqual(sixMonthsMs + 1000)
-    expect(ageMs).toBeGreaterThanOrEqual(sixMonthsMs - 1000)
+    const now = new Date()
+    const expectedStart = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
+    expect(range!.start.getFullYear()).toBe(expectedStart.getFullYear())
+    expect(range!.start.getMonth()).toBe(expectedStart.getMonth())
+    expect(range!.start.getDate()).toBe(expectedStart.getDate())
     expect(range!.end.getDate()).toBe(10)
   })
 

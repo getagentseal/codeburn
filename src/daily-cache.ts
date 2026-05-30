@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { mkdir, open, readFile, rename, unlink } from 'fs/promises'
+import { mkdir, open, readFile, rename, stat, unlink } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
@@ -110,21 +110,53 @@ export async function loadDailyCache(): Promise<DailyCache> {
 export async function saveDailyCache(cache: DailyCache): Promise<void> {
   const dir = getCacheDir()
   await mkdir(dir, { recursive: true })
-  const finalPath = getCachePath()
-  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
-  const payload = JSON.stringify(cache)
-  const handle = await open(tempPath, 'w', 0o600)
-  try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
-    await handle.sync()
-  } finally {
-    await handle.close()
+
+  const lockPath = join(dir, 'daily-cache.lock')
+  let lockHandle: Awaited<ReturnType<typeof open>> | null = null
+  const maxAttempts = 10
+  const delayMs = 150
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      lockHandle = await open(lockPath, 'wx')
+      break
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      try {
+        const lockStat = await stat(lockPath)
+        if (Date.now() - lockStat.mtimeMs > 30_000) {
+          await unlink(lockPath).catch(() => {})
+          continue
+        }
+      } catch { continue }
+      if (i === maxAttempts - 1) {
+        await unlink(lockPath).catch(() => {})
+        lockHandle = await open(lockPath, 'wx').catch(() => null)
+        break
+      }
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)))
+    }
   }
+
   try {
-    await rename(tempPath, finalPath)
-  } catch (err) {
-    try { await unlink(tempPath) } catch { /* ignore */ }
-    throw err
+    const finalPath = getCachePath()
+    const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
+    const payload = JSON.stringify(cache)
+    const handle = await open(tempPath, 'w', 0o600)
+    try {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    try {
+      await rename(tempPath, finalPath)
+    } catch (err) {
+      try { await unlink(tempPath) } catch { /* ignore */ }
+      throw err
+    }
+  } finally {
+    if (lockHandle) await lockHandle.close().catch(() => {})
+    await unlink(lockPath).catch(() => {})
   }
 }
 

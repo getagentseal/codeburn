@@ -1,4 +1,5 @@
-import { existsSync, statSync, readdirSync, readFileSync } from 'fs'
+import { existsSync } from 'fs'
+import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -131,7 +132,7 @@ export function clearCursorWorkspaceMapCache(): void {
   workspaceMapCacheRoot = null
 }
 
-function loadWorkspaceMap(workspaceStorageDir: string): WorkspaceMapping {
+async function loadWorkspaceMap(workspaceStorageDir: string): Promise<WorkspaceMapping> {
   if (workspaceMapCache && workspaceMapCacheRoot === workspaceStorageDir) {
     return workspaceMapCache
   }
@@ -142,7 +143,7 @@ function loadWorkspaceMap(workspaceStorageDir: string): WorkspaceMapping {
 
   let entries: string[]
   try {
-    entries = readdirSync(workspaceStorageDir)
+    entries = await readdir(workspaceStorageDir)
   } catch {
     workspaceMapCache = result
     workspaceMapCacheRoot = workspaceStorageDir
@@ -155,7 +156,7 @@ function loadWorkspaceMap(workspaceStorageDir: string): WorkspaceMapping {
 
     let wsJsonRaw: string
     try {
-      wsJsonRaw = readFileSync(wsJsonPath, 'utf-8')
+      wsJsonRaw = await readFile(wsJsonPath, 'utf-8')
     } catch {
       continue
     }
@@ -547,7 +548,7 @@ function extractTextLength(content: AgentKvContent[]): number {
   return total
 }
 
-function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): { calls: ParsedProviderCall[] } {
+async function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): Promise<{ calls: ParsedProviderCall[] }> {
   const results: ParsedProviderCall[] = []
 
   // Cursor's agentKv schema does not record per-message timestamps. Use the
@@ -557,7 +558,7 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string)
   // the actual last activity time rather than today's date.
   let agentKvTimestamp: string
   try {
-    agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
+    agentKvTimestamp = new Date((await stat(dbPath)).mtimeMs).toISOString()
   } catch {
     agentKvTimestamp = new Date().toISOString()
   }
@@ -679,7 +680,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let composerFilter: Set<string> | null = null
       let filterMode: 'include' | 'exclude' = 'include'
       if (workspaceTag !== '__all__') {
-        const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
+        const wsMap = await loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
         if (workspaceTag === ORPHAN_TAG) {
           // Orphan source: every composer that is mapped to SOME workspace
           // is excluded here, so unmapped composers (and any non-UUID
@@ -720,7 +721,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // about to drop. Cross-source dedup happens at yield time.
           const localSeen = new Set<string>()
           const { calls: bubbleCalls } = parseBubbles(db, localSeen)
-          const { calls: agentKvCalls } = parseAgentKv(db, localSeen, dbPath)
+          const { calls: agentKvCalls } = await parseAgentKv(db, localSeen, dbPath)
           allCalls = [...bubbleCalls, ...agentKvCalls]
           await writeCachedResults(dbPath, allCalls)
         } finally {
@@ -761,7 +762,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       const dbPath = dbPathOverride ?? getCursorDbPath()
       if (!existsSync(dbPath)) return []
 
-      const wsMap = loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
+      const wsMap = await loadWorkspaceMap(getCursorWorkspaceStorageDir(dbPath))
       const sources: SessionSource[] = []
       for (const [folder, project] of wsMap.workspaceProjectName) {
         sources.push({

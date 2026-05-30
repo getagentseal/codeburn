@@ -1426,18 +1426,17 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   const files = await readdir(dirPath).catch(() => [])
   const jsonlFiles = new Set(files.filter(f => f.endsWith('.jsonl')).map(f => join(dirPath, f)))
 
-  const directSubagentsPath = join(dirPath, 'subagents')
-  const directSubFiles = await readdir(directSubagentsPath).catch(() => [])
-  for (const sf of directSubFiles) {
-    if (sf.endsWith('.jsonl')) jsonlFiles.add(join(directSubagentsPath, sf))
-  }
-
-  for (const entry of files) {
-    if (entry.endsWith('.jsonl')) continue
-    const subagentsPath = join(dirPath, entry, 'subagents')
-    const subFiles = await readdir(subagentsPath).catch(() => [])
-    for (const sf of subFiles) {
-      if (sf.endsWith('.jsonl')) jsonlFiles.add(join(subagentsPath, sf))
+  // Parallel reads: direct subagents + per-entry subagents
+  const subagentDirs = [
+    join(dirPath, 'subagents'),
+    ...files.filter(f => !f.endsWith('.jsonl')).map(f => join(dirPath, f, 'subagents')),
+  ]
+  const subResults = await Promise.all(
+    subagentDirs.map(d => readdir(d).catch(() => [] as string[]).then(entries => ({ dir: d, entries })))
+  )
+  for (const { dir, entries } of subResults) {
+    for (const sf of entries) {
+      if (sf.endsWith('.jsonl')) jsonlFiles.add(join(dir, sf))
     }
   }
 
@@ -1459,9 +1458,13 @@ async function scanProjectDirs(
 
   for (const { path: dirPath, name: dirName } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
-    for (const filePath of jsonlFiles) {
+
+    // Parallel fingerprinting
+    const fingerprints = await Promise.all(
+      jsonlFiles.map(async filePath => ({ filePath, fp: await fingerprintFile(filePath) }))
+    )
+    for (const { filePath, fp } of fingerprints) {
       allDiscoveredFiles.add(filePath)
-      const fp = await fingerprintFile(filePath)
       if (!fp) continue
 
       const action = reconcileFile(fp, section.files[filePath])
@@ -1849,9 +1852,12 @@ async function parseProviderSources(
   const unchangedSources: Array<{ source: { path: string; project: string }; cached: CachedFile }> = []
   const changedSources: SourceInfo[] = []
 
-  for (const source of sources) {
+  // Parallel fingerprinting for all sources
+  const fingerprints = await Promise.all(
+    sources.map(async source => ({ source, fp: await fingerprintFile(source.path) }))
+  )
+  for (const { source, fp } of fingerprints) {
     allDiscoveredFiles.add(source.path)
-    const fp = await fingerprintFile(source.path)
     if (!fp) continue
 
     const cached = section.files[source.path]

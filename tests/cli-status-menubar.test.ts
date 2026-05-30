@@ -56,12 +56,13 @@ describe('codeburn status --format menubar-json', () => {
       await mkdir(projectDir, { recursive: true })
 
       const now = new Date()
-      const h = now.getUTCHours()
-      const base = h >= 2 ? new Date(now.getTime() - 2 * 3600_000) : new Date(now.getTime() - h * 3600_000 - 300_000)
-      const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
-      const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
-      const ts3 = new Date(base.getTime() + 120_000).toISOString().replace(/\.\d+Z$/, 'Z')
-      const ts4 = new Date(base.getTime() + 180_000).toISOString().replace(/\.\d+Z$/, 'Z')
+      const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)
+      const baseMs = Math.max(dayStartMs, now.getTime() - 10_000)
+      const toIso = (ms: number) => new Date(Math.min(ms, now.getTime())).toISOString().replace(/\.\d+Z$/, 'Z')
+      const ts1 = toIso(baseMs)
+      const ts2 = toIso(baseMs + 1_000)
+      const ts3 = toIso(baseMs + 2_000)
+      const ts4 = toIso(baseMs + 3_000)
 
       await writeFile(
         join(projectDir, 'session.jsonl'),
