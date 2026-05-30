@@ -136,7 +136,7 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 
 **Gemini CLI** stores sessions as single JSON files. Each session embeds real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Gemini reports input tokens inclusive of cached; CodeBurn subtracts cached from input before pricing to avoid double charging.
 
-**Antigravity CLI** exposes exact usage through a short-lived local process while `agy` is running. Install the optional live hook with `codeburn antigravity-hook install` to capture short CLI sessions even when the menubar's 30-second refresh misses that window. The hook stores sanitized usage totals only, not prompts or local working-directory paths. Remove it with `codeburn antigravity-hook uninstall`; if `--force` replaced an existing statusLine command, uninstall restores that previous command.
+**Antigravity CLI and IDE** automatically discover conversation session files on disk (stored under `.gemini/` folders) and query the running language server process to extract granular trajectory and pricing information. For the CLI, which runs as a short-lived process, you can optionally install a status line hook using `codeburn antigravity-hook install` to capture usage even when the menubar's 30-second refresh misses it. The IDE is detected automatically via the `--app-data-dir antigravity-ide` flag on Windows.
 
 **Mistral Vibe** stores sessions as folders under `~/.vibe/logs/session/` (or `$VIBE_HOME/logs/session/`). CodeBurn reads cumulative prompt/completion totals and model pricing from `meta.json`, then reads `messages.jsonl` for the first user prompt and assistant tool calls. Subagent sessions under `agents/` are counted as separate Vibe sessions.
 

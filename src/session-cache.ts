@@ -99,6 +99,7 @@ const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',
+  antigravity: 'worktree-project-grouping-v3',
 }
 
 // ── Cache Dir ──────────────────────────────────────────────────────────

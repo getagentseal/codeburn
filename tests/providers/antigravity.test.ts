@@ -76,6 +76,10 @@ describe('antigravity provider helpers', () => {
     expect(extractAntigravityAppDataDirFromLine(
       'language_server.exe --app_data_dir "C:\\Users\\Admin\\.gemini\\antigravity-cli" --extension_server_port 62225 --extension_server_csrf_token abcdef01-2345-6789-abcd-ef0123456789',
     )).toBe('antigravity-cli')
+
+    expect(extractAntigravityAppDataDirFromLine(
+      'language_server_windows_x64.exe --app_data_dir antigravity-ide --extension_server_port 8720 --extension_server_csrf_token 39800f1b-343a-40b0-8eb5-850702450346',
+    )).toBe('antigravity-ide')
   })
 
   it('accepts Antigravity 2 ephemeral port zero', () => {
@@ -135,6 +139,9 @@ describe('antigravity provider helpers', () => {
     expect(extractAntigravityModelMap({
       models: { bad: null, good: { model: 'MODEL_PLACEHOLDER_M9' } },
     })).toEqual({ MODEL_PLACEHOLDER_M9: 'good' })
+    expect(extractAntigravityModelMap({
+      models: { 'gemini-3-flash-agent': { model: 'MODEL_PLACEHOLDER_M133', displayName: 'Gemini 3.5 Flash (High)' } },
+    })).toEqual({ MODEL_PLACEHOLDER_M133: 'gemini-3.5-flash-high' })
     expect(extractAntigravityModelMap(null)).toEqual({})
   })
 
@@ -175,6 +182,14 @@ describe('antigravity provider helpers', () => {
     expect(antigravityAppDataDirFromSourcePath(
       'C:\\Users\\Admin\\.gemini\\antigravity-cli\\implicit\\session.pb',
     )).toBe('antigravity-cli')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/dev/.gemini/antigravity-ide/conversations/session.db',
+    )).toBe('antigravity-ide')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      'C:\\Users\\Admin\\.gemini\\antigravity-ide\\implicit\\session.pb',
+    )).toBe('antigravity-ide')
   })
 
   it('discovers legacy .pb files and Antigravity 2 .db files only', async () => {
@@ -201,6 +216,39 @@ describe('antigravity provider helpers', () => {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  it('discovers antigravity-ide conversation and implicit files', async () => {
+    const tempHome = await mkdtemp(join(tmpdir(), 'codeburn-home-'))
+    const conversationsDir = join(tempHome, '.gemini', 'antigravity-ide', 'conversations')
+    const implicitDir = join(tempHome, '.gemini', 'antigravity-ide', 'implicit')
+
+    await mkdir(conversationsDir, { recursive: true })
+    await mkdir(implicitDir, { recursive: true })
+
+    await writeFile(join(conversationsDir, 'session1.db'), '')
+    await writeFile(join(implicitDir, 'session2.pb'), '')
+
+    const roots = [
+      {
+        dir: conversationsDir,
+        project: 'antigravity-ide',
+        extensions: ['.pb', '.db'] as const,
+      },
+      {
+        dir: implicitDir,
+        project: 'antigravity-ide',
+        extensions: ['.pb'] as const,
+      },
+    ]
+
+    const sources = await discoverAntigravitySessionSources(roots)
+    expect(sources).toEqual([
+      { path: join(conversationsDir, 'session1.db'), project: 'antigravity-ide', provider: 'antigravity' },
+      { path: join(implicitDir, 'session2.pb'), project: 'antigravity-ide', provider: 'antigravity' },
+    ])
+
+    await rm(tempHome, { recursive: true, force: true })
   })
 
   it('displays Gemini 3.5 Flash thinking variants as the base model', () => {
