@@ -314,6 +314,14 @@ final class AppStore {
     func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, day: String? = nil, fetchedAt: Date) {
         cache[PayloadCacheKey(period: period, provider: provider, day: day)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
     }
+
+    func seedInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil, insertedAt: Date) {
+        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] = insertedAt
+    }
+
+    func isInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil) -> Bool {
+        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] != nil
+    }
 #endif
 
     var findingsCount: Int {
@@ -512,11 +520,26 @@ final class AppStore {
     }
 
     func recoverFromStuckLoading() async {
+        guard prepareStuckLoadingRecovery() else { return }
+        await refresh(key: currentKey, includeOptimize: false, force: true, showLoading: true)
+    }
+
+    /// Decides whether stuck-loading recovery should kick off a fresh fetch for
+    /// the current key, preparing the loading bookkeeping when it can.
+    ///
+    /// A quiet refresh torn down across sleep/wake (or a generation reset) can
+    /// leave an orphaned `inFlightKeys` entry behind. Without clearing stale
+    /// state first the in-flight guard would bail on every retry, trapping the
+    /// popover on the spinner forever. A healthy in-flight fetch (younger than
+    /// the watchdog) is still respected so recovery never kills it.
+    @discardableResult
+    func prepareStuckLoadingRecovery() -> Bool {
+        _ = clearStaleLoadingIfNeeded()
         let key = currentKey
-        guard inFlightKeys[key] == nil else { return }
+        guard inFlightKeys[key] == nil else { return false }
         loadingCountsByKey[key] = nil
         loadingStartedAtByKey[key] = nil
-        await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+        return true
     }
 
     func setRecoveryExhausted(for label: String) {
