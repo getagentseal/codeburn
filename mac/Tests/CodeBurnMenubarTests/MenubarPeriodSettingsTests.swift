@@ -6,7 +6,7 @@ import Testing
 struct MenubarPeriodSettingsTests {
     @Test("settings picker exposes requested periods")
     func settingsPickerExposesRequestedPeriods() {
-        #expect(Period.menubarMetricCases == [.today, .sevenDays, .month, .all, .lifetime])
+        #expect(Period.menubarMetricCases == [.today, .sevenDays, .month, .all])
     }
 
     @Test("defaults values map to periods")
@@ -37,8 +37,8 @@ struct MenubarPeriodSettingsTests {
         #expect(Period.savedMenubarPeriod(defaults: defaults) == .all)
 
         Period.lifetime.persistAsMenubarDefault(defaults: defaults)
-        #expect(defaults.string(forKey: "CodeBurnMenubarPeriod") == "lifetime")
-        #expect(Period.savedMenubarPeriod(defaults: defaults) == .lifetime)
+        #expect(defaults.string(forKey: "CodeBurnMenubarPeriod") == "today")
+        #expect(Period.savedMenubarPeriod(defaults: defaults) == .today)
 
         Period.thirtyDays.persistAsMenubarDefault(defaults: defaults)
         #expect(defaults.string(forKey: "CodeBurnMenubarPeriod") == "today")
@@ -58,21 +58,17 @@ struct MenubarPeriodSettingsTests {
         #expect(Period.lifetime.menubarSuffix(compact: true) == "/all")
     }
 
-    func testUsageRefreshCadenceDefaults() {
-        XCTAssertEqual(UsageRefreshCadence.default, .thirtySeconds)
-        XCTAssertEqual(UsageRefreshCadence.thirtySeconds.seconds, 30)
-        XCTAssertNil(UsageRefreshCadence.manual.seconds)
-        XCTAssertEqual(UsageRefreshCadence.manual.cacheTTLSeconds, .greatestFiniteMagnitude)
+    @Test("usage refresh cadence defaults")
+    func usageRefreshCadenceDefaults() {
+        #expect(UsageRefreshCadence.default == .thirtySeconds)
+        #expect(UsageRefreshCadence.thirtySeconds.seconds == 30)
+        #expect(UsageRefreshCadence.manual.seconds == nil)
+        #expect(UsageRefreshCadence.manual.cacheTTLSeconds == .greatestFiniteMagnitude)
     }
 
-    func testPrivacyRedactorMasksEmailAddressesWhenEnabled() {
-        XCTAssertEqual(
-            PrivacyRedactor.redact("repo-owner@example.com", enabled: true),
-            "r***@example.com"
-        )
-        XCTAssertEqual(
-            PrivacyRedactor.redact("repo-owner@example.com", enabled: false),
-            "repo-owner@example.com"
-        )
+    @Test("privacy redactor masks email addresses when enabled")
+    func privacyRedactorMasksEmailAddressesWhenEnabled() {
+        #expect(PrivacyRedactor.redact("repo-owner@example.com", enabled: true) == "r***@example.com")
+        #expect(PrivacyRedactor.redact("repo-owner@example.com", enabled: false) == "repo-owner@example.com")
     }
 }

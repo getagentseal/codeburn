@@ -127,7 +127,8 @@ final class PeriodSwitchTests: XCTestCase {
                 tools: [], skills: [], subagents: [], mcpServers: []
             ),
             optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-            history: HistoryBlock(daily: [])
+            history: HistoryBlock(daily: [], intraday: []),
+            stats: StatsSummary(trackedSpend: 0, trackedDays: 1, mostActiveDay: nil, peakDaySpend: 0, currentStreakDays: 1, longestStreakDays: 1)
         )
         store.setCachedPayloadForTesting(payload, period: .sevenDays, provider: .all, fetchedAt: Date())
 
