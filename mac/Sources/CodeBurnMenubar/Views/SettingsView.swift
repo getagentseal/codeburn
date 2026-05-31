@@ -160,6 +160,26 @@ private struct GeneralSettingsTab: View {
                         Text("\(preset.emoji) \(preset.rawValue)").tag(preset)
                     }
                 }
+                Picker("Rounding", selection: Binding(
+                    get: { store.costGranularity },
+                    set: { store.costGranularity = $0 }
+                )) {
+                    Text("$437.08").tag(CostGranularity.exact)
+                    Text("$437").tag(CostGranularity.rounded)
+                    Text("$440").tag(CostGranularity.coarse)
+                }
+                Toggle("Show period suffix (/wk, /mo)", isOn: Binding(
+                    get: { store.showMenubarSuffix },
+                    set: { store.showMenubarSuffix = $0 }
+                ))
+                Picker("Icon", selection: Binding(
+                    get: { store.menubarIcon },
+                    set: { store.menubarIcon = $0 }
+                )) {
+                    ForEach(MenubarIcon.allCases) { icon in
+                        Text("\(icon.emoji) \(icon.rawValue)").tag(icon)
+                    }
+                }
             }
 
             Section("Refresh") {

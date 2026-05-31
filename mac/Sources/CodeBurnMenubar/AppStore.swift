@@ -64,6 +64,15 @@ final class AppStore {
     var displayMetric: DisplayMetric = DisplayMetric(rawValue: UserDefaults.standard.string(forKey: "CodeBurnDisplayMetric") ?? "") ?? .cost {
         didSet { UserDefaults.standard.set(displayMetric.rawValue, forKey: "CodeBurnDisplayMetric") }
     }
+    var costGranularity: CostGranularity = CostGranularity(rawValue: UserDefaults.standard.string(forKey: "CodeBurnCostGranularity") ?? "") ?? .exact {
+        didSet { UserDefaults.standard.set(costGranularity.rawValue, forKey: "CodeBurnCostGranularity") }
+    }
+    var showMenubarSuffix: Bool = UserDefaults.standard.object(forKey: "CodeBurnShowSuffix") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showMenubarSuffix, forKey: "CodeBurnShowSuffix") }
+    }
+    var menubarIcon: MenubarIcon = MenubarIcon(rawValue: UserDefaults.standard.string(forKey: "CodeBurnMenubarIcon") ?? "") ?? .flame {
+        didSet { UserDefaults.standard.set(menubarIcon.rawValue, forKey: "CodeBurnMenubarIcon") }
+    }
     var dailyBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyBudget") {
         didSet { UserDefaults.standard.set(dailyBudget, forKey: "CodeBurnDailyBudget") }
     }
@@ -1366,6 +1375,60 @@ enum SubscriptionLoadState: Sendable, Equatable {
 
 enum DisplayMetric: String {
     case cost, tokens, totalTokens, quotaRemaining, iconOnly
+}
+
+enum CostGranularity: String, CaseIterable, Identifiable {
+    case exact = "Exact"       // $437.08
+    case rounded = "Rounded"   // $437
+    case coarse = "Coarse"     // $440
+
+    var id: String { rawValue }
+
+    func format(_ value: Double, symbol: String) -> String {
+        switch self {
+        case .exact:
+            return String(format: "\(symbol)%.2f", value)
+        case .rounded:
+            return "\(symbol)\(Int(value.rounded()))"
+        case .coarse:
+            let magnitude = max(1, pow(10, floor(log10(max(value, 1)))) / 10)
+            let coarse = (value / magnitude).rounded() * magnitude
+            return "\(symbol)\(Int(coarse))"
+        }
+    }
+}
+
+enum MenubarIcon: String, CaseIterable, Identifiable {
+    case flame = "Flame"
+    case dollar = "Dollar"
+    case chart = "Chart"
+    case bolt = "Bolt"
+    case brain = "Brain"
+    case sparkle = "Sparkle"
+
+    var id: String { rawValue }
+
+    var systemName: String {
+        switch self {
+        case .flame: "flame.fill"
+        case .dollar: "dollarsign.circle.fill"
+        case .chart: "chart.bar.fill"
+        case .bolt: "bolt.fill"
+        case .brain: "brain.head.profile.fill"
+        case .sparkle: "sparkles"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .flame: "🔥"
+        case .dollar: "💵"
+        case .chart: "📊"
+        case .bolt: "⚡"
+        case .brain: "🧠"
+        case .sparkle: "✨"
+        }
+    }
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {
