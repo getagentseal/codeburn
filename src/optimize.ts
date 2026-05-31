@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
-import type { DateRange, ProjectSummary } from './types.js'
+import type { DateRange, ProjectSummary, TaskCategory } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 
@@ -2292,6 +2292,7 @@ export async function scanAndDetect(
   const costRate = computeInputCostRate(projects)
   const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
   const mcpCoverage = aggregateMcpCoverage(projects)
+  const capabilityStats = aggregateCapabilityStats(projects)
 
   const findings: WasteFinding[] = []
   // Priority order for the per-session findings: low-worth → context-bloat →
