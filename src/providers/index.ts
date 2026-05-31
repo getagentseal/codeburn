@@ -138,7 +138,7 @@ async function loadCrush(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode, vertex]
+const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, hermes, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode, vertex]
 
 export async function getAllProviders(): Promise<Provider[]> {
   const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp] = await Promise.all([loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp()])
