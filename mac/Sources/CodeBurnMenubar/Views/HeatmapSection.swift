@@ -79,7 +79,7 @@ struct HeatmapSection: View {
             } else {
                 PlanInsight(usage: store.subscription)
             }
-        case .trend: TrendInsight(days: store.payload.history.daily, period: store.trendPeriod)
+        case .trend: TrendInsight(history: store.payload.history, period: store.trendPeriod)
         case .forecast: ForecastInsight(days: store.payload.history.daily)
         case .pulse: PulseInsight(payload: store.payload)
         case .stats: StatsInsight(payload: store.payload, period: store.selectedPeriod)

@@ -24,7 +24,6 @@ let package = Package(
             name: "CodeBurnMenubarTests",
             dependencies: [
                 "CodeBurnMenubar",
-                .product(name: "Testing", package: "swift-testing")
             ],
             path: "Tests/CodeBurnMenubarTests"
         ),
