@@ -152,12 +152,12 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Picker("Accent", selection: Binding(
+                                Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }
                 )) {
                     ForEach(AccentPreset.allCases) { preset in
-                        Text(preset.rawValue).tag(preset)
+                        Text("\(preset.emoji) \(preset.rawValue)").tag(preset)
                     }
                 }
             }
