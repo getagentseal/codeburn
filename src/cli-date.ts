@@ -8,12 +8,12 @@ const END_OF_DAY_MINUTES = 59
 const END_OF_DAY_SECONDS = 59
 const END_OF_DAY_MS = 999
 
-// The "all" period is intentionally bounded to the last 6 months. Older data
-// is rarely actionable for a cost tracker, and capping the range keeps the
-// parse path bounded so providers like Codex/Cursor with sparse multi-year
-// history still load in seconds. Users who need an unbounded window can use
-// the explicit `lifetime` period or `--from` / `--to`.
-const SIX_MONTH_PERIOD_MONTHS = 6
+// "All Time" is intentionally bounded to the last 6 months. Older data is
+// rarely actionable for a cost tracker, and capping the range keeps the parse
+// path bounded so providers like Codex/Cursor with sparse multi-year history
+// still load in seconds. Users who need an unbounded window can use
+// `--from` / `--to`.
+const ALL_TIME_MONTHS = 6
 
 export type Period = 'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime'
 
@@ -59,6 +59,49 @@ function parseLocalDate(s: string): Date {
   return date
 }
 
+function endOfLocalDay(date: Date): Date {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    END_OF_DAY_HOURS,
+    END_OF_DAY_MINUTES,
+    END_OF_DAY_SECONDS,
+    END_OF_DAY_MS,
+  )
+}
+
+export function dayRangeForDate(date: Date): DateRange {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  return { start, end: endOfLocalDay(start) }
+}
+
+export function formatDayRangeLabel(day: string): string {
+  return `Day (${day})`
+}
+
+export function shiftDay(day: string, delta: number): string {
+  const date = parseLocalDate(day)
+  return toDateString(new Date(date.getFullYear(), date.getMonth(), date.getDate() + delta))
+}
+
+export function parseDayFlag(day: string | undefined): { day: string; range: DateRange; label: string } | null {
+  if (day === undefined) return null
+
+  const now = new Date()
+  let date: Date
+  if (day === 'today') {
+    date = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  } else if (day === 'yesterday') {
+    date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+  } else {
+    date = parseLocalDate(day)
+  }
+
+  const resolvedDay = toDateString(date)
+  return { day: resolvedDay, range: dayRangeForDate(date), label: formatDayRangeLabel(resolvedDay) }
+}
+
 export function parseDateRangeFlags(from: string | undefined, to: string | undefined): DateRange | null {
   if (from === undefined && to === undefined) return null
 
@@ -72,15 +115,7 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
     : new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
 
   const endDate = to !== undefined ? parseLocalDate(to) : new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = new Date(
-    endDate.getFullYear(),
-    endDate.getMonth(),
-    endDate.getDate(),
-    END_OF_DAY_HOURS,
-    END_OF_DAY_MINUTES,
-    END_OF_DAY_SECONDS,
-    END_OF_DAY_MS,
-  )
+  const end = endOfLocalDay(endDate)
 
   if (start > end) {
     throw new Error(`--from must not be after --to (got ${from} > ${to})`)
@@ -95,8 +130,8 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
  * surfaces a few extra inputs not exposed in the dashboard tab strip
  * (e.g. `'yesterday'`). Unknown values fall back to `'week'`.
  *
- * Note: `'all'` is bounded to the last 6 months. Use `'lifetime'` or
- * `--from`/`--to` for an unbounded historical window.
+ * Note: `'all'` is bounded to the last 6 months. Use `--from`/`--to` for
+ * an unbounded historical window.
  */
 export function getDateRange(period: string): { range: DateRange; label: string } {
   const now = new Date()
@@ -113,12 +148,11 @@ export function getDateRange(period: string): { range: DateRange; label: string 
   switch (period) {
     case 'today': {
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      return { range: { start, end }, label: `Today (${toDateString(start)})` }
+      return { range: dayRangeForDate(start), label: `Today (${toDateString(start)})` }
     }
     case 'yesterday': {
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
-      const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, END_OF_DAY_HOURS, END_OF_DAY_MINUTES, END_OF_DAY_SECONDS, END_OF_DAY_MS)
-      return { range: { start, end: yesterdayEnd }, label: `Yesterday (${toDateString(start)})` }
+      return { range: dayRangeForDate(start), label: `Yesterday (${toDateString(start)})` }
     }
     case 'week': {
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
@@ -133,7 +167,7 @@ export function getDateRange(period: string): { range: DateRange; label: string 
       return { range: { start, end }, label: 'Last 30 Days' }
     }
     case 'all': {
-      const start = new Date(now.getFullYear(), now.getMonth() - SIX_MONTH_PERIOD_MONTHS, 1)
+      const start = new Date(now.getFullYear(), now.getMonth() - ALL_TIME_MONTHS, 1)
       return { range: { start, end }, label: 'Last 6 months' }
     }
     case 'lifetime': {

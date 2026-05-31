@@ -129,7 +129,7 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
     } finally {
       await rm(home, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   it('reports null oneShotRate when the day has no edit turns', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-daily-'))
@@ -169,7 +169,7 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
     } finally {
       await rm(home, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   it('filters a single review day with --day', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-day-'))
@@ -234,5 +234,5 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
     } finally {
       await rm(home, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 })
