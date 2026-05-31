@@ -1306,7 +1306,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .ibmBob: ["ibm-bob", "ibm bob"]
         case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
-        case .hermes: ["hermes"]
+        case .hermes: ["hermes", "hermes agent"]
         case .antigravity: ["antigravity"]
         case .vertex: ["vertex"]
         case .goose: ["goose"]
