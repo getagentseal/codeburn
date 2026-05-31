@@ -334,6 +334,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       tokens: {
         input: totalInput,
         output: totalOutput,
+        reasoning: totalReasoning,
         cacheRead: totalCacheRead,
         cacheWrite: totalCacheWrite,
       },
@@ -349,6 +350,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     subagents: Object.entries(subagentMap).sort(([, a], [, b]) => b.cost - a.cost).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost) })),
     topSessions,
   }
+}
+
+function billableOutputTokens(outputTokens: number, reasoningTokens: number): number {
+  return outputTokens + reasoningTokens
 }
 
 program
@@ -406,6 +411,11 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
   const catTotals: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
   const modelTotals: Record<string, { calls: number; cost: number }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
+  // TODO: outputTokens here is raw (excludes reasoning tokens). buildJsonReport
+  // uses billableOutputTokens() to combine output + reasoning for display. This
+  // TUI path and the session-level output at line ~635 should do the same once
+  // totalReasoningTokens is available on SessionSummary. Pre-existing gap that
+  // also affects Claude reasoning tokens.
 
   for (const sess of sessions) {
     inputTokens += sess.totalInputTokens

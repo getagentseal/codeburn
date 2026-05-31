@@ -25,6 +25,10 @@
   tool-name-based detection.
 
 ### Fixed (CLI)
+- **Hermes profile and Windows project parsing.** Hermes Agent state databases
+  now only treat exact `profiles/<name>/state.db` paths as named profiles,
+  avoiding sibling-directory prefix collisions, and `Current working directory:`
+  inference recognizes Windows drive paths.
 - **Codex 100% one-shot rate.** Codex function_call arguments are JSON strings,
   not objects, and `patch_apply_end` stores file paths in `changes` object keys.
   Both are now parsed correctly.
