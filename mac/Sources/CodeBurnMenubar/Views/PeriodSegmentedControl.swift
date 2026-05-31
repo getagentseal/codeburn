@@ -9,7 +9,7 @@ struct PeriodSegmentedControl: View {
             ForEach(Period.allCases) { period in
                 let isActive = !store.isDayMode && store.selectedPeriod == period
                 Button {
-                    store.switchTo(period: period)
+                    showingCalendar.toggle()
                 } label: {
                     Text(period.rawValue)
                         .font(.system(size: 11, weight: .medium))
@@ -47,14 +47,30 @@ struct PeriodSegmentedControl: View {
                     .environment(store)
             }
         }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color.secondary.opacity(0.08))
-        )
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 10)
+    }
+
+    private var selectedDayBinding: Binding<Date> {
+        Binding(
+            get: {
+                store.selectedDayDate ??
+                    Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date())
+            },
+            set: {
+                store.switchTo(day: $0)
+                showingCalendar = false
+            }
+        )
+    }
+
+    private var dayButtonTitle: String {
+        let date = store.selectedDayDate ??
+            Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter.string(from: date)
     }
 }
 
