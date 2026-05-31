@@ -34,6 +34,16 @@ npm-debug.log*
 
 # Build artifacts
 *.tsbuildinfo
+coverage/
+
+# Swift / Xcode build artifacts (mac menubar app)
+mac/.build/
+mac/.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+
+# GNOME compiled schemas
+gnome/schemas/gschemas.compiled
 
 # Local Discord brand / promo assets not yet ready to publish
 assets/discord-*.png
