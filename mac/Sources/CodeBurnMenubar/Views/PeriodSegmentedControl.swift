@@ -18,6 +18,7 @@ struct PeriodSegmentedControl: View {
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
                 }
+                .frame(maxWidth: .infinity)
                 .buttonStyle(.plain)
                 .background(
                     RoundedRectangle(cornerRadius: 5)

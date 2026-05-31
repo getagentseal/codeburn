@@ -7,6 +7,7 @@ import Soup from 'gi://Soup?version=3.0';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { DataClient } from './dataClient.js';
+import { buildPeriodSeries } from './trend-series.js';
 
 const CACHE_TTL_MS = 300_000;
 const TOP_ACTIVITIES = 10;
@@ -19,6 +20,7 @@ const PERIODS = [
   { id: '30days', label: '30 Days' },
   { id: 'month', label: 'Month' },
   { id: 'all', label: '6 Months' },
+  { id: 'lifetime', label: 'Lifetime' },
 ];
 
 const INSIGHTS = [
@@ -585,7 +587,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const sessions = Number(current.sessions ?? 0);
     this._heroMeta.set_text(`${calls.toLocaleString()} calls   ${sessions} sessions`);
 
-    this._renderChart(payload?.history?.daily ?? []);
+    this._renderChart(payload);
     this._renderContent();
     this._renderFindings(payload?.optimize ?? {});
     this._updateBudget();
@@ -594,40 +596,49 @@ class CodeBurnIndicator extends PanelMenu.Button {
     this._updatedLabel.set_text(updated ? `Updated ${updated}` : '');
   }
 
-  _renderChart(daily) {
+  _renderChart(payload) {
     this._chartBars.destroy_all_children();
-    const days = Array.isArray(daily) ? daily.slice(-19) : [];
-    if (days.length === 0) {
+    const series = buildPeriodSeries(this._period, payload);
+    const points = Array.isArray(series.points) ? series.points : [];
+    if (points.length === 0) {
       this._chartContainer.visible = false;
       return;
     }
-    const inTotals = days.map(d => Number(d?.inputTokens) || 0);
-    const outTotals = days.map(d => Number(d?.outputTokens) || 0);
-    const totals = inTotals.map((v, i) => v + outTotals[i]);
+    const inTotals = points.map(point => Number(point.inputTokens) || 0);
+    const outTotals = points.map(point => Number(point.outputTokens) || 0);
+    const tokenTotals = inTotals.map((value, index) => value + outTotals[index]);
+    const totalTokens = tokenTotals.reduce((sum, value) => sum + value, 0);
+    const useTokens = totalTokens > 0;
+    const totals = useTokens ? tokenTotals : points.map(point => Number(point.cost) || 0);
     let maxTotal = 1;
     let totalIn = 0;
     let totalOut = 0;
+    let totalCost = 0;
     let hasAnyTokens = false;
-    for (let i = 0; i < days.length; i++) {
+    for (let i = 0; i < points.length; i++) {
       if (totals[i] > maxTotal) maxTotal = totals[i];
       if (totals[i] > 0) hasAnyTokens = true;
       totalIn += inTotals[i];
       totalOut += outTotals[i];
+      totalCost += Number(points[i]?.cost) || 0;
     }
     if (!hasAnyTokens) {
       this._chartContainer.visible = false;
       return;
     }
     this._chartContainer.visible = true;
-    const summaryText = `In: ${formatTokensCompact(totalIn)}  Out: ${formatTokensCompact(totalOut)}`;
+    this._chartLabel.set_text(useTokens ? 'Tokens' : 'Spend');
+    const summaryText = useTokens
+      ? `In: ${formatTokensCompact(totalIn)}  Out: ${formatTokensCompact(totalOut)}`
+      : `Total: ${this._fmt(totalCost)}`;
     this._chartTotal.set_text(summaryText);
     this._chartSummaryText = summaryText;
 
     const chartWidth = 308;
     const gap = 2;
-    const barW = Math.max(4, Math.floor((chartWidth - gap * (days.length - 1)) / days.length));
+    const barW = Math.max(4, Math.floor((chartWidth - gap * (points.length - 1)) / points.length));
 
-    for (let i = 0; i < days.length; i++) {
+    for (let i = 0; i < points.length; i++) {
       const h = Math.max(2, Math.round((totals[i] / maxTotal) * CHART_HEIGHT));
       const col = new St.BoxLayout({ vertical: true, style_class: 'codeburn-chart-col', reactive: true });
       col.set_width(barW);
@@ -640,12 +651,17 @@ class CodeBurnIndicator extends PanelMenu.Button {
       col.add_child(spacer);
       col.add_child(bar);
 
-      const date = days[i]?.date || '';
+      const label = points[i]?.label || '';
       const inTok = formatTokensCompact(inTotals[i]);
       const outTok = formatTokensCompact(outTotals[i]);
-      const cost = days[i]?.cost != null ? this._fmt(days[i].cost) : '';
+      const cost = points[i]?.cost != null ? this._fmt(points[i].cost) : '';
+      const calls = `${Number(points[i]?.calls || 0).toLocaleString()} calls`;
       col.connect('enter-event', () => {
-        this._chartTotal.set_text(`${date}  ${inTok}/${outTok}  ${cost}`);
+        if (useTokens) {
+          this._chartTotal.set_text(`${label}  ${inTok}/${outTok}  ${cost}`);
+        } else {
+          this._chartTotal.set_text(`${label}  ${cost}  ${calls}`);
+        }
         this._chartTotal.add_style_class_name('codeburn-chart-total-hover');
         bar.add_style_class_name('codeburn-chart-bar-hover');
         return Clutter.EVENT_PROPAGATE;
@@ -708,18 +724,20 @@ class CodeBurnIndicator extends PanelMenu.Button {
   }
 
   _renderTrendView() {
-    const daily = this._payload?.history?.daily ?? [];
-    if (!daily.length) {
+    const series = buildPeriodSeries(this._period, this._payload);
+    const points = Array.isArray(series.points) ? series.points : [];
+    if (!points.length) {
       this._contentArea.add_child(new St.Label({ text: 'Not enough history yet', style_class: 'codeburn-empty' }));
       return;
     }
-    for (const d of daily.slice(-7).reverse()) {
+    this._contentArea.add_child(this._sectionTitle(series.windowLabel));
+    for (const point of points.slice(-7).reverse()) {
       const row = new St.BoxLayout({ style_class: 'codeburn-trend-row' });
-      row.add_child(new St.Label({ text: d.date, style_class: 'codeburn-trend-date', x_expand: true }));
-      const costLabel = new St.Label({ text: this._fmt(d.cost), style_class: 'codeburn-trend-cost' });
+      row.add_child(new St.Label({ text: point.label, style_class: 'codeburn-trend-date', x_expand: true }));
+      const costLabel = new St.Label({ text: this._fmt(point.cost), style_class: 'codeburn-trend-cost' });
       costLabel.clutter_text.x_align = Clutter.ActorAlign.END;
       row.add_child(costLabel);
-      const callsLabel = new St.Label({ text: `${Number(d.calls).toLocaleString()} calls`, style_class: 'codeburn-trend-calls' });
+      const callsLabel = new St.Label({ text: `${Number(point.calls).toLocaleString()} calls`, style_class: 'codeburn-trend-calls' });
       callsLabel.clutter_text.x_align = Clutter.ActorAlign.END;
       row.add_child(callsLabel);
       this._contentArea.add_child(row);

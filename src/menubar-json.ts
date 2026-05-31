@@ -1,4 +1,4 @@
-/// Rollup of one time window (today / 7 days / 30 days / month / all) used as the canonical
+/// Rollup of one time window (today / 7 days / 30 days / month / 6 months / lifetime) used as the canonical
 /// input to the menubar payload. Built inside the CLI and also consumed by the day-aggregator
 /// when hydrating per-day cache entries.
 export type PeriodData = {
@@ -49,6 +49,27 @@ export type DailyHistoryEntry = {
   cacheReadTokens: number
   cacheWriteTokens: number
   topModels: DailyModelBreakdown[]
+}
+
+export type IntradayHistoryEntry = {
+  bucketStartHour: number
+  bucketEndHour: number
+  cost: number
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  topModels: DailyModelBreakdown[]
+}
+
+export type StatsSummaryEntry = {
+  trackedSpend: number
+  trackedDays: number
+  mostActiveDay: string | null
+  peakDaySpend: number | null
+  currentStreakDays: number
+  longestStreakDays: number
 }
 
 export type MenubarPayload = {
@@ -139,6 +160,78 @@ export type MenubarPayload = {
   }
   history: {
     daily: DailyHistoryEntry[]
+    intraday: IntradayHistoryEntry[]
+  }
+  stats: StatsSummaryEntry
+}
+
+function parseLocalDay(day: string): Date {
+  const [year, month, date] = day.split('-').map(Number) as [number, number, number]
+  return new Date(year, month - 1, date)
+}
+
+function toDayKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function buildStatsSummary(days: Array<Pick<DailyHistoryEntry, 'date' | 'cost'>> | undefined): StatsSummaryEntry {
+  if (!days || days.length === 0) {
+    return {
+      trackedSpend: 0,
+      trackedDays: 0,
+      mostActiveDay: null,
+      peakDaySpend: null,
+      currentStreakDays: 0,
+      longestStreakDays: 0,
+    }
+  }
+
+  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date))
+  const trackedSpend = sorted.reduce((sum, day) => sum + day.cost, 0)
+  const peakDay = sorted.reduce<Pick<DailyHistoryEntry, 'date' | 'cost'> | null>(
+    (best, day) => (best === null || day.cost > best.cost ? day : best),
+    null,
+  )
+
+  const costByDate = new Map(sorted.map(day => [day.date, day.cost]))
+  const today = new Date()
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const firstTracked = parseLocalDay(sorted[0]!.date)
+  const lastTracked = parseLocalDay(sorted[sorted.length - 1]!.date)
+
+  let currentStreakDays = 0
+  let cursor = todayStart
+  while (cursor >= firstTracked) {
+    const dayKey = toDayKey(cursor)
+    if ((costByDate.get(dayKey) ?? 0) > 0) {
+      currentStreakDays += 1
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 1)
+      continue
+    }
+    break
+  }
+
+  let longestStreakDays = 0
+  let runningStreak = 0
+  cursor = firstTracked
+  while (cursor <= lastTracked) {
+    const dayKey = toDayKey(cursor)
+    if ((costByDate.get(dayKey) ?? 0) > 0) {
+      runningStreak += 1
+      longestStreakDays = Math.max(longestStreakDays, runningStreak)
+    } else {
+      runningStreak = 0
+    }
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1)
+  }
+
+  return {
+    trackedSpend,
+    trackedDays: sorted.length,
+    mostActiveDay: peakDay?.date ?? null,
+    peakDaySpend: peakDay?.cost ?? null,
+    currentStreakDays,
+    longestStreakDays,
   }
 }
 
@@ -207,11 +300,21 @@ function buildProviders(providers: ProviderCost[]): Record<string, number> {
   return map
 }
 
-function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['history'] {
-  if (!daily || daily.length === 0) return { daily: [] }
-  const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date))
-  const trimmed = sorted.slice(-HISTORY_DAYS_LIMIT)
-  return { daily: trimmed }
+function buildHistory(
+  daily: DailyHistoryEntry[] | undefined,
+  intraday: IntradayHistoryEntry[] | undefined,
+  retainFullDailyHistory = false,
+): MenubarPayload['history'] {
+  const dailyEntries = !daily || daily.length === 0
+    ? []
+    : (() => {
+        const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date))
+        return retainFullDailyHistory ? sorted : sorted.slice(-HISTORY_DAYS_LIMIT)
+      })()
+  const intradayEntries = !intraday || intraday.length === 0
+    ? []
+    : [...intraday].sort((a, b) => a.bucketStartHour - b.bucketStartHour)
+  return { daily: dailyEntries, intraday: intradayEntries }
 }
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
@@ -262,8 +365,11 @@ export function buildMenubarPayload(
   providers: ProviderCost[],
   optimize: OptimizeResult | null,
   dailyHistory?: DailyHistoryEntry[],
+  intradayHistory?: IntradayHistoryEntry[],
+  statsHistory?: Array<Pick<DailyHistoryEntry, 'date' | 'cost'>>,
   retryTax?: MenubarPayload['current']['retryTax'],
   routingWaste?: MenubarPayload['current']['routingWaste'],
+  retainFullDailyHistory = false,
   breakdowns?: BreakdownArrays,
 ): MenubarPayload {
   return {
@@ -291,6 +397,7 @@ export function buildMenubarPayload(
       mcpServers: breakdowns?.mcpServers ?? [],
     },
     optimize: buildOptimize(optimize),
-    history: buildHistory(dailyHistory),
+    history: buildHistory(dailyHistory, intradayHistory, retainFullDailyHistory),
+    stats: buildStatsSummary(statsHistory),
   }
 }

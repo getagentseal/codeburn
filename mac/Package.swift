@@ -22,7 +22,10 @@ let package = Package(
         ),
         .testTarget(
             name: "CodeBurnMenubarTests",
-            dependencies: ["CodeBurnMenubar"],
+            dependencies: [
+                "CodeBurnMenubar",
+                .product(name: "Testing", package: "swift-testing")
+            ],
             path: "Tests/CodeBurnMenubarTests"
         ),
         .testTarget(
