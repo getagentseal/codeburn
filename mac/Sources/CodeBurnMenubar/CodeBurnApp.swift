@@ -888,7 +888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         button.attributedTitle = composed
-        button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
+        button.toolTip = "CodeBurn v2 \(menubarPeriod.menubarMetricLabel)"
     }
 
     private func formatTokensMenubar(_ n: Double) -> String {

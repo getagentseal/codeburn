@@ -184,8 +184,15 @@ final class AppStore {
         PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
     }
 
+    /// Stash the last non-empty payload so period switches don't flash empty.
+    private var lastNonEmptyPayload: MenubarPayload?
+
     var payload: MenubarPayload {
-        cache[currentKey]?.payload ?? .empty
+        if let cached = cache[currentKey]?.payload {
+            lastNonEmptyPayload = cached
+            return cached
+        }
+        return lastNonEmptyPayload ?? .empty
     }
 
     /// Today (across all providers) backs day-specific views in the popover.
@@ -241,7 +248,7 @@ final class AppStore {
     }
 
     var hasCachedData: Bool {
-        cache[currentKey] != nil
+        cache[currentKey] != nil || lastNonEmptyPayload != nil
     }
 
     var hasStaleLoading: Bool {
@@ -314,9 +321,9 @@ final class AppStore {
     }
 
     func switchToMostUsedProviderIfAvailable() {
-        guard autoShowMostUsedProvider, selectedProvider == .all else { return }
-        guard let provider = mostUsedProviderFilter else { return }
-        switchTo(provider: provider)
+        // Disabled: auto-switching provider after refresh is disorienting.
+        // Users pick their own provider tab; period switches should not move it.
+        return
     }
 
 #if DEBUG
@@ -337,12 +344,17 @@ final class AppStore {
         payload.optimize.findingCount
     }
 
+    /// Set during user-initiated period switches to suppress auto-provider-switch.
+    private var suppressAutoProviderSwitch = false
+
     /// Switch to a period. Cancels any in-flight switch and fetches provider-specific +
     /// all-provider data in parallel so tab strip costs stay in sync with the hero.
     func switchTo(period: Period) {
         selectedPeriod = period
         selectedDays = []
-        startInteractiveSelectionRefresh()
+        suppressAutoProviderSwitch = true
+        // Always refresh silently — never show loading overlay on period switch
+        startInteractiveSelectionRefresh(showLoadingOverlay: false)
     }
 
     func switchToYesterday() {
@@ -394,7 +406,7 @@ final class AppStore {
         startInteractiveSelectionRefresh()
     }
 
-    private func startInteractiveSelectionRefresh() {
+    private func startInteractiveSelectionRefresh(showLoadingOverlay: Bool = true) {
         switchTask?.cancel()
         let period = selectedPeriod
         let provider = selectedProvider
@@ -407,15 +419,16 @@ final class AppStore {
         // and refresh silently in the background. This eliminates the perceived
         // half-second delay on period/provider switches.
         let hasCached = cache[key] != nil
-        if !hasCached {
+        let shouldShowLoading = showLoadingOverlay && !hasCached
+        if shouldShowLoading {
             resetLoadingState()
         }
 
         switchTask = Task {
             if provider == .all {
-                await refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
+                await refresh(key: key, includeOptimize: false, force: true, showLoading: shouldShowLoading)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
+                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: shouldShowLoading)
                 async let all: Void = refreshQuietly(period: period, day: day)
                 _ = await (main, all)
             }
