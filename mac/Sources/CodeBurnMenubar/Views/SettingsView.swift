@@ -84,6 +84,7 @@ struct SettingsView: View {
         } detail: {
             detailView
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(width: 650, height: 520)
     }
 
