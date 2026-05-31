@@ -12,7 +12,6 @@ struct ActivitySection: View {
                 HStack(spacing: 8) {
                     Text("Cost").frame(minWidth: 54, alignment: .trailing)
                     Text("Turns").frame(minWidth: 52, alignment: .trailing)
-                    Text("1-shot").frame(minWidth: 44, alignment: .trailing)
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.tertiary)
@@ -52,20 +51,9 @@ struct ActivityRow: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 52, alignment: .trailing)
-
-            Text(oneShotText)
-                .font(.system(size: 10.5))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 44, alignment: .trailing)
         }
         .padding(.horizontal, 2)
         .padding(.vertical, 1)
-    }
-
-    private var oneShotText: String {
-        guard let rate = activity.oneShotRate else { return "—" }
-        return "\(Int(rate * 100))%"
     }
 }
 
@@ -76,10 +64,16 @@ struct FixedBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.secondary.opacity(0.15))
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Theme.brandAccent)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.secondary.opacity(0.08))
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.brandAccentLight, Theme.brandAccent],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                     .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(fraction))))
             }
         }

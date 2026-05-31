@@ -272,9 +272,6 @@ private struct Header: View {
                     )
                     .font(.system(size: 13, weight: .semibold))
                     .tracking(-0.15)
-                    Text("AI Coding Cost Tracker")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if updateChecker.updateAvailable || updateChecker.updateError != nil {
@@ -622,30 +619,6 @@ struct FooterBar: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(store.isLoading)
-
-            Button {
-                openHistory()
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Open history")
-
-            Menu {
-                Button("CSV (folder)") { runExport(format: .csv) }
-                Button("JSON") { runExport(format: .json) }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .fixedSize()
 
             Spacer()
 

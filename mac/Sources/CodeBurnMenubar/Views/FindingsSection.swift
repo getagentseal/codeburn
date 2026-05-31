@@ -5,7 +5,7 @@ import SwiftUI
 /// Wins/risks are derived from current + history; improvements come from the optimize findings.
 struct FindingsSection: View {
     @Environment(AppStore.self) private var store
-    @State private var isExpanded: Bool = true
+    @State private var isExpanded: Bool = false
 
     var body: some View {
         let groups = computeTipGroups(payload: store.payload)
