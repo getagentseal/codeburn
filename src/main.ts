@@ -179,6 +179,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   let totalSessions = 0
   let totalInput = 0
   let totalOutput = 0
+  let totalReasoning = 0
   let totalCacheRead = 0
   let totalCacheWrite = 0
 
@@ -199,6 +200,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     for (const sess of p.sessions) {
       totalInput += sess.totalInputTokens
       totalOutput += sess.totalOutputTokens
+      totalReasoning += sess.totalReasoningTokens
       totalCacheRead += sess.totalCacheReadTokens
       totalCacheWrite += sess.totalCacheWriteTokens
 

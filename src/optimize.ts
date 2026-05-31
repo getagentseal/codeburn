@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
-import type { DateRange, ProjectSummary, TaskCategory } from './types.js'
+import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 
@@ -264,16 +264,14 @@ const IMPROVING_THRESHOLD = 0.5
 async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   const files = await readdir(dirPath).catch(() => [])
   const result = files.filter(f => f.endsWith('.jsonl')).map(f => join(dirPath, f))
-  // Scan subdirectory /subagents/ in parallel for all session dirs
-  const subDirs = files.filter(f => !f.endsWith('.jsonl'))
-  const subResults = await Promise.all(
-    subDirs.map(async (entry) => {
-      const subPath = join(dirPath, entry, 'subagents')
-      const subFiles = await readdir(subPath).catch(() => [] as string[])
-      return subFiles.filter(sf => sf.endsWith('.jsonl')).map(sf => join(subPath, sf))
-    })
-  )
-  for (const sub of subResults) result.push(...sub)
+  for (const entry of files) {
+    if (entry.endsWith('.jsonl')) continue
+    const subPath = join(dirPath, entry, 'subagents')
+    const subFiles = await readdir(subPath).catch(() => [])
+    for (const sf of subFiles) {
+      if (sf.endsWith('.jsonl')) result.push(join(subPath, sf))
+    }
+  }
   return result
 }
 
@@ -410,16 +408,9 @@ async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
   const allApiCalls: ApiCallMeta[] = []
   const allUserMessages: string[] = []
 
-  // Discover file lists from all sources in parallel
-  const sourceFiles = await Promise.all(
-    sources.map(async (source) => {
-      const files = await collectJsonlFiles(source.path)
-      return { source, files }
-    })
-  )
-
   const tasks: Array<{ file: string; project: string }> = []
-  for (const { source, files } of sourceFiles) {
+  for (const source of sources) {
+    const files = await collectJsonlFiles(source.path)
     for (const file of files) {
       if (await isFileStaleForRange(file, dateRange)) continue
       tasks.push({ file, project: source.project })
@@ -496,10 +487,8 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   const dirCounts = new Map<string, number>()
   let totalJunkReads = 0
   let recentJunkReads = 0
-  let hasRecentActivity = false
 
   for (const call of calls) {
-    if (call.recent) hasRecentActivity = true
     if (!isReadTool(call.name)) continue
     const filePath = call.input.file_path as string | undefined
     if (!filePath || !JUNK_PATTERN.test(filePath)) continue
@@ -515,6 +504,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
 
   if (totalJunkReads < MIN_JUNK_READS_TO_FLAG) return null
 
+  const hasRecentActivity = calls.some(c => c.recent)
   const trend = sessionTrend(recentJunkReads, totalJunkReads, dateRange, hasRecentActivity)
   if (trend === 'resolved') return null
 
@@ -2292,7 +2282,6 @@ export async function scanAndDetect(
   const costRate = computeInputCostRate(projects)
   const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
   const mcpCoverage = aggregateMcpCoverage(projects)
-  const capabilityStats = aggregateCapabilityStats(projects)
 
   const findings: WasteFinding[] = []
   // Priority order for the per-session findings: low-worth → context-bloat →
