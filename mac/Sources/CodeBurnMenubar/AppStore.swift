@@ -1275,6 +1275,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case droid = "Droid"
     case forge = "Forge"
     case gemini = "Gemini"
+    case hermes = "Hermes"
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
@@ -1305,6 +1306,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .ibmBob: ["ibm-bob", "ibm bob"]
         case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
+        case .hermes: ["hermes"]
         case .antigravity: ["antigravity"]
         case .vertex: ["vertex"]
         case .goose: ["goose"]
@@ -1331,6 +1333,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kimi: "kimi"
         case .mistralVibe: "mistral-vibe"
         case .openclaw: "openclaw"
+        case .hermes: "hermes"
         case .opencode: "opencode"
         case .pi: "pi"
         case .qwen: "qwen"

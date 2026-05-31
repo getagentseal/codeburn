@@ -57,6 +57,8 @@ struct SettingsView: View {
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
         ("Warp", "warp", "wand.and.rays"),
+        ("Hermes", "hermes", "bolt.horizontal"),
+        ("OpenClaw", "openclaw", "pawprint"),
     ]
 
     private var activeProviders: [(name: String, key: String, icon: String)] {
@@ -546,6 +548,8 @@ private struct ProvidersSettingsTab: View {
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
         ("Warp", "warp", "wand.and.rays"),
+        ("Hermes", "hermes", "bolt.horizontal"),
+        ("OpenClaw", "openclaw", "pawprint"),
     ]
 
     var body: some View {
