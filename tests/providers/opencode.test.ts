@@ -103,10 +103,16 @@ function insertPart(db: TestDb, id: string, messageId: string, sessionId: string
     .run(id, messageId, sessionId, JSON.stringify(data))
 }
 
-async function collectCalls(provider: ReturnType<typeof createOpenCodeProvider>, dbPath: string, sessionId: string, seenKeys?: Set<string>): Promise<ParsedProviderCall[]> {
-  const source = { path: `${dbPath}:${sessionId}`, project: 'myproject', provider: 'opencode' }
+async function collectCalls(
+  provider: ReturnType<typeof createOpenCodeProvider>,
+  dbPath: string,
+  sessionIdOrSeenKeys?: string | Set<string>,
+  seenKeys?: Set<string>,
+): Promise<ParsedProviderCall[]> {
+  const source = { path: dbPath, project: 'opencode', provider: 'opencode' }
+  const keys = sessionIdOrSeenKeys instanceof Set ? sessionIdOrSeenKeys : seenKeys
   const calls: ParsedProviderCall[] = []
-  for await (const call of provider.createSessionParser(source, seenKeys ?? new Set()).parse()) {
+  for await (const call of provider.createSessionParser(source, keys ?? new Set()).parse()) {
     calls.push(call)
   }
   return calls
@@ -167,7 +173,7 @@ skipUnlessSqlite('opencode provider - tool display names', () => {
 })
 
 skipUnlessSqlite('opencode provider - session discovery', () => {
-  it('discovers sessions with correct path format', async () => {
+  it('discovers databases with real filesystem paths', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-1')
@@ -178,11 +184,11 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
 
     expect(sessions).toHaveLength(1)
     expect(sessions[0]!.provider).toBe('opencode')
-    expect(sessions[0]!.project).toBe('home-user-myproject')
-    expect(sessions[0]!.path).toBe(`${dbPath}:sess-1`)
+    expect(sessions[0]!.project).toBe('opencode')
+    expect(sessions[0]!.path).toBe(dbPath)
   })
 
-  it('excludes archived sessions', async () => {
+  it('discovers the database even when it only contains archived sessions', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-archived', { archived: 1700000001000 })
@@ -190,10 +196,11 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    expect(sessions).toHaveLength(0)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(dbPath)
   })
 
-  it('excludes child sessions', async () => {
+  it('discovers the database even when it only contains child sessions', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-child', { parentId: 'parent-id' })
@@ -201,7 +208,8 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    expect(sessions).toHaveLength(0)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(dbPath)
   })
 
   it('returns empty for non-existent path', async () => {
@@ -210,11 +218,12 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     expect(sessions).toEqual([])
   })
 
-  it('returns empty for empty database', async () => {
-    createTestDb(tmpDir)
+  it('discovers empty databases so stale cache entries can be reconciled', async () => {
+    const dbPath = createTestDb(tmpDir)
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    expect(sessions).toEqual([])
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(dbPath)
   })
 
   it('discovers sessions across multiple channel databases', async () => {
@@ -245,8 +254,8 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.map(s => s.path)).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('opencode.db:sess-opencode.db'),
-        expect.stringContaining('opencode-dev.db:sess-opencode-dev.db'),
+        expect.stringContaining('opencode.db'),
+        expect.stringContaining('opencode-dev.db'),
       ]),
     )
     expect(sessions.every(s => s.provider === 'opencode')).toBe(true)
@@ -265,18 +274,24 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     expect(sessions).toHaveLength(1)
   })
 
-  it('sanitizes title when directory is empty', async () => {
+  it('uses session project metadata while parsing when directory is empty', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-1', { directory: '', title: 'My Session Title' })
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.05,
+        tokens: { input: 100, output: 200, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
     })
 
     const provider = createOpenCodeProvider(tmpDir)
-    const sessions = await provider.discoverSessions()
-    expect(sessions[0]!.project).toBe('My Session Title')
+    const calls = await collectCalls(provider, dbPath, 'sess-1')
+    expect(calls[0]!.project).toBe('My Session Title')
   })
 
-  it('discovers multiple sessions in one database', async () => {
+  it('discovers one source for multiple sessions in one database', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-1', { directory: '/home/user/project-a', title: 'A' })
@@ -285,11 +300,91 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    expect(sessions).toHaveLength(2)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(dbPath)
   })
 })
 
 skipUnlessSqlite('opencode provider - session parsing', () => {
+  it('parses all root sessions from one database source', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1', { directory: '/home/user/project-a', title: 'A' })
+      insertSession(db, 'sess-2', { directory: '/home/user/project-b', title: 'B' })
+
+      insertMessage(db, 'msg-a1', 'sess-1', 1700000001000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.01,
+        tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertMessage(db, 'msg-b1', 'sess-2', 1700000002000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.02,
+        tokens: { input: 30, output: 40, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath)
+
+    expect(calls).toHaveLength(2)
+    expect(calls.map(call => call.sessionId).sort()).toEqual(['sess-1', 'sess-2'])
+    expect(calls.map(call => call.project).sort()).toEqual([
+      'home-user-project-a',
+      'home-user-project-b',
+    ])
+  })
+
+  it('does not parse archived root sessions from a database source', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-archived', { archived: 1700000001000 })
+      insertMessage(db, 'msg-archived', 'sess-archived', 1700000001000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.01,
+        tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath)
+
+    expect(calls).toHaveLength(0)
+  })
+
+  it('still accepts legacy compound database/session source paths', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1')
+      insertSession(db, 'sess-2')
+
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.01,
+        tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertMessage(db, 'msg-2', 'sess-2', 1700000002000, {
+        role: 'assistant',
+        modelID: 'claude-opus-4-6',
+        cost: 0.02,
+        tokens: { input: 30, output: 40, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const source = { path: `${dbPath}:sess-2`, project: 'legacy', provider: 'opencode' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.sessionId).toBe('sess-2')
+    expect(calls[0]!.deduplicationKey).toBe('opencode:sess-2:msg-2')
+  })
+
   it('parses assistant messages with all fields', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
