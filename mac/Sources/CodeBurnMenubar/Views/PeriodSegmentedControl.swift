@@ -9,7 +9,7 @@ struct PeriodSegmentedControl: View {
             ForEach(Period.allCases) { period in
                 let isActive = !store.isDayMode && store.selectedPeriod == period
                 Button {
-                    showingCalendar.toggle()
+                    store.switchTo(period: period)
                 } label: {
                     Text(period.rawValue)
                         .font(.system(size: 11, weight: .medium))
