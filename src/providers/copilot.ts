@@ -87,6 +87,12 @@ const CHARS_PER_TOKEN = 4
 const COPILOT_OPENAI_AUTO = 'copilot-openai-auto'
 const COPILOT_ANTHROPIC_AUTO = 'copilot-anthropic-auto'
 
+// Copilot CLI events only log outputTokens — inputTokens are never recorded.
+// For agentic sessions with large context windows (file contents, tool results,
+// conversation history), the typical input:output ratio is ~5:1. We apply this
+// multiplier to estimate input cost when no explicit inputTokens are available.
+const ESTIMATED_INPUT_OUTPUT_RATIO = 5
+
 const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
 // --- Legacy format (session-state/events.jsonl with outputTokens) ---
@@ -160,12 +166,15 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
         .map(t => normalizeToolName(t?.name))
         .filter(Boolean)
 
-      const costUSD = calculateCost(currentModel, 0, outputTokens, 0, 0, 0)
+      // Estimate input tokens: the event only records outputTokens, but agentic
+      // sessions feed large contexts (files, tool results, history). Apply ratio.
+      const estimatedInputTokens = outputTokens * ESTIMATED_INPUT_OUTPUT_RATIO
+      const costUSD = calculateCost(currentModel, estimatedInputTokens, outputTokens, 0, 0, 0)
 
       results.push({
         provider: 'copilot',
         model: currentModel,
-        inputTokens: 0,
+        inputTokens: estimatedInputTokens,
         outputTokens,
         cacheCreationInputTokens: 0,
         cacheReadInputTokens: 0,
@@ -271,7 +280,7 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
       const contentText = data.content ?? ''
       const reasoningText = data.reasoningText ?? ''
 
-      if (contentText.length === 0 && reasoningText.length === 0 && (data.toolRequests ?? []).length === 0) continue
+      if (contentText.length === 0 && reasoningText.length === 0 && (data.toolRequests ?? []).length === 0 && (data.outputTokens ?? 0) === 0) continue
 
       const dedupKey = `copilot:${sessionId}:${data.messageId}`
       if (seenKeys.has(dedupKey)) continue
@@ -284,7 +293,12 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
         reasoningTokens = Math.ceil(reasoningText.length / CHARS_PER_TOKEN)
       }
 
-      const inputTokens = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
+      // User message text is a tiny fraction of actual input (system prompt,
+      // tool results, file contents, conversation history aren't logged).
+      // Use the higher of: message-based estimate or ratio-based estimate.
+      const messageBasedInput = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
+      const ratioBasedInput = (outputTokens + reasoningTokens) * ESTIMATED_INPUT_OUTPUT_RATIO
+      const inputTokens = Math.max(messageBasedInput, ratioBasedInput)
 
       // Same defensive guard as the modern event branch — corrupt legacy
       // sessions have shipped toolRequests as non-array values.

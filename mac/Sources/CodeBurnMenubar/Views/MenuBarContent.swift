@@ -76,7 +76,6 @@ struct MenuBarContent: View {
                 }
             }
             .frame(height: 520)
-            .animation(.easeInOut(duration: 0.2), value: store.isLoading)
 
             Divider()
 

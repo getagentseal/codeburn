@@ -1,0 +1,64 @@
+name: CodeBurnMenubar
+options:
+  bundleIdPrefix: org.agentseal
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "26.2"
+  createIntermediateGroups: true
+
+packages:
+  ViewInspector:
+    url: https://github.com/nalexn/ViewInspector.git
+    from: "0.10.0"
+
+targets:
+  CodeBurnMenubar:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/CodeBurnMenubar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.agentseal.codeburn-menubar
+        INFOPLIST_VALUES: >-
+          CFBundleDisplayName=CodeBurn Menubar;
+          LSUIElement=true;
+          NSHighResolutionCapable=true;
+        SWIFT_STRICT_CONCURRENCY: complete
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+  CodeBurnMenubarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/CodeBurnMenubarTests
+    dependencies:
+      - target: CodeBurnMenubar
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/CodeBurnMenubar.app/Contents/MacOS/CodeBurnMenubar"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  CodeBurnMenubarViewTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/CodeBurnMenubarViewTests
+    dependencies:
+      - target: CodeBurnMenubar
+      - package: ViewInspector
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/CodeBurnMenubar.app/Contents/MacOS/CodeBurnMenubar"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  CodeBurnMenubarUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/CodeBurnMenubarUITests
+    dependencies:
+      - target: CodeBurnMenubar
+    settings:
+      base:
+        TEST_TARGET_NAME: CodeBurnMenubar

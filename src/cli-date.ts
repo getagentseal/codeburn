@@ -109,10 +109,9 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
   // dashboard's "all" period uses) instead of epoch. Previously a bare
   // `--to 2026-01-01` opened a 55-year scan from 1970 which is rarely what
   // the user meant and is expensive on machines with many session files.
-  const ALL_TIME_FALLBACK_MS = 6 * 31 * 24 * 60 * 60 * 1000
   const start = from !== undefined
     ? parseLocalDate(from)
-    : new Date(now.getTime() - ALL_TIME_FALLBACK_MS)
+    : new Date(now.getFullYear(), now.getMonth() - 6, now.getDate())
 
   const endDate = to !== undefined ? parseLocalDate(to) : new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const end = endOfLocalDay(endDate)

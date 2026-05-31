@@ -1,30 +1,106 @@
 import AppKit
 import SwiftUI
 
-/// macOS-standard tabbed Settings window. New per-provider sections (Codex,
-/// Cursor, Copilot, etc.) plug in as additional tabs. Each tab owns its own
-/// concerns; this top-level view only hosts the TabView shell.
+/// Settings window using a sidebar list for navigation instead of toolbar tabs
+/// (which overflow into a >> chevron on narrow windows).
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
+    @State private var selected: SidebarItem? = .settings(.general)
+
+    enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
+        case general, providers, debug, about
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .general: "General"
+            case .providers: "Providers"
+            case .debug: "Debug"
+            case .about: "About"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .general: "gearshape"
+            case .providers: "switch.2"
+            case .debug: "wrench.and.screwdriver"
+            case .about: "info.circle"
+            }
+        }
+    }
+
+    enum SidebarItem: Hashable, Identifiable {
+        case settings(SettingsPane)
+        case provider(String)
+
+        var id: String {
+            switch self {
+            case .settings(let pane): "s-\(pane.rawValue)"
+            case .provider(let key): "p-\(key)"
+            }
+        }
+    }
+
+    static let providerMeta: [(name: String, key: String, icon: String)] = [
+        ("Claude", "claude", "brain"),
+        ("Codex", "codex", "chevron.left.forwardslash.chevron.right"),
+        ("Copilot", "copilot", "airplane"),
+        ("Vertex AI", "vertex", "cloud"),
+        ("Antigravity", "antigravity", "atom"),
+        ("Cursor", "cursor", "cursorarrow.rays"),
+        ("Cline", "cline", "terminal"),
+        ("Roo Code", "roo-code", "hare"),
+        ("KiloCode", "kilocode", "k.circle"),
+        ("OpenCode", "opencode", "chevron.left.slash.chevron.right"),
+        ("Forge", "forge", "hammer"),
+        ("Gemini", "gemini", "sparkles"),
+        ("Goose", "goose", "bird"),
+        ("Warp", "warp", "wand.and.rays"),
+    ]
+
+    private var activeProviders: [(name: String, key: String, icon: String)] {
+        Self.providerMeta.filter { !store.disabledProviders.contains($0.key) }
+    }
 
     var body: some View {
-        TabView {
-            GeneralSettingsTab()
-                .tabItem { Label("General", systemImage: "gearshape") }
-
-            ClaudeSettingsTab()
-                .tabItem { Label("Claude", systemImage: "brain") }
-
-            CodexSettingsTab()
-                .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
-
-            DebugSettingsTab()
-                .tabItem { Label("Debug", systemImage: "wrench.and.screwdriver") }
-
-            AboutSettingsTab()
-                .tabItem { Label("About", systemImage: "info.circle") }
+        NavigationSplitView {
+            List(selection: $selected) {
+                Section("Settings") {
+                    ForEach(SettingsPane.allCases) { pane in
+                        Label(pane.label, systemImage: pane.icon)
+                            .tag(SidebarItem.settings(pane))
+                    }
+                }
+                Section("Providers") {
+                    ForEach(activeProviders, id: \.key) { p in
+                        Label(p.name, systemImage: p.icon)
+                            .tag(SidebarItem.provider(p.key))
+                    }
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 150, ideal: 160, max: 200)
+            .listStyle(.sidebar)
+        } detail: {
+            detailView
         }
-        .frame(width: 560, height: 500)
+        .frame(width: 650, height: 520)
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch selected {
+        case .settings(.general), .none:
+            GeneralSettingsTab()
+        case .settings(.providers):
+            ProvidersSettingsTab()
+        case .settings(.debug):
+            DebugSettingsTab()
+        case .settings(.about):
+            AboutSettingsTab()
+        case .provider(let key):
+            ProviderDetailView(providerKey: key)
+        }
     }
 }
 
@@ -218,38 +294,7 @@ private struct GeneralSettingsTab: View {
     }
 }
 
-// MARK: - Claude
-
-private struct ClaudeSettingsTab: View {
-    @Environment(AppStore.self) private var store
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                ClaudeConnectionRow()
-            }
-            Section("Quota Refresh") {
-                Picker("Update every", selection: Binding(
-                    get: { SubscriptionRefreshCadence.current },
-                    set: { SubscriptionRefreshCadence.current = $0 }
-                )) {
-                    ForEach(SubscriptionRefreshCadence.allCases) { cadence in
-                        Text(cadence.label).tag(cadence)
-                    }
-                }
-                .pickerStyle(.menu)
-                Text("Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Button("Refresh Now") {
-                    Task { await store.refreshSubscription() }
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-}
+// MARK: - Claude Connection
 
 private struct ClaudeConnectionRow: View {
     @Environment(AppStore.self) private var store
@@ -362,28 +407,7 @@ private struct ClaudeConnectionRow: View {
     }
 }
 
-// MARK: - Codex
-
-private struct CodexSettingsTab: View {
-    @Environment(AppStore.self) private var store
-
-    var body: some View {
-        Form {
-            Section("Connection") {
-                CodexConnectionRow()
-            }
-            Section {
-                Text("Codex live-quota tracking reads `~/.codex/auth.json` once on Connect, then keeps a local copy under Application Support so subsequent quota fetches don't re-read the original. Only ChatGPT-mode auth (Plus / Pro / Team / Business) is supported — API-key users are billed per request and have a different reporting surface.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("How it works")
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-}
+// MARK: - Codex Connection
 
 private struct CodexConnectionRow: View {
     @Environment(AppStore.self) private var store
@@ -495,6 +519,177 @@ private struct CodexConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Providers (Toggles + Connections)
+
+private struct ProvidersSettingsTab: View {
+    @Environment(AppStore.self) private var store
+    @State private var copilotDetected = false
+    @State private var vertexDetected = false
+    @State private var vertexPath: String = ""
+
+    private let toggleableProviders: [(name: String, key: String, icon: String)] = [
+        ("Claude", "claude", "brain"),
+        ("Codex", "codex", "chevron.left.forwardslash.chevron.right"),
+        ("Copilot", "copilot", "airplane"),
+        ("Vertex AI", "vertex", "cloud"),
+        ("Antigravity", "antigravity", "atom"),
+        ("Cursor", "cursor", "cursorarrow.rays"),
+        ("Cline", "cline", "terminal"),
+        ("Roo Code", "roo-code", "hare"),
+        ("KiloCode", "kilocode", "k.circle"),
+        ("OpenCode", "opencode", "chevron.left.slash.chevron.right"),
+        ("Forge", "forge", "hammer"),
+        ("Gemini", "gemini", "sparkles"),
+        ("Goose", "goose", "bird"),
+        ("Warp", "warp", "wand.and.rays"),
+    ]
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Disabled providers are excluded from cost tracking and the menubar.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Section("Active Providers") {
+                ForEach(toggleableProviders, id: \.key) { provider in
+                    Toggle(isOn: providerBinding(for: provider.key)) {
+                        Label(provider.name, systemImage: provider.icon)
+                    }
+                }
+            }
+            Section("Claude Connection") {
+                ClaudeConnectionRow()
+                Picker("Quota refresh", selection: Binding(
+                    get: { SubscriptionRefreshCadence.current },
+                    set: { SubscriptionRefreshCadence.current = $0 }
+                )) {
+                    ForEach(SubscriptionRefreshCadence.allCases) { cadence in
+                        Text(cadence.label).tag(cadence)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            Section("Codex Connection") {
+                CodexConnectionRow()
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task { detectProviders() }
+    }
+
+    private func detectProviders() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let copilotPaths = [
+            home.appendingPathComponent(".copilot").path,
+            home.appendingPathComponent("Library/Application Support/GitHub Copilot").path,
+        ]
+        copilotDetected = copilotPaths.contains { FileManager.default.fileExists(atPath: $0) }
+
+        let vertexPaths = [
+            home.appendingPathComponent(".config/google-cloud-sdk/ai/sessions").path,
+            home.appendingPathComponent(".vertex-ai/sessions").path,
+            home.appendingPathComponent(".config/gemini-code-assist/sessions").path,
+        ]
+        for path in vertexPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                vertexDetected = true
+                vertexPath = path
+                break
+            }
+        }
+    }
+
+    private func providerBinding(for key: String) -> Binding<Bool> {
+        Binding(
+            get: { !store.disabledProviders.contains(key) },
+            set: { enabled in
+                if enabled {
+                    store.disabledProviders.remove(key)
+                } else {
+                    store.disabledProviders.insert(key)
+                }
+            }
+        )
+    }
+}
+
+// MARK: - Provider Detail (per-provider sidebar item)
+
+private struct ProviderDetailView: View {
+    @Environment(AppStore.self) private var store
+    let providerKey: String
+
+    private var providerName: String {
+        SettingsView.providerMeta.first { $0.key == providerKey }?.name ?? providerKey.capitalized
+    }
+
+    private var providerIcon: String {
+        SettingsView.providerMeta.first { $0.key == providerKey }?.icon ?? "cpu"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Image(systemName: providerIcon)
+                        .font(.title2)
+                    VStack(alignment: .leading) {
+                        Text(providerName).font(.headline)
+                        Text("Active").font(.caption).foregroundStyle(.green)
+                    }
+                    Spacer()
+                    Toggle("Enabled", isOn: enabledBinding)
+                        .labelsHidden()
+                }
+            }
+
+            if providerKey == "claude" {
+                Section("Connection") {
+                    ClaudeConnectionRow()
+                    Picker("Quota refresh", selection: Binding(
+                        get: { SubscriptionRefreshCadence.current },
+                        set: { SubscriptionRefreshCadence.current = $0 }
+                    )) {
+                        ForEach(SubscriptionRefreshCadence.allCases) { cadence in
+                            Text(cadence.label).tag(cadence)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+
+            if providerKey == "codex" {
+                Section("Connection") {
+                    CodexConnectionRow()
+                }
+            }
+
+            Section("Usage") {
+                Text("Select this provider in the menubar dropdown to see live usage data.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { !store.disabledProviders.contains(providerKey) },
+            set: { enabled in
+                if enabled {
+                    store.disabledProviders.remove(providerKey)
+                } else {
+                    store.disabledProviders.insert(providerKey)
+                }
+            }
+        )
     }
 }
 

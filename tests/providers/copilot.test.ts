@@ -86,7 +86,7 @@ describe('copilot provider - JSONL parsing', () => {
     expect(call.provider).toBe('copilot')
     expect(call.model).toBe('gpt-4.1')
     expect(call.outputTokens).toBe(150)
-    expect(call.inputTokens).toBe(0)
+    expect(call.inputTokens).toBe(150 * 5) // estimated at 5× output ratio
     expect(call.userMessage).toBe('write a function')
     expect(call.sessionId).toBe('sess-001')
     expect(call.bashCommands).toEqual([])

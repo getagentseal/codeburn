@@ -36,17 +36,22 @@ export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string
       for (const turn of session.turns) {
         if (!turn.hasEdits || turn.assistantCalls.length === 0) continue
 
-        const primaryCall = turn.assistantCalls.find(c => getShortModelName(c.model) !== '<synthetic>')
-        if (!primaryCall) continue
-        const primaryModel = getShortModelName(primaryCall.model)
+        // Single pass: find primary model and accumulate cost together
+        let primaryModel: string | undefined
+        let turnCost = 0
+        for (const call of turn.assistantCalls) {
+          const short = getShortModelName(call.model)
+          if (short === '<synthetic>') continue
+          if (!primaryModel) primaryModel = short
+          turnCost += call.costUSD
+        }
+        if (!primaryModel) continue
 
         const stats = ensure(primaryModel)
         stats.editTurns++
         if (turn.retries === 0) stats.oneShotTurns++
         stats.retries += turn.retries
-        stats.editCostUSD += turn.assistantCalls.reduce((sum, call) => {
-          return getShortModelName(call.model) === '<synthetic>' ? sum : sum + call.costUSD
-        }, 0)
+        stats.editCostUSD += turnCost
       }
     }
   }

@@ -1,6 +1,6 @@
 import { homedir } from 'os'
 
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
@@ -381,28 +381,32 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 const SKILL_SUB_ROWS_LIMIT = 5
 
 function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const categoryTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const skillTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      for (const [cat, data] of Object.entries(session.categoryBreakdown)) {
-        if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
-        categoryTotals[cat].turns += data.turns
-        categoryTotals[cat].costUSD += data.costUSD
-        categoryTotals[cat].editTurns += data.editTurns
-        categoryTotals[cat].oneShotTurns += data.oneShotTurns
-      }
-      for (const [skill, data] of Object.entries(session.skillBreakdown ?? {})) {
-        if (!skillTotals[skill]) skillTotals[skill] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
-        skillTotals[skill].turns += data.turns
-        skillTotals[skill].costUSD += data.costUSD
-        skillTotals[skill].editTurns += data.editTurns
-        skillTotals[skill].oneShotTurns += data.oneShotTurns
+  const { sorted, sortedSkills } = useMemo(() => {
+    const categoryTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
+    const skillTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
+    for (const project of projects) {
+      for (const session of project.sessions) {
+        for (const [cat, data] of Object.entries(session.categoryBreakdown)) {
+          if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
+          categoryTotals[cat].turns += data.turns
+          categoryTotals[cat].costUSD += data.costUSD
+          categoryTotals[cat].editTurns += data.editTurns
+          categoryTotals[cat].oneShotTurns += data.oneShotTurns
+        }
+        for (const [skill, data] of Object.entries(session.skillBreakdown ?? {})) {
+          if (!skillTotals[skill]) skillTotals[skill] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
+          skillTotals[skill].turns += data.turns
+          skillTotals[skill].costUSD += data.costUSD
+          skillTotals[skill].editTurns += data.editTurns
+          skillTotals[skill].oneShotTurns += data.oneShotTurns
+        }
       }
     }
-  }
-  const sorted = Object.entries(categoryTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
-  const sortedSkills = Object.entries(skillTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD).slice(0, SKILL_SUB_ROWS_LIMIT)
+    return {
+      sorted: Object.entries(categoryTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD),
+      sortedSkills: Object.entries(skillTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD).slice(0, SKILL_SUB_ROWS_LIMIT),
+    }
+  }, [projects])
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
   return (
     <Panel title="By Activity" color={PANEL_COLORS.activity} width={pw}>
@@ -439,16 +443,18 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
 }
 
 function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string; filterPrefix?: string }) {
-  const toolTotals: Record<string, number> = {}
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      for (const [tool, data] of Object.entries(session.toolBreakdown)) {
-        if (filterPrefix) { if (!tool.startsWith(filterPrefix)) continue } else { if (tool.startsWith('lang:')) continue }
-        toolTotals[tool] = (toolTotals[tool] ?? 0) + data.calls
+  const sorted = useMemo(() => {
+    const toolTotals: Record<string, number> = {}
+    for (const project of projects) {
+      for (const session of project.sessions) {
+        for (const [tool, data] of Object.entries(session.toolBreakdown)) {
+          if (filterPrefix) { if (!tool.startsWith(filterPrefix)) continue } else { if (tool.startsWith('lang:')) continue }
+          toolTotals[tool] = (toolTotals[tool] ?? 0) + data.calls
+        }
       }
     }
-  }
-  const sorted = Object.entries(toolTotals).sort(([, a], [, b]) => b - a)
+    return Object.entries(toolTotals).sort(([, a], [, b]) => b - a)
+  }, [projects, filterPrefix])
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
   return (
@@ -471,9 +477,11 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
 
 
 function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const mcpTotals: Record<string, number> = {}
-  for (const project of projects) { for (const session of project.sessions) { for (const [server, data] of Object.entries(session.mcpBreakdown)) { mcpTotals[server] = (mcpTotals[server] ?? 0) + data.calls } } }
-  const sorted = Object.entries(mcpTotals).sort(([, a], [, b]) => b - a)
+  const sorted = useMemo(() => {
+    const mcpTotals: Record<string, number> = {}
+    for (const project of projects) { for (const session of project.sessions) { for (const [server, data] of Object.entries(session.mcpBreakdown)) { mcpTotals[server] = (mcpTotals[server] ?? 0) + data.calls } } }
+    return Object.entries(mcpTotals).sort(([, a], [, b]) => b - a)
+  }, [projects])
   if (sorted.length === 0) return <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
@@ -488,9 +496,11 @@ function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: nu
 }
 
 function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const bashTotals: Record<string, number> = {}
-  for (const project of projects) { for (const session of project.sessions) { for (const [cmd, data] of Object.entries(session.bashBreakdown)) { bashTotals[cmd] = (bashTotals[cmd] ?? 0) + data.calls } } }
-  const sorted = Object.entries(bashTotals).sort(([, a], [, b]) => b - a)
+  const sorted = useMemo(() => {
+    const bashTotals: Record<string, number> = {}
+    for (const project of projects) { for (const session of project.sessions) { for (const [cmd, data] of Object.entries(session.bashBreakdown)) { bashTotals[cmd] = (bashTotals[cmd] ?? 0) + data.calls } } }
+    return Object.entries(bashTotals).sort(([, a], [, b]) => b - a)
+  }, [projects])
   if (sorted.length === 0) return <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
   const nw = Math.max(6, pw - bw - 15)
@@ -505,12 +515,14 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
 }
 
 function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const merged: Record<string, { uses: number; cost: number }> = {}
-  for (const project of projects) { for (const session of project.sessions) {
-    for (const [skill, d] of Object.entries(session.skillBreakdown)) { const e = merged[skill] ?? { uses: 0, cost: 0 }; e.uses += d.turns; e.cost += d.costUSD; merged[skill] = e }
-    for (const [agent, d] of Object.entries(session.subagentBreakdown)) { const e = merged[agent] ?? { uses: 0, cost: 0 }; e.uses += d.calls; e.cost += d.costUSD; merged[agent] = e }
-  } }
-  const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
+  const sorted = useMemo(() => {
+    const merged: Record<string, { uses: number; cost: number }> = {}
+    for (const project of projects) { for (const session of project.sessions) {
+      for (const [skill, d] of Object.entries(session.skillBreakdown)) { const e = merged[skill] ?? { uses: 0, cost: 0 }; e.uses += d.turns; e.cost += d.costUSD; merged[skill] = e }
+      for (const [agent, d] of Object.entries(session.subagentBreakdown)) { const e = merged[agent] ?? { uses: 0, cost: 0 }; e.uses += d.calls; e.cost += d.costUSD; merged[agent] = e }
+    } }
+    return Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
+  }, [projects])
   if (sorted.length === 0) return <Panel title="Skills & Agents" color={PANEL_COLORS.skills} width={pw}><Text dimColor>No skill/agent usage</Text></Panel>
   const maxCost = sorted[0]?.[1]?.cost ?? 0
   const nw = Math.max(6, pw - bw - 22)
@@ -528,11 +540,14 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   all: 'All',
   claude: 'Claude',
   codex: 'Codex',
+  copilot: 'Copilot',
   cursor: 'Cursor',
   'ibm-bob': 'IBM Bob',
   opencode: 'OpenCode',
   pi: 'Pi',
   kimi: 'Kimi',
+  vertex: 'Vertex AI',
+  antigravity: 'Antigravity',
 }
 function getProviderDisplayName(name: string): string { return PROVIDER_DISPLAY_NAMES[name] ?? name }
 

@@ -171,50 +171,95 @@ program.hook('preAction', async (thisCommand) => {
 })
 
 function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string) {
-  const sessions = projects.flatMap(p => p.sessions)
   const { code } = getCurrency()
 
-  const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
-  const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
-  const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
-  const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
-  const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
-  // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
-  // counts tokens being stored, not served, so it doesn't belong in the denominator.
-  const cacheHitDenom = totalInput + totalCacheRead
-  const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
+  // Single-pass aggregation over all sessions
+  let totalCostUSD = 0
+  let totalCalls = 0
+  let totalSessions = 0
+  let totalInput = 0
+  let totalOutput = 0
+  let totalCacheRead = 0
+  let totalCacheWrite = 0
 
-  // Per-day rollup. Mirrors parser.ts categoryBreakdown semantics so a
-  // consumer summing daily[].editTurns over a period gets the same total as
-  // sum(activities[].editTurns) for that period: every turn counts once for
-  // `turns`, edit turns count for `editTurns`, edit turns with zero retries
-  // count for `oneShotTurns`. Issue #279 — daily-resolution efficiency
-  // dashboards need this without re-deriving from activity-level rollups.
   const dailyMap: Record<string, { cost: number; calls: number; turns: number; editTurns: number; oneShotTurns: number }> = {}
-  for (const sess of sessions) {
-    for (const turn of sess.turns) {
-      // Prefer the user-message timestamp on the turn; fall back to the first
-      // assistant-call timestamp when the user line is missing (continuation
-      // sessions where the JSONL begins mid-conversation). Previously these
-      // turns dropped from daily but stayed in activities, breaking the
-      // sum(daily[].editTurns) === sum(activities[].editTurns) invariant.
-      const ts = turn.timestamp || turn.assistantCalls[0]?.timestamp
-      if (!ts) { continue }
-      const day = dateKey(ts)
-      if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0, turns: 0, editTurns: 0, oneShotTurns: 0 } }
-      dailyMap[day].turns += 1
-      if (turn.hasEdits) {
-        dailyMap[day].editTurns += 1
-        if (turn.retries === 0) dailyMap[day].oneShotTurns += 1
+  const modelMap: Record<string, { calls: number; cost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> = {}
+  const catMap: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
+  const toolMap: Record<string, number> = {}
+  const mcpMap: Record<string, number> = {}
+  const bashMap: Record<string, number> = {}
+  const skillMap: Record<string, { turns: number; cost: number }> = {}
+  const subagentMap: Record<string, { calls: number; cost: number }> = {}
+
+  for (const p of projects) {
+    totalCostUSD += p.totalCostUSD
+    totalCalls += p.totalApiCalls
+    totalSessions += p.sessions.length
+
+    for (const sess of p.sessions) {
+      totalInput += sess.totalInputTokens
+      totalOutput += sess.totalOutputTokens
+      totalCacheRead += sess.totalCacheReadTokens
+      totalCacheWrite += sess.totalCacheWriteTokens
+
+      for (const [model, d] of Object.entries(sess.modelBreakdown)) {
+        if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+        modelMap[model].calls += d.calls
+        modelMap[model].cost += d.costUSD
+        modelMap[model].inputTokens += d.tokens.inputTokens
+        modelMap[model].outputTokens += d.tokens.outputTokens
+        modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
+        modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens
       }
-      for (const call of turn.assistantCalls) {
-        dailyMap[day].cost += call.costUSD
-        dailyMap[day].calls += 1
+      for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
+        if (!catMap[cat]) { catMap[cat] = { turns: 0, cost: 0, editTurns: 0, oneShotTurns: 0 } }
+        catMap[cat].turns += d.turns
+        catMap[cat].cost += d.costUSD
+        catMap[cat].editTurns += d.editTurns
+        catMap[cat].oneShotTurns += d.oneShotTurns
+      }
+      for (const [tool, d] of Object.entries(sess.toolBreakdown)) {
+        toolMap[tool] = (toolMap[tool] ?? 0) + d.calls
+      }
+      for (const [server, d] of Object.entries(sess.mcpBreakdown)) {
+        mcpMap[server] = (mcpMap[server] ?? 0) + d.calls
+      }
+      for (const [cmd, d] of Object.entries(sess.bashBreakdown)) {
+        bashMap[cmd] = (bashMap[cmd] ?? 0) + d.calls
+      }
+      for (const [skill, d] of Object.entries(sess.skillBreakdown)) {
+        if (!skillMap[skill]) skillMap[skill] = { turns: 0, cost: 0 }
+        skillMap[skill].turns += d.turns
+        skillMap[skill].cost += d.costUSD
+      }
+      for (const [sat, d] of Object.entries(sess.subagentBreakdown)) {
+        if (!subagentMap[sat]) subagentMap[sat] = { calls: 0, cost: 0 }
+        subagentMap[sat].calls += d.calls
+        subagentMap[sat].cost += d.costUSD
+      }
+
+      for (const turn of sess.turns) {
+        const ts = turn.timestamp || turn.assistantCalls[0]?.timestamp
+        if (!ts) { continue }
+        const day = dateKey(ts)
+        if (!dailyMap[day]) { dailyMap[day] = { cost: 0, calls: 0, turns: 0, editTurns: 0, oneShotTurns: 0 } }
+        dailyMap[day].turns += 1
+        if (turn.hasEdits) {
+          dailyMap[day].editTurns += 1
+          if (turn.retries === 0) dailyMap[day].oneShotTurns += 1
+        }
+        for (const call of turn.assistantCalls) {
+          dailyMap[day].cost += call.costUSD
+          dailyMap[day].calls += 1
+        }
       }
     }
   }
+
+  // Match src/menubar-json.ts:cacheHitPercent semantics
+  const cacheHitDenom = totalInput + totalCacheRead
+  const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
+
   const daily = Object.entries(dailyMap).sort().map(([date, d]) => ({
     date,
     cost: convertCost(d.cost),
@@ -222,9 +267,6 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     turns: d.turns,
     editTurns: d.editTurns,
     oneShotTurns: d.oneShotTurns,
-    // Pre-computed convenience for dashboards that don't want to do the math.
-    // null when there are no edit turns (the rate is undefined, not zero —
-    // a day where the user only had Q&A turns shouldn't read as 0% one-shot).
     oneShotRate: d.editTurns > 0
       ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10
       : null,
@@ -241,19 +283,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     sessions: p.sessions.length,
   }))
 
-  const modelMap: Record<string, { calls: number; cost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
-  for (const sess of sessions) {
-    for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
-      modelMap[model].calls += d.calls
-      modelMap[model].cost += d.costUSD
-      modelMap[model].inputTokens += d.tokens.inputTokens
-      modelMap[model].outputTokens += d.tokens.outputTokens
-      modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
-      modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens
-    }
-  }
   const models = Object.entries(modelMap)
     .sort(([, a], [, b]) => b.cost - a.cost)
     .map(([name, { cost, ...rest }]) => {
@@ -272,16 +302,6 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       }
     })
 
-  const catMap: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
-  for (const sess of sessions) {
-    for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
-      if (!catMap[cat]) { catMap[cat] = { turns: 0, cost: 0, editTurns: 0, oneShotTurns: 0 } }
-      catMap[cat].turns += d.turns
-      catMap[cat].cost += d.costUSD
-      catMap[cat].editTurns += d.editTurns
-      catMap[cat].oneShotTurns += d.oneShotTurns
-    }
-  }
   const activities = Object.entries(catMap)
     .sort(([, a], [, b]) => b.cost - a.cost)
     .map(([cat, d]) => ({
@@ -292,33 +312,6 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       oneShotTurns: d.oneShotTurns,
       oneShotRate: d.editTurns > 0 ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10 : null,
     }))
-
-  const toolMap: Record<string, number> = {}
-  const mcpMap: Record<string, number> = {}
-  const bashMap: Record<string, number> = {}
-  const skillMap: Record<string, { turns: number; cost: number }> = {}
-  const subagentMap: Record<string, { calls: number; cost: number }> = {}
-  for (const sess of sessions) {
-    for (const [tool, d] of Object.entries(sess.toolBreakdown)) {
-      toolMap[tool] = (toolMap[tool] ?? 0) + d.calls
-    }
-    for (const [server, d] of Object.entries(sess.mcpBreakdown)) {
-      mcpMap[server] = (mcpMap[server] ?? 0) + d.calls
-    }
-    for (const [cmd, d] of Object.entries(sess.bashBreakdown)) {
-      bashMap[cmd] = (bashMap[cmd] ?? 0) + d.calls
-    }
-    for (const [skill, d] of Object.entries(sess.skillBreakdown)) {
-      if (!skillMap[skill]) skillMap[skill] = { turns: 0, cost: 0 }
-      skillMap[skill].turns += d.turns
-      skillMap[skill].cost += d.costUSD
-    }
-    for (const [sat, d] of Object.entries(sess.subagentBreakdown)) {
-      if (!subagentMap[sat]) subagentMap[sat] = { calls: 0, cost: 0 }
-      subagentMap[sat].calls += d.calls
-      subagentMap[sat].cost += d.costUSD
-    }
-  }
 
   const sortedMap = (m: Record<string, number>) =>
     Object.entries(m).sort(([, a], [, b]) => b - a).map(([name, calls]) => ({ name, calls }))
@@ -1263,6 +1256,68 @@ debug
       return
     }
     console.log(formatStorageTable(entries))
+  })
+
+program
+  .command('providers')
+  .description('List, enable, or disable providers')
+  .argument('[action]', 'list (default), enable, or disable')
+  .argument('[names...]', 'Provider names to enable/disable')
+  .action(async (action: string | undefined, names: string[]) => {
+    const config = await readConfig()
+    const disabled = new Set(config.disabledProviders ?? [])
+    const allProviders = await getAllProviders()
+
+    if (!action || action === 'list') {
+      console.log('\n  Providers:\n')
+      for (const p of allProviders) {
+        const status = disabled.has(p.name) ? '\x1b[31m✗ disabled\x1b[0m' : '\x1b[32m✓ enabled\x1b[0m'
+        console.log(`    ${p.displayName.padEnd(20)} (${p.name.padEnd(16)}) ${status}`)
+      }
+      console.log(`\n  Use: codeburn providers enable <name>  or  codeburn providers disable <name>\n`)
+      return
+    }
+
+    if (action === 'enable') {
+      if (names.length === 0) {
+        console.error('\n  Usage: codeburn providers enable <provider-name> [provider-name...]\n')
+        process.exit(1)
+      }
+      const validNames = new Set(allProviders.map(p => p.name))
+      for (const name of names) {
+        if (!validNames.has(name)) {
+          console.error(`\n  Unknown provider: "${name}". Run \`codeburn providers\` to see available providers.\n`)
+          process.exit(1)
+        }
+        disabled.delete(name)
+      }
+      config.disabledProviders = disabled.size > 0 ? [...disabled] : undefined
+      await saveConfig(config)
+      console.log(`\n  Enabled: ${names.join(', ')}\n`)
+      return
+    }
+
+    if (action === 'disable') {
+      if (names.length === 0) {
+        console.error('\n  Usage: codeburn providers disable <provider-name> [provider-name...]\n')
+        process.exit(1)
+      }
+      const validNames = new Set(allProviders.map(p => p.name))
+      for (const name of names) {
+        if (!validNames.has(name)) {
+          console.error(`\n  Unknown provider: "${name}". Run \`codeburn providers\` to see available providers.\n`)
+          process.exit(1)
+        }
+        disabled.add(name)
+      }
+      config.disabledProviders = [...disabled]
+      await saveConfig(config)
+      console.log(`\n  Disabled: ${names.join(', ')}\n`)
+      return
+    }
+
+    console.error(`\n  Unknown action: "${action}". Use: list, enable, or disable.\n`)
+    process.exit(1)
   })
 
 program

@@ -91,6 +91,12 @@ final class AppStore {
     var autoShowMostUsedProvider: Bool = UserDefaults.standard.bool(forKey: "CodeBurnAutoShowMostUsedProvider") {
         didSet { UserDefaults.standard.set(autoShowMostUsedProvider, forKey: "CodeBurnAutoShowMostUsedProvider") }
     }
+    var disabledProviders: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "CodeBurnDisabledProviders") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(disabledProviders), forKey: "CodeBurnDisabledProviders")
+            syncDisabledProvidersToCLI()
+        }
+    }
     var quotaDisplayMode: QuotaDisplayMode = QuotaDisplayMode.current {
         didSet { QuotaDisplayMode.current = quotaDisplayMode }
     }
@@ -373,18 +379,26 @@ final class AppStore {
 
     private func startInteractiveSelectionRefresh() {
         switchTask?.cancel()
-        resetLoadingState()
         let period = selectedPeriod
         let provider = selectedProvider
         let day = selectedDay
         let days = selectedDays
         let key = PayloadCacheKey(period: period, provider: provider, day: day, days: days)
         lastErrorByKey[key] = nil
+
+        // If we already have data for this key, skip the loading overlay entirely
+        // and refresh silently in the background. This eliminates the perceived
+        // half-second delay on period/provider switches.
+        let hasCached = cache[key] != nil
+        if !hasCached {
+            resetLoadingState()
+        }
+
         switchTask = Task {
             if provider == .all {
-                await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                await refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
                 async let all: Void = refreshQuietly(period: period, day: day)
                 _ = await (main, all)
             }
@@ -827,6 +841,25 @@ final class AppStore {
         }
     }
 
+    // MARK: - Provider Toggle Sync
+
+    private func syncDisabledProvidersToCLI() {
+        Task.detached { [disabledProviders] in
+            let configURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/codeburn/config.json")
+            var config: [String: Any] = [:]
+            if let data = try? Data(contentsOf: configURL),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                config = json
+            }
+            config["disabledProviders"] = Array(disabledProviders).sorted()
+            if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
+                try? FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: configURL)
+            }
+        }
+    }
+
     /// Strip control characters and any token-shaped substrings from server-error
     /// strings before they land in NSLog or the UI. Anthropic / OpenAI error
     /// envelopes don't typically echo tokens, but we also surface this in
@@ -1232,6 +1265,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case rooCode = "Roo Code"
     case crush = "Crush"
     case antigravity = "Antigravity"
+    case vertex = "Vertex AI"
     case goose = "Goose"
     case warp = "Warp"
 
@@ -1249,6 +1283,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
         case .antigravity: ["antigravity"]
+        case .vertex: ["vertex"]
         case .goose: ["goose"]
         default: [rawValue.lowercased()]
         }
@@ -1280,6 +1315,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .rooCode: "roo-code"
         case .crush: "crush"
         case .antigravity: "antigravity"
+        case .vertex: "vertex"
         case .goose: "goose"
         case .warp: "warp"
         }

@@ -1,5 +1,4 @@
 import { readFile, stat, open, rename, unlink, readdir, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
 import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -71,7 +70,7 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 3
+export const CACHE_VERSION = 4
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -238,29 +237,71 @@ export async function loadCache(): Promise<SessionCache> {
   }
 }
 
-export async function saveCache(cache: SessionCache): Promise<void> {
+async function withCacheLock<T>(fn: () => Promise<T>): Promise<T> {
   const dir = getCacheDir()
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+  await mkdir(dir, { recursive: true })
+  const lockPath = join(dir, 'session-cache.lock')
+  let lockHandle: Awaited<ReturnType<typeof open>> | null = null
 
-  const finalPath = getCachePath()
-  const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
-  delete (cache as { _dirty?: boolean })._dirty
-  const payload = JSON.stringify(cache)
+  const maxAttempts = 10
+  const delayMs = 200
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      lockHandle = await open(lockPath, 'wx')
+      break
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      // Check if lock is stale (older than 30s)
+      try {
+        const lockStat = await stat(lockPath)
+        if (Date.now() - lockStat.mtimeMs > 30_000) {
+          await unlink(lockPath).catch(() => {})
+          continue
+        }
+      } catch { /* lock disappeared, retry */ continue }
+      if (i === maxAttempts - 1) {
+        // Force break stale lock on last attempt
+        await unlink(lockPath).catch(() => {})
+        lockHandle = await open(lockPath, 'wx').catch(() => null)
+        break
+      }
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)))
+    }
+  }
 
-  const handle = await open(tempPath, 'w', 0o600)
   try {
-    await handle.writeFile(payload, { encoding: 'utf-8' })
-    await handle.sync()
+    return await fn()
   } finally {
-    await handle.close()
+    if (lockHandle) await lockHandle.close().catch(() => {})
+    await unlink(lockPath).catch(() => {})
   }
+}
 
-  try {
-    await rename(tempPath, finalPath)
-  } catch (err) {
-    try { await unlink(tempPath) } catch {}
-    throw err
-  }
+export async function saveCache(cache: SessionCache): Promise<void> {
+  await withCacheLock(async () => {
+    const dir = getCacheDir()
+    await mkdir(dir, { recursive: true })
+
+    const finalPath = getCachePath()
+    const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
+    delete (cache as { _dirty?: boolean })._dirty
+    const payload = JSON.stringify(cache)
+
+    const handle = await open(tempPath, 'w', 0o600)
+    try {
+      await handle.writeFile(payload, { encoding: 'utf-8' })
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+
+    try {
+      await rename(tempPath, finalPath)
+    } catch (err) {
+      try { await unlink(tempPath) } catch {}
+      throw err
+    }
+  })
 }
 
 // ── File Fingerprinting ────────────────────────────────────────────────
@@ -356,23 +397,25 @@ export function mergeCallByDedupKey(
 
 export async function cleanupOrphanedTempFiles(): Promise<void> {
   const dir = getCacheDir()
-  if (!existsSync(dir)) return
 
+  let entries: string[]
   try {
-    const entries = await readdir(dir)
-    const now = Date.now()
+    entries = await readdir(dir)
+  } catch {
+    return
+  }
+  const now = Date.now()
 
-    const prefix = 'session-cache.json.'
-    for (const entry of entries) {
-      if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
-      try {
-        const fullPath = join(dir, entry)
-        const s = await stat(fullPath)
-        if (now - s.mtimeMs > TEMP_FILE_MAX_AGE_MS) {
-          await unlink(fullPath)
-        }
-      } catch {}
-    }
-  } catch {}
+  const prefix = 'session-cache.json.'
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
+    try {
+      const fullPath = join(dir, entry)
+      const s = await stat(fullPath)
+      if (now - s.mtimeMs > TEMP_FILE_MAX_AGE_MS) {
+        await unlink(fullPath)
+      }
+    } catch {}
+  }
 }
 
