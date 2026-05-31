@@ -1,0 +1,567 @@
+# Instincts generated from https://github.com/arbitraged-life/quota
+# Generated: 2026-05-30T00:20:43.740Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: quota-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, feat, perf, refactor, test
+
+## Evidence
+
+- 8 commits analyzed
+- Detected conventional commit pattern
+- Examples: perf: 10 highest-ROI performance & UI optimizations, feat: add vertex provider with provider toggle support
+
+---
+id: quota-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Commit Length
+
+## Action
+
+Write moderate-length commit messages (~63 characters)
+
+## Evidence
+
+- Average commit message length: 63 chars
+- Based on 8 commits
+
+---
+id: quota-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: quota-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: quota-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: quota-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: quota-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Test Framework
+
+## Action
+
+Use vitest as the test framework
+
+## Evidence
+
+- Test framework detected: vitest
+- File pattern: *.test.ts
+
+---
+id: quota-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: quota-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~19x per month
+- Files: src/*, src/providers/*, tests/*
+
+---
+id: quota-workflow-add-or-update-provider
+trigger: "when doing add or update provider"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Workflow Add Or Update Provider
+
+## Action
+
+Follow the add-or-update-provider workflow:
+1. Add or update provider implementation in src/providers (e.g., create src/providers/vertex.ts).
+2. Update provider registry/index (src/providers/index.ts).
+3. Update configuration logic to support toggling (src/config.ts, CLI commands).
+4. Update dashboard UI to display new provider (src/dashboard.tsx).
+5. Update menubar app settings UI to add toggle and settings for provider (mac/Sources/CodeBurnMenubar/Views/SettingsView.swift, AgentTabStrip.swift, AppStore.swift, CodeBurnApp.swift).
+6. Add or update provider display names (src/dashboard.tsx or similar).
+7. Update or add tests for provider registry and toggling (tests/provider-registry.test.ts, mac/Tests/CodeBurnMenubarViewTests/SettingsViewTests.swift).
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src/providers/*.ts, src/providers/index.ts, src/config.ts
+
+---
+id: quota-workflow-menubar-settings-pane-refactor
+trigger: "when doing menubar settings pane refactor"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Workflow Menubar Settings Pane Refactor
+
+## Action
+
+Follow the menubar-settings-pane-refactor workflow:
+1. Update SettingsView.swift to change sidebar structure, tabs, or navigation logic.
+2. Update CodeBurnApp.swift and/or AppStore.swift to support new UI logic or state.
+3. Update AgentTabStrip.swift or MenuBarContent.swift if tab strip or sidebar content changes.
+4. Test sidebar selection, tab switching, and provider toggling.
+5. Adjust window sizing/layout if needed.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: mac/Sources/CodeBurnMenubar/Views/SettingsView.swift, mac/Sources/CodeBurnMenubar/CodeBurnApp.swift, mac/Sources/CodeBurnMenubar/AppStore.swift
+
+---
+id: quota-workflow-add-or-update-menubar-ui-tests
+trigger: "when doing add or update menubar ui tests"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/arbitraged-life/quota
+---
+
+# Quota Workflow Add Or Update Menubar Ui Tests
+
+## Action
+
+Follow the add-or-update-menubar-ui-tests workflow:
+1. Add or update ViewInspector-based unit tests for SettingsView and related UI components.
+2. Add or update XCUITest-based end-to-end UI tests for sidebar/tab interactions.
+3. Update or add test orchestration scripts (e.g., test-quality-gate.sh).
+4. Update mac/project.yml to ensure test targets are generated.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: mac/Tests/CodeBurnMenubarViewTests/SettingsViewTests.swift, mac/Tests/CodeBurnMenubarUITests/SettingsUITests.swift, mac/Scripts/test-quality-gate.sh
+
+---
+id: quota-instinct-file-naming-camelCase
+trigger: "When creating or renaming a file in the src directory"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct File Naming CamelCase
+
+## Action
+
+Use camelCase for file names
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files
+- Observed in src/config.ts, src/dashboard.tsx
+
+---
+id: quota-instinct-function-naming-camelCase
+trigger: "When defining a function"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Function Naming CamelCase
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions
+
+---
+id: quota-instinct-class-naming-pascalCase
+trigger: "When defining a class"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Class Naming PascalCase
+
+## Action
+
+Name the class using PascalCase
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes
+
+---
+id: quota-instinct-constant-naming-screaming-snake-case
+trigger: "When defining a constant"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Constant Naming Screaming Snake Case
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants
+
+---
+id: quota-instinct-imports-relative
+trigger: "When importing modules in TypeScript files"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Imports Relative
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern in codeStyle.importStyle
+- Seen in src/providers/index.ts
+
+---
+id: quota-instinct-exports-named
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Exports Named
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle
+- Seen in src/providers/index.ts
+
+---
+id: quota-instinct-test-file-pattern
+trigger: "When creating a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Test File Pattern
+
+## Action
+
+Name the file with the pattern *.test.ts
+
+## Evidence
+
+- Pattern in testing.filePattern
+- Seen in tests/provider-registry.test.ts
+
+---
+id: quota-instinct-test-framework-vitest
+trigger: "When writing unit tests for TypeScript code"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Test Framework Vitest
+
+## Action
+
+Use the Vitest testing framework
+
+## Evidence
+
+- Pattern in testing.framework
+- Seen in tests/provider-registry.test.ts
+
+---
+id: quota-instinct-test-type-unit
+trigger: "When writing tests for TypeScript code"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Test Type Unit
+
+## Action
+
+Write unit tests
+
+## Evidence
+
+- Pattern in testing.testTypes
+- Seen in tests/provider-registry.test.ts
+
+---
+id: quota-instinct-mac-ui-test-pattern
+trigger: "When writing UI tests for the menubar app"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Mac Ui Test Pattern
+
+## Action
+
+Use ViewInspector for unit tests and XCUITest for end-to-end UI tests
+
+## Evidence
+
+- Workflow add-or-update-menubar-ui-tests
+- Seen in mac/Tests/CodeBurnMenubarViewTests/SettingsViewTests.swift, mac/Tests/CodeBurnMenubarUITests/SettingsUITests.swift
+
+---
+id: quota-instinct-git-commit-conventional
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Git Commit Conventional
+
+## Action
+
+Use the Conventional Commits format with prefixes (fix, feat, perf, refactor, test)
+
+## Evidence
+
+- Pattern in commits.prefixes
+- Examples: 'feat: add vertex provider...', 'fix(menubar): flatten settings tabs...'
+
+---
+id: quota-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Git Commit Length
+
+## Action
+
+Keep the commit message concise, around 60-70 characters
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Examples: 'perf: 10 highest-ROI performance & UI optimizations'
+
+---
+id: quota-instinct-add-or-update-provider
+trigger: "When someone wants to support a new provider or update provider toggling/visibility"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Add Or Update Provider
+
+## Action
+
+Follow the add-or-update-provider workflow: implement provider in src/providers, update registry, config, dashboard UI, menubar settings UI, display names, and related tests
+
+## Evidence
+
+- Workflow add-or-update-provider
+- Commits and files in workflow example
+
+---
+id: quota-instinct-menubar-settings-pane-refactor
+trigger: "When someone wants to reorganize, refactor, or improve the settings sidebar/tabs in the menubar app"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Menubar Settings Pane Refactor
+
+## Action
+
+Follow the menubar-settings-pane-refactor workflow: update SettingsView.swift, CodeBurnApp.swift, AppStore.swift, AgentTabStrip.swift, and MenuBarContent.swift as needed
+
+## Evidence
+
+- Workflow menubar-settings-pane-refactor
+- Commits and files in workflow example
+
+---
+id: quota-instinct-add-or-update-menubar-ui-tests
+trigger: "When someone adds new settings panes, provider toggles, or changes sidebar/tab logic in the menubar app"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: arbitraged-life/quota
+---
+
+# Quota Instinct Add Or Update Menubar Ui Tests
+
+## Action
+
+Follow the add-or-update-menubar-ui-tests workflow: add/update ViewInspector and XCUITest tests, update test scripts and project config
+
+## Evidence
+
+- Workflow add-or-update-menubar-ui-tests
+- Commits and files in workflow example
+
