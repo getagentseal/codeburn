@@ -21,6 +21,9 @@ let antigravityLoadAttempted = false
 let warpProvider: Provider | null = null
 let warpLoadAttempted = false
 
+let windsurfProvider: Provider | null = null
+let windsurfLoadAttempted = false
+
 async function loadAntigravity(): Promise<Provider | null> {
   if (antigravityLoadAttempted) return antigravityProvider
   antigravityLoadAttempted = true
@@ -40,6 +43,18 @@ async function loadWarp(): Promise<Provider | null> {
     const { warp } = await import('./warp.js')
     warpProvider = warp
     return warp
+  } catch {
+    return null
+  }
+}
+
+async function loadWindsurf(): Promise<Provider | null> {
+  if (windsurfLoadAttempted) return windsurfProvider
+  windsurfLoadAttempted = true
+  try {
+    const { windsurf } = await import('./windsurf.js')
+    windsurfProvider = windsurf
+    return windsurf
   } catch {
     return null
   }
@@ -138,7 +153,7 @@ async function loadCrush(): Promise<Provider | null> {
 const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp] = await Promise.all([loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp()])
+  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, windsurf] = await Promise.all([loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadWindsurf()])
   const all = [...coreProviders]
   if (ag) all.push(ag)
   if (forge) all.push(forge)
@@ -148,6 +163,7 @@ export async function getAllProviders(): Promise<Provider[]> {
   if (cursorAgent) all.push(cursorAgent)
   if (crush) all.push(crush)
   if (warp) all.push(warp)
+  if (windsurf) all.push(windsurf)
   return all
 }
 
@@ -198,6 +214,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'warp') {
     const w = await loadWarp()
     return w ?? undefined
+  }
+  if (name === 'windsurf') {
+    const ws = await loadWindsurf()
+    return ws ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }
