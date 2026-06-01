@@ -32,9 +32,12 @@ For Antigravity CLI (`agy`), CodeBurn can also install an opt-in status line
 hook with `codeburn antigravity-hook install`. The hook records the CLI's
 sanitized `context_window.current_usage` payload while `agy` is still alive,
 without prompts or local working-directory paths. It also attempts a best-effort
-RPC snapshot for full response metadata. Remove it with
-`codeburn antigravity-hook uninstall`; if `--force` replaced an existing
-statusLine command, uninstall restores that previous command.
+RPC snapshot for full response metadata. The installed command points at a
+persistent `codeburn` binary from PATH rather than a local build artifact, and
+running `codeburn antigravity-hook install` again repairs older CodeBurn-owned
+statusLine commands that used stale absolute paths. Remove it with `codeburn
+antigravity-hook uninstall`; if `--force` replaced an existing statusLine
+command, uninstall restores that previous command.
 
 ## Storage format
 

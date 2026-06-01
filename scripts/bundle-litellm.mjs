@@ -25,7 +25,7 @@ function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null]
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null]
 }
 
 // Pass 1: direct entries (no prefix) get priority

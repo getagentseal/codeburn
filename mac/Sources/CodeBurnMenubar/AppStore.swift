@@ -94,8 +94,8 @@ final class AppStore {
     var hidePersonalInformation: Bool = UserDefaults.standard.bool(forKey: "CodeBurnHidePersonalInformation") {
         didSet { UserDefaults.standard.set(hidePersonalInformation, forKey: "CodeBurnHidePersonalInformation") }
     }
-    var keychainAccessEnabled: Bool = ClaudeCredentialStore.keychainAccessEnabled {
-        didSet { ClaudeCredentialStore.keychainAccessEnabled = keychainAccessEnabled }
+    var keychainAccessEnabled: Bool = UserDefaults.standard.bool(forKey: "codeburn.claude.keychainAccessEnabled") {
+        didSet { UserDefaults.standard.set(keychainAccessEnabled, forKey: "codeburn.claude.keychainAccessEnabled") }
     }
     var autoShowMostUsedProvider: Bool = UserDefaults.standard.bool(forKey: "CodeBurnAutoShowMostUsedProvider") {
         didSet { UserDefaults.standard.set(autoShowMostUsedProvider, forKey: "CodeBurnAutoShowMostUsedProvider") }

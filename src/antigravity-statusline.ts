@@ -7,6 +7,13 @@ import {
   recordAntigravityStatusLinePayload,
   snapshotAntigravityStatusLinePayload,
 } from './providers/antigravity.js'
+import {
+  buildPersistentCodeburnLookupPath,
+  resolvePersistentCodeburnPathFromPath,
+} from './persistent-codeburn.js'
+
+export { buildPersistentCodeburnLookupPath as buildAntigravityHookLookupPath } from './persistent-codeburn.js'
+export { resolvePersistentCodeburnPathFromPath } from './persistent-codeburn.js'
 
 type Settings = Record<string, unknown> & {
   statusLine?: {
@@ -18,12 +25,15 @@ type Settings = Record<string, unknown> & {
 
 type StatusLineSettings = NonNullable<Settings['statusLine']>
 
+const PERSISTENT_CLI_REQUIRED_MESSAGE =
+  'The Antigravity hook needs a persistent codeburn command. Install CodeBurn globally first: npm install -g codeburn'
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isCodeBurnHook(command: unknown): boolean {
-  return typeof command === 'string' && command.includes('agy-statusline-hook')
+  return typeof command === 'string' && /(?:^|\s)agy-statusline-hook$/.test(command.trim())
 }
 
 function shellQuote(value: string): string {
@@ -31,10 +41,12 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-function hookCommand(): string {
-  const script = process.argv[1] || 'codeburn'
-  if (script === 'codeburn') return 'codeburn agy-statusline-hook'
-  return `${shellQuote(process.execPath)} ${shellQuote(script)} agy-statusline-hook`
+async function hookCommand(): Promise<string> {
+  const codeburnPath = await resolvePersistentCodeburnPathFromPath(
+    buildPersistentCodeburnLookupPath(),
+    PERSISTENT_CLI_REQUIRED_MESSAGE,
+  )
+  return `${shellQuote(codeburnPath)} agy-statusline-hook`
 }
 
 function settingsPath(): string {
@@ -115,12 +127,15 @@ export async function installAntigravityStatusLineHook(force = false): Promise<'
     )
   }
 
-  if (isCodeBurnHook(existing?.command)) return 'already-installed'
+  const command = await hookCommand()
+  if (isCodeBurnHook(existing?.command) && existing?.command === command && existing.type === 'command' && existing.padding === 0) {
+    return 'already-installed'
+  }
   if (existing && !isCodeBurnHook(existing.command)) await savePreviousStatusLine(existing)
 
   settings.statusLine = {
     type: 'command',
-    command: hookCommand(),
+    command,
     padding: 0,
   }
   await writeSettings(settings)

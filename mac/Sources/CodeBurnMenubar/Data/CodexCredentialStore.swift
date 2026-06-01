@@ -10,7 +10,11 @@ import Security
 enum CodexCredentialStore {
     private static let bootstrapCompletedKey = "codeburn.codex.bootstrapCompleted"
     private static let inMemoryTTL: TimeInterval = 5 * 60
-    private static let proactiveRefreshMargin: TimeInterval = 5 * 60
+    // Codex refresh tokens are single-use and rotate on every refresh. The CLI
+    // owns the grant via ~/.codex/auth.json; we only refresh ourselves when its
+    // last_refresh is older than this, mirroring the Codex CLI's own cadence.
+    // Refreshing more eagerly races the CLI and burns its rotating token.
+    private static let staleRefreshInterval: TimeInterval = 8 * 24 * 60 * 60
 
     private static let oauthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     private static let refreshURL = URL(string: "https://auth.openai.com/oauth/token")!
@@ -35,6 +39,7 @@ enum CodexCredentialStore {
         let idToken: String?
         let accountId: String?
         let expiresAt: Date?
+        let lastRefresh: Date?
     }
 
     enum StoreError: Error, LocalizedError {
@@ -115,6 +120,15 @@ enum CodexCredentialStore {
 
     static func currentRecord() throws -> CredentialRecord? {
         guard isBootstrapCompleted else { return nil }
+        // The Codex CLI's auth.json is the source of truth. Read it fresh each
+        // call so we always serve the CLI's current token rather than racing it
+        // with a stale private copy. Our cache is only a fallback for when the
+        // file is briefly unreadable.
+        if let live = try? readCodexAuth() {
+            cacheInMemory(live)
+            try? writeOurCache(record: live)
+            return live
+        }
         if let cached = lock.withLock({ memoryCache }), cached.isFresh {
             return cached.record
         }
@@ -122,23 +136,35 @@ enum CodexCredentialStore {
             cacheInMemory(stored)
             return stored
         }
-        isBootstrapCompleted = false
         return nil
     }
 
     static func freshAccessToken() async throws -> String? {
         guard let record = try currentRecord() else { return nil }
-        if let expiresAt = record.expiresAt, expiresAt.timeIntervalSinceNow < proactiveRefreshMargin {
+        if needsRefresh(record) {
             let updated = try await refreshAndPersist(record: record)
             return updated.accessToken
         }
         return record.accessToken
     }
 
-    static func refreshAfter401() async throws -> String {
+    static func refreshAfter401(failedToken: String) async throws -> String {
+        // Source of truth first: the CLI may have already rotated the token out
+        // from under us. Re-read auth.json before spending our single-use refresh
+        // token, which would race the CLI and can invalidate its login.
+        if let live = try? readCodexAuth(), live.accessToken != failedToken {
+            cacheInMemory(live)
+            try? writeOurCache(record: live)
+            return live.accessToken
+        }
         guard let record = try currentRecord() else { throw StoreError.noRefreshToken }
         let updated = try await refreshAndPersist(record: record)
         return updated.accessToken
+    }
+
+    private static func needsRefresh(_ record: CredentialRecord) -> Bool {
+        guard let last = record.lastRefresh else { return true }
+        return Date().timeIntervalSince(last) > staleRefreshInterval
     }
 
     // MARK: - Bootstrap source: ~/.codex/auth.json
@@ -152,6 +178,7 @@ enum CodexCredentialStore {
         struct Root: Decodable {
             let auth_mode: String?
             let tokens: Tokens?
+            let last_refresh: String?
         }
         struct Tokens: Decodable {
             let access_token: String?
@@ -179,13 +206,51 @@ enum CodexCredentialStore {
                 refreshToken: refresh,
                 idToken: tokens.id_token,
                 accountId: tokens.account_id,
-                expiresAt: nil   // Codex CLI does not record expiresAt in auth.json
+                expiresAt: nil,   // Codex CLI does not record expiresAt in auth.json
+                lastRefresh: root.last_refresh.flatMap(parseISO8601)
             )
         } catch let err as StoreError {
             throw err
         } catch {
             throw StoreError.bootstrapDecodeFailed
         }
+    }
+
+    private static func parseISO8601(_ s: String) -> Date? {
+        // auth.json records fractional seconds (e.g. ...:12.010758Z); the plain
+        // ISO8601 formatter rejects those, so try the fractional variant first.
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFraction.date(from: s) { return d }
+        return ISO8601DateFormatter().date(from: s)
+    }
+
+    // MARK: - Write rotated tokens back to ~/.codex/auth.json
+
+    /// Atomic read-modify-write of auth.json that preserves every other top-level
+    /// key (OPENAI_API_KEY, auth_mode, ...) and only rewrites the tokens dict and
+    /// last_refresh. Keeps the CLI and the menubar on the same rotated grant.
+    private static func writeBackToCodexAuth(record: CredentialRecord) {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(codexAuthPath)
+        var json: [String: Any] = [:]
+        if let data = try? SafeFile.read(from: url.path, maxBytes: maxCredentialBytes),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            json = existing
+        }
+        var tokens: [String: Any] = [
+            "access_token": record.accessToken,
+            "refresh_token": record.refreshToken,
+        ]
+        if let idToken = record.idToken { tokens["id_token"] = idToken }
+        if let accountId = record.accountId { tokens["account_id"] = accountId }
+        json["tokens"] = tokens
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        json["last_refresh"] = stamp.string(from: record.lastRefresh ?? Date())
+        guard let out = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        try? out.write(to: url, options: .atomic)
     }
 
     // MARK: - Local cache file
@@ -253,6 +318,16 @@ enum CodexCredentialStore {
             throw StoreError.refreshHTTPError(-1, nil)
         }
         guard http.statusCode == 200 else {
+            // A 4xx here usually means the CLI already rotated the shared grant
+            // out from under us (single-use refresh token). Re-read the source:
+            // if it now holds a different token, the CLI healed it and we adopt
+            // that instead of surfacing a terminal "disconnected".
+            if http.statusCode >= 400, http.statusCode < 500,
+               let live = try? readCodexAuth(), live.refreshToken != record.refreshToken {
+                cacheInMemory(live)
+                try? writeOurCache(record: live)
+                return live
+            }
             let body = String(data: data, encoding: .utf8)
             throw StoreError.refreshHTTPError(http.statusCode, body)
         }
@@ -272,9 +347,13 @@ enum CodexCredentialStore {
             refreshToken: decoded.refresh_token ?? record.refreshToken,
             idToken: decoded.id_token ?? record.idToken,
             accountId: record.accountId,
-            expiresAt: decoded.expires_in.map { Date().addingTimeInterval(TimeInterval($0)) } ?? record.expiresAt
+            expiresAt: decoded.expires_in.map { Date().addingTimeInterval(TimeInterval($0)) } ?? record.expiresAt,
+            lastRefresh: Date()
         )
         cacheInMemory(updated)
+        // Write the rotated grant back to the CLI's store first so the CLI keeps
+        // working, then mirror it into our fallback cache.
+        writeBackToCodexAuth(record: updated)
         do {
             try writeOurCache(record: updated)
         } catch {

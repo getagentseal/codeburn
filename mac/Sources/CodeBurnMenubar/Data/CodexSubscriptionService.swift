@@ -122,7 +122,7 @@ enum CodexSubscriptionService {
             }
         case 401:
             if allowOne401Recovery {
-                let newToken = try await CodexCredentialStore.refreshAfter401()
+                let newToken = try await CodexCredentialStore.refreshAfter401(failedToken: token)
                 return try await fetchWithToken(newToken, allowOne401Recovery: false)
             }
             throw FetchError.usageHTTPError(401, String(data: data, encoding: .utf8))

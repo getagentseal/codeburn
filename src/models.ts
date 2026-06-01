@@ -20,29 +20,27 @@ type LiteLLMEntry = {
   provider_specific_entry?: { fast?: number }
 }
 
-type SnapshotEntry = [number, number, number | null, number | null]
+// [input, output, cacheWrite, cacheRead, fastMultiplier]. The trailing fast
+// multiplier is carried straight from LiteLLM's provider_specific_entry.fast so
+// new models pick it up automatically — no hand-maintained per-model table.
+type SnapshotEntry = [number, number, number | null, number | null, (number | null)?]
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
-const FAST_MULTIPLIERS: Record<string, number> = {
-  'claude-opus-4-7': 6,
-  'claude-opus-4-6': 6,
-}
-
 function loadSnapshot(): Map<string, ModelCosts> {
   const map = new Map<string, ModelCosts>()
   for (const [name, raw] of Object.entries(snapshotData as unknown as Record<string, SnapshotEntry>)) {
-    const [input, output, cacheWrite, cacheRead] = raw
+    const [input, output, cacheWrite, cacheRead, fast] = raw
     map.set(name, {
       inputCostPerToken: input,
       outputCostPerToken: output,
       cacheWriteCostPerToken: cacheWrite ?? input * 1.25,
       cacheReadCostPerToken: cacheRead ?? input * 0.1,
       webSearchCostPerRequest: WEB_SEARCH_COST,
-      fastMultiplier: FAST_MULTIPLIERS[name] ?? 1,
+      fastMultiplier: fast ?? 1,
     })
   }
   return map
@@ -400,17 +398,10 @@ const autoModelNames: Record<string, string> = {
 }
 
 const SHORT_NAMES: Record<string, string> = {
-  'claude-opus-4-7': 'Opus 4.7',
-  'claude-opus-4-6': 'Opus 4.6',
-  'claude-opus-4-5': 'Opus 4.5',
-  'claude-opus-4-1': 'Opus 4.1',
-  'claude-opus-4': 'Opus 4',
-  'claude-sonnet-4-6': 'Sonnet 4.6',
-  'claude-sonnet-4-5': 'Sonnet 4.5',
-  'claude-sonnet-4': 'Sonnet 4',
+  // Modern claude-<family>-<major>-<minor> ids are derived in deriveClaudeShortName.
+  // Only the legacy 3.x ids (family-last) need explicit mapping.
   'claude-3-7-sonnet': 'Sonnet 3.7',
   'claude-3-5-sonnet': 'Sonnet 3.5',
-  'claude-haiku-4-5': 'Haiku 4.5',
   'claude-3-5-haiku': 'Haiku 3.5',
   'gpt-4o-mini': 'GPT-4o Mini',
   'gpt-4o': 'GPT-4o',
@@ -470,11 +461,27 @@ const SHORT_NAMES: Record<string, string> = {
 const SORTED_SHORT_NAMES: [string, string][] = Object.entries(SHORT_NAMES)
   .sort((a, b) => b[0].length - a[0].length)
 
+// Anthropic's id scheme is `claude-<family>-<major>[-<minor>]`, so every new
+// version is derivable — no hand-maintained entry per release. (Legacy 3.x ids
+// put the family last, e.g. `claude-3-5-sonnet`, and stay in SHORT_NAMES.)
+const CLAUDE_FAMILY: Record<string, string> = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' }
+function deriveClaudeShortName(canonical: string): string | undefined {
+  const m = canonical.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?/)
+  if (!m) return undefined
+  const [, family, major, minor] = m
+  return `${CLAUDE_FAMILY[family]} ${major}${minor ? `.${minor}` : ''}`
+}
+
 export function getShortModelName(model: string): string {
   if (autoModelNames[model]) return autoModelNames[model]
   const canonical = resolveAlias(getCanonicalName(model))
+  const claude = deriveClaudeShortName(canonical)
+  if (claude) return claude
   for (const [key, name] of SORTED_SHORT_NAMES) {
-    if (canonical.startsWith(key)) return name
+    // Match on a version boundary, not a bare prefix: an unlisted future minor
+    // (e.g. gpt-5.6) must NOT collapse into the base "gpt-5" entry — it should
+    // fall through to its raw id rather than show a wrong name/tier.
+    if (canonical === key || canonical.startsWith(key + '-')) return name
   }
   return canonical
 }

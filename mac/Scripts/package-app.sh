@@ -87,11 +87,19 @@ cat > "${BUNDLE}/Contents/PkgInfo" <<'PKG'
 APPL????
 PKG
 
-# Ad-hoc sign so macOS treats the bundle as internally consistent. Release
-# notarization can layer a Developer ID signature on top, but this local step
-# must still fail closed if signing or verification breaks.
-echo "▸ Ad-hoc signing..."
-codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
+# Sign so macOS treats the bundle as internally consistent. Set CODESIGN_IDENTITY
+# to a stable identity (Developer ID Application for distribution, or an Apple
+# Development cert for local testing) so the TCC "access data from other apps"
+# grant persists across rebuilds. Falls back to ad-hoc when unset (e.g. CI), which
+# re-prompts on every build because each ad-hoc build has a fresh code identity.
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -n "${CODESIGN_IDENTITY}" ]]; then
+  echo "▸ Signing with identity: ${CODESIGN_IDENTITY}"
+  codesign --force --sign "${CODESIGN_IDENTITY}" --options runtime --timestamp=none --deep "${BUNDLE}"
+else
+  echo "▸ Ad-hoc signing (set CODESIGN_IDENTITY for a persistent TCC grant)..."
+  codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
+fi
 codesign --verify --deep --strict "${BUNDLE}"
 
 ZIP_NAME="CodeBurnMenubar-${ASSET_VERSION}.zip"

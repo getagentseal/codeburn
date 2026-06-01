@@ -1,37 +1,29 @@
 import Foundation
+import LocalAuthentication
 import Security
 
-/// Owns the lifecycle of Claude OAuth credentials end-to-end. Replaces
-/// SubscriptionClient + SubscriptionRefreshGate with a model that mirrors
-/// CodexBar's proven pattern:
+/// Owns the lifecycle of Claude OAuth credentials, mirroring CodexBar's pattern:
 ///
 ///   1. **Bootstrap is user-initiated.** The first read of Claude's keychain
 ///      entry — which triggers a macOS keychain prompt — only happens when
 ///      the user clicks "Connect" in the Plan tab. The menubar does not
 ///      touch Claude's keychain on launch.
 ///
-///   2. **We persist refreshed tokens.** When Anthropic returns a new access
-///      token (or a rotated refresh token) we write it back to our own keychain
-///      item. The next fetch uses it directly — one API call per cycle, not
-///      three. This was the root cause of "connect once, never updates": the
-///      previous code refreshed on every tick because the new token was
-///      thrown away.
+///   2. **The Claude CLI owns the grant; we never refresh it ourselves.**
+///      Claude's refresh token is single-use and rotates on every refresh, and
+///      the CLI is refreshing the same grant. If the menubar spent that token
+///      it would invalidate the CLI's own login. So on expiry/401 we re-read
+///      the CLI's store for a token it has already rotated rather than calling
+///      the refresh endpoint. If the CLI hasn't rotated yet we report a
+///      transient staleness (`sourceTokenStale`) and recover on its next use.
 ///
-///   3. **Our own keychain item, not Claude's.** We bootstrap from Claude's
-///      entry once, then maintain `com.codeburn.menubar.claude.oauth.v1` in
-///      the user's keychain. Subsequent reads do not prompt because we own
-///      that item's ACL.
-///
-///   4. **In-memory cache (5 min)** so back-to-back reads in the same refresh
-///      cycle don't even hit the keychain.
+///   3. **In-memory + file cache** so back-to-back reads in the same refresh
+///      cycle don't re-hit the source, and we keep serving the last good token
+///      across launches.
 enum ClaudeCredentialStore {
     private static let bootstrapCompletedKey = "codeburn.claude.bootstrapCompleted"
-    private static let keychainAccessEnabledKey = "codeburn.claude.keychainAccessEnabled"
     private static let inMemoryTTL: TimeInterval = 5 * 60
     private static let proactiveRefreshMargin: TimeInterval = 5 * 60
-
-    private static let oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    private static let refreshURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
 
     private static let claudeKeychainService = "Claude Code-credentials"
     private static let credentialsRelativePath = ".claude/.credentials.json"
@@ -59,51 +51,35 @@ enum ClaudeCredentialStore {
 
     enum StoreError: Error, LocalizedError {
         case bootstrapNoSource           // neither file nor Claude keychain has credentials
-        case keychainAccessDisabled
         case bootstrapDecodeFailed
         case keychainWriteFailed(OSStatus)
         case keychainReadFailed(OSStatus)
-        case refreshHTTPError(Int, String?)
-        case refreshNetworkError(Error)
-        case refreshDecodeFailed
         case noRefreshToken
+        case sourceTokenStale            // CLI hasn't rotated yet; transient, not a re-auth
 
         var errorDescription: String? {
             switch self {
             case .bootstrapNoSource:
                 return "No Claude credentials found. Sign in with `claude` first."
-            case .keychainAccessDisabled:
-                return "Claude Keychain access is disabled in CodeBurn settings."
             case .bootstrapDecodeFailed:
                 return "Claude credentials are malformed."
             case let .keychainWriteFailed(status):
                 return "Could not write to keychain (status \(status))."
             case let .keychainReadFailed(status):
                 return "Could not read from keychain (status \(status))."
-            case let .refreshHTTPError(code, body):
-                return "Token refresh failed (HTTP \(code))\(body.map { ": \($0)" } ?? "")"
-            case let .refreshNetworkError(err):
-                return "Token refresh network error: \(err.localizedDescription)"
-            case .refreshDecodeFailed:
-                return "Token refresh response was malformed."
             case .noRefreshToken:
                 return "No refresh token available; reconnect required."
+            case .sourceTokenStale:
+                return "Waiting for the Claude CLI to refresh its token."
             }
         }
 
         /// True when the failure means the user must re-authenticate (re-run
         /// `claude` or click Reconnect). Used by the UI to distinguish between
-        /// "try again later" and "you must act".
+        /// "try again later" and "you must act". `sourceTokenStale` is the CLI
+        /// not having rotated yet — transient, recovers on its next use.
         var isTerminal: Bool {
-            if case let .refreshHTTPError(code, body) = self, code >= 400, code < 500 {
-                let lower = body?.lowercased() ?? ""
-                if lower.contains("invalid_grant") || lower.contains("invalid_client") || lower.contains("invalid_token") {
-                    return true
-                }
-                return true   // 4xx other than rate-limiting is terminal too
-            }
             if case .noRefreshToken = self { return true }
-            if case .keychainAccessDisabled = self { return true }
             return false
         }
     }
@@ -115,16 +91,6 @@ enum ClaudeCredentialStore {
     static var isBootstrapCompleted: Bool {
         get { UserDefaults.standard.bool(forKey: bootstrapCompletedKey) }
         set { UserDefaults.standard.set(newValue, forKey: bootstrapCompletedKey) }
-    }
-
-    static var keychainAccessEnabled: Bool {
-        get {
-            guard UserDefaults.standard.object(forKey: keychainAccessEnabledKey) != nil else {
-                return true
-            }
-            return UserDefaults.standard.bool(forKey: keychainAccessEnabledKey)
-        }
-        set { UserDefaults.standard.set(newValue, forKey: keychainAccessEnabledKey) }
     }
 
     /// Reset bootstrap state. Used when the user explicitly wants to disconnect
@@ -170,23 +136,46 @@ enum ClaudeCredentialStore {
         return nil
     }
 
-    /// Returns a token guaranteed to be either fresh or just-refreshed. If the
-    /// current token expires within `proactiveRefreshMargin`, refreshes ahead
-    /// of time and persists the new token.
+    /// Returns the current token, adopting a fresher one from the CLI's store if
+    /// ours is near expiry. Never spends the refresh token — see the type doc.
     static func freshAccessToken() async throws -> String? {
         guard let record = try currentRecord() else { return nil }
         if let expiresAt = record.expiresAt, expiresAt.timeIntervalSinceNow < proactiveRefreshMargin {
-            let updated = try await refreshAndPersist(record: record)
-            return updated.accessToken
+            if let live = adoptFresherSource(than: record) {
+                return live.accessToken
+            }
         }
         return record.accessToken
     }
 
-    /// Called after an explicit 401. Refreshes, persists, returns the new token.
+    /// Called after an explicit 401. Delegates to the CLI: re-reads its store
+    /// (silently, no prompt) for a token it has already rotated. If none is
+    /// available yet, throws the transient `sourceTokenStale` rather than
+    /// spending the shared refresh token, which would break the CLI's login.
     static func refreshAfter401() async throws -> String {
         guard let record = try currentRecord() else { throw StoreError.noRefreshToken }
-        let updated = try await refreshAndPersist(record: record)
-        return updated.accessToken
+        if let live = adoptFresherSource(than: record) {
+            return live.accessToken
+        }
+        throw StoreError.sourceTokenStale
+    }
+
+    /// Re-reads Claude's own store (file, then keychain with a no-UI query) and
+    /// adopts it when it holds a different access token than `record` — i.e. the
+    /// CLI rotated since we last read. Returns nil when nothing fresher exists.
+    private static func adoptFresherSource(than record: CredentialRecord) -> CredentialRecord? {
+        guard let live = readClaudeSourceSilently(), live.accessToken != record.accessToken else {
+            return nil
+        }
+        cacheInMemory(live)
+        try? writeOurCache(record: live)
+        return live
+    }
+
+    private static func readClaudeSourceSilently() -> CredentialRecord? {
+        if let fromFile = try? readClaudeFile() { return fromFile }
+        if let fromKeychain = try? readClaudeKeychain(allowUI: false) { return fromKeychain }
+        return nil
     }
 
     static func subscriptionTier() throws -> String? {
@@ -197,8 +186,7 @@ enum ClaudeCredentialStore {
 
     private static func readClaudeSource() throws -> CredentialRecord {
         if let fromFile = try? readClaudeFile() { return fromFile }
-        guard keychainAccessEnabled else { throw StoreError.keychainAccessDisabled }
-        if let fromKeychain = try readClaudeKeychain() { return fromKeychain }
+        if let fromKeychain = try readClaudeKeychain(allowUI: true) { return fromKeychain }
         throw StoreError.bootstrapNoSource
     }
 
@@ -217,14 +205,14 @@ enum ClaudeCredentialStore {
     /// often returns the older stale one. We try the user-keyed entry first
     /// (the modern format), then fall back to the unscoped query for older
     /// installations.
-    private static func readClaudeKeychain() throws -> CredentialRecord? {
-        if let record = try readClaudeKeychain(account: NSUserName()) {
+    private static func readClaudeKeychain(allowUI: Bool) throws -> CredentialRecord? {
+        if let record = try readClaudeKeychain(account: NSUserName(), allowUI: allowUI) {
             return record
         }
-        return try readClaudeKeychain(account: nil)
+        return try readClaudeKeychain(account: nil, allowUI: allowUI)
     }
 
-    private static func readClaudeKeychain(account: String?) throws -> CredentialRecord? {
+    private static func readClaudeKeychain(account: String?, allowUI: Bool) throws -> CredentialRecord? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: claudeKeychainService,
@@ -232,9 +220,20 @@ enum ClaudeCredentialStore {
             kSecReturnData as String: true,
         ]
         if let account { query[kSecAttrAccount as String] = account }
+        if !allowUI {
+            // Background refresh cycles must never raise a keychain prompt. Fail
+            // the read instead. Relies on the user having granted "Always Allow"
+            // on the one-time bootstrap prompt.
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = context
+        }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
+        // Silent read that would need interaction: treat as "no fresher token
+        // available", not an error. The caller falls back to the cached token.
+        if !allowUI, status == errSecInteractionNotAllowed { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
             throw StoreError.keychainReadFailed(status)
         }
@@ -316,79 +315,6 @@ enum ClaudeCredentialStore {
 
     private static func cacheInMemory(_ record: CredentialRecord) {
         lock.withLock { memoryCache = CachedRecord(record: record, cachedAt: Date()) }
-    }
-
-    // MARK: - Refresh
-
-    private static func refreshAndPersist(record: CredentialRecord) async throws -> CredentialRecord {
-        guard let refreshToken = record.refreshToken, !refreshToken.isEmpty else {
-            throw StoreError.noRefreshToken
-        }
-
-        var request = URLRequest(url: refreshURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "grant_type", value: "refresh_token"),
-            URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "client_id", value: oauthClientID),
-        ]
-        request.httpBody = (components.percentEncodedQuery ?? "").data(using: .utf8)
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            throw StoreError.refreshNetworkError(error)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw StoreError.refreshHTTPError(-1, nil)
-        }
-        guard http.statusCode == 200 else {
-            let body = String(data: data, encoding: .utf8)
-            throw StoreError.refreshHTTPError(http.statusCode, body)
-        }
-
-        struct RefreshResponse: Decodable {
-            let accessToken: String
-            let refreshToken: String?
-            let expiresIn: Int?
-            enum CodingKeys: String, CodingKey {
-                case accessToken = "access_token"
-                case refreshToken = "refresh_token"
-                case expiresIn = "expires_in"
-            }
-        }
-        guard let decoded = try? JSONDecoder().decode(RefreshResponse.self, from: data) else {
-            throw StoreError.refreshDecodeFailed
-        }
-
-        // Anthropic may rotate the refresh token. If it did, the OLD one is
-        // already invalid server-side — discarding the new one would lock
-        // the user out permanently. So we cache the new record in memory
-        // BEFORE attempting the keychain write, and if the write fails we
-        // still return the new record (memory cache will serve subsequent
-        // calls inside the 5-min TTL while we keep retrying the persist).
-        let updated = CredentialRecord(
-            accessToken: decoded.accessToken,
-            refreshToken: decoded.refreshToken ?? record.refreshToken,
-            expiresAt: decoded.expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) } ?? record.expiresAt,
-            rateLimitTier: record.rateLimitTier
-        )
-        cacheInMemory(updated)
-        do {
-            try writeOurCache(record: updated)
-        } catch {
-            // Best effort — surface to logs but do not abandon the rotated
-            // token. Next refresh will retry persistence; UI will continue
-            // working from the in-memory cache.
-            NSLog("CodeBurn: cache write failed during refresh rotation: %@", String(describing: error))
-        }
-        return updated
     }
 }
 

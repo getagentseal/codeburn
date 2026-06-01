@@ -7,6 +7,11 @@ import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 
+import {
+  buildPersistentCodeburnLookupPath,
+  resolvePersistentCodeburnPathFromWhichOutput,
+} from './persistent-codeburn.js'
+
 /// Public GitHub repo that hosts macOS release builds. CLI and menubar releases share
 /// the repository, so we scan recent releases and choose the newest `mac-v*` release
 /// that actually contains the menubar zip.
@@ -20,7 +25,6 @@ const MIN_MACOS_MAJOR = 14
 const PERSISTED_CLI_PATH = join(homedir(), 'Library', 'Application Support', 'CodeBurn', 'codeburn-cli-path.v1')
 const PERSISTENT_CLI_REQUIRED_MESSAGE =
   'The menubar app needs a persistent codeburn command. Install CodeBurn globally first: npm install -g codeburn'
-const DEFAULT_CLI_LOOKUP_PATHS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 
 export type InstallResult = { installedPath: string; launched: boolean }
 
@@ -55,29 +59,10 @@ export function resolveLatestMenubarReleaseAssets(releases: ReleaseResponse[]): 
   throw new Error('No mac-v* release with a CodeBurnMenubar-v*.zip and checksum was found.')
 }
 
-export function buildPersistentCodeburnLookupPath(existingPath = process.env.PATH ?? ''): string {
-  const parts = existingPath.split(':').filter(Boolean)
-  for (const fallback of DEFAULT_CLI_LOOKUP_PATHS) {
-    if (!parts.includes(fallback)) parts.push(fallback)
-  }
-  return parts.join(':')
-}
-
-function isTransientNpxPath(path: string): boolean {
-  return path.includes('/_npx/') || path.includes('/.npm/_npx/')
-}
-
-export function resolvePersistentCodeburnPathFromWhichOutput(output: string): string {
-  const paths = output
-    .split(/\r?\n/)
-    .map(path => path.trim())
-    .filter(Boolean)
-
-  const persistentPath = paths.find(path => path.startsWith('/') && !isTransientNpxPath(path))
-  if (persistentPath) return persistentPath
-
-  throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
-}
+export {
+  buildPersistentCodeburnLookupPath,
+  resolvePersistentCodeburnPathFromWhichOutput,
+} from './persistent-codeburn.js'
 
 function userApplicationsDir(): string {
   return join(homedir(), 'Applications')
@@ -216,7 +201,7 @@ async function resolvePersistentCodeburnPath(): Promise<string> {
     throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
   }
 
-  return resolvePersistentCodeburnPathFromWhichOutput(output)
+  return resolvePersistentCodeburnPathFromWhichOutput(output, PERSISTENT_CLI_REQUIRED_MESSAGE)
 }
 
 async function persistCodeburnPath(): Promise<void> {

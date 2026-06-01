@@ -54,6 +54,19 @@ describe('getShortModelName', () => {
   it('maps claude-opus-4-6 with date suffix', () => {
     expect(getShortModelName('claude-opus-4-6-20260205')).toBe('Opus 4.6')
   })
+
+  // Regression for #420: claude-opus-4-8 must get its own line, not collapse
+  // into the generic "Opus 4" bucket via the shorter claude-opus-4 prefix.
+  it('maps claude-opus-4-8 to its own line (not Opus 4)', () => {
+    expect(getShortModelName('claude-opus-4-8')).toBe('Opus 4.8')
+  })
+
+  // A future version is derived from the id with no hand-maintained entry.
+  it('derives an unreleased claude version with no SHORT_NAMES entry', () => {
+    expect(getShortModelName('claude-sonnet-5-2')).toBe('Sonnet 5.2')
+    expect(getShortModelName('claude-haiku-5')).toBe('Haiku 5')
+    expect(getShortModelName('claude-opus-9-9-20300101')).toBe('Opus 9.9')
+  })
 })
 
 describe('builtin aliases - getModelCosts', () => {
@@ -240,6 +253,17 @@ describe('existing model names still resolve', () => {
 
   it('anthropic/-prefixed anthropic/claude-opus-4-6', () => {
     expect(getModelCosts('anthropic/claude-opus-4-6')).not.toBeNull()
+  })
+
+  // #420: 4.8 has its own LiteLLM pricing tier ($5/$25), so it must not fall
+  // through the prefix match to the older, 3x-pricier claude-opus-4 ($15/$75).
+  it('claude-opus-4-8 prices at its own tier, not original claude-opus-4', () => {
+    const v48 = getModelCosts('claude-opus-4-8')
+    expect(v48).not.toBeNull()
+    // $5/$25 per M tokens — the 4.6/4.7 tier, not the original opus-4 $15/$75.
+    expect(v48!.inputCostPerToken).toBeCloseTo(0.000005, 12)
+    expect(v48!.outputCostPerToken).toBeCloseTo(0.000025, 12)
+    expect(v48!.inputCostPerToken).not.toEqual(getModelCosts('claude-opus-4')!.inputCostPerToken)
   })
 })
 

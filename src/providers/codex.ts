@@ -23,6 +23,10 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-4o': 'GPT-4o',
 }
 
+// Longest-first + version-boundary match so an unlisted future minor (gpt-5.6)
+// falls through to its raw id instead of collapsing into the base "GPT-5" entry.
+const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
+
 const toolNameMap: Record<string, string> = {
   exec_command: 'Bash',
   read_file: 'Read',
@@ -589,8 +593,8 @@ export function createCodexProvider(codexDir?: string): Provider {
     displayName: 'Codex',
 
     modelDisplayName(model: string): string {
-      for (const [key, name] of Object.entries(modelDisplayNames)) {
-        if (model.startsWith(key)) return name
+      for (const [key, name] of modelDisplayEntries) {
+        if (model === key || model.startsWith(key + '-')) return name
       }
       return model
     },

@@ -3,23 +3,7 @@ import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
 
 import type { Provider, SessionSource, SessionParser } from './types.js'
-
-const shortNames: Record<string, string> = {
-  'claude-opus-4-7': 'Opus 4.7',
-  'claude-opus-4-6': 'Opus 4.6',
-  'claude-opus-4-5': 'Opus 4.5',
-  'claude-opus-4-1': 'Opus 4.1',
-  'claude-opus-4': 'Opus 4',
-  'claude-sonnet-4-6': 'Sonnet 4.6',
-  'claude-sonnet-4-5': 'Sonnet 4.5',
-  'claude-sonnet-4': 'Sonnet 4',
-  'claude-3-7-sonnet': 'Sonnet 3.7',
-  'claude-3-5-sonnet': 'Sonnet 3.5',
-  'claude-haiku-4-5': 'Haiku 4.5',
-  'claude-3-5-haiku': 'Haiku 3.5',
-  'deepseek-v4-pro': 'DeepSeek v4 Pro',
-  'deepseek-v4-flash': 'DeepSeek v4 Flash',
-}
+import { getShortModelName } from '../models.js'
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -163,11 +147,7 @@ export const claude: Provider = {
   displayName: 'Claude',
 
   modelDisplayName(model: string): string {
-    const canonical = model.replace(/@.*$/, '').replace(/-\d{8}$/, '')
-    for (const [key, name] of Object.entries(shortNames)) {
-      if (canonical.startsWith(key)) return name
-    }
-    return canonical
+    return getShortModelName(model)
   },
 
   toolDisplayName(rawTool: string): string {

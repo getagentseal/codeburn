@@ -90,6 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         setupDistributedNotificationListener()
         applyLaunchAgentSetting()
         StartAtLoginController.applyCurrentSetting()
+        removeLegacyRefreshAgent()
+        registerLoginItemIfNeeded()
         prepareQuotaNotificationsIfNeeded()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
@@ -166,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func prepareRefreshPipelineForSleep() {
+        // Leave the timer running: the kernel pauses DispatchSourceTimer during
+        // sleep automatically and resumes it on wake. Tearing it down here
+        // stranded the loop whenever a wake notification was missed.
         forceRefreshTask?.cancel()
         forceRefreshTask = nil
         forceRefreshStartedAt = nil
@@ -178,8 +183,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusPayloadRefreshStartedAt = nil
         statusPayloadRefreshGeneration &+= 1
         store.resetLoadingState()
-        stopRefreshTimer()
-        refreshLoopHeartbeatAt = .distantPast
         lastRefreshTime = .distantPast
     }
 
@@ -286,6 +289,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         try? unload.run()
         unload.waitUntilExit()
         try? fm.removeItem(atPath: destPath)
+    }
+    // Earlier builds installed a launchd job that re-fetched data out of process.
+    // macOS attributes a launchd-spawned binary differently from the LaunchServices
+    // app, so it triggered its own "access data from other apps" prompt on every
+    // run. Remove any such leftover job on upgrade; the in-app loop is the source
+    // of truth and writes the badge backstop file itself.
+    private func removeLegacyRefreshAgent() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let destPath = "\(home)/Library/LaunchAgents/com.codeburn.refresh.plist"
+        guard fm.fileExists(atPath: destPath) else { return }
+
+        let unload = Process()
+        unload.launchPath = "/bin/launchctl"
+        unload.arguments = ["unload", destPath]
+        try? unload.run()
+        unload.waitUntilExit()
+        try? fm.removeItem(atPath: destPath)
+    }
+
+    private func registerLoginItemIfNeeded() {
+        let key = "codeburn.loginItemRegistered"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        let appPath = Bundle.main.bundlePath
+        let script = "tell application \"System Events\" to make login item at end with properties {path:\(appleScriptStringLiteral(appPath)), hidden:false}"
+
+        let process = Process()
+        process.launchPath = "/usr/bin/osascript"
+        process.arguments = ["-e", script]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                UserDefaults.standard.set(true, forKey: key)
+            }
+        } catch {
+            NSLog("CodeBurn: Login item registration failed: \(error)")
+        }
+    }
+
+    private func appleScriptStringLiteral(_ value: String) -> String {
+        var escaped = value.replacingOccurrences(of: "\\", with: "\\\\")
+        escaped = escaped.replacingOccurrences(of: "\"", with: "\\\"")
+        escaped = escaped.replacingOccurrences(of: "\r", with: "")
+        escaped = escaped.replacingOccurrences(of: "\n", with: "")
+        return "\"\(escaped)\""
     }
 
     private var currentRefreshIntervalSeconds: UInt64? {
@@ -518,15 +571,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func refreshPayloadForPopoverOpen() {
-        guard store.needsInteractivePayloadRefresh else { return }
-        let shouldResetPipeline = store.shouldResetInteractiveRefreshPipeline
-        if shouldResetPipeline, let age = store.staleInteractivePayloadAgeSeconds {
-            NSLog("CodeBurn: popover opened with %ds stale payload cache - resetting refresh pipeline", age)
+        // A user viewing the popover is ground truth: unconditionally ensure the
+        // loop is alive, then clear any stuck loading / in-flight state for the
+        // current key and force a fresh fetch.
+        if refreshTimer == nil {
+            startRefreshLoop(forceQuotaOnStart: false, refreshImmediately: false)
         }
-        recoverRefreshPipelineAfterInterruption(
-            resetLoading: shouldResetPipeline,
-            reason: "popover open"
-        )
+        if store.shouldResetInteractiveRefreshPipeline,
+           let age = store.staleInteractivePayloadAgeSeconds {
+            NSLog("CodeBurn: popover opened with %ds stale payload cache - hard recovery", age)
+        }
+        forceRefreshTask?.cancel()
+        forceRefreshTask = nil
+        forceRefreshStartedAt = nil
+        forceRefreshGeneration &+= 1
+        store.resetLoadingState()
+        forceRefresh(bypassRateLimit: true)
     }
 
     private func stopRefreshTimer() {
@@ -889,6 +949,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         button.attributedTitle = composed
         button.toolTip = "CodeBurn v2 \(menubarPeriod.menubarMetricLabel)"
+        persistBadgeStatusFile()
+    }
+
+    private var lastWrittenBadgeGenerated: String?
+
+    // Mirror the freshest in-memory payload to disk so the badge survives an app
+    // restart. Skips redundant writes by tracking the last payload's `generated`
+    // stamp. This is the badge backstop write — runs after every menubar update.
+    private func persistBadgeStatusFile() {
+        guard let payload = store.menubarPayload else { return }
+        guard payload.generated != lastWrittenBadgeGenerated else { return }
+        do {
+            try MenubarStatusCache.standard().writeStatus(payload)
+            lastWrittenBadgeGenerated = payload.generated
+        } catch {
+            NSLog("CodeBurn: failed to write badge status file: \(error)")
+        }
     }
 
     private func formatTokensMenubar(_ n: Double) -> String {
