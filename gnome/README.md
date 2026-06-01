@@ -41,7 +41,7 @@ Or use the GNOME Extensions app.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Refresh Interval | 30s | How often to poll CodeBurn CLI |
-| Default Period | Today | Period shown on open |
+| Default Period | Today | Period shown on open (Today, 7 Days, 30 Days, Month, 6 Months, Lifetime) |
 | Compact Mode | Off | Hide cost label, show icon only |
 | Budget Threshold | $0 | Daily budget alert (0 = disabled) |
 | Budget Alerts | Off | Show warning when budget exceeded |

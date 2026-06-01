@@ -14,7 +14,7 @@ import { dateKey } from './day-aggregator.js'
 import { CompareView } from './compare.js'
 import { getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
-import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
+import { getDateRange, PERIODS, PERIOD_LABELS, type Period, formatDateRangeLabel } from './cli-date.js'
 import { patchStdoutForWindows } from './ink-win.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
@@ -24,7 +24,7 @@ const ORANGE = '#FF8C42'
 const DIM = '#555555'
 const GOLD = '#FFD700'
 const PLAN_BAR_WIDTH = 10
-const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all'])
+const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all', 'lifetime'])
 
 const LANG_DISPLAY_NAMES: Record<string, string> = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
@@ -100,10 +100,6 @@ function gradientColor(pct: number): string {
 
 function getPeriodRange(period: Period): { start: Date; end: Date } {
   return getDateRange(period).range
-}
-
-function getDayRange(day: string): DateRange {
-  return parseDayFlag(day)!.range
 }
 
 function isHeavyPeriod(period: Period): boolean {
@@ -298,7 +294,7 @@ const PROJECT_COL_AVG = 7
 const PROJECT_COL_BASE_WIDTH = 30
 const PROJECT_COL_WITH_OVERHEAD_WIDTH = 40
 
-function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
+function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget> }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
   const hasBudgets = budgets && budgets.size > 0
   const nw = Math.max(8, pw - bw - (hasBudgets ? PROJECT_COL_WITH_OVERHEAD_WIDTH : PROJECT_COL_BASE_WIDTH))
@@ -307,7 +303,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: 
       <Text dimColor wrap="truncate-end">
         {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
       </Text>
-      {projects.slice(0, rows).map((project, i) => {
+      {projects.slice(0, 8).map((project, i) => {
         const budget = budgets?.get(project.project)
         const avgCost = project.sessions.length > 0
           ? formatCost(project.totalCostUSD / project.sessions.length)
@@ -667,16 +663,14 @@ function OptimizeView({ findings, costRate, projects, label, width, healthScore,
   )
 }
 
-function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable, compareAvailable, customRange, dayMode }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean; compareAvailable?: boolean; customRange?: boolean; dayMode?: boolean }) {
+function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable, compareAvailable, customRange }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean; compareAvailable?: boolean; customRange?: boolean }) {
   const isOptimize = view === 'optimize'
   return (
     <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
       <Text>
         {isOptimize
           ? <><Text color={ORANGE} bold>b</Text><Text dimColor> back   </Text><Text color={ORANGE} bold>j</Text><Text dimColor>/</Text><Text color={ORANGE} bold>k</Text><Text dimColor> scroll   </Text></>
-          : dayMode
-            ? <><Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> day   </Text></>
-            : !customRange
+          : !customRange
             ? <><Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> switch   </Text></>
             : null}
         <Text color={ORANGE} bold>q</Text><Text dimColor> quit</Text>
@@ -686,12 +680,8 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
             <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
             <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
             <Text color={ORANGE} bold>4</Text><Text dimColor> month   </Text>
-            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months</Text>
-          </>
-        )}
-        {!customRange && !isOptimize && (
-          <>
-            <Text dimColor>   </Text><Text color={ORANGE} bold>d</Text><Text dimColor>{dayMode ? ' exit day' : ' yesterday'}</Text>
+            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months   </Text>
+            <Text color={ORANGE} bold>6</Text><Text dimColor> lifetime</Text>
           </>
         )}
         {!isOptimize && optimizeAvailable && (
@@ -711,17 +701,18 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages, label, dayMode }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean }) {
+function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[] }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
-  const activeLabel = label ?? PERIOD_LABELS[period]
-  if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
+  if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
-  const days = dayMode ? 1 : period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
+  const days = period === 'all' || period === 'lifetime'
+    ? undefined
+    : (period === 'month' || period === '30days' ? 31 : 14)
   return (
     <Box flexDirection="column" width={dashWidth}>
-      <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={planUsages} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
+      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} planUsages={planUsages} />
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
@@ -732,7 +723,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay }: {
+function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel }: {
   initialProjects: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
@@ -742,7 +733,6 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   excludeFilter?: string[]
   customRange?: DateRange | null
   customRangeLabel?: string
-  initialDay?: string
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -755,13 +745,11 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [optimizeLoading, setOptimizeLoading] = useState(false)
   const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const [planUsages, setPlanUsages] = useState<PlanUsage[]>(initialPlanUsages ?? [])
-  const [dayDate, setDayDate] = useState<string | null>(initialDay ?? null)
   // Cursor for the OptimizeView's findings window. Reset whenever the user
   // leaves the optimize view OR the underlying findings change so a long
   // findings list never strands the user past the new array length.
   const [findingsCursor, setFindingsCursor] = useState(0)
-  const isDayMode = dayDate != null
-  const isCustomRange = customRange != null && !isDayMode
+  const isCustomRange = customRange != null
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
@@ -773,8 +761,8 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reloadGenerationRef = useRef(0)
   const reloadInFlightRef = useRef(false)
-  const currentReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
-  const pendingReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
+  const currentReloadRef = useRef<{ period: Period; provider: string } | null>(null)
+  const pendingReloadRef = useRef<{ period: Period; provider: string } | null>(null)
   const findingCount = optimizeResult?.findings.length ?? 0
 
   useEffect(() => {
@@ -803,31 +791,31 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return () => { cancelled = true }
   }, [projects])
 
-  const reloadData = useCallback(async (p: Period, prov: string, day: string | null = null) => {
+  const reloadData = useCallback(async (p: Period, prov: string) => {
     if (reloadInFlightRef.current) {
       const current = currentReloadRef.current
-      if (current?.period === p && current.provider === prov && current.day === day) {
+      if (current?.period === p && current.provider === prov) {
         pendingReloadRef.current = null
         return
       }
       reloadGenerationRef.current++
-      pendingReloadRef.current = { period: p, provider: prov, day }
+      pendingReloadRef.current = { period: p, provider: prov }
       return
     }
     reloadInFlightRef.current = true
-    currentReloadRef.current = { period: p, provider: prov, day }
+    currentReloadRef.current = { period: p, provider: prov }
     const generation = ++reloadGenerationRef.current
     setLoading(true)
     setOptimizeLoading(false)
     setOptimizeResult(null)
     try {
-      if (!day && isHeavyPeriod(p)) {
+      if (isHeavyPeriod(p)) {
         setProjects([])
         setProjectBudgets(new Map())
         await nextTick()
         if (reloadGenerationRef.current !== generation) return
       }
-      const range = day ? getDayRange(day) : getPeriodRange(p)
+      const range = getPeriodRange(p)
       const data = await parseAllSessions(range, prov)
       if (reloadGenerationRef.current !== generation) return
 
@@ -849,14 +837,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const pending = pendingReloadRef.current
       pendingReloadRef.current = null
       if (pending) {
-        void reloadData(pending.period, pending.provider, pending.day)
+        void reloadData(pending.period, pending.provider)
       }
     }
   }, [projectFilter, excludeFilter])
-
-  const currentRange = useCallback(() => {
-    return dayDate ? getDayRange(dayDate) : getPeriodRange(period)
-  }, [dayDate, period])
 
   const loadOptimizeResult = useCallback(async () => {
     if (!optimizeAvailable || projects.length === 0 || optimizeLoading) return
@@ -867,63 +851,44 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     const generation = reloadGenerationRef.current
     setOptimizeLoading(true)
     try {
-      const result = await scanAndDetect(projects, currentRange())
+      const result = await scanAndDetect(projects, getPeriodRange(period))
       if (reloadGenerationRef.current === generation) setOptimizeResult(result)
     } catch (error) {
       console.error(error)
     } finally {
       if (reloadGenerationRef.current === generation) setOptimizeLoading(false)
     }
-  }, [optimizeAvailable, projects, currentRange, optimizeLoading, optimizeResult])
+  }, [optimizeAvailable, projects, period, optimizeLoading, optimizeResult])
 
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
-    if (!dayDate && isHeavyPeriod(period)) return
-    const id = setInterval(() => { reloadData(period, activeProvider, dayDate) }, refreshSeconds * 1000)
+    if (isHeavyPeriod(period)) return
+    const id = setInterval(() => { reloadData(period, activeProvider) }, refreshSeconds * 1000)
     return () => clearInterval(id)
-  }, [refreshSeconds, period, activeProvider, dayDate, reloadData])
+  }, [refreshSeconds, period, activeProvider, reloadData])
 
   const switchPeriod = useCallback((np: Period) => {
-    if (np === period && !dayDate) return
+    if (np === period) return
     // Clear projects + flip loading synchronously so the dashboard never
     // renders the new period label over the old period's numbers between
     // setPeriod() and the reloadData() promise resolving. Without this,
     // there's a frame-to-hundreds-of-ms window where users saw wrong
     // figures captioned with the new period.
     setPeriod(np)
-    setDayDate(null)
     setProjects([])
     setLoading(true)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => { reloadData(np, activeProvider, null) }, 600)
-  }, [period, activeProvider, dayDate, reloadData])
+    debounceRef.current = setTimeout(() => { reloadData(np, activeProvider) }, 600)
+  }, [period, activeProvider, reloadData])
 
   const switchPeriodImmediate = useCallback(async (np: Period) => {
-    if (np === period && !dayDate) return
+    if (np === period) return
     setPeriod(np)
-    setDayDate(null)
     setProjects([])
     setLoading(true)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    await reloadData(np, activeProvider, null)
-  }, [period, activeProvider, dayDate, reloadData])
-
-  const switchDay = useCallback(async (nextDay: string) => {
-    const today = parseDayFlag('today')!.day
-    const clampedDay = nextDay > today ? today : nextDay
-    if (clampedDay === dayDate) return
-    setDayDate(clampedDay)
-    setProjects([])
-    setLoading(true)
-    setView('dashboard')
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    await reloadData(period, activeProvider, clampedDay)
-  }, [period, activeProvider, dayDate, reloadData])
-
-  const enterYesterday = useCallback(async () => {
-    const yesterday = parseDayFlag('yesterday')!.day
-    await switchDay(yesterday)
-  }, [switchDay])
+    await reloadData(np, activeProvider)
+  }, [period, activeProvider, reloadData])
 
   useInput((input, key) => {
     if (input === 'q') { exit(); return }
@@ -934,7 +899,6 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const maxStart = Math.max(0, total - FINDINGS_WINDOW_SIZE)
       if (input === 'j' || key.downArrow) { setFindingsCursor(c => Math.min(c + 1, maxStart)); return }
       if (input === 'k' || key.upArrow)   { setFindingsCursor(c => Math.max(c - 1, 0)); return }
-      return
     }
     if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
     if ((input === 'b' || key.escape) && view === 'compare') { setView('dashboard'); return }
@@ -942,40 +906,18 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
       setActiveProvider(next); setView('dashboard')
       if (debounceRef.current) clearTimeout(debounceRef.current)
-      reloadData(period, next, dayDate); return
+      reloadData(period, next); return
     }
     // Period switches reload the underlying data. Disable them while the
     // compare view is mounted; the compare view re-aggregates from
     // `projects` and would visibly change underneath the user without any
     // affordance back to the dashboard. Press `b` or Esc to return first.
     if (view === 'compare') return
-    if (!customRange && input === 'd') {
-      if (dayDate) {
-        setDayDate(null)
-        setProjects([])
-        setLoading(true)
-        void reloadData(period, activeProvider, null)
-      } else {
-        void enterYesterday()
-      }
-      return
-    }
     // Also disable while a custom --from/--to range is in effect. Switching
     // period would silently abandon the user's explicit range and reload
     // standard period data; the period tab strip is hidden in this mode so
     // users have no expectation that 1-5 should do anything.
     if (isCustomRange) return
-    if (dayDate) {
-      if (key.leftArrow) { void switchDay(shiftDay(dayDate, -1)); return }
-      if (key.rightArrow || key.tab) { void switchDay(shiftDay(dayDate, 1)); return }
-      if (key.escape || input === 'b') {
-        setDayDate(null)
-        setProjects([])
-        setLoading(true)
-        void reloadData(period, activeProvider, null)
-        return
-      }
-    }
     const idx = PERIODS.indexOf(period)
     if (key.leftArrow) switchPeriod(PERIODS[(idx - 1 + PERIODS.length) % PERIODS.length]!)
     else if (key.rightArrow || key.tab) switchPeriod(PERIODS[(idx + 1) % PERIODS.length]!)
@@ -984,15 +926,15 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
     else if (input === '5') switchPeriodImmediate('all')
+    else if (input === '6') switchPeriodImmediate('lifetime')
   })
 
-  const headerLabel = dayDate ? formatDayRangeLabel(dayDate) : customRangeLabel ?? PERIOD_LABELS[period]
+  const headerLabel = customRangeLabel ?? PERIOD_LABELS[period]
 
   if (loading || optimizeLoading) {
     return (
       <Box flexDirection="column" width={dashWidth}>
-        {!isCustomRange && !isDayMode && <PeriodTabs active={period} providerName={activeProvider} showProvider={view !== 'compare' && multipleProviders} />}
-        {isDayMode && <DayBanner label={headerLabel} width={dashWidth} />}
+        {!isCustomRange && <PeriodTabs active={period} providerName={activeProvider} showProvider={view !== 'compare' && multipleProviders} />}
         {isCustomRange && <CustomRangeBanner label={headerLabel} width={dashWidth} />}
         {view === 'compare'
           ? <Box flexDirection="column" paddingX={2} paddingY={1}>
@@ -1005,30 +947,21 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
           : view === 'optimize'
             ? <Panel title="CodeBurn Optimize" color={ORANGE} width={dashWidth}><Text dimColor>Scanning {headerLabel}...</Text></Panel>
             : <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>Loading {headerLabel}...</Text></Panel>}
-        {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={0} optimizeAvailable={false} compareAvailable={false} customRange={isCustomRange} dayMode={isDayMode} />}
+        {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={0} optimizeAvailable={false} compareAvailable={false} customRange={isCustomRange} />}
       </Box>
     )
   }
 
   return (
     <Box flexDirection="column" width={dashWidth}>
-      {!isCustomRange && !isDayMode && <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />}
-      {isDayMode && <DayBanner label={headerLabel} width={dashWidth} />}
+      {!isCustomRange && <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />}
       {isCustomRange && <CustomRangeBanner label={headerLabel} width={dashWidth} />}
       {view === 'compare'
         ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} />}
-      {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
-    </Box>
-  )
-}
-
-function DayBanner({ label, width }: { label: string; width: number }) {
-  return (
-    <Box width={width} paddingX={1} marginBottom={1}>
-      <Text color={ORANGE} bold>{label}</Text>
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} />}
+      {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} />}
     </Box>
   )
 }
@@ -1042,33 +975,31 @@ function CustomRangeBanner({ label, width }: { label: string; width: number }) {
   )
 }
 
-function StaticDashboard({ projects, period, activeProvider, planUsages, label, dayMode }: { projects: ProjectSummary[]; period: Period; activeProvider?: string; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean }) {
+function StaticDashboard({ projects, period, activeProvider, planUsages }: { projects: ProjectSummary[]; period: Period; activeProvider?: string; planUsages?: PlanUsage[] }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   return (
     <Box flexDirection="column" width={dashWidth}>
-      {dayMode ? <DayBanner label={label ?? PERIOD_LABELS[period]} width={dashWidth} /> : <PeriodTabs active={period} />}
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} planUsages={planUsages} label={label} dayMode={dayMode} />
+      <PeriodTabs active={period} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} planUsages={planUsages} />
     </Box>
   )
 }
 
-export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string, initialDay?: string): Promise<void> {
+export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string): Promise<void> {
   await loadPricing()
-  const dayRange = initialDay ? getDayRange(initialDay) : null
-  const range = dayRange ?? customRange ?? getPeriodRange(period)
+  const range = customRange ?? getPeriodRange(period)
   const filteredProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
   const planUsages = await getPlanUsages()
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
-  const label = initialDay ? formatDayRangeLabel(initialDay) : customRangeLabel
   patchStdoutForWindows()
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} />
+      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} />
     )
     await waitUntilExit()
   } else {
-    const { unmount } = render(<StaticDashboard projects={filteredProjects} period={period} activeProvider={provider} planUsages={planUsages} label={label} dayMode={initialDay != null} />, { patchConsole: false })
+    const { unmount } = render(<StaticDashboard projects={filteredProjects} period={period} activeProvider={provider} planUsages={planUsages} />, { patchConsole: false })
     unmount()
   }
 }

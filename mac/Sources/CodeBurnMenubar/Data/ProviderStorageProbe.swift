@@ -103,6 +103,7 @@ enum ProviderStorageProbe {
             .init(id: "kiro-user", provider: "Kiro", label: "Kiro User", path: "\(support)/Kiro/User"),
             .init(id: "kiro-workspace", provider: "Kiro", label: "Workspace Storage", path: "\(support)/Kiro/User/workspaceStorage"),
             .init(id: "openclaw-home", provider: "OpenClaw", label: "~/.openclaw", path: "\(home)/.openclaw"),
+            .init(id: "hermes-home", provider: "Hermes", label: "~/.hermes", path: "\(home)/.hermes"),
             .init(id: "clawdbot-legacy", provider: "OpenClaw", label: "~/.clawdbot", path: "\(home)/.clawdbot"),
             .init(id: "moltbot-legacy", provider: "OpenClaw", label: "~/.moltbot", path: "\(home)/.moltbot"),
             .init(id: "moldbot-legacy", provider: "OpenClaw", label: "~/.moldbot", path: "\(home)/.moldbot"),

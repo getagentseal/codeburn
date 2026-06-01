@@ -28,7 +28,8 @@ private func menubarPayload(cost: Double) -> MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: [], intraday: []),
+        stats: StatsSummary(trackedSpend: cost, trackedDays: 1, mostActiveDay: nil, peakDaySpend: cost, currentStreakDays: 1, longestStreakDays: 1)
     )
 }
 
@@ -59,7 +60,8 @@ private func menubarPayload(providers: [String: Double]) -> MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: [], intraday: []),
+        stats: StatsSummary(trackedSpend: cost, trackedDays: 1, mostActiveDay: nil, peakDaySpend: cost, currentStreakDays: 1, longestStreakDays: 1)
     )
 }
 

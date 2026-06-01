@@ -82,8 +82,6 @@ struct MenuBarContent: View {
             FooterBar()
 
             CLIUpdateBanner()
-
-            StarBanner()
         }
     }
 
@@ -274,9 +272,6 @@ private struct Header: View {
                     )
                     .font(.system(size: 13, weight: .semibold))
                     .tracking(-0.15)
-                    Text("AI Coding Cost Tracker")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if updateChecker.updateAvailable || updateChecker.updateError != nil {
@@ -360,26 +355,28 @@ private struct QuotaWarningRow: View {
 private struct AccentPicker: View {
     @Environment(AppStore.self) private var store
 
+    private var classicPresets: [AccentPreset] {
+        AccentPreset.allCases.filter { !$0.isCatppuccin }
+    }
+    private var catPresets: [AccentPreset] {
+        AccentPreset.allCases.filter { $0.isCatppuccin }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             if store.showingAccentPicker {
-                HStack(spacing: 5) {
-                    ForEach(AccentPreset.allCases) { preset in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                store.accentPreset = preset
-                            }
-                        } label: {
-                            Circle()
-                                .fill(preset.base)
-                                .frame(width: 12, height: 12)
-                                .overlay(
-                                    Circle()
-                                        .stroke(.white.opacity(store.accentPreset == preset ? 0.9 : 0), lineWidth: 1.5)
-                                )
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        ForEach(classicPresets) { preset in
+                            accentButton(preset)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(preset.rawValue)
+                    }
+                    HStack(spacing: 4) {
+                        Text("🐱")
+                            .font(.system(size: 9))
+                        ForEach(catPresets) { preset in
+                            accentButton(preset)
+                        }
                     }
                 }
                 .padding(.horizontal, 6)
@@ -408,6 +405,25 @@ private struct AccentPicker: View {
             .accessibilityLabel("Change accent color")
             .padding(.leading, 4)
         }
+    }
+
+    private func accentButton(_ preset: AccentPreset) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                store.accentPreset = preset
+            }
+        } label: {
+            Circle()
+                .fill(preset.base)
+                .frame(width: 12, height: 12)
+                .overlay(
+                    Circle()
+                        .stroke(.white.opacity(store.accentPreset == preset ? 0.9 : 0), lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("\(preset.emoji) \(preset.rawValue)")
+        .accessibilityLabel(preset.rawValue)
     }
 }
 
@@ -603,30 +619,6 @@ struct FooterBar: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(store.isLoading)
-
-            Button {
-                openHistory()
-            } label: {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Open history")
-
-            Menu {
-                Button("CSV (folder)") { runExport(format: .csv) }
-                Button("JSON") { runExport(format: .json) }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-                    .font(.system(size: 11, weight: .medium))
-                    .labelStyle(.titleAndIcon)
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .fixedSize()
 
             Spacer()
 

@@ -64,6 +64,15 @@ final class AppStore {
     var displayMetric: DisplayMetric = DisplayMetric(rawValue: UserDefaults.standard.string(forKey: "CodeBurnDisplayMetric") ?? "") ?? .cost {
         didSet { UserDefaults.standard.set(displayMetric.rawValue, forKey: "CodeBurnDisplayMetric") }
     }
+    var costGranularity: CostGranularity = CostGranularity(rawValue: UserDefaults.standard.string(forKey: "CodeBurnCostGranularity") ?? "") ?? .exact {
+        didSet { UserDefaults.standard.set(costGranularity.rawValue, forKey: "CodeBurnCostGranularity") }
+    }
+    var showMenubarSuffix: Bool = UserDefaults.standard.object(forKey: "CodeBurnShowSuffix") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showMenubarSuffix, forKey: "CodeBurnShowSuffix") }
+    }
+    var menubarIcon: MenubarIcon = MenubarIcon(rawValue: UserDefaults.standard.string(forKey: "CodeBurnMenubarIcon") ?? "") ?? .flame {
+        didSet { UserDefaults.standard.set(menubarIcon.rawValue, forKey: "CodeBurnMenubarIcon") }
+    }
     var dailyBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyBudget") {
         didSet { UserDefaults.standard.set(dailyBudget, forKey: "CodeBurnDailyBudget") }
     }
@@ -175,8 +184,15 @@ final class AppStore {
         PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
     }
 
+    /// Stash the last non-empty payload so period switches don't flash empty.
+    private var lastNonEmptyPayload: MenubarPayload?
+
     var payload: MenubarPayload {
-        cache[currentKey]?.payload ?? .empty
+        if let cached = cache[currentKey]?.payload {
+            lastNonEmptyPayload = cached
+            return cached
+        }
+        return lastNonEmptyPayload ?? .empty
     }
 
     /// Today (across all providers) backs day-specific views in the popover.
@@ -232,7 +248,7 @@ final class AppStore {
     }
 
     var hasCachedData: Bool {
-        cache[currentKey] != nil
+        cache[currentKey] != nil || lastNonEmptyPayload != nil
     }
 
     var hasStaleLoading: Bool {
@@ -305,14 +321,22 @@ final class AppStore {
     }
 
     func switchToMostUsedProviderIfAvailable() {
-        guard autoShowMostUsedProvider, selectedProvider == .all else { return }
-        guard let provider = mostUsedProviderFilter else { return }
-        switchTo(provider: provider)
+        // Disabled: auto-switching provider after refresh is disorienting.
+        // Users pick their own provider tab; period switches should not move it.
+        return
     }
 
 #if DEBUG
     func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, day: String? = nil, fetchedAt: Date) {
         cache[PayloadCacheKey(period: period, provider: provider, day: day)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+    }
+
+    func seedInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil, insertedAt: Date) {
+        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] = insertedAt
+    }
+
+    func isInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil) -> Bool {
+        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] != nil
     }
 #endif
 
@@ -320,12 +344,17 @@ final class AppStore {
         payload.optimize.findingCount
     }
 
+    /// Set during user-initiated period switches to suppress auto-provider-switch.
+    private var suppressAutoProviderSwitch = false
+
     /// Switch to a period. Cancels any in-flight switch and fetches provider-specific +
     /// all-provider data in parallel so tab strip costs stay in sync with the hero.
     func switchTo(period: Period) {
         selectedPeriod = period
         selectedDays = []
-        startInteractiveSelectionRefresh()
+        suppressAutoProviderSwitch = true
+        // Always refresh silently — never show loading overlay on period switch
+        startInteractiveSelectionRefresh(showLoadingOverlay: false)
     }
 
     func switchToYesterday() {
@@ -377,7 +406,7 @@ final class AppStore {
         startInteractiveSelectionRefresh()
     }
 
-    private func startInteractiveSelectionRefresh() {
+    private func startInteractiveSelectionRefresh(showLoadingOverlay: Bool = true) {
         switchTask?.cancel()
         let period = selectedPeriod
         let provider = selectedProvider
@@ -390,15 +419,16 @@ final class AppStore {
         // and refresh silently in the background. This eliminates the perceived
         // half-second delay on period/provider switches.
         let hasCached = cache[key] != nil
-        if !hasCached {
+        let shouldShowLoading = showLoadingOverlay && !hasCached
+        if shouldShowLoading {
             resetLoadingState()
         }
 
         switchTask = Task {
             if provider == .all {
-                await refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
+                await refresh(key: key, includeOptimize: false, force: true, showLoading: shouldShowLoading)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: !hasCached)
+                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: shouldShowLoading)
                 async let all: Void = refreshQuietly(period: period, day: day)
                 _ = await (main, all)
             }
@@ -512,11 +542,26 @@ final class AppStore {
     }
 
     func recoverFromStuckLoading() async {
+        guard prepareStuckLoadingRecovery() else { return }
+        await refresh(key: currentKey, includeOptimize: false, force: true, showLoading: true)
+    }
+
+    /// Decides whether stuck-loading recovery should kick off a fresh fetch for
+    /// the current key, preparing the loading bookkeeping when it can.
+    ///
+    /// A quiet refresh torn down across sleep/wake (or a generation reset) can
+    /// leave an orphaned `inFlightKeys` entry behind. Without clearing stale
+    /// state first the in-flight guard would bail on every retry, trapping the
+    /// popover on the spinner forever. A healthy in-flight fetch (younger than
+    /// the watchdog) is still respected so recovery never kills it.
+    @discardableResult
+    func prepareStuckLoadingRecovery() -> Bool {
+        _ = clearStaleLoadingIfNeeded()
         let key = currentKey
-        guard inFlightKeys[key] == nil else { return }
+        guard inFlightKeys[key] == nil else { return false }
         loadingCountsByKey[key] = nil
         loadingStartedAtByKey[key] = nil
-        await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+        return true
     }
 
     func setRecoveryExhausted(for label: String) {
@@ -1252,6 +1297,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case droid = "Droid"
     case forge = "Forge"
     case gemini = "Gemini"
+    case hermes = "Hermes"
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
@@ -1282,6 +1328,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .ibmBob: ["ibm-bob", "ibm bob"]
         case .mistralVibe: ["mistral-vibe", "mistral vibe"]
         case .openclaw: ["openclaw"]
+        case .hermes: ["hermes", "hermes agent"]
         case .antigravity: ["antigravity"]
         case .vertex: ["vertex"]
         case .goose: ["goose"]
@@ -1308,6 +1355,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kimi: "kimi"
         case .mistralVibe: "mistral-vibe"
         case .openclaw: "openclaw"
+        case .hermes: "hermes"
         case .opencode: "opencode"
         case .pi: "pi"
         case .qwen: "qwen"
@@ -1342,6 +1390,60 @@ enum DisplayMetric: String {
     case cost, tokens, totalTokens, quotaRemaining, iconOnly
 }
 
+enum CostGranularity: String, CaseIterable, Identifiable {
+    case exact = "Exact"       // $437.08
+    case rounded = "Rounded"   // $437
+    case coarse = "Coarse"     // $440
+
+    var id: String { rawValue }
+
+    func format(_ value: Double, symbol: String) -> String {
+        switch self {
+        case .exact:
+            return String(format: "\(symbol)%.2f", value)
+        case .rounded:
+            return "\(symbol)\(Int(value.rounded()))"
+        case .coarse:
+            let magnitude = max(1, pow(10, floor(log10(max(value, 1)))) / 10)
+            let coarse = (value / magnitude).rounded() * magnitude
+            return "\(symbol)\(Int(coarse))"
+        }
+    }
+}
+
+enum MenubarIcon: String, CaseIterable, Identifiable {
+    case flame = "Flame"
+    case dollar = "Dollar"
+    case chart = "Chart"
+    case bolt = "Bolt"
+    case brain = "Brain"
+    case sparkle = "Sparkle"
+
+    var id: String { rawValue }
+
+    var systemName: String {
+        switch self {
+        case .flame: "flame.fill"
+        case .dollar: "dollarsign.circle.fill"
+        case .chart: "chart.bar.fill"
+        case .bolt: "bolt.fill"
+        case .brain: "brain.head.profile.fill"
+        case .sparkle: "sparkles"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .flame: "🔥"
+        case .dollar: "💵"
+        case .chart: "📊"
+        case .bolt: "⚡"
+        case .brain: "🧠"
+        case .sparkle: "✨"
+        }
+    }
+}
+
 enum InsightMode: String, CaseIterable, Identifiable {
     case plan = "Plan"
     case trend = "Trend"
@@ -1358,6 +1460,7 @@ enum Period: String, CaseIterable, Identifiable {
     case thirtyDays = "30 Days"
     case month = "Month"
     case all = "6 Months"
+    case lifetime = "Lifetime"
 
     var id: String { rawValue }
 
@@ -1369,6 +1472,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "all"
+        case .lifetime: "lifetime"
         }
     }
 
@@ -1381,6 +1485,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30 Days"
         case .month: "Month"
         case .all: "6 Months"
+        case .lifetime: "Lifetime"
         }
     }
 
@@ -1391,6 +1496,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "sixMonths"
+        case .lifetime: "lifetime"
         }
     }
 
@@ -1400,6 +1506,7 @@ enum Period: String, CaseIterable, Identifiable {
         case "week", "sevenDays": self = .sevenDays
         case "month": self = .month
         case "sixMonths", "all": self = .all
+        case "lifetime": self = .lifetime
         default: self = .today
         }
     }
@@ -1420,6 +1527,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: compact ? "/30d" : " / 30d"
         case .month: compact ? "/mo" : " / mo"
         case .all: compact ? "/6mo" : " / 6mo"
+        case .lifetime: compact ? "/all" : " / all"
         }
     }
 }

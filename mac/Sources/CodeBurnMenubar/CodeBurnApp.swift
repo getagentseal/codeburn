@@ -780,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     // Cached inputs for refreshStatusButton to avoid redundant NSAttributedString rebuilds
-    private var lastMenubarInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?)?
+    private var lastMenubarInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?, granularity: CostGranularity, showSuffix: Bool, icon: MenubarIcon)?
 
     private func refreshStatusButton() {
         guard let button = statusItem.button else { return }
@@ -793,13 +793,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover != nil && popover.isShown { return }
 
         // Skip rebuild if the inputs that affect the rendered title are unchanged
-        let currentInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?) = (
+        let currentInputs: (metric: DisplayMetric, period: Period, cost: Double?, severity: QuotaSummary.Severity, compact: Bool, quotaLabel: String?, granularity: CostGranularity, showSuffix: Bool, icon: MenubarIcon) = (
             store.displayMetric,
             store.menubarPeriod,
             store.menubarPayload?.current.cost,
             store.aggregateQuotaStatus.severity,
             isCompact,
-            store.quotaRemainingLabel
+            store.quotaRemainingLabel,
+            store.costGranularity,
+            store.showMenubarSuffix,
+            store.menubarIcon
         )
         if let last = lastMenubarInputs,
            last.metric == currentInputs.metric,
@@ -807,7 +810,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
            last.cost == currentInputs.cost,
            last.severity == currentInputs.severity,
            last.compact == currentInputs.compact,
-           last.quotaLabel == currentInputs.quotaLabel {
+           last.quotaLabel == currentInputs.quotaLabel,
+           last.granularity == currentInputs.granularity,
+           last.showSuffix == currentInputs.showSuffix,
+           last.icon == currentInputs.icon {
             return
         }
         lastMenubarInputs = currentInputs
@@ -832,7 +838,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         } else {
             flameConfig = baseConfig
         }
-        let flame = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: "CodeBurn")?
+        let flame = NSImage(systemSymbolName: store.menubarIcon.systemName, accessibilityDescription: "CodeBurn")?
             .withSymbolConfiguration(flameConfig)
         flame?.isTemplate = (tint == nil)
 
@@ -851,7 +857,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         composed.append(NSAttributedString(attachment: attachment))
 
         if store.displayMetric != .iconOnly {
-            let suffix = menubarPeriod.menubarSuffix(compact: compact)
+            let suffix = store.showMenubarSuffix ? menubarPeriod.menubarSuffix(compact: compact) : ""
             let valueText: String
             if store.displayMetric == .tokens, let p = menubarPayload?.current {
                 let out = formatTokensMenubar(Double(p.outputTokens))
@@ -864,11 +870,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 let quota = store.quotaRemainingLabel ?? "--% left"
                 valueText = compact ? quota.replacingOccurrences(of: " ", with: "") : " \(quota)"
             } else {
-                let fallback = compact ? "$-" : "$—"
-                let formatted = menubarPayload?.current.cost
-                valueText = compact
-                    ? (formatted?.asCompactCurrencyWhole() ?? fallback) + suffix
-                    : " " + (formatted?.asCompactCurrency() ?? fallback) + suffix
+                let state = CurrencyState.shared
+                let fallback = compact ? "\(state.symbol)-" : "\(state.symbol)—"
+                if let cost = menubarPayload?.current.cost {
+                    let formatted = store.costGranularity.format(cost * state.rate, symbol: state.symbol)
+                    valueText = compact ? formatted + suffix : " " + formatted + suffix
+                } else {
+                    valueText = compact ? fallback + suffix : " " + fallback + suffix
+                }
             }
 
             var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: -1.0]
@@ -879,7 +888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         button.attributedTitle = composed
-        button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
+        button.toolTip = "CodeBurn v2 \(menubarPeriod.menubarMetricLabel)"
     }
 
     private func formatTokensMenubar(_ n: Double) -> String {

@@ -15,9 +15,9 @@ const END_OF_DAY_MS = 999
 // `--from` / `--to`.
 const ALL_TIME_MONTHS = 6
 
-export type Period = 'today' | 'week' | '30days' | 'month' | 'all'
+export type Period = 'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime'
 
-export const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
+export const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
 
 // Short labels suitable for the dashboard tab strip. Long-form labels for
 // header text come from `getDateRange().label`.
@@ -27,9 +27,10 @@ export const PERIOD_LABELS: Record<Period, string> = {
   '30days': '30 Days',
   month: 'This Month',
   all: '6 Months',
+  lifetime: 'Lifetime',
 }
 
-const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all']
+const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all', 'lifetime']
 
 export function toPeriod(s: string): Period {
   if ((VALID_PERIODS as readonly string[]).includes(s)) return s as Period
@@ -169,28 +170,16 @@ export function getDateRange(period: string): { range: DateRange; label: string 
       const start = new Date(now.getFullYear(), now.getMonth() - ALL_TIME_MONTHS, 1)
       return { range: { start, end }, label: 'Last 6 months' }
     }
+    case 'lifetime': {
+      const start = new Date(1970, 0, 1)
+      return { range: { start, end }, label: 'Lifetime' }
+    }
     default: {
       process.stderr.write(
-        `codeburn: unknown period "${period}". Valid values: today, week, 30days, month, all.\n`
+        `codeburn: unknown period "${period}". Valid values: today, week, 30days, month, all, lifetime.\n`
       )
       process.exit(1)
     }
-  }
-}
-
-export function parseDaysFlag(days: string | undefined): { days: Set<string>; range: DateRange; label: string } | null {
-  if (days === undefined) return null
-  const list = days.split(',').map(s => s.trim()).filter(Boolean)
-  if (list.length === 0) return null
-  const dates = list.map(parseLocalDate)
-  const strings = dates.map(toDateString)
-  const sorted = [...strings].sort()
-  const startDate = parseLocalDate(sorted[0]!)
-  const endDate = parseLocalDate(sorted[sorted.length - 1]!)
-  return {
-    days: new Set(sorted),
-    range: { start: startDate, end: endOfLocalDay(endDate) },
-    label: sorted.length === 1 ? sorted[0]! : `${sorted.length} days (${sorted[0]} .. ${sorted[sorted.length - 1]})`,
   }
 }
 

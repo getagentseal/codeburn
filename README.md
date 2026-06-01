@@ -66,10 +66,13 @@ dx codeburn
 
 ```bash
 codeburn                        # interactive dashboard (default: 7 days)
+codeburn -p lifetime            # full history dashboard (uncapped)
 codeburn today                  # today's usage
 codeburn month                  # this month's usage
 codeburn report -p 30days       # rolling 30-day window
 codeburn report -p all          # every recorded session
+codeburn report --day yesterday # review one calendar day
+codeburn status --format menubar-json --day yesterday # menubar payload for one day
 codeburn report --from 2026-04-01 --to 2026-04-10  # exact date range
 codeburn report --format json   # full dashboard data as JSON
 codeburn report --refresh 60    # auto-refresh every 60s (default: 30s)
@@ -92,37 +95,36 @@ codeburn debug storage                 # show provider storage usage and paths
 codeburn debug storage --provider codex --format json
 ```
 
-Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `d` to review yesterday as a single day, then use the arrow keys to move day by day. Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
 ## Supported Providers
 
-|                                                            | Provider       | Supported | Doc                                               |
-|------------------------------------------------------------|----------------|-----------|---------------------------------------------------|
-| <img src="assets/providers/claude.jpg" width="28" />       | Claude Code    | Yes       | [claude.md](docs/providers/claude.md)             |
-| <img src="assets/providers/claude.jpg" width="28" />       | Claude Desktop | Yes       | [claude.md](docs/providers/claude.md)             |
-| <img src="assets/providers/cline.svg" width="28" />        | Cline          | Yes       | [cline.md](docs/providers/cline.md)               |
-| <img src="assets/providers/codex.png" width="28" />        | Codex (OpenAI) | Yes       | [codex.md](docs/providers/codex.md)               |
-| <img src="assets/providers/cursor.jpg" width="28" />       | Cursor         | Yes       | [cursor.md](docs/providers/cursor.md)             |
-| <img src="assets/providers/cursor-agent.jpg" width="28" /> | cursor-agent   | Yes       | [cursor-agent.md](docs/providers/cursor-agent.md) |
-| <img src="assets/providers/forge.png" width="28" />        | Forge          | Yes       | [forge.md](docs/providers/forge.md)               |
-| <img src="assets/providers/gemini.png" width="28" />       | Gemini CLI     | Yes       | [gemini.md](docs/providers/gemini.md)             |
-| <img src="assets/providers/mistral-vibe.svg" width="28" /> | Mistral Vibe   | Yes       | [mistral-vibe.md](docs/providers/mistral-vibe.md) |
-| <img src="assets/providers/copilot.jpg" width="28" />      | GitHub Copilot | Yes       | [copilot.md](docs/providers/copilot.md)           |
-| <img src="assets/providers/ibm-bob.svg" width="28" />      | IBM Bob        | Yes       | [ibm-bob.md](docs/providers/ibm-bob.md)           |
-| <img src="assets/providers/kiro.png" width="28" />         | Kiro           | Yes       | [kiro.md](docs/providers/kiro.md)                 |
-| <img src="assets/providers/opencode.png" width="28" />     | OpenCode       | Yes       | [opencode.md](docs/providers/opencode.md)         |
-| <img src="assets/providers/openclaw.jpg" width="28" />     | OpenClaw       | Yes       | [openclaw.md](docs/providers/openclaw.md)         |
-| <img src="assets/providers/pi.png" width="28" />           | Pi             | Yes       | [pi.md](docs/providers/pi.md)                     |
-| <img src="assets/providers/omp.svg" width="28" />          | OMP (Oh My Pi) | Yes       | [omp.md](docs/providers/omp.md)                   |
-| <img src="assets/providers/droid.png" width="28" />        | Droid          | Yes       | [droid.md](docs/providers/droid.md)               |
-| <img src="assets/providers/roo-code.png" width="28" />     | Roo Code       | Yes       | [roo-code.md](docs/providers/roo-code.md)         |
-| <img src="assets/providers/kilo-code.png" width="28" />    | KiloCode       | Yes       | [kilo-code.md](docs/providers/kilo-code.md)       |
-| <img src="assets/providers/qwen.png" width="28" />         | Qwen           | Yes       | [qwen.md](docs/providers/qwen.md)                 |
-| <img src="assets/providers/kimi.svg" width="28" />         | Kimi Code CLI  | Yes       | [kimi.md](docs/providers/kimi.md)                 |
-| <img src="assets/providers/goose.png" width="28" />        | Goose          | Yes       | [goose.md](docs/providers/goose.md)               |
-| <img src="assets/providers/antigravity.png" width="28" />  | Antigravity    | Yes       | [antigravity.md](docs/providers/antigravity.md)   |
-| <img src="assets/providers/crush.png" width="28" />        | Crush          | Yes       | [crush.md](docs/providers/crush.md)               |
-|                                                            | Warp           | Yes       | [warp.md](docs/providers/warp.md)                 |
+| | Provider | Supported | Doc |
+|---|----------|-----------|-----|
+| <img src="assets/providers/claude.jpg" width="28" /> | Claude Code | Yes | [claude.md](docs/providers/claude.md) |
+| <img src="assets/providers/claude.jpg" width="28" /> | Claude Desktop | Yes | [claude.md](docs/providers/claude.md) |
+| <img src="assets/providers/cline.svg" width="28" /> | Cline | Yes | [cline.md](docs/providers/cline.md) |
+| <img src="assets/providers/codex.png" width="28" /> | Codex (OpenAI) | Yes | [codex.md](docs/providers/codex.md) |
+| <img src="assets/providers/cursor.jpg" width="28" /> | Cursor | Yes | [cursor.md](docs/providers/cursor.md) |
+| <img src="assets/providers/cursor-agent.jpg" width="28" /> | cursor-agent | Yes | [cursor-agent.md](docs/providers/cursor-agent.md) |
+| <img src="assets/providers/gemini.png" width="28" /> | Gemini CLI | Yes | [gemini.md](docs/providers/gemini.md) |
+| <img src="assets/providers/mistral-vibe.svg" width="28" /> | Mistral Vibe | Yes | [mistral-vibe.md](docs/providers/mistral-vibe.md) |
+| <img src="assets/providers/copilot.jpg" width="28" /> | GitHub Copilot | Yes | [copilot.md](docs/providers/copilot.md) |
+| <img src="assets/providers/ibm-bob.svg" width="28" /> | IBM Bob | Yes | [ibm-bob.md](docs/providers/ibm-bob.md) |
+| <img src="assets/providers/kiro.png" width="28" /> | Kiro | Yes | [kiro.md](docs/providers/kiro.md) |
+| <img src="assets/providers/opencode.png" width="28" /> | OpenCode | Yes | [opencode.md](docs/providers/opencode.md) |
+| <img src="assets/providers/openclaw.jpg" width="28" /> | OpenClaw | Yes | [openclaw.md](docs/providers/openclaw.md) |
+| <img src="assets/providers/pi.png" width="28" /> | Pi | Yes | [pi.md](docs/providers/pi.md) |
+| <img src="assets/providers/omp.svg" width="28" /> | OMP (Oh My Pi) | Yes | [omp.md](docs/providers/omp.md) |
+| <img src="assets/providers/droid.png" width="28" /> | Droid | Yes | [droid.md](docs/providers/droid.md) |
+| <img src="assets/providers/roo-code.png" width="28" /> | Roo Code | Yes | [roo-code.md](docs/providers/roo-code.md) |
+| <img src="assets/providers/kilo-code.png" width="28" /> | KiloCode | Yes | [kilo-code.md](docs/providers/kilo-code.md) |
+| <img src="assets/providers/qwen.png" width="28" /> | Qwen | Yes | [qwen.md](docs/providers/qwen.md) |
+| <img src="assets/providers/kimi.svg" width="28" /> | Kimi Code CLI | Yes | [kimi.md](docs/providers/kimi.md) |
+| <img src="assets/providers/goose.png" width="28" /> | Goose | Yes | [goose.md](docs/providers/goose.md) |
+| <img src="assets/providers/antigravity.png" width="28" /> | Antigravity | Yes | [antigravity.md](docs/providers/antigravity.md) |
+| <img src="assets/providers/crush.png" width="28" /> | Crush | Yes | [crush.md](docs/providers/crush.md) |
+|  | Warp | Yes | [warp.md](docs/providers/warp.md) |
 
 Each provider doc lists the exact data location, storage format, and known quirks. Linux and Windows paths are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
 
@@ -130,7 +132,7 @@ Provider logos are trademarks of their respective owners. The icon set was sourc
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
 
-The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`.
+The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all supported usage commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`, `models`.
 
 ### Provider Notes
 
@@ -319,9 +321,12 @@ Filter by provider, project name (case-insensitive substring), or exact date ran
 codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window
 codeburn report --from 2026-04-01                    # this date through today
 codeburn report --to 2026-04-10                      # earliest data through this date
+codeburn report --day 2026-04-10                     # one calendar day
+codeburn report --day yesterday                      # previous local calendar day
+codeburn status --format menubar-json --day yesterday # menubar JSON for one calendar day
 ```
 
-Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only; pressing `1` through `5` switches back to predefined periods.
+Either `--from` / `--to` flag alone is valid. `--day` accepts `YYYY-MM-DD`, `today`, or `yesterday` and cannot be combined with `--from` / `--to` on `report`. Inverted or malformed dates exit with a clear error. In the TUI, `--day` starts in day mode; custom `--from` / `--to` ranges stay fixed. The menubar app uses the same `--day` path for its single-day popover view.
 
 ### JSON Output
 
@@ -359,7 +364,7 @@ You can also set the menubar status period from Terminal:
 defaults write org.agentseal.codeburn-menubar CodeBurnMenubarPeriod -string month
 ```
 
-Allowed values are `today`, `week`, `month`, and `sixMonths`. Relaunch the app to apply external defaults changes.
+Allowed values are `today`, `week`, `month`, `sixMonths`, and `lifetime`. Relaunch the app to apply external defaults changes.
 
 **Compact mode** shrinks the menubar item to fit the text, dropping decimals (e.g. `$110` instead of `$110.20`):
 

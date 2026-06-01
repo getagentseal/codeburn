@@ -57,6 +57,8 @@ struct SettingsView: View {
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
         ("Warp", "warp", "wand.and.rays"),
+        ("Hermes", "hermes", "bolt.horizontal"),
+        ("OpenClaw", "openclaw", "pawprint"),
     ]
 
     private var activeProviders: [(name: String, key: String, icon: String)] {
@@ -84,6 +86,7 @@ struct SettingsView: View {
         } detail: {
             detailView
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(width: 650, height: 520)
     }
 
@@ -149,12 +152,32 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Picker("Accent", selection: Binding(
+                                Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }
                 )) {
                     ForEach(AccentPreset.allCases) { preset in
-                        Text(preset.rawValue).tag(preset)
+                        Text("\(preset.emoji) \(preset.rawValue)").tag(preset)
+                    }
+                }
+                Picker("Rounding", selection: Binding(
+                    get: { store.costGranularity },
+                    set: { store.costGranularity = $0 }
+                )) {
+                    Text("$437.08").tag(CostGranularity.exact)
+                    Text("$437").tag(CostGranularity.rounded)
+                    Text("$440").tag(CostGranularity.coarse)
+                }
+                Toggle("Show period suffix (/wk, /mo)", isOn: Binding(
+                    get: { store.showMenubarSuffix },
+                    set: { store.showMenubarSuffix = $0 }
+                ))
+                Picker("Icon", selection: Binding(
+                    get: { store.menubarIcon },
+                    set: { store.menubarIcon = $0 }
+                )) {
+                    ForEach(MenubarIcon.allCases) { icon in
+                        Text("\(icon.emoji) \(icon.rawValue)").tag(icon)
                     }
                 }
             }
@@ -545,6 +568,8 @@ private struct ProvidersSettingsTab: View {
         ("Gemini", "gemini", "sparkles"),
         ("Goose", "goose", "bird"),
         ("Warp", "warp", "wand.and.rays"),
+        ("Hermes", "hermes", "bolt.horizontal"),
+        ("OpenClaw", "openclaw", "pawprint"),
     ]
 
     var body: some View {

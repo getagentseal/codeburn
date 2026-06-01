@@ -25,6 +25,10 @@
   tool-name-based detection.
 
 ### Fixed (CLI)
+- **Hermes profile and Windows project parsing.** Hermes Agent state databases
+  now only treat exact `profiles/<name>/state.db` paths as named profiles,
+  avoiding sibling-directory prefix collisions, and `Current working directory:`
+  inference recognizes Windows drive paths.
 - **Codex 100% one-shot rate.** Codex function_call arguments are JSON strings,
   not objects, and `patch_apply_end` stores file paths in `changes` object keys.
   Both are now parsed correctly.
@@ -84,6 +88,10 @@
   alerts and project drill-down. (#349)
 
 ### Fixed (CLI)
+- **OpenCode session cache keys now use real database paths.** Discovery now
+  emits one source per `opencode*.db` file and the parser iterates root sessions
+  inside that database, so shared session-cache fingerprinting stats the actual
+  SQLite file instead of a synthetic `<dbPath>:<sessionId>` identifier.
 - **OpenCode child sessions are attributed to their root session.** The
   OpenCode parser now walks the unarchived `session.parent_id` subtree so
   child and grandchild agent sessions contribute token and tool usage under

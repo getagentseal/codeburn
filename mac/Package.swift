@@ -22,7 +22,9 @@ let package = Package(
         ),
         .testTarget(
             name: "CodeBurnMenubarTests",
-            dependencies: ["CodeBurnMenubar"],
+            dependencies: [
+                "CodeBurnMenubar",
+            ],
             path: "Tests/CodeBurnMenubarTests"
         ),
         .testTarget(

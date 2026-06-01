@@ -499,7 +499,7 @@ describe('kiro provider - discoverSessions', () => {
     await writeFile(join(wsDir, 'session1.chat'), makeChatFile({}))
     await writeFile(join(wsDir, 'session2.chat'), makeChatFile({}))
 
-    const provider = createKiroProvider(tmpDir, '/nonexistent/ws')
+    const provider = createKiroProvider(tmpDir, '/nonexistent/ws', '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
 
     expect(sessions).toHaveLength(2)
@@ -520,7 +520,7 @@ describe('kiro provider - discoverSessions', () => {
     await writeFile(join(sessionDir, '.hidden'), 'ignored')
     await writeFile(join(sessionDir, 'ignored.txt'), 'hello')
 
-    const provider = createKiroProvider(tmpDir, '/nonexistent/ws')
+    const provider = createKiroProvider(tmpDir, '/nonexistent/ws', '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
     const paths = sessions.map(s => s.path).sort()
 
@@ -542,7 +542,7 @@ describe('kiro provider - discoverSessions', () => {
     await mkdir(wsStorageEntry, { recursive: true })
     await writeFile(join(wsStorageEntry, 'workspace.json'), JSON.stringify({ folder: 'file:///home/user/myapp' }))
 
-    const provider = createKiroProvider(tmpDir, workspaceStorageDir)
+    const provider = createKiroProvider(tmpDir, workspaceStorageDir, '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
 
     expect(sessions).toHaveLength(1)
@@ -550,7 +550,7 @@ describe('kiro provider - discoverSessions', () => {
   })
 
   it('returns empty when directory does not exist', async () => {
-    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws')
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
     expect(sessions).toHaveLength(0)
   })
@@ -560,7 +560,7 @@ describe('kiro provider - discoverSessions', () => {
     await mkdir(shortDir, { recursive: true })
     await writeFile(join(shortDir, 'test.chat'), makeChatFile({}))
 
-    const provider = createKiroProvider(tmpDir, '/nonexistent/ws')
+    const provider = createKiroProvider(tmpDir, '/nonexistent/ws', '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
     expect(sessions).toHaveLength(0)
   })
@@ -572,7 +572,7 @@ describe('kiro provider - discoverSessions', () => {
     await writeFile(join(wsDir, 'index.json'), '{}')
     await writeFile(join(wsDir, 'notes.txt'), 'hello')
 
-    const provider = createKiroProvider(tmpDir, '/nonexistent/ws')
+    const provider = createKiroProvider(tmpDir, '/nonexistent/ws', '/nonexistent/cli')
     const sessions = await provider.discoverSessions()
     expect(sessions).toHaveLength(0)
   })
@@ -602,5 +602,160 @@ describe('kiro provider - metadata', () => {
   it('longest-prefix match for versioned model IDs', () => {
     expect(kiro.modelDisplayName('claude-sonnet-4-5-20260101')).toBe('Sonnet 4.5')
     expect(kiro.modelDisplayName('claude-haiku-4-5-20260101')).toBe('Haiku 4.5')
+  })
+})
+
+describe('kiro provider - CLI session parsing', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'kiro-cli-test-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  function makeCliSessionMeta(opts: {
+    sessionId?: string
+    cwd?: string
+    createdAt?: string
+    modelId?: string
+  }) {
+    return JSON.stringify({
+      session_id: opts.sessionId ?? 'cli-session-001',
+      cwd: opts.cwd ?? '/home/user/myproject',
+      created_at: opts.createdAt ?? '2026-05-20T14:00:00.000Z',
+      updated_at: '2026-05-20T15:00:00.000Z',
+      title: 'Test session',
+      session_state: {
+        rts_model_state: {
+          model_info: { model_id: opts.modelId ?? 'auto' },
+        },
+      },
+    })
+  }
+
+  function makeCliSessionJsonl(messages: Array<{ kind: string; content?: Array<{ kind: string; data?: unknown }> }>) {
+    return messages.map(m => JSON.stringify({
+      version: 'v1',
+      kind: m.kind,
+      data: { message_id: 'msg-' + Math.random().toString(36).slice(2), content: m.content ?? [] },
+    })).join('\n')
+  }
+
+  it('parses a basic CLI JSONL session', async () => {
+    const sessionId = 'cli-basic-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({ sessionId }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), makeCliSessionJsonl([
+      { kind: 'Prompt', content: [{ kind: 'text', data: 'explain the code' }] },
+      { kind: 'AssistantMessage', content: [{ kind: 'text', data: 'Here is an explanation of the code.' }] },
+    ]))
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.project).toBe('myproject')
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.provider).toBe('kiro')
+    expect(calls[0]!.model).toBe('kiro-auto')
+    expect(calls[0]!.userMessage).toBe('explain the code')
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+    expect(calls[0]!.timestamp).toBe('2026-05-20T14:00:00.000Z')
+  })
+
+  it('detects built-in tools', async () => {
+    const sessionId = 'cli-tools-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({ sessionId }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), makeCliSessionJsonl([
+      { kind: 'Prompt', content: [{ kind: 'text', data: 'read the file' }] },
+      { kind: 'AssistantMessage', content: [
+        { kind: 'text', data: 'Reading...' },
+        { kind: 'toolUse', data: { name: 'read', toolUseId: 't1', input: {} } },
+      ] },
+      { kind: 'AssistantMessage', content: [
+        { kind: 'text', data: 'Done.' },
+        { kind: 'toolUse', data: { name: 'shell', toolUseId: 't2', input: {} } },
+      ] },
+    ]))
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toContain('Read')
+    expect(calls[0]!.tools).toContain('Bash')
+  })
+
+  it('detects MCP tools with mcp__ prefix', async () => {
+    const sessionId = 'cli-mcp-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({ sessionId }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), makeCliSessionJsonl([
+      { kind: 'Prompt', content: [{ kind: 'text', data: 'search jira' }] },
+      { kind: 'AssistantMessage', content: [
+        { kind: 'text', data: 'Searching...' },
+        { kind: 'toolUse', data: { name: 'searchJiraIssuesUsingJql', toolUseId: 't1', input: {} } },
+      ] },
+    ]))
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools.some(t => t.startsWith('mcp__'))).toBe(true)
+    expect(calls[0]!.tools.some(t => t.includes('searchJiraIssuesUsingJql'))).toBe(true)
+  })
+
+  it('skips empty JSONL files', async () => {
+    const sessionId = 'cli-empty-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({ sessionId }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), '')
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(0) // stat.size === 0 is skipped
+  })
+
+  it('deduplicates CLI sessions', async () => {
+    const sessionId = 'cli-dedup-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({ sessionId }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), makeCliSessionJsonl([
+      { kind: 'Prompt', content: [{ kind: 'text', data: 'hello' }] },
+      { kind: 'AssistantMessage', content: [{ kind: 'text', data: 'hi there' }] },
+    ]))
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const seenKeys = new Set<string>()
+
+    const calls1: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, seenKeys).parse()) calls1.push(call)
+    const calls2: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, seenKeys).parse()) calls2.push(call)
+
+    expect(calls1).toHaveLength(1)
+    expect(calls2).toHaveLength(0)
+  })
+
+  it('uses cwd basename as project name', async () => {
+    const sessionId = 'cli-project-001'
+    await writeFile(join(tmpDir, `${sessionId}.json`), makeCliSessionMeta({
+      sessionId,
+      cwd: '/home/user/workspace/my-cool-app',
+    }))
+    await writeFile(join(tmpDir, `${sessionId}.jsonl`), makeCliSessionJsonl([
+      { kind: 'Prompt', content: [{ kind: 'text', data: 'test' }] },
+      { kind: 'AssistantMessage', content: [{ kind: 'text', data: 'ok' }] },
+    ]))
+
+    const provider = createKiroProvider('/nonexistent/agent', '/nonexistent/ws', tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions[0]!.project).toBe('my-cool-app')
   })
 })
