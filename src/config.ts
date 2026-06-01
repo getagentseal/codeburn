@@ -27,6 +27,12 @@ export type CodeburnConfig = {
   plan?: Plan
   plans?: PlanConfigMap
   modelAliases?: Record<string, string>
+  /// Map raw local-model names (e.g. "llama3.1:8b") to the paid model
+  /// we'd price the call against (e.g. "gpt-4o"). The local call still
+  /// costs $0; we track what the same tokens would have cost on the
+  /// baseline so the dashboard can show "saved $X by running locally".
+  /// Distinct from `modelAliases` which rewrites actual spend.
+  localModelSavings?: Record<string, string>
 }
 
 function getConfigDir(): string {

@@ -67,6 +67,16 @@ struct HeroSection: View {
                 .foregroundStyle(.orange)
                 .padding(.top, 2)
             }
+
+            if let savingsCaption {
+                HStack(spacing: 4) {
+                    Image(systemName: "leaf.fill")
+                        .font(.system(size: 10))
+                    Text(savingsCaption)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(.green)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
@@ -97,6 +107,17 @@ struct HeroSection: View {
             return "\(label) · \(todayDate)"
         }
         return label
+    }
+
+    /// Local-model savings caption shown beneath the hero amount when the
+    /// user has mapped any local model to a paid baseline via
+    /// `codeburn model-savings`. Kept as a separate line so actual spend
+    /// (above) and hypothetical avoided spend (below) never get summed
+    /// into a misleading "real cost" by the reader.
+    private var savingsCaption: String? {
+        let savings = store.payload.current.localModelSavings.totalUSD
+        guard savings > 0 else { return nil }
+        return "Saved \(savings.asCurrency()) with local models"
     }
 
     private var todayDate: String {

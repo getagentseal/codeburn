@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added (CLI)
+- **Local-model cost savings reports.** New `codeburn model-savings` command
+  maps a local-model name (e.g. `llama3.1:8b`) to a paid baseline (e.g.
+  `gpt-4o`) so the dashboard can report the counterfactual spend the same
+  tokens would have incurred on the baseline. The local call still costs
+  $0; the new `savingsUSD` field tracks the avoided spend separately from
+  `costUSD` everywhere a number is shown (dashboard, JSON/CSV exports,
+  menubar payload, macOS menubar, GNOME extension, daily cache rollups).
+  Historical savings are recomputed automatically when the baseline
+  mapping changes (config-hash invalidation on the daily cache). Daily
+  cache schema bumped to v8. (#421)
+
 ### Fixed (CLI)
 - **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
   now installs the statusLine command through a persistent `codeburn` binary

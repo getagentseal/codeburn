@@ -37,6 +37,9 @@ private struct ModelRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // Bar tracks actual cost; for local models the cost is $0 and the
+            // bar will be empty. Saved counterfactual (if any) renders as
+            // green text in the saved column, never summed into the bar.
             FixedBar(fraction: model.cost / maxCost)
                 .frame(width: 56, height: 6)
 
@@ -47,6 +50,12 @@ private struct ModelRow: View {
             Text(model.cost.asCompactCurrency())
                 .font(.codeMono(size: 12, weight: .medium))
                 .tracking(-0.2)
+                .frame(minWidth: 54, alignment: .trailing)
+
+            Text(model.savingsUSD > 0 ? model.savingsUSD.asCompactCurrency() : "—")
+                .font(.codeMono(size: 12))
+                .tracking(-0.2)
+                .foregroundStyle(model.savingsUSD > 0 ? Color.green : Color.secondary)
                 .frame(minWidth: 54, alignment: .trailing)
 
             Text("\(model.calls)")

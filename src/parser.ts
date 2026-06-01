@@ -1,7 +1,7 @@
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
-import { calculateCost, getShortModelName } from './models.js'
+import { calculateCost, calculateLocalModelSavings, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
@@ -1040,6 +1040,33 @@ function extractClaudeCacheCreation(usage: AssistantMessageContent['usage']): { 
   }
 }
 
+/// Apply local-model savings accounting to a call. If the raw model name is
+/// mapped via `codeburn model-savings`, the call's actual cost is forced
+/// to $0 and the hypothetical baseline cost is recorded as `savingsUSD`.
+/// Returns the input unchanged when no mapping is configured for the
+/// model — keeps the hot path branch-free for the common paid-only case.
+function applyLocalModelSavings(call: ParsedApiCall): ParsedApiCall {
+  const u = call.usage
+  const savings = calculateLocalModelSavings(
+    call.model,
+    u.inputTokens,
+    u.outputTokens,
+    u.cacheCreationInputTokens,
+    u.cacheReadInputTokens,
+    u.webSearchRequests,
+    call.speed,
+    call.cacheCreationOneHourTokens ?? 0,
+  )
+  if (!savings) return call
+  return {
+    ...call,
+    costUSD: 0,
+    savingsUSD: savings.savingsUSD,
+    savingsBaselineModel: savings.baselineModel,
+    isLocalSavings: true,
+  }
+}
+
 function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   if (entry.type !== 'assistant') return null
   const msg = entry.message as AssistantMessageContent | undefined
@@ -1083,7 +1110,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
       return [call]
     })
 
-  return {
+  return applyLocalModelSavings({
     provider: 'claude',
     model: msg.model,
     usage: tokens,
@@ -1100,7 +1127,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
     toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
-  }
+  })
 }
 
 function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
@@ -1239,6 +1266,7 @@ function buildSessionSummary(
   const subagentBreakdown: SessionSummary['subagentBreakdown'] = Object.create(null)
 
   let totalCost = 0
+  let totalSavings = 0
   let totalInput = 0
   let totalOutput = 0
   let totalCacheRead = 0
@@ -1249,12 +1277,14 @@ function buildSessionSummary(
 
   for (const turn of turns) {
     const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+    const turnSavings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
 
     if (!categoryBreakdown[turn.category]) {
-      categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
+      categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
     }
     categoryBreakdown[turn.category].turns++
     categoryBreakdown[turn.category].costUSD += turnCost
+    categoryBreakdown[turn.category].savingsUSD += turnSavings
     if (turn.hasEdits) {
       categoryBreakdown[turn.category].editTurns++
       categoryBreakdown[turn.category].retries += turn.retries
@@ -1264,10 +1294,11 @@ function buildSessionSummary(
     if (turn.subCategory) {
       const skillKey = turn.subCategory
       if (!skillBreakdown[skillKey]) {
-        skillBreakdown[skillKey] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        skillBreakdown[skillKey] = { turns: 0, costUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
       }
       skillBreakdown[skillKey].turns++
       skillBreakdown[skillKey].costUSD += turnCost
+      skillBreakdown[skillKey].savingsUSD += turnSavings
       if (turn.hasEdits) {
         skillBreakdown[skillKey].editTurns++
         if (turn.retries === 0) skillBreakdown[skillKey].oneShotTurns++
@@ -1275,7 +1306,9 @@ function buildSessionSummary(
     }
 
     for (const call of turn.assistantCalls) {
+      const callSavings = call.savingsUSD ?? 0
       totalCost += call.costUSD
+      totalSavings += callSavings
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
       totalCacheRead += call.usage.cacheReadInputTokens
@@ -1287,11 +1320,13 @@ function buildSessionSummary(
         modelBreakdown[modelKey] = {
           calls: 0,
           costUSD: 0,
+          savingsUSD: 0,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
+      modelBreakdown[modelKey].savingsUSD += callSavings
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
@@ -1311,9 +1346,10 @@ function buildSessionSummary(
         bashBreakdown[cmd].calls++
       }
       for (const sat of call.subagentTypes) {
-        subagentBreakdown[sat] = subagentBreakdown[sat] ?? { calls: 0, costUSD: 0 }
+        subagentBreakdown[sat] = subagentBreakdown[sat] ?? { calls: 0, costUSD: 0, savingsUSD: 0 }
         subagentBreakdown[sat].calls++
         subagentBreakdown[sat].costUSD += call.costUSD
+        subagentBreakdown[sat].savingsUSD += callSavings
       }
 
       if (!firstTs || call.timestamp < firstTs) firstTs = call.timestamp
@@ -1327,6 +1363,7 @@ function buildSessionSummary(
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
+    totalSavingsUSD: totalSavings,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
     totalCacheReadTokens: totalCacheRead,
@@ -1576,6 +1613,7 @@ async function scanProjectDirs(
       projectPath,
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }
@@ -1595,7 +1633,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     webSearchRequests: call.webSearchRequests,
   }
 
-  const apiCall: ParsedApiCall = {
+  const apiCall: ParsedApiCall = applyLocalModelSavings({
     provider: call.provider,
     model: call.model,
     usage,
@@ -1610,7 +1648,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     timestamp: call.timestamp,
     bashCommands: call.bashCommands,
     deduplicationKey: call.deduplicationKey,
-  }
+  })
 
   return {
     userMessage: call.userMessage,
@@ -1735,7 +1773,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     u.cacheCreationInputTokens, u.cacheReadInputTokens,
     u.webSearchRequests, call.speed, u.cacheCreationOneHourTokens,
   )
-  return {
+  return applyLocalModelSavings({
     provider: call.provider,
     model: call.model,
     usage: {
@@ -1760,7 +1798,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     deduplicationKey: call.deduplicationKey,
     cacheCreationOneHourTokens: u.cacheCreationOneHourTokens || undefined,
     toolSequence: call.toolSequence,
-  }
+  })
 }
 
 function cachedTurnToClassified(turn: CachedTurn): ClassifiedTurn {
@@ -1979,6 +2017,7 @@ async function parseProviderSources(
       projectPath: projectPath ?? unsanitizePath(dirName),
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }
@@ -2077,6 +2116,7 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
       projectPath: project.projectPath,
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }
@@ -2098,6 +2138,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
       projectPath: project.projectPath,
       sessions,
       totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
       totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     })
   }

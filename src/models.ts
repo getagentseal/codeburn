@@ -268,6 +268,69 @@ export function setModelAliases(aliases: Record<string, string>): void {
   userAliases = aliases
 }
 
+// Local-model savings config. Kept separate from userAliases: a `modelAliases`
+// entry rewrites a model's identity for actual cost; a `localModelSavings`
+// entry keeps the model cost at $0 and reports the *avoided* spend against a
+// paid baseline. Set during preAction from `config.localModelSavings`.
+let userLocalModelSavings: Record<string, string> = {}
+
+export function setLocalModelSavings(mappings: Record<string, string>): void {
+  userLocalModelSavings = { ...mappings }
+}
+
+export function getLocalSavingsBaseline(rawModel: string): string | undefined {
+  if (!rawModel || typeof rawModel !== 'string') return undefined
+  // Defensive: bracket-accessing user-controlled keys on a plain object
+  // exposes the prototype chain (`__proto__` would resolve to Object.prototype).
+  // Use Object.hasOwn so a hostile JSONL model name cannot piggyback into
+  // Object.prototype either through the alias map or here.
+  if (!Object.hasOwn(userLocalModelSavings, rawModel)) return undefined
+  return userLocalModelSavings[rawModel]
+}
+
+/// Compute the hypothetical baseline cost for a local call. The baseline
+/// model is priced through the normal `calculateCost` pipeline (so it can
+/// be aliased / canonicalized). Returns `null` when the source model has
+/// no savings mapping, the baseline is unknown to the pricing snapshot, or
+/// any input is unusable — callers should treat null as "no savings
+/// recorded for this call" rather than a hard error.
+export function calculateLocalModelSavings(
+  rawModel: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+  webSearchRequests: number,
+  speed: 'standard' | 'fast' = 'standard',
+  oneHourCacheCreationTokens = 0,
+): { savingsUSD: number; baselineModel: string } | null {
+  const baseline = getLocalSavingsBaseline(rawModel)
+  if (!baseline) return null
+  if (!getModelCosts(baseline)) return null
+  const savingsUSD = calculateCost(
+    baseline,
+    inputTokens,
+    outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    webSearchRequests,
+    speed,
+    oneHourCacheCreationTokens,
+  )
+  return { savingsUSD, baselineModel: baseline }
+}
+
+/// Stable hash of the current savings config so the daily cache can detect
+/// "user changed their baseline mapping" and rebuild instead of presenting
+/// stale saved-spend numbers. Two configs with the same key→baseline pairs
+/// in any order collapse to the same hash.
+export function getLocalModelSavingsConfigHash(): string {
+  const keys = Object.keys(userLocalModelSavings).sort()
+  if (keys.length === 0) return ''
+  const parts = keys.map(k => `${k}\u0001${userLocalModelSavings[k]}`)
+  return parts.join('\u0002')
+}
+
 function resolveAlias(model: string): string {
   if (Object.hasOwn(userAliases, model)) return userAliases[model]!
   if (Object.hasOwn(BUILTIN_ALIASES, model)) return BUILTIN_ALIASES[model]!
@@ -353,7 +416,7 @@ export function calculateCost(
       // payloads written by external tools, so a hostile or corrupt file
       // could embed terminal escape sequences here.
       const safeName = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
-      const aliasHint = `Map it with: codeburn model-alias "${safeName}" <known-model>`
+      const aliasHint = `Map it with: codeburn model-alias "${safeName}" <known-model>, or track local-model savings with: codeburn model-savings "${safeName}" <baseline-model>`
       process.stderr.write(
         `codeburn: no pricing data for model "${safeName}" — costs for this model will show $0. ` +
         `${aliasHint}, or update with: npx codeburn@latest.\n`

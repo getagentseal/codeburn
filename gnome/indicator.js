@@ -576,6 +576,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
   _render(payload) {
     const current = payload?.current ?? {};
     const cost = Number(current.cost ?? 0);
+    const savings = Number(current?.localModelSavings?.totalUSD ?? 0);
 
     this._panelLabel.set_text(this._fmt(cost));
     this._heroLabel.set_text(current.label || '');
@@ -583,7 +584,9 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
     const calls = Number(current.calls ?? 0);
     const sessions = Number(current.sessions ?? 0);
-    this._heroMeta.set_text(`${calls.toLocaleString()} calls   ${sessions} sessions`);
+    const metaParts = [`${calls.toLocaleString()} calls`, `${sessions} sessions`];
+    if (savings > 0) metaParts.push(`saved ${this._fmt(savings)}`);
+    this._heroMeta.set_text(metaParts.join('   '));
 
     this._renderChart(payload?.history?.daily ?? []);
     this._renderContent();
@@ -946,6 +949,16 @@ class CodeBurnIndicator extends PanelMenu.Button {
     const mc = new St.Label({ text: this._fmt(model.cost), style_class: 'codeburn-model-cost' });
     mc.clutter_text.x_align = Clutter.ActorAlign.END;
     row.add_child(mc);
+    // Show saved counterfactual when this local model has a savings
+    // mapping. Kept as a separate column so it never gets summed with
+    // the actual cost on the left.
+    const savings = Number(model.savingsUSD || 0);
+    const savedLabel = new St.Label({
+      text: savings > 0 ? this._fmt(savings) : '—',
+      style_class: 'codeburn-model-saved',
+    });
+    savedLabel.clutter_text.x_align = Clutter.ActorAlign.END;
+    row.add_child(savedLabel);
     const mcalls = new St.Label({ text: `${Number(model.calls || 0).toLocaleString()}`, style_class: 'codeburn-model-calls' });
     mcalls.clutter_text.x_align = Clutter.ActorAlign.END;
     row.add_child(mcalls);

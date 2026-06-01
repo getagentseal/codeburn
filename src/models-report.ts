@@ -17,6 +17,8 @@ export type ModelReportRow = {
   cacheReadTokens: number
   totalTokens: number
   costUSD: number
+  savingsUSD: number
+  savingsBaselineModel: string
   calls: number
   topCategory?: TaskCategory
   topCategoryCost?: number
@@ -27,6 +29,10 @@ export type AggregateOptions = {
   byTask?: boolean
   taskFilter?: TaskCategory
   topN?: number
+  /// Threshold for the `cost`-based filter. The default `0.01` would
+  /// hide local-only models whose `costUSD` is 0 but `savingsUSD` is
+  /// meaningful. The implementation ORs in `savingsUSD >= minCost`
+  /// so saved-only rows still surface by default.
   minCost?: number
 }
 
@@ -39,6 +45,8 @@ type Bucket = {
   cacheWriteTokens: number
   cacheReadTokens: number
   costUSD: number
+  savingsUSD: number
+  savingsBaselineModel: string
   calls: number
 }
 
@@ -82,6 +90,8 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
               cacheWriteTokens: 0,
               cacheReadTokens: 0,
               costUSD: 0,
+              savingsUSD: 0,
+              savingsBaselineModel: '',
               calls: 0,
             }
             buckets.set(key, bucket)
@@ -91,6 +101,10 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           bucket.cacheWriteTokens += call.usage.cacheCreationInputTokens
           bucket.cacheReadTokens += call.usage.cacheReadInputTokens + call.usage.cachedInputTokens
           bucket.costUSD += call.costUSD
+          bucket.savingsUSD += call.savingsUSD ?? 0
+          if (!bucket.savingsBaselineModel && call.savingsBaselineModel) {
+            bucket.savingsBaselineModel = call.savingsBaselineModel
+          }
           bucket.calls += 1
 
           const modelKey = `${provider} ${model}`
@@ -135,6 +149,8 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       cacheReadTokens: bucket.cacheReadTokens,
       totalTokens: total,
       costUSD: bucket.costUSD,
+      savingsUSD: bucket.savingsUSD,
+      savingsBaselineModel: bucket.savingsBaselineModel,
       calls: bucket.calls,
     }
 
@@ -167,15 +183,17 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       if (aTotal !== bTotal) return bTotal - aTotal
       if (a.provider !== b.provider) return a.provider.localeCompare(b.provider)
       if (a.model !== b.model) return a.model.localeCompare(b.model)
-      return b.costUSD - a.costUSD
+      return (b.costUSD + b.savingsUSD) - (a.costUSD + a.savingsUSD)
     })
   } else {
-    rows.sort((a, b) => b.costUSD - a.costUSD)
+    rows.sort((a, b) => (b.costUSD + b.savingsUSD) - (a.costUSD + a.savingsUSD))
   }
 
   let filtered = rows
   if (opts.minCost !== undefined) {
-    filtered = filtered.filter(r => r.costUSD >= opts.minCost!)
+    // OR with savings so local models with $0 actual cost but > 0 saved
+    // counterfactual still surface in the default `models` view.
+    filtered = filtered.filter(r => r.costUSD >= opts.minCost! || r.savingsUSD >= opts.minCost!)
   }
   if (opts.topN !== undefined) {
     filtered = filtered.slice(0, opts.topN)
@@ -222,7 +240,7 @@ type Column = {
   /// Drop priority. 0 = always shown; higher numbers get dropped first when
   /// the terminal is narrow.
   priority: number
-  key: 'provider' | 'model' | 'task' | 'input' | 'output' | 'cacheWrite' | 'cacheRead' | 'total' | 'cost'
+  key: 'provider' | 'model' | 'task' | 'input' | 'output' | 'cacheWrite' | 'cacheRead' | 'total' | 'cost' | 'saved'
 }
 
 type TableRenderOptions = {
@@ -236,12 +254,14 @@ const DROP_COLUMN_GROUPS: Array<Array<Column['key']>> = [
   ['cacheWrite', 'cacheRead'],
   ['input', 'output'],
   ['task'],
+  ['saved'],
 ]
 
 function defaultColumns(byTask: boolean): Column[] {
   // Higher priority numbers drop FIRST when the terminal is narrow.
   // Cache columns are the cheapest to lose, then input/output, then top-task.
-  // Provider/Model/Total/Cost stay regardless.
+  // Provider/Model/Total/Cost/Saved stay regardless — Saved is the headline
+  // of issue #421 and should survive almost every narrow-terminal cut.
   // Widths are MINIMUMS; sizeColumnsToContent() expands them to fit cell text.
   return [
     { key: 'provider',   header: 'Provider',                   align: 'left',  width: 8,  priority: 0 },
@@ -253,6 +273,7 @@ function defaultColumns(byTask: boolean): Column[] {
     { key: 'cacheRead',  header: 'Cache Read',                 align: 'right', width: 10, priority: 3 },
     { key: 'total',      header: 'Total',                      align: 'right', width: 6,  priority: 0 },
     { key: 'cost',       header: 'Cost',                       align: 'right', width: 6,  priority: 0 },
+    { key: 'saved',      header: 'Saved',                      align: 'right', width: 6,  priority: 0 },
   ]
 }
 
@@ -395,6 +416,7 @@ export function renderTable(
       case 'cacheRead':  return formatTokens(row.cacheReadTokens)
       case 'total':      return formatTokens(row.totalTokens)
       case 'cost':       return formatCost(row.costUSD)
+      case 'saved':      return row.savingsUSD > 0 ? formatCost(row.savingsUSD) : chalk.dim('-')
     }
   }
 
@@ -424,9 +446,10 @@ export function renderTable(
         acc.cacheRead += r.cacheReadTokens
         acc.total += r.totalTokens
         acc.cost += r.costUSD
+        acc.savings += r.savingsUSD
         return acc
       },
-      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0 },
+      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0 },
     )
     const cells = defaultColumns(byTask).map(col => {
       switch (col.key) {
@@ -439,6 +462,7 @@ export function renderTable(
         case 'cacheRead':  return chalk.yellow(formatTokens(totals.cacheRead))
         case 'total':      return chalk.yellow.bold(formatTokens(totals.total))
         case 'cost':       return chalk.yellow.bold(formatCost(totals.cost))
+        case 'saved':      return totals.savings > 0 ? chalk.yellow.bold(formatCost(totals.savings)) : chalk.dim('-')
       }
     })
     totalsEntry = { kind: 'totals', cells, isNewGroup: true }
@@ -519,13 +543,16 @@ export function renderJson(rows: ModelReportRow[]): string {
       totalTokens: r.totalTokens,
       calls: r.calls,
       costUSD: r.costUSD,
+      savingsUSD: r.savingsUSD,
+      savingsBaselineModel: r.savingsBaselineModel,
     })),
     null,
     2,
   )
 }
 
-function csvEscape(value: string): string {
+function csvEscape(value: string | undefined | null): string {
+  if (value === undefined || value === null) return ''
   if (value.includes(',') || value.includes('"') || value.includes('\n')) {
     return `"${value.replace(/"/g, '""')}"`
   }
@@ -546,9 +573,9 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
   const showTotals = opts.showTotals ?? true
 
   const header = byTask
-    ? ['Provider', 'Model', 'Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost']
-    : ['Provider', 'Model', 'Top Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost']
-  const align = ['---', '---', '---', '---:', '---:', '---:', '---:', '---:', '---:']
+    ? ['Provider', 'Model', 'Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
+    : ['Provider', 'Model', 'Top Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
+  const align = ['---', '---', '---', '---:', '---:', '---:', '---:', '---:', '---:', '---:']
 
   const lines: string[] = []
   lines.push(`| ${header.join(' | ')} |`)
@@ -570,6 +597,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       formatTokens(row.cacheReadTokens),
       formatTokens(row.totalTokens),
       formatCost(row.costUSD),
+      row.savingsUSD > 0 ? formatCost(row.savingsUSD) : '-',
     ]
     lines.push(`| ${cells.join(' | ')} |`)
   }
@@ -583,9 +611,10 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
         acc.cacheRead += r.cacheReadTokens
         acc.total += r.totalTokens
         acc.cost += r.costUSD
+        acc.savings += r.savingsUSD
         return acc
       },
-      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0 },
+      { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0 },
     )
     const totalCells = [
       '',
@@ -597,6 +626,7 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
       `**${formatTokens(totals.cacheRead)}**`,
       `**${formatTokens(totals.total)}**`,
       `**${formatCost(totals.cost)}**`,
+      totals.savings > 0 ? `**${formatCost(totals.savings)}**` : '-',
     ]
     lines.push(`| ${totalCells.join(' | ')} |`)
   }
@@ -609,8 +639,8 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean } = {
   // CSV intentionally repeats provider/model on every row so downstream
   // consumers can sort/filter without first reconstructing the grouping.
   const header = byTask
-    ? ['provider', 'model', 'task', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd']
-    : ['provider', 'model', 'top_task', 'top_task_share', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd']
+    ? ['provider', 'model', 'task', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
+    : ['provider', 'model', 'top_task', 'top_task_share', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
   const lines: string[] = [header.join(',')]
   for (const r of rows) {
     const cells = byTask
@@ -625,6 +655,8 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean } = {
           String(r.totalTokens),
           String(r.calls),
           r.costUSD.toFixed(6),
+          (r.savingsUSD ?? 0).toFixed(6),
+          csvEscape(r.savingsBaselineModel),
         ]
       : [
           csvEscape(r.providerDisplayName),
@@ -638,6 +670,8 @@ export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean } = {
           String(r.totalTokens),
           String(r.calls),
           r.costUSD.toFixed(6),
+          (r.savingsUSD ?? 0).toFixed(6),
+          csvEscape(r.savingsBaselineModel),
         ]
     lines.push(cells.join(','))
   }
