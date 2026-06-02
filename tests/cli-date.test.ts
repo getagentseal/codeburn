@@ -44,6 +44,17 @@ describe('getDateRange', () => {
     expect(range.start.getDate()).toBe(1)
   })
 
+  it('"lifetime" starts at local epoch and stays open-ended through today', () => {
+    const { range, label } = getDateRange('lifetime')
+
+    expect(label).toBe('Lifetime')
+    expect(range.start.getFullYear()).toBe(1970)
+    expect(range.start.getMonth()).toBe(0)
+    expect(range.start.getDate()).toBe(1)
+    expect(range.end.getHours()).toBe(23)
+    expect(range.end.getMinutes()).toBe(59)
+  })
+
   it('"week" returns the last 7 days', () => {
     const { range, label } = getDateRange('week')
     expect(label).toBe('Last 7 Days')
@@ -88,7 +99,7 @@ describe('getDateRange', () => {
 
 describe('PERIODS / PERIOD_LABELS', () => {
   it('exposes the expected period set', () => {
-    expect(PERIODS).toEqual(['today', 'week', '30days', 'month', 'all'])
+    expect(PERIODS).toEqual(['today', 'week', '30days', 'month', 'all', 'lifetime'])
   })
 
   it('has a label for every period', () => {
@@ -102,11 +113,15 @@ describe('PERIODS / PERIOD_LABELS', () => {
     // ("Last 6 months") comes from getDateRange().label.
     expect(PERIOD_LABELS.all).toBe('6 Months')
   })
+
+  it('"lifetime" tab label is explicit about the unbounded range', () => {
+    expect(PERIOD_LABELS.lifetime).toBe('Lifetime')
+  })
 })
 
 describe('toPeriod', () => {
   it('round-trips known periods', () => {
-    const known: Period[] = ['today', 'week', '30days', 'month', 'all']
+    const known: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
     for (const p of known) {
       expect(toPeriod(p)).toBe(p)
     }
