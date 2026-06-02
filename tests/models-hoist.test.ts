@@ -61,6 +61,7 @@ const KNOWN_NAMES = [
   'deepseek-r1',
   'MiniMax-M2.7',
   'MiniMax-M2.7-highspeed',
+  'MiniMax-M3',
 ]
 
 describe('post-hoist resolution stability', () => {

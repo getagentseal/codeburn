@@ -452,6 +452,7 @@ const SHORT_NAMES: Record<string, string> = {
   'o3': 'o3',
   'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
   'MiniMax-M2.7': 'MiniMax M2.7',
+  'MiniMax-M3': 'MiniMax M3',
 }
 
 // Sorted longest-first so more-specific prefixes match before shorter ones.

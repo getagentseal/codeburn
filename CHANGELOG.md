@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added (CLI)
+- **MiniMax-M3 pricing.** Added `MiniMax-M3` to `FALLBACK_PRICING` plus the
+  `MiniMax M3` display name so MiniMax M3 sessions show up with the right
+  cost and readable label when users route MiniMax through providers like
+  OpenCode. Rates from MiniMax's paygo pricing for ≤512K context: $0.6/M
+  input, $2.4/M output, $0.12/M cache read; cache writes are not billed on
+  M3 paygo so the cache-write rate is pinned to 0 (the loader's input * 1.25
+  fallback would otherwise apply).
+
 ### Fixed (CLI)
 - **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
   now installs the statusLine command through a persistent `codeburn` binary

@@ -7,6 +7,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const outPath = join(__dirname, '..', 'src', 'data', 'litellm-snapshot.json')
 
 const MANUAL_ENTRIES = {
+  // MiniMax-M3 standard paygo pricing (≤512K context). M3 does not support
+  // active prompt cache writes, so cache_creation cost is 0; cache reads are
+  // billed separately. Source: https://platform.minimax.io/docs/guides/pricing-paygo
+  'MiniMax-M3':             [0.6e-6, 2.4e-6, 0, 0.12e-6],
   'MiniMax-M2.7':           [0.3e-6, 1.2e-6, 0.375e-6, 0.06e-6],
   'MiniMax-M2.7-highspeed': [0.6e-6, 2.4e-6, 0.375e-6, 0.06e-6],
   // LiteLLM PR #27056 is not merged yet. Source: https://api-docs.deepseek.com/quick_start/pricing
