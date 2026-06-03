@@ -1108,6 +1108,7 @@ enum DisplayMetric: String {
 enum InsightMode: String, CaseIterable, Identifiable {
     case plan = "Plan"
     case trend = "Trend"
+    case calendar = "Calendar"
     case forecast = "Forecast"
     case pulse = "Pulse"
     case stats = "Stats"
