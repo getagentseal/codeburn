@@ -121,6 +121,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/antigravity.png" width="28" />  | Antigravity    | Yes       | [antigravity.md](docs/providers/antigravity.md)   |
 | <img src="assets/providers/crush.png" width="28" />        | Crush          | Yes       | [crush.md](docs/providers/crush.md)               |
 |                                                            | Warp           | Yes       | [warp.md](docs/providers/warp.md)                 |
+|                                                            | Vercel AI Gateway | Yes*   | [vercel-gateway.md](docs/providers/vercel-gateway.md) |
 
 Each provider doc lists the exact data location, storage format, and known quirks. Linux and Windows paths are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
 
@@ -129,6 +130,10 @@ CodeBurn auto-detects which AI coding tools you use. If multiple providers have 
 The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `status`, `export`, `optimize`, `compare`, `yield`.
 
 ### Provider Notes
+
+**Codex (OpenAI)** stores sessions at `~/.codex/sessions/` as JSONL rollout files. CodeBurn reads `token_count` events and attributes cost by project working directory. Use `codeburn report --provider codex` to view Codex only, or `codeburn` (all providers) to combine with Cursor and others.
+
+**Vercel AI Gateway** pulls usage from the [Vercel AI Gateway reporting API](https://vercel.com/docs/ai-gateway/capabilities/custom-reporting) (cloud, not local logs). Set `AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN` (from `vercel env pull` / `vercel dev`). Requires a Vercel plan with Custom Reporting access. Example: `codeburn report --provider vercel-gateway -p month`. Without credentials, this provider is skipped silently in the combined dashboard.
 
 **Cursor** reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a Languages panel instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 

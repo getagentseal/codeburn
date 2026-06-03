@@ -1883,6 +1883,7 @@ async function parseProviderSources(
       const parser = provider.createSessionParser(
         { path: source.path, project: source.project, provider: providerName },
         parserDedup,
+        dateRange,
       )
 
       try {

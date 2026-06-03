@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { getAllProviders } from '../../src/providers/index.js'
+import { getCursorTimeFloor } from '../../src/providers/cursor.js'
 import type { Provider } from '../../src/providers/types.js'
 
 describe('cursor provider', () => {
@@ -40,6 +41,13 @@ describe('cursor provider', () => {
     })
   })
 
+  describe('time floor', () => {
+    it('uses dateRange.start when within the six-month cap', () => {
+      const start = new Date(2026, 3, 1)
+      expect(getCursorTimeFloor({ start, end: new Date(2026, 5, 2) })).toBe(start.toISOString())
+    })
+  })
+
   describe('session discovery', () => {
     it('returns empty when sqlite is not available', async () => {
       const sessions = await cursorProvider.discoverSessions()
@@ -71,7 +79,7 @@ describe('cursor sqlite adapter', () => {
 describe('cursor cache', () => {
   it('returns null when no cache exists', async () => {
     const { readCachedResults } = await import('../../src/cursor-cache.js')
-    const result = await readCachedResults('/nonexistent/path.db')
+    const result = await readCachedResults('/nonexistent/path.db', new Date(0).toISOString())
     expect(result).toBeNull()
   })
 })

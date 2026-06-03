@@ -99,6 +99,21 @@ let cursorAgentLoadAttempted = false
 let crushProvider: Provider | null = null
 let crushLoadAttempted = false
 
+let vercelGatewayProvider: Provider | null = null
+let vercelGatewayLoadAttempted = false
+
+async function loadVercelGateway(): Promise<Provider | null> {
+  if (vercelGatewayLoadAttempted) return vercelGatewayProvider
+  vercelGatewayLoadAttempted = true
+  try {
+    const { vercelGateway } = await import('./vercel-gateway.js')
+    vercelGatewayProvider = vercelGateway
+    return vercelGateway
+  } catch {
+    return null
+  }
+}
+
 async function loadOpenCode(): Promise<Provider | null> {
   if (opencodeLoadAttempted) return opencodeProvider
   opencodeLoadAttempted = true
@@ -138,7 +153,9 @@ async function loadCrush(): Promise<Provider | null> {
 const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, openclaw, pi, omp, qwen, rooCode]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp] = await Promise.all([loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp()])
+  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw] = await Promise.all([
+    loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(),
+  ])
   const all = [...coreProviders]
   if (ag) all.push(ag)
   if (forge) all.push(forge)
@@ -148,6 +165,7 @@ export async function getAllProviders(): Promise<Provider[]> {
   if (cursorAgent) all.push(cursorAgent)
   if (crush) all.push(crush)
   if (warp) all.push(warp)
+  if (vercelGw) all.push(vercelGw)
   return all
 }
 
@@ -198,6 +216,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'warp') {
     const w = await loadWarp()
     return w ?? undefined
+  }
+  if (name === 'vercel-gateway') {
+    const vg = await loadVercelGateway()
+    return vg ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }

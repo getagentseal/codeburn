@@ -1,4 +1,4 @@
-import type { ToolCall } from '../types.js'
+import type { DateRange, ToolCall } from '../types.js'
 
 export type SessionSource = {
   path: string
@@ -41,5 +41,5 @@ export type Provider = {
   modelDisplayName(model: string): string
   toolDisplayName(rawTool: string): string
   discoverSessions(): Promise<SessionSource[]>
-  createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser
+  createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser
 }

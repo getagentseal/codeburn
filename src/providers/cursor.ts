@@ -5,7 +5,23 @@ import { homedir } from 'os'
 import { calculateCost } from '../models.js'
 import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
+import type { DateRange } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+
+/** Matches cli-date.ts "all" period cap (6 months). */
+const CURSOR_MAX_LOOKBACK_MONTHS = 6
+
+export function getCursorTimeFloor(dateRange?: DateRange): string {
+  const now = new Date()
+  const maxStart = new Date(
+    now.getFullYear(),
+    now.getMonth() - CURSOR_MAX_LOOKBACK_MONTHS,
+    now.getDate(),
+  )
+  const start = dateRange?.start ?? maxStart
+  const effective = start < maxStart ? maxStart : start
+  return effective.toISOString()
+}
 
 const CURSOR_COST_MODEL = 'claude-sonnet-4-5'
 
@@ -384,12 +400,13 @@ function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: 
   return msg
 }
 
-function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
+function parseBubbles(
+  db: SqliteDatabase,
+  seenKeys: Set<string>,
+  timeFloor: string,
+): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
-
-  const LOOKBACK_DAYS = 180
-  const timeFloor = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   // Hard cap on rows to scan. The BUBBLE_QUERY_SINCE filter relies on
   // json_extract over the value BLOB, which SQLite cannot serve from an
@@ -660,7 +677,13 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string)
   return { calls: results }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(
+  source: SessionSource,
+  seenKeys: Set<string>,
+  dateRange?: DateRange,
+): SessionParser {
+  const timeFloor = getCursorTimeFloor(dateRange)
+
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -699,7 +722,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       // sources reuse one parsed bubble set per CLI run. Filtering happens
       // post-cache so each source emits only its own composers.
       let allCalls: ParsedProviderCall[] | null = null
-      const cached = await readCachedResults(dbPath)
+      const cached = await readCachedResults(dbPath, timeFloor)
       if (cached) {
         allCalls = cached
       } else {
@@ -719,10 +742,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // seenKeys is not mutated by calls that the workspace filter is
           // about to drop. Cross-source dedup happens at yield time.
           const localSeen = new Set<string>()
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen)
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor)
           const { calls: agentKvCalls } = parseAgentKv(db, localSeen, dbPath)
           allCalls = [...bubbleCalls, ...agentKvCalls]
-          await writeCachedResults(dbPath, allCalls)
+          await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {
           db.close()
         }
@@ -784,8 +807,8 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
       return sources
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys)
+    createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser {
+      return createParser(source, seenKeys, dateRange)
     },
   }
 }

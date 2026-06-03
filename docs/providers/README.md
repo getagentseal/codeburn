@@ -39,6 +39,7 @@ For the architectural picture, see `../architecture.md`.
 | [Goose](goose.md) | SQLite | `src/providers/goose.ts` | none |
 | [OpenCode](opencode.md) | SQLite | `src/providers/opencode.ts` | `tests/providers/opencode.test.ts` |
 | [Warp](warp.md) | SQLite | `src/providers/warp.ts` | `tests/providers/warp.test.ts` |
+| [Vercel AI Gateway](vercel-gateway.md) | REST API | `src/providers/vercel-gateway.ts` | `tests/providers/vercel-gateway.test.ts` |
 
 ### Shared
 
