@@ -334,6 +334,155 @@ function isTranscriptFormat(content: string): boolean {
   }
 }
 
+function isJetBrainsFormat(content: string): boolean {
+  const firstLine = content.split('\n')[0] ?? ''
+  try {
+    const event = JSON.parse(firstLine)
+    // JB format starts with user.message_rendered or user.message (no session.start)
+    // and has events with turnId / iterationNumber patterns
+    return (
+      event.type === 'user.message_rendered' ||
+      event.type === 'user.message' ||
+      event.type === 'partition.created'
+    )
+  } catch {
+    return false
+  }
+}
+
+// --- JetBrains (IntelliJ/DataGrip) format parser ---
+
+type JBEvent = {
+  type: string
+  timestamp?: string
+  id?: string
+  data: Record<string, unknown>
+}
+
+function parseJetBrainsEvents(content: string, sessionId: string, seenKeys: Set<string>): ParsedProviderCall[] {
+  const results: ParsedProviderCall[] = []
+  const lines = content.split('\n').filter(l => l.trim())
+  const events: JBEvent[] = []
+
+  for (const line of lines) {
+    try {
+      events.push(JSON.parse(line))
+    } catch {
+      continue
+    }
+  }
+
+  // Infer model from tool call IDs (same heuristic as transcript format)
+  const modelCounts = new Map<string, number>()
+  for (const e of events) {
+    if (e.type === 'tool.execution_start' || e.type === 'tool.execution_complete') {
+      const toolCallId = (e.data.toolCallId as string) ?? ''
+      for (const hint of transcriptToolCallModelHints) {
+        if (!toolCallId.startsWith(hint.prefix)) continue
+        modelCounts.set(hint.model, (modelCounts.get(hint.model) ?? 0) + 1)
+        break
+      }
+    }
+  }
+  const model = modelCounts.size > 0
+    ? [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+    : 'copilot-auto'
+
+  // Collect tool names per turn (messageId)
+  const toolsByTurn = new Map<string, string[]>()
+  let currentTurnId = ''
+
+  // First pass: gather user message text
+  let pendingUserMessage = ''
+  for (const e of events) {
+    if (e.type === 'user.message_rendered') {
+      const msg = (e.data.renderedMessage as string) ?? ''
+      pendingUserMessage = msg.slice(0, 500)
+    }
+    if (e.type === 'user.message') {
+      const msg = (e.data.content as string) ?? ''
+      if (msg) pendingUserMessage = msg.slice(0, 500)
+    }
+  }
+
+  // Reset for second pass
+  let userMsg = ''
+  for (const e of events) {
+    if (e.type === 'user.message_rendered') {
+      userMsg = ((e.data.renderedMessage as string) ?? '').slice(0, 500)
+    }
+    if (e.type === 'user.message') {
+      const msg = (e.data.content as string) ?? ''
+      if (msg) userMsg = msg.slice(0, 500)
+    }
+
+    if (e.type === 'assistant.turn_start') {
+      currentTurnId = (e.data.turnId as string) ?? ''
+    }
+
+    if (e.type === 'tool.execution_start') {
+      const toolName = (e.data.toolName as string) ?? ''
+      const normalized = normalizeToolName(toolName)
+      if (normalized) {
+        const msgId = currentTurnId || 'unknown'
+        const existing = toolsByTurn.get(msgId) ?? []
+        existing.push(normalized)
+        toolsByTurn.set(msgId, existing)
+      }
+    }
+
+    if (e.type === 'assistant.message') {
+      const data = e.data as { messageId?: string; content?: string; text?: string; reasoningText?: string; thinking?: { text?: string }; iterationNumber?: number; outputTokens?: number }
+      const contentText = data.text ?? data.content ?? ''
+      const reasoningText = data.reasoningText ?? data.thinking?.text ?? ''
+
+      // Skip empty messages (streaming placeholders)
+      if (contentText.length === 0 && reasoningText.length === 0) continue
+
+      const messageId = data.messageId ?? e.id ?? ''
+      const dedupKey = `copilot:jb:${sessionId}:${messageId}:${data.iterationNumber ?? 0}`
+      if (seenKeys.has(dedupKey)) continue
+      seenKeys.add(dedupKey)
+
+      let outputTokens = data.outputTokens ?? 0
+      let reasoningTokens = 0
+      if (outputTokens === 0) {
+        outputTokens = Math.ceil(contentText.length / CHARS_PER_TOKEN)
+        reasoningTokens = Math.ceil(reasoningText.length / CHARS_PER_TOKEN)
+      }
+
+      const inputTokens = Math.ceil(userMsg.length / CHARS_PER_TOKEN)
+      const tools = toolsByTurn.get(currentTurnId || messageId) ?? []
+      const costUSD = calculateCost(model, inputTokens, outputTokens + reasoningTokens, 0, 0, 0)
+
+      results.push({
+        provider: 'copilot',
+        model,
+        inputTokens,
+        outputTokens,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens,
+        webSearchRequests: 0,
+        costUSD,
+        tools,
+        bashCommands: [],
+        timestamp: e.timestamp ?? '',
+        speed: 'standard',
+        deduplicationKey: dedupKey,
+        userMessage: userMsg,
+        sessionId,
+      })
+
+      // Only count user message once per assistant turn
+      userMsg = ''
+    }
+  }
+
+  return results
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -343,9 +492,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         ? basename(source.path, '.jsonl')
         : basename(dirname(source.path))
 
-      const calls = isTranscriptFormat(content)
-        ? parseTranscriptEvents(content, sessionId, seenKeys)
-        : parseLegacyEvents(content, sessionId, seenKeys)
+      let calls: ParsedProviderCall[]
+      if (isTranscriptFormat(content)) {
+        calls = parseTranscriptEvents(content, sessionId, seenKeys)
+      } else if (isJetBrainsFormat(content)) {
+        calls = parseJetBrainsEvents(content, sessionId, seenKeys)
+      } else {
+        calls = parseLegacyEvents(content, sessionId, seenKeys)
+      }
 
       for (const call of calls) {
         yield call
@@ -407,6 +561,84 @@ async function readWorkspaceProject(workspaceDir: string): Promise<string> {
     }
   } catch {}
   return basename(workspaceDir)
+}
+
+function getJetBrainsSessionDir(override?: string): string {
+  return override ?? join(homedir(), '.copilot', 'jb')
+}
+
+async function discoverJetBrainsSessions(jbDir: string): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+
+  let sessionDirs: string[]
+  try {
+    sessionDirs = await readdir(jbDir)
+  } catch {
+    return sources
+  }
+
+  for (const sessionId of sessionDirs) {
+    const sessionPath = join(jbDir, sessionId)
+    const s = await stat(sessionPath).catch(() => null)
+    if (!s?.isDirectory()) continue
+
+    let partitions: string[]
+    try {
+      partitions = await readdir(sessionPath)
+    } catch {
+      continue
+    }
+
+    for (const file of partitions) {
+      if (!file.endsWith('.jsonl')) continue
+      const filePath = join(sessionPath, file)
+      const fs = await stat(filePath).catch(() => null)
+      if (!fs?.isFile()) continue
+
+      // Try to infer project name from tool execution paths in the first few lines
+      const project = await inferJBProjectName(filePath) ?? sessionId
+      sources.push({ path: filePath, project, provider: 'copilot' })
+    }
+  }
+
+  return sources
+}
+
+async function inferJBProjectName(filePath: string): Promise<string | null> {
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    const lines = content.split('\n').slice(0, 100) // Only scan first 100 lines
+    const homeParts = homedir().split(sep)
+    const homeDepth = homeParts.length
+
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line)
+        if (e.type === 'tool.execution_start') {
+          const args = e.data?.arguments
+          if (typeof args === 'object' && args !== null && typeof args.path === 'string') {
+            const pathVal: string = args.path
+            const parts = pathVal.split('/')
+            // Pick the first meaningful directory after home (the project root)
+            if (parts.length > homeDepth + 1) {
+              // Skip common intermediate dirs like "IKEA", "projects", "repos", "src", "work"
+              // Try to return the first unique project-level folder
+              const afterHome = parts.slice(homeDepth)
+              // Return up to 2 levels deep for context (e.g. "01_SPE/spe-price-data-service")
+              if (afterHome.length >= 2) {
+                return basename(afterHome.slice(0, afterHome.length > 2 ? 2 : afterHome.length).join('/'))
+                  || afterHome[0] || null
+              }
+              return afterHome[0] || null
+            }
+          }
+        }
+      } catch {
+        continue
+      }
+    }
+  } catch {}
+  return null
 }
 
 async function discoverLegacySessions(sessionStateDir: string): Promise<SessionSource[]> {
@@ -475,6 +707,7 @@ async function discoverVSCodeTranscripts(workspaceStorageDir: string): Promise<S
 export function createCopilotProvider(sessionStateDir?: string, workspaceStorageDirOverride?: string): Provider {
   const legacyDir = getCopilotSessionStateDir(sessionStateDir)
   const vscodeDirs = workspaceStorageDirOverride != null ? [workspaceStorageDirOverride] : getVSCodeWorkspaceStorageDirs()
+  const jbDir = getJetBrainsSessionDir()
 
   return {
     name: 'copilot',
@@ -495,11 +728,12 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      const [legacy, ...vscodeResults] = await Promise.all([
+      const [legacy, jb, ...vscodeResults] = await Promise.all([
         discoverLegacySessions(legacyDir),
+        discoverJetBrainsSessions(jbDir),
         ...vscodeDirs.map(discoverVSCodeTranscripts),
       ])
-      return [...legacy, ...vscodeResults.flat()]
+      return [...legacy, ...jb, ...vscodeResults.flat()]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
