@@ -27,6 +27,12 @@ export type CodeburnConfig = {
   plan?: Plan
   plans?: PlanConfigMap
   modelAliases?: Record<string, string>
+  // Extra Claude config directories to aggregate usage across (e.g. work /
+  // personal accounts). Honored by getClaudeConfigDirs() below the
+  // CLAUDE_CONFIG_DIRS/CLAUDE_CONFIG_DIR env vars. Lets the macOS menubar — a
+  // GUI app that doesn't inherit the user's shell env — configure multi-account
+  // aggregation without injecting env into every spawned subprocess.
+  claudeConfigDirs?: string[]
 }
 
 function getConfigDir(): string {

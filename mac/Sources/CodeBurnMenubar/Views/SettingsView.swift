@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// macOS-standard tabbed Settings window. New per-provider sections (Codex,
@@ -114,6 +115,15 @@ private struct ClaudeSettingsTab: View {
         Form {
             Section("Connection") {
                 ClaudeConnectionRow()
+            }
+            Section {
+                ClaudeConfigDirsSection()
+            } header: {
+                Text("Config Directories")
+            } footer: {
+                Text("Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             Section("Quota Refresh") {
                 Picker("Update every", selection: Binding(
@@ -240,6 +250,85 @@ private struct ClaudeConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Claude config directories
+
+private struct ClaudeConfigDirsSection: View {
+    @Environment(AppStore.self) private var store
+    @State private var dirs: [String] = CLIClaudeConfig.load()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if dirs.isEmpty {
+                Text("No extra directories — tracking the default `~/.claude`.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(dirs.enumerated()), id: \.offset) { index, dir in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text(dir)
+                            .font(.system(size: 12))
+                            .truncationMode(.middle)
+                            .lineLimit(1)
+                            .help(dir)
+                        Spacer()
+                        Button {
+                            remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove")
+                    }
+                }
+            }
+
+            Button {
+                addDirectory()
+            } label: {
+                Label("Add Directory…", systemImage: "plus")
+            }
+            .controlSize(.small)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func addDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose one or more Claude config directories (each containing a `projects` folder)."
+        guard panel.runModal() == .OK else { return }
+
+        let added = panel.urls.map { $0.path }
+        var next = dirs
+        for path in added where !next.contains(path) {
+            next.append(path)
+        }
+        apply(next)
+    }
+
+    private func remove(at index: Int) {
+        guard dirs.indices.contains(index) else { return }
+        var next = dirs
+        next.remove(at: index)
+        apply(next)
+    }
+
+    /// Persists the new list and kicks a forced refresh so the dashboard
+    /// reflects the changed aggregation immediately.
+    private func apply(_ next: [String]) {
+        dirs = next
+        CLIClaudeConfig.persist(dirs: next)
+        Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
     }
 }
 
