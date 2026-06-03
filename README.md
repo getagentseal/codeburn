@@ -121,6 +121,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/antigravity.png" width="28" />  | Antigravity    | Yes       | [antigravity.md](docs/providers/antigravity.md)   |
 | <img src="assets/providers/crush.png" width="28" />        | Crush          | Yes       | [crush.md](docs/providers/crush.md)               |
 |                                                            | Warp           | Yes       | [warp.md](docs/providers/warp.md)                 |
+|                                                            | Windsurf       | Yes       | [windsurf.md](docs/providers/windsurf.md)         |
 
 Each provider doc lists the exact data location, storage format, and known quirks. Linux and Windows paths are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
 

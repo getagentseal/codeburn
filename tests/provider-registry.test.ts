@@ -110,4 +110,23 @@ describe('provider registry', () => {
     expect(cursor.modelDisplayName('grok-code-fast-1')).toBe('Grok Code Fast')
     expect(cursor.modelDisplayName('unknown-model')).toBe('unknown-model')
   })
+
+  it('windsurf is available through async provider loading', async () => {
+    const ws = await getProvider('windsurf')
+    expect(ws).toBeDefined()
+    expect(ws!.name).toBe('windsurf')
+    expect(ws!.displayName).toBe('Windsurf')
+  })
+
+  it('windsurf model and tool display names are normalized', async () => {
+    const ws = await getProvider('windsurf')
+    expect(ws).toBeDefined()
+    expect(ws!.modelDisplayName('swe-1.6')).toBe('SWE-1.6')
+    expect(ws!.modelDisplayName('windsurf-auto')).toBe('Windsurf Auto')
+    expect(ws!.modelDisplayName('claude-4.6-sonnet')).toBe('Sonnet 4.6')
+    expect(ws!.modelDisplayName('unknown-model')).toBe('unknown-model')
+    expect(ws!.toolDisplayName('run_command')).toBe('Bash')
+    expect(ws!.toolDisplayName('read_file')).toBe('Read')
+    expect(ws!.toolDisplayName('unknown_tool')).toBe('unknown_tool')
+  })
 })
