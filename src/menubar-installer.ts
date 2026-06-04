@@ -16,7 +16,8 @@ import {
 /// the repository, so we scan recent releases and choose the newest `mac-v*` release
 /// that actually contains the menubar zip.
 const RELEASE_API = 'https://api.github.com/repos/getagentseal/codeburn/releases?per_page=20'
-const APP_BUNDLE_NAME = 'CodeBurnMenubar.app'
+const APP_BUNDLE_NAME = 'CodeBurn.app'
+const LEGACY_APP_BUNDLE_NAME = 'CodeBurnMenubar.app'
 const EXPECTED_BUNDLE_ID = 'org.agentseal.codeburn-menubar'
 const VERSIONED_ASSET_PATTERN = /^CodeBurnMenubar-v.+\.zip$/
 const APP_PROCESS_NAME = 'CodeBurnMenubar'
@@ -237,7 +238,9 @@ export async function installMenubarApp(options: { force?: boolean } = {}): Prom
 
   const appsDir = userApplicationsDir()
   const targetPath = join(appsDir, APP_BUNDLE_NAME)
+  const legacyPath = join(appsDir, LEGACY_APP_BUNDLE_NAME)
   const alreadyInstalled = await exists(targetPath)
+  const legacyInstalled = await exists(legacyPath)
 
   if (alreadyInstalled && !options.force) {
     if (!(await isAppRunning())) {
@@ -246,7 +249,7 @@ export async function installMenubarApp(options: { force?: boolean } = {}): Prom
     return { installedPath: targetPath, launched: true }
   }
 
-  console.log('Looking up the latest CodeBurn Menubar release...')
+  console.log('Looking up the latest CodeBurn release...')
   const { zip, checksum } = await fetchLatestReleaseAssets()
 
   const stagingDir = await mkdtemp(join(tmpdir(), 'codeburn-menubar-'))
@@ -275,15 +278,16 @@ export async function installMenubarApp(options: { force?: boolean } = {}): Prom
     await runCommand('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', unpackedApp]).catch(() => {})
 
     await mkdir(appsDir, { recursive: true })
-    if (alreadyInstalled) {
+    if (alreadyInstalled || legacyInstalled) {
       // Kill the running copy before replacing its bundle so `mv` can proceed cleanly and the
       // user ends up on the new version.
       await killRunningApp()
       await rm(targetPath, { recursive: true, force: true })
+      await rm(legacyPath, { recursive: true, force: true })
     }
     await rename(unpackedApp, targetPath)
 
-    console.log('Launching CodeBurn Menubar...')
+    console.log('Launching CodeBurn...')
     await runCommand('/usr/bin/open', [targetPath])
     return { installedPath: targetPath, launched: true }
   } finally {

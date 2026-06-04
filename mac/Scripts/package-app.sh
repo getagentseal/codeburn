@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a universal CodeBurnMenubar.app bundle from the SwiftPM target and drops a
+# Builds a universal CodeBurn.app bundle from the SwiftPM target and drops a
 # distributable zip alongside. Used by the GitHub release workflow; also runnable locally.
 #
 # Usage:
@@ -11,7 +11,7 @@ set -euo pipefail
 VERSION="${1:-dev}"
 ASSET_VERSION="${VERSION#mac-}"
 BUNDLE_VERSION="${ASSET_VERSION#v}"
-BUNDLE_NAME="CodeBurnMenubar.app"
+BUNDLE_NAME="CodeBurn.app"
 BUNDLE_ID="org.agentseal.codeburn-menubar"
 EXECUTABLE_NAME="CodeBurnMenubar"
 MIN_MACOS="14.0"
@@ -54,7 +54,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>CodeBurn Menubar</string>
+    <string>CodeBurn</string>
     <key>CFBundleExecutable</key>
     <string>${EXECUTABLE_NAME}</string>
     <key>CFBundleIconFile</key>
@@ -64,7 +64,7 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>${EXECUTABLE_NAME}</string>
+    <string>CodeBurn</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
