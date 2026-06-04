@@ -1,0 +1,29 @@
+# Quality gate — delegates to the shared reusable workflow in NERV.
+#
+# Single source of truth:
+#   NERV-es/NERV/.github/workflows/lint-reusable.yml
+#
+# This stub is byte-identical across every arbitraged-life fork. The reusable
+# workflow auto-detects which languages are present and runs only the relevant
+# linters + a gitleaks secret scan. Advisory by default (style annotates, never
+# blocks); secret detection always fails. To make style blocking here, set
+# strict: true below.
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: NERV-es/NERV/.github/workflows/lint-reusable.yml@ci-quality-v1
+    # with:
+    #   strict: true        # hard-fail on any lint finding
+    #   swift_strict: true  # SwiftLint --strict (any warning fails)
+
+
+
