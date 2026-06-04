@@ -1,6 +1,6 @@
 import { existsSync } from 'fs'
 import { readdir, readFile, stat } from 'fs/promises'
-import { basename, dirname, join, posix, win32 } from 'path'
+import { basename, dirname, join, posix, sep, win32 } from 'path'
 import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
@@ -243,6 +243,34 @@ function inferModelFromToolCallIds(events: TranscriptEvent[]): string {
   return 'copilot-auto'
 }
 
+/** Model inference for JB events — checks data.model (100x weight) and tool call
+ *  ID prefixes on tool.execution_start/complete events. */
+function inferModelFromEvents(events: JBEvent[]): string {
+  const modelCounts = new Map<string, number>()
+
+  for (const e of events) {
+    const data = e.data as { model?: string; toolCallId?: string }
+    if (typeof data.model === 'string' && data.model) {
+      modelCounts.set(data.model, (modelCounts.get(data.model) ?? 0) + 100)
+    }
+
+    if (e.type === 'tool.execution_start' || e.type === 'tool.execution_complete') {
+      const toolCallId = data.toolCallId ?? ''
+      for (const hint of transcriptToolCallModelHints) {
+        if (!toolCallId.startsWith(hint.prefix)) continue
+        modelCounts.set(hint.model, (modelCounts.get(hint.model) ?? 0) + 1)
+        break
+      }
+    }
+  }
+
+  if (modelCounts.size > 0) {
+    return [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+  }
+
+  return 'copilot-auto'
+}
+
 function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set<string>): ParsedProviderCall[] {
   const results: ParsedProviderCall[] = []
   const lines = content.split('\n').filter(l => l.trim())
@@ -338,11 +366,11 @@ function isJetBrainsFormat(content: string): boolean {
   const firstLine = content.split('\n')[0] ?? ''
   try {
     const event = JSON.parse(firstLine)
-    // JB format starts with user.message_rendered or user.message (no session.start)
-    // and has events with turnId / iterationNumber patterns
+    // JB format starts with user.message_rendered or partition.created (JB-specific).
+    // We intentionally exclude user.message here since legacy files can also start
+    // with that event type — routing them to the JB parser would misparse them.
     return (
       event.type === 'user.message_rendered' ||
-      event.type === 'user.message' ||
       event.type === 'partition.created'
     )
   } catch {
@@ -372,41 +400,17 @@ function parseJetBrainsEvents(content: string, sessionId: string, seenKeys: Set<
     }
   }
 
-  // Infer model from tool call IDs (same heuristic as transcript format)
-  const modelCounts = new Map<string, number>()
-  for (const e of events) {
-    if (e.type === 'tool.execution_start' || e.type === 'tool.execution_complete') {
-      const toolCallId = (e.data.toolCallId as string) ?? ''
-      for (const hint of transcriptToolCallModelHints) {
-        if (!toolCallId.startsWith(hint.prefix)) continue
-        modelCounts.set(hint.model, (modelCounts.get(hint.model) ?? 0) + 1)
-        break
-      }
-    }
-  }
-  const model = modelCounts.size > 0
-    ? [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]![0]
-    : 'copilot-auto'
+  // Reuse the shared model inference logic: check explicit data.model fields
+  // (weighted 100x) and tool call ID prefix heuristics from both assistant.message
+  // toolRequests and tool.execution_start/complete events (JB-specific).
+  const model = inferModelFromEvents(events)
 
-  // Collect tool names per turn (messageId)
+  // Collect tool names per turn
   const toolsByTurn = new Map<string, string[]>()
   let currentTurnId = ''
-
-  // First pass: gather user message text
-  let pendingUserMessage = ''
-  for (const e of events) {
-    if (e.type === 'user.message_rendered') {
-      const msg = (e.data.renderedMessage as string) ?? ''
-      pendingUserMessage = msg.slice(0, 500)
-    }
-    if (e.type === 'user.message') {
-      const msg = (e.data.content as string) ?? ''
-      if (msg) pendingUserMessage = msg.slice(0, 500)
-    }
-  }
-
-  // Reset for second pass
   let userMsg = ''
+  let msgIndex = 0
+
   for (const e of events) {
     if (e.type === 'user.message_rendered') {
       userMsg = ((e.data.renderedMessage as string) ?? '').slice(0, 500)
@@ -439,8 +443,11 @@ function parseJetBrainsEvents(content: string, sessionId: string, seenKeys: Set<
       // Skip empty messages (streaming placeholders)
       if (contentText.length === 0 && reasoningText.length === 0) continue
 
+      // Use messageId if available, otherwise fall back to an incrementing index
+      // to avoid dedup collisions when messageId is absent.
       const messageId = data.messageId ?? e.id ?? ''
-      const dedupKey = `copilot:jb:${sessionId}:${messageId}:${data.iterationNumber ?? 0}`
+      const dedupId = messageId || String(msgIndex++)
+      const dedupKey = `copilot:jb:${sessionId}:${dedupId}:${data.iterationNumber ?? 0}`
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
@@ -497,6 +504,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         calls = parseTranscriptEvents(content, sessionId, seenKeys)
       } else if (isJetBrainsFormat(content)) {
         calls = parseJetBrainsEvents(content, sessionId, seenKeys)
+        // Infer project name from tool paths now that content is loaded
+        const inferredProject = inferJBProjectFromContent(content)
+        if (inferredProject) {
+          for (const call of calls) {
+            call.project = inferredProject
+          }
+        }
       } else {
         calls = parseLegacyEvents(content, sessionId, seenKeys)
       }
@@ -594,50 +608,44 @@ async function discoverJetBrainsSessions(jbDir: string): Promise<SessionSource[]
       const filePath = join(sessionPath, file)
       const fs = await stat(filePath).catch(() => null)
       if (!fs?.isFile()) continue
-
-      // Try to infer project name from tool execution paths in the first few lines
-      const project = await inferJBProjectName(filePath) ?? sessionId
-      sources.push({ path: filePath, project, provider: 'copilot' })
+      sources.push({ path: filePath, project: sessionId, provider: 'copilot' })
     }
   }
 
   return sources
 }
 
-async function inferJBProjectName(filePath: string): Promise<string | null> {
-  try {
-    const content = await readFile(filePath, 'utf-8')
-    const lines = content.split('\n').slice(0, 100) // Only scan first 100 lines
-    const homeParts = homedir().split(sep)
-    const homeDepth = homeParts.length
+/** Infer a project name from tool execution paths in already-loaded content. */
+function inferJBProjectFromContent(content: string): string | null {
+  const homeParts = homedir().split(sep)
+  const homeDepth = homeParts.length
+  const lines = content.split('\n')
+  const limit = Math.min(lines.length, 200)
 
-    for (const line of lines) {
-      try {
-        const e = JSON.parse(line)
-        if (e.type === 'tool.execution_start') {
-          const args = e.data?.arguments
-          if (typeof args === 'object' && args !== null && typeof args.path === 'string') {
-            const pathVal: string = args.path
-            const parts = pathVal.split('/')
-            // Pick the first meaningful directory after home (the project root)
-            if (parts.length > homeDepth + 1) {
-              // Skip common intermediate dirs like "IKEA", "projects", "repos", "src", "work"
-              // Try to return the first unique project-level folder
-              const afterHome = parts.slice(homeDepth)
-              // Return up to 2 levels deep for context (e.g. "01_SPE/spe-price-data-service")
-              if (afterHome.length >= 2) {
-                return basename(afterHome.slice(0, afterHome.length > 2 ? 2 : afterHome.length).join('/'))
-                  || afterHome[0] || null
-              }
-              return afterHome[0] || null
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i]
+    if (!line) continue
+    try {
+      const e = JSON.parse(line)
+      if (e.type === 'tool.execution_start') {
+        const args = e.data?.arguments
+        if (typeof args === 'object' && args !== null && typeof args.path === 'string') {
+          const pathVal: string = args.path
+          const parts = pathVal.split('/')
+          if (parts.length > homeDepth + 1) {
+            const afterHome = parts.slice(homeDepth)
+            if (afterHome.length >= 2) {
+              return basename(afterHome.slice(0, afterHome.length > 2 ? 2 : afterHome.length).join('/'))
+                || afterHome[0] || null
             }
+            return afterHome[0] || null
           }
         }
-      } catch {
-        continue
       }
+    } catch {
+      continue
     }
-  } catch {}
+  }
   return null
 }
 
@@ -704,10 +712,10 @@ async function discoverVSCodeTranscripts(workspaceStorageDir: string): Promise<S
   return sources
 }
 
-export function createCopilotProvider(sessionStateDir?: string, workspaceStorageDirOverride?: string): Provider {
+export function createCopilotProvider(sessionStateDir?: string, workspaceStorageDirOverride?: string, jbDirOverride?: string): Provider {
   const legacyDir = getCopilotSessionStateDir(sessionStateDir)
   const vscodeDirs = workspaceStorageDirOverride != null ? [workspaceStorageDirOverride] : getVSCodeWorkspaceStorageDirs()
-  const jbDir = getJetBrainsSessionDir()
+  const jbDir = getJetBrainsSessionDir(jbDirOverride)
 
   return {
     name: 'copilot',
