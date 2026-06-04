@@ -124,6 +124,7 @@ export type SessionSummary = {
   totalCostUSD: number
   totalInputTokens: number
   totalOutputTokens: number
+  totalReasoningTokens: number
   totalCacheReadTokens: number
   totalCacheWriteTokens: number
   apiCalls: number
