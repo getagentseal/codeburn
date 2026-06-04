@@ -19,7 +19,7 @@ const RELEASE_API = 'https://api.github.com/repos/getagentseal/codeburn/releases
 const APP_BUNDLE_NAME = 'CodeBurn.app'
 const LEGACY_APP_BUNDLE_NAME = 'CodeBurnMenubar.app'
 const EXPECTED_BUNDLE_ID = 'org.agentseal.codeburn-menubar'
-const VERSIONED_ASSET_PATTERN = /^CodeBurnMenubar-v.+\.zip$/
+const VERSIONED_ASSET_PATTERN = /^CodeBurn-v.+\.zip$/
 const APP_PROCESS_NAME = 'CodeBurnMenubar'
 const SUPPORTED_OS = 'darwin'
 const MIN_MACOS_MAJOR = 14
@@ -57,7 +57,7 @@ export function resolveLatestMenubarReleaseAssets(releases: ReleaseResponse[]): 
       continue
     }
   }
-  throw new Error('No mac-v* release with a CodeBurnMenubar-v*.zip and checksum was found.')
+  throw new Error('No mac-v* release with a CodeBurn-v*.zip and checksum was found.')
 }
 
 export {

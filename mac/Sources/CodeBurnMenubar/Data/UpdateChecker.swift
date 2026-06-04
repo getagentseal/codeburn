@@ -95,7 +95,7 @@ final class UpdateChecker {
             }
 
             let version = resolved.asset.name
-                .replacingOccurrences(of: "CodeBurnMenubar-", with: "")
+                .replacingOccurrences(of: "CodeBurn-", with: "")
                 .replacingOccurrences(of: ".zip", with: "")
 
             let cliVersion = Self.resolveLatestCliVersion(in: releases)
@@ -138,7 +138,7 @@ final class UpdateChecker {
     nonisolated static func resolveLatestMenubarRelease(in releases: [GitHubRelease]) -> (release: GitHubRelease, asset: GitHubAsset)? {
         for release in releases where release.tag_name.hasPrefix("mac-v") {
             guard let asset = release.assets.first(where: {
-                $0.name.hasPrefix("CodeBurnMenubar-v") && $0.name.hasSuffix(".zip")
+                $0.name.hasPrefix("CodeBurn-v") && $0.name.hasSuffix(".zip")
             }) else { continue }
             guard release.assets.contains(where: { $0.name == "\(asset.name).sha256" }) else { continue }
             return (release, asset)

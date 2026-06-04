@@ -44,10 +44,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: CodeBurnMenubar-${{ steps.version.outputs.value }}
+          name: CodeBurn-${{ steps.version.outputs.value }}
           path: |
-            mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip
-            mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip.sha256
+            mac/.build/dist/CodeBurn-${{ steps.version.outputs.value }}.zip
+            mac/.build/dist/CodeBurn-${{ steps.version.outputs.value }}.zip.sha256
           if-no-files-found: error
 
       - name: Create / update GitHub Release
@@ -70,6 +70,6 @@ jobs:
             the zip from this page directly and macOS shows "cannot verify developer",
             right-click the app in Finder and pick Open to whitelist it once.
           files: |
-            mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip
-            mac/.build/dist/CodeBurnMenubar-${{ steps.version.outputs.value }}.zip.sha256
+            mac/.build/dist/CodeBurn-${{ steps.version.outputs.value }}.zip
+            mac/.build/dist/CodeBurn-${{ steps.version.outputs.value }}.zip.sha256
           fail_on_unmatched_files: true
