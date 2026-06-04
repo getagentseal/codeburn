@@ -13,7 +13,7 @@ name: Quality
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feat/ci-quality-gate]  # CANARY: feat branch line reverted before rollout
 
 permissions:
   contents: read
@@ -24,6 +24,7 @@ jobs:
     # with:
     #   strict: true        # hard-fail on any lint finding
     #   swift_strict: true  # SwiftLint --strict (any warning fails)
+
 
 
 
