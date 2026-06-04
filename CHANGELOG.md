@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added (CLI)
+- **Hermes Agent provider.** Track token usage, cost, and tool breakdowns
+  for Hermes Agent sessions. Reads from `~/.hermes/state.db` and per-profile
+  databases. Supports session-level accounting with actual/estimated costs
+  from Hermes, falling back to CodeBurn's model pricing table. Supersedes
+  #386, closes #368.
+
 ### Fixed (CLI)
 - **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
   now installs the statusLine command through a persistent `codeburn` binary
