@@ -35,6 +35,16 @@ async function writeWorkspace(root: string, workspaceId: string, lines: string[]
   return filePath
 }
 
+// Sub-agent transcripts live nested under the parent workspace, not as a
+// top-level sessions/<id> dir.
+async function writeSubagent(root: string, workspaceId: string, childTaskId: string, lines: string[]) {
+  const dir = join(root, 'sessions', workspaceId, 'subagent-transcripts', childTaskId)
+  await mkdir(dir, { recursive: true })
+  const filePath = join(dir, 'chat.jsonl')
+  await writeFile(filePath, lines.join('\n') + '\n')
+  return filePath
+}
+
 function userMessage(text: string, id = 'msg-user-1') {
   return JSON.stringify({
     id,
@@ -134,6 +144,57 @@ describe('mux provider - session discovery', () => {
     await mkdir(join(tmpDir, 'sessions', 'ws-empty'), { recursive: true })
     const provider = createMuxProvider(tmpDir)
     expect(await provider.discoverSessions()).toEqual([])
+  })
+
+  it('discovers sub-agent transcripts and attributes them to the parent project', async () => {
+    await writeWorkspace(tmpDir, 'ws-parent', [assistantMessage({ id: 'parent-1' })])
+    await writeSubagent(tmpDir, 'ws-parent', 'child-a', [assistantMessage({ id: 'child-a-1' })])
+    await writeSubagent(tmpDir, 'ws-parent', 'child-b', [assistantMessage({ id: 'child-b-1' })])
+    await writeConfig(tmpDir, [['/Users/test/myproject', ['ws-parent']]])
+
+    const provider = createMuxProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    // parent chat.jsonl + two sub-agent transcripts, all under one project.
+    expect(sessions).toHaveLength(3)
+    expect(sessions.every(s => s.project === 'myproject')).toBe(true)
+    const subagentPaths = sessions
+      .map(s => s.path)
+      .filter(p => p.includes('subagent-transcripts'))
+      .sort()
+    expect(subagentPaths).toHaveLength(2)
+    expect(subagentPaths[0]).toContain(join('subagent-transcripts', 'child-a', 'chat.jsonl'))
+  })
+
+  it('discovers a sub-agent transcript even when the workspace has no top-level chat.jsonl', async () => {
+    // mkdir the workspace dir without a chat.jsonl, but with a sub-agent transcript.
+    await writeSubagent(tmpDir, 'ws-parent', 'child-only', [assistantMessage({ id: 'child-only-1' })])
+
+    const provider = createMuxProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toContain(join('subagent-transcripts', 'child-only', 'chat.jsonl'))
+  })
+
+  it('counts sub-agent calls once, with a workspace-distinct dedup key', async () => {
+    const seenKeys = new Set<string>()
+    await writeWorkspace(tmpDir, 'ws-parent', [assistantMessage({ id: 'shared-id', input: 100 })])
+    // Same message id inside the sub-agent must NOT collide with the parent's.
+    await writeSubagent(tmpDir, 'ws-parent', 'child-a', [assistantMessage({ id: 'shared-id', input: 200 })])
+
+    const provider = createMuxProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, seenKeys).parse()) calls.push(call)
+    }
+
+    expect(calls).toHaveLength(2)
+    expect(new Set(calls.map(c => c.deduplicationKey))).toEqual(
+      new Set(['mux:ws-parent:shared-id', 'mux:child-a:shared-id']),
+    )
+    expect(calls.map(c => c.sessionId).sort()).toEqual(['child-a', 'ws-parent'])
   })
 })
 

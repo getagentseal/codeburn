@@ -105,6 +105,11 @@ async function loadProjectMap(root: string): Promise<Map<string, string>> {
   return map
 }
 
+async function pushChatSource(sources: SessionSource[], chatPath: string, project: string): Promise<void> {
+  const s = await stat(chatPath).catch(() => null)
+  if (s?.isFile()) sources.push({ path: chatPath, project, provider: 'mux' })
+}
+
 async function discoverSessions(root: string): Promise<SessionSource[]> {
   const sessionsDir = join(root, 'sessions')
 
@@ -118,14 +123,29 @@ async function discoverSessions(root: string): Promise<SessionSource[]> {
   const projectMap = await loadProjectMap(root)
   const sources: SessionSource[] = []
   for (const workspaceId of workspaceIds) {
-    const chatPath = join(sessionsDir, workspaceId, 'chat.jsonl')
-    const s = await stat(chatPath).catch(() => null)
-    if (!s?.isFile()) continue
-    sources.push({
-      path: chatPath,
-      project: projectMap.get(workspaceId) ?? workspaceId,
-      provider: 'mux',
-    })
+    const workspaceDir = join(sessionsDir, workspaceId)
+    const project = projectMap.get(workspaceId) ?? workspaceId
+
+    // The workspace's own turns.
+    await pushChatSource(sources, join(workspaceDir, 'chat.jsonl'), project)
+
+    // Sub-agent turns. Each spawned sub-agent is a separate LLM-client session
+    // recorded at subagent-transcripts/<childTaskId>/chat.jsonl — mux does NOT
+    // mirror these into a top-level sessions/<id> dir, so they are only
+    // reachable here. They carry real token usage (often the bulk of a
+    // session's spend) and are attributed to the parent workspace's project.
+    // Dedup stays correct: the parser keys off the child-task dir name, which
+    // is distinct from every workspace id, so each call is still counted once.
+    const subagentDir = join(workspaceDir, 'subagent-transcripts')
+    let childTaskIds: string[]
+    try {
+      childTaskIds = await readdir(subagentDir)
+    } catch {
+      continue
+    }
+    for (const childTaskId of childTaskIds) {
+      await pushChatSource(sources, join(subagentDir, childTaskId, 'chat.jsonl'), project)
+    }
   }
   return sources
 }

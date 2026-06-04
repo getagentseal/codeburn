@@ -14,7 +14,7 @@
 | 2 | `$MUX_ROOT` (mux's own override) |
 | 3 | `~/.mux` (default) |
 
-Session files: `<root>/sessions/<workspaceId>/chat.jsonl`. Dev builds of mux use `~/.mux-dev` and an older install may use `~/.cmux` (migrated to `~/.mux`); point `CODEBURN_MUX_DIR`/`MUX_ROOT` at those if needed.
+Session files: `<root>/sessions/<workspaceId>/chat.jsonl`, plus each spawned sub-agent's own transcript at `<root>/sessions/<workspaceId>/subagent-transcripts/<childTaskId>/chat.jsonl` (see Quirks). Dev builds of mux use `~/.mux-dev` and an older install may use `~/.cmux` (migrated to `~/.mux`); point `CODEBURN_MUX_DIR`/`MUX_ROOT` at those if needed.
 
 The human-readable project name is resolved from `<root>/config.json` (shape: `{ projects: Array<[projectPath, { workspaces: [{ id }] }] > }`); the directory under `sessions/` is the `workspaceId`, matched against `workspace.id`. Falls back to the raw `workspaceId` when there's no mapping.
 
@@ -42,7 +42,9 @@ Per `mux:<workspaceId>:<message.id>`. `message.id` is required by mux's schema; 
 
 ## Quirks
 
-- **No double-counting with `claude`.** Mux calls model APIs itself and stores usage under `~/.mux`; it does not shell out to Claude Code or read `~/.claude`. Sub-agents are internal child workspaces, each with their own `sessions/<id>/chat.jsonl`, so per-workspace parsing counts each call once.
+- **No double-counting with `claude`.** Mux calls model APIs itself and stores usage under `~/.mux`; it does not shell out to Claude Code or read `~/.claude`.
+- **Sub-agents.** A spawned sub-agent is its own LLM-client session, but mux writes it to `sessions/<workspaceId>/subagent-transcripts/<childTaskId>/chat.jsonl` — *nested under the parent workspace*, not as a top-level `sessions/<id>` dir. `discoverSessions` walks these explicitly and attributes them to the parent's project; missing them undercounts real sessions substantially (sub-agent calls are routinely the majority of a session's turns). No double-count: the dedup key is derived from the `<childTaskId>` directory name, which is disjoint from every workspace id.
+- **Reasoning vs. output decomposition.** `output = outputTokens − reasoningTokens` assumes `outputTokens` is reasoning-inclusive, which holds for every record carrying `outputTokenDetails` (text + reasoning). A small fraction of Google `gemini-3-*-preview` records report `reasoningTokens > outputTokens`; for those the text component clamps to 0 (reasoning is still billed at the output rate). This matches mux's own `displayUsage.ts` and the token/cost effect is negligible.
 - **Read only `chat.jsonl`.** `session-usage.json` (pre-aggregated per model) and `analytics/analytics.db` (DuckDB, derived from `chat.jsonl`) describe the *same* usage; summing them would double-count.
 - **No web-search field.** Mux records no web-search/server-tool request count, so `webSearchRequests` is always `0`.
 - **Remote runtimes.** Mux can run workspaces on SSH/Docker, but the desktop app is the LLM client and writes `sessions/*/chat.jsonl` on the machine running mux — so usage is captured locally regardless of where commands execute.
