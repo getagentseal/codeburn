@@ -102,6 +102,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/codex.png" width="28" />        | Codex (OpenAI) | Yes       | [codex.md](docs/providers/codex.md)               |
 | <img src="assets/providers/cursor.jpg" width="28" />       | Cursor         | Yes       | [cursor.md](docs/providers/cursor.md)             |
 | <img src="assets/providers/cursor-agent.jpg" width="28" /> | cursor-agent   | Yes       | [cursor-agent.md](docs/providers/cursor-agent.md) |
+| <img src="assets/providers/devin.png" width="28" />        | Devin          | Yes       | [devin.md](docs/providers/devin.md)               |
 | <img src="assets/providers/forge.png" width="28" />        | Forge          | Yes       | [forge.md](docs/providers/forge.md)               |
 | <img src="assets/providers/gemini.png" width="28" />       | Gemini CLI     | Yes       | [gemini.md](docs/providers/gemini.md)             |
 | <img src="assets/providers/mistral-vibe.svg" width="28" /> | Mistral Vibe   | Yes       | [mistral-vibe.md](docs/providers/mistral-vibe.md) |

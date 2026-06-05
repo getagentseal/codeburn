@@ -14,6 +14,7 @@
     "bundle-litellm": "node scripts/bundle-litellm.mjs",
     "build": "node scripts/bundle-litellm.mjs && tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\"",
     "dev": "tsx src/cli.ts",
+    "dev:menubar": "npm run build && cd mac && CODEBURN_ALLOW_DEV_BIN=1 CODEBURN_BIN=\"node $(pwd)/../dist/cli.js\" swift run",
     "test": "vitest",
     "prepublishOnly": "npm run build"
   },
@@ -22,6 +23,7 @@
     "cursor",
     "codex",
     "kimi",
+    "devin",
     "ibm-bob",
     "opencode",
     "pi",
