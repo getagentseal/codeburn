@@ -121,15 +121,6 @@ export async function estimateContextBudget(projectPath?: string, modelContext =
   }
 }
 
-export async function estimateBudgetsByProject(projectPaths: Map<string, string>): Promise<Map<string, ContextBudget>> {
-  const results = new Map<string, ContextBudget>()
-  for (const [project, cwd] of projectPaths) {
-    const budget = await estimateContextBudget(cwd)
-    results.set(project, budget)
-  }
-  return results
-}
-
 export async function discoverProjectCwd(sessionDir: string): Promise<string | null> {
   let files: string[]
   try {

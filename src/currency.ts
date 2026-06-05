@@ -149,10 +149,6 @@ export async function switchCurrency(code: string): Promise<void> {
   active = { code, rate, symbol }
 }
 
-export function getCostColumnHeader(): string {
-  return `Cost (${active.code})`
-}
-
 export function convertCost(costUSD: number): number {
   // Return the unrounded converted cost. Rounding here meant zero-fraction
   // currencies (JPY, KRW, CLP) clamped every per-session cost to the nearest

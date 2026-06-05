@@ -2063,41 +2063,6 @@ function turnIsInDateRange(turn: ClassifiedTurn, dateRange: DateRange): boolean 
   return ts >= dateRange.start && ts <= dateRange.end
 }
 
-function turnDayString(turn: ClassifiedTurn): string | null {
-  if (turn.assistantCalls.length === 0) return null
-  const ts = turn.assistantCalls[0]!.timestamp
-  if (!ts) return null
-  const d = new Date(ts)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-export function filterProjectsByDays(projects: ProjectSummary[], days: Set<string>): ProjectSummary[] {
-  const filtered: ProjectSummary[] = []
-  for (const project of projects) {
-    const sessions: SessionSummary[] = []
-    for (const session of project.sessions) {
-      const turns = session.turns.filter(turn => {
-        const ds = turnDayString(turn)
-        return ds !== null && days.has(ds)
-      })
-      if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
-    }
-    if (sessions.length === 0) continue
-    filtered.push({
-      project: project.project,
-      projectPath: project.projectPath,
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
-  }
-  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
-}
-
 export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange: DateRange): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
