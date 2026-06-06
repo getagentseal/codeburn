@@ -390,8 +390,18 @@ private struct AboutSettingsTab: View {
             Image(systemName: "flame.fill")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.brandAccent)
-            Text("CodeBurn")
-                .font(.system(size: 18, weight: .semibold))
+            HStack(spacing: 6) {
+                Text("CodeBurn")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("v2")
+                    .font(.system(size: 10, weight: .bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(Theme.brandAccent.opacity(0.15))
+                    )
+                    .foregroundStyle(Theme.brandAccent)
+            }
             Text("AI Coding Cost Tracker")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
