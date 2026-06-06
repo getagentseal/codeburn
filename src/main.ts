@@ -25,6 +25,18 @@ import {
 import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
+import {
+    syncEnroll,
+    syncPush,
+    syncStatus,
+    syncToggle,
+    syncReset,
+} from './commands/sync.js'
+import { readSyncConfig, isSyncEnabled } from './sync/config.js'
+import { SyncClient } from './sync/client.js'
+import { buildSyncPayload } from './menubar-json.js'
+import { getEndpoint } from './sync/config.js'
+
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -756,7 +768,21 @@ program
       })()
 
       const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
-      console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns)))
+
+      // Fetch sync aggregate if enabled
+      let syncPayload = undefined
+      const syncConfig = await readSyncConfig()
+      if (isSyncEnabled(syncConfig) && syncConfig.bearer_token) {
+          try {
+              const client = new SyncClient(syncConfig)
+              const aggregate = await client.aggregate()
+              syncPayload = buildSyncPayload(providers, aggregate)
+          } catch {
+              // Silently ignore sync fetch failures; menubar falls back to local-only
+          }
+      }
+
+      console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, syncPayload)))
       return
     }
 
@@ -1276,6 +1302,90 @@ program
   .description('Internal Antigravity CLI statusLine hook')
   .action(async () => {
     await runAgyStatusLineHook()
+  })
+
+// ── Usage cost command (from opencode SQLite DBs) ─────────────────
+
+program
+  .command('usage-cost')
+  .description('Show usage costs from opencode databases (usage table)')
+  .option('--provider <id>', 'Filter by provider ID')
+  .option('--format <format>', 'Output format: json or text', 'text')
+  .action(async (opts: { provider?: string; format: string }) => {
+    const { usageCost } = await import('./commands/usage-cost.js')
+    await usageCost(opts.format, opts.provider)
+  })
+
+// ── Usage limits command (multi-provider, source = opencode usage-limits plugin) ──
+
+program
+  .command('usage-limits [provider]')
+  .description(
+    'Show live usage limits from any provider (claude, codex, gemini, opencode, ollama, cursor, krater, kimi). ' +
+    'Defaults to all providers; pass a provider name to scope to one.',
+  )
+  .option('--format <format>', 'Output format: json or text', 'text')
+  .option('--json', 'Shortcut for --format json')
+  .option('--all', 'Force JSON output of every provider, not just one')
+  .option('--workspace <id>', 'OpenCode workspace ID override (default: wrk_01KPYTBGPQYB83E2NJPVNYGAYA)')
+  .action(
+    async (
+      provider: string | undefined,
+      opts: { format?: string; json?: boolean; all?: boolean; workspace?: string },
+    ) => {
+      const { usageLimits } = await import('./commands/usage-limits.js')
+      await usageLimits({
+        provider,
+        format: opts.json ? 'json' : opts.format,
+        json: opts.json,
+        all: opts.all,
+        workspace: opts.workspace,
+      })
+    },
+  )
+
+// ── Sync commands ────────────────────────────────────────────────────
+
+const syncCmd = program
+  .command('sync')
+  .description('Cross-device usage sync')
+
+syncCmd
+  .command('enroll')
+  .description('Register this machine with the sync service')
+  .option('--endpoint <url>', 'Sync service endpoint')
+  .action(async (opts: { endpoint?: string }) => {
+    await syncEnroll(opts.endpoint)
+  })
+
+syncCmd
+  .command('push')
+  .description('Upload local usage data to the sync service')
+  .option('--dry-run', 'Show what would be pushed without uploading')
+  .action(async (opts: { dryRun?: boolean }) => {
+    await syncPush(!!opts.dryRun)
+  })
+
+syncCmd
+  .command('status')
+  .description('Show cross-device usage status')
+  .option('--period <period>', 'Period: today, 30days', 'today')
+  .action(async (opts: { period?: string }) => {
+    await syncStatus(opts.period)
+  })
+
+syncCmd
+  .command('toggle')
+  .description('Enable or disable sync')
+  .action(async () => {
+    await syncToggle()
+  })
+
+syncCmd
+  .command('reset')
+  .description('Remove sync configuration')
+  .action(async () => {
+    await syncReset()
   })
 
 program.parse()
