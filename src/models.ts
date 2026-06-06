@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import snapshotData from './data/litellm-snapshot.json'
+import fallbackData from './data/pricing-fallback.json'
 import { fetchWithTimeout } from './fetch-utils.js'
 
 export type ModelCosts = {
@@ -31,30 +32,88 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
+// Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
+// input, read = 0.1x input) when a source omits them. Shared by the bundled
+// tuple path (tupleToCosts) and the live LiteLLM path (parseLiteLLMEntry) so the
+// multipliers live in exactly one place.
+function buildCosts(
+  input: number,
+  output: number,
+  cacheWrite: number | null | undefined,
+  cacheRead: number | null | undefined,
+  fast: number | null | undefined,
+): ModelCosts {
+  return {
+    inputCostPerToken: input,
+    outputCostPerToken: output,
+    cacheWriteCostPerToken: cacheWrite ?? input * 1.25,
+    cacheReadCostPerToken: cacheRead ?? input * 0.1,
+    webSearchCostPerRequest: WEB_SEARCH_COST,
+    fastMultiplier: fast ?? 1,
+  }
+}
+
+function tupleToCosts(raw: SnapshotEntry): ModelCosts {
+  const [input, output, cacheWrite, cacheRead, fast] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast)
+}
+
 function loadSnapshot(): Map<string, ModelCosts> {
   const map = new Map<string, ModelCosts>()
   for (const [name, raw] of Object.entries(snapshotData as unknown as Record<string, SnapshotEntry>)) {
-    const [input, output, cacheWrite, cacheRead, fast] = raw
-    map.set(name, {
-      inputCostPerToken: input,
-      outputCostPerToken: output,
-      cacheWriteCostPerToken: cacheWrite ?? input * 1.25,
-      cacheReadCostPerToken: cacheRead ?? input * 0.1,
-      webSearchCostPerRequest: WEB_SEARCH_COST,
-      fastMultiplier: fast ?? 1,
-    })
+    map.set(name, tupleToCosts(raw))
   }
   return map
 }
 
+// Gap-fill pricing from models.dev / OpenRouter, keyed lowercase. Consulted ONLY
+// as the last-resort fallback in getModelCosts (never for exact/canonical/prefix
+// matches), so a reseller variant name can't shadow a real canonical entry.
+const fallbackCosts: Map<string, ModelCosts> = (() => {
+  const map = new Map<string, ModelCosts>()
+  for (const [name, raw] of Object.entries(fallbackData as unknown as Record<string, SnapshotEntry>)) {
+    const lk = name.toLowerCase()
+    if (!map.has(lk)) map.set(lk, tupleToCosts(raw))
+  }
+  return map
+})()
+
 let pricingCache: Map<string, ModelCosts> = loadSnapshot()
 let sortedPricingKeys: string[] | null = null
+let lowercasePricingIndex: Map<string, ModelCosts> | null = null
 
 function getSortedPricingKeys(): string[] {
   if (sortedPricingKeys === null) {
     sortedPricingKeys = Array.from(pricingCache.keys()).sort((a, b) => b.length - a.length)
   }
   return sortedPricingKeys
+}
+
+// Case-insensitive index, built lazily. Lets a session model like `MiniMax-M3`
+// resolve to a gap-filled OpenRouter key like `minimax-m3` (lowercase slug).
+// First key wins on a lowercase collision so it stays deterministic.
+//
+// Zero-priced entries are excluded: LiteLLM ships `[0,0]` stubs (e.g.
+// `GigaChat-2-Max`) for models it lists but has no price for. Indexing those
+// would let a case-mismatched query (`gigachat-2-max`) resolve to a silent $0
+// instead of returning null, which suppresses the unknown-model warning and
+// hides real spend. A case-EXACT query still finds the stub via the normal
+// pipeline; only the fuzzy case-insensitive path skips them.
+function getLowercasePricingIndex(): Map<string, ModelCosts> {
+  if (lowercasePricingIndex === null) {
+    lowercasePricingIndex = new Map()
+    const priced = (c: ModelCosts) => c.inputCostPerToken > 0 || c.outputCostPerToken > 0
+    // The live pricing data wins on any lowercase collision; the gap-fill only
+    // fills names that resolve to nothing through the normal pipeline.
+    for (const [key, costs] of pricingCache) {
+      const lk = key.toLowerCase()
+      if (priced(costs) && !lowercasePricingIndex.has(lk)) lowercasePricingIndex.set(lk, costs)
+    }
+    for (const [lk, costs] of fallbackCosts) {
+      if (priced(costs) && !lowercasePricingIndex.has(lk)) lowercasePricingIndex.set(lk, costs)
+    }
+  }
+  return lowercasePricingIndex
 }
 
 function getCacheDir(): string {
@@ -82,16 +141,13 @@ function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   const inputCost = safePerTokenRate(entry.input_cost_per_token)
   const outputCost = safePerTokenRate(entry.output_cost_per_token)
   if (inputCost === null || outputCost === null) return null
-  const cacheWrite = safePerTokenRate(entry.cache_creation_input_token_cost) ?? inputCost * 1.25
-  const cacheRead = safePerTokenRate(entry.cache_read_input_token_cost) ?? inputCost * 0.1
-  return {
-    inputCostPerToken: inputCost,
-    outputCostPerToken: outputCost,
-    cacheWriteCostPerToken: cacheWrite,
-    cacheReadCostPerToken: cacheRead,
-    webSearchCostPerRequest: WEB_SEARCH_COST,
-    fastMultiplier: entry.provider_specific_entry?.fast ?? 1,
-  }
+  return buildCosts(
+    inputCost,
+    outputCost,
+    safePerTokenRate(entry.cache_creation_input_token_cost),
+    safePerTokenRate(entry.cache_read_input_token_cost),
+    entry.provider_specific_entry?.fast,
+  )
 }
 
 async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
@@ -147,12 +203,14 @@ export async function loadPricing(): Promise<void> {
   if (cached) {
     pricingCache = mergeSnapshotFallbacks(cached)
     sortedPricingKeys = null
+    lowercasePricingIndex = null
     return
   }
 
   try {
     pricingCache = mergeSnapshotFallbacks(await fetchAndCachePricing())
     sortedPricingKeys = null
+    lowercasePricingIndex = null
   } catch {
     // snapshot already loaded at init; nothing more to do
   }
@@ -351,9 +409,20 @@ function getCanonicalName(model: string): string {
 export function getModelCosts(model: string): ModelCosts | null {
   // Try with provider prefix preserved (azure/gpt-5.4, openrouter/anthropic/claude-opus-4.6)
   const withPrefix = model.replace(/@.*$/, '').replace(/-\d{8}$/, '')
+  const canonicalName = getCanonicalName(model)
+  const canonical = resolveAlias(canonicalName)
+
+  // An explicit alias for a bare (un-prefixed) model name is authoritative: it
+  // must win over a coincidental stripped reseller key of the same name. LiteLLM
+  // ships `snowflake/claude-4-opus` ($5), which the bundler strips to a bare
+  // `claude-4-opus` key; without this, that would shadow the curated alias
+  // `claude-4-opus -> claude-opus-4` ($15 official Anthropic price).
+  if (canonical !== canonicalName && withPrefix === canonicalName && pricingCache.has(canonical)) {
+    return pricingCache.get(canonical)!
+  }
+
   if (pricingCache.has(withPrefix)) return pricingCache.get(withPrefix)!
 
-  const canonical = resolveAlias(getCanonicalName(model))
   if (pricingCache.has(canonical)) return pricingCache.get(canonical)!
 
   // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
@@ -364,6 +433,16 @@ export function getModelCosts(model: string): ModelCosts | null {
       return pricingCache.get(key)!
     }
   }
+
+  // Case-insensitive fallback: gap-filled keys from OpenRouter are lowercase
+  // slugs (e.g. `minimax-m3`), but sessions report `MiniMax-M3`. Only consulted
+  // after the exact/canonical/prefix attempts, so it never changes a match that
+  // already resolved above.
+  const lowerIndex = getLowercasePricingIndex()
+  const byCanonical = lowerIndex.get(canonical.toLowerCase())
+  if (byCanonical) return byCanonical
+  const byPrefix = lowerIndex.get(withPrefix.toLowerCase())
+  if (byPrefix) return byPrefix
 
   return null
 }

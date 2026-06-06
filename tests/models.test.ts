@@ -336,6 +336,51 @@ describe('Cursor model variants resolve to pricing', () => {
   }
 })
 
+// Regression: LiteLLM ships `snowflake/claude-4-opus` ($5/M, a gateway rate),
+// which the bundler strips to a bare `claude-4-opus` snapshot key. Without the
+// alias-precedence guard in getModelCosts, that bare reseller key shadows the
+// curated alias `claude-4-opus -> claude-opus-4` and mis-prices Opus 4 at a
+// third of its official list price. Pin the official number so a re-shadowing
+// fails loudly rather than silently under-reporting spend.
+describe('alias precedence over stripped reseller keys', () => {
+  it('claude-4-opus resolves to the official Opus 4 list price, not a gateway discount', () => {
+    const aliased = getModelCosts('claude-4-opus')
+    const canonical = getModelCosts('claude-opus-4')
+    expect(aliased).not.toBeNull()
+    expect(canonical).not.toBeNull()
+    expect(aliased!.inputCostPerToken).toBe(canonical!.inputCostPerToken)
+    expect(aliased!.outputCostPerToken).toBe(canonical!.outputCostPerToken)
+    expect(aliased!.inputCostPerToken).toBe(15e-6)
+    expect(aliased!.outputCostPerToken).toBe(75e-6)
+  })
+
+  it('the explicit provider prefix is still honored for the gateway rate', () => {
+    // The guard fires only for the bare name; a fully-qualified gateway id must
+    // still return that gateway's own price when LiteLLM publishes one.
+    const gateway = getModelCosts('snowflake/claude-4-opus')
+    const bare = getModelCosts('claude-4-opus')
+    expect(gateway).not.toBeNull()
+    expect(gateway!.inputCostPerToken).toBeLessThan(bare!.inputCostPerToken)
+  })
+})
+
+// The case-insensitive index that lets `MiniMax-M3` reach a lowercase
+// `minimax-m3` slug must NOT let a case-mismatched query resolve to one of
+// LiteLLM's [0,0] price stubs (e.g. `GigaChat-2-Max`). Doing so would flip an
+// honest null (which fires the "no pricing data, will show $0" warning) into a
+// silent $0 and hide real spend. A case-EXACT query still finds the stub.
+describe('zero-priced stubs do not satisfy case-insensitive lookup', () => {
+  it('a case-mismatched query to a [0,0] stub stays null', () => {
+    expect(getModelCosts('gigachat-2-max')).toBeNull()
+  })
+
+  it('the case-exact stub still resolves (just at zero cost)', () => {
+    const exact = getModelCosts('GigaChat-2-Max')
+    expect(exact).not.toBeNull()
+    expect(exact!.inputCostPerToken).toBe(0)
+  })
+})
+
 describe('DeepSeek v4 models resolve to pricing', () => {
   it('deepseek-v4-pro has current official discounted pricing', () => {
     const costs = getModelCosts('deepseek-v4-pro')
