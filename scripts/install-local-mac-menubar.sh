@@ -7,6 +7,7 @@ set -euo pipefail
 
 REPLACE_APP=0
 SYSTEM_APP=0
+MIN_NODE_VERSION="22.13.0"
 
 usage() {
   cat <<'USAGE'
@@ -46,9 +47,31 @@ repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.." && pwd)
 }
 
+require_node_version() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Node ${MIN_NODE_VERSION}+ is required, but node was not found." >&2
+    exit 1
+  fi
+
+  local node_version
+  node_version="$(node -p "process.versions.node")"
+  if ! node -e "
+const current = process.versions.node.split('.').map(Number)
+const minimum = '${MIN_NODE_VERSION}'.split('.').map(Number)
+const ok = current[0] > minimum[0]
+  || (current[0] === minimum[0] && current[1] > minimum[1])
+  || (current[0] === minimum[0] && current[1] === minimum[1] && current[2] >= minimum[2])
+process.exit(ok ? 0 : 1)
+"; then
+    echo "Node ${MIN_NODE_VERSION}+ is required, but found ${node_version}." >&2
+    exit 1
+  fi
+}
+
 ROOT="$(repo_root)"
 PACK_DIR="${TMPDIR:-/tmp}/codeburn-local-pack"
 SUPPORT_DIR="${HOME}/Library/Application Support/CodeBurn"
+WRAPPER_PATH="${SUPPORT_DIR}/codeburn-menubar-cli"
 PERSISTED_CLI_PATH="${SUPPORT_DIR}/codeburn-cli-path.v1"
 if [[ "${SYSTEM_APP}" -eq 1 ]]; then
   INSTALLED_APP_PATH="/Applications/CodeBurnMenubar.app"
@@ -63,8 +86,16 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+require_node_version
+
 echo "==> Building CLI"
 npm run build
+NODE_PATH="$(node -p "process.execPath")"
+if [[ ! -x "${NODE_PATH}" ]]; then
+  echo "Node executable was not found at ${NODE_PATH}." >&2
+  exit 1
+fi
+NODE_BIN_DIR="$(dirname "${NODE_PATH}")"
 
 echo "==> Packing CLI"
 rm -rf "${PACK_DIR}"
@@ -81,9 +112,17 @@ if [[ -z "${CLI_PATH}" ]]; then
   exit 1
 fi
 
-echo "==> Persisting CLI path: ${CLI_PATH}"
+echo "==> Writing menubar CLI wrapper"
 mkdir -p "${SUPPORT_DIR}"
-printf '%s\n' "${CLI_PATH}" > "${PERSISTED_CLI_PATH}"
+{
+  printf '%s\n' '#!/bin/sh'
+  printf 'export PATH=%s:"${PATH:-}"\n' "$(printf '%q' "${NODE_BIN_DIR}")"
+  printf 'exec %s "$@"\n' "$(printf '%q' "${CLI_PATH}")"
+} > "${WRAPPER_PATH}"
+chmod 755 "${WRAPPER_PATH}"
+
+echo "==> Persisting CLI path: ${WRAPPER_PATH}"
+printf '%s\n' "${WRAPPER_PATH}" > "${PERSISTED_CLI_PATH}"
 chmod 600 "${PERSISTED_CLI_PATH}"
 
 VERSION="$(node -p "require('./package.json').version")-local"
