@@ -35,6 +35,7 @@ const PROVIDERS = [
   { id: 'codex', label: 'Codex' },
   { id: 'cursor', label: 'Cursor' },
   { id: 'copilot', label: 'Copilot' },
+  { id: 'devin', label: 'Devin' },
   { id: 'opencode', label: 'OpenCode' },
   { id: 'pi', label: 'Pi' },
   { id: 'droid', label: 'Droid' },
@@ -70,6 +71,7 @@ const PROVIDER_PATHS = {
   codex: '.codex/sessions',
   cursor: '.config/Cursor/User/globalStorage/state.vscdb',
   copilot: '.copilot/session-state',
+  devin: '.local/share/devin/cli',
   kimi: '.kimi/sessions',
   pi: '.pi/agent/sessions',
 };
