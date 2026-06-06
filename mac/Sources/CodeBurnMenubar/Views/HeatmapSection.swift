@@ -538,7 +538,7 @@ private struct ContributionHeatmapInsight: View {
 
     private let cellSize: CGFloat = 8
     private let cellGap: CGFloat = 3
-    private let weekdayLabelWidth: CGFloat = 18
+    private let weekdayLabelWidth: CGFloat = 26
     @State private var hoveredDayID: ContributionDay.ID?
 
     var body: some View {
@@ -605,7 +605,7 @@ private struct ContributionHeatmapInsight: View {
                 }
             }
         }
-        .frame(height: 198)
+        .frame(height: 216)
     }
 
     private func adaptiveWeekCount(for width: CGFloat) -> Int {
@@ -619,6 +619,7 @@ private struct ContributionHeatmapInsight: View {
         case 0: return "Mon"
         case 2: return "Wed"
         case 4: return "Fri"
+        case 6: return "Sun"
         default: return ""
         }
     }
@@ -694,14 +695,15 @@ private struct ContributionDayDetail: View {
     }
 
     private var title: String {
-        guard let day else { return "Hover a day" }
+        // The header already shows the period total and active-day count, so
+        // the resting state is a short hover hint — not a duplicate of those
+        // (and not the full sentence that previously overflowed and truncated).
+        guard let day else { return "Daily detail" }
         return prettyDate(day.date)
     }
 
     private var value: String {
-        guard let day else {
-            return "\(fallbackStats.activeDays) active days, \(fallbackStats.total.asCompactCurrency()) total"
-        }
+        guard let day else { return "Hover a day" }
         if day.isFuture { return "Future day" }
         if day.cost <= 0 && day.calls == 0 { return "No tracked usage" }
         return day.cost.asCompactCurrency()
