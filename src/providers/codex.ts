@@ -7,6 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
+import { normalizeContentBlocks } from '../content-utils.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -405,7 +406,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'user') {
-          const texts = (entry.payload.content ?? [])
+          const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'input_text')
             .map(c => c.text ?? '')
             .filter(Boolean)
@@ -417,7 +418,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'assistant') {
-          const texts = (entry.payload.content ?? [])
+          const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'output_text' || c.type === 'text')
             .map(c => c.text ?? '')
           pendingOutputChars += texts.join('').length

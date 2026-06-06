@@ -189,6 +189,36 @@ describe('pi provider - JSONL parsing', () => {
     expect(call.deduplicationKey).toContain('resp-abc')
   })
 
+  it('does not crash when a user message content is a string instead of an array (issue #441)', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    // Pi legitimately writes string `content` for some (e.g. injected) user turns.
+    // Before the fix this threw `content.filter is not a function`, which aborted
+    // the whole backfill and silently emptied the trend/history.
+    const stringContentUser = JSON.stringify({
+      type: 'message',
+      id: 'msg-user-str',
+      timestamp: '2026-04-14T10:00:10.000Z',
+      message: { role: 'user', content: 'test message from file watcher', timestamp: 1776023210000 },
+    })
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta({ id: 'sess-str', cwd: '/Users/test/myproject' }),
+      stringContentUser,
+      assistantMessage({ responseId: 'resp-str', input: 500, output: 80 }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    // The assistant turn is still parsed, and the string user content is paired.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(500)
+    expect(calls[0]!.userMessage).toBe('test message from file watcher')
+  })
+
   it('collects tool names from toolCall content items', async () => {
     const projectDir = join(tmpDir, '--Users-test-myproject--')
     const filePath = await writeSession(projectDir, 'session.jsonl', [

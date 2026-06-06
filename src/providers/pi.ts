@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
+import { normalizeContentBlocks } from '../content-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const modelDisplayNames: Record<string, string> = {
@@ -40,7 +41,7 @@ type PiEntry = {
   cwd?: string
   message?: {
     role?: string
-    content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }>
+    content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
     model?: string
     responseId?: string
     usage?: {
@@ -139,7 +140,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (!msg) continue
 
         if (msg.role === 'user') {
-          const texts = (msg.content ?? [])
+          const texts = normalizeContentBlocks(msg.content)
             .filter(c => c.type === 'text')
             .map(c => c.text ?? '')
             .filter(Boolean)
@@ -166,7 +167,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (seenKeys.has(dedupKey)) continue
         seenKeys.add(dedupKey)
 
-        const toolCalls = (msg.content ?? []).filter(c => c.type === 'toolCall' && c.name)
+        const toolCalls = normalizeContentBlocks(msg.content).filter(c => c.type === 'toolCall' && c.name)
         const tools = toolCalls.map(c => toolNameMap[c.name!] ?? c.name!)
         const bashCommands = toolCalls
           .filter(c => c.name === 'bash')

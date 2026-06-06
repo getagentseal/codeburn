@@ -2,6 +2,7 @@ import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
+import { normalizeContentBlocks } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
@@ -1057,9 +1058,13 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     webSearchRequests: usage.server_tool_use?.web_search_requests ?? 0,
   }
 
-  const tools = extractToolNames(msg.content ?? [])
-  const skills = extractSkillNames(msg.content ?? [])
-  const subagentTypes = extractSubagentTypes(msg.content ?? [])
+  // Defensive: a message whose `content` is a string (not an array of blocks)
+  // would crash the helpers below; normalize so one bad record can't abort the
+  // whole backfill (issue #441).
+  const contentBlocks = normalizeContentBlocks(msg.content)
+  const tools = extractToolNames(contentBlocks)
+  const skills = extractSkillNames(contentBlocks)
+  const subagentTypes = extractSubagentTypes(contentBlocks)
   const costUSD = calculateCost(
     msg.model,
     tokens.inputTokens,
@@ -1071,9 +1076,9 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     cacheCreation.oneHourTokens,
   )
 
-  const bashCmds = extractBashCommandsFromContent(msg.content ?? [])
+  const bashCmds = extractBashCommandsFromContent(contentBlocks)
 
-  const toolSeq: ToolCall[][] = (msg.content ?? [])
+  const toolSeq: ToolCall[][] = contentBlocks
     .filter((b): b is ToolUseBlock => b.type === 'tool_use')
     .map(b => {
       const call: ToolCall = { tool: b.name }
@@ -1827,6 +1832,18 @@ function warnProviderReadFailureOnce(providerName: string, err: unknown): void {
   }
 }
 
+function warnProviderParseFailureOnce(providerName: string, sourcePath: string, err: unknown): void {
+  const key = `${providerName}:parse-failure`
+  if (warnedProviderReadFailures.has(key)) return
+  warnedProviderReadFailures.add(key)
+  const msg = err instanceof Error ? err.message : String(err)
+  process.stderr.write(
+    `codeburn: skipping ${providerName} session(s) that failed to parse (${msg}). ` +
+    `First offending file: ${sourcePath}. Further ${providerName} parse failures this run are suppressed; ` +
+    `other sessions still aggregate normally.\n`
+  )
+}
+
 async function parseProviderSources(
   providerName: string,
   sources: Array<{ path: string; project: string }>,
@@ -1900,7 +1917,12 @@ async function parseProviderSources(
           warnProviderReadFailureOnce(providerName, err)
           continue
         }
-        throw err
+        // A single malformed session file must not abort the entire run — that
+        // would silently empty the daily-cache backfill and wipe the trend /
+        // history (issue #441). Skip just this file (its stale cache entry was
+        // already cleared above, so it's excluded) and keep going.
+        warnProviderParseFailureOnce(providerName, source.path, err)
+        continue
       }
     }
   } finally {

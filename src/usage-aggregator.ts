@@ -54,7 +54,15 @@ async function hydrateCache(): Promise<DailyCache> {
       (range) => parseAllSessions(range, 'all'),
       aggregateProjectsIntoDays,
     )
-  } catch {
+  } catch (err) {
+    // Previously swallowed silently, which turned any backfill failure into an
+    // empty trend/history with no signal (issue #441). Per-file parse errors no
+    // longer reach here (they're isolated in parseProviderSources), so anything
+    // that does is exceptional and worth surfacing.
+    process.stderr.write(
+      `codeburn: daily history backfill failed; the trend chart may be incomplete. ` +
+      `${err instanceof Error ? err.message : String(err)}\n`
+    )
     return emptyCache()
   }
 }
