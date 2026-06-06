@@ -173,6 +173,10 @@ function parseLegacyEvents(content: string, sessionId: string, seenKeys: Set<str
         reasoningTokens: 0,
         webSearchRequests: 0,
         costUSD,
+        // Copilot doesn't record a billed amount; this is a token-based API-rate
+        // estimate of the inferred model, which does NOT match GitHub's
+        // premium-request / AI-Credits metered billing. See docs/providers/copilot.md.
+        costIsEstimated: true,
         tools,
         bashCommands: [],
         timestamp: event.timestamp ?? '',
@@ -306,6 +310,9 @@ function parseTranscriptEvents(content: string, sessionId: string, seenKeys: Set
         reasoningTokens,
         webSearchRequests: 0,
         costUSD,
+        // Token-based API-rate estimate of the inferred model — not GitHub's
+        // metered premium-request / AI-Credits billing. See docs/providers/copilot.md.
+        costIsEstimated: true,
         tools,
         bashCommands: [],
         timestamp: event.timestamp ?? '',
