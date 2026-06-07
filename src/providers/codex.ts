@@ -529,7 +529,21 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
           const model = resolveModel(entry.payload, sessionModel)
           const timestamp = entry.timestamp ?? ''
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}`
+          // Forked sessions copy the parent's entire token_count history
+          // (re-timestamped), so replays must collide with the parent's events
+          // and drop to avoid double-counting -- hence the parent namespace
+          // (forkedFromId) and the deliberate omission of the per-session id.
+          // But cumulativeTotal alone is too coarse a discriminator: a genuine
+          // post-divergence fork event whose running total coincidentally equals
+          // some parent total would also collide and be lost (undercount). So we
+          // also key on the cumulative token breakdown, which a fork replays
+          // verbatim from the parent -- a true replay collides exactly, while
+          // genuinely different work at the same total stays distinct. We use the
+          // CUMULATIVE figures (not the per-event deltas) on purpose: the deltas
+          // are computed against a running `prev` that the fork advances
+          // differently once the 5s cutoff skips some replays, so a delta-based
+          // key would spuriously diverge on a replay and double-count it.
+          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
 
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
