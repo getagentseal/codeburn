@@ -1019,15 +1019,19 @@ function getMessageId(entry: JournalEntry): string | null {
   return msg?.id ?? null
 }
 
-function positiveNumber(n: number | undefined): number {
-  return n !== undefined && Number.isFinite(n) && n > 0 ? n : 0
+export function safeNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+export function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
 function extractClaudeCacheCreation(usage: AssistantMessageContent['usage']): { totalTokens: number; oneHourTokens: number } {
-  const legacyTotal = positiveNumber(usage.cache_creation_input_tokens)
+  const legacyTotal = safeNumber(usage.cache_creation_input_tokens)
   const cacheCreation = usage.cache_creation
-  const fiveMinuteTokens = positiveNumber(cacheCreation?.ephemeral_5m_input_tokens)
-  const oneHourTokens = positiveNumber(cacheCreation?.ephemeral_1h_input_tokens)
+  const fiveMinuteTokens = safeNumber(cacheCreation?.ephemeral_5m_input_tokens)
+  const oneHourTokens = safeNumber(cacheCreation?.ephemeral_1h_input_tokens)
   const splitTotal = fiveMinuteTokens + oneHourTokens
 
   if (splitTotal === 0) return { totalTokens: legacyTotal, oneHourTokens: 0 }

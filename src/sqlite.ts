@@ -137,7 +137,3 @@ export function openDatabase(path: string): SqliteDatabase {
     },
   }
 }
-
-export function booleanValue(value: number): boolean {
-  return value === 1
-}

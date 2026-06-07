@@ -6,6 +6,7 @@ import { readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import { safeNumber } from '../parser.js'
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -60,10 +61,6 @@ function getMuxRoot(override?: string): string {
 function stripProvider(model: string): string {
   const i = model.indexOf(':')
   return i >= 0 ? model.slice(i + 1) : model
-}
-
-function num(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
 }
 
 function asRecord(v: unknown): Record<string, unknown> | undefined {
@@ -189,11 +186,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         // cache/reasoning-exclusive convention. Cache creation is Anthropic-only.
         // The AI SDK v6 normalizes reasoning into usage.reasoningTokens across
         // every provider family, so that field is the single source of truth.
-        const cacheRead = num(usage['cachedInputTokens'])
-        const cacheCreate = num(anthropic?.['cacheCreationInputTokens'])
-        const reasoning = num(usage['reasoningTokens'])
-        const inputTokens = Math.max(0, num(usage['inputTokens']) - cacheRead - cacheCreate)
-        const outputTokens = Math.max(0, num(usage['outputTokens']) - reasoning)
+        const cacheRead = safeNumber(usage['cachedInputTokens'])
+        const cacheCreate = safeNumber(anthropic?.['cacheCreationInputTokens'])
+        const reasoning = safeNumber(usage['reasoningTokens'])
+        const inputTokens = Math.max(0, safeNumber(usage['inputTokens']) - cacheRead - cacheCreate)
+        const outputTokens = Math.max(0, safeNumber(usage['outputTokens']) - reasoning)
 
         if (inputTokens === 0 && outputTokens === 0 && cacheRead === 0 && cacheCreate === 0 && reasoning === 0) {
           continue

@@ -11,8 +11,7 @@
     "rootDir": "src",
     "declaration": true,
     "sourceMap": true,
-    "resolveJsonModule": true,
-    "types": ["node"]
+    "resolveJsonModule": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]

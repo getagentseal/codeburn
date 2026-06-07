@@ -6,6 +6,7 @@ import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import { safeNumber } from '../parser.js'
 
 const METADATA_FILENAME = 'meta.json'
 const MESSAGES_FILENAME = 'messages.jsonl'
@@ -174,10 +175,6 @@ function resolveModel(metadata: VibeMetadata): string {
   if (activeModel) return activeModel
   const configured = activeModelConfig(metadata)
   return configured?.alias ?? configured?.name ?? DEFAULT_MODEL
-}
-
-function safeNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
 function calculateSessionCost(metadata: VibeMetadata, model: string, inputTokens: number, outputTokens: number): number {

@@ -3,7 +3,7 @@ import { basename, join } from "path";
 import { homedir } from "os";
 
 import { getShortModelName } from "../models.js";
-import { booleanValue, openDatabase } from "../sqlite.js";
+import { openDatabase } from "../sqlite.js";
 import { readConfig } from "../config.js";
 import type {
   Provider,
@@ -12,6 +12,7 @@ import type {
   ParsedProviderCall,
 } from "./types.js";
 import { readSessionFile } from "../fs-utils.js";
+import { isPositiveNumber, safeNumber } from "../parser.js";
 
 type AgentTrajectory<T extends Step> = {
   schema_version: string;
@@ -93,7 +94,7 @@ const DEFAULT_DEVIN_CLI_DIR = join(
 const DEFAULT_MODEL_NAME = "devin";
 const DEVIN_PROVIDER_NAME = "devin";
 const DEVIN_PROVIDER_DISPLAY_NAME = "Devin";
-const DEVIN_TRASNCRIPTS_SUBDIR = "transcripts";
+const DEVIN_TRANSCRIPTS_SUBDIR = "transcripts";
 const DEVIN_SESSIONS_DB = "sessions.db";
 
 function parseTranscript(raw: string): DevinAgentTrajectory | null {
@@ -121,16 +122,16 @@ function getUsage(
     metrics?.output_tokens,
     metrics?.cache_creation_tokens,
     metrics?.cache_read_tokens,
-  ].some((x) => x !== undefined && x !== null && x > 0);
+  ].some((x) => isPositiveNumber(x));
 
   if (!hasAnyUsage) return null;
 
   return {
-    committedAcuCost: metadata.committed_acu_cost ?? 0,
-    inputTokens: metrics?.input_tokens ?? 0,
-    outputTokens: metrics?.output_tokens ?? 0,
-    cacheCreationInputTokens: metrics?.cache_creation_tokens ?? 0,
-    cacheReadInputTokens: metrics?.cache_read_tokens ?? 0,
+    committedAcuCost: safeNumber(metadata.committed_acu_cost),
+    inputTokens: safeNumber(metrics?.input_tokens),
+    outputTokens: safeNumber(metrics?.output_tokens),
+    cacheCreationInputTokens: safeNumber(metrics?.cache_creation_tokens),
+    cacheReadInputTokens: safeNumber(metrics?.cache_read_tokens),
   };
 }
 
@@ -238,7 +239,7 @@ function loadSessionMetadata(
         title: row.title ?? undefined,
         createdAt: parseNumericTimestamp(row.created_at),
         lastActivityAt: parseNumericTimestamp(row.last_activity_at),
-        hidden: booleanValue(row.hidden),
+        hidden: !!row.hidden,
       });
     }
   } catch {
@@ -249,13 +250,9 @@ function loadSessionMetadata(
   return sessions;
 }
 
-function isValidAcuUsdRate(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
 async function getCostFactor(): Promise<number | null> {
   const configRate = (await readConfig()).devin?.acuUsdRate;
-  return isValidAcuUsdRate(configRate) ? configRate : null;
+  return isPositiveNumber(configRate) ? configRate : null;
 }
 
 class DevinSessionParser implements SessionParser {
@@ -349,7 +346,7 @@ export function createDevinProvider(cliDir: string): Provider {
     async discoverSessions(): Promise<SessionSource[]> {
       if ((await getCostFactor()) === null) return [];
 
-      const transcriptsDir = join(cliDir, DEVIN_TRASNCRIPTS_SUBDIR);
+      const transcriptsDir = join(cliDir, DEVIN_TRANSCRIPTS_SUBDIR);
       const entries = await readdir(transcriptsDir).catch(() => []);
       const metadata = getSessionMetadata();
       const sources: SessionSource[] = [];
