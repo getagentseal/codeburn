@@ -158,6 +158,12 @@ export type ProjectSummary = {
   totalCostUSD: number
   totalSavingsUSD: number
   totalApiCalls: number
+  // Portion of `totalCostUSD` served through a subscription-backed proxy
+  // (config `proxyPaths`). `totalCostUSD` is left at the full API rate (the
+  // billable / would-be figure); this is the subscription-covered amount, so
+  // net out-of-pocket for the project is `totalCostUSD - totalProxiedCostUSD`.
+  // 0 when the project is not under a configured proxy path.
+  totalProxiedCostUSD: number
 }
 
 export type DateRange = {

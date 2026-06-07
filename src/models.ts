@@ -336,6 +336,58 @@ export function getLocalModelSavingsConfigHash(): string {
   return parts.join('\u0002')
 }
 
+// Absolute directory prefixes whose sessions are routed through a
+// subscription-backed proxy (config `proxyPaths`). Stored already-normalized so
+// the per-project match is a cheap compare. Set during preAction. See
+// CodeburnConfig.proxyPaths for the product rationale.
+let userProxyPaths: string[] = []
+
+/// Normalize a path for prefix comparison: backslashes -> forward slashes
+/// (Windows configs / cwds), strip leading AND trailing slashes, fold case on
+/// case-insensitive filesystems. Leading slashes are stripped because provider
+/// project paths arrive in two forms — Claude keeps the absolute "/Users/x"
+/// while Codex (sanitizeProject) and the unsanitizePath fallback drop the
+/// leading slash to "Users/x". Folding both to a slashless form (mirroring
+/// crossProviderKey) makes matching agnostic to which provider produced the
+/// path, so the same directory is flagged whether or not a Claude session
+/// happens to co-exist there. Case is folded only on macOS/Windows; on Linux
+/// "/home/Me" and "/home/me" are different dirs, so folding would risk
+/// crediting unrelated spend. A path that normalizes to empty (e.g. "/" or "")
+/// is dropped by callers so it can never match everything. Exported so the CLI
+/// dedupes with the same rule.
+export function normalizeProxyPath(p: string): string {
+  const s = p.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  return (process.platform === 'darwin' || process.platform === 'win32') ? s.toLowerCase() : s
+}
+
+export function setProxyPaths(paths: string[]): void {
+  userProxyPaths = (Array.isArray(paths) ? paths : [])
+    .filter((p): p is string => typeof p === 'string')
+    .map(normalizeProxyPath)
+    .filter(p => p !== '')
+}
+
+/// True when `cwd` is at or under a configured proxy path. Prefix match is
+/// anchored to a path-segment boundary so "/a/proj" matches "/a/proj" and
+/// "/a/proj/sub" but NOT "/a/project-x". Empty/undefined cwd or empty config
+/// never matches (so a misconfig can't silently zero unrelated spend).
+export function isProxiedPath(cwd: string | undefined | null): boolean {
+  if (!cwd || typeof cwd !== 'string') return false
+  if (userProxyPaths.length === 0) return false
+  const c = normalizeProxyPath(cwd)
+  if (c === '') return false
+  return userProxyPaths.some(p => c === p || c.startsWith(p + '/'))
+}
+
+/// Stable hash of the active proxy-path config. Project-level proxy attribution
+/// is computed live from this set and then cached in the in-memory session
+/// cache, so the cache key must vary with it — otherwise a long-lived process
+/// (menubar) that re-reads config could serve attribution from a stale set.
+export function getProxyPathsConfigHash(): string {
+  if (userProxyPaths.length === 0) return ''
+  return [...userProxyPaths].sort().join('')
+}
+
 function resolveAlias(model: string): string {
   if (Object.hasOwn(userAliases, model)) return userAliases[model]!
   if (Object.hasOwn(BUILTIN_ALIASES, model)) return BUILTIN_ALIASES[model]!

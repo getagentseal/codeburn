@@ -1,7 +1,7 @@
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
-import { calculateCost, calculateLocalModelSavings, getShortModelName } from './models.js'
+import { calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash } from './models.js'
 import { normalizeContentBlocks } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
@@ -1613,17 +1613,30 @@ async function scanProjectDirs(
 
   const projects: ProjectSummary[] = []
   for (const { project, projectPath, sessions } of projectMap.values()) {
-    projects.push({
-      project,
-      projectPath,
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
+    projects.push(summarizeProject(project, projectPath, sessions))
   }
 
   return projects
+}
+
+/// Build a ProjectSummary from its sessions, rolling up cost/savings/calls and
+/// deriving the proxy attribution. This is the single place proxy matching
+/// happens: a project whose canonical path is under a configured `proxyPaths`
+/// prefix keeps its full API-rate `totalCostUSD` but records that amount as
+/// `totalProxiedCostUSD` (subscription-covered). All ProjectSummary callers go
+/// through here so the rule stays consistent across the fresh, cached, and
+/// date/day-filtered paths.
+function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[]): ProjectSummary {
+  const totalCostUSD = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
+  return {
+    project,
+    projectPath,
+    sessions,
+    totalCostUSD,
+    totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
+    totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
+    totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
+  }
 }
 
 function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
@@ -2049,14 +2062,7 @@ async function parseProviderSources(
 
   const projects: ProjectSummary[] = []
   for (const [dirName, { projectPath, sessions }] of projectMap) {
-    projects.push({
-      project: dirName,
-      projectPath: projectPath ?? unsanitizePath(dirName),
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
+    projects.push(summarizeProject(dirName, projectPath ?? unsanitizePath(dirName), sessions))
   }
 
   return projects
@@ -2072,7 +2078,9 @@ function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
   // process (menubar / GNOME extension / test workers) does not return
   // stale data keyed under a previous configuration.
   const claudeEnv = (process.env['CLAUDE_CONFIG_DIRS'] ?? '') + '|' + (process.env['CLAUDE_CONFIG_DIR'] ?? '')
-  return `${s}:${providerFilter ?? 'all'}:${claudeEnv}`
+  // Proxy attribution (totalProxiedCostUSD) is computed live from proxyPaths and
+  // then cached, so the key must change when that config changes.
+  return `${s}:${providerFilter ?? 'all'}:${claudeEnv}:${getProxyPathsConfigHash()}`
 }
 
 export function clearSessionCache(): void {
@@ -2148,14 +2156,7 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
       sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
     }
     if (sessions.length === 0) continue
-    filtered.push({
-      project: project.project,
-      projectPath: project.projectPath,
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -2170,14 +2171,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
       sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
     }
     if (sessions.length === 0) continue
-    filtered.push({
-      project: project.project,
-      projectPath: project.projectPath,
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -2255,6 +2249,17 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     } else {
       mergedMap.set(key, { ...p })
     }
+  }
+
+  // Re-derive proxy attribution on the merged total: the merge above sums
+  // totalCostUSD across providers that share a canonical path but never
+  // recomputed totalProxiedCostUSD, so a merged project (e.g. the same repo
+  // used with Claude Code + Codex) would otherwise carry the proxied amount of
+  // only the first-seen provider. The merge key is the canonical path, so both
+  // sides share the same proxied status — keying off the surviving projectPath
+  // and the final cost keeps the project-level all-or-nothing rule intact.
+  for (const p of mergedMap.values()) {
+    p.totalProxiedCostUSD = isProxiedPath(p.projectPath) ? p.totalCostUSD : 0
   }
 
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)

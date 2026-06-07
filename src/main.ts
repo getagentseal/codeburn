@@ -1,7 +1,8 @@
+import { isAbsolute } from 'path'
 import { Command } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { loadPricing, setModelAliases, setLocalModelSavings } from './models.js'
+import { loadPricing, setModelAliases, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
@@ -150,6 +151,7 @@ program.hook('preAction', async (thisCommand) => {
   const config = await readConfig()
   setModelAliases(config.modelAliases ?? {})
   setLocalModelSavings(config.localModelSavings ?? {})
+  setProxyPaths(config.proxyPaths ?? [])
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
     process.env['CODEBURN_VERBOSE'] = '1'
   }
@@ -162,6 +164,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
 
   const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalSavingsUSD = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
+  // Subscription-covered (proxied) portion of totalCostUSD, and the resulting
+  // out-of-pocket figure. `cost` stays the full billable/would-be amount.
+  const totalProxiedUSD = projects.reduce((s, p) => s + p.totalProxiedCostUSD, 0)
+  const netCostUSD = totalCostUSD - totalProxiedUSD
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
@@ -360,6 +366,12 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     periodKey,
     overview: {
       cost: convertCost(totalCostUSD),
+      // Subscription-covered spend (config `proxyPaths`) and net out-of-pocket.
+      // `cost` is the full API-rate figure; `proxiedCost` is the part billed to
+      // a subscription; `netCost` = cost - proxiedCost. Both 0 with no proxy
+      // paths configured, so existing consumers are unaffected.
+      proxiedCost: convertCost(totalProxiedUSD),
+      netCost: convertCost(netCostUSD),
       savings: convertCost(totalSavingsUSD),
       calls: totalCalls,
       sessions: totalSessions,
@@ -792,6 +804,73 @@ program
     }
 
     console.log(`\n  Savings mapping saved: ${local} -> ${baseline}`)
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('proxy-path [path]')
+  .description('Mark a project directory as routed through a subscription-backed LLM proxy (e.g. Claude Code over GitHub Copilot). Sessions whose canonical path is under it keep their full API-rate cost as the "would-be" figure, but that amount is reported as subscription-covered so the report can show net out-of-pocket (e.g. codeburn proxy-path ~/work/copilot-repo). Actual API-key sessions elsewhere are untouched.')
+  .option('--remove <path>', 'Remove a configured proxy path')
+  .option('--list', 'List configured proxy paths')
+  .action(async (path?: string, opts?: { remove?: string; list?: boolean }) => {
+    const config = await readConfig()
+    // Sanitize the on-disk shape the same way setProxyPaths does: a hand-edited
+    // config.json could have proxyPaths as a non-array or hold non-string
+    // entries, which would otherwise throw when spread or normalized below.
+    const paths = (Array.isArray(config.proxyPaths) ? config.proxyPaths : [])
+      .filter((p): p is string => typeof p === 'string')
+    const samePath = (a: string, b: string) => normalizeProxyPath(a) === normalizeProxyPath(b)
+
+    if (opts?.list || (!path && !opts?.remove)) {
+      if (paths.length === 0) {
+        console.log('\n  No proxy paths configured.')
+        console.log(`  Config: ${getConfigFilePath()}`)
+        console.log('  Add one with: codeburn proxy-path <project-dir>\n')
+      } else {
+        console.log('\n  Proxy paths (sessions under these are subscription-covered):')
+        for (const p of paths) console.log(`    ${p}`)
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+      }
+      return
+    }
+
+    if (opts?.remove) {
+      const idx = paths.findIndex(p => samePath(p, opts.remove!))
+      if (idx === -1) {
+        console.error(`\n  No proxy path found matching: ${opts.remove}\n`)
+        process.exitCode = 1
+        return
+      }
+      paths.splice(idx, 1)
+      config.proxyPaths = paths.length > 0 ? paths : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed proxy path: ${opts.remove}\n`)
+      return
+    }
+
+    if (!path) {
+      console.error('\n  Usage: codeburn proxy-path <project-dir>\n')
+      process.exitCode = 1
+      return
+    }
+
+    const trimmed = path.trim()
+    if (!isAbsolute(trimmed) || normalizeProxyPath(trimmed) === '') {
+      console.error(`\n  Proxy path must be an absolute project directory (got: ${path}).`)
+      console.error('  codeburn matches sessions by their recorded absolute cwd; the')
+      console.error('  filesystem root is too broad and is not accepted.\n')
+      process.exitCode = 1
+      return
+    }
+    if (paths.some(p => samePath(p, trimmed))) {
+      console.log(`\n  Proxy path already configured: ${trimmed}\n`)
+      return
+    }
+    paths.push(trimmed)
+    config.proxyPaths = paths
+    await saveConfig(config)
+    console.log(`\n  Proxy path saved: ${trimmed}`)
+    console.log('  Sessions under it keep their full API-rate cost as the would-be figure; that amount is reported as subscription-covered (net out-of-pocket excludes it).')
     console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 

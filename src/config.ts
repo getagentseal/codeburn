@@ -39,6 +39,17 @@ export type CodeburnConfig = {
   // can show "saved $X by running locally". Distinct from modelAliases which
   // rewrites actual spend.
   localModelSavings?: Record<string, string>
+  // Absolute directory prefixes whose Claude Code sessions are routed through a
+  // subscription-backed LLM proxy (e.g. GitHub Copilot via ANTHROPIC_BASE_URL;
+  // tools like claude-code-over-github-copilot / claudegate). The JSONL records
+  // the underlying model name and no endpoint, so codeburn cannot auto-detect
+  // proxying — the user declares it here, scoped by the project's canonical cwd.
+  // Matching projects keep their full API-rate `totalCostUSD` (the billable /
+  // would-be figure is never destroyed) but expose `totalProxiedCostUSD` so the
+  // report can show what was subscription-covered and the net out-of-pocket.
+  // Matched against the canonical project path: prefix on a path-segment
+  // boundary, case-insensitive, trailing-slash and backslash tolerant.
+  proxyPaths?: string[]
 }
 
 function getConfigDir(): string {
