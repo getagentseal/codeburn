@@ -120,6 +120,7 @@ function createParser(
 export const vercelGateway: Provider = {
   name: 'vercel-gateway',
   displayName: 'Vercel AI Gateway',
+  network: true,
 
   modelDisplayName(model: string): string {
     const slash = model.indexOf('/')

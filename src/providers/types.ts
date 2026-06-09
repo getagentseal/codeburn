@@ -38,6 +38,9 @@ export type ParsedProviderCall = {
 export type Provider = {
   name: string
   displayName: string
+  // Data comes from a live API fetch (no on-disk file). Such sources can't be
+  // fingerprinted or incrementally cached, so the parser re-fetches every run.
+  network?: boolean
   modelDisplayName(model: string): string
   toolDisplayName(rawTool: string): string
   discoverSessions(): Promise<SessionSource[]>

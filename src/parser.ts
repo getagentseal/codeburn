@@ -1696,7 +1696,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       webSearchRequests: call.webSearchRequests,
       cacheCreationOneHourTokens: 0,
     },
-    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin') ? call.costUSD : undefined,
+    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway') ? call.costUSD : undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1931,6 +1931,16 @@ async function parseProviderSources(
 
   for (const source of sources) {
     allDiscoveredFiles.add(source.path)
+
+    // Network providers (e.g. Vercel AI Gateway) have no on-disk file — their data
+    // comes from a live API fetch in createSessionParser. There's nothing to
+    // fingerprint or incrementally cache, so re-fetch every run with a synthetic
+    // fingerprint (mtime=now so the date-range filter below never excludes it).
+    if (provider.network) {
+      changedSources.push({ source, fp: { dev: 0, ino: 0, mtimeMs: Date.now(), sizeBytes: 0 } })
+      continue
+    }
+
     const fp = await fingerprintFile(source.path)
     if (!fp) continue
 
