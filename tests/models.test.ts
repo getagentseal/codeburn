@@ -69,6 +69,19 @@ describe('getShortModelName', () => {
   })
 })
 
+describe('Fable 5 / Mythos 5 launch pricing (temporary)', () => {
+  it('prices fable-5 and mythos-5 at $10/M input, $50/M output', () => {
+    for (const id of ['claude-fable-5', 'claude-mythos-5']) {
+      expect(calculateCost(id, 1_000_000, 0, 0, 0, 0)).toBeCloseTo(10, 6)
+      expect(calculateCost(id, 0, 1_000_000, 0, 0, 0)).toBeCloseTo(50, 6)
+    }
+  })
+  it('gives them their own display names', () => {
+    expect(getShortModelName('claude-fable-5')).toBe('Fable 5')
+    expect(getShortModelName('claude-mythos-5')).toBe('Mythos 5')
+  })
+})
+
 describe('builtin aliases - getModelCosts', () => {
   it('resolves anthropic--claude-4.6-opus', () => {
     expect(getModelCosts('anthropic--claude-4.6-opus')).not.toBeNull()
