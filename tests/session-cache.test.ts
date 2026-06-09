@@ -112,6 +112,27 @@ describe('loadCache / saveCache', () => {
     expect(loaded).toEqual(cache)
   })
 
+  it('persists a failed-parse marker across save/load (negative-result cache)', async () => {
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        pi: {
+          envFingerprint: 'abc123',
+          files: {
+            '/path/to/bad.jsonl': makeCachedFile({ turns: [], failed: true }),
+          },
+        },
+      },
+    }
+
+    await saveCache(cache)
+    const loaded = await loadCache()
+    // The `failed` flag and empty turns survive validation + load, so the file
+    // stays skipped on the next run instead of being re-read and re-thrown.
+    expect(loaded.providers['pi']?.files['/path/to/bad.jsonl']?.failed).toBe(true)
+    expect(loaded.providers['pi']?.files['/path/to/bad.jsonl']?.turns).toEqual([])
+  })
+
   it('returns empty cache on version mismatch', async () => {
     const bad: SessionCache = { version: 999, providers: { claude: { envFingerprint: 'x', files: {} } } }
     await mkdir(TMP_DIR, { recursive: true })
@@ -259,6 +280,22 @@ describe('reconcileFile', () => {
     })
     const current: FileFingerprint = { dev: 1, ino: 200, mtimeMs: 2000, sizeBytes: 5000 }
     expect(reconcileFile(current, cached)).toEqual({ action: 'modified' })
+  })
+
+  it('a failed marker at the same fingerprint stays "unchanged" (not re-parsed)', () => {
+    const fp: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 }
+    const marker = makeCachedFile({ fingerprint: { ...fp }, turns: [], failed: true })
+    expect(reconcileFile(fp, marker)).toEqual({ action: 'unchanged' })
+  })
+
+  it('a failed marker is re-parsed once the file changes', () => {
+    const marker = makeCachedFile({
+      fingerprint: { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 },
+      turns: [],
+      failed: true,
+    })
+    const changed: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 2000, sizeBytes: 6000 }
+    expect(reconcileFile(changed, marker)).toEqual({ action: 'modified' })
   })
 
   it('returns "modified" when size shrank', () => {

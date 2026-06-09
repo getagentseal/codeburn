@@ -6,6 +6,7 @@ import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
 import { openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { normalizeContentBlocks } from '../content-utils.js'
 import type {
   Provider,
   SessionSource,
@@ -180,7 +181,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
     }
 
     if (entry.role === 'user') {
-      const texts = (entry.message?.content ?? [])
+      const texts = normalizeContentBlocks(entry.message?.content)
         .filter(c => c.type === 'text')
         .map(c => c.text ?? '')
       const combined = texts.join(' ')
@@ -189,7 +190,7 @@ function parseJsonlTranscript(raw: string): { turns: ParsedTurn[]; recognized: b
     }
 
     if (entry.role === 'assistant' && currentUserMessage) {
-      const content = entry.message?.content ?? []
+      const content = normalizeContentBlocks(entry.message?.content)
       const bodyParts: string[] = []
       const tools: string[] = []
 

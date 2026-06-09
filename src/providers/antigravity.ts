@@ -3,9 +3,11 @@ import { execFile } from 'child_process'
 import { randomBytes } from 'crypto'
 import { basename, join } from 'path'
 import { homedir } from 'os'
+import { fileURLToPath } from 'url'
 import https from 'https'
 
 import { calculateCost } from '../models.js'
+import { isSqliteAvailable, openDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 type AntigravityConversationRoot = {
@@ -30,6 +32,16 @@ const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
     project: 'antigravity-cli',
     extensions: ['.pb'],
   },
+  {
+    dir: join(homedir(), '.gemini', 'antigravity-ide', 'conversations'),
+    project: 'antigravity-ide',
+    extensions: ['.pb', '.db'],
+  },
+  {
+    dir: join(homedir(), '.gemini', 'antigravity-ide', 'implicit'),
+    project: 'antigravity-ide',
+    extensions: ['.pb'],
+  },
 ] as const
 const CACHE_VERSION = 2
 
@@ -42,7 +54,7 @@ export type ServerInfo = {
 }
 
 type ServerCandidate = ServerInfo & {
-  appDataDir?: 'antigravity' | 'antigravity-cli'
+  appDataDir?: 'antigravity' | 'antigravity-cli' | 'antigravity-ide'
 }
 
 type ModelMap = Record<string, string>
@@ -69,9 +81,9 @@ export type GeneratorMetadata = {
 }
 
 type ModelMapResponse = {
-  models?: Record<string, { model?: string }>
+  models?: Record<string, { model?: string; displayName?: string }>
   response?: {
-    models?: Record<string, { model?: string }>
+    models?: Record<string, { model?: string; displayName?: string }>
   }
 }
 
@@ -131,9 +143,9 @@ let memCache: AntigravityCache | null = null
 let cacheDirty = false
 let httpsAgent: https.Agent | undefined
 
-const SERVER_PORT_FLAGS = ['https_server_port', 'extension_server_port']
-const CSRF_TOKEN_FLAGS = ['csrf_token', 'extension_server_csrf_token']
-const APP_DATA_DIR_FLAGS = ['app_data_dir']
+const SERVER_PORT_FLAGS = ['https_server_port', 'extension_server_port', 'https-server-port', 'extension-server-port']
+const CSRF_TOKEN_FLAGS = ['csrf_token', 'extension_server_csrf_token', 'csrf-token', 'extension-server-csrf-token']
+const APP_DATA_DIR_FLAGS = ['app_data_dir', 'app-data-dir']
 
 function getAgent(): https.Agent {
   if (!httpsAgent) httpsAgent = new https.Agent({ rejectUnauthorized: false })
@@ -174,15 +186,16 @@ function isLikelyCsrfToken(value: string): boolean {
   return value.length >= 16 && /^[A-Za-z0-9._~:/+=-]+$/.test(value)
 }
 
-function normalizeAppDataDir(value: string | null): 'antigravity' | 'antigravity-cli' | undefined {
+function normalizeAppDataDir(value: string | null): 'antigravity' | 'antigravity-cli' | 'antigravity-ide' | undefined {
   if (!value) return undefined
   const normalized = value.replace(/\\/g, '/').toLowerCase()
+  if (normalized.includes('antigravity-ide')) return 'antigravity-ide'
   if (normalized.includes('antigravity-cli')) return 'antigravity-cli'
   if (normalized.includes('antigravity')) return 'antigravity'
   return undefined
 }
 
-export function extractAntigravityAppDataDirFromLine(line: string): 'antigravity' | 'antigravity-cli' | undefined {
+export function extractAntigravityAppDataDirFromLine(line: string): 'antigravity' | 'antigravity-cli' | 'antigravity-ide' | undefined {
   return normalizeAppDataDir(getFlagValue(line, APP_DATA_DIR_FLAGS))
 }
 
@@ -224,6 +237,35 @@ function parseAntigravityServerCandidates(lines: string[]): ServerCandidate[] {
     .filter((server): server is ServerCandidate => server !== null)
 }
 
+function getCanonicalModelId(key: string, displayName?: string): string {
+  if (displayName) {
+    const lower = displayName.toLowerCase()
+    if (lower.includes('3.5 flash')) {
+      if (lower.includes('high')) return 'gemini-3.5-flash-high'
+      if (lower.includes('medium')) return 'gemini-3.5-flash-medium'
+      if (lower.includes('low')) return 'gemini-3.5-flash-low'
+      return 'gemini-3.5-flash'
+    }
+    if (lower.includes('3.1 pro')) {
+      if (lower.includes('high')) return 'gemini-3.1-pro-high'
+      if (lower.includes('low')) return 'gemini-3.1-pro-low'
+      return 'gemini-3.1-pro'
+    }
+    if (lower.includes('3.1 flash')) {
+      if (lower.includes('image')) return 'gemini-3.1-flash-image'
+      if (lower.includes('lite')) return 'gemini-3.1-flash-lite'
+      return 'gemini-3.1-flash'
+    }
+    if (lower.includes('3 flash')) {
+      return 'gemini-3-flash'
+    }
+    if (lower.includes('3 pro')) {
+      return 'gemini-3-pro'
+    }
+  }
+  return key
+}
+
 export function extractAntigravityModelMap(resp: unknown): ModelMap {
   if (!resp || typeof resp !== 'object') return {}
   const data = resp as ModelMapResponse
@@ -232,7 +274,8 @@ export function extractAntigravityModelMap(resp: unknown): ModelMap {
   if (!models) return map
   for (const [key, info] of Object.entries(models)) {
     if (info && typeof info === 'object' && typeof info.model === 'string') {
-      map[info.model] = key
+      const canonicalKey = getCanonicalModelId(key, info.displayName)
+      map[info.model] = canonicalKey
     }
   }
   return map
@@ -312,8 +355,70 @@ async function readProcessCommandLines(): Promise<string[]> {
   return output.split('\n')
 }
 
-async function resolveEphemeralPort(csrfToken: string, appDataDir?: 'antigravity' | 'antigravity-cli'): Promise<ServerInfo | null> {
-  if (process.platform === 'win32') return null
+async function resolveEphemeralPort(csrfToken: string, appDataDir?: 'antigravity' | 'antigravity-cli' | 'antigravity-ide'): Promise<ServerInfo | null> {
+  if (process.platform === 'win32') {
+    try {
+      const script = [
+        "$ErrorActionPreference = 'SilentlyContinue'",
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*language_server*' -and $_.CommandLine -like '*antigravity*' } | ForEach-Object { @{ PID = $_.ProcessId; Cmd = $_.CommandLine } | ConvertTo-Json -Compress }"
+      ].join('; ')
+      const output = await execFileText('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], 5000)
+      
+      let targetPid = 0
+      for (const line of output.split(/\r?\n/)) {
+        if (!line.trim()) continue
+        try {
+          const proc = JSON.parse(line) as { PID: number; Cmd: string }
+          const candidate = parseAntigravityServerCandidateFromLine(proc.Cmd)
+          if (candidate && candidate.csrfToken === csrfToken) {
+            if (!appDataDir || !candidate.appDataDir || candidate.appDataDir === appDataDir) {
+              targetPid = proc.PID
+              break
+            }
+          }
+        } catch { /* skip invalid parse */ }
+      }
+      
+      if (targetPid === 0) return null
+      
+      const portScript = `Get-NetTCPConnection -State Listen -OwningProcess ${targetPid} | Select-Object -ExpandProperty LocalPort`
+      const portOutput = await execFileText('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', portScript], 5000)
+      const ports = portOutput.split(/\r?\n/)
+        .map(p => Number(p.trim()))
+        .filter(p => Number.isInteger(p) && p > 0)
+      
+      for (const port of ports) {
+        try {
+          await new Promise((resolve, reject) => {
+            const req = https.request({
+              hostname: '127.0.0.1',
+              port: port,
+              path: '/exa.language_server_pb.LanguageServerService/GetAvailableModels',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Connect-Protocol-Version': '1',
+                'X-Codeium-Csrf-Token': csrfToken,
+                'Content-Length': 2,
+              },
+              agent: getAgent(),
+              timeout: 1000,
+            }, (res) => {
+              if (res.statusCode === 200) resolve(true)
+              else reject(new Error())
+            })
+            req.on('error', reject)
+            req.write('{}')
+            req.end()
+          })
+          return { port, csrfToken }
+        } catch { /* try next port */ }
+      }
+    } catch { /* best-effort */ }
+    return null
+  }
+
   try {
     const processOutput = await execFileText('ps', ['-ww', '-eo', 'pid=,args='])
     let pid = ''
@@ -341,22 +446,23 @@ async function resolveEphemeralPort(csrfToken: string, appDataDir?: 'antigravity
   return null
 }
 
-export function antigravityAppDataDirFromSourcePath(path: string): 'antigravity' | 'antigravity-cli' {
-  return path.replace(/\\/g, '/').toLowerCase().includes('/.gemini/antigravity-cli/')
-    ? 'antigravity-cli'
-    : 'antigravity'
+export function antigravityAppDataDirFromSourcePath(path: string): 'antigravity' | 'antigravity-cli' | 'antigravity-ide' {
+  const lower = path.replace(/\\/g, '/').toLowerCase()
+  if (lower.includes('/.gemini/antigravity-ide/')) return 'antigravity-ide'
+  if (lower.includes('/.gemini/antigravity-cli/')) return 'antigravity-cli'
+  return 'antigravity'
 }
 
-async function detectServer(appDataDir: 'antigravity' | 'antigravity-cli' = 'antigravity'): Promise<ServerInfo | null> {
+async function detectServer(appDataDir: 'antigravity' | 'antigravity-cli' | 'antigravity-ide' = 'antigravity'): Promise<ServerInfo | null> {
   if (cachedServers.has(appDataDir)) return cachedServers.get(appDataDir)!
   try {
     const candidates = parseAntigravityServerCandidates(await readProcessCommandLines())
     const info = candidates.find(candidate => candidate.appDataDir === appDataDir)
       ?? (appDataDir === 'antigravity' ? candidates.find(candidate => candidate.appDataDir === undefined) : undefined)
       ?? null
-    if (info && info.port > 0) {
+    if (info && info.port > 0 && appDataDir !== 'antigravity-ide') {
       cachedServers.set(appDataDir, { port: info.port, csrfToken: info.csrfToken })
-    } else if (info && info.port === 0) {
+    } else if (info) {
       cachedServers.set(appDataDir, await resolveEphemeralPort(info.csrfToken, appDataDir))
     } else {
       cachedServers.set(appDataDir, null)
@@ -768,10 +874,11 @@ export function shouldReparseAntigravitySource(path: string, cachedTurnCount: nu
 
 async function findCascadeSource(cascadeId: string): Promise<SessionSource | null> {
   const sources = await discoverAntigravitySessionSources()
-  return sources.find(source =>
-    source.path.replace(/\\/g, '/').toLowerCase().includes('/.gemini/antigravity-cli/') &&
-    antigravityCascadeIdFromPath(source.path) === cascadeId
-  ) ?? null
+  return sources.find(source => {
+    const lower = source.path.replace(/\\/g, '/').toLowerCase()
+    return (lower.includes('/.gemini/antigravity-cli/') || lower.includes('/.gemini/antigravity-ide/')) &&
+      antigravityCascadeIdFromPath(source.path) === cascadeId
+  }) ?? null
 }
 
 export async function snapshotAntigravityStatusLinePayload(input: unknown): Promise<boolean> {
@@ -791,7 +898,7 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
     return true
   }
 
-  const server = await detectServer('antigravity-cli')
+  const server = await detectServer(antigravityAppDataDirFromSourcePath(source.path))
   if (!server) return false
 
   let metadata: GeneratorMetadata[]
@@ -813,6 +920,40 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
   }
 }
 
+async function extractWorkspacePath(filePath: string): Promise<string | undefined> {
+  let text = ''
+  if (filePath.endsWith('.db') && isSqliteAvailable()) {
+    try {
+      const db = openDatabase(filePath)
+      const rows = db.query<{ data: Uint8Array }>('SELECT data FROM trajectory_metadata_blob')
+      db.close()
+      const textDecoder = new TextDecoder('utf-8', { fatal: false })
+      text = rows.map(r => textDecoder.decode(r.data)).join(' ')
+    } catch { /* ignore and fallback */ }
+  }
+
+  if (!text) {
+    try {
+      text = await readFile(filePath, 'utf-8')
+    } catch {
+      return undefined
+    }
+  }
+
+  const match = text.match(/file:\/\/\/[^\x00-\x1F\x7F"'\s]+/i)
+  if (!match) return undefined
+
+  try {
+    return fileURLToPath(match[0])
+  } catch {
+    return undefined
+  }
+}
+
+function sanitizeProject(path: string): string {
+  return basename(path.replace(/\\/g, '/'))
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -830,9 +971,15 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const s = await stat(source.path).catch(() => null)
       if (!s) return
 
+      const projectPath = await extractWorkspacePath(source.path)
+
       const cached = cache.cascades[cascadeId]
       if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size) {
         for (const call of cached.calls) {
+          if (projectPath) {
+            call.projectPath = projectPath
+            call.project = sanitizeProject(projectPath)
+          }
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
           yield call
@@ -844,6 +991,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       if (!server) {
         if (cached) {
           for (const call of cached.calls) {
+            if (projectPath) {
+              call.projectPath = projectPath
+              call.project = sanitizeProject(projectPath)
+            }
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call
@@ -862,6 +1013,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       } catch {
         if (cached) {
           for (const call of cached.calls) {
+            if (projectPath) {
+              call.projectPath = projectPath
+              call.project = sanitizeProject(projectPath)
+            }
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call
@@ -871,6 +1026,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       }
 
       const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+      if (projectPath) {
+        const projectName = sanitizeProject(projectPath)
+        for (const call of results) {
+          call.projectPath = projectPath
+          call.project = projectName
+        }
+      }
 
       cache.cascades[cascadeId] = {
         mtimeMs: s.mtimeMs,

@@ -207,3 +207,74 @@ enum CLICurrencyConfig {
         }
     }
 }
+
+struct CodeburnCLIConfigStore {
+    let homeDirectory: String
+
+    init(homeDirectory: String = NSHomeDirectory()) {
+        self.homeDirectory = homeDirectory
+    }
+
+    private var configDir: String {
+        (homeDirectory as NSString).appendingPathComponent(".config/codeburn")
+    }
+    private var configPath: String {
+        (configDir as NSString).appendingPathComponent("config.json")
+    }
+    private var lockPath: String {
+        (configDir as NSString).appendingPathComponent(".config.lock")
+    }
+
+    func loadDevinAcuUsdRate() -> Double? {
+        guard
+            let data = try? SafeFile.read(from: configPath),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let devin = json["devin"] as? [String: Any],
+            let rate = devin["acuUsdRate"] as? Double,
+            rate.isFinite,
+            rate > 0
+        else {
+            return nil
+        }
+        return rate
+    }
+
+    func persistDevinAcuUsdRate(_ rate: Double) {
+        guard rate.isFinite, rate > 0 else { return }
+        do {
+            try SafeFile.withExclusiveLock(at: lockPath) {
+                var existing: [String: Any] = [:]
+                if let data = try? SafeFile.read(from: configPath),
+                   let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    existing = parsed
+                }
+
+                var devin = existing["devin"] as? [String: Any] ?? [:]
+                devin["acuUsdRate"] = rate
+                existing["devin"] = devin
+
+                guard let data = try? JSONSerialization.data(
+                    withJSONObject: existing,
+                    options: [.prettyPrinted, .sortedKeys]
+                ) else {
+                    return
+                }
+                try SafeFile.write(data, to: configPath, mode: 0o600)
+            }
+        } catch {
+            NSLog("CodeBurn: failed to persist Devin ACU config: \(error)")
+        }
+    }
+}
+
+enum CLIDevinConfig {
+    private static let store = CodeburnCLIConfigStore()
+
+    static func loadAcuUsdRate() -> Double? {
+        store.loadDevinAcuUsdRate()
+    }
+
+    static func persistAcuUsdRate(_ rate: Double) {
+        store.persistDevinAcuUsdRate(rate)
+    }
+}

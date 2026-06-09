@@ -5,6 +5,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { blobToText, getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import { safeNumber } from '../parser.js'
 
 const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
 const WARP_STABLE_BUNDLE_ID = 'dev.warp.Warp-Stable'
@@ -133,11 +134,6 @@ function parseJsonString(raw: string): string {
 function isFinalStatus(rawStatus: string): boolean {
   const status = parseJsonString(rawStatus)
   return status === 'Completed' || status === 'Cancelled' || status === 'Failed'
-}
-
-function safeNumber(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
-  return Math.max(0, value)
 }
 
 function extractCategoryTokens(categories: Record<string, unknown> | undefined, key: string): number {

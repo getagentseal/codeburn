@@ -480,3 +480,86 @@ describe('copilot provider - metadata', () => {
     expect(copilot.modelDisplayName('gpt-4.1-mini-2026-01-01')).toBe('GPT-4.1 Mini')
   })
 })
+
+// JetBrains (IntelliJ/DataGrip) format, added in #433. Discovery + parsing,
+// the isJetBrainsFormat routing guard, and the id-less dedup fallback.
+describe('copilot provider - JetBrains format', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jb-'))
+  })
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  const jbUser = (text: string) =>
+    JSON.stringify({ type: 'user.message_rendered', data: { renderedMessage: text } })
+  const jbTurnStart = (turnId: string) =>
+    JSON.stringify({ type: 'assistant.turn_start', data: { turnId } })
+  const jbToolStart = (toolName: string, toolCallId: string, path?: string) =>
+    JSON.stringify({ type: 'tool.execution_start', data: { toolName, toolCallId, arguments: path ? { path } : {} } })
+  const jbAssistant = (opts: { messageId?: string; text?: string; outputTokens?: number; iterationNumber?: number }) =>
+    JSON.stringify({ type: 'assistant.message', data: { ...opts } })
+
+  async function writeJbSession(workspaceId: string, lines: string[]) {
+    const dir = join(tmpDir, workspaceId)
+    await mkdir(dir, { recursive: true })
+    const filePath = join(dir, 'chat.jsonl')
+    await writeFile(filePath, lines.join('\n') + '\n')
+    return filePath
+  }
+
+  async function parse(filePath: string, seen = new Set<string>()) {
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/vscode', tmpDir)
+    const source = { path: filePath, project: 'p', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, seen).parse()) calls.push(call)
+    return calls
+  }
+
+  it('discovers a JetBrains chat.jsonl under the jb dir', async () => {
+    const filePath = await writeJbSession('ws-abc', [jbUser('hello'), jbAssistant({ messageId: 'm1', text: 'hi', outputTokens: 10 })])
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/vscode', tmpDir)
+    const sources = await provider.discoverSessions()
+    expect(sources.some(s => s.path === filePath && s.provider === 'copilot')).toBe(true)
+  })
+
+  it('parses a JetBrains session into a call with the inferred model and user message', async () => {
+    const filePath = await writeJbSession('ws-abc', [
+      jbUser('implement the feature'),
+      jbTurnStart('t1'),
+      jbToolStart('read_file', 'toolu_vrtx_x'),
+      jbAssistant({ messageId: 'm1', text: 'done', outputTokens: 42 }),
+    ])
+    const calls = await parse(filePath)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.provider).toBe('copilot')
+    expect(calls[0]!.model).toBe('copilot-anthropic-auto') // toolu_ prefix -> Anthropic
+    expect(calls[0]!.outputTokens).toBe(42)
+    expect(calls[0]!.userMessage).toBe('implement the feature')
+    expect(calls[0]!.tools).toEqual(['Read'])
+    expect(calls[0]!.deduplicationKey.startsWith('copilot:jb:')).toBe(true)
+  })
+
+  it('does NOT route a legacy file (first line user.message) to the JetBrains parser', async () => {
+    // Regression guard: isJetBrainsFormat must not match bare user.message.
+    const filePath = await writeJbSession('ws-legacy', [
+      JSON.stringify({ type: 'user.message', data: { content: 'hi' } }),
+      JSON.stringify({ type: 'session.model_change', data: { newModel: 'gpt-4.1' } }),
+      JSON.stringify({ type: 'assistant.message', data: { messageId: 'm1', outputTokens: 5 } }),
+    ])
+    const calls = await parse(filePath)
+    // Parsed by the legacy parser -> legacy dedup key, not a jb one.
+    expect(calls.every(c => !c.deduplicationKey.startsWith('copilot:jb:'))).toBe(true)
+  })
+
+  it('does not collapse id-less assistant messages (dedup fallback)', async () => {
+    const filePath = await writeJbSession('ws-noid', [
+      jbUser('q1'),
+      jbAssistant({ text: 'a1', outputTokens: 5 }),
+      jbAssistant({ text: 'a2', outputTokens: 6 }),
+    ])
+    const calls = await parse(filePath)
+    expect(calls).toHaveLength(2)
+    expect(new Set(calls.map(c => c.deduplicationKey)).size).toBe(2)
+  })
+})

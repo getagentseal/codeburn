@@ -125,6 +125,17 @@ describe('aggregateModels', () => {
     expect(claudeRow.totalTokens).toBe(1800 + 300 + 800 + 13000)
   })
 
+  it('does not double-count cache reads when a provider sets both cache fields', async () => {
+    // Providers like codex/mux/codebuff populate cacheReadInputTokens AND
+    // cachedInputTokens with the same value (Anthropic vs OpenAI vocabulary for
+    // the same tokens). The report must count them once, not sum them.
+    const call = makeCall({ provider: 'mux', model: 'claude-opus-4-8', input: 100, output: 50, cacheRead: 4000, costUSD: 2.0 })
+    call.usage.cachedInputTokens = 4000 // mirrors cacheReadInputTokens, as those providers do
+
+    const rows = await aggregateModels([makeProject([makeTurn('feature', [call])])])
+    expect(rows[0]!.cacheReadTokens).toBe(4000) // not 8000
+  })
+
   it('reports the dominant task type with its cost share in default mode', async () => {
     const project = makeProject([
       makeTurn('feature', [makeCall({ provider: 'claude', model: 'claude-sonnet-4-6', costUSD: 6.0, input: 100, output: 20 })]),
@@ -217,6 +228,8 @@ describe('renderTable', () => {
       cacheReadTokens: 0,
       totalTokens: 0,
       costUSD: 0,
+      savingsUSD: 0,
+      savingsBaselineModel: '',
       calls: 0,
       ...partial,
     }
@@ -324,8 +337,8 @@ describe('renderMarkdown', () => {
     ]
     const md = renderMarkdown(rows, { showTotals: false })
     const lines = md.split('\n')
-    expect(lines[0]).toBe('| Provider | Model | Top Task | Input | Output | Cache Write | Cache Read | Total | Cost |')
-    expect(lines[1]).toBe('| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |')
+    expect(lines[0]).toBe('| Provider | Model | Top Task | Input | Output | Cache Write | Cache Read | Total | Cost | Saved |')
+    expect(lines[1]).toBe('| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |')
     expect(lines[2]).toContain('| Claude |')
     expect(lines[2]).toContain('`Sonnet 4.6`')
     expect(lines[2]).toContain('Feature Dev (60%)')
@@ -432,13 +445,14 @@ describe('renderCsv', () => {
         cacheReadTokens: 0,
         totalTokens: 150,
         costUSD: 1.5,
+        savingsUSD: 0,
         calls: 1,
       },
     ]
     const csv = renderCsv(rows)
     const lines = csv.split('\n')
-    expect(lines[0]).toBe('provider,model,top_task,top_task_share,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,total_tokens,calls,cost_usd')
-    expect(lines[1]).toBe('Claude,Sonnet 4.6,Feature Dev,0.6000,100,50,0,0,150,1,1.500000')
+    expect(lines[0]).toBe('provider,model,top_task,top_task_share,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,total_tokens,calls,cost_usd,savings_usd,savings_baseline_model')
+    expect(lines[1]).toBe('Claude,Sonnet 4.6,Feature Dev,0.6000,100,50,0,0,150,1,1.500000,0.000000,')
   })
 
   it('escapes commas in provider/model cells', () => {
@@ -457,6 +471,7 @@ describe('renderCsv', () => {
         cacheReadTokens: 0,
         totalTokens: 0,
         costUSD: 0,
+        savingsUSD: 0,
         calls: 0,
       },
     ]

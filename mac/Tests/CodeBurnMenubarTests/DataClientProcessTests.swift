@@ -48,4 +48,55 @@ final class DataClientProcessTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(String(data: result.stdout, encoding: .utf8), "hello\n")
     }
+
+    /// Many NORMALLY-exiting processes, all at once, must every one complete
+    /// through the terminationHandler wait path. Guards against the wait path
+    /// leaking or wedging under concurrency (the production bug was the wait and
+    /// its timeout sharing one queue that saturated under sustained load).
+    func testManyNormalProcessesAllComplete() async {
+        let count = 50
+        let codes = await withTaskGroup(of: Int32?.self) { group -> [Int32?] in
+            for _ in 0..<count {
+                group.addTask {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/bin/echo")
+                    process.arguments = ["ok"]
+                    return try? await DataClient.runProcess(process, timeoutSeconds: 5, label: "echo ok").exitCode
+                }
+            }
+            var out: [Int32?] = []
+            for await code in group { out.append(code) }
+            return out
+        }
+        XCTAssertEqual(codes.count, count)
+        XCTAssertTrue(codes.allSatisfy { $0 == 0 },
+                      "every concurrent process should exit 0 via the terminationHandler wait path")
+    }
+
+    /// The async semaphore never lets more than its count run concurrently.
+    func testAsyncSemaphoreCapsConcurrency() async {
+        let sem = AsyncSemaphore(2)
+        let peak = PeakCounter()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<12 {
+                group.addTask {
+                    await sem.acquire()
+                    await peak.enter()
+                    try? await Task.sleep(nanoseconds: 8_000_000)
+                    await peak.leave()
+                    await sem.release()
+                }
+            }
+        }
+        let observed = await peak.peak
+        XCTAssertLessThanOrEqual(observed, 2, "semaphore should cap concurrency at 2, saw \(observed)")
+        XCTAssertGreaterThan(observed, 0)
+    }
+}
+
+private actor PeakCounter {
+    private var current = 0
+    private(set) var peak = 0
+    func enter() { current += 1; peak = max(peak, current) }
+    func leave() { current -= 1 }
 }

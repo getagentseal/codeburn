@@ -192,6 +192,7 @@ function planStatusText(planUsage: PlanUsage): string {
 
 function Overview({ projects, label, width, planUsages }: { projects: ProjectSummary[]; label: string; width: number; planUsages?: PlanUsage[] }) {
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalSavings = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const allSessions = projects.flatMap(p => p.sessions)
@@ -223,6 +224,12 @@ function Overview({ projects, label, width, planUsages }: { projects: ProjectSum
       <Text dimColor wrap="truncate-end">
         {formatTokens(totalInput)} in   {formatTokens(totalOutput)} out   {formatTokens(totalCacheRead)} cached   {formatTokens(totalCacheWrite)} written
       </Text>
+      {totalSavings > 0 && (
+        <Text wrap="truncate-end">
+          <Text color="green">{formatCost(totalSavings)}</Text>
+          <Text dimColor> saved by local models</Text>
+        </Text>
+      )}
       {activePlanUsages.length > 0 && (
         <>
           {activePlanUsages.map(planUsage => {

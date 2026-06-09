@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
 import snapshotData from './data/litellm-snapshot.json'
+import fallbackData from './data/pricing-fallback.json'
+import { fetchWithTimeout } from './fetch-utils.js'
 
 export type ModelCosts = {
   inputCostPerToken: number
@@ -30,30 +32,88 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
+// Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
+// input, read = 0.1x input) when a source omits them. Shared by the bundled
+// tuple path (tupleToCosts) and the live LiteLLM path (parseLiteLLMEntry) so the
+// multipliers live in exactly one place.
+function buildCosts(
+  input: number,
+  output: number,
+  cacheWrite: number | null | undefined,
+  cacheRead: number | null | undefined,
+  fast: number | null | undefined,
+): ModelCosts {
+  return {
+    inputCostPerToken: input,
+    outputCostPerToken: output,
+    cacheWriteCostPerToken: cacheWrite ?? input * 1.25,
+    cacheReadCostPerToken: cacheRead ?? input * 0.1,
+    webSearchCostPerRequest: WEB_SEARCH_COST,
+    fastMultiplier: fast ?? 1,
+  }
+}
+
+function tupleToCosts(raw: SnapshotEntry): ModelCosts {
+  const [input, output, cacheWrite, cacheRead, fast] = raw
+  return buildCosts(input, output, cacheWrite, cacheRead, fast)
+}
+
 function loadSnapshot(): Map<string, ModelCosts> {
   const map = new Map<string, ModelCosts>()
   for (const [name, raw] of Object.entries(snapshotData as unknown as Record<string, SnapshotEntry>)) {
-    const [input, output, cacheWrite, cacheRead, fast] = raw
-    map.set(name, {
-      inputCostPerToken: input,
-      outputCostPerToken: output,
-      cacheWriteCostPerToken: cacheWrite ?? input * 1.25,
-      cacheReadCostPerToken: cacheRead ?? input * 0.1,
-      webSearchCostPerRequest: WEB_SEARCH_COST,
-      fastMultiplier: fast ?? 1,
-    })
+    map.set(name, tupleToCosts(raw))
   }
   return map
 }
 
+// Gap-fill pricing from models.dev / OpenRouter, keyed lowercase. Consulted ONLY
+// as the last-resort fallback in getModelCosts (never for exact/canonical/prefix
+// matches), so a reseller variant name can't shadow a real canonical entry.
+const fallbackCosts: Map<string, ModelCosts> = (() => {
+  const map = new Map<string, ModelCosts>()
+  for (const [name, raw] of Object.entries(fallbackData as unknown as Record<string, SnapshotEntry>)) {
+    const lk = name.toLowerCase()
+    if (!map.has(lk)) map.set(lk, tupleToCosts(raw))
+  }
+  return map
+})()
+
 let pricingCache: Map<string, ModelCosts> = loadSnapshot()
 let sortedPricingKeys: string[] | null = null
+let lowercasePricingIndex: Map<string, ModelCosts> | null = null
 
 function getSortedPricingKeys(): string[] {
   if (sortedPricingKeys === null) {
     sortedPricingKeys = Array.from(pricingCache.keys()).sort((a, b) => b.length - a.length)
   }
   return sortedPricingKeys
+}
+
+// Case-insensitive index, built lazily. Lets a session model like `MiniMax-M3`
+// resolve to a gap-filled OpenRouter key like `minimax-m3` (lowercase slug).
+// First key wins on a lowercase collision so it stays deterministic.
+//
+// Zero-priced entries are excluded: LiteLLM ships `[0,0]` stubs (e.g.
+// `GigaChat-2-Max`) for models it lists but has no price for. Indexing those
+// would let a case-mismatched query (`gigachat-2-max`) resolve to a silent $0
+// instead of returning null, which suppresses the unknown-model warning and
+// hides real spend. A case-EXACT query still finds the stub via the normal
+// pipeline; only the fuzzy case-insensitive path skips them.
+function getLowercasePricingIndex(): Map<string, ModelCosts> {
+  if (lowercasePricingIndex === null) {
+    lowercasePricingIndex = new Map()
+    const priced = (c: ModelCosts) => c.inputCostPerToken > 0 || c.outputCostPerToken > 0
+    // The live pricing data wins on any lowercase collision; the gap-fill only
+    // fills names that resolve to nothing through the normal pipeline.
+    for (const [key, costs] of pricingCache) {
+      const lk = key.toLowerCase()
+      if (priced(costs) && !lowercasePricingIndex.has(lk)) lowercasePricingIndex.set(lk, costs)
+    }
+    for (const [lk, costs] of fallbackCosts) {
+      if (priced(costs) && !lowercasePricingIndex.has(lk)) lowercasePricingIndex.set(lk, costs)
+    }
+  }
+  return lowercasePricingIndex
 }
 
 function getCacheDir(): string {
@@ -81,20 +141,21 @@ function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
   const inputCost = safePerTokenRate(entry.input_cost_per_token)
   const outputCost = safePerTokenRate(entry.output_cost_per_token)
   if (inputCost === null || outputCost === null) return null
-  const cacheWrite = safePerTokenRate(entry.cache_creation_input_token_cost) ?? inputCost * 1.25
-  const cacheRead = safePerTokenRate(entry.cache_read_input_token_cost) ?? inputCost * 0.1
-  return {
-    inputCostPerToken: inputCost,
-    outputCostPerToken: outputCost,
-    cacheWriteCostPerToken: cacheWrite,
-    cacheReadCostPerToken: cacheRead,
-    webSearchCostPerRequest: WEB_SEARCH_COST,
-    fastMultiplier: entry.provider_specific_entry?.fast ?? 1,
-  }
+  return buildCosts(
+    inputCost,
+    outputCost,
+    safePerTokenRate(entry.cache_creation_input_token_cost),
+    safePerTokenRate(entry.cache_read_input_token_cost),
+    entry.provider_specific_entry?.fast,
+  )
 }
 
 async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
-  const response = await fetch(LITELLM_URL)
+  // Bounded: runs on every CLI invocation (the menubar shells out and blocks on
+  // it). Without a timeout a half-open network after wake-from-sleep makes
+  // fetch() hang forever, wedging the menubar's loading spinner. On timeout the
+  // caller's catch falls back to the bundled price snapshot.
+  const response = await fetchWithTimeout(LITELLM_URL)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json() as Record<string, LiteLLMEntry>
   const pricing = new Map<string, ModelCosts>()
@@ -142,12 +203,14 @@ export async function loadPricing(): Promise<void> {
   if (cached) {
     pricingCache = mergeSnapshotFallbacks(cached)
     sortedPricingKeys = null
+    lowercasePricingIndex = null
     return
   }
 
   try {
     pricingCache = mergeSnapshotFallbacks(await fetchAndCachePricing())
     sortedPricingKeys = null
+    lowercasePricingIndex = null
   } catch {
     // snapshot already loaded at init; nothing more to do
   }
@@ -268,6 +331,121 @@ export function setModelAliases(aliases: Record<string, string>): void {
   userAliases = aliases
 }
 
+// Local-model savings config. Kept separate from userAliases: a `modelAliases`
+// entry rewrites a model's identity for actual cost; a `localModelSavings`
+// entry keeps the model cost at $0 and reports the *avoided* spend against a
+// paid baseline. Set during preAction from `config.localModelSavings`.
+let userLocalModelSavings: Record<string, string> = {}
+
+export function setLocalModelSavings(mappings: Record<string, string>): void {
+  userLocalModelSavings = { ...mappings }
+}
+
+export function getLocalSavingsBaseline(rawModel: string): string | undefined {
+  if (!rawModel || typeof rawModel !== 'string') return undefined
+  // Defensive: bracket-accessing user-controlled keys on a plain object
+  // exposes the prototype chain (`__proto__` would resolve to Object.prototype).
+  // Use Object.hasOwn so a hostile JSONL model name cannot piggyback into
+  // Object.prototype either through the alias map or here.
+  if (!Object.hasOwn(userLocalModelSavings, rawModel)) return undefined
+  return userLocalModelSavings[rawModel]
+}
+
+/// Compute the hypothetical baseline cost for a local call. The baseline
+/// model is priced through the normal `calculateCost` pipeline (so it can
+/// be aliased / canonicalized). Returns `null` when the source model has
+/// no savings mapping, the baseline is unknown to the pricing snapshot, or
+/// any input is unusable — callers should treat null as "no savings
+/// recorded for this call" rather than a hard error.
+export function calculateLocalModelSavings(
+  rawModel: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationTokens: number,
+  cacheReadTokens: number,
+  webSearchRequests: number,
+  speed: 'standard' | 'fast' = 'standard',
+  oneHourCacheCreationTokens = 0,
+): { savingsUSD: number; baselineModel: string } | null {
+  const baseline = getLocalSavingsBaseline(rawModel)
+  if (!baseline) return null
+  if (!getModelCosts(baseline)) return null
+  const savingsUSD = calculateCost(
+    baseline,
+    inputTokens,
+    outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    webSearchRequests,
+    speed,
+    oneHourCacheCreationTokens,
+  )
+  return { savingsUSD, baselineModel: baseline }
+}
+
+/// Stable hash of the current savings config so the daily cache can detect
+/// "user changed their baseline mapping" and rebuild instead of presenting
+/// stale saved-spend numbers. Two configs with the same key→baseline pairs
+/// in any order collapse to the same hash.
+export function getLocalModelSavingsConfigHash(): string {
+  const keys = Object.keys(userLocalModelSavings).sort()
+  if (keys.length === 0) return ''
+  const parts = keys.map(k => `${k}\u0001${userLocalModelSavings[k]}`)
+  return parts.join('\u0002')
+}
+
+// Absolute directory prefixes whose sessions are routed through a
+// subscription-backed proxy (config `proxyPaths`). Stored already-normalized so
+// the per-project match is a cheap compare. Set during preAction. See
+// CodeburnConfig.proxyPaths for the product rationale.
+let userProxyPaths: string[] = []
+
+/// Normalize a path for prefix comparison: backslashes -> forward slashes
+/// (Windows configs / cwds), strip leading AND trailing slashes, fold case on
+/// case-insensitive filesystems. Leading slashes are stripped because provider
+/// project paths arrive in two forms — Claude keeps the absolute "/Users/x"
+/// while Codex (sanitizeProject) and the unsanitizePath fallback drop the
+/// leading slash to "Users/x". Folding both to a slashless form (mirroring
+/// crossProviderKey) makes matching agnostic to which provider produced the
+/// path, so the same directory is flagged whether or not a Claude session
+/// happens to co-exist there. Case is folded only on macOS/Windows; on Linux
+/// "/home/Me" and "/home/me" are different dirs, so folding would risk
+/// crediting unrelated spend. A path that normalizes to empty (e.g. "/" or "")
+/// is dropped by callers so it can never match everything. Exported so the CLI
+/// dedupes with the same rule.
+export function normalizeProxyPath(p: string): string {
+  const s = p.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  return (process.platform === 'darwin' || process.platform === 'win32') ? s.toLowerCase() : s
+}
+
+export function setProxyPaths(paths: string[]): void {
+  userProxyPaths = (Array.isArray(paths) ? paths : [])
+    .filter((p): p is string => typeof p === 'string')
+    .map(normalizeProxyPath)
+    .filter(p => p !== '')
+}
+
+/// True when `cwd` is at or under a configured proxy path. Prefix match is
+/// anchored to a path-segment boundary so "/a/proj" matches "/a/proj" and
+/// "/a/proj/sub" but NOT "/a/project-x". Empty/undefined cwd or empty config
+/// never matches (so a misconfig can't silently zero unrelated spend).
+export function isProxiedPath(cwd: string | undefined | null): boolean {
+  if (!cwd || typeof cwd !== 'string') return false
+  if (userProxyPaths.length === 0) return false
+  const c = normalizeProxyPath(cwd)
+  if (c === '') return false
+  return userProxyPaths.some(p => c === p || c.startsWith(p + '/'))
+}
+
+/// Stable hash of the active proxy-path config. Project-level proxy attribution
+/// is computed live from this set and then cached in the in-memory session
+/// cache, so the cache key must vary with it — otherwise a long-lived process
+/// (menubar) that re-reads config could serve attribution from a stale set.
+export function getProxyPathsConfigHash(): string {
+  if (userProxyPaths.length === 0) return ''
+  return [...userProxyPaths].sort().join('')
+}
+
 function resolveAlias(model: string): string {
   if (Object.hasOwn(userAliases, model)) return userAliases[model]!
   if (Object.hasOwn(BUILTIN_ALIASES, model)) return BUILTIN_ALIASES[model]!
@@ -283,9 +461,20 @@ function getCanonicalName(model: string): string {
 export function getModelCosts(model: string): ModelCosts | null {
   // Try with provider prefix preserved (azure/gpt-5.4, openrouter/anthropic/claude-opus-4.6)
   const withPrefix = model.replace(/@.*$/, '').replace(/-\d{8}$/, '')
+  const canonicalName = getCanonicalName(model)
+  const canonical = resolveAlias(canonicalName)
+
+  // An explicit alias for a bare (un-prefixed) model name is authoritative: it
+  // must win over a coincidental stripped reseller key of the same name. LiteLLM
+  // ships `snowflake/claude-4-opus` ($5), which the bundler strips to a bare
+  // `claude-4-opus` key; without this, that would shadow the curated alias
+  // `claude-4-opus -> claude-opus-4` ($15 official Anthropic price).
+  if (canonical !== canonicalName && withPrefix === canonicalName && pricingCache.has(canonical)) {
+    return pricingCache.get(canonical)!
+  }
+
   if (pricingCache.has(withPrefix)) return pricingCache.get(withPrefix)!
 
-  const canonical = resolveAlias(getCanonicalName(model))
   if (pricingCache.has(canonical)) return pricingCache.get(canonical)!
 
   // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
@@ -296,6 +485,16 @@ export function getModelCosts(model: string): ModelCosts | null {
       return pricingCache.get(key)!
     }
   }
+
+  // Case-insensitive fallback: gap-filled keys from OpenRouter are lowercase
+  // slugs (e.g. `minimax-m3`), but sessions report `MiniMax-M3`. Only consulted
+  // after the exact/canonical/prefix attempts, so it never changes a match that
+  // already resolved above.
+  const lowerIndex = getLowercasePricingIndex()
+  const byCanonical = lowerIndex.get(canonical.toLowerCase())
+  if (byCanonical) return byCanonical
+  const byPrefix = lowerIndex.get(withPrefix.toLowerCase())
+  if (byPrefix) return byPrefix
 
   return null
 }
@@ -353,7 +552,7 @@ export function calculateCost(
       // payloads written by external tools, so a hostile or corrupt file
       // could embed terminal escape sequences here.
       const safeName = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
-      const aliasHint = `Map it with: codeburn model-alias "${safeName}" <known-model>`
+      const aliasHint = `Map it with: codeburn model-alias "${safeName}" <known-model>, or track local-model savings with: codeburn model-savings "${safeName}" <baseline-model>`
       process.stderr.write(
         `codeburn: no pricing data for model "${safeName}" — costs for this model will show $0. ` +
         `${aliasHint}, or update with: npx codeburn@latest.\n`
@@ -398,6 +597,8 @@ const autoModelNames: Record<string, string> = {
 }
 
 const SHORT_NAMES: Record<string, string> = {
+  // claude-fable-5 is outside the opus/sonnet/haiku families deriveClaudeShortName covers.
+  'claude-fable-5': 'Fable 5',
   // Modern claude-<family>-<major>-<minor> ids are derived in deriveClaudeShortName.
   // Only the legacy 3.x ids (family-last) need explicit mapping.
   'claude-3-7-sonnet': 'Sonnet 3.7',

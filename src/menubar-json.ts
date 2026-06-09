@@ -4,17 +4,23 @@
 export type PeriodData = {
   label: string
   cost: number
+  /// Counterfactual USD the same tokens would have cost on the paid
+  /// baseline configured for each local model. Stays `0` when no
+  /// `codeburn model-savings` mappings are active. Always shown
+  /// separately from `cost` so the two never get summed into a "real
+  /// spend" number by accident.
+  savingsUSD: number
   calls: number
   sessions: number
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
-  categories: Array<{ name: string; cost: number; turns: number; editTurns: number; oneShotTurns: number }>
-  models: Array<{ name: string; cost: number; calls: number }>
-  projects?: Array<{ name: string; cost: number; sessions: number; sessionDetails?: Array<{ cost: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number }> }> }>
+  categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
+  models: Array<{ name: string; cost: number; savingsUSD: number; calls: number }>
+  projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
-  topSessions?: Array<{ project: string; cost: number; calls: number; date: string }>
+  topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string }>
 }
 
 export type ProviderCost = {
@@ -35,6 +41,7 @@ const MODEL_EFFICIENCY_LIMIT = 5
 export type DailyModelBreakdown = {
   name: string
   cost: number
+  savingsUSD: number
   calls: number
   inputTokens: number
   outputTokens: number
@@ -43,12 +50,28 @@ export type DailyModelBreakdown = {
 export type DailyHistoryEntry = {
   date: string
   cost: number
+  savingsUSD: number
   calls: number
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
   topModels: DailyModelBreakdown[]
+}
+
+export type LocalModelSavings = {
+  totalUSD: number
+  calls: number
+  byModel: Array<{
+    name: string
+    calls: number
+    actualUSD: number
+    savingsUSD: number
+    baselineModel: string
+    inputTokens: number
+    outputTokens: number
+  }>
+  byProvider: Array<{ name: string; calls: number; savingsUSD: number }>
 }
 
 export type MenubarPayload = {
@@ -65,27 +88,38 @@ export type MenubarPayload = {
     topActivities: Array<{
       name: string
       cost: number
+      savingsUSD: number
       turns: number
       oneShotRate: number | null
     }>
     topModels: Array<{
       name: string
       cost: number
+      savingsUSD: number
+      savingsBaselineModel: string
       calls: number
     }>
+    /// Local-model savings rollup, distinct from the routing-waste /
+    /// optimize savings concepts which describe hypothetical optimization
+    /// opportunities. This block tracks counterfactual spend that was
+    /// already avoided because the user ran a local model mapped via
+    /// `codeburn model-savings`.
+    localModelSavings: LocalModelSavings
     providers: Record<string, number>
     topProjects: Array<{
       name: string
       cost: number
+      savingsUSD: number
       sessions: number
       avgCostPerSession: number
       sessionDetails: Array<{
         cost: number
+        savingsUSD: number
         calls: number
         inputTokens: number
         outputTokens: number
         date: string
-        models: Array<{ name: string; cost: number }>
+        models: Array<{ name: string; cost: number; savingsUSD: number }>
       }>
     }>
     modelEfficiency: Array<{
@@ -96,6 +130,7 @@ export type MenubarPayload = {
     topSessions: Array<{
       project: string
       cost: number
+      savingsUSD: number
       calls: number
       date: string
     }>
@@ -168,6 +203,7 @@ function buildTopActivities(categories: PeriodData['categories']): MenubarPayloa
   return categories.slice(0, TOP_ACTIVITIES_LIMIT).map(cat => ({
     name: cat.name,
     cost: cat.cost,
+    savingsUSD: cat.savingsUSD,
     turns: cat.turns,
     oneShotRate: oneShotRateFor(cat.editTurns, cat.oneShotTurns),
   }))
@@ -177,7 +213,7 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   return models
     .filter(m => m.name !== SYNTHETIC_MODEL_NAME)
     .slice(0, TOP_MODELS_LIMIT)
-    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls }))
+    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '' }))
 }
 
 function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
@@ -216,16 +252,18 @@ function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['h
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
   return (projects ?? [])
-    .filter(p => p.cost > 0)
-    .sort((a, b) => b.cost - a.cost)
+    .filter(p => p.cost > 0 || p.savingsUSD > 0)
+    .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
     .slice(0, TOP_PROJECTS_LIMIT)
     .map(p => ({
       name: p.name,
       cost: p.cost,
+      savingsUSD: p.savingsUSD,
       sessions: p.sessions,
       avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,
+        savingsUSD: s.savingsUSD,
         calls: s.calls,
         inputTokens: s.inputTokens,
         outputTokens: s.outputTokens,
@@ -245,9 +283,9 @@ function buildModelEfficiency(models: PeriodData['modelEfficiency']): MenubarPay
 
 function buildTopSessions(sessions: PeriodData['topSessions']): MenubarPayload['current']['topSessions'] {
   return (sessions ?? [])
-    .sort((a, b) => b.cost - a.cost)
+    .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
     .slice(0, TOP_SESSIONS_LIMIT)
-    .map(s => ({ project: s.project, cost: s.cost, calls: s.calls, date: s.date }))
+    .map(s => ({ project: s.project, cost: s.cost, savingsUSD: s.savingsUSD, calls: s.calls, date: s.date }))
 }
 
 export type BreakdownArrays = {
@@ -255,6 +293,12 @@ export type BreakdownArrays = {
   skills?: MenubarPayload['current']['skills']
   subagents?: MenubarPayload['current']['subagents']
   mcpServers?: MenubarPayload['current']['mcpServers']
+  /// Optional rollup of per-model and per-provider local-model savings.
+  /// Computed by the CLI from the parsed projects (we have raw token
+  /// + baseline info there, not in `PeriodData`). When omitted, the
+  /// menubar payload defaults to an empty savings block — keeping the
+  /// schema stable for consumers that don't care about local savings.
+  localModelSavings?: LocalModelSavings
 }
 
 export function buildMenubarPayload(
@@ -279,6 +323,7 @@ export function buildMenubarPayload(
       cacheHitPercent: cacheHitPercent(current.inputTokens, current.cacheReadTokens),
       topActivities: buildTopActivities(current.categories),
       topModels: buildTopModels(current.models),
+      localModelSavings: breakdowns?.localModelSavings ?? { totalUSD: 0, calls: 0, byModel: [], byProvider: [] },
       providers: buildProviders(providers),
       topProjects: buildTopProjects(current.projects ?? []),
       modelEfficiency: buildModelEfficiency(current.modelEfficiency ?? []),

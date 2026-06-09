@@ -57,6 +57,11 @@ export type CachedFile = {
   canonicalProjectName?: string
   mcpInventory: string[]
   turns: CachedTurn[]
+  // Negative-result marker: this file threw while parsing at the recorded
+  // fingerprint. Cached so we don't re-read + re-throw it on every refresh; it
+  // is re-parsed only when the file changes (fingerprint differs). Carries no
+  // turns, so it contributes no usage. (issue #441 follow-up)
+  failed?: boolean
 }
 
 export type ProviderSection = {
@@ -99,6 +104,7 @@ const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',
+  antigravity: 'worktree-project-grouping-v3',
 }
 
 // ── Cache Dir ──────────────────────────────────────────────────────────
@@ -375,4 +381,3 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
     }
   } catch {}
 }
-

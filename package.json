@@ -22,6 +22,7 @@
     "cursor",
     "codex",
     "kimi",
+    "devin",
     "ibm-bob",
     "opencode",
     "pi",
@@ -46,11 +47,13 @@
   },
   "homepage": "https://github.com/getagentseal/codeburn#readme",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^7.0.0",
     "react": "^19.2.5",
-    "strip-ansi": "^7.2.0"
+    "strip-ansi": "^7.2.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

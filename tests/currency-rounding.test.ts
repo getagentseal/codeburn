@@ -100,5 +100,6 @@ describe('getFractionDigits', () => {
     expect(getFractionDigits('EUR')).toBe(2)
     expect(getFractionDigits('GBP')).toBe(2)
     expect(getFractionDigits('INR')).toBe(2)
+    expect(getFractionDigits('CNY')).toBe(2)
   })
 })

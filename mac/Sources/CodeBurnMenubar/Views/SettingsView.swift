@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// macOS-standard tabbed Settings window. New per-provider sections (Codex,
@@ -17,10 +18,13 @@ struct SettingsView: View {
             CodexSettingsTab()
                 .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
 
+            DevinSettingsTab()
+                .tabItem { Label("Devin", systemImage: "flame.fill") }
+
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 430)
     }
 }
 
@@ -36,8 +40,8 @@ private struct GeneralSettingsTab: View {
                     get: { store.currency },
                     set: { applyCurrency(code: $0) }
                 )) {
-                    ForEach(["USD", "EUR", "GBP", "INR", "JPY", "AUD", "CAD"], id: \.self) { code in
-                        Text(code).tag(code)
+                    ForEach(SupportedCurrency.allCases) { currency in
+                        Text("\(currency.rawValue) — \(currency.displayName)").tag(currency.rawValue)
                     }
                 }
                 Picker("Metric", selection: Binding(
@@ -114,6 +118,15 @@ private struct ClaudeSettingsTab: View {
         Form {
             Section("Connection") {
                 ClaudeConnectionRow()
+            }
+            Section {
+                ClaudeConfigDirsSection()
+            } header: {
+                Text("Config Directories")
+            } footer: {
+                Text("Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             Section("Quota Refresh") {
                 Picker("Update every", selection: Binding(
@@ -240,6 +253,85 @@ private struct ClaudeConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Claude config directories
+
+private struct ClaudeConfigDirsSection: View {
+    @Environment(AppStore.self) private var store
+    @State private var dirs: [String] = CLIClaudeConfig.load()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if dirs.isEmpty {
+                Text("No extra directories — tracking the default `~/.claude`.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(dirs.enumerated()), id: \.offset) { index, dir in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text(dir)
+                            .font(.system(size: 12))
+                            .truncationMode(.middle)
+                            .lineLimit(1)
+                            .help(dir)
+                        Spacer()
+                        Button {
+                            remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove")
+                    }
+                }
+            }
+
+            Button {
+                addDirectory()
+            } label: {
+                Label("Add Directory…", systemImage: "plus")
+            }
+            .controlSize(.small)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func addDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose one or more Claude config directories (each containing a `projects` folder)."
+        guard panel.runModal() == .OK else { return }
+
+        let added = panel.urls.map { $0.path }
+        var next = dirs
+        for path in added where !next.contains(path) {
+            next.append(path)
+        }
+        apply(next)
+    }
+
+    private func remove(at index: Int) {
+        guard dirs.indices.contains(index) else { return }
+        var next = dirs
+        next.remove(at: index)
+        apply(next)
+    }
+
+    /// Persists the new list and kicks a forced refresh so the dashboard
+    /// reflects the changed aggregation immediately.
+    private func apply(_ next: [String]) {
+        dirs = next
+        CLIClaudeConfig.persist(dirs: next)
+        Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
     }
 }
 
@@ -376,6 +468,81 @@ private struct CodexConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Devin
+
+private struct DevinSettingsTab: View {
+    @State private var rateText: String = ""
+    @State private var statusText: String = ""
+
+    private var parsedRate: Double? {
+        let trimmed = rateText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(trimmed), value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    var body: some View {
+        Form {
+            Section("ACU Conversion") {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("USD per ACU")
+                    Spacer()
+                    TextField("", text: $rateText)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 96)
+                        .accessibilityLabel("USD per ACU")
+                    Text("USD")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .leading)
+                }
+
+                Button("Save") {
+                    saveRate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(parsedRate == nil)
+
+                if !statusText.isEmpty {
+                    Text(statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Text("CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("How it works")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            if let rate = CLIDevinConfig.loadAcuUsdRate() {
+                rateText = Self.format(rate)
+            }
+        }
+    }
+
+    private func saveRate() {
+        guard let rate = parsedRate else { return }
+        CLIDevinConfig.persistAcuUsdRate(rate)
+        rateText = Self.format(rate)
+        statusText = "Saved. Refresh CodeBurn to recalculate Devin cost."
+    }
+
+    private static func format(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 }
 

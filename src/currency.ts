@@ -3,6 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { readConfig } from './config.js'
+import { fetchWithTimeout } from './fetch-utils.js'
 
 type CurrencyState = {
   code: string
@@ -27,6 +28,9 @@ function isValidRate(value: unknown): value is number {
 let active: CurrencyState = { code: 'USD', rate: 1, symbol: '$' }
 
 const USD: CurrencyState = { code: 'USD', rate: 1, symbol: '$' }
+const SYMBOL_OVERRIDES: Record<string, string> = {
+  CNY: '¥',
+}
 
 // Intl.NumberFormat throws on invalid ISO 4217 codes, so we use it as a validator
 export function isValidCurrencyCode(code: string): boolean {
@@ -39,6 +43,8 @@ export function isValidCurrencyCode(code: string): boolean {
 }
 
 function resolveSymbol(code: string): string {
+  if (SYMBOL_OVERRIDES[code]) return SYMBOL_OVERRIDES[code]
+
   const parts = new Intl.NumberFormat('en', {
     style: 'currency',
     currency: code,
@@ -74,7 +80,9 @@ function getRateCachePath(): string {
 }
 
 async function fetchRate(code: string): Promise<number> {
-  const response = await fetch(`${FRANKFURTER_URL}${code}`)
+  // Bounded so a stalled network can't hang the daily refresh for non-USD users
+  // (same wedge as the pricing fetch); callers fall back to USD / cached rate.
+  const response = await fetchWithTimeout(`${FRANKFURTER_URL}${code}`)
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const data = await response.json() as { rates?: Record<string, unknown> }
   const rate = data.rates?.[code]

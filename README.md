@@ -102,6 +102,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/codex.png" width="28" />        | Codex (OpenAI) | Yes       | [codex.md](docs/providers/codex.md)               |
 | <img src="assets/providers/cursor.jpg" width="28" />       | Cursor         | Yes       | [cursor.md](docs/providers/cursor.md)             |
 | <img src="assets/providers/cursor-agent.jpg" width="28" /> | cursor-agent   | Yes       | [cursor-agent.md](docs/providers/cursor-agent.md) |
+| <img src="assets/providers/devin.png" width="28" />        | Devin          | Yes       | [devin.md](docs/providers/devin.md)               |
 | <img src="assets/providers/forge.png" width="28" />        | Forge          | Yes       | [forge.md](docs/providers/forge.md)               |
 | <img src="assets/providers/gemini.png" width="28" />       | Gemini CLI     | Yes       | [gemini.md](docs/providers/gemini.md)             |
 | <img src="assets/providers/mistral-vibe.svg" width="28" /> | Mistral Vibe   | Yes       | [mistral-vibe.md](docs/providers/mistral-vibe.md) |
@@ -121,6 +122,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/antigravity.png" width="28" />  | Antigravity    | Yes       | [antigravity.md](docs/providers/antigravity.md)   |
 | <img src="assets/providers/crush.png" width="28" />        | Crush          | Yes       | [crush.md](docs/providers/crush.md)               |
 |                                                            | Warp           | Yes       | [warp.md](docs/providers/warp.md)                 |
+|                                                            | Mux (coder)    | Yes       | [mux.md](docs/providers/mux.md)                   |
 |                                                            | Vercel AI Gateway | Yes*   | [vercel-gateway.md](docs/providers/vercel-gateway.md) |
 
 Each provider doc lists the exact data location, storage format, and known quirks. Linux and Windows paths are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
@@ -139,7 +141,7 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 
 **Gemini CLI** stores sessions as single JSON files. Each session embeds real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Gemini reports input tokens inclusive of cached; CodeBurn subtracts cached from input before pricing to avoid double charging.
 
-**Antigravity CLI** exposes exact usage through a short-lived local process while `agy` is running. Install the optional live hook with `codeburn antigravity-hook install` to capture short CLI sessions even when the menubar's 30-second refresh misses that window. The hook stores sanitized usage totals only, not prompts or local working-directory paths. Remove it with `codeburn antigravity-hook uninstall`; if `--force` replaced an existing statusLine command, uninstall restores that previous command.
+**Antigravity CLI and IDE** automatically discover conversation session files on disk (stored under `.gemini/` folders) and query the running language server process to extract granular trajectory and pricing information. For the CLI, which runs as a short-lived process, you can optionally install a status line hook using `codeburn antigravity-hook install` to capture usage even when the menubar's 30-second refresh misses it. The IDE is detected automatically via the `--app-data-dir antigravity-ide` flag on Windows.
 
 **Mistral Vibe** stores sessions as folders under `~/.vibe/logs/session/` (or `$VIBE_HOME/logs/session/`). CodeBurn reads cumulative prompt/completion totals and model pricing from `meta.json`, then reads `messages.jsonl` for the first user prompt and assistant tool calls. Subagent sessions under `agents/` are counted as separate Vibe sessions.
 
@@ -286,6 +288,7 @@ Subscription tracking for Claude Pro, Claude Max, Cursor Pro, and custom provide
 codeburn currency GBP          # set to British Pounds
 codeburn currency AUD          # set to Australian Dollars
 codeburn currency JPY          # set to Japanese Yen
+codeburn currency CNY          # set to Chinese Yuan
 codeburn currency              # show current setting
 codeburn currency --reset      # back to USD
 ```

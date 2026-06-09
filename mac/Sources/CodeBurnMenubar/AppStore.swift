@@ -991,7 +991,7 @@ final class AppStore {
 }
 
 enum SupportedCurrency: String, CaseIterable, Identifiable {
-    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
+    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
     var id: String { rawValue }
     var displayName: String {
         switch self {
@@ -1002,6 +1002,7 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
         case .CAD: "Canadian Dollar"
         case .NZD: "New Zealand Dollar"
         case .JPY: "Japanese Yen"
+        case .CNY: "Chinese Yuan"
         case .CHF: "Swiss Franc"
         case .INR: "Indian Rupee"
         case .BRL: "Brazilian Real"
@@ -1024,6 +1025,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case cursor = "Cursor"
     case cursorAgent = "Cursor Agent"
     case copilot = "Copilot"
+    case devin = "Devin"
     case droid = "Droid"
     case gemini = "Gemini"
     case ibmBob = "IBM Bob"
@@ -1066,6 +1068,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursor: "cursor"
         case .cursorAgent: "cursor-agent"
         case .copilot: "copilot"
+        case .devin: "devin"
         case .droid: "droid"
         case .gemini: "gemini"
         case .ibmBob: "ibm-bob"
@@ -1109,6 +1112,7 @@ enum InsightMode: String, CaseIterable, Identifiable {
     case plan = "Plan"
     case trend = "Trend"
     case forecast = "Forecast"
+    case calendar = "Calendar"
     case pulse = "Pulse"
     case stats = "Stats"
     case optimize = "Optimize"

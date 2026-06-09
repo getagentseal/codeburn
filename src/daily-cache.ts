@@ -5,16 +5,20 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 7: new providers (Codebuff, Mistral Vibe, Kimi, Cline) and
-// the per-provider menubar path now reads historical cost from the cache.
-// Stale entries computed by older binaries may carry incorrect totals.
-export const DAILY_CACHE_VERSION = 7
-const MIN_SUPPORTED_VERSION = 7
+// Bumped to 8: local-model savings accounting is now part of the daily rollup
+// (savingsUSD per day / per model / per category / per provider). Stale entries
+// computed by older binaries lack those fields, so MIN_SUPPORTED_VERSION is
+// also raised to 8 to force a full re-hydration. The `savingsConfigHash` field
+// is invalidated separately when the user changes their `localModelSavings`
+// mapping so historical "saved" totals stay in sync with the active baseline.
+export const DAILY_CACHE_VERSION = 8
+const MIN_SUPPORTED_VERSION = 8
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
   date: string
   cost: number
+  savingsUSD: number
   calls: number
   sessions: number
   inputTokens: number
@@ -26,17 +30,23 @@ export type DailyEntry = {
   models: Record<string, {
     calls: number
     cost: number
+    savingsUSD: number
     inputTokens: number
     outputTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
   }>
-  categories: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }>
-  providers: Record<string, { calls: number; cost: number }>
+  categories: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
+  providers: Record<string, { calls: number; cost: number; savingsUSD: number }>
 }
 
 export type DailyCache = {
   version: number
+  /// Hash of the active `localModelSavings` config at the time the cache
+  /// was last written. When the user changes their baseline mapping the
+  /// hash mismatches and `ensureCacheHydrated` discards the cached days
+  /// so historical savings are recomputed against the current mapping.
+  savingsConfigHash: string
   lastComputedDate: string | null
   days: DailyEntry[]
 }
@@ -49,11 +59,11 @@ function getCachePath(): string {
   return join(getCacheDir(), DAILY_CACHE_FILENAME)
 }
 
-export function emptyCache(): DailyCache {
-  return { version: DAILY_CACHE_VERSION, lastComputedDate: null, days: [] }
+export function emptyCache(savingsConfigHash = ''): DailyCache {
+  return { version: DAILY_CACHE_VERSION, savingsConfigHash, lastComputedDate: null, days: [] }
 }
 
-function isMigratableCache(parsed: unknown): parsed is { version: number; lastComputedDate: string | null; days: Record<string, unknown>[] } {
+function isMigratableCache(parsed: unknown): parsed is { version: number; lastComputedDate: string | null; savingsConfigHash?: string; days: Record<string, unknown>[] } {
   if (!parsed || typeof parsed !== 'object') return false
   const c = parsed as Partial<DailyCache>
   if (typeof c.version !== 'number') return false
@@ -65,6 +75,7 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
   return days.map(d => ({
     date: d.date as string,
     cost: (d.cost as number) ?? 0,
+    savingsUSD: (d.savingsUSD as number) ?? 0,
     calls: (d.calls as number) ?? 0,
     sessions: (d.sessions as number) ?? 0,
     inputTokens: (d.inputTokens as number) ?? 0,
@@ -93,6 +104,7 @@ export async function loadDailyCache(): Promise<DailyCache> {
     if (isMigratableCache(parsed)) {
       const migrated: DailyCache = {
         version: DAILY_CACHE_VERSION,
+        savingsConfigHash: parsed.savingsConfigHash ?? '',
         lastComputedDate: parsed.lastComputedDate,
         days: migrateDays(parsed.days),
       }
@@ -153,7 +165,12 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
   const nextLast = cache.lastComputedDate && cache.lastComputedDate > newestDate
     ? cache.lastComputedDate
     : newestDate
-  return { version: DAILY_CACHE_VERSION, lastComputedDate: nextLast, days: pruned }
+  return {
+    version: DAILY_CACHE_VERSION,
+    savingsConfigHash: cache.savingsConfigHash,
+    lastComputedDate: nextLast,
+    days: pruned,
+  }
 }
 
 export function getDaysInRange(cache: DailyCache, start: string, end: string): DailyEntry[] {
@@ -182,6 +199,11 @@ export function toDateString(date: Date): string {
 export async function ensureCacheHydrated(
   parseSessions: (range: DateRange) => Promise<ProjectSummary[]>,
   aggregateDays: (projects: ProjectSummary[]) => DailyEntry[],
+  /// Hash of the active `localModelSavings` config. When this changes
+  /// (user re-mapped a baseline) the cached `savingsUSD` totals are no
+  /// longer accurate, so we treat the cache as stale and force a full
+  /// re-hydration. Pass `''` for "no savings config" to disable.
+  savingsConfigHash: string = '',
 ): Promise<DailyCache> {
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -190,6 +212,19 @@ export async function ensureCacheHydrated(
 
   return withDailyCacheLock(async () => {
     let c = await loadDailyCache()
+
+    // Savings config changed: roll the cache forward into the active
+    // mapping. We can't cheaply recompute savings for already-cached
+    // historical days without re-parsing every session, so we drop the
+    // cached days and re-hydrate from the daily cache retention window.
+    if (c.savingsConfigHash !== savingsConfigHash) {
+      c = {
+        version: DAILY_CACHE_VERSION,
+        savingsConfigHash,
+        lastComputedDate: null,
+        days: [],
+      }
+    }
 
     const hadYesterday = c.days.some(d => d.date >= yesterdayStr)
     if (hadYesterday) {

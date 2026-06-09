@@ -24,9 +24,35 @@ export type CodeburnConfig = {
     code: string
     symbol?: string
   }
+  devin?: {
+    acuUsdRate?: number
+  }
   plan?: Plan
   plans?: PlanConfigMap
   modelAliases?: Record<string, string>
+  // Extra Claude config directories to aggregate usage across (e.g. work /
+  // personal accounts). Honored by getClaudeConfigDirs() below the
+  // CLAUDE_CONFIG_DIRS/CLAUDE_CONFIG_DIR env vars. Lets the macOS menubar (a
+  // GUI app that doesn't inherit the user's shell env) configure multi-account
+  // aggregation without injecting env into every spawned subprocess.
+  claudeConfigDirs?: string[]
+  // Map raw local-model names (e.g. "llama3.1:8b") to the paid model we would
+  // price the call against (e.g. "gpt-4o"). The local call still costs $0; we
+  // track what the same tokens would have cost on the baseline so the dashboard
+  // can show "saved $X by running locally". Distinct from modelAliases which
+  // rewrites actual spend.
+  localModelSavings?: Record<string, string>
+  // Absolute directory prefixes whose Claude Code sessions are routed through a
+  // subscription-backed LLM proxy (e.g. GitHub Copilot via ANTHROPIC_BASE_URL;
+  // tools like claude-code-over-github-copilot / claudegate). The JSONL records
+  // the underlying model name and no endpoint, so codeburn cannot auto-detect
+  // proxying — the user declares it here, scoped by the project's canonical cwd.
+  // Matching projects keep their full API-rate `totalCostUSD` (the billable /
+  // would-be figure is never destroyed) but expose `totalProxiedCostUSD` so the
+  // report can show what was subscription-covered and the net out-of-pocket.
+  // Matched against the canonical project path: prefix on a path-segment
+  // boundary, case-insensitive, trailing-slash and backslash tolerant.
+  proxyPaths?: string[]
 }
 
 function getConfigDir(): string {

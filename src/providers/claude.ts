@@ -4,6 +4,7 @@ import { homedir } from 'os'
 
 import type { Provider, SessionSource, SessionParser } from './types.js'
 import { getShortModelName } from '../models.js'
+import { readConfig } from '../config.js'
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -11,14 +12,28 @@ function expandHome(p: string): string {
   return p
 }
 
+function dedupeResolved(paths: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const p of paths) {
+    if (!seen.has(p)) {
+      seen.add(p)
+      out.push(p)
+    }
+  }
+  return out
+}
+
 /// Returns every Claude config dir to scan, in priority order with duplicates
 /// removed (resolved-path equality). Precedence: `CLAUDE_CONFIG_DIRS` (a
 /// `path.delimiter`-separated list, ":" on POSIX, ";" on Windows), then
-/// `CLAUDE_CONFIG_DIR` (single dir), then `~/.claude`. Sessions from every
-/// returned dir are merged into one ProjectSummary per project name in
-/// `src/parser.ts:scanProjectDirs`, so two dirs holding the same sanitized
-/// project slug naturally aggregate (issue #208 option 1).
-function getClaudeConfigDirs(): string[] {
+/// `CLAUDE_CONFIG_DIR` (single dir), then the `claudeConfigDirs` array in
+/// `~/.config/codeburn/config.json` (how the macOS menubar configures
+/// multi-account aggregation, since a GUI app can't inherit the shell env),
+/// then `~/.claude`. Sessions from every returned dir are merged into one
+/// ProjectSummary per project name in `src/parser.ts:scanProjectDirs`, so two
+/// dirs holding the same sanitized project slug naturally aggregate (#208).
+async function getClaudeConfigDirs(): Promise<string[]> {
   const multi = process.env['CLAUDE_CONFIG_DIRS']
   if (multi !== undefined && multi !== '') {
     const dirs = multi
@@ -26,20 +41,22 @@ function getClaudeConfigDirs(): string[] {
       .map(s => s.trim())
       .filter(s => s.length > 0)
       .map(s => resolve(expandHome(s)))
-    if (dirs.length > 0) {
-      const seen = new Set<string>()
-      const out: string[] = []
-      for (const d of dirs) {
-        if (!seen.has(d)) {
-          seen.add(d)
-          out.push(d)
-        }
-      }
-      return out
-    }
+    if (dirs.length > 0) return dedupeResolved(dirs)
   }
   const single = process.env['CLAUDE_CONFIG_DIR']
   if (single !== undefined && single !== '') return [resolve(expandHome(single))]
+
+  // Config-file fallback (menubar-driven). Env vars always win so a power user
+  // can still override per-shell. A non-array or empty value falls through to
+  // the ~/.claude default, matching the "unset" behavior.
+  const config = await readConfig()
+  if (Array.isArray(config.claudeConfigDirs)) {
+    const dirs = config.claudeConfigDirs
+      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map(s => resolve(expandHome(s.trim())))
+    if (dirs.length > 0) return dedupeResolved(dirs)
+  }
+
   return [join(homedir(), '.claude')]
 }
 
@@ -157,7 +174,7 @@ export const claude: Provider = {
   async discoverSessions(): Promise<SessionSource[]> {
     const sources: SessionSource[] = []
     const seenProjectDirs = new Set<string>()
-    const configDirs = getClaudeConfigDirs()
+    const configDirs = await getClaudeConfigDirs()
     let anyDirReadable = false
 
     for (const claudeDir of configDirs) {
