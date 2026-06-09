@@ -1,8 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.9.12 - 2026-06-09
 
 ### Added (CLI)
+- **MCP server.** `codeburn mcp` runs a stdio Model Context Protocol server
+  exposing `get_usage` and `get_savings` to AI agents, with project names
+  pseudonymized by default (opt-in reveal). (#429)
+- **New providers:** Devin (#444), Antigravity IDE (#418), JetBrains —
+  IntelliJ/DataGrip via Copilot (#433), coder/mux (#438), and an opt-in
+  Vercel AI Gateway datasource via `AI_GATEWAY_API_KEY` (#432).
+- **Automatic pricing gap-fill** from models.dev and OpenRouter for models
+  LiteLLM has not indexed yet (e.g. Claude Fable 5). (#457)
+- **Proxy-aware cost attribution.** `codeburn proxy-path` marks a project as
+  routed through a subscription-backed proxy (e.g. Claude Code over GitHub
+  Copilot); the full API-rate cost is reported as subscription-covered so the
+  dashboard shows net out-of-pocket, leaving actual cost untouched. (#417, #459)
 - **Local-model cost savings reports.** New `codeburn model-savings` command
   maps a local-model name (e.g. `llama3.1:8b`) to a paid baseline (e.g.
   `gpt-4o`) so the dashboard can report the counterfactual spend the same
@@ -13,13 +25,40 @@
   Historical savings are recomputed automatically when the baseline
   mapping changes (config-hash invalidation on the daily cache). Daily
   cache schema bumped to v8. (#421)
+- CNY currency support. (#430)
+- Contribution heatmap insight. (#437)
 
 ### Fixed (CLI)
+- **Per-file parse isolation.** A single malformed session file no longer
+  aborts the run or empties the daily-history trend; parse failures are cached
+  so broken files are not re-read every run. (#441, #450, #453)
+- **Codex fork dedupe** is content-addressed, fixing undercounting of
+  divergent events. (#458)
+- **Model-name matching on the version boundary** so e.g. `claude-opus-4-6`
+  and `claude-opus-4-8` no longer collapse to the same tier. (#417)
+- Vercel AI Gateway data now flows through aggregation instead of reporting $0;
+  Fable 5 and Mythos 5 price correctly ($10/$50). (#432, #466)
+- Cache-read tokens are no longer double-counted in the models report. (#447)
+- Critical-path fetches (pricing, currency) now time out so a stalled network
+  cannot wedge the CLI or menubar. (#445, #448)
+- Cursor lookback is period-aligned with a 6-month floor. (#432)
 - **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
   now installs the statusLine command through a persistent `codeburn` binary
   from PATH and repairs older CodeBurn-owned hooks that pointed at stale local
   build artifacts, preventing `agy` from auto-disabling capture after
   `MODULE_NOT_FOUND` failures.
+
+### Added (macOS menubar)
+- App icon. (#455)
+- Configure `CLAUDE_CONFIG_DIRS` from Settings. (#434, #436)
+
+### Fixed (macOS menubar)
+- **Refresh reliability.** The app awaits the CLI's exit via its termination
+  handler instead of blocking a queue thread, and caps concurrent CLI spawns —
+  fixing the menubar wedging on "Loading…" after a long idle. (#462)
+- Recover from stuck loading when an in-flight refresh is orphaned across
+  sleep/wake. (#412)
+- Use the correct currency enum in the Settings picker. (#435)
 
 ## 0.9.11 - 2026-05-27
 
