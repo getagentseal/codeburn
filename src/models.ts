@@ -597,8 +597,9 @@ const autoModelNames: Record<string, string> = {
 }
 
 const SHORT_NAMES: Record<string, string> = {
-  // claude-fable-5 is outside the opus/sonnet/haiku families deriveClaudeShortName covers.
+  // claude-fable-5 and claude-mythos-5 are outside the opus/sonnet/haiku families deriveClaudeShortName covers.
   'claude-fable-5': 'Fable 5',
+  'claude-mythos-5': 'Mythos 5',
   // Modern claude-<family>-<major>-<minor> ids are derived in deriveClaudeShortName.
   // Only the legacy 3.x ids (family-last) need explicit mapping.
   'claude-3-7-sonnet': 'Sonnet 3.7',

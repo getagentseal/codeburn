@@ -42,6 +42,8 @@ const MANUAL_ENTRIES = {
   // LiteLLM PR #27056 is not merged yet. Source: https://api-docs.deepseek.com/quick_start/pricing
   'deepseek-v4-flash':      [1.4e-7, 2.8e-7, 0, 2.8e-9],
   'deepseek-v4-pro':        [4.35e-7, 8.7e-7, 0, 3.625e-9],
+  // Mythos 5 launch pricing; not yet in LiteLLM or the models.dev/OpenRouter gap-fill (Fable is).
+  'claude-mythos-5':        [10e-6, 50e-6, 12.5e-6, 1e-6],
 }
 
 const snapshot = {}
