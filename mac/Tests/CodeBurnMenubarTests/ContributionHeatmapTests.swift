@@ -31,6 +31,7 @@ private func historyEntry(
     DailyHistoryEntry(
         date: date,
         cost: cost,
+        savingsUSD: 0,
         calls: calls,
         inputTokens: inputTokens,
         outputTokens: outputTokens,

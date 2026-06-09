@@ -16,7 +16,7 @@ struct MenubarStatusCacheTests {
             current: CurrentBlock(
                 label: "Today", cost: cost, calls: 1, sessions: 1, oneShotRate: nil,
                 inputTokens: 1, outputTokens: 1, cacheHitPercent: 0,
-                topActivities: [], topModels: [], providers: ["claude": cost],
+                topActivities: [], topModels: [], localModelSavings: LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: []), providers: ["claude": cost],
                 topProjects: [], modelEfficiency: [], topSessions: [],
                 retryTax: RetryTax(totalUSD: 0, retries: 0, editTurns: 0, byModel: []),
                 routingWaste: RoutingWaste(totalSavingsUSD: 0, baselineModel: "", baselineCostPerEdit: 0, byModel: []),
