@@ -63,20 +63,6 @@ function loadSnapshot(): Map<string, ModelCosts> {
   for (const [name, raw] of Object.entries(snapshotData as unknown as Record<string, SnapshotEntry>)) {
     map.set(name, tupleToCosts(raw))
   }
-  // TEMP (2026-06-09): Fable 5 / Mythos 5 launch pricing, $10/M input and $50/M output,
-  // until LiteLLM indexes them. Added as snapshot fallbacks so a real LiteLLM entry, once
-  // it exists, takes precedence (mergeSnapshotFallbacks only fills gaps). Remove then.
-  const tempLaunch: ModelCosts = {
-    inputCostPerToken: 0.00001,
-    outputCostPerToken: 0.00005,
-    cacheWriteCostPerToken: 0.0000125,
-    cacheReadCostPerToken: 0.000001,
-    webSearchCostPerRequest: WEB_SEARCH_COST,
-    fastMultiplier: 1,
-  }
-  for (const id of ['claude-fable-5', 'claude-mythos-5']) {
-    if (!map.has(id)) map.set(id, { ...tempLaunch })
-  }
   return map
 }
 
@@ -559,9 +545,8 @@ const autoModelNames: Record<string, string> = {
 }
 
 const SHORT_NAMES: Record<string, string> = {
-  // TEMP (2026-06-09): until deriveClaudeShortName or LiteLLM cover them.
+  // claude-fable-5 is outside the opus/sonnet/haiku families deriveClaudeShortName covers.
   'claude-fable-5': 'Fable 5',
-  'claude-mythos-5': 'Mythos 5',
   // Modern claude-<family>-<major>-<minor> ids are derived in deriveClaudeShortName.
   // Only the legacy 3.x ids (family-last) need explicit mapping.
   'claude-3-7-sonnet': 'Sonnet 3.7',
