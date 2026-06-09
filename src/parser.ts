@@ -1526,22 +1526,33 @@ async function scanProjectDirs(
   for (const { filePath, info } of changedFiles) {
     delete section.files[filePath]
 
-    const tracker = { lastCompleteLineOffset: 0 }
-    const entries = await parseClaudeEntries(filePath, tracker)
-    if (!entries) continue
+    try {
+      const tracker = { lastCompleteLineOffset: 0 }
+      const entries = await parseClaudeEntries(filePath, tracker)
+      if (!entries) continue
 
-    const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
-    const cwd = extractCanonicalCwd(entries)
-    const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
-    section.files[filePath] = {
-      fingerprint: info.fp,
-      lastCompleteLineOffset: tracker.lastCompleteLineOffset,
-      canonicalCwd: canonical?.path,
-      canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
-      mcpInventory: extractMcpInventory(entries),
-      turns: turns.map(parsedTurnToCachedTurn),
+      const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
+      const cwd = extractCanonicalCwd(entries)
+      const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
+      section.files[filePath] = {
+        fingerprint: info.fp,
+        lastCompleteLineOffset: tracker.lastCompleteLineOffset,
+        canonicalCwd: canonical?.path,
+        canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
+        mcpInventory: extractMcpInventory(entries),
+        turns: turns.map(parsedTurnToCachedTurn),
+      }
+      ;(diskCache as { _dirty?: boolean })._dirty = true
+    } catch (err) {
+      // A single malformed Claude session file must not abort the whole run — that
+      // would empty the daily-cache backfill and wipe the trend/history (issue #441,
+      // same isolation the provider path already has). Record a failure marker keyed
+      // by the current fingerprint so it isn't re-read and re-thrown every run; it
+      // re-parses only if the file changes.
+      section.files[filePath] = { fingerprint: info.fp, mcpInventory: [], turns: [], failed: true }
+      ;(diskCache as { _dirty?: boolean })._dirty = true
+      warnProviderParseFailure('claude', filePath, err)
     }
-    ;(diskCache as { _dirty?: boolean })._dirty = true
   }
 
   if (dirs.length > 0) {
