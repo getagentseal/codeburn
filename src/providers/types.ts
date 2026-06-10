@@ -31,8 +31,11 @@ export type ParsedProviderCall = {
   toolSequence?: ToolCall[][]
   userMessage: string
   sessionId: string
+  chatTitle?: string
+  projectTitle?: string
   project?: string
   projectPath?: string
+  metadataOnly?: boolean
 }
 
 export type Provider = {

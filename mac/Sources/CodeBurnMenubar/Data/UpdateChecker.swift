@@ -35,6 +35,7 @@ final class UpdateChecker {
     var updateError: String?
 
     var updateAvailable: Bool {
+        guard !Self.isUsingLocalDevelopmentCLI() else { return false }
         guard let latest = latestVersion else { return false }
         let current = currentVersion
         let normalizedLatest = AppVersion.normalize(latest)
@@ -44,6 +45,7 @@ final class UpdateChecker {
     }
 
     var cliUpdateAvailable: Bool {
+        guard !Self.isUsingLocalDevelopmentCLI() else { return false }
         guard let latest = latestCliVersion, let installed = installedCliVersion else { return false }
         let normalizedLatest = AppVersion.normalize(latest)
         let normalizedInstalled = AppVersion.normalize(installed)
@@ -60,6 +62,11 @@ final class UpdateChecker {
 
     var currentVersion: String {
         AppVersion.normalizedBundleShortVersion
+    }
+
+    nonisolated static func isUsingLocalDevelopmentCLI() -> Bool {
+        guard let first = CodeburnCLI.baseArgv().first else { return false }
+        return first.hasSuffix("/dist/cli.js") && first.contains("/codeburn/")
     }
 
     func checkIfNeeded() async {
@@ -147,6 +154,11 @@ final class UpdateChecker {
     }
 
     func performUpdate() {
+        guard !Self.isUsingLocalDevelopmentCLI() else {
+            updateError = "Local patched CodeBurn build is protected from remote replacement."
+            return
+        }
+
         isUpdating = true
         updateError = nil
 

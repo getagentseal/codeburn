@@ -15,6 +15,8 @@
   cache schema bumped to v8. (#421)
 
 ### Fixed (CLI)
+- **Codex active chat visibility without inflated token spend.** Codex reports now treat sqlite thread rows as metadata-only active chat/project records, so active zero-spend chats and projects stay visible across JSON, exports, status, and menubar reports while cumulative `threads.tokens_used` is no longer counted as today/period spend.
+- **Codex stale cache invalidation.** Codex's per-file, session, and daily rollup caches now invalidate old entries that could preserve pre-fix token totals, so switching the menubar/report period to Today recomputes from current session files instead of showing stale multi-million token counts in Today or Trend.
 - **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
   now installs the statusLine command through a persistent `codeburn` binary
   from PATH and repairs older CodeBurn-owned hooks that pointed at stale local

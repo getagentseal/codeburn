@@ -1,0 +1,21 @@
+# Implementation Notes
+
+- Task: fix CodeBurn menubar/report inconsistency where Today shows zero but Trend still shows stale multi-million token history.
+- Assumption: screenshot shows data inconsistency, not layout regression; no SwiftUI layout changes planned.
+- Finding: Today payload is corrected by Codex/session cache invalidation, but Trend reads `daily-cache.json`, a separate daily rollup cache.
+- Decision: use the smallest sufficient fix by bumping the daily cache schema version so stale historical token rollups are recomputed from current parser output.
+- Risk: historical daily cost/token totals will refresh on next run; this is intended because prior cache may contain stale inflated Codex values.
+- Verification plan: typecheck, build, targeted tests, run `status --format menubar-json --period today`, and inspect history token total.
+- Implementation: bumped `DAILY_CACHE_VERSION`/`MIN_SUPPORTED_VERSION` from 8 to 9 and broadened changelog wording to include daily rollup cache invalidation.
+- Additional finding from screenshot: `TrendInsight.trendDayCount` returned 19 even for `.today`, so the Today tab displayed `Last 19 days` and historical tokens. Changed `.today` to 1 day only; kept `.sevenDays` at 19 to preserve its prior comparison window.
+- UX polish: Today trend label is changed to render `Today` instead of `Last 1 days` after narrowing the Today trend window.
+- Verification observed: CLI Today payload has 0 calls, 0 input/output tokens, 6 active Codex chats, and last history day 2026-06-10 has 0 token fields; Swift package build completed.
+- Runtime install decision: source changes alone do not update `~/Applications/CodeBurnMenubar.app`; package and replace the local app bundle after creating a timestamped backup.
+- Packaging fallback: universal package script failed because `xcbuild` is unavailable. Use current-architecture `swift build -c release`, replace only the installed bundle executable, then ad-hoc sign the app.
+- Menubar self-test added: Swift can open the real popover, force Today and Trend, capture PNG, and write a JSON report via smoke output env.
+- Smoke script added: mac/Scripts/smoke-popover.sh uses a temporary CLI symlink without spaces before launching swift run.
+- Installed-app smoke follow-up: hidden the CLI update banner when the app is using the local patched CLI path, and changed the header Code text to a visible secondary color in dark popover captures.
+- Critical follow-up: Today was still zero because 2026-06-10 Codex Desktop JSONL sessions contain no numeric token_count/usage fields.
+- Fix: no-token_count Codex sessions now emit one non-metadata estimated call from transcript character counts, marked costIsEstimated.
+- Cache invalidation: codex result cache 7, session Codex parse version transcript-estimate-v1, daily cache 10.
+- Installed smoke: /tmp/codeburn-installed-smoke-20260610-133711/report.json ok=true, currentInputTokens=123168, currentCalls=6, chatReturned=6, chatTotalTokens=123168.

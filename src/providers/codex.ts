@@ -1,5 +1,5 @@
 import { readdir, stat } from 'fs/promises'
-import { createReadStream } from 'fs'
+import { createReadStream, existsSync } from 'fs'
 import { createInterface } from 'readline'
 import { basename, join } from 'path'
 import { homedir } from 'os'
@@ -8,6 +8,7 @@ import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
 import { normalizeContentBlocks } from '../content-utils.js'
+import { openDatabase } from '../sqlite.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -44,6 +45,7 @@ type CodexEntry = {
   type: string
   timestamp?: string
   payload?: {
+    id?: string
     type?: string
     role?: string
     cwd?: string
@@ -54,6 +56,8 @@ type CodexEntry = {
     model?: string
     name?: string
     content?: Array<{ type?: string; text?: string }>
+    estimatedInputChars?: number
+    estimatedOutputChars?: number
     info?: {
       model?: string
       model_name?: string
@@ -77,6 +81,149 @@ const LARGE_TEXT_CAP = 2000
 
 function getCodexDir(override?: string): string {
   return override ?? process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
+}
+
+type CodexThreadUsage = {
+  id: string
+  rollout_path?: string
+  created_at: number
+  updated_at: number
+  tokens_used: number
+  model?: string
+  cwd?: string
+  title?: string
+  first_user_message?: string
+}
+
+const CODEX_STATE_SOURCE_PREFIX = '#codex-state='
+
+function normalizeSqliteNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value === 'string') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+  }
+  return 0
+}
+
+function normalizeSqliteString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function rowToCodexThreadUsage(row: Record<string, unknown>, fallbackId?: string): CodexThreadUsage | null {
+  const id = normalizeSqliteString(row['id']) ?? fallbackId
+  if (!id) return null
+  const tokensUsed = normalizeSqliteNumber(row['tokens_used'])
+  if (tokensUsed <= 0) return null
+  return {
+    id,
+    rollout_path: normalizeSqliteString(row['rollout_path']),
+    created_at: normalizeSqliteNumber(row['created_at']),
+    updated_at: normalizeSqliteNumber(row['updated_at']),
+    tokens_used: tokensUsed,
+    model: normalizeSqliteString(row['model']),
+    cwd: normalizeSqliteString(row['cwd']),
+    title: normalizeSqliteString(row['title']),
+    first_user_message: normalizeSqliteString(row['first_user_message']),
+  }
+}
+
+function readCodexThreadUsage(codexDir: string, sessionId: string): CodexThreadUsage | null {
+  if (!sessionId) return null
+  const dbPath = join(codexDir, 'state_5.sqlite')
+  if (!existsSync(dbPath)) return null
+  let db: ReturnType<typeof openDatabase> | null = null
+  try {
+    db = openDatabase(dbPath)
+    const rows = db.query('SELECT id, rollout_path, created_at, updated_at, tokens_used, model, cwd, title, first_user_message FROM threads WHERE id = ? LIMIT 1', [sessionId])
+    const row = rows[0]
+    return row ? rowToCodexThreadUsage(row, sessionId) : null
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+function readCodexThreadUsages(codexDir: string): CodexThreadUsage[] {
+  const dbPath = join(codexDir, 'state_5.sqlite')
+  if (!existsSync(dbPath)) return []
+  let db: ReturnType<typeof openDatabase> | null = null
+  try {
+    db = openDatabase(dbPath)
+    const rows = db.query('SELECT id, rollout_path, created_at, updated_at, tokens_used, model, cwd, title, first_user_message FROM threads WHERE COALESCE(tokens_used, 0) > 0 AND COALESCE(archived, 0) = 0 ORDER BY updated_at DESC')
+    return rows.map(row => rowToCodexThreadUsage(row)).filter((row): row is CodexThreadUsage => row !== null)
+  } catch {
+    return []
+  } finally {
+    try { db?.close() } catch {}
+  }
+}
+
+function stateSourcePath(codexDir: string, sessionId: string): string {
+  return join(codexDir, 'state_5.sqlite') + CODEX_STATE_SOURCE_PREFIX + sessionId
+}
+
+function stateSourceId(sourcePath: string): string | null {
+  const markerIndex = sourcePath.indexOf(CODEX_STATE_SOURCE_PREFIX)
+  return markerIndex === -1 ? null : sourcePath.slice(markerIndex + CODEX_STATE_SOURCE_PREFIX.length)
+}
+
+function sessionIdFromRolloutPath(filePath: string): string | null {
+  const name = basename(filePath, ".jsonl")
+  const match = name.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)
+  return match?.[1] ?? null
+}
+
+function buildStateFallbackCall(
+  source: SessionSource,
+  codexDir: string,
+  sessionId: string,
+  sessionModel?: string,
+  sessionName?: string,
+  timestampSource: 'created' | 'updated' = 'created',
+): ParsedProviderCall | null {
+  const usage = readCodexThreadUsage(codexDir, sessionId)
+  if (!usage) return null
+
+  const preferredTimestamp = timestampSource === 'updated' ? usage.updated_at : usage.created_at
+  const fallbackTimestamp = timestampSource === 'updated' ? usage.created_at : usage.updated_at
+  const timestamp = preferredTimestamp > 0
+    ? new Date(preferredTimestamp * 1000).toISOString()
+    : new Date(fallbackTimestamp * 1000).toISOString()
+  const model = usage.model ?? sessionModel ?? 'gpt-5'
+  const projectPath = usage.cwd
+  const project = projectPath ? sanitizeProject(projectPath) : source.project
+  const userMessage = usage.first_user_message ?? usage.title ?? sessionName ?? ''
+  const fallbackInputTokens = 0
+  const dedupKey = `codex-state:${usage.id}:${usage.tokens_used}`
+
+  return {
+    provider: 'codex',
+    model,
+    inputTokens: fallbackInputTokens,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+    webSearchRequests: 0,
+    costUSD: calculateCost(model, fallbackInputTokens, 0, 0, 0, 0),
+    costIsEstimated: true,
+    tools: [],
+    bashCommands: [],
+    timestamp,
+    speed: 'standard',
+    deduplicationKey: dedupKey,
+    turnId: `${usage.id}:state`,
+    userMessage,
+    sessionId: usage.id,
+    chatTitle: usage.title ?? sessionName,
+    project,
+    projectPath,
+    metadataOnly: true,
+  }
 }
 
 function sanitizeProject(cwd: string): string {
@@ -202,6 +349,22 @@ function countFirstJsonText(source: Buffer): number {
   return countJsonStringBytes(source, qStart + 1)
 }
 
+function countAllJsonText(source: Buffer): number {
+  const key = Buffer.from('"text"')
+  let total = 0
+  let searchFrom = 0
+  while (true) {
+    const idx = source.indexOf(key, searchFrom)
+    if (idx === -1) return total
+    const colon = source.indexOf(0x3a, idx + key.length)
+    if (colon === -1) return total
+    const qStart = source.indexOf(0x22, colon + 1)
+    if (qStart === -1) return total
+    total += countJsonStringBytes(source, qStart + 1)
+    searchFrom = qStart + 1
+  }
+}
+
 function parseCodexLine(line: string | Buffer): CodexEntry | null {
   if (typeof line === 'string') {
     const trimmed = line.trim()
@@ -225,6 +388,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
     type,
     timestamp: getRawJsonStringField(head, 'timestamp'),
     payload: {
+      id: getRawJsonStringField(pHead, 'id'),
       type: payloadType,
       role,
       cwd: getRawJsonStringField(pHead, 'cwd'),
@@ -237,10 +401,15 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
     },
   }
 
-  if (type === 'response_item' && payloadType === 'message' && role === 'user') {
-    entry.payload!.content = [{ type: 'input_text', text: extractFirstJsonText(line) }]
-  } else if (type === 'response_item' && payloadType === 'message' && role === 'assistant') {
-    entry.payload!.content = [{ type: 'output_text', text: 'x'.repeat(Math.min(countFirstJsonText(line), LARGE_TEXT_CAP)) }]
+  if (type === 'response_item' && payloadType === 'message' && role) {
+    const textChars = countAllJsonText(line)
+    if (role === 'assistant') {
+      entry.payload!.estimatedOutputChars = textChars
+      entry.payload!.content = [{ type: 'output_text', text: 'x'.repeat(Math.min(textChars, LARGE_TEXT_CAP)) }]
+    } else {
+      entry.payload!.estimatedInputChars = textChars
+      entry.payload!.content = [{ type: 'input_text', text: extractFirstJsonText(line) }]
+    }
   }
 
   return entry
@@ -249,12 +418,13 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
 async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
   const sessionsDir = join(codexDir, 'sessions')
   const sources: SessionSource[] = []
+  const sourcePaths = new Set<string>()
 
   let years: string[]
   try {
     years = await readdir(sessionsDir)
   } catch {
-    return sources
+    years = []
   }
 
   for (const year of years) {
@@ -277,6 +447,8 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
           const filePath = join(dayDir, file)
           const s = await stat(filePath).catch(() => null)
           if (!s?.isFile()) continue
+          sourcePaths.add(filePath)
+          const fileSessionId = sessionIdFromRolloutPath(filePath)
 
           const cachedProject = await getCachedCodexProject(filePath)
           if (cachedProject) {
@@ -288,9 +460,19 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
           if (!valid || !meta) continue
 
           const cwd = meta.payload?.cwd ?? 'unknown'
+          const sessionId = meta.payload?.session_id ?? meta.payload?.id ?? basename(filePath, '.jsonl')
           sources.push({ path: filePath, project: sanitizeProject(cwd), provider: 'codex' })
         }
       }
+    }
+  }
+
+  for (const usage of readCodexThreadUsages(codexDir)) {
+    const project = usage.cwd ? sanitizeProject(usage.cwd) : 'codex-state'
+    const path = stateSourcePath(codexDir, usage.id)
+    if (!sourcePaths.has(path)) {
+      sourcePaths.add(path)
+      sources.push({ path, project, provider: 'codex' })
     }
   }
 
@@ -305,11 +487,21 @@ function resolveModel(info: CodexEntry['payload'], sessionModel?: string): strin
     ?? 'gpt-5'
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+function createParser(source: SessionSource, seenKeys: Set<string>, codexDir = getCodexDir()): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const virtualStateSessionId = stateSourceId(source.path)
+      if (virtualStateSessionId) {
+        const fallback = buildStateFallbackCall(source, codexDir, virtualStateSessionId, undefined, undefined, 'updated')
+        if (fallback && !seenKeys.has(fallback.deduplicationKey)) {
+          seenKeys.add(fallback.deduplicationKey)
+          yield fallback
+        }
+        return
+      }
+
       const cached = await readCachedCodexResults(source.path)
-      if (cached) {
+      if (cached && cached.length > 0) {
         for (const call of cached) {
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
@@ -340,10 +532,15 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let pendingToolSequence: ToolCall[][] = []
       let pendingUserMessage = ''
       let pendingOutputChars = 0
+      let transcriptInputChars = 0
+      let transcriptOutputChars = 0
+      let transcriptTimestamp = ''
+      let firstTranscriptUserMessage = ''
       let estCounter = 0
       let turnCounter = 0
       let currentTurnId = `${sessionId}:t0`
       let sawAnyLine = false
+      let sessionName = ''
       const results: ParsedProviderCall[] = []
 
       // Stream the session file line by line. Heavy Codex sessions can exceed
@@ -355,14 +552,16 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         sawAnyLine = true
         const entry = parseCodexLine(rawLine)
         if (!entry) continue
+        if (entry.timestamp) transcriptTimestamp = entry.timestamp
 
         if (entry.type === 'session_meta') {
-          sessionId = entry.payload?.session_id ?? basename(source.path, '.jsonl')
+          sessionId = entry.payload?.session_id ?? entry.payload?.id ?? basename(source.path, '.jsonl')
           forkedFromId = entry.payload?.forked_from_id ?? ''
           if (forkedFromId && entry.timestamp) {
             forkCutoff = new Date(new Date(entry.timestamp).getTime() + 5000).toISOString()
           }
           sessionModel = entry.payload?.model ?? sessionModel
+          sessionName = entry.payload?.name ?? sessionName
           continue
         }
 
@@ -405,14 +604,20 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
-        if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'user') {
+        if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role !== 'assistant') {
           const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'input_text')
             .map(c => c.text ?? '')
             .filter(Boolean)
+          const inputChars = entry.payload.estimatedInputChars ?? texts.join('').length
+          transcriptInputChars += inputChars
           if (texts.length > 0) {
-            pendingUserMessage = texts.join(' ').slice(0, 500)
-            currentTurnId = `${sessionId}:t${++turnCounter}`
+            const preview = texts.join(' ').slice(0, 500)
+            if (entry.payload.role === 'user') {
+              pendingUserMessage = preview
+              if (!firstTranscriptUserMessage) firstTranscriptUserMessage = preview
+              currentTurnId = `${sessionId}:t${++turnCounter}`
+            }
           }
           continue
         }
@@ -421,7 +626,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'output_text' || c.type === 'text')
             .map(c => c.text ?? '')
-          pendingOutputChars += texts.join('').length
+          const outputChars = entry.payload.estimatedOutputChars ?? texts.join('').length
+          pendingOutputChars += outputChars
+          transcriptOutputChars += outputChars
           continue
         }
 
@@ -467,6 +674,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
               userMessage: pendingUserMessage,
               sessionId,
+              chatTitle: sessionName,
             })
 
             pendingTools = []
@@ -577,6 +785,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
             userMessage: pendingUserMessage,
             sessionId,
+            chatTitle: sessionName,
           })
 
           pendingTools = []
@@ -590,6 +799,53 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       // empty. Skip cache write so a transient failure can't pin an empty
       // result set against a fingerprint that would otherwise be re-parsed.
       if (!sawAnyLine) return
+
+      if (results.length === 0) {
+        const estInput = Math.ceil(transcriptInputChars / CHARS_PER_TOKEN)
+        const estOutput = Math.ceil(transcriptOutputChars / CHARS_PER_TOKEN)
+        if (estInput !== 0 || estOutput !== 0) {
+          const model = sessionModel ?? 'gpt-5'
+          const timestamp = transcriptTimestamp || new Date(fp.mtimeMs).toISOString()
+          const fallbackSessionId = sessionId || basename(source.path, '.jsonl')
+          const dedupKey = `codex:${fallbackSessionId}:transcript-est:${fp.sizeBytes}:${Math.round(fp.mtimeMs)}`
+          if (!seenKeys.has(dedupKey)) {
+            seenKeys.add(dedupKey)
+            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0)
+            results.push({
+              provider: 'codex',
+              model,
+              inputTokens: estInput,
+              outputTokens: estOutput,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+              cachedInputTokens: 0,
+              reasoningTokens: 0,
+              webSearchRequests: 0,
+              costUSD,
+              costIsEstimated: true,
+              tools: pendingTools,
+              bashCommands: [],
+              timestamp,
+              speed: 'standard',
+              deduplicationKey: dedupKey,
+              turnId: currentTurnId || `${fallbackSessionId}:transcript-est`,
+              toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
+              userMessage: firstTranscriptUserMessage || pendingUserMessage,
+              sessionId: fallbackSessionId,
+              chatTitle: sessionName,
+              project: source.project,
+            })
+          }
+        }
+      }
+
+      if (results.length === 0) {
+        const fallback = buildStateFallbackCall(source, codexDir, sessionId, sessionModel, sessionName, 'updated')
+        if (fallback && !seenKeys.has(fallback.deduplicationKey)) {
+          seenKeys.add(fallback.deduplicationKey)
+          results.push(fallback)
+        }
+      }
 
       await writeCachedCodexResults(source.path, source.project, results, fp)
 
@@ -623,7 +879,7 @@ export function createCodexProvider(codexDir?: string): Provider {
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys)
+      return createParser(source, seenKeys, dir)
     },
   }
 }

@@ -4,6 +4,7 @@ import Observation
 private let cacheTTLSeconds: TimeInterval = 30
 private let interactiveRefreshResetSeconds: TimeInterval = 120
 private let menubarPeriodDefaultsKey = "CodeBurnMenubarPeriod"
+private let codexChatWindowDefaultsKey = "CodeBurnCodexChatWindow"
 
 struct CachedPayload {
     let payload: MenubarPayload
@@ -16,12 +17,14 @@ struct PayloadCacheKey: Hashable {
     let provider: ProviderFilter
     let day: String?
     let days: Set<String>
+    let chatHours: Int
 
-    init(period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = []) {
+    init(period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = [], chatHours: Int = CodexChatWindow.fortyEightHours.hours) {
         self.period = period
         self.provider = provider
         self.day = days.count <= 1 ? (day ?? days.first) : nil
         self.days = days.count > 1 ? days : []
+        self.chatHours = max(1, chatHours)
     }
 
     var label: String {
@@ -47,6 +50,7 @@ final class AppStore {
         didSet { menubarPeriod.persistAsMenubarDefault() }
     }
     var selectedInsight: InsightMode = .trend
+    var selectedChatWindow: CodexChatWindow = CodexChatWindow.saved()
     var accentPreset: AccentPreset = ThemeState.shared.preset {
         didSet { ThemeState.shared.preset = accentPreset }
     }
@@ -109,15 +113,15 @@ final class AppStore {
     }
 
     private var todayAllKey: PayloadCacheKey {
-        PayloadCacheKey(period: .today, provider: .all, day: nil)
+        PayloadCacheKey(period: .today, provider: .all, day: nil, chatHours: selectedChatWindow.hours)
     }
 
     private var menubarStatusKey: PayloadCacheKey {
-        PayloadCacheKey(period: menubarPeriod, provider: .all, day: nil)
+        PayloadCacheKey(period: menubarPeriod, provider: .all, day: nil, chatHours: selectedChatWindow.hours)
     }
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays, chatHours: selectedChatWindow.hours)
     }
 
     var payload: MenubarPayload {
@@ -150,7 +154,7 @@ final class AppStore {
     /// All-provider payload for the selected period. Used by the tab strip to show
     /// per-provider costs that match the active period, not just today.
     var periodAllPayload: MenubarPayload? {
-        cache[PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)]?.payload
+        cache[PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays, chatHours: selectedChatWindow.hours)]?.payload
     }
 
     var isDayMode: Bool {
@@ -195,7 +199,7 @@ final class AppStore {
         let keys = Set([
             currentKey,
             todayAllKey,
-            PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays),
+            PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays, chatHours: selectedChatWindow.hours),
         ])
         let staleAges = keys.compactMap { key -> TimeInterval? in
             guard let cached = cache[key] else { return nil }
@@ -206,7 +210,7 @@ final class AppStore {
     }
 
     var needsInteractivePayloadRefresh: Bool {
-        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)
+        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays, chatHours: selectedChatWindow.hours)
         return cache[currentKey]?.isFresh != true ||
             cache[todayAllKey]?.isFresh != true ||
             cache[periodAllKey]?.isFresh != true ||
@@ -263,6 +267,13 @@ final class AppStore {
         startInteractiveSelectionRefresh()
     }
 
+    func switchTo(chatWindow: CodexChatWindow) {
+        guard selectedChatWindow != chatWindow else { return }
+        selectedChatWindow = chatWindow
+        chatWindow.persistAsCodexChatDefault()
+        startInteractiveSelectionRefresh()
+    }
+
     func shiftSelectedDay(by delta: Int) {
         let base = selectedDayDate ?? Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
         let shifted = Calendar.current.date(byAdding: .day, value: delta, to: base) ?? base
@@ -303,14 +314,14 @@ final class AppStore {
         let provider = selectedProvider
         let day = selectedDay
         let days = selectedDays
-        let key = PayloadCacheKey(period: period, provider: provider, day: day, days: days)
+        let key = PayloadCacheKey(period: period, provider: provider, day: day, days: days, chatHours: selectedChatWindow.hours)
         lastErrorByKey[key] = nil
         switchTask = Task {
             if provider == .all {
                 await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
             } else {
                 async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
-                async let all: Void = refreshQuietly(period: period, day: day)
+                async let all: Void = refreshQuietly(period: period, day: day, chatHours: selectedChatWindow.hours)
                 _ = await (main, all)
             }
         }
@@ -478,7 +489,7 @@ final class AppStore {
             }
         }
         do {
-            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize)
+            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize, chatHours: key.chatHours)
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
                 return
@@ -508,7 +519,7 @@ final class AppStore {
             NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
-                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false)
+                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false, chatHours: key.chatHours)
                     guard !Task.isCancelled else { return }
                     if generationAtStart != payloadRefreshGeneration { return }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
@@ -527,18 +538,18 @@ final class AppStore {
             lastErrorByKey[key] = String(describing: error)
         }
 
-        let allKey = PayloadCacheKey(period: key.period, provider: .all, day: key.day)
+        let allKey = PayloadCacheKey(period: key.period, provider: .all, day: key.day, days: key.days, chatHours: key.chatHours)
         if key != allKey, cache[allKey]?.isFresh != true {
-            await refreshQuietly(period: key.period, day: key.day)
+            await refreshQuietly(period: key.period, day: key.day, days: key.days, chatHours: key.chatHours)
         }
     }
 
     /// Background refresh for a period other than the visible one (e.g. keeping today fresh for the menubar badge).
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
-    func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
+    func refreshQuietly(period: Period, day: String? = nil, days: Set<String> = [], chatHours: Int? = nil, force: Bool = false) async {
         invalidateStaleDayCache()
-        let key = PayloadCacheKey(period: period, provider: .all, day: day)
+        let key = PayloadCacheKey(period: period, provider: .all, day: day, days: days, chatHours: chatHours ?? selectedChatWindow.hours)
         if !force, cache[key]?.isFresh == true { return }
         if inFlightKeys[key] != nil { return }
         inFlightKeys[key] = Date()
@@ -552,7 +563,7 @@ final class AppStore {
             inFlightKeys[key] = nil
         }
         do {
-            let fresh = try await DataClient.fetch(period: period, day: day, provider: .all, includeOptimize: false)
+            let fresh = try await DataClient.fetch(period: period, day: day, days: days, provider: .all, includeOptimize: false, chatHours: key.chatHours)
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
                 return
@@ -1113,8 +1124,35 @@ enum InsightMode: String, CaseIterable, Identifiable {
     case calendar = "Calendar"
     case pulse = "Pulse"
     case stats = "Stats"
+    case chats = "Chats"
     case optimize = "Optimize"
     var id: String { rawValue }
+}
+
+enum CodexChatWindow: String, CaseIterable, Identifiable {
+    case twentyFourHours = "24h"
+    case fortyEightHours = "48h"
+    case threeDays = "3d"
+    case sevenDays = "7d"
+
+    var id: String { rawValue }
+
+    var hours: Int {
+        switch self {
+        case .twentyFourHours: 24
+        case .fortyEightHours: 48
+        case .threeDays: 72
+        case .sevenDays: 168
+        }
+    }
+
+    static func saved() -> CodexChatWindow {
+        CodexChatWindow(rawValue: UserDefaults.standard.string(forKey: codexChatWindowDefaultsKey) ?? "") ?? .fortyEightHours
+    }
+
+    func persistAsCodexChatDefault() {
+        UserDefaults.standard.set(rawValue, forKey: codexChatWindowDefaultsKey)
+    }
 }
 
 enum Period: String, CaseIterable, Identifiable {

@@ -1277,40 +1277,48 @@ function buildSessionSummary(
   let totalCacheRead = 0
   let totalCacheWrite = 0
   let apiCalls = 0
+  let sourceProjectPath: string | undefined
   let firstTs = ''
   let lastTs = ''
 
   for (const turn of turns) {
-    const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
-    const turnSavings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
+    const billableCalls = turn.assistantCalls.filter(call => !call.metadataOnly)
+    const turnCost = billableCalls.reduce((s, c) => s + c.costUSD, 0)
+    const turnSavings = billableCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
 
-    if (!categoryBreakdown[turn.category]) {
-      categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
-    }
-    categoryBreakdown[turn.category].turns++
-    categoryBreakdown[turn.category].costUSD += turnCost
-    categoryBreakdown[turn.category].savingsUSD += turnSavings
-    if (turn.hasEdits) {
-      categoryBreakdown[turn.category].editTurns++
-      categoryBreakdown[turn.category].retries += turn.retries
-      if (turn.retries === 0) categoryBreakdown[turn.category].oneShotTurns++
-    }
-
-    if (turn.subCategory) {
-      const skillKey = turn.subCategory
-      if (!skillBreakdown[skillKey]) {
-        skillBreakdown[skillKey] = { turns: 0, costUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+    if (billableCalls.length > 0) {
+      if (!categoryBreakdown[turn.category]) {
+        categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
       }
-      skillBreakdown[skillKey].turns++
-      skillBreakdown[skillKey].costUSD += turnCost
-      skillBreakdown[skillKey].savingsUSD += turnSavings
+      categoryBreakdown[turn.category].turns++
+      categoryBreakdown[turn.category].costUSD += turnCost
+      categoryBreakdown[turn.category].savingsUSD += turnSavings
       if (turn.hasEdits) {
-        skillBreakdown[skillKey].editTurns++
-        if (turn.retries === 0) skillBreakdown[skillKey].oneShotTurns++
+        categoryBreakdown[turn.category].editTurns++
+        categoryBreakdown[turn.category].retries += turn.retries
+        if (turn.retries === 0) categoryBreakdown[turn.category].oneShotTurns++
+      }
+
+      if (turn.subCategory) {
+        const skillKey = turn.subCategory
+        if (!skillBreakdown[skillKey]) {
+          skillBreakdown[skillKey] = { turns: 0, costUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        }
+        skillBreakdown[skillKey].turns++
+        skillBreakdown[skillKey].costUSD += turnCost
+        skillBreakdown[skillKey].savingsUSD += turnSavings
+        if (turn.hasEdits) {
+          skillBreakdown[skillKey].editTurns++
+          if (turn.retries === 0) skillBreakdown[skillKey].oneShotTurns++
+        }
       }
     }
 
     for (const call of turn.assistantCalls) {
+      if (!firstTs || call.timestamp < firstTs) firstTs = call.timestamp
+      if (!lastTs || call.timestamp > lastTs) lastTs = call.timestamp
+      if (!sourceProjectPath && call.projectPath) sourceProjectPath = call.projectPath
+      if (call.metadataOnly) continue
       const callSavings = call.savingsUSD ?? 0
       totalCost += call.costUSD
       totalSavings += callSavings
@@ -1356,15 +1364,13 @@ function buildSessionSummary(
         subagentBreakdown[sat].costUSD += call.costUSD
         subagentBreakdown[sat].savingsUSD += callSavings
       }
-
-      if (!firstTs || call.timestamp < firstTs) firstTs = call.timestamp
-      if (!lastTs || call.timestamp > lastTs) lastTs = call.timestamp
     }
   }
 
   return {
     sessionId,
     project,
+    sourceProjectPath,
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
@@ -1382,6 +1388,10 @@ function buildSessionSummary(
     categoryBreakdown,
     skillBreakdown,
     subagentBreakdown,
+    chatTitle: turns
+      .flatMap(turn => turn.assistantCalls)
+      .map(call => call.chatTitle)
+      .find((title): title is string => typeof title === 'string' && title.length > 0),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
   }
 }
@@ -1580,7 +1590,7 @@ async function scanProjectDirs(
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
 
-    if (session.apiCalls > 0) {
+    if (session.apiCalls > 0 || session.turns.some(turn => turn.assistantCalls.some(call => call.metadataOnly))) {
       const projectKey = cachedFile.canonicalCwd
         ? normalizeProjectPathKey(cachedFile.canonicalCwd)
         : `slug:${dirName}`
@@ -1653,6 +1663,10 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     timestamp: call.timestamp,
     bashCommands: call.bashCommands,
     deduplicationKey: call.deduplicationKey,
+    chatTitle: call.chatTitle,
+    projectTitle: call.projectTitle,
+    projectPath: call.projectPath,
+    metadataOnly: call.metadataOnly,
   })
 
   return {
@@ -1689,12 +1703,15 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     deduplicationKey: call.deduplicationKey,
     project: call.project,
     projectPath: call.projectPath,
+    chatTitle: call.chatTitle,
+    projectTitle: call.projectTitle,
     toolSequence: call.toolSequence,
+    metadataOnly: call.metadataOnly,
   }
 }
 
 async function canonicalizeProviderCallProject(call: ParsedProviderCall): Promise<ParsedProviderCall> {
-  if (!call.projectPath) return call
+  if (!call.projectPath || call.metadataOnly) return call
 
   const canonical = await resolveCanonicalProjectPath(call.projectPath)
   if (!canonical.isWorktree) return call
@@ -1719,6 +1736,10 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     subagentTypes: call.subagentTypes,
     deduplicationKey: call.deduplicationKey,
     toolSequence: call.toolSequence,
+    chatTitle: call.chatTitle,
+    projectTitle: call.projectTitle,
+    projectPath: call.projectPath,
+    metadataOnly: call.metadataOnly,
   }
 }
 
@@ -1803,6 +1824,10 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     deduplicationKey: call.deduplicationKey,
     cacheCreationOneHourTokens: u.cacheCreationOneHourTokens || undefined,
     toolSequence: call.toolSequence,
+    chatTitle: call.chatTitle,
+    projectTitle: call.projectTitle,
+    projectPath: call.projectPath,
+    metadataOnly: call.metadataOnly,
   })
 }
 
@@ -2036,7 +2061,7 @@ async function parseProviderSources(
   for (const [key, { project, projectPath, turns }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
-    if (session.apiCalls > 0) {
+    if (session.apiCalls > 0 || session.turns.some(turn => turn.assistantCalls.some(call => call.metadataOnly))) {
       const existing = projectMap.get(project)
       if (existing) {
         existing.sessions.push(session)
