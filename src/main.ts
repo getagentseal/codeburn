@@ -320,6 +320,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const bashMap: Record<string, number> = {}
   const skillMap: Record<string, { turns: number; cost: number; savings: number }> = {}
   const subagentMap: Record<string, { calls: number; cost: number; savings: number }> = {}
+  // Claude Code only: real subagent-transcript spend grouped by agentType
+  // (workflow-subagent / Explore / general-purpose / …). Distinct from
+  // subagentMap, which is Task-tool-input based and never sees workflow agents.
+  const agentTypeMap: Record<string, { calls: number; cost: number; savings: number }> = {}
   for (const sess of sessions) {
     for (const [tool, d] of Object.entries(sess.toolBreakdown)) {
       toolMap[tool] = (toolMap[tool] ?? 0) + d.calls
@@ -341,6 +345,12 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       subagentMap[sat].calls += d.calls
       subagentMap[sat].cost += d.costUSD
       subagentMap[sat].savings += d.savingsUSD
+    }
+    if (sess.agentType) {
+      if (!agentTypeMap[sess.agentType]) agentTypeMap[sess.agentType] = { calls: 0, cost: 0, savings: 0 }
+      agentTypeMap[sess.agentType].calls += sess.apiCalls
+      agentTypeMap[sess.agentType].cost += sess.totalCostUSD
+      agentTypeMap[sess.agentType].savings += sess.totalSavingsUSD
     }
   }
 
@@ -392,6 +402,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     shellCommands: sortedMap(bashMap),
     skills: Object.entries(skillMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, turns: d.turns, cost: convertCost(d.cost), savings: convertCost(d.savings) })),
     subagents: Object.entries(subagentMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost), savings: convertCost(d.savings) })),
+    claudeAgentTypes: Object.entries(agentTypeMap).sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings)).map(([name, d]) => ({ name, calls: d.calls, cost: convertCost(d.cost), savings: convertCost(d.savings) })),
     topSessions,
   }
 }

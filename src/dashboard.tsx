@@ -531,6 +531,30 @@ function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw:
   )
 }
 
+// Claude Code only: real subagent-transcript spend by agentType
+// (workflow-subagent / Explore / general-purpose / …). Returns null when there
+// are no agent transcripts, so it never shows for other providers.
+function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const merged: Record<string, { uses: number; cost: number }> = {}
+  for (const project of projects) { for (const session of project.sessions) {
+    if (!session.agentType) continue
+    const e = merged[session.agentType] ?? { uses: 0, cost: 0 }
+    e.uses += session.apiCalls; e.cost += session.totalCostUSD; merged[session.agentType] = e
+  } }
+  const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
+  if (sorted.length === 0) return null
+  const maxCost = sorted[0]?.[1]?.cost ?? 0
+  const nw = Math.max(6, pw - bw - 22)
+  return (
+    <Panel title="Claude Agent Types" color={PANEL_COLORS.skills} width={pw}>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(6)}{'cost'.padStart(8)}</Text>
+      {sorted.slice(0, 10).map(([name, d]) => (
+        <Text key={name} wrap="truncate-end"><HBar value={d.cost} max={maxCost} width={bw} /><Text> {fit(name, nw)}</Text><Text>{String(d.uses).padStart(6)}</Text><Text color={GOLD}>{formatCost(d.cost).padStart(8)}</Text></Text>
+      ))}
+    </Panel>
+  )
+}
+
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   all: 'All',
   claude: 'Claude',
@@ -718,7 +742,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
       ) : (
-        <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><SkillsAndAgents projects={projects} pw={pw} bw={barWidth} /><McpBreakdown projects={projects} pw={pw} bw={barWidth} /></Row></>
+        <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><SkillsAndAgents projects={projects} pw={pw} bw={barWidth} /><McpBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><ClaudeAgentTypes projects={projects} pw={pw} bw={barWidth} /></Row></>
       )}
     </Box>
   )

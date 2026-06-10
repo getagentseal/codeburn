@@ -126,6 +126,10 @@ export type ClassifiedTurn = ParsedTurn & {
 export type SessionSummary = {
   sessionId: string
   project: string
+  // Claude Code only: agent type of a subagent transcript session
+  // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
+  // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
+  agentType?: string
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number

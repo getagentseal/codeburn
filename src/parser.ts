@@ -1489,6 +1489,21 @@ export async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return [...jsonlFiles]
 }
 
+// Claude Code subagent transcripts (`subagents/.../agent-*.jsonl`) have a sibling
+// `.meta.json` carrying the `agentType` (e.g. `workflow-subagent`, `Explore`).
+// Returns undefined for ordinary session files, which carry no agent type.
+export async function readAgentType(filePath: string): Promise<string | undefined> {
+  if (!/[\\/]subagents[\\/]/.test(filePath)) return undefined
+  const metaPath = filePath.replace(/\.jsonl$/, '.meta.json')
+  try {
+    const t = (JSON.parse(await readFile(metaPath, 'utf8')) as { agentType?: unknown }).agentType
+    if (typeof t === 'string' && t.trim()) return t.trim().slice(0, 100)
+  } catch { /* missing or unreadable meta */ }
+  // Workflow agents always live under `subagents/workflows/`, so fall back to that
+  // even when the meta sidecar is absent.
+  return /[\\/]subagents[\\/]workflows[\\/]/.test(filePath) ? 'workflow-subagent' : undefined
+}
+
 async function scanProjectDirs(
   dirs: Array<{ path: string; name: string }>,
   seenMsgIds: Set<string>,
@@ -1545,6 +1560,7 @@ async function scanProjectDirs(
         canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
         mcpInventory: extractMcpInventory(entries),
         turns: turns.map(parsedTurnToCachedTurn),
+        agentType: await readAgentType(filePath),
       }
       ;(diskCache as { _dirty?: boolean })._dirty = true
     } catch (err) {
@@ -1598,6 +1614,7 @@ async function scanProjectDirs(
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
+    session.agentType = cachedFile.agentType
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
