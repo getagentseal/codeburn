@@ -1463,23 +1463,27 @@ async function parseSessionFile(
   }
 }
 
-async function collectJsonlFiles(dirPath: string): Promise<string[]> {
+// Recursively collect every `.jsonl` under `dir`. Subagent transcripts live in
+// `subagents/`, and workflow/ultracode runs nest a further level deep
+// (`subagents/workflows/<wf>/agent-*.jsonl`); a flat scan misses those, so their
+// usage went uncounted whenever the workflow feature was on. (#470)
+async function collectJsonlInto(dir: string, out: Set<string>): Promise<void> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  for (const e of entries) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) await collectJsonlInto(p, out)
+    else if (e.name.endsWith('.jsonl')) out.add(p)
+  }
+}
+
+export async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   const files = await readdir(dirPath).catch(() => [])
   const jsonlFiles = new Set(files.filter(f => f.endsWith('.jsonl')).map(f => join(dirPath, f)))
 
-  const directSubagentsPath = join(dirPath, 'subagents')
-  const directSubFiles = await readdir(directSubagentsPath).catch(() => [])
-  for (const sf of directSubFiles) {
-    if (sf.endsWith('.jsonl')) jsonlFiles.add(join(directSubagentsPath, sf))
-  }
-
+  await collectJsonlInto(join(dirPath, 'subagents'), jsonlFiles)
   for (const entry of files) {
     if (entry.endsWith('.jsonl')) continue
-    const subagentsPath = join(dirPath, entry, 'subagents')
-    const subFiles = await readdir(subagentsPath).catch(() => [])
-    for (const sf of subFiles) {
-      if (sf.endsWith('.jsonl')) jsonlFiles.add(join(subagentsPath, sf))
-    }
+    await collectJsonlInto(join(dirPath, entry, 'subagents'), jsonlFiles)
   }
 
   return [...jsonlFiles]
