@@ -32,6 +32,8 @@ struct CodeBurnApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var rightClickMonitor: Any?
+    private var lastContextMenuPresentedAt: Date = .distantPast
     fileprivate let store = AppStore()
     let updateChecker = UpdateChecker()
     /// Held for the lifetime of the app to opt out of App Nap and Automatic Termination.
@@ -622,7 +624,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         button.target = self
         button.action = #selector(handleButtonClick(_:))
+        // Left-click drives the popover. We keep .rightMouseUp in the mask so the
+        // legacy action path below still fires on macOS <= 26; on macOS 27 the
+        // system consumes the right button entirely and this never fires, so the
+        // global monitor (below) is what restores the right-click menu there.
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        // macOS 27 no longer routes any right-mouse event to the status-item
+        // button's target/action. A global monitor still observes right-mouse-down;
+        // we hit-test it against our own status-item window and present the menu
+        // ourselves. Harmless and stable on 15/26 too (the debounce in
+        // showContextMenu prevents a double-present if the legacy path also fires).
+        rightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] _ in
+            guard let self,
+                  let button = self.statusItem.button,
+                  let window = button.window,
+                  window.frame.contains(NSEvent.mouseLocation) else { return }
+            DispatchQueue.main.async { self.showContextMenu(from: button) }
+        }
 
         // Defer the full attributed title setup to ensure initial render completes
         DispatchQueue.main.async { [weak self] in
@@ -783,6 +802,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button,
               let event = NSApp.currentEvent else { return }
 
+        // Legacy right-click path for macOS <= 26 (no-op on 27, where the action
+        // never receives a right-mouse event — the global monitor handles it).
         if event.type == .rightMouseUp {
             showContextMenu(from: button)
             return
@@ -816,6 +837,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func showContextMenu(from button: NSStatusBarButton) {
+        // Debounce: on macOS <= 26 both the legacy action path and the global
+        // monitor can fire for a single right-click. Present at most once per click.
+        let now = Date()
+        guard now.timeIntervalSince(lastContextMenuPresentedAt) > 0.3 else { return }
+        lastContextMenuPresentedAt = now
+
         let menu = NSMenu()
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -835,9 +862,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
-        button.performClick(nil)
-        statusItem.menu = nil
+        // Present directly. The previous `statusItem.menu = menu; button.performClick`
+        // trick relies on the click -> action path that macOS 27 changed; popUp is
+        // version-stable.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
     private var settingsWindowController: NSWindowController?
