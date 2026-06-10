@@ -6,6 +6,7 @@ import { homedir, platform, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 import {
   buildPersistentCodeburnLookupPath,
@@ -31,6 +32,34 @@ export type InstallResult = { installedPath: string; launched: boolean }
 export type ReleaseAsset = { name: string; browser_download_url: string }
 export type ReleaseResponse = { tag_name: string; assets: ReleaseAsset[] }
 export type ResolvedAssets = { release: ReleaseResponse; zip: ReleaseAsset; checksum: ReleaseAsset }
+type ProxyEnv = Partial<Record<'HTTPS_PROXY' | 'https_proxy' | 'HTTP_PROXY' | 'http_proxy' | 'NO_PROXY' | 'no_proxy', string>>
+type FetchOptions = Parameters<typeof undiciFetch>[1]
+
+export function resolveProxyUrlForUrl(url: string, env: ProxyEnv = process.env): string | undefined {
+  const target = new URL(url)
+  if (matchesNoProxy(target.hostname, env.NO_PROXY ?? env.no_proxy)) return undefined
+  if (target.protocol === 'https:') return env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy
+  if (target.protocol === 'http:') return env.HTTP_PROXY ?? env.http_proxy
+  return undefined
+}
+
+function matchesNoProxy(hostname: string, noProxy?: string): boolean {
+  if (!noProxy) return false
+  const host = hostname.toLowerCase()
+  return noProxy.split(',').some(entry => {
+    const rule = entry.trim().toLowerCase().split(':')[0]
+    if (!rule) return false
+    if (rule === '*') return true
+    if (rule.startsWith('.')) return host === rule.slice(1) || host.endsWith(rule)
+    return host === rule || host.endsWith(`.${rule}`)
+  })
+}
+
+function fetchWithProxy(url: string, options: FetchOptions = {}) {
+  const proxyUrl = resolveProxyUrlForUrl(url)
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined
+  return undiciFetch(url, dispatcher ? { ...options, dispatcher } : options)
+}
 
 export function resolveMenubarReleaseAssets(release: ReleaseResponse): ResolvedAssets {
   const zip = release.assets.find(a => VERSIONED_ASSET_PATTERN.test(a.name))
@@ -102,7 +131,7 @@ async function sysProductVersion(): Promise<string> {
 }
 
 async function fetchLatestReleaseAssets(): Promise<ResolvedAssets> {
-  const response = await fetch(RELEASE_API, {
+  const response = await fetchWithProxy(RELEASE_API, {
     headers: {
       'User-Agent': 'codeburn-menubar-installer',
       Accept: 'application/vnd.github+json',
@@ -116,7 +145,7 @@ async function fetchLatestReleaseAssets(): Promise<ResolvedAssets> {
 }
 
 async function verifyChecksum(archivePath: string, checksumUrl: string): Promise<void> {
-  const response = await fetch(checksumUrl, {
+  const response = await fetchWithProxy(checksumUrl, {
     headers: { 'User-Agent': 'codeburn-menubar-installer' },
     redirect: 'follow',
   })
@@ -138,7 +167,7 @@ async function verifyChecksum(archivePath: string, checksumUrl: string): Promise
 }
 
 async function downloadToFile(url: string, destPath: string): Promise<void> {
-  const response = await fetch(url, {
+  const response = await fetchWithProxy(url, {
     headers: { 'User-Agent': 'codeburn-menubar-installer' },
     redirect: 'follow',
   })
