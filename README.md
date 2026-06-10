@@ -105,6 +105,7 @@ Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--fr
 | <img src="assets/providers/devin.png" width="28" />        | Devin          | Yes       | [devin.md](docs/providers/devin.md)               |
 | <img src="assets/providers/forge.png" width="28" />        | Forge          | Yes       | [forge.md](docs/providers/forge.md)               |
 | <img src="assets/providers/gemini.png" width="28" />       | Gemini CLI     | Yes       | [gemini.md](docs/providers/gemini.md)             |
+|                                                            | Hermes Agent   | Yes*      | [hermes.md](docs/providers/hermes.md)             |
 | <img src="assets/providers/mistral-vibe.svg" width="28" /> | Mistral Vibe   | Yes       | [mistral-vibe.md](docs/providers/mistral-vibe.md) |
 | <img src="assets/providers/copilot.jpg" width="28" />      | GitHub Copilot | Yes       | [copilot.md](docs/providers/copilot.md)           |
 | <img src="assets/providers/ibm-bob.svg" width="28" />      | IBM Bob        | Yes       | [ibm-bob.md](docs/providers/ibm-bob.md)           |
@@ -140,6 +141,8 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 **Cursor** reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a Languages panel instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 
 **Gemini CLI** stores sessions as single JSON files. Each session embeds real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Gemini reports input tokens inclusive of cached; CodeBurn subtracts cached from input before pricing to avoid double charging.
+
+**Hermes Agent** stores conversation transcripts at `~/.hermes/sessions/` as JSON files (`session_*.json` for foreground, `session_bg_*.json` for background tasks). The parser surfaces real session counts, models, tool-call distributions, shell commands, and activity classification, but token and cost columns are always $0 because Hermes does not persist per-turn `usage` blocks locally — usage lives on the upstream provider (OpenAI / Anthropic / OpenRouter / Ollama). `request_dump_*.json` files are deliberately skipped to avoid surfacing captured upstream request bodies. See [hermes.md](docs/providers/hermes.md) for the full storage layout and quirk list.
 
 **Antigravity CLI and IDE** automatically discover conversation session files on disk (stored under `.gemini/` folders) and query the running language server process to extract granular trajectory and pricing information. For the CLI, which runs as a short-lived process, you can optionally install a status line hook using `codeburn antigravity-hook install` to capture usage even when the menubar's 30-second refresh misses it. The IDE is detected automatically via the `--app-data-dir antigravity-ide` flag on Windows.
 

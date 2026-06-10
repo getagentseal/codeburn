@@ -50,6 +50,21 @@ async function loadWarp(): Promise<Provider | null> {
 let forgeProvider: Provider | null = null
 let forgeLoadAttempted = false
 
+let hermesProvider: Provider | null = null
+let hermesLoadAttempted = false
+
+async function loadHermes(): Promise<Provider | null> {
+  if (hermesLoadAttempted) return hermesProvider
+  hermesLoadAttempted = true
+  try {
+    const { hermes } = await import('./hermes.js')
+    hermesProvider = hermes
+    return hermes
+  } catch {
+    return null
+  }
+}
+
 async function loadForge(): Promise<Provider | null> {
   if (forgeLoadAttempted) return forgeProvider
   forgeLoadAttempted = true
@@ -155,8 +170,8 @@ async function loadCrush(): Promise<Provider | null> {
 const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, devin, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, mux, openclaw, pi, omp, qwen, rooCode]
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw] = await Promise.all([
-    loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(),
+  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw, hermes] = await Promise.all([
+    loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(), loadHermes(),
   ])
   const all = [...coreProviders]
   if (ag) all.push(ag)
@@ -168,6 +183,7 @@ export async function getAllProviders(): Promise<Provider[]> {
   if (crush) all.push(crush)
   if (warp) all.push(warp)
   if (vercelGw) all.push(vercelGw)
+  if (hermes) all.push(hermes)
   return all
 }
 
@@ -222,6 +238,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'vercel-gateway') {
     const vg = await loadVercelGateway()
     return vg ?? undefined
+  }
+  if (name === 'hermes') {
+    const h = await loadHermes()
+    return h ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }

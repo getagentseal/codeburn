@@ -35,6 +35,7 @@ For the architectural picture, see `../architecture.md`.
 | [Antigravity](antigravity.md) | protobuf over RPC | `src/providers/antigravity.ts` | none |
 | [Crush](crush.md) | SQLite (per-project) | `src/providers/crush.ts` | `tests/providers/crush.test.ts` |
 | [Forge](forge.md) | SQLite | `src/providers/forge.ts` | `tests/providers/forge.test.ts` |
+| [Hermes](hermes.md) | JSON | `src/providers/hermes.ts` | none (verified manually) |
 | [Cursor](cursor.md) | SQLite | `src/providers/cursor.ts` | `tests/providers/cursor.test.ts` |
 | [Cursor Agent](cursor-agent.md) | text / JSONL | `src/providers/cursor-agent.ts` | `tests/providers/cursor-agent.test.ts` |
 | [Goose](goose.md) | SQLite | `src/providers/goose.ts` | none |
