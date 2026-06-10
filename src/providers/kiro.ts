@@ -27,8 +27,10 @@ const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0
 const toolNameMap: Record<string, string> = {
   readFile: 'Read',
   read_file: 'Read',
+  read: 'Read',
   writeFile: 'Edit',
   write_file: 'Edit',
+  write: 'Edit',
   editFile: 'Edit',
   edit_file: 'Edit',
   createFile: 'Write',
@@ -39,10 +41,13 @@ const toolNameMap: Record<string, string> = {
   openFolders: 'LS',
   runCommand: 'Bash',
   run_command: 'Bash',
+  shell: 'Bash',
   searchFiles: 'Grep',
   search_files: 'Grep',
+  grep: 'Grep',
   findFiles: 'Glob',
   find_files: 'Glob',
+  glob: 'Glob',
   webSearch: 'WebSearch',
   web_search: 'WebSearch',
 }
@@ -343,9 +348,187 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
   return results
 }
 
+// --- Kiro CLI session types & parser ---
+
+type KiroCliEntry = {
+  version: string
+  kind: 'Prompt' | 'AssistantMessage' | 'ToolResults' | 'Clear'
+  data: Record<string, unknown>
+}
+
+type KiroCliSessionMeta = {
+  session_id: string
+  cwd: string
+  created_at: string
+  updated_at: string
+  title?: string
+  session_state?: {
+    rts_model_state?: { model_info?: { model_id?: string } }
+    conversation_metadata?: {
+      user_turn_metadatas?: Array<{
+        end_timestamp?: string
+        builtin_tool_uses?: number
+        metering_usage?: Array<{ value: number; unit: string }>
+        total_request_count?: number
+      }>
+    }
+  }
+}
+
+function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seenKeys: Set<string>): ParsedProviderCall[] {
+  const results: ParsedProviderCall[] = []
+  const sessionId = meta.session_id
+  const project = basename(meta.cwd || '')
+
+  let modelId = meta.session_state?.rts_model_state?.model_info?.model_id ?? 'auto'
+  if (modelId === 'auto' || !modelId) modelId = 'kiro-auto'
+  else modelId = normalizeModelId(modelId)
+
+  const turns = meta.session_state?.conversation_metadata?.user_turn_metadatas ?? []
+
+  // Walk through JSONL entries grouping by prompt turns
+  let turnIndex = 0
+  let pendingUserMessage = ''
+  let outputChars = 0
+  let inputChars = 0
+  const allTools: string[] = []
+  let turnStartTimestamp: string | undefined
+
+  function flushTurn() {
+    if (outputChars === 0) return
+    const turnMeta = turns[turnIndex]
+    const dedupKey = `kiro-cli:${sessionId}:${turnIndex}`
+    if (seenKeys.has(dedupKey)) { turnIndex++; return }
+
+    const timestamp = turnMeta?.end_timestamp ?? turnStartTimestamp ?? meta.created_at
+    const tsDate = parseKiroTimestamp(timestamp)
+    if (!tsDate) { turnIndex++; return }
+
+    const costUSD = turnMeta?.metering_usage
+      ? turnMeta.metering_usage.reduce((sum, m) => sum + m.value, 0)
+      : 0
+
+    const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
+    const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+    seenKeys.add(dedupKey)
+
+    results.push({
+      provider: 'kiro',
+      model: modelId,
+      inputTokens,
+      outputTokens,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: 0,
+      costUSD,
+      costIsEstimated: !turnMeta?.metering_usage,
+      tools: [...new Set(allTools)],
+      bashCommands: [],
+      timestamp: tsDate.toISOString(),
+      speed: 'standard',
+      deduplicationKey: dedupKey,
+      userMessage: pendingUserMessage,
+      sessionId,
+      project,
+    })
+    turnIndex++
+  }
+
+  let isFirstPrompt = true
+  for (const entry of entries) {
+    if (entry.kind === 'Prompt') {
+      if (!isFirstPrompt) {
+        flushTurn()
+        pendingUserMessage = ''
+        outputChars = 0
+        inputChars = 0
+        allTools.length = 0
+      }
+      isFirstPrompt = false
+      const content = entry.data['content']
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          const rec = asRecord(item)
+          if (rec && rec['kind'] === 'text' && typeof rec['data'] === 'string') {
+            pendingUserMessage = (rec['data'] as string).slice(0, 500)
+            inputChars += (rec['data'] as string).length
+          }
+        }
+      }
+      const meta2 = asRecord(entry.data['meta'])
+      if (meta2) {
+        const ts = meta2['timestamp']
+        if (typeof ts === 'number') turnStartTimestamp = new Date(ts * 1000).toISOString()
+      }
+    } else if (entry.kind === 'AssistantMessage') {
+      const content = entry.data['content']
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          const rec = asRecord(item)
+          if (!rec) continue
+          if (rec['kind'] === 'text' && typeof rec['data'] === 'string') {
+            outputChars += (rec['data'] as string).length
+          } else if (rec['kind'] === 'toolUse') {
+            const toolData = asRecord(rec['data'])
+            if (toolData) {
+              const name = typeof toolData['name'] === 'string' ? toolData['name'] : ''
+              if (name) allTools.push(toolNameMap[name] ?? name)
+            }
+          }
+        }
+      }
+    } else if (entry.kind === 'ToolResults') {
+      // Tool results count as input context
+      const content = entry.data['content']
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          const text = extractText(item)
+          if (text) inputChars += text.length
+        }
+      }
+    }
+  }
+  // Flush last turn
+  flushTurn()
+
+  return results
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
+      // CLI session: path points to a .jsonl file
+      if (source.path.endsWith('.jsonl')) {
+        const jsonlContent = await readSessionFile(source.path)
+        if (jsonlContent === null) return
+
+        const entries: KiroCliEntry[] = []
+        for (const line of jsonlContent.split('\n')) {
+          if (!line.trim()) continue
+          try { entries.push(JSON.parse(line) as KiroCliEntry) } catch { /* skip malformed lines */ }
+        }
+        if (entries.length === 0) return
+
+        // Load companion .json for metadata
+        const metaPath = source.path.replace(/\.jsonl$/, '.json')
+        let meta: KiroCliSessionMeta
+        try {
+          const raw = await readFile(metaPath, 'utf-8')
+          meta = JSON.parse(raw) as KiroCliSessionMeta
+        } catch {
+          // Minimal fallback
+          meta = { session_id: basename(source.path, '.jsonl'), cwd: '', created_at: '', updated_at: '' }
+        }
+
+        for (const call of parseCliSession(meta, entries, seenKeys)) {
+          yield call
+        }
+        return
+      }
+
+      // IDE session: original path
       const content = await readSessionFile(source.path)
       if (content === null) return
 
@@ -423,9 +606,28 @@ async function resolveWorkspaceProject(agentDir: string, workspaceStorageDir: st
   return workspaceHash
 }
 
-async function discoverSessions(agentDir: string, workspaceStorageDir: string): Promise<SessionSource[]> {
+async function discoverSessions(agentDir: string, workspaceStorageDir: string, cliSessionsDir: string): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
 
+  // --- Kiro CLI sessions (~/.kiro/sessions/cli/) ---
+  try {
+    const cliEntries = await readdir(cliSessionsDir, { withFileTypes: true })
+    for (const entry of cliEntries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+      const jsonlPath = join(cliSessionsDir, entry.name)
+      // Derive project from companion .json
+      const metaPath = jsonlPath.replace(/\.jsonl$/, '.json')
+      let project = 'kiro-cli'
+      try {
+        const raw = await readFile(metaPath, 'utf-8')
+        const meta = JSON.parse(raw) as { cwd?: string }
+        if (meta.cwd) project = basename(meta.cwd)
+      } catch {}
+      sources.push({ path: jsonlPath, project, provider: 'kiro' })
+    }
+  } catch {}
+
+  // --- Kiro IDE sessions ---
   let workspaceDirs: string[]
   try {
     const entries = await readdir(agentDir, { withFileTypes: true })
@@ -468,9 +670,11 @@ async function discoverSessions(agentDir: string, workspaceStorageDir: string): 
   return sources
 }
 
-export function createKiroProvider(agentDirOverride?: string, workspaceStorageDirOverride?: string): Provider {
+export function createKiroProvider(agentDirOverride?: string, workspaceStorageDirOverride?: string, cliSessionsDirOverride?: string): Provider {
   const agentDir = getKiroAgentDir(agentDirOverride)
   const wsDir = getKiroWorkspaceStorageDir(workspaceStorageDirOverride)
+  // When overrides are provided (tests), don't scan real CLI sessions unless explicitly given
+  const cliDir = cliSessionsDirOverride ?? (agentDirOverride ? join(agentDirOverride, '..', 'cli-sessions') : join(process.env['KIRO_HOME'] || join(homedir(), '.kiro'), 'sessions', 'cli'))
 
   return {
     name: 'kiro',
@@ -489,7 +693,7 @@ export function createKiroProvider(agentDirOverride?: string, workspaceStorageDi
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(agentDir, wsDir)
+      return discoverSessions(agentDir, wsDir, cliDir)
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

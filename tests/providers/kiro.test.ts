@@ -604,3 +604,121 @@ describe('kiro provider - metadata', () => {
     expect(kiro.modelDisplayName('claude-haiku-4-5-20260101')).toBe('Haiku 4.5')
   })
 })
+
+describe('kiro provider - CLI session discovery', () => {
+  let cliDir: string
+
+  beforeEach(async () => {
+    cliDir = await mkdtemp(join(tmpdir(), 'kiro-cli-test-'))
+  })
+
+  afterEach(async () => {
+    await rm(cliDir, { recursive: true, force: true })
+  })
+
+  it('discovers .jsonl files from CLI sessions directory', async () => {
+    const sessionId = '11111111-1111-1111-1111-111111111111'
+    await writeFile(join(cliDir, `${sessionId}.jsonl`), '')
+    await writeFile(join(cliDir, `${sessionId}.json`), JSON.stringify({
+      session_id: sessionId,
+      cwd: '/home/user/my-project',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:01:00Z',
+    }))
+
+    const provider = createKiroProvider('/nonexistent', '/nonexistent', cliDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.project).toBe('my-project')
+    expect(sessions[0]!.path).toContain('.jsonl')
+    expect(sessions[0]!.provider).toBe('kiro')
+  })
+
+  it('parses CLI session JSONL into calls', async () => {
+    const sessionId = '22222222-2222-2222-2222-222222222222'
+    const jsonl = [
+      JSON.stringify({ version: '1', kind: 'Prompt', data: { message_id: 'm1', content: [{ kind: 'text', data: 'hello world' }], meta: { timestamp: 1700000000 } } }),
+      JSON.stringify({ version: '1', kind: 'AssistantMessage', data: { message_id: 'm2', content: [{ kind: 'text', data: 'Hello! How can I help you today?' }, { kind: 'toolUse', data: { toolUseId: 't1', name: 'read', input: {} } }] } }),
+      JSON.stringify({ version: '1', kind: 'ToolResults', data: { message_id: 'm3', content: [{ kind: 'text', data: 'file contents here' }], results: { t1: { output: 'ok' } } } }),
+      JSON.stringify({ version: '1', kind: 'AssistantMessage', data: { message_id: 'm4', content: [{ kind: 'text', data: 'I read the file for you.' }] } }),
+    ].join('\n')
+
+    await writeFile(join(cliDir, `${sessionId}.jsonl`), jsonl)
+    await writeFile(join(cliDir, `${sessionId}.json`), JSON.stringify({
+      session_id: sessionId,
+      cwd: '/tmp/test-project',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:01:00Z',
+      session_state: {
+        rts_model_state: { model_info: { model_id: 'auto' } },
+        conversation_metadata: {
+          user_turn_metadatas: [{
+            end_timestamp: '2026-01-01T00:00:30Z',
+            metering_usage: [{ value: 0.05, unit: 'credit' }, { value: 0.08, unit: 'credit' }],
+          }],
+        },
+      },
+    }))
+
+    const source = { path: join(cliDir, `${sessionId}.jsonl`), project: 'test-project', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.provider).toBe('kiro')
+    expect(call.model).toBe('kiro-auto')
+    expect(call.tools).toContain('Read')
+    expect(call.userMessage).toBe('hello world')
+    expect(call.costUSD).toBeCloseTo(0.13, 2)
+    expect(call.deduplicationKey).toBe(`kiro-cli:${sessionId}:0`)
+    expect(call.timestamp).toBe('2026-01-01T00:00:30.000Z')
+    expect(call.project).toBe('test-project')
+  })
+
+  it('parses multiple turns from a CLI session', async () => {
+    const sessionId = '33333333-3333-3333-3333-333333333333'
+    const jsonl = [
+      JSON.stringify({ version: '1', kind: 'Prompt', data: { message_id: 'm1', content: [{ kind: 'text', data: 'first question' }], meta: { timestamp: 1700000000 } } }),
+      JSON.stringify({ version: '1', kind: 'AssistantMessage', data: { message_id: 'm2', content: [{ kind: 'text', data: 'first answer' }] } }),
+      JSON.stringify({ version: '1', kind: 'Prompt', data: { message_id: 'm3', content: [{ kind: 'text', data: 'second question' }], meta: { timestamp: 1700000060 } } }),
+      JSON.stringify({ version: '1', kind: 'AssistantMessage', data: { message_id: 'm4', content: [{ kind: 'text', data: 'second answer' }] } }),
+    ].join('\n')
+
+    await writeFile(join(cliDir, `${sessionId}.jsonl`), jsonl)
+    await writeFile(join(cliDir, `${sessionId}.json`), JSON.stringify({
+      session_id: sessionId,
+      cwd: '/tmp/multi',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:02:00Z',
+      session_state: {
+        rts_model_state: { model_info: { model_id: 'claude-sonnet-4' } },
+        conversation_metadata: {
+          user_turn_metadatas: [
+            { end_timestamp: '2026-01-01T00:00:30Z', metering_usage: [{ value: 0.04, unit: 'credit' }] },
+            { end_timestamp: '2026-01-01T00:01:30Z', metering_usage: [{ value: 0.06, unit: 'credit' }] },
+          ],
+        },
+      },
+    }))
+
+    const source = { path: join(cliDir, `${sessionId}.jsonl`), project: 'multi', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.userMessage).toBe('first question')
+    expect(calls[0]!.model).toBe('claude-sonnet-4')
+    expect(calls[1]!.userMessage).toBe('second question')
+    expect(calls[1]!.costUSD).toBeCloseTo(0.06, 2)
+  })
+
+  it('skips non-jsonl files in CLI directory', async () => {
+    await writeFile(join(cliDir, 'something.json'), '{}')
+    await writeFile(join(cliDir, 'something.lock'), '')
+
+    const provider = createKiroProvider('/nonexistent', '/nonexistent', cliDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(0)
+  })
+})
