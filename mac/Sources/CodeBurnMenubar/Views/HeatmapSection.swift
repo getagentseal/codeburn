@@ -63,6 +63,9 @@ struct HeatmapSection: View {
             if mode == .plan {
                 return store.selectedProvider == .claude || store.selectedProvider == .codex
             }
+            if mode == .chats {
+                return store.selectedProvider == .all || store.selectedProvider == .codex
+            }
             return true
         }
     }
@@ -82,6 +85,11 @@ struct HeatmapSection: View {
             } else {
                 PlanInsight(usage: store.subscription)
             }
+        case .chats: CodexChatsInsight(
+            report: store.payload.current.codexChats48h,
+            selectedWindow: store.selectedChatWindow,
+            onWindowChange: { store.switchTo(chatWindow: $0) }
+        )
         case .trend: TrendInsight(days: store.payload.history.daily, period: store.trendPeriod)
         case .calendar: ContributionHeatmapInsight(days: store.payload.history.daily)
         case .forecast: ForecastInsight(days: store.payload.history.daily)
@@ -100,16 +108,16 @@ private struct InsightPillSwitcher: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 ForEach(visibleModes) { mode in
                     Button {
                         selected = mode
                     } label: {
                         Text(mode.rawValue)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 10.5, weight: .medium))
                             .fixedSize()
                             .foregroundStyle(selected == mode ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 4)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
@@ -131,7 +139,8 @@ private struct TrendInsight: View {
 
     private var trendDayCount: Int {
         switch period {
-        case .today, .sevenDays: return 19
+        case .today: return 1
+        case .sevenDays: return 19
         case .thirtyDays: return 30
         case .month: return 31
         case .all: return min(days.count, 90)
@@ -159,7 +168,7 @@ private struct TrendInsight: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Last \(dayCount) days")
+                    Text(period == .today ? "Today" : "Last \(dayCount) days")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
                     Text(formatHero(useTokens: useTokens, tokens: totalTokens, dollars: stats.totalThisWindow))
@@ -1180,6 +1189,292 @@ private struct OptimizeSavingsBadge: View {
         if n >= 1_000_000 { return String(format: "%.1fM", n / 1_000_000) }
         if n >= 1_000 { return String(format: "%.0fK", n / 1_000) }
         return String(format: "%.0f", n)
+    }
+}
+
+// MARK: - Codex Chats
+
+private struct CodexChatsInsight: View {
+    let report: CodexChatsReport
+    let selectedWindow: CodexChatWindow
+    let onWindowChange: (CodexChatWindow) -> Void
+    @State private var expandedProjectID: String?
+
+    private var projects: [CodexChatProject] {
+        let grouped = Dictionary(grouping: report.chats) { chat in
+            chat.projectPath.isEmpty ? chat.projectDisplayName : chat.projectPath
+        }
+        return grouped.map { key, chats in
+            let sortedChats = chats.sorted { $0.totalTokens > $1.totalTokens }
+            let first = sortedChats[0]
+            return CodexChatProject(
+                id: key,
+                name: first.projectDisplayName.isEmpty ? projectDisplayName(first.project) : first.projectDisplayName,
+                path: first.projectPath,
+                chats: sortedChats
+            )
+        }
+        .sorted { $0.totalTokens > $1.totalTokens }
+    }
+
+    private var maxTokens: Int {
+        max(projects.map(\.totalTokens).max() ?? 1, 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(report.label.isEmpty ? "Last 48h" : report.label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text("\(compactTokens(report.totals.totalTokens)) tokens")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(report.totalChats) chats")
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.brandAccent)
+                    Text("\(report.totals.calls) calls")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            HStack(spacing: 14) {
+                MiniStat(label: "Input", value: compactTokens(report.totals.inputTokens))
+                MiniStat(label: "Output", value: compactTokens(report.totals.outputTokens))
+                MiniStat(label: "Cache read", value: compactTokens(report.totals.cacheReadTokens))
+            }
+
+            HStack(spacing: 4) {
+                ForEach(CodexChatWindow.allCases) { window in
+                    Button {
+                        onWindowChange(window)
+                    } label: {
+                        Text(window.rawValue)
+                            .font(.system(size: 10, weight: .semibold))
+                            .monospacedDigit()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedWindow == window ? .white : .secondary)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(selectedWindow == window ? Theme.brandAccent : Color.secondary.opacity(0.10))
+                    )
+                    .help("Codex chats, last \(window.hours) hours")
+                }
+            }
+
+            Divider().opacity(0.5)
+
+            if projects.isEmpty {
+                Text("No Codex chats in the last \(report.hours > 0 ? report.hours : 48)h")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, minHeight: 54, alignment: .center)
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(projects.enumerated()), id: \.element.id) { _, project in
+                        CodexChatProjectRow(
+                            project: project,
+                            maxTokens: maxTokens,
+                            isExpanded: expandedProjectID == project.id,
+                            onToggle: {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                                    expandedProjectID = expandedProjectID == project.id ? nil : project.id
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if expandedProjectID == nil {
+                expandedProjectID = projects.first?.id
+            }
+        }
+    }
+
+    private func compactTokens(_ n: Int) -> String {
+        let d = Double(n)
+        if d >= 1_000_000_000 { return String(format: "%.1fB", d / 1_000_000_000) }
+        if d >= 1_000_000 { return String(format: "%.1fM", d / 1_000_000) }
+        if d >= 1_000 { return String(format: "%.0fK", d / 1_000) }
+        return "\(n)"
+    }
+}
+
+private struct CodexChatProject: Identifiable {
+    let id: String
+    let name: String
+    let path: String
+    let chats: [CodexChatEntry]
+
+    var totalTokens: Int { chats.reduce(0) { $0 + $1.totalTokens } }
+    var inputTokens: Int { chats.reduce(0) { $0 + $1.inputTokens } }
+    var outputTokens: Int { chats.reduce(0) { $0 + $1.outputTokens } }
+    var cacheReadTokens: Int { chats.reduce(0) { $0 + $1.cacheReadTokens } }
+    var calls: Int { chats.reduce(0) { $0 + $1.calls } }
+}
+
+private struct CodexChatProjectRow: View {
+    let project: CodexChatProject
+    let maxTokens: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        let ratio = CGFloat(min(max(Double(project.totalTokens) / Double(max(maxTokens, 1)), 0), 1))
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.quaternary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Theme.brandAccent.opacity(0.85))
+                    .frame(width: max(4, 54 * ratio), height: 6)
+                Text(project.name)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text("\(project.chats.count) chats")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                Text(compactTokens(project.totalTokens))
+                    .font(.codeMono(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onToggle)
+
+            HStack(spacing: 8) {
+                Text("\(project.calls) calls")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                Text("\(compactTokens(project.inputTokens)) in / \(compactTokens(project.outputTokens)) out")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text("\(compactTokens(project.cacheReadTokens)) cache")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
+                    .lineLimit(1)
+            }
+            .padding(.leading, 13)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(project.chats.enumerated()), id: \.element.sessionId) { _, chat in
+                        CodexChatRow(chat: chat)
+                    }
+                                    }
+                .padding(.top, 2)
+                .padding(.leading, 13)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.primary.opacity(0.03))
+        )
+        .help(project.path)
+    }
+
+    private func compactTokens(_ n: Int) -> String {
+        let d = Double(n)
+        if d >= 1_000_000_000 { return String(format: "%.1fB", d / 1_000_000_000) }
+        if d >= 1_000_000 { return String(format: "%.1fM", d / 1_000_000) }
+        if d >= 1_000 { return String(format: "%.0fK", d / 1_000) }
+        return "\(n)"
+    }
+}
+
+private struct CodexChatRow: View {
+    let chat: CodexChatEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(chat.chatTitle)
+                    .font(.system(size: 10.2, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text(compactTokens(chat.totalTokens))
+                    .font(.codeMono(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            HStack(spacing: 8) {
+                Text("\(chat.calls) calls")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+                Text("\(compactTokens(chat.inputTokens)) in / \(compactTokens(chat.outputTokens)) out")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                Text(shortTimestamp(chat.lastSeenAt))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.quaternary)
+                    .lineLimit(1)
+            }
+
+            if !chat.models.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(chat.models.prefix(3).enumerated()), id: \.offset) { _, model in
+                        Text(model.name)
+                            .font(.system(size: 8.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Theme.brandAccent.opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.07))
+        )
+        .help(chat.projectPath.isEmpty ? chat.sessionId : chat.projectPath)
+    }
+
+    private func compactTokens(_ n: Int) -> String {
+        let d = Double(n)
+        if d >= 1_000_000_000 { return String(format: "%.1fB", d / 1_000_000_000) }
+        if d >= 1_000_000 { return String(format: "%.1fM", d / 1_000_000) }
+        if d >= 1_000 { return String(format: "%.0fK", d / 1_000) }
+        return "\(n)"
+    }
+
+    private func shortTimestamp(_ iso: String) -> String {
+        let text = iso.replacingOccurrences(of: "T", with: " ")
+        let withoutSeconds = String(text.prefix(16))
+        return withoutSeconds.replacingOccurrences(of: "-", with: "/")
     }
 }
 

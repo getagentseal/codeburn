@@ -34,8 +34,8 @@ const TOP_MODELS_LIMIT = 20
 const TOP_FINDINGS_LIMIT = 10
 const HISTORY_DAYS_LIMIT = 365
 const SYNTHETIC_MODEL_NAME = '<synthetic>'
-const TOP_PROJECTS_LIMIT = 5
-const TOP_SESSIONS_LIMIT = 3
+const TOP_PROJECTS_LIMIT = 5000
+const TOP_SESSIONS_LIMIT = 5000
 const MODEL_EFFICIENCY_LIMIT = 5
 
 export type DailyModelBreakdown = {
@@ -72,6 +72,49 @@ export type LocalModelSavings = {
     outputTokens: number
   }>
   byProvider: Array<{ name: string; calls: number; savingsUSD: number }>
+}
+
+export type CodexChatsReport = {
+  label: string
+  provider: 'codex'
+  hours: number
+  totalChats: number
+  returnedChats: number
+  totals: {
+    calls: number
+    cost: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    totalTokens: number
+  }
+  chats: Array<{
+    project: string
+    projectDisplayName: string
+    projectPath: string
+    sessionId: string
+    sessionDisplayId: string
+    chatTitle: string
+    startedAt: string
+    lastSeenAt: string
+    calls: number
+    cost: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    totalTokens: number
+    models: Array<{
+      name: string
+      calls: number
+      cost: number
+      inputTokens: number
+      outputTokens: number
+      cacheReadTokens: number
+      cacheWriteTokens: number
+    }>
+  }>
 }
 
 export type MenubarPayload = {
@@ -162,6 +205,7 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
+    codexChats48h: CodexChatsReport
   }
   optimize: {
     findingCount: number
@@ -252,7 +296,7 @@ function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['h
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
   return (projects ?? [])
-    .filter(p => p.cost > 0 || p.savingsUSD > 0)
+    .filter(p => p.sessions > 0)
     .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
     .slice(0, TOP_PROJECTS_LIMIT)
     .map(p => ({
@@ -299,6 +343,7 @@ export type BreakdownArrays = {
   /// menubar payload defaults to an empty savings block — keeping the
   /// schema stable for consumers that don't care about local savings.
   localModelSavings?: LocalModelSavings
+  codexChats48h?: CodexChatsReport
 }
 
 export function buildMenubarPayload(
@@ -334,6 +379,15 @@ export function buildMenubarPayload(
       skills: breakdowns?.skills ?? [],
       subagents: breakdowns?.subagents ?? [],
       mcpServers: breakdowns?.mcpServers ?? [],
+      codexChats48h: breakdowns?.codexChats48h ?? {
+        label: 'Last 48 hours',
+        provider: 'codex',
+        hours: 48,
+        totalChats: 0,
+        returnedChats: 0,
+        totals: { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 },
+        chats: [],
+      },
     },
     optimize: buildOptimize(optimize),
     history: buildHistory(dailyHistory),

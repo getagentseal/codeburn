@@ -270,7 +270,7 @@ private struct Header: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     (
-                        Text("Code").foregroundStyle(.primary)
+                        Text("Code").foregroundStyle(.secondary)
                         + Text("Burn").foregroundStyle(Theme.brandEmber)
                     )
                     .font(.system(size: 13, weight: .semibold))

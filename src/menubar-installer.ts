@@ -77,6 +77,19 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+async function readPersistedCodeburnPath(): Promise<string | null> {
+  try {
+    const value = (await readFile(PERSISTED_CLI_PATH, "utf8")).trim()
+    return value.startsWith("/") ? value : null
+  } catch {
+    return null
+  }
+}
+
+function isLocalDevelopmentCliPath(cliPath: string): boolean {
+  return cliPath.endsWith("/dist/cli.js") && cliPath.includes("/codeburn/")
+}
+
 async function ensureSupportedPlatform(): Promise<void> {
   if (platform() !== SUPPORTED_OS) {
     throw new Error(`The menubar app is macOS only (detected: ${platform()}).`)
@@ -205,6 +218,12 @@ async function resolvePersistentCodeburnPath(): Promise<string> {
 }
 
 async function persistCodeburnPath(): Promise<void> {
+  const existingCliPath = await readPersistedCodeburnPath()
+  if (existingCliPath && await exists(existingCliPath) && process.env.CODEBURN_REFRESH_CLI_PATH !== '1') {
+    await chmod(PERSISTED_CLI_PATH, 0o600).catch(() => {})
+    return
+  }
+
   const cliPath = await resolvePersistentCodeburnPath()
   await mkdir(join(homedir(), 'Library', 'Application Support', 'CodeBurn'), { recursive: true, mode: 0o700 })
   await writeFile(PERSISTED_CLI_PATH, `${cliPath}\n`, { mode: 0o600 })
@@ -238,6 +257,11 @@ export async function installMenubarApp(options: { force?: boolean } = {}): Prom
   const appsDir = userApplicationsDir()
   const targetPath = join(appsDir, APP_BUNDLE_NAME)
   const alreadyInstalled = await exists(targetPath)
+  const persistedCliPath = await readPersistedCodeburnPath()
+
+  if (options.force && persistedCliPath && isLocalDevelopmentCliPath(persistedCliPath) && process.env.CODEBURN_ALLOW_REMOTE_MENUBAR_UPDATE !== '1') {
+    throw new Error('Refusing to replace a local patched CodeBurn Menubar build with a remote release. Rebuild and reinstall the local mac app, or set CODEBURN_ALLOW_REMOTE_MENUBAR_UPDATE=1 to allow the remote replacement.')
+  }
 
   if (alreadyInstalled && !options.force) {
     if (!(await isAppRunning())) {

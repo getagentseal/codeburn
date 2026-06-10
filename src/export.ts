@@ -213,13 +213,19 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
   for (const p of projects) {
     for (const s of p.sessions) {
       rows.push({
-        Project: p.projectPath,
+        Project: s.sourceProjectPath ?? p.projectPath,
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
+        'Last Seen At': s.lastTimestamp ?? '',
+        'Chat Title': s.chatTitle ?? '',
         [`Cost (${code})`]: roundForActiveCurrency(convertCost(s.totalCostUSD)),
         [`Saved (${code})`]: roundForActiveCurrency(convertCost(s.totalSavingsUSD)),
         'API Calls': s.apiCalls,
         Turns: s.turns.length,
+        'Input Tokens': s.totalInputTokens,
+        'Output Tokens': s.totalOutputTokens,
+        'Cache Read Tokens': s.totalCacheReadTokens,
+        'Cache Write Tokens': s.totalCacheWriteTokens,
       })
     }
   }
@@ -238,7 +244,7 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
     const savings = p.projects.reduce((s, proj) => s + proj.totalSavingsUSD, 0)
     const calls = p.projects.reduce((s, proj) => s + proj.totalApiCalls, 0)
     const sessions = p.projects.reduce((s, proj) => s + proj.sessions.length, 0)
-    const projectCount = p.projects.filter(proj => proj.totalCostUSD > 0 || proj.totalSavingsUSD > 0).length
+    const projectCount = p.projects.filter(proj => proj.sessions.length > 0).length
     return {
       Period: p.label,
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(cost)),

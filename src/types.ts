@@ -86,6 +86,9 @@ export type ParsedApiCall = {
   deduplicationKey: string
   cacheCreationOneHourTokens?: number
   toolSequence?: ToolCall[][]
+  chatTitle?: string
+  projectTitle?: string
+  projectPath?: string
   /// When set, `costUSD` is the actual local call (forced to 0) and
   /// `savingsUSD` is the counterfactual cost the same tokens would have
   /// incurred against `savingsBaselineModel`. Set by the savings
@@ -93,6 +96,9 @@ export type ParsedApiCall = {
   savingsUSD?: number
   savingsBaselineModel?: string
   isLocalSavings?: boolean
+  /// Metadata-only calls represent active chats/projects without exact token usage.
+  /// They keep reports visible but must not count as spend or API calls.
+  metadataOnly?: boolean
 }
 
 export type ToolCall = {
@@ -130,6 +136,8 @@ export type SessionSummary = {
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
   agentType?: string
+  sourceProjectPath?: string
+  chatTitle?: string
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number

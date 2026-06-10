@@ -5,14 +5,14 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 8: local-model savings accounting is now part of the daily rollup
-// (savingsUSD per day / per model / per category / per provider). Stale entries
-// computed by older binaries lack those fields, so MIN_SUPPORTED_VERSION is
-// also raised to 8 to force a full re-hydration. The `savingsConfigHash` field
+// Bumped to 10: Codex transcript-estimate fallback for sessions that contain
+// no token_count events. Stale entries computed by older binaries may contain
+// zero Codex totals for active Desktop sessions, so MIN_SUPPORTED_VERSION is
+// also raised to 10 to force a full re-hydration. The `savingsConfigHash` field
 // is invalidated separately when the user changes their `localModelSavings`
 // mapping so historical "saved" totals stay in sync with the active baseline.
-export const DAILY_CACHE_VERSION = 8
-const MIN_SUPPORTED_VERSION = 8
+export const DAILY_CACHE_VERSION = 10
+const MIN_SUPPORTED_VERSION = 10
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {

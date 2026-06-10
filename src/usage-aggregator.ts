@@ -1,12 +1,15 @@
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory, type DateRange } from './types.js'
-import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, buildMenubarPayload } from './menubar-json.js'
+import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type CodexChatsReport, buildMenubarPayload } from './menubar-json.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays } from './parser.js'
 import { getLocalModelSavingsConfigHash, getShortModelName } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { scanAndDetect } from './optimize.js'
+import { openDatabase } from './sqlite.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -79,6 +82,184 @@ export type AggregateOpts = {
   exclude?: string[]
   daysSelection?: { range: DateRange; label: string; days: Set<string> } | null
   optimize?: boolean
+  chatHours?: number
+}
+
+type CodexStateChatRow = {
+  id: string
+  created_at: number
+  updated_at: number
+  tokens_used: number
+  model?: string
+  cwd?: string
+  title?: string
+  first_user_message?: string
+}
+
+function sqliteNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'bigint') return Number(value)
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+  }
+  return 0
+}
+
+function sqliteString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function unixSecondsToIso(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return ''
+  return new Date(seconds * 1000).toISOString()
+}
+
+function readRecentCodexStateChats(hours: number): CodexStateChatRow[] {
+  const safeHours = Math.max(1, Math.floor(hours || 48))
+  const codexDir = process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
+  const dbPath = join(codexDir, 'state_5.sqlite')
+  if (!existsSync(dbPath)) return []
+
+  const cutoff = Math.floor((Date.now() - safeHours * 60 * 60 * 1000) / 1000)
+  let db: ReturnType<typeof openDatabase> | null = null
+  try {
+    db = openDatabase(dbPath)
+    return db.query<Record<string, unknown>>(
+      'SELECT id, created_at, updated_at, tokens_used, model, cwd, title, first_user_message ' +
+      'FROM threads ' +
+      'WHERE COALESCE(tokens_used, 0) > 0 ' +
+      'AND COALESCE(archived, 0) = 0 ' +
+      'AND COALESCE(updated_at, 0) >= ? ' +
+      'ORDER BY updated_at DESC',
+      [cutoff],
+    ).map(row => ({
+      id: sqliteString(row.id) ?? '',
+      created_at: sqliteNumber(row.created_at),
+      updated_at: sqliteNumber(row.updated_at),
+      tokens_used: sqliteNumber(row.tokens_used),
+      model: sqliteString(row.model),
+      cwd: sqliteString(row.cwd),
+      title: sqliteString(row.title),
+      first_user_message: sqliteString(row.first_user_message),
+    })).filter(row => row.id.length > 0)
+  } catch {
+    return []
+  } finally {
+    db?.close()
+  }
+}
+
+export function buildCodexChatsReport(projects: ProjectSummary[], hours: number, limit = 5000): CodexChatsReport {
+  const safeHours = Math.max(1, Math.floor(hours || 48))
+  const home = homedir()
+  const displayNameForPath = (projectPath: string, fallback: string): string => {
+    const resolved = projectPath || fallback
+    if (resolved === home || resolved === home + '/') return 'Home'
+    return resolved.split('/').filter(Boolean).pop() || fallback
+  }
+  const projectDisplayName = (project: ProjectSummary): string => {
+    const resolved = project.projectPath || project.project
+    return displayNameForPath(resolved, project.project)
+  }
+  const sessions = projects
+    .flatMap(project => project.sessions.map(session => ({ project, session })))
+    .filter(({ session }) => session.apiCalls > 0)
+    .sort((a, b) => (b.session.lastTimestamp || '').localeCompare(a.session.lastTimestamp || ''))
+
+  const parsedChats = sessions.map(({ project, session }) => {
+    const models = Object.entries(session.modelBreakdown)
+      .map(([name, model]) => ({
+        name,
+        calls: model.calls,
+        cost: model.costUSD,
+        inputTokens: model.tokens.inputTokens,
+        outputTokens: model.tokens.outputTokens,
+        cacheReadTokens: model.tokens.cacheReadInputTokens,
+        cacheWriteTokens: model.tokens.cacheCreationInputTokens,
+      }))
+      .sort((a, b) => b.cost - a.cost)
+    const totalTokens = session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens
+    return {
+      project: project.project,
+      projectDisplayName: projectDisplayName(project),
+      projectPath: project.projectPath,
+      sessionId: session.sessionId,
+      sessionDisplayId: session.sessionId.slice(-8),
+      chatTitle: session.chatTitle ?? '',
+      startedAt: session.firstTimestamp,
+      lastSeenAt: session.lastTimestamp,
+      calls: session.apiCalls,
+      cost: session.totalCostUSD,
+      inputTokens: session.totalInputTokens,
+      outputTokens: session.totalOutputTokens,
+      cacheReadTokens: session.totalCacheReadTokens,
+      cacheWriteTokens: session.totalCacheWriteTokens,
+      totalTokens,
+      models,
+    }
+  })
+
+  const seenSessionIds = new Set(parsedChats.map(chat => chat.sessionId).filter(Boolean))
+  const metadataChats = readRecentCodexStateChats(safeHours)
+    .filter(row => !seenSessionIds.has(row.id))
+    .map(row => {
+      const projectPath = row.cwd ?? ''
+      const project = projectPath || 'codex'
+      return {
+        project,
+        projectDisplayName: displayNameForPath(projectPath, project),
+        projectPath,
+        sessionId: row.id,
+        sessionDisplayId: row.id.slice(-8),
+        chatTitle: row.title ?? row.first_user_message ?? '',
+        startedAt: unixSecondsToIso(row.created_at || row.updated_at),
+        lastSeenAt: unixSecondsToIso(row.updated_at || row.created_at),
+        calls: 0,
+        cost: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 0,
+        models: row.model ? [{
+          name: row.model,
+          calls: 0,
+          cost: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }] : [],
+      }
+    })
+
+  const chats = [...parsedChats, ...metadataChats]
+    .sort((a, b) => (b.lastSeenAt || '').localeCompare(a.lastSeenAt || ''))
+    .slice(0, Math.max(1, limit))
+
+  const totals = chats.reduce((acc, chat) => {
+    acc.calls += chat.calls
+    acc.cost += chat.cost
+    acc.inputTokens += chat.inputTokens
+    acc.outputTokens += chat.outputTokens
+    acc.cacheReadTokens += chat.cacheReadTokens
+    acc.cacheWriteTokens += chat.cacheWriteTokens
+    acc.totalTokens += chat.totalTokens
+    return acc
+  }, { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 })
+
+  return {
+    label: `Last ${safeHours} hours`,
+    provider: 'codex',
+    hours: safeHours,
+    totalChats: chats.length,
+    returnedChats: chats.length,
+    totals,
+    chats,
+  }
 }
 
 /**
@@ -90,6 +271,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const pf = opts.provider ?? 'all'
   const daysSelection = opts.daysSelection ?? null
   const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project ?? [], opts.exclude ?? [])
+  const chatHours = Math.max(1, Math.floor(opts.chatHours ?? 48))
 
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -123,6 +305,8 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   let scanRange: DateRange
   let cache: DailyCache
   let todayProviderData: PeriodData | null = null
+  const chatRange: DateRange = { start: new Date(now.getTime() - chatHours * 60 * 60 * 1000), end: now }
+  const codexChats48h = buildCodexChatsReport(fp(await parseAllSessions(chatRange, 'codex')), chatHours)
 
   if (isAllProviders) {
     cache = await hydrateCache()
@@ -273,7 +457,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     sessions: p.sessions.length,
     sessionDetails: [...p.sessions]
       .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
-      .slice(0, 10)
+      .slice(0, 5000)
       .map(s => ({
         cost: s.totalCostUSD,
         savingsUSD: s.totalSavingsUSD,
@@ -319,7 +503,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       calls: s.apiCalls,
       date: s.firstTimestamp?.split('T')[0] ?? '',
     }))
-  ).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5)
+  ).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5000)
 
   // Routing waste: find cheapest reliable model (≥90% 1-shot, ≥5 edits),
   // then compute how much each pricier model overpaid.
@@ -400,6 +584,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       subagents: Object.entries(subagentMap).sort(([, a], [, b]) => b.cost - a.cost).slice(0, 10).map(([name, d]) => ({ name, ...d })),
       mcpServers: Object.entries(mcpMap).sort(([, a], [, b]) => b - a).slice(0, 10).map(([name, calls]) => ({ name, calls })),
       localModelSavings,
+      codexChats48h,
     }
   })()
 

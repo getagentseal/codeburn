@@ -34,6 +34,13 @@
   so broken files are not re-read every run. (#441, #450, #453)
 - **Codex fork dedupe** is content-addressed, fixing undercounting of
   divergent events. (#458)
+- **Codex active chat visibility without inflated token spend.** Codex reports
+  now treat sqlite thread rows as metadata-only active chat/project records, so
+  active zero-spend chats and projects stay visible while cumulative
+  `threads.tokens_used` is no longer counted as today/period spend.
+- **Codex stale cache invalidation.** Codex per-file, session, and daily
+  rollup caches now invalidate old entries that could preserve pre-fix token
+  totals, so Today recomputes from current session files.
 - **Model-name matching on the version boundary** so e.g. `claude-opus-4-6`
   and `claude-opus-4-8` no longer collapse to the same tier. (#417)
 - Vercel AI Gateway data now flows through aggregation instead of reporting $0;
