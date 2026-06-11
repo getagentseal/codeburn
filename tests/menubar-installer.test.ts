@@ -4,6 +4,7 @@ import {
   resolveLatestMenubarReleaseAssets,
   resolveMenubarReleaseAssets,
   resolvePersistentCodeburnPathFromWhichOutput,
+  resolveProxyUrlForUrl,
   type ReleaseResponse,
 } from '../src/menubar-installer.js'
 
@@ -95,5 +96,22 @@ describe('resolveMenubarReleaseAssets', () => {
     expect(() => resolvePersistentCodeburnPathFromWhichOutput(
       '/Users/me/.npm/_npx/abcd/node_modules/.bin/codeburn'
     )).toThrow(/Install CodeBurn globally first/)
+  })
+
+  it('uses HTTPS proxy for GitHub HTTPS downloads', () => {
+    const proxyUrl = resolveProxyUrlForUrl('https://api.github.com/repos/getagentseal/codeburn/releases', {
+      HTTPS_PROXY: 'http://proxy.company.test:8080',
+    })
+
+    expect(proxyUrl).toBe('http://proxy.company.test:8080')
+  })
+
+  it('bypasses proxy when NO_PROXY matches the download host', () => {
+    const proxyUrl = resolveProxyUrlForUrl('https://api.github.com/repos/getagentseal/codeburn/releases', {
+      HTTPS_PROXY: 'http://proxy.company.test:8080',
+      NO_PROXY: '.github.com',
+    })
+
+    expect(proxyUrl).toBeUndefined()
   })
 })

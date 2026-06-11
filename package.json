@@ -53,6 +53,7 @@
     "ink": "^7.0.0",
     "react": "^19.2.5",
     "strip-ansi": "^7.2.0",
+    "undici": "^7.27.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {
