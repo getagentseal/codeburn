@@ -493,3 +493,15 @@ describe('codex provider - forked session dedupe', () => {
     expect(tokens).toBe(300)
   })
 })
+
+describe('codex provider - modelDisplayName', () => {
+  it('maps gpt-5.3-codex-spark to its own display name (not GPT-5.3 Codex) - fix #461', () => {
+    const provider = createCodexProvider('/nonexistent/path')
+    expect(provider.modelDisplayName('gpt-5.3-codex-spark')).toBe('GPT-5.3 Codex Spark')
+  })
+
+  it('still maps the base gpt-5.3-codex to GPT-5.3 Codex', () => {
+    const provider = createCodexProvider('/nonexistent/path')
+    expect(provider.modelDisplayName('gpt-5.3-codex')).toBe('GPT-5.3 Codex')
+  })
+})
