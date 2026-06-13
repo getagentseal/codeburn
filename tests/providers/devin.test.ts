@@ -73,6 +73,11 @@ function createSessionsDb(): void {
 }
 
 describe('devin provider', () => {
+  it('keeps raw model ids in display names', () => {
+    const provider = createDevinProvider(tmpDir)
+    expect(provider.modelDisplayName('gpt-5-3-codex-xhigh')).toBe('gpt-5-3-codex-xhigh')
+  })
+
   it('discovers Devin CLI transcript json files', async () => {
     await configureDevinRate()
     const filePath = await writeTranscript('glimmer-platinum.json', { steps: [] })

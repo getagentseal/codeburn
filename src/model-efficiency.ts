@@ -22,6 +22,11 @@ function rate(num: number, den: number): number | null {
 export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string, ModelEfficiency> {
   const byModel = new Map<string, MutableModelEfficiency>()
 
+  function modelKey(provider: string, model: string): string {
+    if (provider === 'devin') return model
+    return getShortModelName(model)
+  }
+
   function ensure(model: string): MutableModelEfficiency {
     let stats = byModel.get(model)
     if (!stats) {
@@ -36,16 +41,16 @@ export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string
       for (const turn of session.turns) {
         if (!turn.hasEdits || turn.assistantCalls.length === 0) continue
 
-        const primaryCall = turn.assistantCalls.find(c => getShortModelName(c.model) !== '<synthetic>')
+        const primaryCall = turn.assistantCalls.find(c => modelKey(c.provider, c.model) !== '<synthetic>')
         if (!primaryCall) continue
-        const primaryModel = getShortModelName(primaryCall.model)
+        const primaryModel = modelKey(primaryCall.provider, primaryCall.model)
 
         const stats = ensure(primaryModel)
         stats.editTurns++
         if (turn.retries === 0) stats.oneShotTurns++
         stats.retries += turn.retries
         stats.editCostUSD += turn.assistantCalls.reduce((sum, call) => {
-          return getShortModelName(call.model) === '<synthetic>' ? sum : sum + call.costUSD
+          return modelKey(call.provider, call.model) === '<synthetic>' ? sum : sum + call.costUSD
         }, 0)
       }
     }

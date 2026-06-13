@@ -2,7 +2,6 @@ import { readdir, stat } from "fs/promises";
 import { basename, join } from "path";
 import { homedir } from "os";
 
-import { getShortModelName } from "../models.js";
 import { openDatabase } from "../sqlite.js";
 import { readConfig } from "../config.js";
 import type {
@@ -336,7 +335,7 @@ export function createDevinProvider(cliDir: string): Provider {
     displayName: DEVIN_PROVIDER_DISPLAY_NAME,
 
     modelDisplayName(model: string): string {
-      return getShortModelName(model);
+      return model;
     },
 
     toolDisplayName(rawTool: string): string {
