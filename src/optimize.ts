@@ -202,6 +202,35 @@ export type OptimizeResult = {
   healthGrade: HealthGrade
 }
 
+export type OptimizeJsonReport = {
+  period: {
+    label: string
+    start: string | null
+    end: string | null
+  }
+  summary: {
+    healthScore: number
+    healthGrade: HealthGrade
+    findingCount: number
+    periodCostUSD: number
+    sessions: number
+    calls: number
+    potentialSavingsTokens: number
+    potentialSavingsCostUSD: number
+    potentialSavingsPercent: number | null
+    costRateUSD: number
+  }
+  findings: Array<{
+    title: string
+    explanation: string
+    severity: Impact
+    trend: Trend | null
+    tokensSaved: number
+    estimatedSavingsUSD: number
+    fix: WasteAction
+  }>
+}
+
 export type ToolCall = {
   name: string
   input: Record<string, unknown>
@@ -2476,19 +2505,74 @@ export async function runOptimize(
   projects: ProjectSummary[],
   periodLabel: string,
   dateRange?: DateRange,
+  opts: { format?: 'text' | 'json' } = {},
 ): Promise<void> {
-  if (projects.length === 0) {
+  const format = opts.format ?? 'text'
+  if (projects.length === 0 && format === 'text') {
     console.log(chalk.dim('\n  No usage data found for this period.\n'))
     return
   }
 
-  process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
+  if (format === 'text') {
+    process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
+  }
 
-  const { findings, costRate, healthScore, healthGrade } = await scanAndDetect(projects, dateRange)
+  const result = await scanAndDetect(projects, dateRange)
+  const { findings, costRate, healthScore, healthGrade } = result
   const sessions = projects.flatMap(p => p.sessions)
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const callCount = projects.reduce((s, p) => s + p.totalApiCalls, 0)
 
+  if (format === 'json') {
+    console.log(JSON.stringify(buildOptimizeJsonReport(projects, periodLabel, result, dateRange), null, 2))
+    return
+  }
+
   const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade)
   console.log(output)
+}
+
+export function buildOptimizeJsonReport(
+  projects: ProjectSummary[],
+  periodLabel: string,
+  result: OptimizeResult,
+  dateRange?: DateRange,
+): OptimizeJsonReport {
+  const sessions = projects.flatMap(p => p.sessions)
+  const periodCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const calls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  const potentialSavingsTokens = result.findings.reduce((s, f) => s + f.tokensSaved, 0)
+  const potentialSavingsCostUSD = potentialSavingsTokens * result.costRate
+  const potentialSavingsPercent = periodCostUSD > 0
+    ? Math.round((potentialSavingsCostUSD / periodCostUSD) * 1000) / 10
+    : null
+
+  return {
+    period: {
+      label: periodLabel,
+      start: dateRange?.start.toISOString() ?? null,
+      end: dateRange?.end.toISOString() ?? null,
+    },
+    summary: {
+      healthScore: result.healthScore,
+      healthGrade: result.healthGrade,
+      findingCount: result.findings.length,
+      periodCostUSD,
+      sessions: sessions.length,
+      calls,
+      potentialSavingsTokens,
+      potentialSavingsCostUSD,
+      potentialSavingsPercent,
+      costRateUSD: result.costRate,
+    },
+    findings: result.findings.map(f => ({
+      title: f.title,
+      explanation: f.explanation,
+      severity: f.impact,
+      trend: f.trend ?? null,
+      tokensSaved: f.tokensSaved,
+      estimatedSavingsUSD: f.tokensSaved * result.costRate,
+      fix: f.fix,
+    })),
+  }
 }

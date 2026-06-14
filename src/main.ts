@@ -1033,11 +1033,13 @@ program
   .description('Find token waste and get exact fixes')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (opts) => {
+    assertFormat(opts.format, ['text', 'json'], 'optimize')
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
     const projects = await parseAllSessions(range, opts.provider)
-    await runOptimize(projects, label, range)
+    await runOptimize(projects, label, range, { format: opts.format })
   })
 
 program
@@ -1111,12 +1113,20 @@ program
   .command('yield')
   .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'week')
+  .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (opts) => {
-    const { computeYield, formatYieldSummary } = await import('./yield.js')
+    assertFormat(opts.format, ['text', 'json'], 'yield')
+    const { computeYield, formatYieldSummary, buildYieldJsonReport } = await import('./yield.js')
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
-    console.log(`\n  Analyzing yield for ${label}...\n`)
+    if (opts.format !== 'json') {
+      console.log(`\n  Analyzing yield for ${label}...\n`)
+    }
     const summary = await computeYield(range, process.cwd())
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(buildYieldJsonReport(summary, label, range), null, 2))
+      return
+    }
     console.log(formatYieldSummary(summary))
   })
 
