@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 /// Owns the lifecycle of Claude OAuth credentials, mirroring CodexBar's pattern:
@@ -201,18 +200,30 @@ enum ClaudeCredentialStore {
     /// entries under different account names — older versions used "agentseal"
     /// (a hardcoded company-style identifier) while Claude Code 2.1.x writes
     /// under `$USER` (NSUserName()). After a user re-runs `/login`, both
-    /// entries can coexist and `SecItemCopyMatching` with kSecMatchLimitOne
-    /// often returns the older stale one. We try the user-keyed entry first
-    /// (the modern format), then fall back to the unscoped query for older
-    /// installations.
+    /// entries can coexist and a service-only lookup often returns the older
+    /// stale one. We try the user-keyed entry first (the modern format), then
+    /// fall back to the unscoped query for older installations.
+    ///
+    /// Silent background reads go through the `security` CLI rather than the
+    /// Security framework. The Apple-signed `security` binary sits in the
+    /// keychain item's `apple-tool:` partition, so it never raises the
+    /// partition-list prompt. The framework API does — and re-prompts every
+    /// time Claude Code rotates its credential and resets the item's partition
+    /// list, dropping our app from the allowed set (issue #490). Only the
+    /// user-initiated bootstrap still reads through the framework, where a
+    /// single consent prompt is expected.
     private static func readClaudeKeychain(allowUI: Bool) throws -> CredentialRecord? {
-        if let record = try readClaudeKeychain(account: NSUserName(), allowUI: allowUI) {
+        if !allowUI {
+            return readClaudeKeychainSilently(account: NSUserName())
+                ?? readClaudeKeychainSilently(account: nil)
+        }
+        if let record = try readClaudeKeychainPrompting(account: NSUserName()) {
             return record
         }
-        return try readClaudeKeychain(account: nil, allowUI: allowUI)
+        return try readClaudeKeychainPrompting(account: nil)
     }
 
-    private static func readClaudeKeychain(account: String?, allowUI: Bool) throws -> CredentialRecord? {
+    private static func readClaudeKeychainPrompting(account: String?) throws -> CredentialRecord? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: claudeKeychainService,
@@ -220,24 +231,38 @@ enum ClaudeCredentialStore {
             kSecReturnData as String: true,
         ]
         if let account { query[kSecAttrAccount as String] = account }
-        if !allowUI {
-            // Background refresh cycles must never raise a keychain prompt. Fail
-            // the read instead. Relies on the user having granted "Always Allow"
-            // on the one-time bootstrap prompt.
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        // Silent read that would need interaction: treat as "no fresher token
-        // available", not an error. The caller falls back to the cached token.
-        if !allowUI, status == errSecInteractionNotAllowed { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
             throw StoreError.keychainReadFailed(status)
         }
         return try parseClaudeBlob(data: sanitizeClaudeBlob(data))
+    }
+
+    /// Reads Claude's keychain entry via `/usr/bin/security`, which never raises
+    /// the partition-list prompt. Returns nil on any failure so the caller falls
+    /// back to the cached token.
+    private static func readClaudeKeychainSilently(account: String?) -> CredentialRecord? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        var args = ["find-generic-password", "-s", claudeKeychainService]
+        if let account { args += ["-a", account] }
+        args.append("-w")
+        process.arguments = args
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return try? parseClaudeBlob(data: sanitizeClaudeBlob(data))
+        } catch {
+            return nil
+        }
     }
 
     /// Claude Code's keychain writer line-wraps long values (newline + leading
