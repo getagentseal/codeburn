@@ -36,6 +36,15 @@ Copilot does not always tag the model on each message. The parser infers it from
 
 See `copilot.ts:176-213`.
 
+## Pricing (read this before comparing to the GitHub dashboard)
+
+**CodeBurn's Copilot cost is a token-based estimate and will not match your GitHub Copilot bill.** They measure different things:
+
+- **CodeBurn** prices Copilot usage as `tokens × the underlying model's API rate`. Copilot's logs don't record a billed amount and often don't tag the model, so the parser infers the model family from the tool-call-ID prefix (see Model inference) and prices the tokens at Anthropic/OpenAI **API** rates. Calls are flagged `costIsEstimated`.
+- **GitHub** bills by **metered usage**, not tokens: the legacy **premium-request** model (`requests × per-model multiplier × $0.04`, against a monthly allowance) for annual Pro/Pro+ plans, or the newer **usage-based AI Credits** model (1 credit = $0.01) that GitHub moved to on 2026-06-01 for everyone else.
+
+Because a token estimate and a request-multiplier / credit charge are different units, the two figures diverge — and the gap widened with metered billing. Treat the Copilot number as a relative token-spend signal, not a dollar-accurate bill. Modeling GitHub's metered billing directly is tracked separately; the multiplier table has changed silently in the past, so it needs per-plan calibration against a real dashboard.
+
 ## Quirks
 
 - `toolRequests` can be missing or non-array on older sessions; the parser guards against that (`copilot.ts:126`, `:260`).
