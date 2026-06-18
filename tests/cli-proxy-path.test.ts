@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// Each test spawns `tsx src/cli.ts` several times, which re-transpiles the CLI
+// on every spawn. Under full-suite parallel load those spawns contend for CPU
+// and can exceed the 5s default, so give this spawn-based file a timeout that
+// matches the per-spawn cap below. The slowest test runs ~1.7s in isolation.
+vi.setConfig({ testTimeout: 30_000 })
 
 let homes: string[] = []
 
