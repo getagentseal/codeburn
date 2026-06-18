@@ -154,6 +154,22 @@ async function loadCrush(): Promise<Provider | null> {
 
 const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, devin, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, mux, openclaw, pi, omp, qwen, rooCode]
 
+// Lazily loaded providers, listed by name so --provider validation works even
+// when an optional module fails to load. Must stay in sync with getAllProviders.
+const lazyProviderNames = ['antigravity', 'forge', 'goose', 'cursor', 'opencode', 'cursor-agent', 'crush', 'warp', 'vercel-gateway']
+
+// Canonical set of every provider name (core + lazy), used to validate the
+// --provider CLI flag. Computed lazily so importing this module never depends on
+// every provider object being defined at load time (e.g. under test mocks).
+let allProviderNamesCache: string[] | undefined
+export function allProviderNames(): readonly string[] {
+  allProviderNamesCache ??= [
+    ...coreProviders.map(p => p.name),
+    ...lazyProviderNames,
+  ].sort()
+  return allProviderNamesCache
+}
+
 export async function getAllProviders(): Promise<Provider[]> {
   const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw] = await Promise.all([
     loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(),

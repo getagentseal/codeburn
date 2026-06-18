@@ -4,6 +4,7 @@ import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing, setModelAliases, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
+import { allProviderNames } from './providers/index.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
@@ -120,6 +121,15 @@ function assertFormat(value: string, allowed: readonly string[], command: string
     )
     process.exit(1)
   }
+}
+
+function assertProvider(value: string, command: string): void {
+  const names = allProviderNames()
+  if (value === 'all' || names.includes(value)) return
+  process.stderr.write(
+    `codeburn ${command}: unknown provider "${value}". Valid values: all, ${names.join(', ')}.\n`
+  )
+  process.exit(1)
 }
 
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
@@ -421,6 +431,7 @@ program
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
+    assertProvider(opts.provider, 'report')
     let customRange: DateRange | null = null
     let daySelection: ReturnType<typeof parseDayFlag> = null
     try {
@@ -473,6 +484,7 @@ program
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
+    assertProvider(opts.provider, 'status')
     if (opts.day && (opts.from || opts.to)) {
       process.stderr.write('error: --day cannot be combined with --from or --to\n')
       process.exit(1)
@@ -553,6 +565,7 @@ program
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
+    assertProvider(opts.provider, 'today')
     if (opts.format === 'json') {
       await runJsonReport('today', opts.provider, opts.project, opts.exclude)
       return
@@ -570,6 +583,7 @@ program
   .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
+    assertProvider(opts.provider, 'month')
     if (opts.format === 'json') {
       await runJsonReport('month', opts.provider, opts.project, opts.exclude)
       return
@@ -589,6 +603,7 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['csv', 'json'], 'export')
+    assertProvider(opts.provider, 'export')
     await loadPricing()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
@@ -1036,6 +1051,7 @@ program
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (opts) => {
     assertFormat(opts.format, ['text', 'json'], 'optimize')
+    assertProvider(opts.provider, 'optimize')
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
     const projects = await parseAllSessions(range, opts.provider)
@@ -1048,6 +1064,7 @@ program
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .action(async (opts) => {
+    assertProvider(opts.provider, 'compare')
     await loadPricing()
     const { range } = getDateRange(opts.period)
     await renderCompare(range, opts.provider)
@@ -1067,6 +1084,7 @@ program
   .option('--no-totals', 'Suppress the footer totals row')
   .option('--format <format>', 'Output format: table, markdown, json, csv', 'table')
   .action(async (opts) => {
+    assertProvider(opts.provider, 'models')
     const { aggregateModels, renderTable, renderMarkdown, renderJson, renderCsv } = await import('./models-report.js')
     await loadPricing()
 

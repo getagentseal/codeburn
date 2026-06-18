@@ -1085,6 +1085,10 @@ export async function renderDashboard(period: Period = 'week', provider: string 
     await waitUntilExit()
   } else {
     const { unmount } = render(<StaticDashboard projects={filteredProjects} period={period} activeProvider={provider} planUsages={planUsages} label={label} dayMode={initialDay != null} />, { patchConsole: false })
+    // Non-interactive one-shot output: ink schedules the frame through a
+    // throttled render, so yield a tick to let it flush to stdout before
+    // unmounting. Unmounting synchronously can race the flush and drop output.
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
     unmount()
   }
 }
