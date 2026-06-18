@@ -5,12 +5,10 @@ import { randomBytes } from 'crypto'
 
 import type { ParsedProviderCall } from './providers/types.js'
 
-// Bumped to 3 for the workspace-aware breakdown change: the cursor parser
-// now derives `sessionId` from the bubble row key (the real composer id)
-// rather than the empty `conversationId` JSON field, and the workspace
-// router relies on those composer ids to bucket calls per project.
-// Version 2 caches contain `sessionId: 'unknown'` for every call and would
-// route everything to the orphan project, so we invalidate them.
+// Bumped to 4 for the paged Cursor bubble scan: version 3 caches could have
+// been populated from the historic "newest 250k bubbles" cap and therefore
+// may be missing older in-window calls even when the DB file itself has not
+// changed.
 const CURSOR_CACHE_VERSION = 4
 
 type ResultCache = {
@@ -24,7 +22,7 @@ type ResultCache = {
 const CACHE_FILE = 'cursor-results.json'
 
 function getCacheDir(): string {
-  return join(homedir(), '.cache', 'codeburn')
+  return process.env['CODEBURN_CACHE_DIR'] ?? join(homedir(), '.cache', 'codeburn')
 }
 
 function getCachePath(): string {

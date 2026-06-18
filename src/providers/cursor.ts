@@ -25,6 +25,10 @@ export function getCursorTimeFloor(dateRange?: DateRange): string {
 
 const CURSOR_COST_MODEL = 'claude-sonnet-4-5'
 
+function verbose(): boolean {
+  return process.env['CODEBURN_VERBOSE'] === '1'
+}
+
 const modelDisplayNames: Record<string, string> = {
   'claude-4.5-opus-high-thinking': 'Opus 4.5 (Thinking)',
   'claude-4-opus': 'Opus 4',
@@ -43,6 +47,7 @@ const modelDisplayNames: Record<string, string> = {
 }
 
 type BubbleRow = {
+  row_id: number
   bubble_key: string
   input_tokens: number | null
   output_tokens: number | null
@@ -301,6 +306,7 @@ function modelForDisplay(raw: string | null): string {
 
 const BUBBLE_QUERY_BASE = `
   SELECT
+    ROWID as row_id,
     key as bubble_key,
     json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
@@ -328,29 +334,13 @@ const AGENTKV_QUERY = `
   ORDER BY ROWID ASC
 `
 
-const USER_MESSAGES_QUERY = `
-  SELECT
-    json_extract(value, '$.conversationId') as conversation_id,
-    json_extract(value, '$.createdAt') as created_at,
-    CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as text
-  FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%'
-    AND json_extract(value, '$.type') = 1
-    AND (json_extract(value, '$.createdAt') > ? OR json_extract(value, '$.createdAt') IS NULL)
-  ORDER BY ROWID ASC
-`
-
-// Split into HEAD (predicates we always emit) and TAIL (ORDER BY) so the
-// caller can splice in an optional `ROWID >= ?` cutoff without rewriting
-// the whole template. The original combined string is preserved as
-// BUBBLE_QUERY_SINCE for any caller that doesn't want the cap.
-const BUBBLE_QUERY_SINCE_HEAD = BUBBLE_QUERY_BASE + `
+const BUBBLE_QUERY_PAGE = BUBBLE_QUERY_BASE + `
     AND json_extract(value, '$.createdAt') IS NOT NULL
-    AND json_extract(value, '$.createdAt') > ?`
-const BUBBLE_QUERY_SINCE_TAIL = `
-  ORDER BY ROWID ASC
+    AND ROWID < ?
+  ORDER BY ROWID DESC
+  LIMIT ?
 `
-const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_SINCE_HEAD + BUBBLE_QUERY_SINCE_TAIL
+const BUBBLE_QUERY_PAGE_SIZE = 10_000
 
 function validateSchema(db: SqliteDatabase): boolean {
   try {
@@ -363,8 +353,6 @@ function validateSchema(db: SqliteDatabase): boolean {
   }
 }
 
-type UserMsgRow = { conversation_id: string; created_at: string; text: Uint8Array | string }
-
 /// Per-conversation user-message buffer. We pop messages in arrival order via
 /// the `pos` cursor — a previous implementation called Array.shift() which is
 /// O(n) per call on large conversations and pinned multi-GB Cursor DBs at
@@ -374,21 +362,21 @@ type UserMessageQueue = {
   pos: number
 }
 
-function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, UserMessageQueue> {
+function buildUserMessageMap(rows: BubbleRow[]): Map<string, UserMessageQueue> {
   const map = new Map<string, UserMessageQueue>()
-  try {
-    const rows = db.query<UserMsgRow>(USER_MESSAGES_QUERY, [timeFloor])
-    for (const row of rows) {
-      if (!row.conversation_id || !row.text) continue
-      const text = blobToText(row.text)
-      const existing = map.get(row.conversation_id)
-      if (existing) {
-        existing.messages.push(text)
-      } else {
-        map.set(row.conversation_id, { messages: [text], pos: 0 })
-      }
+
+  for (const row of rows) {
+    if (row.bubble_type !== 1 || !row.user_text) continue
+    const conversationId = parseComposerIdFromKey(row.bubble_key)
+    if (!conversationId) continue
+    const text = blobToText(row.user_text)
+    const existing = map.get(conversationId)
+    if (existing) {
+      existing.messages.push(text)
+    } else {
+      map.set(conversationId, { messages: [text], pos: 0 })
     }
-  } catch {}
+  }
   return map
 }
 
@@ -400,66 +388,36 @@ function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: 
   return msg
 }
 
-function parseBubbles(
-  db: SqliteDatabase,
-  seenKeys: Set<string>,
-  timeFloor: string,
-): { calls: ParsedProviderCall[] } {
+function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, timeFloor: string): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
-  // Hard cap on rows to scan. The BUBBLE_QUERY_SINCE filter relies on
-  // json_extract over the value BLOB, which SQLite cannot serve from an
-  // index — every row is JSON-decoded. Multi-GB Cursor DBs (power users,
-  // years of usage) regularly exceed 500k bubble rows and were producing
-  // 30s+ parse stalls. Compute a ROWID cutoff that limits the scan to the
-  // MAX_BUBBLES most-recent bubbles when the user is over the cap, and
-  // warn so they know older sessions may be missing.
-  const MAX_BUBBLES = 250_000
-  let rowIdCutoff = 0
+  const collected: BubbleRow[] = []
+  let beforeRowId = Number.MAX_SAFE_INTEGER
   try {
-    const countRows = db.query<{ cnt: number }>(
-      "SELECT COUNT(*) as cnt FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
-    )
-    const total = countRows[0]?.cnt ?? 0
-    if (total > MAX_BUBBLES) {
-      // Find the ROWID of the (MAX_BUBBLES)th most-recent bubble. Anything
-      // below this rowid is older and gets skipped. Bubbles are written
-      // chronologically so ROWID order ≈ insertion order.
-      const cutoffRows = db.query<{ rid: number }>(
-        `SELECT MIN(rid) as rid FROM (
-           SELECT ROWID as rid FROM cursorDiskKV
-           WHERE key LIKE 'bubbleId:%'
-           ORDER BY ROWID DESC
-           LIMIT ?
-         )`,
-        [MAX_BUBBLES]
-      )
-      rowIdCutoff = cutoffRows[0]?.rid ?? 0
-      process.stderr.write(
-        `codeburn: Cursor database has ${total.toLocaleString()} bubbles, ` +
-        `scanning the most recent ${MAX_BUBBLES.toLocaleString()}. ` +
-        `Older sessions may be missing from this report.\n`
-      )
+    while (true) {
+      const rows = db.query<BubbleRow>(BUBBLE_QUERY_PAGE, [beforeRowId, BUBBLE_QUERY_PAGE_SIZE])
+      if (rows.length === 0) break
+      beforeRowId = rows[rows.length - 1]!.row_id
+
+      let allRowsOutsideWindow = true
+      for (const row of rows) {
+        const createdAt = row.created_at ?? ''
+        if (createdAt > timeFloor) {
+          collected.push(row)
+          allRowsOutsideWindow = false
+        }
+      }
+      if (allRowsOutsideWindow) break
     }
-  } catch { /* best-effort diagnostic */ }
-
-  const userMessages = buildUserMessageMap(db, timeFloor)
-
-  // Append the rowid cutoff when active. Empty string when not capped so the
-  // query string compares identically to the un-capped version on small DBs.
-  const rowIdFilter = rowIdCutoff > 0 ? ' AND ROWID >= ?' : ''
-  const params: unknown[] = rowIdCutoff > 0 ? [timeFloor, rowIdCutoff] : [timeFloor]
-  const cappedQuery = BUBBLE_QUERY_SINCE_HEAD + rowIdFilter + BUBBLE_QUERY_SINCE_TAIL
-
-  let rows: BubbleRow[]
-  try {
-    rows = db.query<BubbleRow>(cappedQuery, params)
   } catch {
     return { calls: results }
   }
 
-  for (const row of rows) {
+  collected.sort((a, b) => a.row_id - b.row_id)
+  const userMessages = buildUserMessageMap(collected)
+
+  for (const row of collected) {
     try {
       let inputTokens = row.input_tokens ?? 0
       let outputTokens = row.output_tokens ?? 0
@@ -540,7 +498,7 @@ function parseBubbles(
     }
   }
 
-  if (skipped > 0) {
+  if (skipped > 0 && verbose()) {
     process.stderr.write(`codeburn: skipped ${skipped} unreadable Cursor entries\n`)
   }
 
@@ -677,13 +635,62 @@ function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string)
   return { calls: results }
 }
 
-function createParser(
-  source: SessionSource,
-  seenKeys: Set<string>,
-  dateRange?: DateRange,
-): SessionParser {
-  const timeFloor = getCursorTimeFloor(dateRange)
+const parsedDbCache = new Map<string, Promise<ParsedProviderCall[] | null>>()
 
+function parsedDbCacheKey(dbPath: string, timeFloor: string): string {
+  try {
+    const s = statSync(dbPath)
+    return `${dbPath}:${s.mtimeMs}:${s.size}:${timeFloor}`
+  } catch {
+    return `${dbPath}:missing:${timeFloor}`
+  }
+}
+
+async function loadParsedCursorCalls(dbPath: string, timeFloor: string): Promise<ParsedProviderCall[] | null> {
+  const cacheKey = parsedDbCacheKey(dbPath, timeFloor)
+  const existing = parsedDbCache.get(cacheKey)
+  if (existing) return existing
+
+  const promise = (async () => {
+    const cached = await readCachedResults(dbPath, timeFloor)
+    if (cached) return cached
+
+    let db: SqliteDatabase
+    try {
+      db = openDatabase(dbPath)
+    } catch (err) {
+      process.stderr.write(`codeburn: cannot open Cursor database: ${err instanceof Error ? err.message : err}\n`)
+      return null
+    }
+    try {
+      if (!validateSchema(db)) {
+        process.stderr.write('codeburn: Cursor storage format not recognized. You may need to update CodeBurn.\n')
+        return null
+      }
+      // Use a fresh local Set for intra-parse dedup so the global
+      // seenKeys is not mutated by calls that the workspace filter is
+      // about to drop. Cross-source dedup happens at yield time.
+      const localSeen = new Set<string>()
+      const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor)
+      const { calls: agentKvCalls } = parseAgentKv(db, localSeen, dbPath)
+      const allCalls = [...bubbleCalls, ...agentKvCalls]
+      await writeCachedResults(dbPath, allCalls, timeFloor)
+      return allCalls
+    } finally {
+      db.close()
+    }
+  })()
+
+  parsedDbCache.set(cacheKey, promise)
+  try {
+    return await promise
+  } catch (err) {
+    parsedDbCache.delete(cacheKey)
+    throw err
+  }
+}
+
+function createParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -718,38 +725,11 @@ function createParser(
         }
       }
 
-      // Cache is keyed on the bare DB path so multiple workspace-scoped
-      // sources reuse one parsed bubble set per CLI run. Filtering happens
-      // post-cache so each source emits only its own composers.
-      let allCalls: ParsedProviderCall[] | null = null
-      const cached = await readCachedResults(dbPath, timeFloor)
-      if (cached) {
-        allCalls = cached
-      } else {
-        let db: SqliteDatabase
-        try {
-          db = openDatabase(dbPath)
-        } catch (err) {
-          process.stderr.write(`codeburn: cannot open Cursor database: ${err instanceof Error ? err.message : err}\n`)
-          return
-        }
-        try {
-          if (!validateSchema(db)) {
-            process.stderr.write('codeburn: Cursor storage format not recognized. You may need to update CodeBurn.\n')
-            return
-          }
-          // Use a fresh local Set for intra-parse dedup so the global
-          // seenKeys is not mutated by calls that the workspace filter is
-          // about to drop. Cross-source dedup happens at yield time.
-          const localSeen = new Set<string>()
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor)
-          const { calls: agentKvCalls } = parseAgentKv(db, localSeen, dbPath)
-          allCalls = [...bubbleCalls, ...agentKvCalls]
-          await writeCachedResults(dbPath, allCalls, timeFloor)
-        } finally {
-          db.close()
-        }
-      }
+      // Cache is keyed on the bare DB path and requested lower bound so multiple
+      // workspace-scoped sources reuse one parsed bubble set per CLI run.
+      // Filtering happens post-cache so each source emits only its own composers.
+      const allCalls = await loadParsedCursorCalls(dbPath, getCursorTimeFloor(dateRange))
+      if (!allCalls) return
 
       for (const call of allCalls) {
         if (composerFilter !== null) {
