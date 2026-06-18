@@ -70,6 +70,20 @@ function functionCall(name: string, timestamp?: string) {
   })
 }
 
+function mcpToolCallEnd(server: string, tool: string, timestamp?: string) {
+  return JSON.stringify({
+    type: 'event_msg',
+    timestamp: timestamp ?? '2026-04-14T10:00:30Z',
+    payload: {
+      type: 'mcp_tool_call_end',
+      call_id: 'call-1',
+      invocation: { server, tool, arguments: {} },
+      duration: '1.2s',
+      result: { Ok: { content: [] } },
+    },
+  })
+}
+
 function userMessage(text: string, timestamp?: string) {
   return JSON.stringify({
     type: 'response_item',
@@ -277,6 +291,30 @@ describe('codex provider - JSONL parsing', () => {
     expect(call.sessionId).toBe('sess-parse')
     expect(call.costUSD).toBeGreaterThan(0)
     expect(call.deduplicationKey).toContain('codex:')
+  })
+
+  it('attributes MCP calls emitted as event_msg/mcp_tool_call_end', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),
+      userMessage('look up the issue'),
+      mcpToolCallEnd('github', 'get_issue'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__github__get_issue'])
   })
 
   it('normalizes Codex subagent tool calls to Agent', async () => {

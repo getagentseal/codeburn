@@ -405,6 +405,22 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
+        // Recent Codex emits MCP calls as `event_msg`/`mcp_tool_call_end`
+        // instead of a `function_call` response_item, so the call was never
+        // attributed. Rebuild the canonical `mcp__<server>__<tool>` name the
+        // classifier recognizes.
+        if (entry.type === 'event_msg' && entry.payload?.type === 'mcp_tool_call_end') {
+          const inv = (entry.payload as Record<string, unknown>)['invocation'] as Record<string, unknown> | undefined
+          const server = typeof inv?.['server'] === 'string' ? inv['server'] as string : ''
+          const tool = typeof inv?.['tool'] === 'string' ? inv['tool'] as string : ''
+          if (server && tool) {
+            const name = `mcp__${server}__${tool}`
+            pendingTools.push(name)
+            pendingToolSequence.push([{ tool: name }])
+          }
+          continue
+        }
+
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'user') {
           const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'input_text')

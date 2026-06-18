@@ -6,7 +6,9 @@ import { homedir } from 'os'
 
 import type { ParsedProviderCall } from './providers/types.js'
 
-const CODEX_CACHE_VERSION = 3
+// v4: attribute MCP calls emitted as event_msg/mcp_tool_call_end (issue #478).
+// Recent Codex sessions cached under v3 dropped these, so force a re-parse.
+const CODEX_CACHE_VERSION = 4
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }
