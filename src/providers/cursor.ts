@@ -53,6 +53,9 @@ type BubbleRow = {
   text_length: number | null
   bubble_type: number | null
   code_blocks: Uint8Array | string | null
+  /// Only populated on the paged scan path (BUBBLE_QUERY_PAGE) used for very
+  /// large databases; undefined on the un-paged BUBBLE_QUERY_SINCE path.
+  rid?: number
 }
 
 type AgentKvRow = {
@@ -352,6 +355,29 @@ const BUBBLE_QUERY_SINCE_TAIL = `
 `
 const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_SINCE_HEAD + BUBBLE_QUERY_SINCE_TAIL
 
+// Paged variant for very large DBs: fetches one ROWID-descending page below a
+// cursor. Returns ROWID and createdAt so the caller can stop once it has paged
+// past the requested window floor. No date predicate here — the caller filters
+// by createdAt in JS so it can see the window boundary.
+const BUBBLE_QUERY_PAGE = `
+  SELECT
+    key as bubble_key,
+    ROWID as rid,
+    json_extract(value, '$.tokenCount.inputTokens') as input_tokens,
+    json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
+    json_extract(value, '$.modelInfo.modelName') as model,
+    json_extract(value, '$.createdAt') as created_at,
+    json_extract(value, '$.conversationId') as conversation_id,
+    CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as user_text,
+    length(json_extract(value, '$.text')) as text_length,
+    json_extract(value, '$.type') as bubble_type,
+    CAST(json_extract(value, '$.codeBlocks') AS BLOB) as code_blocks
+  FROM cursorDiskKV
+  WHERE key LIKE 'bubbleId:%' AND ROWID < ?
+  ORDER BY ROWID DESC
+  LIMIT ?
+`
+
 function validateSchema(db: SqliteDatabase): boolean {
   try {
     const rows = db.query<{ cnt: number }>(
@@ -400,6 +426,50 @@ function takeUserMessage(queues: Map<string, UserMessageQueue>, conversationId: 
   return msg
 }
 
+/// Scans bubbles for very large DBs by paging ROWID-descending (newest first),
+/// keeping only rows within the requested window (createdAt > timeFloor), and
+/// stopping once a full page lands below the floor. A `budget` caps the number
+/// of in-range bubbles collected so a genuinely enormous in-range scan can't
+/// stall; `truncated` is set only when that budget is actually hit, so the
+/// caller warns only when older in-range sessions were really dropped.
+function scanBubblesPaged(
+  db: SqliteDatabase,
+  timeFloor: string,
+  budget: number,
+): { rows: BubbleRow[]; truncated: boolean } {
+  const BATCH = 25_000
+  const collected: BubbleRow[] = []
+  let beforeRowId = Number.MAX_SAFE_INTEGER
+  let truncated = false
+
+  paging: while (true) {
+    let batch: BubbleRow[]
+    try {
+      batch = db.query<BubbleRow>(BUBBLE_QUERY_PAGE, [beforeRowId, BATCH])
+    } catch {
+      break
+    }
+    if (batch.length === 0) break
+
+    for (const row of batch) {
+      if (collected.length >= budget) { truncated = true; break paging }
+      if (row.created_at != null && row.created_at > timeFloor) collected.push(row)
+    }
+
+    const oldest = batch[batch.length - 1]!
+    beforeRowId = oldest.rid ?? 0
+    if (beforeRowId <= 0) break
+    if (batch.length < BATCH) break // exhausted the table
+    // Pages are ROWID-descending (~chronological), so once the oldest row in a
+    // full page predates the window, every older page does too.
+    if (oldest.created_at != null && oldest.created_at <= timeFloor) break
+  }
+
+  // Restore ROWID-ascending order to match the un-paged query's row ordering.
+  collected.sort((a, b) => (a.rid ?? 0) - (b.rid ?? 0))
+  return { rows: collected, truncated }
+}
+
 function parseBubbles(
   db: SqliteDatabase,
   seenKeys: Set<string>,
@@ -408,53 +478,42 @@ function parseBubbles(
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
-  // Hard cap on rows to scan. The BUBBLE_QUERY_SINCE filter relies on
-  // json_extract over the value BLOB, which SQLite cannot serve from an
-  // index — every row is JSON-decoded. Multi-GB Cursor DBs (power users,
-  // years of usage) regularly exceed 500k bubble rows and were producing
-  // 30s+ parse stalls. Compute a ROWID cutoff that limits the scan to the
-  // MAX_BUBBLES most-recent bubbles when the user is over the cap, and
-  // warn so they know older sessions may be missing.
-  const MAX_BUBBLES = 250_000
-  let rowIdCutoff = 0
+  // The bubble timestamp lives inside the JSON value (no index), so the date
+  // filter forces a full JSON decode per row. Multi-GB Cursor DBs (500k+
+  // bubbles) were producing 30s+ parse stalls, so the scan is bounded. The old
+  // approach kept only the most-recent MAX_BUBBLES by ROWID, which dropped
+  // in-range older sessions and warned even when the requested window fit
+  // comfortably. Instead, for large DBs we page the requested window
+  // (ROWID-descending, stopping past the window floor) and only fall back to a
+  // hard budget — warning — when the in-range scan genuinely exceeds it.
+  // Override the budget in tests via CODEBURN_CURSOR_MAX_BUBBLES.
+  const MAX_BUBBLES = Number(process.env['CODEBURN_CURSOR_MAX_BUBBLES']) || 250_000
+
+  let total = 0
   try {
     const countRows = db.query<{ cnt: number }>(
       "SELECT COUNT(*) as cnt FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
     )
-    const total = countRows[0]?.cnt ?? 0
-    if (total > MAX_BUBBLES) {
-      // Find the ROWID of the (MAX_BUBBLES)th most-recent bubble. Anything
-      // below this rowid is older and gets skipped. Bubbles are written
-      // chronologically so ROWID order ≈ insertion order.
-      const cutoffRows = db.query<{ rid: number }>(
-        `SELECT MIN(rid) as rid FROM (
-           SELECT ROWID as rid FROM cursorDiskKV
-           WHERE key LIKE 'bubbleId:%'
-           ORDER BY ROWID DESC
-           LIMIT ?
-         )`,
-        [MAX_BUBBLES]
-      )
-      rowIdCutoff = cutoffRows[0]?.rid ?? 0
-      process.stderr.write(
-        `codeburn: Cursor database has ${total.toLocaleString()} bubbles, ` +
-        `scanning the most recent ${MAX_BUBBLES.toLocaleString()}. ` +
-        `Older sessions may be missing from this report.\n`
-      )
-    }
-  } catch { /* best-effort diagnostic */ }
+    total = countRows[0]?.cnt ?? 0
+  } catch { /* best-effort */ }
 
   const userMessages = buildUserMessageMap(db, timeFloor)
 
-  // Append the rowid cutoff when active. Empty string when not capped so the
-  // query string compares identically to the un-capped version on small DBs.
-  const rowIdFilter = rowIdCutoff > 0 ? ' AND ROWID >= ?' : ''
-  const params: unknown[] = rowIdCutoff > 0 ? [timeFloor, rowIdCutoff] : [timeFloor]
-  const cappedQuery = BUBBLE_QUERY_SINCE_HEAD + rowIdFilter + BUBBLE_QUERY_SINCE_TAIL
-
   let rows: BubbleRow[]
   try {
-    rows = db.query<BubbleRow>(cappedQuery, params)
+    if (total > MAX_BUBBLES) {
+      const scan = scanBubblesPaged(db, timeFloor, MAX_BUBBLES)
+      rows = scan.rows
+      if (scan.truncated) {
+        process.stderr.write(
+          `codeburn: Cursor database has ${total.toLocaleString()} bubbles and the ` +
+          `requested range exceeds the ${MAX_BUBBLES.toLocaleString()}-bubble scan budget; ` +
+          `the oldest sessions in range may be missing from this report.\n`
+        )
+      }
+    } else {
+      rows = db.query<BubbleRow>(BUBBLE_QUERY_SINCE, [timeFloor])
+    }
   } catch {
     return { calls: results }
   }
