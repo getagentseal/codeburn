@@ -210,6 +210,7 @@ codeburn optimize                       # scan the last 30 days
 codeburn optimize -p today              # today only
 codeburn optimize -p week               # last 7 days
 codeburn optimize --provider claude     # restrict to one provider
+codeburn optimize --format json         # setup health + findings as JSON
 ```
 
 Scans your sessions and your `~/.claude/` setup for waste patterns:
@@ -259,6 +260,7 @@ codeburn yield                  # last 7 days (default)
 codeburn yield -p today         # today only
 codeburn yield -p 30days        # last 30 days
 codeburn yield -p month         # this calendar month
+codeburn yield --format json    # productive/reverted/abandoned spend as JSON
 ```
 
 Correlates AI sessions with git commits by timestamp:
@@ -349,7 +351,7 @@ codeburn report --format json | jq '.projects'
 codeburn today --format json | jq '.overview.cost'
 ```
 
-For lighter output, use `status --format json` (today and month totals only) or file exports (`export -f json`).
+For lighter output, use `status --format json` (today and month totals only), `optimize --format json` (setup health, findings, and copy-paste fixes), `yield --format json` (productive/reverted/abandoned spend), or file exports (`export -f json`).
 
 ## Menu Bar
 
