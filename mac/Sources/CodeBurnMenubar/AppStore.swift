@@ -85,9 +85,11 @@ final class AppStore {
         return total >= activeDailyBudget
     }
 
-    /// The active daily-budget threshold formatted for display (currency or tokens).
+    /// The active daily-budget threshold formatted for display (tokens, or USD).
+    /// The cost budget is defined in USD (matching the "$" presets and field), so
+    /// it is not run through the display-currency conversion here.
     var dailyBudgetLabel: String {
-        isTokenMetric ? "\(activeDailyBudget.asCompactTokens()) tokens" : activeDailyBudget.asCurrency()
+        isTokenMetric ? "\(activeDailyBudget.asCompactTokens()) tokens" : activeDailyBudget.asUSD()
     }
 
     var isLoading: Bool { loadingCountsByKey.values.contains { $0 > 0 } }
@@ -1267,6 +1269,12 @@ private let thousandsFormatter: NumberFormatter = {
         if n >= 1_000_000 { return String(format: "%.1fM", n / 1_000_000) }
         if n >= 1_000 { return String(format: "%.0fK", n / 1_000) }
         return String(format: "%.0f", n)
+    }
+
+    /// Formats a raw USD amount with a "$" and grouping, without applying the
+    /// display-currency rate. Used for the USD-denominated daily budget.
+    func asUSD() -> String {
+        "$" + (groupedDecimalFormatter.string(from: NSNumber(value: self)) ?? "\(Int(self))")
     }
 }
 

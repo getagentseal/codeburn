@@ -57,6 +57,17 @@ private struct GeneralSettingsTab: View {
         v == v.rounded() ? String(Int(v)) : String(v)
     }
 
+    // Help text under the budget picker. When "Custom…" is selected but no amount
+    // has been entered, the budget is effectively 0 (off); call that out so the
+    // alert does not look armed when it isn't.
+    private var alertHelpText: String {
+        let customEmpty = store.isTokenMetric
+            ? (tokenCustom && store.dailyTokenBudget == 0)
+            : (costCustom && store.dailyBudget == 0)
+        if customEmpty { return "Enter an amount above, or the alert stays off." }
+        return "Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget."
+    }
+
     var body: some View {
         Form {
             Section("Display") {
@@ -162,7 +173,7 @@ private struct GeneralSettingsTab: View {
                         }
                     }
                 }
-                Text("Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget.")
+                Text(alertHelpText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
