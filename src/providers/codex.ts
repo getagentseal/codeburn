@@ -40,6 +40,36 @@ const toolNameMap: Record<string, string> = {
   read_dir: 'Glob',
 }
 
+function normalizeMcpSegment(segment: string): string {
+  return segment
+    .replace(/[^a-zA-Z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
+function mcpToolName(server: string, tool: string): string | null {
+  const normalizedServer = normalizeMcpSegment(server)
+  const normalizedTool = normalizeMcpSegment(tool)
+  if (!normalizedServer || !normalizedTool) return null
+  return `mcp__${normalizedServer}__${normalizedTool}`
+}
+
+function codexFunctionCallToolName(payload: CodexEntry['payload']): string {
+  const rawName = payload?.name ?? ''
+  const namespace = payload?.namespace
+  if (typeof namespace === 'string' && namespace.startsWith('mcp__')) {
+    return mcpToolName(namespace.slice('mcp__'.length), rawName) ?? rawName
+  }
+  return toolNameMap[rawName] ?? rawName
+}
+
+function codexMcpToolEndName(entry: CodexEntry): string | null {
+  if (entry.type !== 'event_msg' || entry.payload?.type !== 'mcp_tool_call_end') return null
+  const invocation = entry.payload.invocation
+  if (typeof invocation?.server !== 'string' || typeof invocation.tool !== 'string') return null
+  return mcpToolName(invocation.server, invocation.tool)
+}
+
 type CodexEntry = {
   type: string
   timestamp?: string
@@ -53,7 +83,13 @@ type CodexEntry = {
     forked_from_id?: string
     model?: string
     name?: string
+    namespace?: string
+    call_id?: string
     content?: Array<{ type?: string; text?: string }>
+    invocation?: {
+      server?: string
+      tool?: string
+    }
     info?: {
       model?: string
       model_name?: string
@@ -234,6 +270,8 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
       forked_from_id: getRawJsonStringField(pHead, 'forked_from_id'),
       model: getRawJsonStringField(pHead, 'model'),
       name: getRawJsonStringField(pHead, 'name'),
+      namespace: getRawJsonStringField(pHead, 'namespace'),
+      call_id: getRawJsonStringField(pHead, 'call_id'),
     },
   }
 
@@ -338,6 +376,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let prevReasoning = 0
       let pendingTools: string[] = []
       let pendingToolSequence: ToolCall[][] = []
+      const mcpFunctionCallIds = new Set<string>()
       let pendingUserMessage = ''
       let pendingOutputChars = 0
       let estCounter = 0
@@ -372,8 +411,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
-          const rawName = entry.payload.name ?? ''
-          const mapped = toolNameMap[rawName] ?? rawName
+          const mapped = codexFunctionCallToolName(entry.payload)
+          if (mapped.startsWith('mcp__') && entry.payload.call_id) {
+            mcpFunctionCallIds.add(entry.payload.call_id)
+          }
           pendingTools.push(mapped)
           const call: ToolCall = { tool: mapped }
           const rawArgs = (entry.payload as Record<string, unknown>)['arguments']
@@ -387,6 +428,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             if (typeof cmd === 'string') call.command = cmd
           }
           pendingToolSequence.push([call])
+          continue
+        }
+
+        const mcpTool = codexMcpToolEndName(entry)
+        if (mcpTool) {
+          if (entry.payload?.call_id && mcpFunctionCallIds.has(entry.payload.call_id)) continue
+          pendingTools.push(mcpTool)
+          pendingToolSequence.push([{ tool: mcpTool }])
           continue
         }
 

@@ -70,6 +70,31 @@ function functionCall(name: string, timestamp?: string) {
   })
 }
 
+function mcpFunctionCall(server: string, tool: string, timestamp?: string, callId = 'call-mcp-1') {
+  return JSON.stringify({
+    type: 'response_item',
+    timestamp: timestamp ?? '2026-04-14T10:00:30Z',
+    payload: {
+      type: 'function_call',
+      name: tool,
+      namespace: `mcp__${server}`,
+      call_id: callId,
+    },
+  })
+}
+
+function mcpToolCallEnd(server: string, tool: string, timestamp?: string, callId = 'call-mcp-1') {
+  return JSON.stringify({
+    type: 'event_msg',
+    timestamp: timestamp ?? '2026-04-14T10:00:45Z',
+    payload: {
+      type: 'mcp_tool_call_end',
+      invocation: { server, tool },
+      call_id: callId,
+    },
+  })
+}
+
 function userMessage(text: string, timestamp?: string) {
   return JSON.stringify({
     type: 'response_item',
@@ -303,6 +328,56 @@ describe('codex provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['Agent', 'Agent', 'Agent'])
+  })
+
+  it('attributes recent Codex MCP tool-call end events', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),
+      userMessage('inspect the browser'),
+      mcpFunctionCall('node_repl', 'js'),
+      mcpToolCallEnd('node_repl', 'js'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__node_repl__js'])
+    expect(calls[0]!.toolSequence).toEqual([[{ tool: 'mcp__node_repl__js' }]])
+  })
+
+  it('attributes MCP tool-call end events without a paired function call', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp-end-only.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp-end-only', model: 'gpt-5.5' }),
+      userMessage('inspect the browser'),
+      mcpToolCallEnd('node_repl', 'js'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__node_repl__js'])
   })
 
   it('skips duplicate token_count events', async () => {
