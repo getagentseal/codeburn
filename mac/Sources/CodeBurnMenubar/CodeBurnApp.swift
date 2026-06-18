@@ -857,30 +857,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let menu = NSMenu()
 
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        // Glanceable "today" usage at the top as a single non-interactive (dimmed)
+        // row. A real .sectionHeader adds section padding (and pulls the actions
+        // into its group without a separator), so use a plain disabled item.
+        let usageItem = NSMenuItem(title: contextMenuUsageSummary(), action: nil, keyEquivalent: "")
+        usageItem.isEnabled = false
+        menu.addItem(usageItem)
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: "")
         settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
         menu.addItem(settingsItem)
 
-        let refreshNow = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "r")
+        let refreshNow = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "")
         refreshNow.target = self
         menu.addItem(refreshNow)
 
-        menu.addItem(.separator())
         let updateItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
-        menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit CodeBurn", action: #selector(quitApp), keyEquivalent: "q")
+
+        let aboutItem = NSMenuItem(title: "About CodeBurn", action: #selector(openAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
+        let quitItem = NSMenuItem(title: "Quit CodeBurn", action: #selector(quitApp), keyEquivalent: "")
         quitItem.target = self
         menu.addItem(quitItem)
 
         // Present directly. The previous `statusItem.menu = menu; button.performClick`
         // trick relies on the click -> action path that macOS 27 changed; popUp is
-        // version-stable.
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+        // version-stable. Open a few px below the status item so the menu clears the
+        // menu bar: anchoring flush clips the top edge and makes macOS engage menu
+        // scrolling (a scroll chevron appears and the first row slides up on hover).
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 6), in: button)
+    }
+
+    /// One-line "today" summary for the context menu's usage row.
+    private func contextMenuUsageSummary() -> String {
+        guard let current = store.todayPayload?.current else { return "Today · no usage yet" }
+        let calls = current.calls == 1 ? "1 call" : "\(current.calls) calls"
+        return "Today · \(current.cost.asCurrency()) · \(calls)"
     }
 
     private var settingsWindowController: NSWindowController?
+
+    @objc private func openAbout() {
+        store.settingsTab = "about"
+        openSettings()
+    }
 
     @objc private func openSettings() {
         // Accessory-policy apps (no Dock icon, no main menu) don't get the

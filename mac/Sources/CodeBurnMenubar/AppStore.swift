@@ -52,6 +52,9 @@ final class AppStore {
     }
     var showingAccentPicker: Bool = false
     var currency: String = "USD"
+    /// Which Settings tab to show; lets the menu's "About CodeBurn" item jump
+    /// straight to the About tab even when the Settings window is reused.
+    var settingsTab: String = "general"
     var displayMetric: DisplayMetric = DisplayMetric(rawValue: UserDefaults.standard.string(forKey: "CodeBurnDisplayMetric") ?? "") ?? .cost {
         didSet { UserDefaults.standard.set(displayMetric.rawValue, forKey: "CodeBurnDisplayMetric") }
     }

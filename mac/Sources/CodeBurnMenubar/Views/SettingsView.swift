@@ -8,21 +8,26 @@ struct SettingsView: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        TabView {
+        TabView(selection: Binding(get: { store.settingsTab }, set: { store.settingsTab = $0 })) {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
 
             ClaudeSettingsTab()
                 .tabItem { Label("Claude", systemImage: "brain") }
+                .tag("claude")
 
             CodexSettingsTab()
                 .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
+                .tag("codex")
 
             DevinSettingsTab()
                 .tabItem { Label("Devin", systemImage: "flame.fill") }
+                .tag("devin")
 
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
+                .tag("about")
         }
         .frame(width: 520, height: 430)
     }
@@ -660,9 +665,16 @@ private struct AboutSettingsTab: View {
             Text("Version \(appVersion) (\(buildVersion))")
                 .font(.codeMono(size: 11))
                 .foregroundStyle(.secondary)
+            Link(destination: URL(string: "https://github.com/getagentseal/codeburn")!) {
+                Label("Star on GitHub", systemImage: "star.fill")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brandAccent)
             HStack(spacing: 10) {
                 Link("GitHub", destination: URL(string: "https://github.com/getagentseal/codeburn")!)
                 Link("Issues", destination: URL(string: "https://github.com/getagentseal/codeburn/issues")!)
+                Link("Sponsor", destination: URL(string: "https://github.com/sponsors/iamtoruk")!)
             }
             .font(.system(size: 12))
         }
