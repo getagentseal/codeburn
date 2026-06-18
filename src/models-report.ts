@@ -1,6 +1,7 @@
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 
+import { codexCredits } from './codex-credits.js'
 import { formatCost, formatTokens } from './format.js'
 import { getProvider } from './providers/index.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
@@ -20,6 +21,9 @@ export type ModelReportRow = {
   savingsUSD: number
   savingsBaselineModel: string
   calls: number
+  /// Codex credit consumption (issues #408/#495). null for non-Codex models or
+  /// Codex models without a known credit rate.
+  credits: number | null
   topCategory?: TaskCategory
   topCategoryCost?: number
   topCategoryShare?: number
@@ -156,6 +160,16 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       savingsUSD: bucket.savingsUSD,
       savingsBaselineModel: bucket.savingsBaselineModel,
       calls: bucket.calls,
+      // outputTokens already includes reasoning (folded in above), and for Codex
+      // inputTokens is non-cached with cacheReadTokens holding cached input, which
+      // is exactly what the credit rates expect.
+      credits: bucket.provider === 'codex'
+        ? codexCredits(bucket.model, {
+            inputTokens: bucket.inputTokens,
+            cachedReadTokens: bucket.cacheReadTokens,
+            outputTokens: bucket.outputTokens,
+          })
+        : null,
     }
 
     if (!opts.byTask) {
@@ -553,6 +567,7 @@ export function renderJson(rows: ModelReportRow[]): string {
       costUSD: r.costUSD,
       savingsUSD: r.savingsUSD,
       savingsBaselineModel: r.savingsBaselineModel,
+      credits: r.credits,
     })),
     null,
     2,
