@@ -33,6 +33,30 @@ struct SettingsView: View {
 private struct GeneralSettingsTab: View {
     @Environment(AppStore.self) private var store
 
+    // "Custom…" budget entry state, one per metric (cost in dollars, tokens in
+    // millions). When custom is active the picker shows "Custom…" and a field
+    // appears for an exact amount.
+    @State private var costCustom = false
+    @State private var tokenCustom = false
+    @State private var costText = ""
+    @State private var tokenText = ""
+
+    private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
+    private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
+
+    private func applyCostBudget() {
+        store.dailyBudget = max(0, Double(costText.trimmingCharacters(in: .whitespaces)) ?? 0)
+    }
+
+    private func applyTokenBudget() {
+        let millions = Double(tokenText.trimmingCharacters(in: .whitespaces)) ?? 0
+        store.dailyTokenBudget = max(0, millions * 1_000_000)
+    }
+
+    private func trimNumber(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(v)
+    }
+
     var body: some View {
         Form {
             Section("Display") {
@@ -75,10 +99,19 @@ private struct GeneralSettingsTab: View {
             Section("Alerts") {
                 // The budget tracks whatever the menubar metric shows: dollars for
                 // the Cost metric, tokens for the Tokens / Total Tokens metrics.
+                // "Custom…" reveals a field for an exact amount.
                 if store.isTokenMetric {
                     Picker("Daily budget", selection: Binding(
-                        get: { store.dailyTokenBudget },
-                        set: { store.dailyTokenBudget = $0 }
+                        get: { tokenCustom ? -1.0 : store.dailyTokenBudget },
+                        set: { sel in
+                            if sel < 0 {
+                                tokenCustom = true
+                                tokenText = store.dailyTokenBudget > 0 ? trimNumber(store.dailyTokenBudget / 1_000_000) : ""
+                            } else {
+                                tokenCustom = false
+                                store.dailyTokenBudget = sel
+                            }
+                        }
                     )) {
                         Text("Off").tag(0.0)
                         Text("1M").tag(1_000_000.0)
@@ -87,11 +120,29 @@ private struct GeneralSettingsTab: View {
                         Text("25M").tag(25_000_000.0)
                         Text("50M").tag(50_000_000.0)
                         Text("100M").tag(100_000_000.0)
+                        Text("Custom…").tag(-1.0)
+                    }
+                    if tokenCustom {
+                        HStack {
+                            TextField("Amount", text: $tokenText)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit { applyTokenBudget() }
+                                .onChange(of: tokenText) { _, _ in applyTokenBudget() }
+                            Text("M tokens").foregroundStyle(.secondary)
+                        }
                     }
                 } else {
                     Picker("Daily budget", selection: Binding(
-                        get: { store.dailyBudget },
-                        set: { store.dailyBudget = $0 }
+                        get: { costCustom ? -1.0 : store.dailyBudget },
+                        set: { sel in
+                            if sel < 0 {
+                                costCustom = true
+                                costText = store.dailyBudget > 0 ? trimNumber(store.dailyBudget) : ""
+                            } else {
+                                costCustom = false
+                                store.dailyBudget = sel
+                            }
+                        }
                     )) {
                         Text("Off").tag(0.0)
                         Text("$25").tag(25.0)
@@ -99,11 +150,27 @@ private struct GeneralSettingsTab: View {
                         Text("$100").tag(100.0)
                         Text("$200").tag(200.0)
                         Text("$500").tag(500.0)
+                        Text("Custom…").tag(-1.0)
+                    }
+                    if costCustom {
+                        HStack {
+                            Text("$").foregroundStyle(.secondary)
+                            TextField("Amount", text: $costText)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit { applyCostBudget() }
+                                .onChange(of: costText) { _, _ in applyCostBudget() }
+                        }
                     }
                 }
                 Text("Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+            .onAppear {
+                costCustom = store.dailyBudget > 0 && !costPresets.contains(store.dailyBudget)
+                if costCustom { costText = trimNumber(store.dailyBudget) }
+                tokenCustom = store.dailyTokenBudget > 0 && !tokenPresets.contains(store.dailyTokenBudget)
+                if tokenCustom { tokenText = trimNumber(store.dailyTokenBudget / 1_000_000) }
             }
         }
         .formStyle(.grouped)
