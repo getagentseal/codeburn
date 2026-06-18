@@ -590,6 +590,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = self.store.displayMetric
             _ = self.store.dailyBudget
             _ = self.store.dailyTokenBudget
+            // Read the derived flag so the flame re-tints when today's usage
+            // crosses the budget, not only when the budget value itself changes.
+            // This also makes the dependency on todayPayload explicit instead of
+            // relying on payload/menubarPayload happening to touch the same cache.
+            _ = self.store.isOverDailyBudget
             // Track the live-quota state too so the flame icon re-tints on
             // every subscription / codex usage update, not just every 30s.
             _ = self.store.subscription
