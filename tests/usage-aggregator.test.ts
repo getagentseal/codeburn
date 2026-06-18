@@ -42,6 +42,9 @@ describe('buildMenubarPayloadForRange', () => {
     expect(Array.isArray(payload.current.topModels)).toBe(true)
     expect(Array.isArray(payload.history.daily)).toBe(true)
     expect(payload.current.retryTax.totalUSD).toBeGreaterThanOrEqual(0)
+    // Codex credits are always present in the payload (display gates them); 0 with no data.
+    expect(typeof payload.current.codexCredits).toBe('number')
+    expect(payload.current.codexCredits).toBeGreaterThanOrEqual(0)
     // optimize:false => scanAndDetect skipped => empty optimize block regardless of data
     expect(payload.optimize).toEqual({ findingCount: 0, savingsUSD: 0, topFindings: [] })
   })

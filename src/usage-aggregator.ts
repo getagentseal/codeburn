@@ -6,6 +6,7 @@ import { getLocalModelSavingsConfigHash, getShortModelName } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
+import { aggregateModels } from './models-report.js'
 import { scanAndDetect } from './optimize.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
 
@@ -156,6 +157,15 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   if (isAllProviders) {
     currentData = buildPeriodData(periodInfo.label, scanProjects)
   }
+
+  // Codex credits for the period. Reuses the models aggregation (folds reasoning
+  // into output, keeps non-cached input + cached-read separate) so the figure
+  // matches the official credit rates.
+  const modelRows = await aggregateModels(scanProjects)
+  currentData.codexCredits = modelRows.reduce(
+    (sum, r) => sum + (r.provider === 'codex' && r.credits != null ? r.credits : 0),
+    0,
+  )
 
   // PROVIDERS
   // For .all: enumerate every provider with cost across the period (from cache) + installed-but-zero.

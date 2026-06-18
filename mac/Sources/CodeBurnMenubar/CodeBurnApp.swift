@@ -735,6 +735,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             } else if store.displayMetric == .totalTokens, let p = menubarPayload?.current {
                 let total = formatTokensMenubar(Double(p.inputTokens + p.outputTokens))
                 valueText = compact ? "\(total)\(suffix)" : " \(total) tok\(suffix)"
+            } else if store.displayMetric == .credits, let p = menubarPayload?.current {
+                let credits = formatTokensMenubar((p.codexCredits ?? 0).rounded())
+                valueText = compact ? "\(credits)cr\(suffix)" : " \(credits) credits\(suffix)"
             } else {
                 let fallback = compact ? "$-" : "$—"
                 let formatted = menubarPayload?.current.cost

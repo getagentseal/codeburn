@@ -16,6 +16,9 @@ export type PeriodData = {
   outputTokens: number
   cacheReadTokens: number
   cacheWriteTokens: number
+  /// Total Codex credits consumed in the period (issues #408/#495). Optional so
+  /// non-menubar PeriodData producers don't have to compute it.
+  codexCredits?: number
   categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
   models: Array<{ name: string; cost: number; savingsUSD: number; calls: number }>
   projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
@@ -85,6 +88,8 @@ export type MenubarPayload = {
     inputTokens: number
     outputTokens: number
     cacheHitPercent: number
+    /// Codex credits consumed in the period; 0 when there is no Codex usage.
+    codexCredits: number
     topActivities: Array<{
       name: string
       cost: number
@@ -321,6 +326,7 @@ export function buildMenubarPayload(
       inputTokens: current.inputTokens,
       outputTokens: current.outputTokens,
       cacheHitPercent: cacheHitPercent(current.inputTokens, current.cacheReadTokens),
+      codexCredits: current.codexCredits ?? 0,
       topActivities: buildTopActivities(current.categories),
       topModels: buildTopModels(current.models),
       localModelSavings: breakdowns?.localModelSavings ?? { totalUSD: 0, calls: 0, byModel: [], byProvider: [] },

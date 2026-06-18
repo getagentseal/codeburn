@@ -113,6 +113,8 @@ struct CurrentBlock: Codable, Sendable {
     let inputTokens: Int
     let outputTokens: Int
     let cacheHitPercent: Double
+    /// Codex credits consumed in the period (nil on payloads from older builds).
+    let codexCredits: Double?
     let topActivities: [ActivityEntry]
     let topModels: [ModelEntry]
     let localModelSavings: LocalModelSavings
@@ -131,7 +133,7 @@ struct CurrentBlock: Codable, Sendable {
 extension CurrentBlock {
     enum CodingKeys: String, CodingKey {
         case label, cost, calls, sessions, oneShotRate, inputTokens, outputTokens,
-             cacheHitPercent, topActivities, topModels, localModelSavings, providers, topProjects,
+             cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers
     }
@@ -145,6 +147,7 @@ extension CurrentBlock {
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
         outputTokens = try c.decode(Int.self, forKey: .outputTokens)
         cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
+        codexCredits = try c.decodeIfPresent(Double.self, forKey: .codexCredits)
         topActivities = try c.decodeIfPresent([ActivityEntry].self, forKey: .topActivities) ?? []
         topModels = try c.decodeIfPresent([ModelEntry].self, forKey: .topModels) ?? []
         localModelSavings = try c.decodeIfPresent(LocalModelSavings.self, forKey: .localModelSavings) ?? LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: [])
@@ -368,6 +371,7 @@ extension MenubarPayload {
             inputTokens: 0,
             outputTokens: 0,
             cacheHitPercent: 0,
+            codexCredits: nil,
             topActivities: [],
             topModels: [],
             localModelSavings: LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: []),
