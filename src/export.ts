@@ -171,6 +171,25 @@ function buildToolRows(projects: ProjectSummary[]): Row[] {
     }))
 }
 
+function buildMcpRows(projects: ProjectSummary[]): Row[] {
+  const mcpTotals: Record<string, number> = {}
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [server, d] of Object.entries(session.mcpBreakdown)) {
+        mcpTotals[server] = (mcpTotals[server] ?? 0) + d.calls
+      }
+    }
+  }
+  const total = Object.values(mcpTotals).reduce((s, n) => s + n, 0)
+  return Object.entries(mcpTotals)
+    .sort(([, a], [, b]) => b - a)
+    .map(([server, calls]) => ({
+      Server: server,
+      Calls: calls,
+      'Share (%)': pct(calls, total),
+    }))
+}
+
 function buildBashRows(projects: ProjectSummary[]): Row[] {
   const bashTotals: Record<string, number> = {}
   for (const project of projects) {
@@ -270,6 +289,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',
+    '  mcp.csv               MCP server invocations and share for the selected detail period.',
     '  shell-commands.csv    Shell commands executed via Bash tool for the selected detail period.',
     '',
     'Notes',
@@ -338,6 +358,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   await writeFile(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'tools.csv'), rowsToCsv(buildToolRows(thirtyDayProjects)), 'utf-8')
+  await writeFile(join(folder, 'mcp.csv'), rowsToCsv(buildMcpRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'shell-commands.csv'), rowsToCsv(buildBashRows(thirtyDayProjects)), 'utf-8')
 
   return folder
@@ -362,6 +383,7 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     projects: buildProjectRows(thirtyDayProjects),
     sessions: buildSessionRows(thirtyDayProjects),
     tools: buildToolRows(thirtyDayProjects),
+    mcp: buildMcpRows(thirtyDayProjects),
     shellCommands: buildBashRows(thirtyDayProjects),
   }
 
