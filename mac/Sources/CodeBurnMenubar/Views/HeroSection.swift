@@ -55,13 +55,11 @@ struct HeroSection: View {
 
             if !store.isDayMode,
                store.selectedPeriod == .today,
-               store.dailyBudget > 0,
-               let todayCost = store.todayPayload?.current.cost,
-               todayCost >= store.dailyBudget {
+               store.isOverDailyBudget {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text("Daily budget of \(store.dailyBudget.asCurrency()) exceeded")
+                    Text("Daily budget of \(store.dailyBudgetLabel) exceeded")
                         .font(.system(size: 11, weight: .medium))
                 }
                 .foregroundStyle(.orange)

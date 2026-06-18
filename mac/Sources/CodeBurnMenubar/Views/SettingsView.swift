@@ -73,18 +73,35 @@ private struct GeneralSettingsTab: View {
             }
 
             Section("Alerts") {
-                Picker("Daily budget", selection: Binding(
-                    get: { store.dailyBudget },
-                    set: { store.dailyBudget = $0 }
-                )) {
-                    Text("Off").tag(0.0)
-                    Text("$25").tag(25.0)
-                    Text("$50").tag(50.0)
-                    Text("$100").tag(100.0)
-                    Text("$200").tag(200.0)
-                    Text("$500").tag(500.0)
+                // The budget tracks whatever the menubar metric shows: dollars for
+                // the Cost metric, tokens for the Tokens / Total Tokens metrics.
+                if store.isTokenMetric {
+                    Picker("Daily budget", selection: Binding(
+                        get: { store.dailyTokenBudget },
+                        set: { store.dailyTokenBudget = $0 }
+                    )) {
+                        Text("Off").tag(0.0)
+                        Text("1M").tag(1_000_000.0)
+                        Text("5M").tag(5_000_000.0)
+                        Text("10M").tag(10_000_000.0)
+                        Text("25M").tag(25_000_000.0)
+                        Text("50M").tag(50_000_000.0)
+                        Text("100M").tag(100_000_000.0)
+                    }
+                } else {
+                    Picker("Daily budget", selection: Binding(
+                        get: { store.dailyBudget },
+                        set: { store.dailyBudget = $0 }
+                    )) {
+                        Text("Off").tag(0.0)
+                        Text("$25").tag(25.0)
+                        Text("$50").tag(50.0)
+                        Text("$100").tag(100.0)
+                        Text("$200").tag(200.0)
+                        Text("$500").tag(500.0)
+                    }
                 }
-                Text("Flame icon turns yellow when you pass the daily budget.")
+                Text("Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
