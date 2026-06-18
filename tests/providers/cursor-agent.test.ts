@@ -190,6 +190,28 @@ describe('cursor-agent provider', () => {
     stderrSpy.mockRestore()
   })
 
+  it('warns only once for the same unrecognized transcript', async () => {
+    const baseDir = await makeBaseDir()
+    const transcriptDir = join(baseDir, 'projects', 'bad-proj-repeat', 'agent-transcripts')
+    await mkdir(transcriptDir, { recursive: true })
+    const transcriptPath = join(transcriptDir, 'repeat-bad.txt')
+    await writeFile(transcriptPath, 'no cursor-agent markers here')
+
+    const provider = createCursorAgentProvider(baseDir)
+    const source = (await provider.discoverSessions())[0]!
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+
+    await collectCalls(provider, source)
+    await collectCalls(provider, source)
+
+    const warnings = stderrSpy.mock.calls
+      .map(call => String(call[0] ?? ''))
+      .filter(message => message.includes('unrecognized cursor-agent transcript format'))
+    expect(warnings).toHaveLength(1)
+
+    stderrSpy.mockRestore()
+  })
+
   it('falls back to stable sha1 conversation id for non-uuid filenames', async () => {
     const baseDir = await makeBaseDir()
     const transcriptDir = join(baseDir, 'projects', 'sha-proj', 'agent-transcripts')

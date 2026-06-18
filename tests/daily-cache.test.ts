@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFile, rm } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -11,8 +11,8 @@ import {
   DAILY_CACHE_VERSION,
   type DailyCache,
   type DailyEntry,
-  ensureCacheHydrated,
   getDaysInRange,
+  ensureCacheHydrated,
   loadDailyCache,
   saveDailyCache,
   withDailyCacheLock,
@@ -44,6 +44,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  vi.useRealTimers()
   delete process.env['CODEBURN_CACHE_DIR']
   if (existsSync(TMP_CACHE_ROOT)) {
     await rm(TMP_CACHE_ROOT, { recursive: true, force: true })
@@ -264,6 +265,61 @@ describe('getDaysInRange', () => {
   it('clips to available cache days when range extends beyond', () => {
     const days = getDaysInRange(cache, '2026-04-09', '2026-04-20')
     expect(days.map(d => d.date)).toEqual(['2026-04-09', '2026-04-10'])
+  })
+})
+
+describe('ensureCacheHydrated', () => {
+  it('does not recompute yesterday after it has already been cached', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-12T12:00:00.000Z'))
+
+    const saved: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-06-11',
+      days: [emptyDay('2026-06-11', 5, 10)],
+    }
+    await saveDailyCache(saved)
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCalls += 1
+        return []
+      },
+      () => [],
+    )
+
+    expect(parseCalls).toBe(0)
+    expect(hydrated).toEqual(saved)
+  })
+
+  it('drops a cached today/future entry so it is recomputed live, keeping yesterday cached', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-12T12:00:00.000Z'))
+
+    // A "today" entry can only exist via a backward clock change or a stale
+    // cache; it must be purged so today is served live, not from a frozen entry.
+    const saved: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-06-12',
+      days: [emptyDay('2026-06-11', 5, 10), emptyDay('2026-06-12', 9, 20)],
+    }
+    await saveDailyCache(saved)
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCalls += 1
+        return []
+      },
+      () => [],
+    )
+
+    expect(parseCalls).toBe(0)
+    expect(hydrated.days.map(d => d.date)).toEqual(['2026-06-11'])
+    expect(hydrated.lastComputedDate).toBe('2026-06-11')
   })
 })
 

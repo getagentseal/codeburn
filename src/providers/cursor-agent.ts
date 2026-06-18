@@ -44,6 +44,7 @@ const TOOL_CALL_MARKER = /^\s*\[Tool call\]\s*(.+?)\s*$/i
 const TOOL_RESULT_MARKER = /^\s*\[Tool result\]\b/i
 const USER_QUERY_OPEN = '<user_query>'
 const USER_QUERY_CLOSE = '</user_query>'
+const warnedUnrecognizedTranscripts = new Set<string>()
 const CONVERSATION_SUMMARY_QUERY = `
   SELECT conversationId, model, title, updatedAt
   FROM conversation_summaries
@@ -360,7 +361,10 @@ function createParser(
         const parsed = isJsonl ? parseJsonlTranscript(transcript) : parseTranscript(transcript)
 
         if (!parsed.recognized) {
-          process.stderr.write(`codeburn: skipped ${basename(source.path)}: unrecognized cursor-agent transcript format\n`)
+          if (!warnedUnrecognizedTranscripts.has(source.path)) {
+            warnedUnrecognizedTranscripts.add(source.path)
+            process.stderr.write(`codeburn: skipped ${basename(source.path)}: unrecognized cursor-agent transcript format\n`)
+          }
           return
         }
 
