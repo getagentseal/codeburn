@@ -816,4 +816,120 @@ describe('copilot provider - OTel cache token parsing', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.inputTokens).toBe(100)
   })
+
+  it('attributes genuine subagents but excludes the root agent', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+
+    // Root agent turn: chat span + invoke_agent WITHOUT a parent session.
+    insertSpan(dbPath, {
+      spanId: 'span-root-chat', traceId: 'trace-root', operationName: 'chat', startTimeMs: 1000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-h',
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 400,
+        'gen_ai.usage.output_tokens': 60,
+        'gen_ai.usage.cache_read.input_tokens': 0,
+        'gen_ai.usage.cache_creation.input_tokens': 0,
+      },
+    })
+    insertSpan(dbPath, {
+      spanId: 'span-root-agent', traceId: 'trace-root', operationName: 'invoke_agent', startTimeMs: 1010,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-h',
+        'gen_ai.agent.name': 'GitHub Copilot Chat',
+      },
+    })
+
+    // Genuine subagent: its own trace holds the subagent's chat span plus an
+    // invoke_agent span carrying copilot_chat.parent_chat_session_id.
+    insertSpan(dbPath, {
+      spanId: 'span-sub-chat', traceId: 'trace-sub', operationName: 'chat', startTimeMs: 2000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-h',
+        'gen_ai.response.model': 'claude-haiku-4.5',
+        'gen_ai.usage.input_tokens': 250,
+        'gen_ai.usage.output_tokens': 30,
+        'gen_ai.usage.cache_read.input_tokens': 0,
+        'gen_ai.usage.cache_creation.input_tokens': 0,
+      },
+    })
+    insertSpan(dbPath, {
+      spanId: 'span-sub-agent', traceId: 'trace-sub', operationName: 'invoke_agent', startTimeMs: 2010,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-h',
+        'gen_ai.agent.name': 'Explore',
+        'copilot_chat.parent_chat_session_id': 'conv-h',
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const sources = await provider.discoverSessions()
+    const src = sources.find(s => s.path.startsWith(dbPath))
+    expect(src).toBeDefined()
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(src!, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(2)
+    const rootCall = calls.find(c => c.model === 'gpt-4.1')!
+    const subCall = calls.find(c => c.model === 'claude-haiku-4.5')!
+
+    // Root agent must NOT surface as a subagent
+    expect(rootCall.subagentTypes ?? []).not.toContain('GitHub Copilot Chat')
+    expect(rootCall.subagentTypes ?? []).toHaveLength(0)
+
+    // Genuine subagent is attributed to its own call
+    expect(subCall.subagentTypes).toEqual(['Explore'])
+  })
+
+  it('normalises multi-line OTel shell scripts, dropping control-flow keywords', async () => {
+    if (!isSqliteAvailable()) return
+
+    createOtelDb(dbPath)
+    insertSpan(dbPath, {
+      spanId: 'span-sh-chat', traceId: 'trace-sh', operationName: 'chat', startTimeMs: 1000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-sh',
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 100,
+        'gen_ai.usage.output_tokens': 10,
+        'gen_ai.usage.cache_read.input_tokens': 0,
+        'gen_ai.usage.cache_creation.input_tokens': 0,
+      },
+    })
+    // A full multi-line script with control flow and newline-separated commands,
+    // exactly as the OTel store records it.
+    insertSpan(dbPath, {
+      spanId: 'span-sh-tool', traceId: 'trace-sh', operationName: 'execute_tool', startTimeMs: 1500,
+      attrs: {
+        'gen_ai.tool.name': 'run_in_terminal',
+        'gen_ai.tool.call.arguments': JSON.stringify({
+          command: 'for f in *.ts; do\n  echo "$f"\ndone\ngit status\nnpm test',
+        }),
+      },
+    })
+
+    const provider = createCopilotProvider('/nonexistent/jsonl', '/nonexistent/ws')
+    const sources = await provider.discoverSessions()
+    const src = sources.find(s => s.path.startsWith(dbPath))
+    expect(src).toBeDefined()
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(src!, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    const bash = calls[0]!.bashCommands
+    // Real commands separated by newlines/`;` are captured
+    expect(bash).toEqual(expect.arrayContaining(['echo', 'git', 'npm']))
+    // Control-flow keywords are NOT reported as commands
+    for (const kw of ['for', 'do', 'done']) {
+      expect(bash).not.toContain(kw)
+    }
+  })
 })

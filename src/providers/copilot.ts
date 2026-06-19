@@ -60,6 +60,7 @@ import { join, basename, dirname, posix, win32 } from 'path'
 import { existsSync } from 'fs'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
+import { extractBashCommands } from '../bash-utils.js'
 import type {
   Provider,
   SessionSource,
@@ -139,12 +140,17 @@ const modelDisplayEntries = Object.entries(modelDisplayNames).sort(
   (a, b) => b[0].length - a[0].length
 )
 
+// Tool names that represent shell/bash execution. When the AI calls one of
+// these, we extract the `arguments.command` string into bashCommands[].
+const BASH_TOOL_NAMES = new Set(['bash', 'run_in_terminal', 'runInTerminal', 'runCommand'])
+
 // ---------------------------------------------------------------------------
 // Types for JSONL session state events (unchanged from original)
 // ---------------------------------------------------------------------------
 type ToolRequest = {
   toolName?: string  // older format
   name?: string      // newer format (copilot-agent)
+  arguments?: Record<string, unknown>
 }
 
 type SessionStartData = {
@@ -169,11 +175,18 @@ type AssistantMessageData = {
   toolRequests?: ToolRequest[]
 }
 
+type SubagentSelectedData = {
+  agentName: string
+  agentDisplayName?: string
+  tools?: string[]
+}
+
 type CopilotEvent =
   | { type: 'session.start'; data: SessionStartData; timestamp?: string }
   | { type: 'session.model_change'; data: ModelChangeData; timestamp?: string }
   | { type: 'user.message'; data: UserMessageData; timestamp?: string }
   | { type: 'assistant.message'; data: AssistantMessageData; timestamp?: string }
+  | { type: 'subagent.selected'; data: SubagentSelectedData; timestamp?: string }
 
 // ---------------------------------------------------------------------------
 // Types for OTel span rows from agent-traces.db
@@ -196,6 +209,8 @@ interface SpanAttributes {
   'gen_ai.conversation.id'?: string
   'gen_ai.agent.name'?: string
   'gen_ai.tool.name'?: string
+  'gen_ai.tool.call.arguments'?: string
+  'copilot_chat.parent_chat_session_id'?: string
   'github.copilot.chat.turn.id'?: string
   [key: string]: unknown
 }
@@ -319,6 +334,51 @@ function epochToISO(epoch: number): string {
   return new Date(ms).toISOString()
 }
 
+/**
+ * Extract a shell command string from an OTel execute_tool span's
+ * `gen_ai.tool.call.arguments` attribute. The attribute is a JSON-encoded
+ * argument object (e.g. `{"command":"ls -la"}`); we pull out the `command`
+ * field. Returns null when the attribute is absent or doesn't carry a command,
+ * so callers can skip shell-command extraction cleanly.
+ */
+function parseToolCommand(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const command = parsed['command']
+    return typeof command === 'string' ? command : null
+  } catch {
+    return null
+  }
+}
+
+// Shell control-flow keywords. These lead a statement but are not commands, so
+// they must never be reported as bash commands.
+const OTEL_SHELL_KEYWORDS = new Set([
+  'if', 'then', 'else', 'elif', 'fi',
+  'for', 'while', 'until', 'do', 'done',
+  'case', 'esac', 'select', 'function', 'in', 'time', 'coproc',
+])
+
+/**
+ * Normalise an OTEL shell command before command-name extraction.
+ *
+ * Unlike the Copilot CLI / VS Code JSONL logs — which record a single command
+ * per tool call (e.g. `cd x && python3 y`) — the OTEL store records the FULL
+ * multi-line script the agent ran (heredocs, for/if blocks, newline-separated
+ * statements). The shared extractBashCommands helper only splits on `;`/`&&`/`|`
+ * and has no concept of shell keywords, so those scripts leak control-flow words
+ * (`for`, `do`, `if`, `then`, …) and collapse newline-separated statements.
+ *
+ * Normalising here — rather than in the shared helper — keeps every other
+ * provider's behaviour unchanged. We (1) turn newlines into `;` so each
+ * statement is its own segment, then (2) drop shell control-flow keywords.
+ */
+function extractOtelBashCommands(command: string): string[] {
+  const normalized = command.replace(/\r?\n/g, '; ')
+  return extractBashCommands(normalized).filter(c => !OTEL_SHELL_KEYWORDS.has(c))
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for JSONL / transcript parsing
 // ---------------------------------------------------------------------------
@@ -386,6 +446,9 @@ function createJsonlParser(
       let isTranscript = false
       let currentModel = ''
       let pendingUserMessage = ''
+      // Track the active subagent for this session (from subagent.selected events).
+      // Resets when a new subagent is selected.
+      let currentSubagentType: string | undefined
 
       // First pass: detect format and infer transcript model if needed.
       for (const line of lines) {
@@ -429,6 +492,11 @@ function createJsonlParser(
           continue
         }
 
+        if (event.type === 'subagent.selected') {
+          currentSubagentType = (event.data as SubagentSelectedData).agentName
+          continue
+        }
+
         if (event.type === 'user.message') {
           pendingUserMessage = (event.data as UserMessageData).content ?? ''
           continue
@@ -459,6 +527,18 @@ function createJsonlParser(
             })
             .filter((t): t is string => t !== null)
 
+          // Extract base command names from bash-type tool requests, routing the
+          // raw command through the shared extractBashCommands helper so chained
+          // commands are normalised the same way as every other provider
+          // (see bash-utils.ts, parser.ts, forge.ts, grok.ts, etc.).
+          const bashCommands = toolRequests.flatMap((t) => {
+            if (typeof t !== 'object' || t === null) return []
+            const name = (t.name ?? t.toolName) ?? ''
+            if (!BASH_TOOL_NAMES.has(name)) return []
+            const cmd = t.arguments?.['command']
+            return typeof cmd === 'string' ? extractBashCommands(cmd) : []
+          })
+
           // Copilot JSONL only logs outputTokens; inputTokens are NOT available.
           // Cost will be lower than actual API cost. This is the original
           // behaviour — OTel data (below) replaces it when available.
@@ -477,7 +557,8 @@ function createJsonlParser(
             webSearchRequests: 0,
             costUSD,
             tools,
-            bashCommands: [],
+            bashCommands,
+            subagentTypes: currentSubagentType ? [currentSubagentType] : undefined,
             timestamp: event.timestamp ?? '',
             speed: 'standard' as const,
             deduplicationKey: dedupKey,
@@ -577,8 +658,23 @@ function createOtelParser(
             traceIdArr
           )
 
-          // Collect tool names from execute_tool spans for each trace
+          // Collect tool names, shell commands and subagent names from the
+          // execute_tool / invoke_agent spans for each trace. These mirror the
+          // metadata the JSONL path captures, so the OTel source stays
+          // equivalent (tools + bashCommands + subagentTypes are all first-class
+          // call metadata per types.ts).
+          //
+          // Subagent attribution: VS Code records a subagent run as an
+          // invoke_agent span carrying copilot_chat.parent_chat_session_id. The
+          // root turn agent (gen_ai.agent.name = 'GitHub Copilot Chat') has NO
+          // parent session and is intentionally excluded, otherwise it would
+          // surface as a bogus 'GitHub Copilot Chat' entry in the agents view.
+          // A subagent's invoke_agent span lives in the same trace as that
+          // subagent's own chat spans, so attributing the agent name per-trace
+          // labels exactly the subagent's calls.
           const toolsByTrace = new Map<string, string[]>()
+          const bashByTrace = new Map<string, string[]>()
+          const subagentsByTrace = new Map<string, string[]>()
           const chatSpanIds: string[] = []
           const spanMetaById = new Map<string, { trace_id: string; start_time_ms: number; response_model: string | null }>()
 
@@ -588,6 +684,7 @@ function createOtelParser(
 
             if (opName === 'chat') {
               chatSpanIds.push(span.span_id)
+              continue
             }
 
             if (opName === 'execute_tool') {
@@ -598,6 +695,33 @@ function createOtelParser(
                 const existing = toolsByTrace.get(span.trace_id) ?? []
                 existing.push(normalizeTool(rawToolName))
                 toolsByTrace.set(span.trace_id, existing)
+
+                // For shell tools, extract command names via the OTEL-specific
+                // normaliser (handles the full multi-line scripts the OTEL store
+                // records; see extractOtelBashCommands).
+                if (BASH_TOOL_NAMES.has(rawToolName)) {
+                  const command = parseToolCommand(attrs['gen_ai.tool.call.arguments'])
+                  if (command) {
+                    const bash = bashByTrace.get(span.trace_id) ?? []
+                    bash.push(...extractOtelBashCommands(command))
+                    bashByTrace.set(span.trace_id, bash)
+                  }
+                }
+              }
+              continue
+            }
+
+            // Genuine subagent invocation: an invoke_agent span with a parent
+            // chat session. The root turn agent ('GitHub Copilot Chat') has no
+            // parent session and is skipped to avoid a bogus agents-view entry.
+            if (opName === 'invoke_agent') {
+              const attrs = loadSpanAttributesFromTable(db, span.span_id)
+              const parentSession = attrs['copilot_chat.parent_chat_session_id']
+              const agentName = attrs['gen_ai.agent.name'] as string | undefined
+              if (parentSession && agentName) {
+                const subs = subagentsByTrace.get(span.trace_id) ?? []
+                subs.push(agentName)
+                subagentsByTrace.set(span.trace_id, subs)
               }
             }
           }
@@ -639,6 +763,8 @@ function createOtelParser(
             }
 
             const tools = toolsByTrace.get(spanMetadata.trace_id) ?? []
+            const bashCommands = bashByTrace.get(spanMetadata.trace_id) ?? []
+            const subagentTypes = subagentsByTrace.get(spanMetadata.trace_id)
             const timestamp = epochToISO(spanMetadata.start_time_ms)
 
             // calculateCost with FULL token data — this is the key improvement.
@@ -665,7 +791,8 @@ function createOtelParser(
               webSearchRequests: 0,
               costUSD,
               tools,
-              bashCommands: [],
+              bashCommands,
+              subagentTypes: subagentTypes && subagentTypes.length > 0 ? subagentTypes : undefined,
               timestamp,
               speed: 'standard' as const,
               deduplicationKey: dedupKey,
