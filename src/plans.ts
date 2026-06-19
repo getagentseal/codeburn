@@ -1,9 +1,9 @@
 import type { Plan, PlanId, PlanProvider } from './config.js'
 
-export const PLAN_PROVIDERS: PlanProvider[] = ['all', 'claude', 'codex', 'cursor']
-export const PLAN_IDS: PlanId[] = ['claude-pro', 'claude-max', 'claude-max-5x', 'cursor-pro', 'custom', 'none']
+export const PLAN_PROVIDERS: PlanProvider[] = ['all', 'claude', 'codex', 'cursor', 'grok']
+export const PLAN_IDS: PlanId[] = ['claude-pro', 'claude-max', 'claude-max-5x', 'cursor-pro', 'supergrok', 'supergrok-heavy', 'custom', 'none']
 
-export const PRESET_PLANS: Record<'claude-pro' | 'claude-max' | 'claude-max-5x' | 'cursor-pro', Omit<Plan, 'setAt'>> = {
+export const PRESET_PLANS: Record<'claude-pro' | 'claude-max' | 'claude-max-5x' | 'cursor-pro' | 'supergrok' | 'supergrok-heavy', Omit<Plan, 'setAt'>> = {
   'claude-pro': {
     id: 'claude-pro',
     monthlyUsd: 20,
@@ -26,6 +26,18 @@ export const PRESET_PLANS: Record<'claude-pro' | 'claude-max' | 'claude-max-5x' 
     id: 'cursor-pro',
     monthlyUsd: 20,
     provider: 'cursor',
+    resetDay: 1,
+  },
+  'supergrok': {
+    id: 'supergrok',
+    monthlyUsd: 30,
+    provider: 'grok',
+    resetDay: 1,
+  },
+  'supergrok-heavy': {
+    id: 'supergrok-heavy',
+    monthlyUsd: 300,
+    provider: 'grok',
     resetDay: 1,
   },
 }
@@ -55,6 +67,10 @@ export function planDisplayName(id: PlanId): string {
       return 'Claude Max 5x'
     case 'cursor-pro':
       return 'Cursor Pro'
+    case 'supergrok':
+      return 'SuperGrok'
+    case 'supergrok-heavy':
+      return 'SuperGrok Heavy'
     case 'custom':
       return 'Custom'
     case 'none':
