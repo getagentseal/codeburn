@@ -35,6 +35,9 @@ const toolNameMap: Record<string, string> = {
   web_search: 'WebSearch',
   fetch: 'WebFetch',
   task: 'Agent',
+  search_replace: 'Edit',
+  todo_write: 'TodoWrite',
+  spawn_subagent: 'Agent',
 }
 
 function defaultSessionsDir(): string {
