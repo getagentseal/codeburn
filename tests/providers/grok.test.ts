@@ -24,6 +24,7 @@ async function writeSession(opts: {
   cwd?: string
   model?: string
   turns?: Array<{ promptId: string; totals: number[] }>
+  toolCalls?: Array<{ title: string; rawInput: Record<string, unknown> }>
   toolsUsed?: string[]
 } = {}) {
   const cwdEncoded = opts.cwdEncoded ?? '%2FUsers%2Ftest'
@@ -70,6 +71,17 @@ async function writeSession(opts: {
         },
       }))
     }
+  }
+  for (const tc of opts.toolCalls ?? [
+    { title: 'read_file', rawInput: { target_directory: '.' } },
+    { title: 'grep', rawInput: { pattern: 'x' } },
+    { title: 'run_terminal_command', rawInput: { command: 'git status' } },
+  ]) {
+    lines.push(JSON.stringify({
+      timestamp: '2026-06-19T11:30:05.000Z',
+      method: 'session/update',
+      params: { sessionId: uuid, update: { sessionUpdate: 'tool_call', toolCallId: 'c1', title: tc.title, rawInput: tc.rawInput } },
+    }))
   }
   await writeFile(join(dir, 'updates.jsonl'), lines.join('\n') + '\n')
 
@@ -124,7 +136,8 @@ describe('grok provider - parsing', () => {
     expect(call.outputTokens).toBe(15000)
     expect(call.costIsEstimated).toBe(true)
     expect(call.costUSD).toBeGreaterThan(0)
-    expect(call.tools).toEqual(['Read', 'Bash', 'Grep'])
+    expect(call.tools).toEqual(['Read', 'Grep', 'Bash'])
+    expect(call.bashCommands).toContain('git')
     expect(call.project).toBe('myproject')
     expect(call.deduplicationKey).toContain('grok:')
   })

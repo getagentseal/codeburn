@@ -4,6 +4,7 @@ import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
+import { extractBashCommands } from '../bash-utils.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 // Grok Build (xAI's coding CLI) stores one session per directory at
@@ -82,23 +83,52 @@ function safeDecode(name: string): string {
 // updates.jsonl is one ACP JSON-RPC notification per line; streamed chunks carry
 // params._meta.{totalTokens, promptId}. totalTokens is the running context size,
 // so grouping by promptId (one per turn) gives each turn's first/last value.
-function estimateTokens(updates: string): { input: number; cacheRead: number; output: number } {
+type GrokUpdate = {
+  params?: {
+    _meta?: { totalTokens?: number; promptId?: string }
+    update?: { sessionUpdate?: string; title?: string; rawInput?: { command?: unknown } }
+  }
+}
+
+// Single pass over updates.jsonl: per-turn totalTokens for the cost estimate,
+// plus the real tool calls (each tool_call's title -> a tool, and
+// run_terminal_command's rawInput.command -> shell commands).
+function parseUpdates(updates: string): {
+  input: number
+  cacheRead: number
+  output: number
+  tools: string[]
+  bashCommands: string[]
+} {
   const turns = new Map<string, { first: number; last: number }>()
+  const tools: string[] = []
+  const bashCommands: string[] = []
+
   for (const line of updates.split('\n')) {
     if (!line.trim()) continue
-    let meta: { totalTokens?: number; promptId?: string } | undefined
+    let params: GrokUpdate['params']
     try {
-      meta = (JSON.parse(line) as { params?: { _meta?: { totalTokens?: number; promptId?: string } } })
-        .params?._meta
+      params = (JSON.parse(line) as GrokUpdate).params
     } catch {
       continue
     }
-    const total = meta?.totalTokens
-    const promptId = meta?.promptId
-    if (typeof total !== 'number' || !promptId) continue
-    const turn = turns.get(promptId)
-    if (!turn) turns.set(promptId, { first: total, last: total })
-    else turn.last = total
+    if (!params) continue
+
+    const total = params._meta?.totalTokens
+    const promptId = params._meta?.promptId
+    if (typeof total === 'number' && promptId) {
+      const turn = turns.get(promptId)
+      if (!turn) turns.set(promptId, { first: total, last: total })
+      else turn.last = total
+    }
+
+    const update = params.update
+    if (update?.sessionUpdate === 'tool_call' && typeof update.title === 'string') {
+      tools.push(toolNameMap[update.title] ?? update.title)
+      if (update.title === 'run_terminal_command' && typeof update.rawInput?.command === 'string') {
+        bashCommands.push(...extractBashCommands(update.rawInput.command))
+      }
+    }
   }
 
   let sumFirst = 0
@@ -112,7 +142,7 @@ function estimateTokens(updates: string): { input: number; cacheRead: number; ou
   // Unique context (peak) is fresh input billed once; the rest of the per-turn
   // re-sends are cache reads (Grok caches them, even though it reports nothing).
   const cacheRead = Math.max(0, sumFirst - peak)
-  return { input: peak, cacheRead, output }
+  return { input: peak, cacheRead, output, tools, bashCommands }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -123,7 +153,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const updates = await readSessionFile(source.path)
       if (!summary || updates === null) return
 
-      const { input, cacheRead, output } = estimateTokens(updates)
+      const { input, cacheRead, output, tools, bashCommands } = parseUpdates(updates)
       if (input === 0 && output === 0) return
 
       const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
@@ -135,8 +165,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const dedupKey = `${source.provider}:${dir}:${timestamp}:${sessionId}`
       if (seenKeys.has(dedupKey)) return
       seenKeys.add(dedupKey)
-
-      const tools = (signals?.toolsUsed ?? []).map(t => toolNameMap[t] ?? t)
 
       yield {
         provider: source.provider,
@@ -151,7 +179,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         costUSD: calculateCost(model, input, output, 0, cacheRead, 0),
         costIsEstimated: true,
         tools,
-        bashCommands: [],
+        bashCommands,
         timestamp,
         speed: 'standard',
         deduplicationKey: dedupKey,
