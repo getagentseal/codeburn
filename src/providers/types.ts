@@ -24,6 +24,9 @@ export type ParsedProviderCall = {
   costIsEstimated?: boolean
   tools: string[]
   bashCommands: string[]
+  // Subagent types spawned in this call (e.g. 'general-purpose'). Feeds the
+  // Skills & Agents breakdown; optional since most providers don't expose it.
+  subagentTypes?: string[]
   timestamp: string
   speed: 'standard' | 'fast'
   deduplicationKey: string

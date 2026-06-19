@@ -76,6 +76,7 @@ async function writeSession(opts: {
     { title: 'read_file', rawInput: { target_directory: '.' } },
     { title: 'grep', rawInput: { pattern: 'x' } },
     { title: 'run_terminal_command', rawInput: { command: 'git status' } },
+    { title: 'spawn_subagent', rawInput: { subagent_type: 'general-purpose', prompt: 'x' } },
   ]) {
     lines.push(JSON.stringify({
       timestamp: '2026-06-19T11:30:05.000Z',
@@ -136,8 +137,9 @@ describe('grok provider - parsing', () => {
     expect(call.outputTokens).toBe(15000)
     expect(call.costIsEstimated).toBe(true)
     expect(call.costUSD).toBeGreaterThan(0)
-    expect(call.tools).toEqual(['Read', 'Grep', 'Bash'])
+    expect(call.tools).toEqual(['Read', 'Grep', 'Bash', 'Agent'])
     expect(call.bashCommands).toContain('git')
+    expect(call.subagentTypes).toEqual(['general-purpose'])
     expect(call.project).toBe('myproject')
     expect(call.deduplicationKey).toContain('grok:')
   })

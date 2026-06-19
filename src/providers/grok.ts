@@ -86,7 +86,7 @@ function safeDecode(name: string): string {
 type GrokUpdate = {
   params?: {
     _meta?: { totalTokens?: number; promptId?: string }
-    update?: { sessionUpdate?: string; title?: string; rawInput?: { command?: unknown } }
+    update?: { sessionUpdate?: string; title?: string; rawInput?: { command?: unknown; subagent_type?: unknown } }
   }
 }
 
@@ -99,10 +99,12 @@ function parseUpdates(updates: string): {
   output: number
   tools: string[]
   bashCommands: string[]
+  subagentTypes: string[]
 } {
   const turns = new Map<string, { first: number; last: number }>()
   const tools: string[] = []
   const bashCommands: string[] = []
+  const subagentTypes: string[] = []
 
   for (const line of updates.split('\n')) {
     if (!line.trim()) continue
@@ -128,6 +130,9 @@ function parseUpdates(updates: string): {
       if (update.title === 'run_terminal_command' && typeof update.rawInput?.command === 'string') {
         bashCommands.push(...extractBashCommands(update.rawInput.command))
       }
+      if (update.title === 'spawn_subagent' && typeof update.rawInput?.subagent_type === 'string') {
+        subagentTypes.push(update.rawInput.subagent_type)
+      }
     }
   }
 
@@ -142,7 +147,7 @@ function parseUpdates(updates: string): {
   // Unique context (peak) is fresh input billed once; the rest of the per-turn
   // re-sends are cache reads (Grok caches them, even though it reports nothing).
   const cacheRead = Math.max(0, sumFirst - peak)
-  return { input: peak, cacheRead, output, tools, bashCommands }
+  return { input: peak, cacheRead, output, tools, bashCommands, subagentTypes }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -153,7 +158,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const updates = await readSessionFile(source.path)
       if (!summary || updates === null) return
 
-      const { input, cacheRead, output, tools, bashCommands } = parseUpdates(updates)
+      const { input, cacheRead, output, tools, bashCommands, subagentTypes } = parseUpdates(updates)
       if (input === 0 && output === 0) return
 
       const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
@@ -180,6 +185,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         costIsEstimated: true,
         tools,
         bashCommands,
+        subagentTypes,
         timestamp,
         speed: 'standard',
         deduplicationKey: dedupKey,
