@@ -17,9 +17,9 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
-You pay for Claude, Codex, Cursor, and a stack of other AI coding tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
+You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
 
-CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **28 AI coding tools**.
+CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **28 AI tools**.
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily.
 
@@ -175,7 +175,7 @@ Relaunch the app to apply. To revert: `defaults delete org.agentseal.codeburn-me
 
 ## Supported tools
 
-CodeBurn auto-detects which AI coding tools you use. Each logo links to its provider doc.
+CodeBurn auto-detects which AI tools you use. Each logo links to its provider doc.
 
 <p align="center">
   <a href="docs/providers/claude.md" title="Claude Code &amp; Claude Desktop"><img src="assets/providers/claude.jpg" alt="Claude Code &amp; Claude Desktop" height="34" /></a>
@@ -216,6 +216,9 @@ The `--provider` flag filters any command to a single provider: `codeburn report
 Adding a new provider is a single file. See `src/providers/codex.ts` for an example.
 
 ## Commands
+
+<details>
+<summary><strong>All commands and keyboard shortcuts</strong></summary>
 
 Run `codeburn` for the dashboard, or use a subcommand below. Most commands also accept `--provider`, `--project` / `--exclude`, and a period flag (`-p today|week|30days|month|all`).
 
@@ -264,7 +267,12 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 
 Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison, `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
+</details>
+
 ## Features
+
+<details>
+<summary><strong>Pricing, task categories, plans, currency, filtering, and more</strong></summary>
 
 ### Pricing
 
@@ -378,7 +386,12 @@ codeburn today --format json | jq '.overview.cost'
 
 For lighter output, use `status --format json` (today and month totals only), `optimize --format json` (setup health, findings, and copy-paste fixes), `yield --format json` (productive/reverted/abandoned spend), or file exports (`export -f json`).
 
+</details>
+
 ## Reading the dashboard
+
+<details>
+<summary><strong>Signals and what they might mean</strong></summary>
 
 CodeBurn surfaces the data, you read the story. A few patterns worth knowing:
 
@@ -395,7 +408,12 @@ CodeBurn surfaces the data, you read the story. A few patterns worth knowing:
 
 These are starting points, not verdicts. A 60% cache hit on a single experimental session is fine. A persistent 60% cache hit across weeks of work is a config issue.
 
+</details>
+
 ## How it reads your data
+
+<details>
+<summary><strong>Per-tool data locations and parsing</strong></summary>
 
 | Provider | Data location | Notes |
 |----------|---------------|-------|
@@ -421,7 +439,12 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 CodeBurn deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session ID for Gemini, by session+message ID for OpenCode, by responseId for Pi/OMP, by chat folder + message ID for Codebuff, by session+message ID for Kimi), filters by date range per entry, and classifies each turn.
 
+</details>
+
 ## Environment Variables
+
+<details>
+<summary><strong>Override data directories and paths</strong></summary>
 
 | Variable | Description |
 |----------|-------------|
@@ -435,6 +458,8 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 | `QWEN_DATA_DIR` | Override Qwen data directory (default: `~/.qwen/projects`) |
 | `VIBE_HOME` | Override Mistral Vibe home directory (default: `~/.vibe`) |
 | `WARP_DB_PATH` | Override Warp database path (default: Warp Stable, then Warp Preview) |
+
+</details>
 
 ## Sponsoring CodeBurn
 
