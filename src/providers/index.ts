@@ -16,6 +16,7 @@ import { openclaw } from './openclaw.js'
 import { pi, omp } from './pi.js'
 import { qwen } from './qwen.js'
 import { rooCode } from './roo-code.js'
+import { zerostack } from './zerostack.js'
 import type { Provider, SessionSource } from './types.js'
 
 let antigravityProvider: Provider | null = null
@@ -152,7 +153,7 @@ async function loadCrush(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, devin, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, mux, openclaw, pi, omp, qwen, rooCode]
+const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, devin, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, mux, openclaw, pi, omp, qwen, rooCode, zerostack]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.
