@@ -1,0 +1,221 @@
+import { readdir, stat } from 'fs/promises'
+import { basename, dirname, join } from 'path'
+import { homedir } from 'os'
+
+import { readSessionFile } from '../fs-utils.js'
+import { calculateCost, getShortModelName } from '../models.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+
+// Grok Build (xAI's coding CLI) stores one session per directory at
+// <grok-home>/sessions/<url-encoded-cwd>/<uuid>/, where grok-home is $GROK_HOME
+// or ~/.grok. Each session dir holds summary.json, signals.json, and the ACP
+// log updates.jsonl.
+//
+// Grok does NOT record billable input/output tokens. signals.json carries
+// `contextTokensUsed` (current context fill) and updates.jsonl carries a running
+// `_meta.totalTokens` per streamed chunk; there is no per-call input/output
+// split. We reconstruct an ESTIMATE from the per-turn totalTokens curve: input
+// is the context entering each turn, output is the context growth during it.
+// Cost is flagged estimated. grok-build is priced via its grok-build-0.1 alias.
+
+const toolNameMap: Record<string, string> = {
+  bash: 'Bash',
+  run_terminal_command: 'Bash',
+  read_file: 'Read',
+  read: 'Read',
+  write_file: 'Write',
+  edit_file: 'Edit',
+  edit: 'Edit',
+  list_dir: 'Glob',
+  glob: 'Glob',
+  grep: 'Grep',
+  search: 'WebSearch',
+  web_search: 'WebSearch',
+  fetch: 'WebFetch',
+  task: 'Agent',
+}
+
+function defaultSessionsDir(): string {
+  const home = process.env['GROK_HOME'] ?? join(homedir(), '.grok')
+  return join(home, 'sessions')
+}
+
+type GrokSummary = {
+  info?: { id?: string; cwd?: string }
+  created_at?: string
+  updated_at?: string
+  last_active_at?: string
+  current_model_id?: string
+  session_summary?: string
+  generated_title?: string
+}
+
+type GrokSignals = {
+  primaryModelId?: string
+  modelsUsed?: string[]
+  toolsUsed?: string[]
+}
+
+async function readJson<T>(path: string): Promise<T | null> {
+  const content = await readSessionFile(path)
+  if (content === null) return null
+  try {
+    return JSON.parse(content) as T
+  } catch {
+    return null
+  }
+}
+
+function safeDecode(name: string): string {
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+}
+
+// updates.jsonl is one ACP JSON-RPC notification per line; streamed chunks carry
+// params._meta.{totalTokens, promptId}. totalTokens is the running context size,
+// so grouping by promptId (one per turn) gives each turn's first/last value.
+function estimateTokens(updates: string): { input: number; output: number } {
+  const turns = new Map<string, { first: number; last: number }>()
+  for (const line of updates.split('\n')) {
+    if (!line.trim()) continue
+    let meta: { totalTokens?: number; promptId?: string } | undefined
+    try {
+      meta = (JSON.parse(line) as { params?: { _meta?: { totalTokens?: number; promptId?: string } } })
+        .params?._meta
+    } catch {
+      continue
+    }
+    const total = meta?.totalTokens
+    const promptId = meta?.promptId
+    if (typeof total !== 'number' || !promptId) continue
+    const turn = turns.get(promptId)
+    if (!turn) turns.set(promptId, { first: total, last: total })
+    else turn.last = total
+  }
+
+  let input = 0
+  let output = 0
+  for (const { first, last } of turns.values()) {
+    input += first
+    output += Math.max(0, last - first)
+  }
+  return { input, output }
+}
+
+function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const dir = dirname(source.path)
+      const summary = await readJson<GrokSummary>(join(dir, 'summary.json'))
+      const updates = await readSessionFile(source.path)
+      if (!summary || updates === null) return
+
+      const { input, output } = estimateTokens(updates)
+      if (input === 0 && output === 0) return
+
+      const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
+      const model =
+        summary.current_model_id ?? signals?.primaryModelId ?? signals?.modelsUsed?.[0] ?? 'grok-build'
+      const timestamp = summary.updated_at ?? summary.last_active_at ?? summary.created_at ?? ''
+      const sessionId = summary.info?.id ?? basename(dir)
+
+      const dedupKey = `${source.provider}:${dir}:${timestamp}:${sessionId}`
+      if (seenKeys.has(dedupKey)) return
+      seenKeys.add(dedupKey)
+
+      const tools = (signals?.toolsUsed ?? []).map(t => toolNameMap[t] ?? t)
+
+      yield {
+        provider: source.provider,
+        model,
+        inputTokens: input,
+        outputTokens: output,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+        costUSD: calculateCost(model, input, output, 0, 0, 0),
+        costIsEstimated: true,
+        tools,
+        bashCommands: [],
+        timestamp,
+        speed: 'standard',
+        deduplicationKey: dedupKey,
+        userMessage: summary.session_summary ?? summary.generated_title ?? '',
+        sessionId,
+        project: source.project,
+        projectPath: summary.info?.cwd,
+      }
+    },
+  }
+}
+
+async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+
+  let cwdDirs: string[]
+  try {
+    cwdDirs = await readdir(sessionsDir)
+  } catch {
+    return sources
+  }
+
+  for (const cwdName of cwdDirs) {
+    const cwdPath = join(sessionsDir, cwdName)
+    const cwdStat = await stat(cwdPath).catch(() => null)
+    if (!cwdStat?.isDirectory()) continue
+
+    let sessionDirs: string[]
+    try {
+      sessionDirs = await readdir(cwdPath)
+    } catch {
+      continue
+    }
+
+    for (const sessionName of sessionDirs) {
+      const sessionPath = join(cwdPath, sessionName)
+      const sessionStat = await stat(sessionPath).catch(() => null)
+      if (!sessionStat?.isDirectory()) continue
+
+      const summary = await readJson<GrokSummary>(join(sessionPath, 'summary.json'))
+      if (!summary) continue
+
+      const cwd = summary.info?.cwd ?? safeDecode(cwdName)
+      sources.push({ path: join(sessionPath, 'updates.jsonl'), project: basename(cwd), provider: 'grok' })
+    }
+  }
+
+  return sources
+}
+
+export function createGrokProvider(sessionsDir?: string): Provider {
+  const dir = sessionsDir ?? defaultSessionsDir()
+
+  return {
+    name: 'grok',
+    displayName: 'Grok Build',
+
+    modelDisplayName(model: string): string {
+      if (model.startsWith('grok-build')) return 'Grok Build'
+      return getShortModelName(model)
+    },
+
+    toolDisplayName(rawTool: string): string {
+      return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async discoverSessions(): Promise<SessionSource[]> {
+      return discoverSessions(dir)
+    },
+
+    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
+      return createParser(source, seenKeys)
+    },
+  }
+}
+
+export const grok = createGrokProvider()

@@ -28,6 +28,7 @@ For the architectural picture, see `../architecture.md`.
 | [Qwen](qwen.md) | JSONL | `src/providers/qwen.ts` | none |
 | [Roo Code](roo-code.md) | JSON | `src/providers/roo-code.ts` | `tests/providers/roo-code.test.ts` |
 | [Zerostack](zerostack.md) | JSON | `src/providers/zerostack.ts` | `tests/providers/zerostack.test.ts` |
+| [Grok Build](grok.md) | JSON/JSONL | `src/providers/grok.ts` | `tests/providers/grok.test.ts` |
 
 ### Lazy (loaded on first call)
 
