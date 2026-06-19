@@ -100,7 +100,7 @@ describe('devin provider', () => {
   it('parses per-step ACUs, tokens, tools, and model resolution', async () => {
     await configureDevinRate()
     const filePath = await writeTranscript('glimmer-platinum.json', {
-      schema_version: '1',
+      schema_version: 'ATIF-v1.4',
       session_id: 'session-123',
       agent: { model_name: 'agent-model' },
       steps: [
@@ -212,6 +212,189 @@ describe('devin provider', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.costUSD).toBeCloseTo(1, 12)
+  })
+
+  it('supports ATIF-v1.5 agent tool_definitions without changing parsing', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('atif-v15.json', {
+      schema_version: 'ATIF-v1.5',
+      session_id: 'atif-v15',
+      agent: {
+        model_name: 'agent-model',
+        tool_definitions: [
+          {
+            type: 'function',
+            function: { name: 'read_file' },
+          },
+        ],
+      },
+      steps: [
+        {
+          step_id: 1,
+          source: 'user',
+          message: 'hello from v1.5',
+          metadata: {
+            is_user_input: true,
+            created_at: '2027-01-15T08:00:00.000Z',
+          },
+        },
+        {
+          step_id: 2,
+          source: 'agent',
+          message: 'done',
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.25,
+            metrics: {
+              input_tokens: 12,
+              output_tokens: 3,
+            },
+          },
+          tool_calls: [{ function_name: 'read_file' }],
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      sessionId: 'atif-v15',
+      userMessage: 'hello from v1.5',
+      inputTokens: 12,
+      outputTokens: 3,
+      costUSD: 0.25,
+      tools: ['read_file'],
+    })
+  })
+
+  it('supports ATIF-v1.6 content-part messages and step-level metrics', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('atif-v16.json', {
+      schema_version: 'ATIF-v1.6',
+      session_id: 'atif-v16',
+      agent: { model_name: 'agent-v16' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'user',
+          message: [
+            { type: 'text', text: 'review image' },
+            { type: 'image', image_source: { path: 'images/1.png' } },
+          ],
+          metadata: {
+            created_at: '2027-01-15T08:00:00.000Z',
+            is_user_input: true,
+          },
+        },
+        {
+          step_id: 2,
+          source: 'agent',
+          timestamp: '2027-01-15T08:00:02.000Z',
+          model_name: 'Claude Opus 4.6',
+          message: [
+            { type: 'text', text: 'analysis complete' },
+          ],
+          metrics: {
+            prompt_tokens: 200,
+            completion_tokens: 40,
+            cached_tokens: 150,
+            extra: {
+              cache_creation_input_tokens: 20,
+            },
+          },
+          extra: {
+            generation_model: 'claude-opus-4-6-thinking',
+            committed_credit_cost: 300,
+          },
+          tool_calls: [
+            {
+              function: { name: 'read_file' },
+            },
+          ],
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      sessionId: 'atif-v16',
+      userMessage: 'review image',
+      model: 'claude-opus-4-6-thinking',
+      inputTokens: 30,
+      outputTokens: 40,
+      cacheReadInputTokens: 150,
+      cacheCreationInputTokens: 20,
+      costUSD: 0.03,
+      tools: ['read_file'],
+      timestamp: '2027-01-15T08:00:02.000Z',
+    })
+  })
+
+  it('supports ATIF-v1.7 by reading source/timestamp/step metrics and trajectory_id fallback', async () => {
+    await configureDevinRate(2)
+    const filePath = await writeTranscript('atif-v17.json', {
+      schema_version: 'ATIF-v1.7',
+      trajectory_id: 'traj-001',
+      agent: {
+        model_name: 'Claude Opus 4.6',
+        tool_definitions: [],
+      },
+      steps: [
+        {
+          step_id: 1,
+          source: 'user',
+          timestamp: '2027-01-15T08:00:00.000Z',
+          message: [
+            { type: 'text', text: 'Run checks' },
+          ],
+          extra: { telemetry: { source: 'user' } },
+        },
+        {
+          step_id: 2,
+          source: 'agent',
+          timestamp: '2027-01-15T08:00:01.000Z',
+          model_name: 'GPT-5.3-Codex',
+          message: '',
+          metrics: {
+            prompt_tokens: 1200,
+            completion_tokens: 45,
+            cached_tokens: 1100,
+            extra: {
+              cache_creation_input_tokens: 50,
+            },
+          },
+          extra: {
+            committed_credit_cost: 150,
+            generation_model: 'gpt-5-3-codex-xhigh',
+          },
+          tool_calls: [{ function_name: 'shell_command' }],
+        },
+      ],
+      final_metrics: {
+        total_prompt_tokens: 1200,
+        total_completion_tokens: 45,
+      },
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      sessionId: 'traj-001',
+      deduplicationKey: 'devin:traj-001:2',
+      userMessage: 'Run checks',
+      model: 'gpt-5-3-codex-xhigh',
+      inputTokens: 50,
+      outputTokens: 45,
+      cacheReadInputTokens: 1100,
+      cacheCreationInputTokens: 50,
+      costUSD: 0.03,
+      tools: ['shell_command'],
+      timestamp: '2027-01-15T08:00:01.000Z',
+    })
   })
 
   it('falls back to filename session id and deduplicates by step id', async () => {

@@ -15,53 +15,77 @@ import { readSessionFile } from "../fs-utils.js";
 import { isPositiveNumber, safeNumber } from "../parser.js";
 
 type AgentTrajectory<T extends Step> = {
-  schema_version: string;
+  schema_version?: string;
   session_id?: string;
-  agent: Agent;
-  steps: T[];
+  trajectory_id?: string;
+  agent?: Agent;
+  steps?: T[];
 };
 
 type Agent = {
-  name: string;
-  version: string;
+  name?: string;
+  version?: string;
   model_name?: string;
+  tool_definitions?: unknown;
 };
 
 type ToolCall = {
-  tool_call_id: string;
-  function_name: string;
+  tool_call_id?: string;
+  function_name?: string;
+  function?: {
+    name?: string;
+  };
   arguments: unknown;
+};
+
+type DevinMetrics = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_tokens?: number;
+  cache_read_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cached_tokens?: number;
+  total_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  extra?: {
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
 };
 
 type DevinMetadata = {
   created_at?: string;
   committed_acu_cost?: number;
+  committed_credit_cost?: number;
   generation_model?: string;
   is_user_input?: boolean;
   num_tokens?: number;
   request_id?: string;
   finish_reason?: string;
-  metrics?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cache_creation_tokens?: number;
-    cache_read_tokens?: number;
-    tokens_per_sec?: number;
-    total_time_ms?: number;
-    ttft_ms?: number;
-    tpot_ms?: number;
-  };
+  metrics?: DevinMetrics;
+};
+
+type DevinStepExtra = {
+  committed_acu_cost?: number;
+  committed_credit_cost?: number;
+  generation_model?: string;
 };
 
 type Step = {
-  step_id: number;
-  source: string;
+  step_id?: number | string;
+  source?: string;
+  timestamp?: string;
   model_name?: string;
-  message: string;
+  message?: unknown;
+  metrics?: DevinMetrics;
+  metadata?: DevinMetadata;
+  extra?: DevinStepExtra;
   tool_calls?: Array<ToolCall>;
 };
 
-type DevinStep = Step & { metadata?: DevinMetadata };
+type DevinStep = Step;
 
 type DevinAgentTrajectory = AgentTrajectory<DevinStep>;
 
@@ -96,10 +120,15 @@ const DEVIN_PROVIDER_NAME = "devin";
 const DEVIN_PROVIDER_DISPLAY_NAME = "Devin";
 const DEVIN_TRANSCRIPTS_SUBDIR = "transcripts";
 const DEVIN_SESSIONS_DB = "sessions.db";
+const DEVIN_CREDITS_PER_ACU = 10_000;
 
 function parseTranscript(raw: string): DevinAgentTrajectory | null {
   try {
-    return JSON.parse(raw) as DevinAgentTrajectory;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as DevinAgentTrajectory;
   } catch {
     return null;
   }
@@ -110,29 +139,104 @@ function parseNumericTimestamp(value: number): string {
   return new Date(millis).toISOString();
 }
 
-function getUsage(
-  metadata: DevinMetadata | undefined | null,
-): DevinUsage | null {
-  if (!metadata) return null;
-  const metrics = metadata.metrics;
+function normalizeMessageText(message: unknown): string {
+  if (typeof message === "string") return message.trim();
+
+  if (Array.isArray(message)) {
+    return message
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (!part || typeof part !== "object") return "";
+        const text = (part as Record<string, unknown>).text;
+        return typeof text === "string" ? text : "";
+      })
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  if (message && typeof message === "object") {
+    const text = (message as Record<string, unknown>).text;
+    if (typeof text === "string") return text.trim();
+  }
+
+  return "";
+}
+
+function getCommittedAcuCost(step: DevinStep): number {
+  const metadataAcuCost = safeNumber(step.metadata?.committed_acu_cost);
+  if (isPositiveNumber(metadataAcuCost)) return metadataAcuCost;
+
+  const extraAcuCost = safeNumber(step.extra?.committed_acu_cost);
+  if (isPositiveNumber(extraAcuCost)) return extraAcuCost;
+
+  const metadataCreditCost = safeNumber(step.metadata?.committed_credit_cost);
+  if (isPositiveNumber(metadataCreditCost)) {
+    return metadataCreditCost / DEVIN_CREDITS_PER_ACU;
+  }
+
+  const extraCreditCost = safeNumber(step.extra?.committed_credit_cost);
+  if (isPositiveNumber(extraCreditCost)) {
+    return extraCreditCost / DEVIN_CREDITS_PER_ACU;
+  }
+
+  return 0;
+}
+
+function getUsage(step: DevinStep): DevinUsage | null {
+  const metrics = step.metrics ?? step.metadata?.metrics;
+  const committedAcuCost = getCommittedAcuCost(step);
+
+  const cacheCreationInputTokens = safeNumber(
+    metrics?.cache_creation_tokens ??
+      metrics?.cache_creation_input_tokens ??
+      metrics?.extra?.cache_creation_input_tokens,
+  );
+
+  const cacheReadInputTokens = safeNumber(
+    metrics?.cache_read_tokens ??
+      metrics?.cache_read_input_tokens ??
+      metrics?.cached_tokens ??
+      metrics?.extra?.cache_read_input_tokens,
+  );
+
+  const promptTokens = safeNumber(
+    metrics?.prompt_tokens ?? metrics?.total_input_tokens,
+  );
+
+  let inputTokens = safeNumber(metrics?.input_tokens);
+  if (inputTokens === 0 && promptTokens > 0) {
+    inputTokens = Math.max(
+      0,
+      promptTokens - cacheReadInputTokens - cacheCreationInputTokens,
+    );
+  }
+
+  const outputTokens = safeNumber(
+    metrics?.output_tokens ?? metrics?.completion_tokens,
+  );
 
   const hasAnyUsage = [
-    metadata.committed_acu_cost,
-    metrics?.input_tokens,
-    metrics?.output_tokens,
-    metrics?.cache_creation_tokens,
-    metrics?.cache_read_tokens,
+    committedAcuCost,
+    inputTokens,
+    outputTokens,
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
   ].some((x) => isPositiveNumber(x));
 
   if (!hasAnyUsage) return null;
 
   return {
-    committedAcuCost: safeNumber(metadata.committed_acu_cost),
-    inputTokens: safeNumber(metrics?.input_tokens),
-    outputTokens: safeNumber(metrics?.output_tokens),
-    cacheCreationInputTokens: safeNumber(metrics?.cache_creation_tokens),
-    cacheReadInputTokens: safeNumber(metrics?.cache_read_tokens),
+    committedAcuCost,
+    inputTokens,
+    outputTokens,
+    cacheCreationInputTokens,
+    cacheReadInputTokens,
   };
+}
+
+function isUserInputStep(step: DevinStep): boolean {
+  return step.metadata?.is_user_input === true || step.source === "user";
 }
 
 function getSessionId(
@@ -140,7 +244,12 @@ function getSessionId(
   transcript: DevinAgentTrajectory,
 ): string {
   const fromTranscript = transcript.session_id?.trim();
-  return fromTranscript || basename(source.path, ".json");
+  if (fromTranscript) return fromTranscript;
+
+  const fromTrajectoryId = transcript.trajectory_id?.trim();
+  if (fromTrajectoryId) return fromTrajectoryId;
+
+  return basename(source.path, ".json");
 }
 
 function projectNameFromPath(path: string): string {
@@ -170,6 +279,7 @@ function getTimestamp(
 ): string | undefined {
   return [
     step.metadata?.created_at,
+    step.timestamp,
     session?.lastActivityAt,
     session?.createdAt,
   ]
@@ -184,6 +294,7 @@ function getModelName(
 ): string {
   return (
     [
+      step.extra?.generation_model,
       step.metadata?.generation_model,
       step.model_name,
       transcript.agent?.model_name,
@@ -195,7 +306,13 @@ function getModelName(
 }
 
 function getToolNames(step: DevinStep): string[] {
-  return (step.tool_calls ?? []).map((call) => call.function_name);
+  const tools: string[] = [];
+  const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+  for (const call of toolCalls) {
+    const toolName = call.function_name ?? call.function?.name;
+    if (toolName) tools.push(toolName);
+  }
+  return tools;
 }
 
 function getFirstUserMessageBeforeStep(
@@ -204,8 +321,8 @@ function getFirstUserMessageBeforeStep(
 ): string | null {
   for (let i = index - 1; i >= 0; i--) {
     const step = steps[i];
-    if (!step?.metadata?.is_user_input) continue;
-    const message = step.message?.trim();
+    if (!step || !isUserInputStep(step)) continue;
+    const message = normalizeMessageText(step.message);
     if (message) return message;
   }
   return null;
@@ -267,7 +384,7 @@ class DevinSessionParser implements SessionParser {
     if (!raw) return;
 
     const transcript = parseTranscript(raw);
-    if (!transcript?.steps) return;
+    if (!transcript?.steps || !Array.isArray(transcript.steps)) return;
 
     const sessionId = getSessionId(this.source, transcript);
     const session = this.sessionMetadata.get(sessionId) ?? null;
@@ -280,14 +397,15 @@ class DevinSessionParser implements SessionParser {
 
     for (let index = 0; index < transcript.steps.length; index++) {
       const step = transcript.steps[index];
-      if (step.metadata?.is_user_input) continue;
+      if (!step || typeof step !== "object" || Array.isArray(step)) continue;
+      if (isUserInputStep(step)) continue;
 
-      const usage = getUsage(step.metadata);
+      const usage = getUsage(step);
       if (!usage) continue;
 
       const timestamp = getTimestamp(step, session) ?? "";
-
-      const deduplicationKey = `devin:${sessionId}:${step.step_id}`;
+      const stepId = `${step.step_id ?? index + 1}`;
+      const deduplicationKey = `devin:${sessionId}:${stepId}`;
 
       if (this.seenKeys.has(deduplicationKey)) continue;
       this.seenKeys.add(deduplicationKey);

@@ -4,7 +4,7 @@ Cognition Devin CLI local usage tracking.
 
 - **Source:** `src/providers/devin.ts`
 - **Loading:** eager (`src/providers/index.ts`)
-- **Test:** `tests/providers/devin.test.ts` (336 lines)
+- **Test:** `tests/providers/devin.test.ts`
 
 ## Where it reads from
 
@@ -14,7 +14,7 @@ Devin CLI data lives under:
 ~/.local/share/devin/cli/
 ```
 
-The MVP usage source is transcript JSON:
+Usage comes from transcript JSON:
 
 ```text
 ~/.local/share/devin/cli/transcripts/*.json
@@ -49,127 +49,111 @@ The config file is:
 ~/.config/codeburn/config.json
 ```
 
-The macOS Settings window writes this value from the Devin tab. There is no
-environment-variable override and no default rate. Do not hardcode a universal
-ACU price; Devin ACU pricing is account/contract dependent.
-
 When the rate is missing or invalid, `discoverSessions()` returns `[]` and the
-parser yields no calls. Devin remains registered as a provider, but it does not
-appear in CLI/UI results until configured.
+parser yields no calls.
 
 ## Storage format
 
-Transcript root is a JSON object following the [ATIF-v1.4 trajectory schema][atif],
-with Devin-specific additions such as per-step `metadata`. The parser does not
-validate `schema_version`; it only requires a parseable object with `steps[]`.
+CodeBurn supports ATIF transcript variants used by Devin across **ATIF-v1.5**, **ATIF-v1.6**, and **ATIF-v1.7** (and remains backward-compatible with older Devin transcripts that still use v1.4-style field names).
 
-Core fields include `session_id`, `agent.model_name`, and `steps[]`.
+The parser does not hard-fail on `schema_version`; it parses any object root
+with a `steps[]` array.
 
-Each counted step can provide:
+### Field normalization
 
-- `step_id`
-- `metadata.committed_acu_cost`
-- `metadata.metrics.input_tokens`
-- `metadata.metrics.output_tokens`
-- `metadata.metrics.cache_creation_tokens`
-- `metadata.metrics.cache_read_tokens`
-- `metadata.created_at`
-- `metadata.generation_model`
-- `metadata.request_id`
-- `tool_calls[].function_name`
+The provider normalizes equivalent usage fields across versions:
 
-User-input steps (`metadata.is_user_input === true`) are skipped. Non-user
-steps are included only if they have positive ACU usage or positive token usage.
+- **Cost inputs (ACU before conversion to USD):**
+  - `metadata.committed_acu_cost`
+  - `extra.committed_acu_cost`
+  - `metadata.committed_credit_cost / 10000`
+  - `extra.committed_credit_cost / 10000`
+- **Input tokens:**
+  - legacy: `metadata.metrics.input_tokens`
+  - newer prompt-style: `metrics.prompt_tokens - cache_read - cache_creation`
+- **Output tokens:**
+  - `metrics.output_tokens` or `metrics.completion_tokens`
+- **Cache write tokens:**
+  - `metrics.cache_creation_tokens`
+  - `metrics.cache_creation_input_tokens`
+  - `metrics.extra.cache_creation_input_tokens`
+- **Cache read tokens:**
+  - `metrics.cache_read_tokens`
+  - `metrics.cache_read_input_tokens`
+  - `metrics.cached_tokens`
+  - `metrics.extra.cache_read_input_tokens`
+
+### User/agent step detection
+
+- User steps are skipped when either:
+  - `metadata.is_user_input === true` (older exports)
+  - `source === "user"` (ATIF step source)
+- Non-user steps are included only when they contain positive ACU usage or
+  positive token usage.
+
+### Session, model, and timestamp fallback
+
+- **sessionId:** `session_id` -> `trajectory_id` -> transcript filename
+- **model:** `step.extra.generation_model` -> `step.metadata.generation_model` -> `step.model_name` -> `agent.model_name` -> `sessions.model` -> `devin`
+- **timestamp:** `step.metadata.created_at` -> `step.timestamp` -> `sessions.last_activity_at` -> `sessions.created_at`
 
 ## Pricing
 
-`metadata.committed_acu_cost` is per step, not cumulative. The provider converts
-each step with:
+`costUSD` is always provider-supplied and uses configured ACU conversion:
 
 ```text
 costUSD = committed_acu_cost * devin.acuUsdRate
 ```
 
+If a step only has `committed_credit_cost`, CodeBurn converts credits to ACU
+using Devin's current export convention:
+
+```text
+committed_acu_cost = committed_credit_cost / 10000
+```
+
 Token-only steps are still included when they have positive token metrics, but
-their `costUSD` is `0` if `committed_acu_cost` is absent.
+their `costUSD` is `0` if no committed cost is present.
 
 `src/parser.ts` preserves Devin's provider-supplied `costUSD` instead of
 re-pricing it through LiteLLM.
 
 ## sessions.db enrichment
 
-The provider currently reads these columns from `sessions`:
+The provider reads these columns from `sessions`:
 
-| Column              | Use                                                                                                         |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `id`                | join key with transcript `session_id` during parsing; discovery uses the transcript filename before `.json` |
-| `working_directory` | `projectPath` and derived project name                                                                      |
-| `model`             | model fallback                                                                                              |
-| `title`             | project name fallback                                                                                       |
-| `created_at`        | timestamp fallback                                                                                          |
-| `last_activity_at`  | preferred session timestamp fallback                                                                        |
-| `hidden`            | skip hidden sessions                                                                                        |
-
-`message_nodes`, `prompt_history`, and `tool_call_state` are not parsed yet.
-
-## Timestamps
-
-Step timestamps come from `metadata.created_at`, falling back to
-`sessions.last_activity_at`, then `sessions.created_at`.
-
-Transcript step timestamps are passed through as ATIF string timestamps.
-Numeric normalization is only applied to `sessions.db` timestamps:
-
-- less than `10_000_000_000`: seconds
-- otherwise: milliseconds
-
-## Model Resolution
-
-Model names resolve in this order:
-
-1. `step.metadata.generation_model`
-2. `step.model_name`
-3. `transcript.agent.model_name`
-4. `sessions.model`
-5. `devin`
-
-## Caching
-
-No provider-level cache.
-
-The normal session cache stores parsed provider calls, but Devin is always
-reparsed by `src/parser.ts` because `sessions.db` can change without the
-transcript JSON fingerprint changing.
+| Column              | Use                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `id`                | join key with transcript session id during parsing; discovery uses transcript filename before `.json`      |
+| `working_directory` | `projectPath` and derived project name                                                                       |
+| `model`             | model fallback                                                                                               |
+| `title`             | project name fallback                                                                                        |
+| `created_at`        | timestamp fallback                                                                                           |
+| `last_activity_at`  | preferred session timestamp fallback                                                                         |
+| `hidden`            | skip hidden sessions                                                                                         |
 
 ## Deduplication
 
 `devin:<sessionId>:<step.step_id>`
 
-The provider name is part of the key via the `devin:` prefix.
+When `step_id` is missing, parser falls back to 1-based step index.
 
 ## Quirks
 
-- The transcript directory has usage; `sessions.db` is enrichment only.
-- `committed_acu_cost` is per-generation/per-step ACU usage. Never treat it as cumulative.
+- Transcript JSON is the usage source; `sessions.db` only enriches metadata.
 - There is no default ACU-to-USD rate. Missing config intentionally hides Devin.
 - Hidden sessions from `sessions.db` are skipped in discovery and parsing.
-- Tool names come directly from `tool_calls[].function_name`; the provider assumes valid ATIF tool-call records.
-- If SQLite is unavailable or `sessions.db` cannot be opened, the provider still parses transcripts without enrichment.
+- Tool names are taken from either `tool_calls[].function_name` or
+  `tool_calls[].function.name`.
+- If SQLite is unavailable or `sessions.db` cannot be opened, transcript parsing
+  still works without enrichment.
 
 ## When fixing a bug here
 
-1. First check whether `~/.config/codeburn/config.json` contains a valid
-   `devin.acuUsdRate`. Without it, no Devin sessions should appear.
-2. For usage total bugs, compare against:
-
-   ```bash
-   jq '[.steps[] | select(.metadata.committed_acu_cost != null) | .metadata.committed_acu_cost] | add' ~/.local/share/devin/cli/transcripts/<session>.json
-   ```
-
-3. If project/model/timestamp metadata is wrong, inspect `sessions.db`, not the transcript.
-4. If a hidden session appears, check the `hidden` column. Discovery can only
-   hide sessions whose transcript filename matches `sessions.id`; parsing uses
-   the transcript `session_id` when present.
-5. Run `tests/providers/devin.test.ts` after parser changes. It covers ACU conversion, disabled-until-configured behavior, timestamp parsing, deduplication, hidden sessions, and `sessions.db` enrichment.
+1. Confirm `~/.config/codeburn/config.json` contains a valid positive
+   `devin.acuUsdRate`.
+2. Validate a transcript step's raw usage fields first (cost + token fields).
+3. If project/model/timestamp metadata is wrong, inspect `sessions.db`.
+4. Run `tests/providers/devin.test.ts` after parser changes.
 
 [atif]: https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md
