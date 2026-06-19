@@ -734,9 +734,14 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = dayMode ? 1 : period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
+  // A provider-scoped plan (e.g. SuperGrok) only makes sense on its own
+  // provider tab, where the shown cost matches the plan's spend. Hide it on
+  // every other tab, including All, so its budget isn't compared to spend it
+  // doesn't cover.
+  const visiblePlanUsages = (planUsages ?? []).filter(p => p.plan.provider === (activeProvider ?? 'all'))
   return (
     <Box flexDirection="column" width={dashWidth}>
-      <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={planUsages} />
+      <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} />
       <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
