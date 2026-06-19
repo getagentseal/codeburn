@@ -14,9 +14,11 @@ import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from 
 // Grok does NOT record billable input/output tokens. signals.json carries
 // `contextTokensUsed` (current context fill) and updates.jsonl carries a running
 // `_meta.totalTokens` per streamed chunk; there is no per-call input/output
-// split. We reconstruct an ESTIMATE from the per-turn totalTokens curve: input
-// is the context entering each turn, output is the context growth during it.
-// Cost is flagged estimated. grok-build is priced via its grok-build-0.1 alias.
+// split. We reconstruct an ESTIMATE from the per-turn totalTokens curve. Agentic
+// turns re-send the growing context every call, and that re-sent context is
+// cached server-side, so we bill the unique (peak) context as fresh input once,
+// the re-sent remainder as cache reads, and the per-turn growth as output. Cost
+// is flagged estimated; grok-build is priced via its grok-build-0.1 alias.
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -77,7 +79,7 @@ function safeDecode(name: string): string {
 // updates.jsonl is one ACP JSON-RPC notification per line; streamed chunks carry
 // params._meta.{totalTokens, promptId}. totalTokens is the running context size,
 // so grouping by promptId (one per turn) gives each turn's first/last value.
-function estimateTokens(updates: string): { input: number; output: number } {
+function estimateTokens(updates: string): { input: number; cacheRead: number; output: number } {
   const turns = new Map<string, { first: number; last: number }>()
   for (const line of updates.split('\n')) {
     if (!line.trim()) continue
@@ -96,13 +98,18 @@ function estimateTokens(updates: string): { input: number; output: number } {
     else turn.last = total
   }
 
-  let input = 0
+  let sumFirst = 0
   let output = 0
+  let peak = 0
   for (const { first, last } of turns.values()) {
-    input += first
+    sumFirst += first
     output += Math.max(0, last - first)
+    if (last > peak) peak = last
   }
-  return { input, output }
+  // Unique context (peak) is fresh input billed once; the rest of the per-turn
+  // re-sends are cache reads (Grok caches them, even though it reports nothing).
+  const cacheRead = Math.max(0, sumFirst - peak)
+  return { input: peak, cacheRead, output }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -113,7 +120,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const updates = await readSessionFile(source.path)
       if (!summary || updates === null) return
 
-      const { input, output } = estimateTokens(updates)
+      const { input, cacheRead, output } = estimateTokens(updates)
       if (input === 0 && output === 0) return
 
       const signals = await readJson<GrokSignals>(join(dir, 'signals.json'))
@@ -134,11 +141,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         inputTokens: input,
         outputTokens: output,
         cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 0,
-        cachedInputTokens: 0,
+        cacheReadInputTokens: cacheRead,
+        cachedInputTokens: cacheRead,
         reasoningTokens: 0,
         webSearchRequests: 0,
-        costUSD: calculateCost(model, input, output, 0, 0, 0),
+        costUSD: calculateCost(model, input, output, 0, cacheRead, 0),
         costIsEstimated: true,
         tools,
         bashCommands: [],

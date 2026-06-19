@@ -53,8 +53,9 @@ async function writeSession(opts: {
   }))
 
   const turns = opts.turns ?? [
-    { promptId: 'p1', totals: [10000, 15000] },
-    { promptId: 'p2', totals: [15000, 40000] },
+    { promptId: 'p1', totals: [20000, 25000] },
+    { promptId: 'p2', totals: [30000, 35000] },
+    { promptId: 'p3', totals: [40000, 45000] },
   ]
   const lines: string[] = []
   for (const turn of turns) {
@@ -115,10 +116,12 @@ describe('grok provider - parsing', () => {
     expect(calls).toHaveLength(1)
     const call = calls[0]!
     expect(call.model).toBe('grok-build')
-    // input = sum of per-turn first totals (10000 + 15000)
-    expect(call.inputTokens).toBe(25000)
-    // output = sum of per-turn growth ((15000-10000) + (40000-15000))
-    expect(call.outputTokens).toBe(30000)
+    // input = peak context (max totalTokens across the session)
+    expect(call.inputTokens).toBe(45000)
+    // cache reads = re-sent context (sum of per-turn starts 90000 minus peak 45000)
+    expect(call.cacheReadInputTokens).toBe(45000)
+    // output = sum of per-turn growth (3 turns x 5000)
+    expect(call.outputTokens).toBe(15000)
     expect(call.costIsEstimated).toBe(true)
     expect(call.costUSD).toBeGreaterThan(0)
     expect(call.tools).toEqual(['Read', 'Bash', 'Grep'])
