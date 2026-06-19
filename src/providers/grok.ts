@@ -17,7 +17,7 @@ import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from 
 // `_meta.totalTokens` per streamed chunk; there is no per-call input/output
 // split. We reconstruct an ESTIMATE from the per-turn totalTokens curve. Agentic
 // turns re-send the growing context every call, and that re-sent context is
-// cached server-side, so we bill the unique (peak) context as fresh input once,
+// cached server-side, so we bill the unique context (summed per compaction segment) as fresh input,
 // the re-sent remainder as cache reads, and the per-turn growth as output. Cost
 // is flagged estimated; grok-build is priced via its grok-build-0.1 alias.
 
@@ -105,6 +105,12 @@ function parseUpdates(updates: string): {
   const tools: string[] = []
   const bashCommands: string[] = []
   const subagentTypes: string[] = []
+  // Compaction-aware fresh input: a large drop in totalTokens means the context
+  // was compacted and rebuilt, so we sum each segment's peak rather than the
+  // single global peak (which would lose everything before the last compaction).
+  let prevTotal = -1
+  let segmentPeak = 0
+  let inputFresh = 0
 
   for (const line of updates.split('\n')) {
     if (!line.trim()) continue
@@ -117,11 +123,20 @@ function parseUpdates(updates: string): {
     if (!params) continue
 
     const total = params._meta?.totalTokens
-    const promptId = params._meta?.promptId
-    if (typeof total === 'number' && promptId) {
-      const turn = turns.get(promptId)
-      if (!turn) turns.set(promptId, { first: total, last: total })
-      else turn.last = total
+    if (typeof total === 'number') {
+      if (prevTotal >= 0 && total < prevTotal * 0.5) {
+        inputFresh += segmentPeak // close the segment a compaction just ended
+        segmentPeak = 0
+      }
+      if (total > segmentPeak) segmentPeak = total
+      prevTotal = total
+
+      const promptId = params._meta?.promptId
+      if (promptId) {
+        const turn = turns.get(promptId)
+        if (!turn) turns.set(promptId, { first: total, last: total })
+        else turn.last = total
+      }
     }
 
     const update = params.update
@@ -136,18 +151,17 @@ function parseUpdates(updates: string): {
     }
   }
 
+  inputFresh += segmentPeak // close the final segment
   let sumFirst = 0
   let output = 0
-  let peak = 0
   for (const { first, last } of turns.values()) {
     sumFirst += first
     output += Math.max(0, last - first)
-    if (last > peak) peak = last
   }
-  // Unique context (peak) is fresh input billed once; the rest of the per-turn
+  // Fresh input (summed segment peaks) is billed once; the rest of the per-turn
   // re-sends are cache reads (Grok caches them, even though it reports nothing).
-  const cacheRead = Math.max(0, sumFirst - peak)
-  return { input: peak, cacheRead, output, tools, bashCommands, subagentTypes }
+  const cacheRead = Math.max(0, sumFirst - inputFresh)
+  return { input: inputFresh, cacheRead, output, tools, bashCommands, subagentTypes }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

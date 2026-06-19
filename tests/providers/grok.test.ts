@@ -155,6 +155,17 @@ describe('grok provider - parsing', () => {
     expect(await parse(seen)).toHaveLength(1)
     expect(await parse(seen)).toHaveLength(0)
   })
+
+  it('sums fresh input across a compaction instead of only the last peak', async () => {
+    await writeSession({ turns: [
+      { promptId: 'p1', totals: [100000, 400000] },
+      { promptId: 'p2', totals: [20000, 50000] },
+    ] })
+    const calls = await parse()
+    expect(calls).toHaveLength(1)
+    // 400k (segment 1 peak) + 50k (post-compaction segment), not just the 400k global peak
+    expect(calls[0]!.inputTokens).toBe(450000)
+  })
 })
 
 describe('grok provider - display names', () => {
