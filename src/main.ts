@@ -13,6 +13,10 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { buildPeriodData, buildMenubarPayloadForRange } from './usage-aggregator.js'
 import { renderDashboard } from './dashboard.js'
+import { hostname } from 'os'
+import { runShareServer } from './sharing/share-run.js'
+import { addRemote, pullDevices, renderDevices } from './sharing/host.js'
+import { loadRemotes, saveRemotes } from './sharing/store.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
 import { renderCompare } from './compare.js'
@@ -468,6 +472,50 @@ program
     await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange, customRangeLabel, daySelection?.day)
   })
 
+program
+  .command('share')
+  .description("Securely share this device's usage with your other devices on the same network")
+  .option('--port <number>', 'Port to listen on', parseInteger, 7777)
+  .option('--pair', 'Open a pairing window and print a PIN to add a new device')
+  .option('--always', 'Keep sharing until stopped (default stops after 10 min idle)')
+  .action(async (opts) => {
+    await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always })
+  })
+
+program
+  .command('devices [action] [target]')
+  .description('Combined usage across your paired devices. Actions: add <host> --pin <pin>, rm <name>')
+  .option('--pin <pin>', 'Pairing PIN shown on the device you are adding')
+  .option('-p, --period <period>', 'Period: today, week, 30days, month, all', 'month')
+  .option('--port <number>', 'Default port when adding a device', parseInteger, 7777)
+  .action(async (action: string | undefined, target: string | undefined, opts) => {
+    await loadPricing()
+    if (action === 'add') {
+      if (!target || !opts.pin) {
+        console.error('\n  Usage: codeburn devices add <host[:port]> --pin <pin>\n')
+        process.exit(1)
+      }
+      const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
+      console.log(`\n  Paired with "${device.name}" (${device.host}:${device.port}).\n`)
+      return
+    }
+    if (action === 'rm' || action === 'remove') {
+      const remotes = await loadRemotes()
+      const next = remotes.filter((r) => r.name !== target && `${r.host}:${r.port}` !== target)
+      await saveRemotes(next)
+      console.log(`\n  Removed ${remotes.length - next.length} device(s).\n`)
+      return
+    }
+    const localGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
+      const customRange = parseDateRangeFlags(q.from, q.to)
+      const periodInfo = customRange
+        ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
+        : getDateRange(toPeriod(q.period ?? opts.period))
+      return buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false })
+    }
+    const results = await pullDevices(localGetUsage, { period: opts.period }, hostname(), {})
+    process.stdout.write('\n' + renderDevices(results))
+  })
 
 program
   .command('status')
