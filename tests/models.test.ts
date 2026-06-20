@@ -429,7 +429,6 @@ describe('DeepSeek v4 models resolve to pricing', () => {
   })
 
   it('keeps bundled DeepSeek v4 fallback entries when runtime pricing cache is stale', async () => {
-    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
     const cacheRoot = await mkdtemp(join(tmpdir(), 'codeburn-pricing-cache-'))
 
     try {
@@ -455,11 +454,6 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(4.35e-7)
       expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(1.4e-7)
     } finally {
-      if (previousCacheDir === undefined) {
-        delete process.env['CODEBURN_CACHE_DIR']
-      } else {
-        process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
-      }
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()
     }

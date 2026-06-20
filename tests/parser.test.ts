@@ -172,15 +172,11 @@ function totalOutput(projects: Awaited<ReturnType<typeof parseAllSessions>>): nu
 // ── Common env setup ──────────────────────────────────────────────────────
 let tmpHome: string
 let tmpCache: string
-let prevHome: string | undefined
-let prevCache: string | undefined
 
 beforeEach(async () => {
   tmpHome  = await mkdtemp(join(tmpdir(), 'cb-parser-test-home-'))
   tmpCache = await mkdtemp(join(tmpdir(), 'cb-parser-test-cache-'))
 
-  prevHome  = process.env['HOME']
-  prevCache = process.env['CODEBURN_CACHE_DIR']
   process.env['HOME']               = tmpHome
   process.env['CODEBURN_CACHE_DIR'] = tmpCache
 
@@ -193,11 +189,6 @@ beforeEach(async () => {
 afterEach(async () => {
   clearSessionCache()
   vi.unstubAllEnvs()
-
-  if (prevHome  === undefined) delete process.env['HOME']
-  else                          process.env['HOME'] = prevHome
-  if (prevCache === undefined) delete process.env['CODEBURN_CACHE_DIR']
-  else                          process.env['CODEBURN_CACHE_DIR'] = prevCache
 
   _synthSources = []
 

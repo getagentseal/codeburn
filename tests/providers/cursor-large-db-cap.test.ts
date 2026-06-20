@@ -18,16 +18,12 @@ import type { DateRange } from '../../src/types.js'
 const skipReason = isSqliteAvailable() ? null : 'node:sqlite not available — needs Node 22+; skipping'
 
 let tmpDir: string
-let savedBudget: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'cursor-cap-'))
-  savedBudget = process.env['CODEBURN_CURSOR_MAX_BUBBLES']
 })
 
 afterEach(async () => {
-  if (savedBudget === undefined) delete process.env['CODEBURN_CURSOR_MAX_BUBBLES']
-  else process.env['CODEBURN_CURSOR_MAX_BUBBLES'] = savedBudget
   await rm(tmpDir, { recursive: true, force: true })
 })
 

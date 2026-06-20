@@ -19,8 +19,6 @@ const MERGE_CWD = '/Users/test/proxiedmerge'
 let tmpDirs: string[] = []
 
 afterEach(async () => {
-  delete process.env['CLAUDE_CONFIG_DIR']
-  delete process.env['CODEX_HOME']
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()
     if (d) await rm(d, { recursive: true, force: true })

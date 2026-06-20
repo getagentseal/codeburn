@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtemp, mkdir, cp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -28,19 +28,9 @@ function makeRange(offsetMs: number): DateRange {
 
 describe('HIGH-1 prototype pollution via unchecked bracket-assign', () => {
   const tmpDirs: string[] = []
-  let originalConfigDir: string | undefined
-
-  beforeEach(() => {
-    originalConfigDir = process.env['CLAUDE_CONFIG_DIR']
-  })
 
   afterEach(async () => {
     delete (Object.prototype as Record<string, unknown>).calls
-    if (originalConfigDir === undefined) {
-      delete process.env['CLAUDE_CONFIG_DIR']
-    } else {
-      process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir
-    }
     while (tmpDirs.length > 0) {
       const d = tmpDirs.pop()
       if (d) await rm(d, { recursive: true, force: true })

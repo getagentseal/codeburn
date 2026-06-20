@@ -16,9 +16,6 @@ describe('Antigravity CLI statusLine hook installer', () => {
     const settingsPath = join(dir, 'settings.json')
     const binDir = join(dir, 'bin')
     const codeburnPath = join(binDir, process.platform === 'win32' ? 'codeburn.cmd' : 'codeburn')
-    const oldSettingsPath = process.env['CODEBURN_ANTIGRAVITY_SETTINGS_PATH']
-    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
-    const oldPath = process.env.PATH
     await mkdir(binDir, { recursive: true })
     await writeFile(codeburnPath, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n')
     await chmod(codeburnPath, 0o755)
@@ -29,12 +26,6 @@ describe('Antigravity CLI statusLine hook installer', () => {
     try {
       await run(dir, settingsPath)
     } finally {
-      if (oldSettingsPath === undefined) delete process.env['CODEBURN_ANTIGRAVITY_SETTINGS_PATH']
-      else process.env['CODEBURN_ANTIGRAVITY_SETTINGS_PATH'] = oldSettingsPath
-      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
-      if (oldPath === undefined) delete process.env.PATH
-      else process.env.PATH = oldPath
       await rm(dir, { recursive: true, force: true })
     }
   }

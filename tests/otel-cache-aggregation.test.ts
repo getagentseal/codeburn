@@ -92,16 +92,12 @@ describe.skipIf(!isSqliteAvailable())(
     let tmpHome: string
     let tmpCache: string
     let dbPath: string
-    let prevHome: string | undefined
-    let prevCache: string | undefined
 
     beforeEach(async () => {
       tmpHome  = await mkdtemp(join(tmpdir(), 'cb-otel-agg-home-'))
       tmpCache = await mkdtemp(join(tmpdir(), 'cb-otel-agg-cache-'))
       dbPath   = join(tmpHome, 'agent-traces.db')
 
-      prevHome  = process.env['HOME']
-      prevCache = process.env['CODEBURN_CACHE_DIR']
       process.env['HOME']              = tmpHome
       process.env['CODEBURN_CACHE_DIR'] = tmpCache
 
@@ -116,10 +112,6 @@ describe.skipIf(!isSqliteAvailable())(
     afterEach(async () => {
       clearSessionCache()
       vi.unstubAllEnvs()
-      if (prevHome  === undefined) delete process.env['HOME']
-      else                          process.env['HOME'] = prevHome
-      if (prevCache === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else                          process.env['CODEBURN_CACHE_DIR'] = prevCache
       await rm(tmpHome,  { recursive: true, force: true })
       await rm(tmpCache, { recursive: true, force: true })
     })

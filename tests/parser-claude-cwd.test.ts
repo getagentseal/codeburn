@@ -7,13 +7,9 @@ import { parseAllSessions } from '../src/parser.js'
 import type { DateRange } from '../src/types.js'
 
 let tmpDir: string
-let originalConfigDir: string | undefined
-let originalDesktopSessionsDir: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'claude-cwd-test-'))
-  originalConfigDir = process.env['CLAUDE_CONFIG_DIR']
-  originalDesktopSessionsDir = process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
   process.env['CLAUDE_CONFIG_DIR'] = tmpDir
   // Point desktop sessions at an empty subdir by default so real sessions
   // on the developer's machine do not bleed into the unit tests.
@@ -21,16 +17,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (originalConfigDir === undefined) {
-    delete process.env['CLAUDE_CONFIG_DIR']
-  } else {
-    process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir
-  }
-  if (originalDesktopSessionsDir === undefined) {
-    delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
-  } else {
-    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = originalDesktopSessionsDir
-  }
   await rm(tmpDir, { recursive: true, force: true })
 })
 

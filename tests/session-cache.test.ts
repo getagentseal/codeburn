@@ -28,7 +28,6 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  delete process.env['CODEBURN_CACHE_DIR']
   if (existsSync(TMP_DIR)) await rm(TMP_DIR, { recursive: true })
 })
 
@@ -171,11 +170,8 @@ describe('computeEnvFingerprint', () => {
 
   it('changes when env var changes', () => {
     const before = computeEnvFingerprint('claude')
-    const orig = process.env['CLAUDE_CONFIG_DIR']
     process.env['CLAUDE_CONFIG_DIR'] = '/tmp/different'
     const after = computeEnvFingerprint('claude')
-    if (orig === undefined) delete process.env['CLAUDE_CONFIG_DIR']
-    else process.env['CLAUDE_CONFIG_DIR'] = orig
     expect(before).not.toBe(after)
   })
 

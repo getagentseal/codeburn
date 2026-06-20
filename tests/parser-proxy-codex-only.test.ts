@@ -18,8 +18,6 @@ const CWD = '/Users/test/codexonlyproxied'
 let tmpDirs: string[] = []
 
 afterEach(async () => {
-  delete process.env['CODEX_HOME']
-  delete process.env['CLAUDE_CONFIG_DIR']
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()
     if (d) await rm(d, { recursive: true, force: true })

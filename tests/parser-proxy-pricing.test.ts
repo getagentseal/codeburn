@@ -127,14 +127,12 @@ const makeRange = (): DateRange => ({ start: RANGE_START, end: RANGE_END })
 const FIXTURE_CWD = '/private/var/eywa-proxy-fixture/acme'
 
 let tmpDirs: string[] = []
-let originalConfigDir: string | undefined
 
 beforeAll(async () => {
   await loadPricing()
 })
 
 beforeEach(() => {
-  originalConfigDir = process.env['CLAUDE_CONFIG_DIR']
   setProxyPaths([])
   setLocalModelSavings({})
   setModelAliases({})
@@ -143,8 +141,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   setProxyPaths([])
-  if (originalConfigDir === undefined) delete process.env['CLAUDE_CONFIG_DIR']
-  else process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir
   clearSessionCache()
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()

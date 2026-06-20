@@ -45,7 +45,6 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers()
-  delete process.env['CODEBURN_CACHE_DIR']
   if (existsSync(TMP_CACHE_ROOT)) {
     await rm(TMP_CACHE_ROOT, { recursive: true, force: true })
   }

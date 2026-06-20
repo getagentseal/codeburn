@@ -18,19 +18,12 @@ type TestDb = {
 }
 
 let tmpRoot: string
-let originalEnv: string | undefined
 
 beforeEach(async () => {
   tmpRoot = await mkdtemp(join(tmpdir(), 'crush-test-'))
-  originalEnv = process.env['CRUSH_GLOBAL_DATA']
 })
 
 afterEach(async () => {
-  if (originalEnv === undefined) {
-    delete process.env['CRUSH_GLOBAL_DATA']
-  } else {
-    process.env['CRUSH_GLOBAL_DATA'] = originalEnv
-  }
   await rm(tmpRoot, { recursive: true, force: true })
 })
 

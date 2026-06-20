@@ -8,18 +8,12 @@ import type { DateRange } from '../src/types.js'
 let home: string
 let cacheDir: string
 let vibeHome: string
-let originalHome: string | undefined
-let originalCacheDir: string | undefined
-let originalVibeHome: string | undefined
 let clearParserCache: (() => void) | undefined
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'codeburn-turn-group-home-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'codeburn-turn-group-cache-'))
   vibeHome = await mkdtemp(join(tmpdir(), 'codeburn-turn-group-vibe-'))
-  originalHome = process.env['HOME']
-  originalCacheDir = process.env['CODEBURN_CACHE_DIR']
-  originalVibeHome = process.env['VIBE_HOME']
   process.env['HOME'] = home
   process.env['CODEBURN_CACHE_DIR'] = cacheDir
   process.env['VIBE_HOME'] = vibeHome
@@ -29,12 +23,6 @@ afterEach(async () => {
   clearParserCache?.()
   clearParserCache = undefined
   vi.resetModules()
-  if (originalHome === undefined) delete process.env['HOME']
-  else process.env['HOME'] = originalHome
-  if (originalCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-  else process.env['CODEBURN_CACHE_DIR'] = originalCacheDir
-  if (originalVibeHome === undefined) delete process.env['VIBE_HOME']
-  else process.env['VIBE_HOME'] = originalVibeHome
   await rm(home, { recursive: true, force: true })
   await rm(cacheDir, { recursive: true, force: true })
   await rm(vibeHome, { recursive: true, force: true })

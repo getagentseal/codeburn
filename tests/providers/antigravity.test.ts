@@ -263,7 +263,6 @@ describe('antigravity provider helpers', () => {
 
   it('captures exact Antigravity CLI statusLine usage as fallback calls', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-'))
-    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
     process.env['CODEBURN_CACHE_DIR'] = dir
 
     try {
@@ -317,15 +316,12 @@ describe('antigravity provider helpers', () => {
       expect(calls[0]!.projectPath).toBeUndefined()
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
     } finally {
-      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('skips statusLine fallback calls when RPC cache already covered the conversation', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-rpc-dedup-'))
-    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
     process.env['CODEBURN_CACHE_DIR'] = dir
 
     try {
@@ -354,15 +350,12 @@ describe('antigravity provider helpers', () => {
 
       expect(calls).toEqual([])
     } finally {
-      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('skips singleton statusLine snapshots and deltas monotonic usage', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-runs-'))
-    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
     process.env['CODEBURN_CACHE_DIR'] = dir
 
     const basePayload = {
@@ -409,15 +402,12 @@ describe('antigravity provider helpers', () => {
       ])
       expect(calls.map(call => call.cachedInputTokens)).toEqual([0, 0])
     } finally {
-      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('treats non-monotonic statusLine usage as a new request snapshot', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-reset-'))
-    const oldCacheDir = process.env['CODEBURN_CACHE_DIR']
     process.env['CODEBURN_CACHE_DIR'] = dir
 
     const payload = (
@@ -458,8 +448,6 @@ describe('antigravity provider helpers', () => {
         [200, 30, 500],
       ])
     } finally {
-      if (oldCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-      else process.env['CODEBURN_CACHE_DIR'] = oldCacheDir
       await rm(dir, { recursive: true, force: true })
     }
   })

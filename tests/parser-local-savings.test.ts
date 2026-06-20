@@ -20,25 +20,18 @@ function makeRange(): DateRange {
 }
 
 let tmpDirs: string[] = []
-let originalConfigDir: string | undefined
 
 beforeAll(async () => {
   await loadPricing()
 })
 
 beforeEach(() => {
-  originalConfigDir = process.env['CLAUDE_CONFIG_DIR']
   setLocalModelSavings({})
   setModelAliases({})
 })
 
 afterEach(async () => {
   delete (Object.prototype as Record<string, unknown>).calls
-  if (originalConfigDir === undefined) {
-    delete process.env['CLAUDE_CONFIG_DIR']
-  } else {
-    process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir
-  }
   clearSessionCache()
   while (tmpDirs.length > 0) {
     const d = tmpDirs.pop()

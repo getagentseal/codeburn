@@ -16,7 +16,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   clearSessionCache()
-  delete process.env['CLAUDE_CONFIG_DIR']
   await rm(home, { recursive: true, force: true })
 })
 

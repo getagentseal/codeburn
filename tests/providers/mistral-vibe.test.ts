@@ -7,20 +7,12 @@ import { createMistralVibeProvider } from '../../src/providers/mistral-vibe.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
-let originalVibeHome: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'mistral-vibe-test-'))
-  originalVibeHome = process.env['VIBE_HOME']
-  delete process.env['VIBE_HOME']
 })
 
 afterEach(async () => {
-  if (originalVibeHome === undefined) {
-    delete process.env['VIBE_HOME']
-  } else {
-    process.env['VIBE_HOME'] = originalVibeHome
-  }
   await rm(tmpDir, { recursive: true, force: true })
 })
 

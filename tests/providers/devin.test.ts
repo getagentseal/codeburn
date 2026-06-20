@@ -8,7 +8,6 @@ import { createDevinProvider } from '../../src/providers/devin.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
-const originalHome = process.env['HOME']
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'devin-provider-'))
@@ -16,8 +15,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (originalHome === undefined) delete process.env['HOME']
-  else process.env['HOME'] = originalHome
   await rm(tmpDir, { recursive: true, force: true })
 })
 
