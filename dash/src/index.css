@@ -1,52 +1,54 @@
-@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@300..600&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Midnight theme for CodeBurn. Near-black surfaces, a single warm orange
- * accent, and a warm orange -> gold 10-stop ramp for stacked charts.
+ * Archival warmth + forensic precision. Warm paper surfaces, ink text, a
+ * forest-green accent, and a green -> gold -> terracotta ramp for stacked
+ * charts. No pure white background, no pure black, no cold neutrals.
  */
 :root {
   font-family: "Geist", "Geist Fallback", system-ui, sans-serif;
-  --radius: 0.5rem;
+  --radius: 0.375rem;
 
-  --background: #0a0a0b;
-  --outer-background: #000000;
-  --foreground: #e7e7ea;
-  --card: #0b0b0d;
-  --card-foreground: #ffffff;
-  --popover: #131316;
-  --popover-foreground: #ffffff;
-  --muted: #121215;
-  --muted-foreground: #cfcfd4;
-  --tertiary-foreground: #8a8a92;
-  --border: #1b1b1f;
-  --input: #2a2a2e;
-  --interactive-secondary: #141417;
-  --interactive-secondary-hover: #1d1d21;
-  --active-primary: #221a12;
-  --accent: #1c1c20;
-  --accent-foreground: #ffffff;
-  --subtle: #6b6b73;
-  --primary: #ff8c42;
-  --primary-foreground: #1a0f06;
-  --ring: #ff8c42;
-  --positive: #5bf58c;
+  --background: #f6f4ef;
+  --outer-background: #e9e6de;
+  --foreground: #16181d;
+  --card: #ffffff;
+  --card-foreground: #16181d;
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+  --muted: #efece4;
+  --muted-foreground: #5d626b;
+  --tertiary-foreground: #8a857c;
+  --heading: #2c5242;
+  --border: rgba(23, 27, 32, 0.08);
+  --input: rgba(23, 27, 32, 0.14);
+  --interactive-secondary: rgba(23, 27, 32, 0.04);
+  --interactive-secondary-hover: rgba(23, 27, 32, 0.08);
+  --active-primary: #ffffff;
+  --accent: #efece4;
+  --accent-foreground: #16181d;
+  --subtle: #8a857c;
+  --primary: #1f8a5b;
+  --primary-foreground: #ffffff;
+  --ring: #1f8a5b;
+  --positive: #1f8a5b;
 
-  --chart-1: #ff8c42;
-  --chart-2: #ffa94d;
-  --chart-3: #f97316;
-  --chart-4: #ffc35e;
-  --chart-5: #fb923c;
-  --chart-6: #fbbf24;
-  --chart-7: #f59e0b;
-  --chart-8: #fdba74;
-  --chart-9: #eab308;
-  --chart-10: #d97742;
-  --chart-grid-stroke: #19191c;
+  --chart-1: #1f8a5b;
+  --chart-2: #4fd394;
+  --chart-3: #2c5242;
+  --chart-4: #d99a3c;
+  --chart-5: #c8541f;
+  --chart-6: #2f5fd0;
+  --chart-7: #7aa86f;
+  --chart-8: #b5403a;
+  --chart-9: #3f8f6b;
+  --chart-10: #a98b4f;
+  --chart-grid-stroke: rgba(23, 27, 32, 0.07);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -60,6 +62,7 @@
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-tertiary-foreground: var(--tertiary-foreground);
+  --color-heading: var(--heading);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-interactive-secondary: var(--interactive-secondary);
@@ -85,6 +88,9 @@
   --color-chart-10: var(--chart-10);
   --color-chart-grid-stroke: var(--chart-grid-stroke);
 
+  --font-display: "Alga", Georgia, "Times New Roman", serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
@@ -102,8 +108,8 @@
   }
   body {
     @apply bg-outer-background text-foreground;
-    letter-spacing: -0.011em;
-    font-weight: 450;
+    letter-spacing: -0.006em;
+    font-weight: 400;
     margin: 0;
   }
   ::selection {
@@ -125,7 +131,7 @@
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklch, var(--foreground) 8%, transparent) 50%,
+    color-mix(in oklch, var(--foreground) 7%, transparent) 50%,
     transparent 100%
   );
   background-size: 200% 100%;

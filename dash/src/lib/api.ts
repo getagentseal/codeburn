@@ -69,3 +69,28 @@ export const PERIODS: Array<{ key: Period; label: string }> = [
   { key: 'month', label: 'Month' },
   { key: 'all', label: 'All' },
 ]
+
+export type DiscoveredDevice = {
+  name: string
+  host: string
+  port: number
+  fingerprint: string
+  code: string
+  paired: boolean
+}
+
+export async function scanDevices(): Promise<DiscoveredDevice[]> {
+  const res = await fetch('/api/devices/scan')
+  if (!res.ok) throw new Error(`Scan failed (${res.status})`)
+  const json = (await res.json()) as { found: DiscoveredDevice[] }
+  return json.found
+}
+
+export async function pairDevice(d: DiscoveredDevice): Promise<{ ok: boolean; name?: string; error?: string }> {
+  const res = await fetch('/api/devices/pair', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: d.name, host: d.host, port: d.port, fingerprint: d.fingerprint }),
+  })
+  return res.json() as Promise<{ ok: boolean; name?: string; error?: string }>
+}

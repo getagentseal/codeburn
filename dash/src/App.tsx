@@ -9,31 +9,31 @@ import { MetricCard } from '@/components/MetricCard'
 import { BarList, type BarItem } from '@/components/BarList'
 import { DataTable } from '@/components/DataTable'
 import { UsageChart } from '@/components/UsageChart'
+import { DeviceSearchModal } from '@/components/DeviceSearchModal'
 
 const n = (v: number | undefined): number => v ?? 0
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <Card className="px-5 py-4">
-      <h2 className="mb-3.5 text-[11px] font-semibold uppercase tracking-wider text-tertiary-foreground">{title}</h2>
+      <h2 className="mb-3.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">{title}</h2>
       {children}
     </Card>
   )
 }
 
-function DeviceTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+function SideLink({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
-        active
-          ? 'border-primary/40 bg-active-primary text-foreground'
-          : 'border-border bg-interactive-secondary text-tertiary-foreground hover:text-foreground',
+        'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13.5px] transition-colors',
+        active ? 'bg-interactive-secondary font-medium text-foreground' : 'font-light text-muted-foreground hover:text-foreground',
       )}
     >
-      {children}
+      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', active ? 'bg-primary' : 'bg-transparent')} />
+      <span className="truncate">{children}</span>
     </button>
   )
 }
@@ -54,14 +54,14 @@ function DeviceView({ payload, isRemote }: { payload?: Payload; isRemote: boolea
 
   return (
     <>
-      <Card className="mb-4 overflow-hidden">
+      <Card className="mb-3 overflow-hidden">
         <div className="flex items-end justify-between px-5 pt-4">
           <div>
             <div className="text-xs text-tertiary-foreground">
               {c ? `${fmtNum(c.calls)} calls · ${fmtNum(c.sessions)} sessions` : ' '}
             </div>
-            <div className="mt-0.5 text-3xl font-semibold tracking-tight tabular-nums text-primary">
-              {c ? usd(c.cost) : <Skeleton className="h-9 w-32" />}
+            <div className="mt-1 font-display text-4xl tracking-tight tabular-nums text-primary">
+              {c ? usd(c.cost) : <Skeleton className="h-10 w-36" />}
             </div>
           </div>
         </div>
@@ -70,7 +70,7 @@ function DeviceView({ payload, isRemote }: { payload?: Payload; isRemote: boolea
         </div>
       </Card>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {c ? (
           <>
             <MetricCard label="Cost" value={usd(c.cost)} accent />
@@ -89,7 +89,7 @@ function DeviceView({ payload, isRemote }: { payload?: Payload; isRemote: boolea
         )}
       </div>
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-2">
+      <div className="mb-3 grid gap-3 lg:grid-cols-2">
         <Panel title="By tool">
           <BarList items={toolBars} total={c?.cost} />
         </Panel>
@@ -98,7 +98,7 @@ function DeviceView({ payload, isRemote }: { payload?: Payload; isRemote: boolea
         </Panel>
       </div>
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-2">
+      <div className="mb-3 grid gap-3 lg:grid-cols-2">
         <Panel title="Top projects">
           {isRemote ? (
             <p className="py-6 text-center text-sm text-tertiary-foreground">
@@ -212,11 +212,11 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
 
   return (
     <>
-      <Card className="mb-4 overflow-hidden">
+      <Card className="mb-3 overflow-hidden">
         <div className="flex items-end justify-between px-5 pt-4">
           <div>
             <div className="text-xs text-tertiary-foreground">{`${reachable} device${reachable === 1 ? '' : 's'} · ${fmtNum(total.calls)} calls`}</div>
-            <div className="mt-0.5 text-3xl font-semibold tracking-tight tabular-nums text-primary">{usd(total.cost)}</div>
+            <div className="mt-1 font-display text-4xl tracking-tight tabular-nums text-primary">{usd(total.cost)}</div>
           </div>
         </div>
         <div className="mt-3 h-64 px-2 pb-2">
@@ -224,7 +224,7 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
         </div>
       </Card>
 
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <MetricCard label="Total cost" value={usd(total.cost)} accent />
         <MetricCard label="Tokens" value={fmtTokens(total.tokens)} />
         <MetricCard label="Calls" value={fmtNum(total.calls)} />
@@ -242,7 +242,7 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
             { key: 'sessions', label: 'Sessions', num: true },
           ]}
           rows={rows.map((r) => ({
-            device: r.name + (r.local ? ' (this Mac)' : ''),
+            device: r.name + (r.local ? ' · this Mac' : ''),
             cost: r.error ? <span className="text-tertiary-foreground">unreachable</span> : usd(r.cost),
             tokens: r.error ? '—' : fmtTokens(r.tokens),
             calls: r.error ? '—' : fmtNum(r.calls),
@@ -251,7 +251,7 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
         />
       </Panel>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
         <Panel title="By tool (all devices)">
           <BarList items={toolBars} total={total.cost} />
         </Panel>
@@ -267,8 +267,9 @@ export function App() {
   const [period, setPeriod] = useState<Period>('month')
   const [provider, setProvider] = useState('all')
   const [view, setView] = useState<string>('all')
+  const [searchOpen, setSearchOpen] = useState(false)
 
-  const { data, isError, error } = useQuery({
+  const { data, isError, error, refetch } = useQuery({
     queryKey: ['devices', period, provider],
     queryFn: () => fetchDevices(period, provider),
     placeholderData: keepPreviousData,
@@ -293,77 +294,111 @@ export function App() {
   )
 
   const showCombined = multi && view === 'all'
+  const viewTitle = showCombined ? 'All devices' : (primary ? primary.name + (primary.local ? ' · this Mac' : '') : 'Loading…')
+  const label = local?.payload?.current.label ?? ''
 
   return (
-    <div className="min-h-screen bg-outer-background">
-      <header className="border-b border-border">
-        <div className="mx-auto flex max-w-[1200px] items-center gap-3 px-6 py-3.5">
+    <div className="min-h-screen bg-outer-background p-2.5">
+      <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5">
+        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
           <div className="flex items-center gap-2">
-            <span className="text-lg leading-none text-primary">&#9650;</span>
-            <span className="text-sm font-semibold">CodeBurn</span>
+            <span className="text-base leading-none text-primary">&#9650;</span>
+            <span className="font-display text-lg tracking-wide text-foreground">CodeBurn</span>
+            <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground">usage</span>
           </div>
-          <span className="text-[11px] text-tertiary-foreground">Local usage dashboard. Nothing leaves your machine.</span>
-          <span className="ml-auto text-[11px] text-tertiary-foreground">{local?.payload?.current.label ?? ''}</span>
+
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5">
+              {PERIODS.map((p) => (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => setPeriod(p.key)}
+                  className={cn(
+                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                    period === p.key ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none"
+            >
+              <option value="all">All tools</option>
+              {providerOptions.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+        </header>
+
+        <div className="flex min-h-0 flex-1 gap-2.5">
+          <aside className="flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5">
+            <div className="flex flex-col gap-1">
+              <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Devices</p>
+              {multi && (
+                <SideLink active={view === 'all'} onClick={() => setView('all')}>
+                  All devices
+                </SideLink>
+              )}
+              {devices.map((d) => (
+                <SideLink
+                  key={d.name}
+                  active={view === d.name || (!multi && view === 'all' && d.local)}
+                  onClick={() => setView(d.name)}
+                >
+                  {d.name}
+                  {d.local ? ' · this Mac' : ''}
+                </SideLink>
+              ))}
+              {devices.length === 0 && <p className="px-2.5 py-1 text-xs text-tertiary-foreground">Loading…</p>}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-interactive-secondary"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                <circle cx="7" cy="7" r="4.5" />
+                <path d="M10.5 10.5L14 14" />
+              </svg>
+              Search local devices
+            </button>
+
+            <div className="mt-auto border-t border-border pt-4">
+              <p className="text-[11px] leading-relaxed text-tertiary-foreground">
+                Local only. Nothing leaves your machine; only totals are shared between your devices.
+              </p>
+            </div>
+          </aside>
+
+          <main className="min-w-0 flex-1 overflow-y-auto pr-0.5">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h1 className="font-display text-xl tracking-tight text-foreground">{viewTitle}</h1>
+              <span className="text-xs text-tertiary-foreground">{label}</span>
+            </div>
+
+            {showCombined ? (
+              <CombinedView devices={devices} />
+            ) : (
+              <DeviceView payload={primary?.payload} isRemote={!!viewing && !viewing.local} />
+            )}
+
+            {isError && (
+              <div className="mt-4 text-sm text-tertiary-foreground">Failed to load: {String((error as Error)?.message)}</div>
+            )}
+          </main>
         </div>
-      </header>
+      </div>
 
-      <main className="mx-auto max-w-[1200px] px-6 py-6">
-        {multi && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            <DeviceTab active={view === 'all'} onClick={() => setView('all')}>
-              All devices
-            </DeviceTab>
-            {devices.map((d) => (
-              <DeviceTab key={d.name} active={view === d.name} onClick={() => setView(d.name)}>
-                {d.name}
-                {d.local ? ' (this Mac)' : ''}
-              </DeviceTab>
-            ))}
-          </div>
-        )}
-
-        <div className="mb-5 flex flex-wrap items-center gap-2">
-          <div className="flex rounded-lg border border-border bg-interactive-secondary p-1">
-            {PERIODS.map((p) => (
-              <button
-                key={p.key}
-                type="button"
-                onClick={() => setPeriod(p.key)}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                  period === p.key
-                    ? 'bg-active-primary text-foreground shadow-sm ring-1 ring-inset ring-white/10'
-                    : 'text-tertiary-foreground hover:text-foreground',
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            className="ml-auto rounded-lg border border-border bg-interactive-secondary px-3 py-2 text-xs text-foreground outline-none"
-          >
-            <option value="all">All tools</option>
-            {providerOptions.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {showCombined ? (
-          <CombinedView devices={devices} />
-        ) : (
-          <DeviceView payload={primary?.payload} isRemote={!!viewing && !viewing.local} />
-        )}
-
-        {isError && (
-          <div className="mt-4 text-sm text-tertiary-foreground">Failed to load: {String((error as Error)?.message)}</div>
-        )}
-      </main>
+      {searchOpen && <DeviceSearchModal onClose={() => setSearchOpen(false)} onPaired={() => void refetch()} />}
     </div>
   )
 }

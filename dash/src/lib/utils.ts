@@ -30,10 +30,11 @@ export function compactUsd(n: number): string {
   return '$' + Math.round(n)
 }
 
-// Warm orange -> gold ramp for stacked series (mirrors --chart-* tokens).
+// Forest green -> gold -> terracotta ramp for stacked series (mirrors the
+// --chart-* tokens). Warm and on-brand, distinct enough to read when stacked.
 export const CHART_COLORS = [
-  '#ff8c42', '#ffa94d', '#f97316', '#ffc35e', '#fb923c',
-  '#fbbf24', '#f59e0b', '#fdba74', '#eab308', '#d97742',
+  '#1f8a5b', '#4fd394', '#2c5242', '#d99a3c', '#c8541f',
+  '#2f5fd0', '#7aa86f', '#b5403a', '#3f8f6b', '#a98b4f',
 ]
 
 const MODEL_LABELS: Record<string, string> = {
