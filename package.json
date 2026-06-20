@@ -13,7 +13,7 @@
   "scripts": {
     "bundle-litellm": "node scripts/bundle-litellm.mjs",
     "build": "node scripts/bundle-litellm.mjs && tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\"",
-    "dev": "tsx src/cli.ts",
+    "dev": "NODE_OPTIONS=--no-deprecation tsx src/cli.ts",
     "test": "vitest",
     "prepublishOnly": "npm run build"
   },
