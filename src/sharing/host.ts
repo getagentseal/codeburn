@@ -15,6 +15,7 @@ type DevicePayload = {
 }
 
 export type DeviceUsage = {
+  id: string // stable unique id (cert fingerprint for remotes, 'local' for this device)
   name: string
   local: boolean
   payload?: DevicePayload
@@ -91,7 +92,7 @@ export async function pullDevices(
   const identity = await loadOrCreateIdentity(dir)
   const remotes = await loadRemotes(dir)
 
-  const local: DeviceUsage = { name: localName, local: true, payload: await localGetUsage(query) }
+  const local: DeviceUsage = { id: 'local', name: localName, local: true, payload: await localGetUsage(query) }
   // Pull every remote concurrently and isolate failures, so one slow or
   // powered-off device degrades to an error row instead of blocking the rest.
   const remoteResults = await Promise.all(
@@ -101,10 +102,10 @@ export async function pullDevices(
         // Re-sanitize on receipt: do not trust the sender to have stripped its
         // own project names/sessions (it may run an older build). Belt and
         // suspenders alongside the sender-side sanitize.
-        if (res.status === 200) return { name: r.name, local: false, payload: sanitizeForSharing(res.json as MenubarPayload) }
-        return { name: r.name, local: false, error: res.status === 401 ? 'not authorized (re-pair?)' : `HTTP ${res.status}` }
+        if (res.status === 200) return { id: r.fingerprint, name: r.name, local: false, payload: sanitizeForSharing(res.json as MenubarPayload) }
+        return { id: r.fingerprint, name: r.name, local: false, error: res.status === 401 ? 'not authorized (re-pair?)' : `HTTP ${res.status}` }
       } catch (e) {
-        return { name: r.name, local: false, error: e instanceof Error ? e.message : String(e) }
+        return { id: r.fingerprint, name: r.name, local: false, error: e instanceof Error ? e.message : String(e) }
       }
     }),
   )

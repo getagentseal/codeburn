@@ -56,6 +56,7 @@ export async function fetchUsage(period: Period, provider: string): Promise<Payl
 }
 
 export type DeviceUsage = {
+  id: string
   name: string
   local: boolean
   payload?: Payload

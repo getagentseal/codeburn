@@ -347,6 +347,7 @@ export function App() {
   const [view, setView] = useState<string>('all')
   const [unit, setUnit] = useState<Unit>('cost')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [responded, setResponded] = useState<Set<string>>(new Set())
 
   const qc = useQueryClient()
 
@@ -377,18 +378,19 @@ export function App() {
     refreshShare()
   }
   const respondPairing = async (id: string, approve: boolean) => {
+    setResponded((s) => new Set(s).add(id)) // drop it from the prompt at once so it can't be double-clicked
     await approvePairing(id, approve)
     refreshShare()
     void refetch()
   }
-  const pending = shareInfo?.pending ?? []
+  const pending = (shareInfo?.pending ?? []).filter((p) => !responded.has(p.id))
 
   // Only show devices we could actually reach; an unreachable paired device is
   // hidden entirely rather than shown as an error row.
   const devices = (data?.devices ?? []).filter((d) => d.payload)
   const local = devices.find((d) => d.local)
   const multi = devices.some((d) => !d.local)
-  const viewing = view === 'all' ? undefined : devices.find((d) => d.name === view)
+  const viewing = view === 'all' ? undefined : devices.find((d) => d.id === view)
   const primary = viewing ?? local
   const c0 = primary?.payload?.current
 
@@ -406,7 +408,7 @@ export function App() {
   // If the device you're viewing drops off (slept/unreachable), fall back to
   // All devices instead of showing an empty panel with nothing selected.
   useEffect(() => {
-    if (view !== 'all' && data && !devices.some((d) => d.name === view)) setView('all')
+    if (view !== 'all' && data && !devices.some((d) => d.id === view)) setView('all')
   }, [view, devices, data])
 
   // If the selected provider isn't present on the current view, reset to all
@@ -488,9 +490,9 @@ export function App() {
               )}
               {devices.map((d) => (
                 <SideLink
-                  key={d.name}
-                  active={view === d.name || (!multi && view === 'all' && d.local)}
-                  onClick={() => setView(d.name)}
+                  key={d.id}
+                  active={view === d.id || (!multi && view === 'all' && d.local)}
+                  onClick={() => setView(d.id)}
                 >
                   {d.name}
                   {d.local ? ' · this Mac' : ''}

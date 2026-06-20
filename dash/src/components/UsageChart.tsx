@@ -132,19 +132,20 @@ export function DeviceUsageChart({ devices, unit = 'cost' }: { devices: DeviceUs
   const { rows, series, labels } = useMemo(() => {
     const named = devices.filter((d) => d.payload)
     const dailyOf = (d: DeviceUsage) => d.payload?.history?.daily ?? []
-    // Stable key + color per device (by name) so a device keeps its color and
-    // its bars don't remount when another device drops/returns between polls.
-    const keyOf = (d: DeviceUsage) => 'dev_' + d.name.replace(/[^a-zA-Z0-9]/g, '_')
-    const colorOf = (name: string) => {
+    // Stable key + color per device (by unique id) so a device keeps its color
+    // and its bars don't remount when another device drops/returns between
+    // polls, and two devices sharing a hostname never collide.
+    const keyOf = (d: DeviceUsage) => 'dev_' + d.id.replace(/[^a-zA-Z0-9]/g, '_')
+    const colorOf = (id: string) => {
       let h = 0
-      for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0
+      for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
       return CHART_COLORS[Math.abs(h) % CHART_COLORS.length]!
     }
     const dates = [...new Set(named.flatMap((d) => dailyOf(d).map((e) => e.date)))].sort((a, b) => a.localeCompare(b))
     const series: Series[] = named.map((d) => ({
       key: keyOf(d),
       label: d.name + (d.local ? ' (this Mac)' : ''),
-      color: colorOf(d.name),
+      color: colorOf(d.id),
     }))
     const rowData = dates.map((date) => {
       const row: Record<string, number | string> = { period: date }

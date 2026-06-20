@@ -7,9 +7,11 @@ export function cn(...inputs: ClassValue[]): string {
 
 export function usd(n: number | undefined | null): string {
   const v = n == null || !isFinite(n) ? 0 : n
-  const s = v >= 1 || v === 0 ? v.toFixed(2) : v >= 0.01 ? v.toFixed(3) : v.toFixed(2)
+  const sign = v < 0 ? '-' : ''
+  const a = Math.abs(v)
+  const s = a >= 1 || a === 0 ? a.toFixed(2) : a >= 0.01 ? a.toFixed(3) : a.toFixed(2)
   const [int, dec] = s.split('.')
-  return '$' + int!.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (dec ? '.' + dec : '')
+  return sign + '$' + int!.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (dec ? '.' + dec : '')
 }
 
 export function fmtTokens(n: number | undefined | null): string {

@@ -30,7 +30,10 @@ export class ShareController {
   private idleTimer: ReturnType<typeof setInterval> | null = null
   private lastActivity = 0
   private readonly dir = getSharingDir()
-  private readonly pending = new Map<string, { name: string; code: string; resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
+  private readonly pending = new Map<
+    string,
+    { name: string; code: string; fingerprint: string; resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }
+  >()
 
   constructor(
     private readonly getUsage: (q: UsageQuery) => Promise<unknown>,
@@ -105,6 +108,10 @@ export class ShareController {
   }
 
   private enqueueApproval(req: PairRequest): Promise<boolean> {
+    // One outstanding request per device, and a hard cap, so a LAN peer cannot
+    // flood the approval prompt or bury a legitimate request.
+    for (const p of this.pending.values()) if (p.fingerprint === req.fingerprint) return Promise.resolve(false)
+    if (this.pending.size >= 8) return Promise.resolve(false)
     return new Promise((resolve) => {
       const id = randomUUID()
       const timer = setTimeout(() => {
@@ -112,7 +119,7 @@ export class ShareController {
         resolve(false)
       }, 60_000)
       timer.unref?.()
-      this.pending.set(id, { name: req.name, code: req.code, resolve, timer })
+      this.pending.set(id, { name: req.name, code: req.code, fingerprint: req.fingerprint, resolve, timer })
     })
   }
 
