@@ -1,5 +1,7 @@
-import { hello, pair, fetchUsage } from './client.js'
+import { hello, pair, pairRequest, fetchUsage } from './client.js'
 import { loadOrCreateIdentity } from './identity.js'
+import { pairingCode } from './pairing.js'
+import type { DiscoveredDevice } from './discovery.js'
 import type { UsageQuery } from './share-server.js'
 import { getSharingDir, loadRemotes, saveRemotes, type RemoteDevice } from './store.js'
 import { formatCost } from '../currency.js'
@@ -49,6 +51,28 @@ export async function addRemote(
 
   const device: RemoteDevice = { name: info.name, host, port, fingerprint: info.fingerprint, token, addedAt: Date.now() }
   const remotes = (await loadRemotes(dir)).filter((r) => r.fingerprint !== device.fingerprint)
+  remotes.push(device)
+  await saveRemotes(remotes, dir)
+  return device
+}
+
+// Pair with a discovered device using approve-style pairing (no PIN). The owner
+// of that device approves on their screen after confirming the matching code.
+export async function linkRemote(
+  d: DiscoveredDevice,
+  opts: { dir?: string; onCode?: (code: string) => void } = {},
+): Promise<RemoteDevice> {
+  const dir = opts.dir ?? getSharingDir()
+  const identity = await loadOrCreateIdentity(dir)
+  const code = pairingCode(identity.fingerprint, d.fingerprint)
+  opts.onCode?.(code)
+  const r = await pairRequest({ identity, host: d.host, port: d.port, expectedFingerprint: d.fingerprint }, identity.name)
+  if (r.status !== 200) {
+    throw new Error(r.status === 403 ? 'the other device declined' : `pairing failed (HTTP ${r.status})`)
+  }
+  const token = (r.json as { token: string }).token
+  const device: RemoteDevice = { name: d.name, host: d.host, port: d.port, fingerprint: d.fingerprint, token, addedAt: Date.now() }
+  const remotes = (await loadRemotes(dir)).filter((x) => x.fingerprint !== device.fingerprint)
   remotes.push(device)
   await saveRemotes(remotes, dir)
   return device

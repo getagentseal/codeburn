@@ -3,6 +3,8 @@ import { networkInterfaces } from 'os'
 import { loadOrCreateIdentity } from './identity.js'
 import { PeerStore } from './pairing.js'
 import { ShareServer, type UsageQuery } from './share-server.js'
+import { advertise } from './discovery.js'
+import { promptYesNo } from './prompt.js'
 import { getSharingDir, loadPeers, savePeers } from './store.js'
 import { loadPricing } from '../models.js'
 import { buildMenubarPayloadForRange } from '../usage-aggregator.js'
@@ -43,22 +45,33 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     onPaired: () => {
       void savePeers(peers.list(), dir)
     },
+    approve: async (req) => {
+      process.stdout.write(`\n  "${req.name}" wants your usage.\n`)
+      process.stdout.write(`  Confirm this code matches on that device:  ${req.code}\n`)
+      const ok = await promptYesNo('  Approve?', 60_000)
+      process.stdout.write(ok ? `  Approved "${req.name}".\n\n` : `  Declined "${req.name}".\n\n`)
+      return ok
+    },
   })
 
   const port = await server.listen(opts.port, '0.0.0.0')
   const ip = lanAddress() ?? '127.0.0.1'
+  const ad = advertise({ name: identity.name, port, fingerprint: identity.fingerprint })
 
-  process.stdout.write(`\n  Sharing "${identity.name}" at ${ip}:${port}\n`)
-  process.stdout.write(`  Fingerprint ${identity.fingerprint.slice(0, 16)}...\n`)
+  const shutdown = async (): Promise<void> => {
+    await ad.stop().catch(() => {})
+    await server.close().catch(() => {})
+    process.exit(0)
+  }
+  process.on('SIGINT', () => void shutdown())
 
+  process.stdout.write(`\n  Sharing "${identity.name}" - discoverable on your network.\n`)
+  process.stdout.write(`  On your other Mac, run:  codeburn devices add\n`)
   if (opts.pair) {
     const pin = server.openPairing(120_000)
-    process.stdout.write(`\n  Pairing open for 2 minutes. On the other device, run:\n`)
+    process.stdout.write(`\n  Manual fallback (if discovery is blocked):\n`)
     process.stdout.write(`    codeburn devices add ${ip}:${port} --pin ${pin}\n`)
-  } else if (peers.list().length === 0) {
-    process.stdout.write(`\n  No paired devices yet. Re-run with --pair to add one.\n`)
   }
-
   process.stdout.write(`\n  ${peers.list().length} paired device(s). Press Ctrl+C to stop.\n\n`)
 
   if (!opts.always) {
