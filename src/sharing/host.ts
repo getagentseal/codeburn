@@ -7,11 +7,14 @@ import type { UsageQuery } from './share-server.js'
 import { getSharingDir, loadRemotes, saveRemotes, type RemoteDevice } from './store.js'
 import type { MenubarPayload } from '../menubar-json.js'
 import { formatCost } from '../currency.js'
-import { formatTokens } from '../format.js'
+import { renderTable } from '../text-table.js'
+import { Chalk } from 'chalk'
 
 // Minimal shape we read from a device's usage payload (the menubar payload).
+// Cache create/read are only in the daily history, so we sum those.
 type DevicePayload = {
   current?: { cost?: number; calls?: number; sessions?: number; inputTokens?: number; outputTokens?: number }
+  history?: { daily?: Array<{ cacheReadTokens?: number; cacheWriteTokens?: number }> }
 }
 
 export type DeviceUsage = {
@@ -112,36 +115,63 @@ export async function pullDevices(
   return [local, ...remoteResults]
 }
 
+// Joined "Totals by machine" report: one row per device plus a bold Combined
+// row. Tokens are shown as full, comma-grouped numbers.
 export function renderDevices(results: DeviceUsage[]): string {
   const num = (n: number | undefined): number => n ?? 0
+  const n = (x: number): string => Math.round(x).toLocaleString()
+  const money = (x: number): string => formatCost(x).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
   const rows = results.map((d) => {
-    const c = d.payload?.current
+    const cur = d.payload?.current
+    const daily = d.payload?.history?.daily ?? []
+    const input = num(cur?.inputTokens)
+    const output = num(cur?.outputTokens)
+    const cacheCreate = daily.reduce((s, e) => s + num(e.cacheWriteTokens), 0)
+    const cacheRead = daily.reduce((s, e) => s + num(e.cacheReadTokens), 0)
     return {
       name: d.name + (d.local ? ' (this Mac)' : ''),
-      cost: num(c?.cost),
-      tokens: num(c?.inputTokens) + num(c?.outputTokens),
-      calls: num(c?.calls),
-      sessions: num(c?.sessions),
       error: d.error,
+      cost: num(cur?.cost),
+      input,
+      output,
+      cacheCreate,
+      cacheRead,
+      total: input + output + cacheCreate + cacheRead,
     }
   })
   const combined = rows.reduce(
-    (a, r) => ({ cost: a.cost + r.cost, tokens: a.tokens + r.tokens, calls: a.calls + r.calls, sessions: a.sessions + r.sessions }),
-    { cost: 0, tokens: 0, calls: 0, sessions: 0 },
+    (a, r) => ({
+      cost: a.cost + r.cost,
+      input: a.input + r.input,
+      output: a.output + r.output,
+      cacheCreate: a.cacheCreate + r.cacheCreate,
+      cacheRead: a.cacheRead + r.cacheRead,
+      total: a.total + r.total,
+    }),
+    { cost: 0, input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
   )
 
-  const nameW = Math.max(8, ...rows.map((r) => r.name.length), 'Combined'.length)
-  const line = (name: string, cost: string, tokens: string, calls: string): string =>
-    `  ${name.padEnd(nameW)}  ${cost.padStart(11)}  ${tokens.padStart(9)}  ${calls.padStart(8)}`
-
-  const out: string[] = []
-  out.push(line('Device', 'Cost', 'Tokens', 'Calls'))
-  out.push('  ' + '-'.repeat(nameW + 11 + 9 + 8 + 6))
-  for (const r of rows) {
-    if (r.error) out.push(line(r.name, '-', '-', r.error))
-    else out.push(line(r.name, formatCost(r.cost), formatTokens(r.tokens), r.calls.toLocaleString()))
-  }
-  out.push('  ' + '-'.repeat(nameW + 11 + 9 + 8 + 6))
-  out.push(line('Combined', formatCost(combined.cost), formatTokens(combined.tokens), combined.calls.toLocaleString()))
-  return out.join('\n') + '\n'
+  const tableRows = [
+    ...rows.map((r) =>
+      r.error
+        ? [r.name, r.error, '-', '-', '-', '-', '-']
+        : [r.name, money(r.cost), n(r.total), n(r.input), n(r.output), n(r.cacheCreate), n(r.cacheRead)],
+    ),
+    ['Combined', money(combined.cost), n(combined.total), n(combined.input), n(combined.output), n(combined.cacheCreate), n(combined.cacheRead)],
+  ]
+  const table = renderTable(
+    [
+      { header: 'Host' },
+      { header: 'Cost', right: true },
+      { header: 'Total tokens', right: true },
+      { header: 'Input', right: true },
+      { header: 'Output', right: true },
+      { header: 'Cache create', right: true },
+      { header: 'Cache read', right: true },
+    ],
+    tableRows,
+    { boldRows: new Set([tableRows.length - 1]) },
+  )
+  const heading = new Chalk({}).cyan('Totals by machine')
+  return heading + '\n' + table + '\n'
 }
