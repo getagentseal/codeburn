@@ -1,14 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
-import { fetchDevices, PERIODS, type DailyEntry, type DeviceUsage, type Payload, type Period } from '@/lib/api'
+import { fetchDevices, PERIODS, type DeviceUsage, type Payload, type Period } from '@/lib/api'
 import { cn, fmtNum, fmtTokens, usd } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MetricCard } from '@/components/MetricCard'
 import { BarList, type BarItem } from '@/components/BarList'
 import { DataTable } from '@/components/DataTable'
-import { UsageChart } from '@/components/UsageChart'
+import { UsageChart, DeviceUsageChart } from '@/components/UsageChart'
 import { DeviceSearchModal } from '@/components/DeviceSearchModal'
 
 const n = (v: number | undefined): number => v ?? 0
@@ -137,40 +137,6 @@ function DeviceView({ payload, isRemote }: { payload?: Payload; isRemote: boolea
   )
 }
 
-// Merge every device's daily history by date for the combined chart, summing
-// per-model costs so the stacked bars stay correct.
-function mergeDaily(devices: DeviceUsage[]): DailyEntry[] {
-  const byDate = new Map<string, DailyEntry>()
-  for (const d of devices) {
-    for (const e of d.payload?.history.daily ?? []) {
-      const cur =
-        byDate.get(e.date) ??
-        { date: e.date, cost: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, topModels: [] }
-      cur.cost += e.cost
-      cur.calls += e.calls
-      cur.inputTokens += e.inputTokens
-      cur.outputTokens += e.outputTokens
-      cur.cacheReadTokens += e.cacheReadTokens
-      cur.cacheWriteTokens += e.cacheWriteTokens
-      const m = new Map(cur.topModels.map((x) => [x.name, { ...x }]))
-      for (const tm of e.topModels) {
-        const ex = m.get(tm.name)
-        if (ex) {
-          ex.cost += tm.cost
-          ex.calls += tm.calls
-          ex.inputTokens += tm.inputTokens
-          ex.outputTokens += tm.outputTokens
-        } else {
-          m.set(tm.name, { ...tm })
-        }
-      }
-      cur.topModels = [...m.values()]
-      byDate.set(e.date, cur)
-    }
-  }
-  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
-}
-
 // The "All devices" view: combined totals plus a per-device breakdown. Devices
 // are summed for display only; nothing is merged on the server.
 function CombinedView({ devices }: { devices: DeviceUsage[] }) {
@@ -194,11 +160,17 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
 
   const providers = new Map<string, number>()
   const models = new Map<string, number>()
+  const activities = new Map<string, number>()
+  let inTok = 0
+  let outTok = 0
   for (const d of devices) {
     const c = d.payload?.current
     if (!c) continue
+    inTok += c.inputTokens
+    outTok += c.outputTokens
     for (const [k, v] of Object.entries(c.providers)) providers.set(k, (providers.get(k) ?? 0) + v)
     for (const m of c.topModels) models.set(m.name, (models.get(m.name) ?? 0) + m.cost)
+    for (const a of c.topActivities) activities.set(a.name, (activities.get(a.name) ?? 0) + a.cost)
   }
   const toolBars: BarItem[] = [...providers.entries()]
     .filter(([, v]) => v > 0)
@@ -208,6 +180,10 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
+    .map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
+  const taskBars: BarItem[] = [...activities.entries()]
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
     .map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
 
   return (
@@ -220,13 +196,13 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
           </div>
         </div>
         <div className="mt-3 h-64 px-2 pb-2">
-          <UsageChart daily={mergeDaily(devices)} />
+          <DeviceUsageChart devices={devices} />
         </div>
       </Card>
 
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <MetricCard label="Total cost" value={usd(total.cost)} accent />
-        <MetricCard label="Tokens" value={fmtTokens(total.tokens)} />
+        <MetricCard label="Tokens" value={fmtTokens(total.tokens)} sub={`in ${fmtTokens(inTok)} / out ${fmtTokens(outTok)}`} />
         <MetricCard label="Calls" value={fmtNum(total.calls)} />
         <MetricCard label="Sessions" value={fmtNum(total.sessions)} />
         <MetricCard label="Devices" value={String(reachable)} />
@@ -252,9 +228,15 @@ function CombinedView({ devices }: { devices: DeviceUsage[] }) {
       </Panel>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        <Panel title="By task (all devices)">
+          <BarList items={taskBars} total={total.cost} />
+        </Panel>
         <Panel title="By tool (all devices)">
           <BarList items={toolBars} total={total.cost} />
         </Panel>
+      </div>
+
+      <div className="mt-3">
         <Panel title="Top models (all devices)">
           <BarList items={modelBars} total={total.cost} />
         </Panel>
@@ -275,7 +257,9 @@ export function App() {
     placeholderData: keepPreviousData,
   })
 
-  const devices = data?.devices ?? []
+  // Only show devices we could actually reach; an unreachable paired device is
+  // hidden entirely rather than shown as an error row.
+  const devices = (data?.devices ?? []).filter((d) => d.payload)
   const local = devices.find((d) => d.local)
   const multi = devices.some((d) => !d.local)
   const viewing = view === 'all' ? undefined : devices.find((d) => d.name === view)
