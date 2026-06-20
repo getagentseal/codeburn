@@ -49,8 +49,13 @@ The config file is:
 ~/.config/codeburn/config.json
 ```
 
+The macOS Settings window writes this value from the Devin tab. There is no
+environment-variable override and no default rate. Do not hardcode a universal
+ACU price; Devin ACU pricing is account/contract dependent.
+
 When the rate is missing or invalid, `discoverSessions()` returns `[]` and the
-parser yields no calls.
+parser yields no calls. Devin remains registered as a provider, but it does not
+appear in CLI/UI results until configured.
 
 ## Storage format
 
