@@ -49,6 +49,19 @@ export async function fetchUsage(period: Period, provider: string): Promise<Payl
   return res.json() as Promise<Payload>
 }
 
+export type DeviceUsage = {
+  name: string
+  local: boolean
+  payload?: Payload
+  error?: string
+}
+
+export async function fetchDevices(period: Period, provider: string): Promise<{ devices: DeviceUsage[] }> {
+  const res = await fetch(`/api/devices?period=${encodeURIComponent(period)}&provider=${encodeURIComponent(provider)}`)
+  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  return res.json() as Promise<{ devices: DeviceUsage[] }>
+}
+
 export const PERIODS: Array<{ key: Period; label: string }> = [
   { key: 'today', label: 'Today' },
   { key: 'week', label: '7 days' },

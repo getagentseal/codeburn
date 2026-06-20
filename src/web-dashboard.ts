@@ -6,9 +6,12 @@ import { join, normalize, extname, dirname, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { AddressInfo } from 'net'
 
+import { hostname } from 'os'
+
 import { loadPricing } from './models.js'
 import { buildMenubarPayloadForRange } from './usage-aggregator.js'
 import { getDateRange, parseDateRangeFlags, formatDateRangeLabel, toPeriod } from './cli-date.js'
+import { pullDevices } from './sharing/host.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -91,6 +94,26 @@ export async function runWebDashboard(opts: {
         })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify(payload))
+        return
+      }
+
+      // This machine plus every paired device, each kept separate. Remote
+      // payloads arrive already sanitized (aggregate numbers only).
+      if (url.pathname === '/api/devices') {
+        const period = url.searchParams.get('period') ?? opts.period
+        const provider = url.searchParams.get('provider') ?? opts.provider
+        const from = url.searchParams.get('from') ?? opts.from
+        const to = url.searchParams.get('to') ?? opts.to
+        const localGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
+          const customRange = parseDateRangeFlags(q.from, q.to)
+          const periodInfo = customRange
+            ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
+            : getDateRange(toPeriod(q.period ?? period))
+          return buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
+        }
+        const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ devices: results }))
         return
       }
 
