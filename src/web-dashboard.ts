@@ -11,7 +11,23 @@ import { hostname } from 'os'
 import { loadPricing } from './models.js'
 import { buildMenubarPayloadForRange } from './usage-aggregator.js'
 import { getDateRange, parseDateRangeFlags, formatDateRangeLabel, toPeriod } from './cli-date.js'
-import { pullDevices } from './sharing/host.js'
+import { pullDevices, linkRemote } from './sharing/host.js'
+import { browse } from './sharing/discovery.js'
+import { loadOrCreateIdentity } from './sharing/identity.js'
+import { pairingCode } from './sharing/pairing.js'
+import { getSharingDir, loadRemotes } from './sharing/store.js'
+
+function readBody(req: import('http').IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.on('data', (c) => {
+      body += c
+      if (body.length > 1_000_000) reject(new Error('request body too large'))
+    })
+    req.on('end', () => resolve(body))
+    req.on('error', reject)
+  })
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -114,6 +130,51 @@ export async function runWebDashboard(opts: {
         const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ devices: results }))
+        return
+      }
+
+      // This device's own identity (name + fingerprint) for the pairing UI.
+      if (url.pathname === '/api/identity') {
+        const id = await loadOrCreateIdentity(getSharingDir())
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ name: id.name, fingerprint: id.fingerprint }))
+        return
+      }
+
+      // Discover devices currently sharing on the local network (mDNS). Each
+      // carries the confirm code to match, and whether it is already paired.
+      if (url.pathname === '/api/devices/scan') {
+        const dir = getSharingDir()
+        const id = await loadOrCreateIdentity(dir)
+        const pairedFps = new Set((await loadRemotes(dir)).map((r) => r.fingerprint))
+        const found = await browse(2500)
+        const list = found
+          .filter((d) => d.fingerprint !== id.fingerprint)
+          .map((d) => ({
+            name: d.name,
+            host: d.host,
+            port: d.port,
+            fingerprint: d.fingerprint,
+            code: pairingCode(id.fingerprint, d.fingerprint),
+            paired: pairedFps.has(d.fingerprint),
+          }))
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ found: list }))
+        return
+      }
+
+      // Pair with a chosen discovered device. Blocks until the other device
+      // approves (or declines / times out), then stores the link.
+      if (url.pathname === '/api/devices/pair' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}') as { name: string; host: string; port: number; fingerprint: string }
+        try {
+          const device = await linkRemote(body)
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: true, name: device.name }))
+        } catch (err) {
+          res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
+        }
         return
       }
 
