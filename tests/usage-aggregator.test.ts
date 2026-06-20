@@ -4,9 +4,6 @@ import { getDateRange } from '../src/cli-date.js'
 import { loadPricing } from '../src/models.js'
 
 describe('buildMenubarPayloadForRange', () => {
-  // Discovery dirs are sandboxed by tests/setup/env-isolation.ts, so the payload
-  // is always built from an empty dataset - keeps the assertions deterministic
-  // and fast no matter what the developer's machine has for "today".
   beforeAll(async () => {
     await loadPricing()
   })
