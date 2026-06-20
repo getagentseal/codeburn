@@ -286,9 +286,7 @@ export function App() {
       <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5">
         <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
           <div className="flex items-center gap-2">
-            <svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" className="text-primary" aria-hidden="true">
-              <path d="M8 1C6.5 3.5 4 5 4 8c0 2.2 1.8 4 4 4s4-1.8 4-4c0-3-2.5-4.5-4-7zm0 9.5c-1 0-1.5-.7-1.5-1.5 0-1.2 1-2 1.5-3 .5 1 1.5 1.8 1.5 3 0 .8-.5 1.5-1.5 1.5z" />
-            </svg>
+            <img src="/codeburn-flame.png" alt="CodeBurn" className="h-7 w-auto" />
             <span className="font-display text-lg tracking-wide text-foreground">CodeBurn</span>
             <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground">usage</span>
           </div>
