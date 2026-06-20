@@ -75,6 +75,7 @@ const CLEARED = [
   'CODEBURN_TZ',
   'CODEBURN_VERBOSE',
   'CODEBURN_CURSOR_MAX_BUBBLES',
+  'CODEBURN_FORCE_MACOS_MAJOR',
   // Provider model/credential overrides
   'KIMI_MODEL_NAME',
   'AI_GATEWAY_API_KEY',
@@ -98,6 +99,11 @@ function applyIsolation(): void {
     if (original === undefined) delete process.env[key]
     else process.env[key] = original
   }
+  // Pin the timezone so date grouping is deterministic regardless of the dev's
+  // shell TZ. Clearing it is not enough (Node falls back to the OS zone); a
+  // non-UTC TZ would otherwise shift day buckets versus a clean CI runner. A
+  // test that needs a specific zone can still set process.env.TZ in beforeEach.
+  process.env.TZ = 'UTC'
 }
 
 applyIsolation()
