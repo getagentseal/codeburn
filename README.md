@@ -239,6 +239,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
   <a href="docs/providers/vercel-gateway.md" title="Vercel AI Gateway"><img src="assets/providers/vercel-gateway.png" alt="Vercel AI Gateway" height="34" /></a>
   <a href="docs/providers/zerostack.md" title="Zerostack"><img src="assets/providers/zerostack.png" alt="Zerostack" height="34" /></a>
   <a href="docs/providers/grok.md" title="Grok Build"><img src="assets/providers/grok.png" alt="Grok Build" height="34" /></a>
+  <a href="docs/providers/zcode.md" title="ZCode"><img src="assets/providers/zcode.jpg" alt="ZCode" height="34" /></a>
 </p>
 
 If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
