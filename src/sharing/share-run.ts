@@ -5,6 +5,7 @@ import { PeerStore } from './pairing.js'
 import { ShareServer, type UsageQuery } from './share-server.js'
 import { advertise } from './discovery.js'
 import { promptYesNo } from './prompt.js'
+import { sanitizeForSharing } from './sanitize.js'
 import { getSharingDir, loadPeers, savePeers } from './store.js'
 import { loadPricing } from '../models.js'
 import { buildMenubarPayloadForRange } from '../usage-aggregator.js'
@@ -35,7 +36,7 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     const periodInfo = customRange
       ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
       : getDateRange(toPeriod(q.period ?? 'month'))
-    return buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false })
+    return sanitizeForSharing(await buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false }))
   }
 
   const server = new ShareServer({
