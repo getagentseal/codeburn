@@ -15,11 +15,11 @@ import { readSessionFile } from "../fs-utils.js";
 import { isPositiveNumber, safeNumber } from "../parser.js";
 
 type AgentTrajectory<T extends Step> = {
-  schema_version?: string;
+  schema_version: string;
   session_id?: string;
   trajectory_id?: string;
-  agent?: Agent;
-  steps?: T[];
+  agent: Agent;
+  steps: T[];
 };
 
 type Agent = {
