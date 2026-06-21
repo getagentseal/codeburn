@@ -14,6 +14,7 @@ private func menubarPayload(cost: Double) -> MenubarPayload {
             inputTokens: 1,
             outputTokens: 1,
             cacheHitPercent: 0,
+            codexCredits: nil,
             topActivities: [],
             topModels: [],
             localModelSavings: LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: []),
