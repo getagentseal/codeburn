@@ -38,6 +38,31 @@ final class DataClientProcessTests: XCTestCase {
                        "runProcess deadlocked: \(count) concurrent CLIs starved the cooperative pool")
     }
 
+    /// A decode failure surfaces the CLI's actual stdout/stderr so a stray banner
+    /// on stdout (see #515) is self-diagnosing instead of an opaque "not valid JSON".
+    func testDecodeFailureSurfacesOutput() {
+        struct Boom: Error {}
+        let failure = CLIDecodeFailure(
+            underlying: Boom(),
+            stdoutByteCount: 13,
+            stdoutSnippet: "(node) banner",
+            stderr: "warn: x"
+        )
+        let text = String(describing: failure)
+        XCTAssertTrue(text.contains("(node) banner"), "should include the stdout snippet")
+        XCTAssertTrue(text.contains("13 bytes"), "should include the stdout byte count")
+        XCTAssertTrue(text.contains("warn: x"), "should include stderr")
+    }
+
+    /// Empty stdout is reported distinctly (the JSONDecoder-on-empty-Data case).
+    func testDecodeFailureWithEmptyStdout() {
+        struct Boom: Error {}
+        let failure = CLIDecodeFailure(underlying: Boom(), stdoutByteCount: 0, stdoutSnippet: "", stderr: "")
+        let text = String(describing: failure)
+        XCTAssertTrue(text.contains("0 bytes"))
+        XCTAssertTrue(text.contains("<empty>"))
+    }
+
     /// A normally-exiting process returns its real output and exit code through
     /// the off-pool wait path.
     func testProcessReturnsOutputAndExitCode() async throws {

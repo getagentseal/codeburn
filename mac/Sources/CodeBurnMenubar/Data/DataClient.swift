@@ -17,6 +17,26 @@ enum DataClientError: Error {
     case outputTooLarge
 }
 
+/// Wraps a `MenubarPayload` decode failure with a bounded snippet of what the CLI
+/// actually wrote to stdout (plus stderr), so a malformed-output failure — for
+/// example a stray Node banner landing on stdout ahead of the JSON (see #515) —
+/// is self-diagnosing in logs and the UI instead of an opaque "not valid JSON".
+struct CLIDecodeFailure: Error, CustomStringConvertible {
+    let underlying: Error
+    let stdoutByteCount: Int
+    let stdoutSnippet: String
+    let stderr: String
+
+    var description: String {
+        var parts = [
+            "decode failed: \(underlying)",
+            "stdout (\(stdoutByteCount) bytes): \(stdoutSnippet.isEmpty ? "<empty>" : stdoutSnippet)",
+        ]
+        if !stderr.isEmpty { parts.append("stderr: \(stderr)") }
+        return parts.joined(separator: " | ")
+    }
+}
+
 /// Runs the CLI via argv (no shell interpretation). See `CodeburnCLI` for why we never route
 /// commands through `/bin/zsh -c` anymore.
 struct DataClient {
@@ -46,7 +66,13 @@ struct DataClient {
         do {
             return try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
         } catch {
-            throw DataClientError.decode(error)
+            let snippet = String(decoding: result.stdout.prefix(2048), as: UTF8.self)
+            throw DataClientError.decode(CLIDecodeFailure(
+                underlying: error,
+                stdoutByteCount: result.stdout.count,
+                stdoutSnippet: snippet,
+                stderr: result.stderr
+            ))
         }
     }
 
