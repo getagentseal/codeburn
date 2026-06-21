@@ -16,10 +16,14 @@ function formatCost(usd: number): string {
 function formatTokens(n: number): string {
   return Math.round(n).toLocaleString()
 }
+function isAbsoluteProjectPath(path: string): boolean {
+  return path.startsWith('/') || path.startsWith('\\') || /^[a-zA-Z]:[/\\]/.test(path)
+}
 function projectName(p: ProjectSummary): string {
   const path = p.projectPath
   if (path) {
     if (path === homedir()) return 'Home'
+    if (!isAbsoluteProjectPath(path)) return p.project || path
     const base = path.replace(/[/\\]+$/, '').split(/[/\\]/).filter(Boolean).pop()
     if (base) return base
   }

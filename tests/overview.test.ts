@@ -100,4 +100,19 @@ describe('renderOverview', () => {
     const out = renderOverview([], { label: 'June 2026', color: false })
     expect(out).toContain('No usage found for June 2026')
   })
+
+  it('does not split a slug-only Claude project path into fake path segments', () => {
+    const out = renderOverview([makeProject({
+      project: 'Projects-Content-OS',
+      projectPath: 'Projects/Content/OS',
+      cost: 3.25,
+      calls: 1,
+      model: 'claude-sonnet-4-5',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).toContain('Projects-Content-OS')
+    expect(out).not.toContain(' OS ')
+  })
 })

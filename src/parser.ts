@@ -44,6 +44,13 @@ function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
 }
 
+function claudeSlugFallbackPath(dirName: string): string {
+  // Claude project directory names are lossy: a dash may be either a path
+  // separator from the original cwd or a literal dash in the leaf name.
+  // Without cwd metadata, keep the slug intact instead of inventing segments.
+  return dirName
+}
+
 function normalizeProjectPathKey(projectPath: string): string {
   const normalized = projectPath.trim().replace(/\\/g, '/')
   return (normalized.replace(/\/+$/, '') || normalized).toLowerCase()
@@ -76,12 +83,11 @@ async function resolveCanonicalProjectPath(cwd: string): Promise<{ path: string;
   const trimmed = cwd.trim()
   if (!trimmed) return { path: cwd, isWorktree: false }
 
-  // Walk up the directory tree to find the nearest .git entry. This handles
-  // three cases: (1) cwd IS the repo root (.git is a directory), (2) cwd is a
-  // git worktree (.git is a file pointing back to the main repo), (3) cwd is a
-  // subdirectory of a repo — we resolve up to the repo root so subdirectory
-  // sessions group with the rest of the project even when the subdir no longer
-  // exists on disk.
+  // Walk up the directory tree to find a real git worktree marker. Ordinary
+  // repos use a .git directory; linked worktrees use a .git file pointing back
+  // to <main>/.git/worktrees/<name>. Only the latter should canonicalize to
+  // the main repo. A parent directory with a stray .git directory must not
+  // absorb sibling projects.
   // Guard against foreign paths (e.g. a Windows path recorded on a machine
   // that now runs macOS): only walk paths that look like absolute paths on the
   // current platform. A relative or foreign-format path cannot be walked on
@@ -95,17 +101,19 @@ async function resolveCanonicalProjectPath(cwd: string): Promise<{ path: string;
   while (true) {
     const gitEntry = join(dir, '.git')
     const entryStat = await lstat(gitEntry).catch(() => null)
-    if (entryStat?.isDirectory()) return { path: dir, isWorktree: false }
+    if (entryStat?.isDirectory()) {
+      return { path: dir === trimmed ? dir : cwd, isWorktree: false }
+    }
     if (entryStat?.isFile()) {
       const gitFile = await readFile(gitEntry, 'utf-8').catch(() => null)
-      if (gitFile === null) return { path: dir, isWorktree: false }
+      if (gitFile === null) return { path: dir === trimmed ? dir : cwd, isWorktree: false }
       const match = gitFile.match(/^gitdir:\s*(.+?)\s*$/m)
-      if (!match?.[1]) return { path: dir, isWorktree: false }
+      if (!match?.[1]) return { path: dir === trimmed ? dir : cwd, isWorktree: false }
       const gitDir = resolve(dir, match[1])
       const normalizedGitDir = gitDir.replace(/\\/g, '/')
       const worktreeMarker = '/.git/worktrees/'
       const markerIndex = normalizedGitDir.lastIndexOf(worktreeMarker)
-      if (markerIndex === -1) return { path: dir, isWorktree: false }
+      if (markerIndex === -1) return { path: dir === trimmed ? dir : cwd, isWorktree: false }
       return { path: normalizedGitDir.slice(0, markerIndex), isWorktree: true }
     }
     const parent = dirname(dir)
@@ -1611,7 +1619,7 @@ async function scanProjectDirs(
     if (classifiedTurns.length === 0) continue
 
     const sessionId = basename(filePath, '.jsonl')
-    const projectPath = cachedFile.canonicalCwd ?? unsanitizePath(dirName)
+    const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
