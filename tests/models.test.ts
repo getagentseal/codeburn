@@ -51,6 +51,18 @@ describe('getShortModelName', () => {
     expect(getShortModelName('gpt-5.4-mini')).toBe('GPT-5.4 Mini')
   })
 
+  // Regression for #461: spark is a distinct variant, not a reasoning suffix.
+  it('maps gpt-5.3-codex-spark to its own label (not GPT-5.3 Codex)', () => {
+    const name = getShortModelName('gpt-5.3-codex-spark')
+    expect(name).not.toBe('GPT-5.3 Codex')
+    expect(name).toBe('GPT-5.3 Codex Spark')
+  })
+
+  it('maps gpt-5.3-codex reasoning suffixes to the base label', () => {
+    expect(getShortModelName('gpt-5.3-codex-high')).toBe('GPT-5.3 Codex')
+    expect(getShortModelName('gpt-5.3-codex-low')).toBe('GPT-5.3 Codex')
+  })
+
   it('maps claude-opus-4-6 with date suffix', () => {
     expect(getShortModelName('claude-opus-4-6-20260205')).toBe('Opus 4.6')
   })

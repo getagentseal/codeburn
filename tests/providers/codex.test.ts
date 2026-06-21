@@ -105,6 +105,21 @@ async function writeSession(dir: string, date: string, filename: string, lines: 
   return filePath
 }
 
+describe('codex provider - model display names', () => {
+  it('maps gpt-5.3-codex-spark to its own label', () => {
+    const provider = createCodexProvider(tmpDir)
+    const name = provider.modelDisplayName('gpt-5.3-codex-spark')
+    expect(name).not.toBe('GPT-5.3 Codex')
+    expect(name).toBe('GPT-5.3 Codex Spark')
+  })
+
+  it('maps gpt-5.3-codex reasoning suffixes to the base label', () => {
+    const provider = createCodexProvider(tmpDir)
+    expect(provider.modelDisplayName('gpt-5.3-codex-high')).toBe('GPT-5.3 Codex')
+    expect(provider.modelDisplayName('gpt-5.3-codex-low')).toBe('GPT-5.3 Codex')
+  })
+})
+
 describe('codex provider - session discovery', () => {
   it('discovers sessions in YYYY/MM/DD structure', async () => {
     await writeSession(tmpDir, '2026-04-14', 'rollout-abc123.jsonl', [
