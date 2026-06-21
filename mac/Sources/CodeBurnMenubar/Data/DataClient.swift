@@ -6,13 +6,14 @@ import Foundation
 /// Pipe file descriptors pinned forever.
 private let maxPayloadBytes = 20 * 1024 * 1024
 private let maxStderrBytes = 256 * 1024
+private let maxDecodeStdoutPreviewBytes = 4 * 1024
 private let spawnTimeoutSeconds: UInt64 = 45
 private let maxConcurrentSpawns = 6
 
 enum DataClientError: Error {
     case spawn(String)
     case nonZeroExit(code: Int32, stderr: String)
-    case decode(Error)
+    case decode(Error, stdoutPreview: String, stderr: String, stdoutBytes: Int)
     case timeout
     case outputTooLarge
 }
@@ -46,7 +47,12 @@ struct DataClient {
         do {
             return try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
         } catch {
-            throw DataClientError.decode(error)
+            throw DataClientError.decode(
+                error,
+                stdoutPreview: decodeFailureStdoutPreview(from: result.stdout),
+                stderr: result.stderr,
+                stdoutBytes: result.stdout.count
+            )
         }
     }
 
@@ -175,6 +181,28 @@ struct DataClient {
             }
         }
         return buffer
+    }
+
+    static func decodeFailureStdoutPreview(from stdout: Data) -> String {
+        let preview = stdout.prefix(maxDecodeStdoutPreviewBytes)
+        return String(decoding: preview, as: UTF8.self)
+    }
+}
+
+extension DataClientError: CustomStringConvertible {
+    var description: String {
+        switch self {
+        case .spawn(let message):
+            return "spawn(\(String(reflecting: message)))"
+        case .nonZeroExit(let code, let stderr):
+            return "nonZeroExit(code: \(code), stderr: \(String(reflecting: stderr)))"
+        case .decode(let error, let stdoutPreview, let stderr, let stdoutBytes):
+            return "decode(\(error); stdoutPreview(first \(stdoutPreview.utf8.count) of \(stdoutBytes) bytes): \(String(reflecting: stdoutPreview)); stderr: \(String(reflecting: stderr)))"
+        case .timeout:
+            return "timeout"
+        case .outputTooLarge:
+            return "outputTooLarge"
+        }
     }
 }
 
