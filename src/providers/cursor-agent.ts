@@ -139,10 +139,81 @@ function costModel(model: string): string {
   return model === 'cursor-agent-auto' ? CURSOR_AGENT_COST_MODEL : model
 }
 
+function transcriptStem(transcriptPath: string): string {
+  const name = basename(transcriptPath)
+  if (name.endsWith('.jsonl')) return name.slice(0, -'.jsonl'.length)
+  if (name.endsWith('.txt')) return name.slice(0, -'.txt'.length)
+  return name
+}
+
 function toConversationId(transcriptPath: string): string {
-  const filename = basename(transcriptPath, '.txt')
+  const filename = transcriptStem(transcriptPath)
   if (filename.length === 36 && UUID_LIKE.test(filename)) return filename
   return createHash('sha1').update(transcriptPath).digest('hex').slice(0, 16)
+}
+
+async function appendTranscriptSources(
+  scanDir: string,
+  projectId: string,
+  sources: SessionSource[],
+): Promise<void> {
+  const transcriptEntries = await readdir(scanDir, { withFileTypes: true })
+  for (const transcript of transcriptEntries) {
+    // Legacy format: .txt files directly in the scan dir
+    if (transcript.isFile() && transcript.name.endsWith('.txt')) {
+      sources.push({
+        path: join(scanDir, transcript.name),
+        project: projectId,
+        provider: 'cursor-agent',
+      })
+      continue
+    }
+
+    // Composer 2 format: UUID subdirectories with .jsonl files
+    if (transcript.isDirectory() && UUID_LIKE.test(transcript.name)) {
+      const subdir = join(scanDir, transcript.name)
+      const subEntries = await readdir(subdir, { withFileTypes: true }).catch(() => [])
+      const transcriptFilesByStem = new Map<string, { jsonl?: string; txt?: string }>()
+
+      for (const sub of subEntries) {
+        if (sub.isFile() && (sub.name.endsWith('.jsonl') || sub.name.endsWith('.txt'))) {
+          const stem = transcriptStem(sub.name)
+          const existing = transcriptFilesByStem.get(stem) ?? {}
+          if (sub.name.endsWith('.jsonl')) {
+            transcriptFilesByStem.set(stem, { ...existing, jsonl: sub.name })
+          } else {
+            transcriptFilesByStem.set(stem, { ...existing, txt: sub.name })
+          }
+          continue
+        }
+
+        // Subagent transcripts inside a subagents/ directory
+        if (sub.isDirectory() && sub.name === 'subagents') {
+          const subagentEntries = await readdir(join(subdir, sub.name), { withFileTypes: true }).catch(() => [])
+          for (const sa of subagentEntries) {
+            if (!sa.isFile()) continue
+            if (!sa.name.endsWith('.jsonl') && !sa.name.endsWith('.txt')) continue
+            sources.push({
+              path: join(subdir, sub.name, sa.name),
+              project: projectId,
+              provider: 'cursor-agent',
+            })
+          }
+        }
+      }
+
+      for (const files of transcriptFilesByStem.values()) {
+        const selectedName = files.jsonl ?? files.txt
+        if (selectedName) {
+          sources.push({
+            path: join(subdir, selectedName),
+            project: projectId,
+            provider: 'cursor-agent',
+          })
+        }
+      }
+    }
+  }
 }
 
 function extractUserQuery(userBlock: string): string {
@@ -241,7 +312,7 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
 
     let output = ''
     let reasoning = ''
-    const toolsByTurn: Record<string, boolean> = Object.create(null)
+    const toolsByTurn = new Map<string, true>()
 
     for (const line of assistantLines) {
       if (TOOL_RESULT_MARKER.test(line)) continue
@@ -257,7 +328,7 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
       if (toolMatch) {
         const parsedTool = parseToolName(toolMatch[1] ?? '')
         const toolKey = `cursor:${parsedTool}`
-        toolsByTurn[toolKey] = true
+        toolsByTurn.set(toolKey, true)
         continue
       }
 
@@ -266,7 +337,7 @@ function parseTranscript(raw: string): { turns: ParsedTurn[]; recognized: boolea
 
     if (pendingUsers.length > 0) {
       const userMessage = pendingUsers.shift()!
-      const tools = Object.keys(toolsByTurn)
+      const tools = Array.from(toolsByTurn.keys())
       turns.push({
         userMessage,
         assistant: {
@@ -319,13 +390,13 @@ function createParser(
   source: SessionSource,
   seenKeys: Set<string>,
   dbPath: string,
-  summariesByConversationId: Record<string, ConversationSummary | undefined>,
+  summariesByConversationId: Map<string, ConversationSummary>,
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const conversationId = toConversationId(source.path)
 
-      let summary = summariesByConversationId[conversationId]
+      let summary = summariesByConversationId.get(conversationId)
       let db: SqliteDatabase | null = null
 
       try {
@@ -348,7 +419,7 @@ function createParser(
                   title: row.title,
                   updatedAt: normalizeTimestamp(row.updatedAt),
                 }
-                summariesByConversationId[conversationId] = summary
+                summariesByConversationId.set(conversationId, summary)
               }
             } catch {
               summary = undefined
@@ -426,7 +497,7 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
   const baseDir = getCursorAgentBaseDir(baseDirOverride)
   const projectsDir = getProjectsDir(baseDir)
   const dbPath = getAttributionDbPath(baseDir)
-  const summariesByConversationId: Record<string, ConversationSummary | undefined> = Object.create(null)
+  const summariesByConversationId = new Map<string, ConversationSummary>()
 
   return {
     name: 'cursor-agent',
@@ -452,50 +523,15 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
         if (!entry.isDirectory()) continue
 
         const projectId = prettifyProjectId(entry.name)
-        const transcriptDir = join(projectsDir, entry.name, 'agent-transcripts')
-        if (!existsSync(transcriptDir)) continue
-
-        const transcriptEntries = await readdir(transcriptDir, { withFileTypes: true })
-        for (const transcript of transcriptEntries) {
-          // Legacy format: .txt files directly in agent-transcripts/
-          if (transcript.isFile() && transcript.name.endsWith('.txt')) {
-            const transcriptPath = join(transcriptDir, transcript.name)
-            sources.push({
-              path: transcriptPath,
-              project: projectId,
-              provider: 'cursor-agent',
-            })
-            continue
-          }
-
-          // Composer 2 format: UUID subdirectories with .jsonl files
-          if (transcript.isDirectory() && UUID_LIKE.test(transcript.name)) {
-            const subdir = join(transcriptDir, transcript.name)
-            const subEntries = await readdir(subdir, { withFileTypes: true }).catch(() => [])
-            for (const sub of subEntries) {
-              if (sub.isFile() && (sub.name.endsWith('.jsonl') || sub.name.endsWith('.txt'))) {
-                sources.push({
-                  path: join(subdir, sub.name),
-                  project: projectId,
-                  provider: 'cursor-agent',
-                })
-              }
-              // Subagent transcripts inside a subagents/ directory
-              if (sub.isDirectory() && sub.name === 'subagents') {
-                const subagentEntries = await readdir(join(subdir, sub.name), { withFileTypes: true }).catch(() => [])
-                for (const sa of subagentEntries) {
-                  if (!sa.isFile()) continue
-                  if (!sa.name.endsWith('.jsonl') && !sa.name.endsWith('.txt')) continue
-                  sources.push({
-                    path: join(subdir, sub.name, sa.name),
-                    project: projectId,
-                    provider: 'cursor-agent',
-                  })
-                }
-              }
-            }
-          }
+        const projectDir = join(projectsDir, entry.name)
+        if (entry.name === 'agent-transcripts') {
+          await appendTranscriptSources(projectDir, projectId, sources)
+          continue
         }
+
+        const transcriptDir = join(projectDir, 'agent-transcripts')
+        if (!existsSync(transcriptDir)) continue
+        await appendTranscriptSources(transcriptDir, projectId, sources)
       }
 
       return sources

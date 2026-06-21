@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\nRun a quick smoke test\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Smoke test passed."}]}}
