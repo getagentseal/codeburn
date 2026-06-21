@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 import https from 'https'
 
 import { calculateCost } from '../models.js'
-import { isSqliteAvailable, openDatabase } from '../sqlite.js'
+import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 type AntigravityConversationRoot = {
@@ -761,7 +761,10 @@ async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string):
     db = openDatabase(filePath)
     const rows = db.query<AntigravityGenMetadataRow>('SELECT idx, data FROM gen_metadata ORDER BY idx')
     return buildCallsFromSqliteGenMetadata(cascadeId, rows)
-  } catch {
+  } catch (err) {
+    // Let a transient lock propagate so the run retries this file on the next
+    // refresh instead of treating it as empty (see parser.ts busy handling).
+    if (isSqliteBusyError(err)) throw err
     return []
   } finally {
     db?.close()
