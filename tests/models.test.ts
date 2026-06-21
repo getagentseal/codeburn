@@ -32,6 +32,15 @@ describe('getModelCosts', () => {
     expect(costs).not.toBeNull()
     expect(costs!.inputCostPerToken).toBe(5e-6)
   })
+
+  it('prices lowercase glm-5.2 (Hermes spelling) the same as capitalized GLM-5.2', () => {
+    const lower = getModelCosts('glm-5.2')
+    const upper = getModelCosts('GLM-5.2')
+    expect(lower).not.toBeNull()
+    expect(upper).not.toBeNull()
+    expect(lower!.inputCostPerToken).toBe(upper!.inputCostPerToken)
+    expect(lower!.outputCostPerToken).toBe(upper!.outputCostPerToken)
+  })
 })
 
 describe('getShortModelName', () => {

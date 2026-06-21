@@ -325,6 +325,10 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // ZCode runs GLM-5.2 through z.ai's start-plan subscription; it isn't in
   // LiteLLM yet. Price as the nearest released sibling (GLM-5.1) until it is.
   'GLM-5.2':                        'glm-5p1',
+  // Hermes Agent stores the same model id lowercased (`glm-5.2`) in its
+  // sessions table, so it misses the capitalized alias above and goes
+  // unpriced. Map the lowercase spelling to the same sibling.
+  'glm-5.2':                        'glm-5p1',
 }
 
 let userAliases: Record<string, string> = {}
