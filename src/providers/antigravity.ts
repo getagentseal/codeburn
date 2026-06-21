@@ -25,7 +25,7 @@ const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
   {
     dir: join(homedir(), '.gemini', 'antigravity-cli', 'conversations'),
     project: 'antigravity-cli',
-    extensions: ['.pb'],
+    extensions: ['.pb', '.db'],
   },
   {
     dir: join(homedir(), '.gemini', 'antigravity-cli', 'implicit'),
@@ -137,11 +137,29 @@ type AntigravityCache = {
   cascades: Record<string, CachedCascade>
 }
 
+type ProtoField = {
+  number: number
+  wireType: number
+  value?: bigint
+  bytes?: Uint8Array
+}
+
+type ProtoVarint = {
+  value: bigint
+  offset: number
+}
+
+type AntigravityGenMetadataRow = {
+  idx: number
+  data: Uint8Array | string
+}
+
 const cachedServers = new Map<string, ServerInfo | null>()
 const cachedModelMaps = new Map<string, ModelMap>()
 let memCache: AntigravityCache | null = null
 let cacheDirty = false
 let httpsAgent: https.Agent | undefined
+const protoTextDecoder = new TextDecoder('utf-8', { fatal: false })
 
 const SERVER_PORT_FLAGS = ['https_server_port', 'extension_server_port', 'https-server-port', 'extension-server-port']
 const CSRF_TOKEN_FLAGS = ['csrf_token', 'extension_server_csrf_token', 'csrf-token', 'extension-server-csrf-token']
@@ -270,15 +288,15 @@ export function extractAntigravityModelMap(resp: unknown): ModelMap {
   if (!resp || typeof resp !== 'object') return {}
   const data = resp as ModelMapResponse
   const models = data.response?.models ?? data.models
-  const map: ModelMap = {}
-  if (!models) return map
+  const map = new Map<string, string>()
+  if (!models) return {}
   for (const [key, info] of Object.entries(models)) {
     if (info && typeof info === 'object' && typeof info.model === 'string') {
       const canonicalKey = getCanonicalModelId(key, info.displayName)
-      map[info.model] = canonicalKey
+      map.set(info.model, canonicalKey)
     }
   }
-  return map
+  return Object.fromEntries(map)
 }
 
 export function extractAntigravityGeneratorMetadata(resp: unknown): GeneratorMetadata[] {
@@ -542,6 +560,212 @@ const PRICING_ALIASES: Record<string, string> = {
 function normalizePricingModel(model: string): string {
   const stripped = model.replace(/-(high|medium|low|agent)$/, '')
   return PRICING_ALIASES[stripped] ?? stripped
+}
+
+function readProtoVarint(data: Uint8Array, startOffset: number): ProtoVarint | null {
+  let value = 0n
+  let shift = 0n
+  let offset = startOffset
+
+  while (offset < data.length) {
+    const byte = BigInt(data[offset]!)
+    offset += 1
+    value |= (byte & 0x7fn) << shift
+    if ((byte & 0x80n) === 0n) return { value, offset }
+    shift += 7n
+    if (shift > 70n) return null
+  }
+
+  return null
+}
+
+function parseProtoFields(data: Uint8Array): ProtoField[] {
+  const fields: ProtoField[] = []
+  let offset = 0
+
+  while (offset < data.length) {
+    const key = readProtoVarint(data, offset)
+    if (!key) break
+    offset = key.offset
+
+    const fieldNumber = Number(key.value >> 3n)
+    const wireType = Number(key.value & 0x7n)
+    if (!Number.isSafeInteger(fieldNumber) || fieldNumber <= 0) break
+
+    if (wireType === 0) {
+      const value = readProtoVarint(data, offset)
+      if (!value) break
+      fields.push({ number: fieldNumber, wireType, value: value.value })
+      offset = value.offset
+      continue
+    }
+
+    if (wireType === 1) {
+      if (offset + 8 > data.length) break
+      fields.push({ number: fieldNumber, wireType, bytes: data.subarray(offset, offset + 8) })
+      offset += 8
+      continue
+    }
+
+    if (wireType === 2) {
+      const length = readProtoVarint(data, offset)
+      if (!length) break
+      offset = length.offset
+      const byteLength = Number(length.value)
+      if (!Number.isSafeInteger(byteLength) || byteLength < 0 || offset + byteLength > data.length) break
+      fields.push({ number: fieldNumber, wireType, bytes: data.subarray(offset, offset + byteLength) })
+      offset += byteLength
+      continue
+    }
+
+    if (wireType === 5) {
+      if (offset + 4 > data.length) break
+      fields.push({ number: fieldNumber, wireType, bytes: data.subarray(offset, offset + 4) })
+      offset += 4
+      continue
+    }
+
+    break
+  }
+
+  return fields
+}
+
+function firstProtoField(fields: readonly ProtoField[], fieldNumber: number): ProtoField | undefined {
+  return fields.find(field => field.number === fieldNumber)
+}
+
+function protoFieldText(field: ProtoField | undefined): string | undefined {
+  if (!field?.bytes || field.bytes.length === 0) return undefined
+  const text = protoTextDecoder.decode(field.bytes)
+  if (!text || /[\u0000-\u0008\u000E-\u001F\u007F\uFFFD]/.test(text)) return undefined
+  return text
+}
+
+function protoFieldPositiveInteger(field: ProtoField | undefined): number {
+  if (field?.value === undefined) return 0
+  const value = Number(field.value)
+  return Number.isSafeInteger(value) && value > 0 ? value : 0
+}
+
+function protoFieldBytes(field: ProtoField | undefined): Uint8Array | undefined {
+  return field?.bytes
+}
+
+function isAntigravityResponseId(value: string): boolean {
+  return /^[^\s]+$/.test(value)
+}
+
+function antigravitySqliteResponseId(usageFields: readonly ProtoField[], fallback: string): string {
+  const responseId = protoFieldText(firstProtoField(usageFields, 11))
+  return responseId && isAntigravityResponseId(responseId) ? responseId : fallback
+}
+
+function genMetadataDataBytes(value: Uint8Array | string): Uint8Array {
+  return typeof value === 'string'
+    ? new TextEncoder().encode(value)
+    : value
+}
+
+function antigravitySqliteMetadataAttributes(chatFields: readonly ProtoField[]): Map<string, string> {
+  const attributes = new Map<string, string>()
+  for (const field of chatFields) {
+    if (field.number !== 20) continue
+    const pairFields = parseProtoFields(protoFieldBytes(field) ?? new Uint8Array())
+    const key = protoFieldText(firstProtoField(pairFields, 1))
+    const value = protoFieldText(firstProtoField(pairFields, 2))
+    if (key && value) attributes.set(key, value)
+  }
+  return attributes
+}
+
+function antigravitySqliteModel(chatFields: readonly ProtoField[]): string {
+  const attributes = antigravitySqliteMetadataAttributes(chatFields)
+  const displayName = protoFieldText(firstProtoField(chatFields, 21))
+  const rawModel = protoFieldText(firstProtoField(chatFields, 19))
+    ?? attributes.get('model_enum')
+    ?? displayName
+    ?? 'unknown'
+
+  return getCanonicalModelId(rawModel, displayName)
+}
+
+function buildCallFromSqliteGenMetadataRow(cascadeId: string, row: AntigravityGenMetadataRow): ParsedProviderCall | null {
+  const rootFields = parseProtoFields(genMetadataDataBytes(row.data))
+  const chatFields = parseProtoFields(protoFieldBytes(firstProtoField(rootFields, 1)) ?? new Uint8Array())
+  const usageFields = parseProtoFields(protoFieldBytes(firstProtoField(chatFields, 4)) ?? new Uint8Array())
+  if (usageFields.length === 0) return null
+
+  const inputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 2))
+    || protoFieldPositiveInteger(firstProtoField(usageFields, 1))
+  const totalOutputTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 3))
+  let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
+  let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
+
+  if (responseTokens === 0 && thinkingTokens === 0) {
+    responseTokens = totalOutputTokens
+  } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
+    const adjustedResponseTokens = totalOutputTokens - thinkingTokens
+    if (adjustedResponseTokens >= 0) responseTokens = adjustedResponseTokens
+  }
+
+  if (inputTokens === 0 && totalOutputTokens === 0) return null
+
+  const responseId = antigravitySqliteResponseId(usageFields, String(row.idx))
+  const model = antigravitySqliteModel(chatFields)
+  const pricingModel = normalizePricingModel(model)
+  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+
+  return {
+    provider: 'antigravity',
+    model,
+    inputTokens,
+    outputTokens: responseTokens,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: thinkingTokens,
+    webSearchRequests: 0,
+    costUSD,
+    tools: [],
+    bashCommands: [],
+    timestamp: '',
+    speed: 'standard',
+    deduplicationKey: `antigravity:${cascadeId}:${responseId}`,
+    userMessage: '',
+    sessionId: cascadeId,
+  }
+}
+
+function buildCallsFromSqliteGenMetadata(cascadeId: string, rows: AntigravityGenMetadataRow[]): ParsedProviderCall[] {
+  const calls: ParsedProviderCall[] = []
+  const seenResponseIds = new Set<string>()
+
+  for (const row of rows) {
+    const call = buildCallFromSqliteGenMetadataRow(cascadeId, row)
+    if (!call) continue
+    if (seenResponseIds.has(call.deduplicationKey)) continue
+    seenResponseIds.add(call.deduplicationKey)
+    calls.push(call)
+  }
+
+  return calls
+}
+
+async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string): Promise<ParsedProviderCall[]> {
+  if (!filePath.toLowerCase().endsWith('.db')) return []
+  if (!isSqliteAvailable()) return []
+
+  let db: ReturnType<typeof openDatabase> | null = null
+  try {
+    db = openDatabase(filePath)
+    const rows = db.query<AntigravityGenMetadataRow>('SELECT idx, data FROM gen_metadata ORDER BY idx')
+    return buildCallsFromSqliteGenMetadata(cascadeId, rows)
+  } catch {
+    return []
+  } finally {
+    db?.close()
+  }
 }
 
 function parseFiniteToken(value: unknown): number {
@@ -954,6 +1178,22 @@ function sanitizeProject(path: string): string {
   return basename(path.replace(/\\/g, '/'))
 }
 
+function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource, projectPath: string | undefined): void {
+  if (source.project === 'antigravity-cli') {
+    call.project = source.project
+    delete call.projectPath
+    return
+  }
+
+  if (projectPath) {
+    call.projectPath = projectPath
+    call.project = sanitizeProject(projectPath)
+    return
+  }
+
+  call.project = source.project
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -974,12 +1214,30 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const projectPath = await extractWorkspacePath(source.path)
 
       const cached = cache.cascades[cascadeId]
-      if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size) {
+      if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size && cached.calls.length > 0) {
         for (const call of cached.calls) {
-          if (projectPath) {
-            call.projectPath = projectPath
-            call.project = sanitizeProject(projectPath)
-          }
+          applyAntigravityProject(call, source, projectPath)
+          if (seenKeys.has(call.deduplicationKey)) continue
+          seenKeys.add(call.deduplicationKey)
+          yield call
+        }
+        return
+      }
+
+      const sqliteResults = await parseSqliteGenMetadataCalls(source.path, cascadeId)
+      if (sqliteResults.length > 0) {
+        for (const call of sqliteResults) {
+          applyAntigravityProject(call, source, projectPath)
+        }
+
+        cache.cascades[cascadeId] = {
+          mtimeMs: s.mtimeMs,
+          sizeBytes: s.size,
+          calls: sqliteResults,
+        }
+        cacheDirty = true
+
+        for (const call of sqliteResults) {
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
           yield call
@@ -991,10 +1249,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       if (!server) {
         if (cached) {
           for (const call of cached.calls) {
-            if (projectPath) {
-              call.projectPath = projectPath
-              call.project = sanitizeProject(projectPath)
-            }
+            applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call
@@ -1013,10 +1268,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       } catch {
         if (cached) {
           for (const call of cached.calls) {
-            if (projectPath) {
-              call.projectPath = projectPath
-              call.project = sanitizeProject(projectPath)
-            }
+            applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
             yield call
@@ -1026,12 +1278,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       }
 
       const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
-      if (projectPath) {
-        const projectName = sanitizeProject(projectPath)
-        for (const call of results) {
-          call.projectPath = projectPath
-          call.project = projectName
-        }
+      for (const call of results) {
+        applyAntigravityProject(call, source, projectPath)
       }
 
       cache.cascades[cascadeId] = {

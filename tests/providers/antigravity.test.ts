@@ -1,8 +1,10 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
+import { isSqliteAvailable } from '../../src/sqlite.js'
 import {
   antigravityAppDataDirFromSourcePath,
   antigravityCascadeIdFromPath,
@@ -17,6 +19,46 @@ import {
   recordAntigravityStatusLinePayload,
   shouldReparseAntigravitySource,
 } from '../../src/providers/antigravity.js'
+import type { ParsedProviderCall } from '../../src/providers/types.js'
+
+const requireForTest = createRequire(import.meta.url)
+
+type CurrentCliFixture = {
+  conversationId: string
+  rows: Array<{ idx: number; hex: string }>
+}
+
+type TestDb = {
+  exec(sql: string): void
+  prepare(sql: string): { run(...params: unknown[]): void }
+  close(): void
+}
+
+function createCurrentAntigravityCliDb(dbPath: string, fixture: CurrentCliFixture): void {
+  const { DatabaseSync: Database } = requireForTest('node:sqlite')
+  const db = new Database(dbPath) as TestDb
+  try {
+    db.exec('CREATE TABLE gen_metadata (idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx))')
+    db.exec('CREATE TABLE trajectory_metadata_blob (id text DEFAULT "main", data blob, PRIMARY KEY (id))')
+    db.prepare('INSERT INTO trajectory_metadata_blob (id, data) VALUES (?, ?)').run(
+      'main',
+      Buffer.from('file:///Users/example/private-project'),
+    )
+    for (const row of fixture.rows) {
+      const data = Buffer.from(row.hex, 'hex')
+      db.prepare('INSERT INTO gen_metadata (idx, data, size) VALUES (?, ?, ?)').run(row.idx, data, data.length)
+    }
+  } finally {
+    db.close()
+  }
+}
+
+async function collectAntigravityCalls(source: { path: string; project: string; provider: string }): Promise<ParsedProviderCall[]> {
+  const parser = createAntigravityProvider().createSessionParser(source, new Set())
+  const calls: ParsedProviderCall[] = []
+  for await (const call of parser.parse()) calls.push(call)
+  return calls
+}
 
 describe('antigravity provider helpers', () => {
   it('parses legacy https server flags from POSIX process args', () => {
@@ -458,5 +500,109 @@ describe('antigravity provider helpers', () => {
     expect(shouldReparseAntigravitySource(statusLinePath, 1)).toBe(true)
     expect(shouldReparseAntigravitySource('/tmp/antigravity/conversation.pb', 0)).toBe(true)
     expect(shouldReparseAntigravitySource('/tmp/antigravity/conversation.pb', 1)).toBe(false)
+  })
+
+  it('parses current Antigravity CLI SQLite conversations with non-zero token usage', async () => {
+    if (!isSqliteAvailable()) return
+
+    const tempHome = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-current-cli-'))
+    const cacheDir = join(tempHome, 'cache')
+    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+
+    try {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-cli', 'conversations')
+      const logsDir = join(
+        tempHome,
+        '.gemini',
+        'antigravity-cli',
+        'brain',
+        fixture.conversationId,
+        '.system_generated',
+        'logs',
+      )
+
+      await mkdir(conversationsDir, { recursive: true })
+      await mkdir(logsDir, { recursive: true })
+      await writeFile(
+        join(logsDir, 'transcript.jsonl'),
+        await readFile(
+          new URL(
+            '../fixtures/antigravity-cli-current/brain/fixture-current-cli/.system_generated/logs/transcript.jsonl',
+            import.meta.url,
+          ),
+          'utf-8',
+        ),
+      )
+
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const sources = await discoverAntigravitySessionSources([{
+        dir: conversationsDir,
+        project: 'antigravity-cli',
+        extensions: ['.pb', '.db'],
+      }])
+      expect(sources).toEqual([{ path: dbPath, project: 'antigravity-cli', provider: 'antigravity' }])
+
+      const calls = await collectAntigravityCalls(sources[0]!)
+
+      expect(calls.length).toBeGreaterThanOrEqual(1)
+      expect(calls[0]).toMatchObject({
+        provider: 'antigravity',
+        model: 'gemini-3.1-pro-high',
+        inputTokens: 30265,
+        outputTokens: 659,
+        reasoningTokens: 71,
+        sessionId: fixture.conversationId,
+        project: 'antigravity-cli',
+      })
+      expect(calls[0]!.projectPath).toBeUndefined()
+      expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    } finally {
+      if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
+      await rm(tempHome, { recursive: true, force: true })
+    }
+  })
+
+  it('deduplicates current SQLite rows against RPC response ids with hyphens', async () => {
+    if (!isSqliteAvailable()) return
+
+    const tempHome = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-current-cli-dedup-'))
+    const cacheDir = join(tempHome, 'cache')
+    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+
+    try {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-cli', 'conversations')
+
+      await mkdir(conversationsDir, { recursive: true })
+
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: dbPath,
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, new Set([`antigravity:${fixture.conversationId}:fixture-response-1`]))
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toEqual([])
+    } finally {
+      if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
+      await rm(tempHome, { recursive: true, force: true })
+    }
   })
 })
