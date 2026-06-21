@@ -169,11 +169,26 @@ async function loadZcode(): Promise<Provider | null> {
   }
 }
 
+let hermesProvider: Provider | null = null
+let hermesLoadAttempted = false
+
+async function loadHermes(): Promise<Provider | null> {
+  if (hermesLoadAttempted) return hermesProvider
+  hermesLoadAttempted = true
+  try {
+    const { hermes } = await import('./hermes.js')
+    hermesProvider = hermes
+    return hermes
+  } catch {
+    return null
+  }
+}
+
 const coreProviders: Provider[] = [claude, cline, codebuff, codex, copilot, devin, droid, gemini, ibmBob, kiloCode, kiro, kimi, mistralVibe, mux, openclaw, pi, omp, qwen, rooCode, zerostack, grok]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.
-const lazyProviderNames = ['antigravity', 'forge', 'goose', 'cursor', 'opencode', 'cursor-agent', 'crush', 'warp', 'vercel-gateway', 'zcode']
+const lazyProviderNames = ['antigravity', 'forge', 'goose', 'cursor', 'opencode', 'cursor-agent', 'crush', 'warp', 'vercel-gateway', 'zcode', 'hermes']
 
 // Canonical set of every provider name (core + lazy), used to validate the
 // --provider CLI flag. Computed lazily so importing this module never depends on
@@ -188,8 +203,8 @@ export function allProviderNames(): readonly string[] {
 }
 
 export async function getAllProviders(): Promise<Provider[]> {
-  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw, zc] = await Promise.all([
-    loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(), loadZcode(),
+  const [ag, forge, gs, cursor, opencode, cursorAgent, crush, warp, vercelGw, zc, hm] = await Promise.all([
+    loadAntigravity(), loadForge(), loadGoose(), loadCursor(), loadOpenCode(), loadCursorAgent(), loadCrush(), loadWarp(), loadVercelGateway(), loadZcode(), loadHermes(),
   ])
   const all = [...coreProviders]
   if (ag) all.push(ag)
@@ -202,6 +217,7 @@ export async function getAllProviders(): Promise<Provider[]> {
   if (warp) all.push(warp)
   if (vercelGw) all.push(vercelGw)
   if (zc) all.push(zc)
+  if (hm) all.push(hm)
   return all
 }
 
@@ -260,6 +276,10 @@ export async function getProvider(name: string): Promise<Provider | undefined> {
   if (name === 'zcode') {
     const z = await loadZcode()
     return z ?? undefined
+  }
+  if (name === 'hermes') {
+    const h = await loadHermes()
+    return h ?? undefined
   }
   return coreProviders.find(p => p.name === name)
 }

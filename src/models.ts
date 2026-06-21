@@ -325,6 +325,9 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // ZCode runs GLM-5.2 through z.ai's start-plan subscription; it isn't in
   // LiteLLM yet. Price as the nearest released sibling (GLM-5.1) until it is.
   'GLM-5.2':                        'glm-5p1',
+  // Hermes Agent stores its model id lowercased (e.g. `glm-5.2`); ZCode uses
+  // the capitalized `GLM-5.2`. Both resolve to glm-5p1 for the same reason.
+  'glm-5.2':                        'glm-5p1',
 }
 
 let userAliases: Record<string, string> = {}
@@ -547,6 +550,7 @@ export function calculateCost(
   webSearchRequests: number,
   speed: 'standard' | 'fast' = 'standard',
   oneHourCacheCreationTokens = 0,
+  reasoningTokens = 0,
 ): number {
   const costs = getModelCosts(model)
   if (!costs) {
@@ -579,6 +583,7 @@ export function calculateCost(
   return multiplier * (
     safe(inputTokens) * costs.inputCostPerToken +
     safe(outputTokens) * costs.outputCostPerToken +
+    safe(reasoningTokens) * costs.outputCostPerToken +
     safeFiveMinuteCacheCreation * costs.cacheWriteCostPerToken +
     safeOneHourCacheCreation * costs.cacheWriteCostPerToken * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
     safe(cacheReadTokens) * costs.cacheReadCostPerToken +

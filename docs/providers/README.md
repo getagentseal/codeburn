@@ -44,6 +44,7 @@ For the architectural picture, see `../architecture.md`.
 | [Warp](warp.md) | SQLite | `src/providers/warp.ts` | `tests/providers/warp.test.ts` |
 | [Vercel AI Gateway](vercel-gateway.md) | REST API | `src/providers/vercel-gateway.ts` | `tests/providers/vercel-gateway.test.ts` |
 | [ZCode](zcode.md) | SQLite | `src/providers/zcode.ts` | `tests/providers/zcode.test.ts` |
+| [Hermes](hermes.md) | SQLite | `src/providers/hermes.ts` | `tests/providers/hermes.test.ts` |
 
 ### Shared
 
