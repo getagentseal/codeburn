@@ -42,6 +42,12 @@ export type CodeburnConfig = {
   // can show "saved $X by running locally". Distinct from modelAliases which
   // rewrites actual spend.
   localModelSavings?: Record<string, string>
+  // Spend budgets are stored in the configured display currency, not USD.
+  budget?: {
+    daily?: number
+    weekly?: number
+    monthly?: number
+  }
   // Absolute directory prefixes whose Claude Code sessions are routed through a
   // subscription-backed LLM proxy (e.g. GitHub Copilot via ANTHROPIC_BASE_URL;
   // tools like claude-code-over-github-copilot / claudegate). The JSONL records
