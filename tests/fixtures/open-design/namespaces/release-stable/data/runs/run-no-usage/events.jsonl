@@ -1,0 +1,3 @@
+{"id":"evt-start","event":"start","timestamp":"2026-06-22T11:00:00.000Z","data":{"model":"glm-5.2"}}
+{"id":"evt-status","event":"agent","timestamp":"2026-06-22T11:00:05.000Z","data":{"type":"status","model":"openai-codex:gpt-5.5"}}
+{"id":"evt-message","event":"agent","timestamp":"2026-06-22T11:00:10.000Z","data":{"type":"message","text":"no usage was emitted"}}
