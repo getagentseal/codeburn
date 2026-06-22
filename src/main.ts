@@ -2,7 +2,7 @@ import { isAbsolute } from 'path'
 import { Command } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { loadPricing, setModelAliases, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
+import { loadPricing, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
 import { allProviderNames } from './providers/index.js'
 import { convertCost } from './currency.js'
@@ -29,7 +29,7 @@ import {
   runAgyStatusLineHook,
   uninstallAntigravityStatusLineHook,
 } from './antigravity-statusline.js'
-import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
+import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type CodeburnConfig, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
 import { createRequire } from 'node:module'
@@ -57,6 +57,30 @@ function parseNumber(value: string): number {
 
 function parseInteger(value: string): number {
   return parseInt(value, 10)
+}
+
+type PriceOverrideConfig = NonNullable<CodeburnConfig['priceOverrides']>[string]
+
+type PriceOverrideOptions = {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheCreation?: number
+  remove?: string
+  list?: boolean
+}
+
+function invalidUsdPerMillionRate(option: string, value: number | undefined): string | null {
+  if (value === undefined) return null
+  if (Number.isFinite(value) && value >= 0) return null
+  return `Invalid ${option}: expected a finite number >= 0 (USD per 1,000,000 tokens).`
+}
+
+function formatPriceOverrideParts(rates: PriceOverrideConfig): string {
+  const parts = [`input ${rates.input}`, `output ${rates.output}`]
+  if (typeof rates.cacheRead === 'number') parts.push(`cache read ${rates.cacheRead}`)
+  if (typeof rates.cacheCreation === 'number') parts.push(`cache creation ${rates.cacheCreation}`)
+  return parts.join(', ')
 }
 
 type JsonPlanSummary = {
@@ -176,6 +200,7 @@ program.hook('preAction', async (thisCommand) => {
   }
   const config = await readConfig()
   setModelAliases(config.modelAliases ?? {})
+  setPriceOverrides(config.priceOverrides ?? {})
   setLocalModelSavings(config.localModelSavings ?? {})
   setProxyPaths(config.proxyPaths ?? [])
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
@@ -903,6 +928,85 @@ program
     config.modelAliases = aliases
     await saveConfig(config)
     console.log(`\n  Alias saved: ${from} -> ${to}`)
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('price-override [model]')
+  .description('Override or add local model pricing. Rates are USD per 1,000,000 tokens (e.g. --input 0.27).')
+  .option('--input <usd-per-1M>', 'Input token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--output <usd-per-1M>', 'Output token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--cache-read <usd-per-1M>', 'Cache-read token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--cache-creation <usd-per-1M>', 'Cache-creation token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--remove <model>', 'Remove a price override')
+  .option('--list', 'List configured price overrides')
+  .action(async (model?: string, opts?: PriceOverrideOptions) => {
+    const config = await readConfig()
+    const overrides = new Map<string, PriceOverrideConfig>(Object.entries(config.priceOverrides ?? {}))
+
+    if (opts?.list || (!model && !opts?.remove)) {
+      const entries = [...overrides.entries()]
+      if (entries.length === 0) {
+        console.log('\n  No price overrides configured.')
+        console.log('  Rates use USD per 1,000,000 tokens.')
+        console.log(`  Config: ${getConfigFilePath()}`)
+        console.log('  Add one with: codeburn price-override <model> --input <usd-per-1M> --output <usd-per-1M>\n')
+      } else {
+        console.log('\n  Price overrides (USD per 1,000,000 tokens):')
+        for (const [name, rates] of entries) {
+          console.log(`    ${name}: ${formatPriceOverrideParts(rates)}`)
+        }
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+      }
+      return
+    }
+
+    if (opts?.remove) {
+      if (!overrides.has(opts.remove)) {
+        console.error(`\n  Price override not found: ${opts.remove}\n`)
+        process.exitCode = 1
+        return
+      }
+      overrides.delete(opts.remove)
+      config.priceOverrides = overrides.size > 0 ? Object.fromEntries(overrides) : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed price override: ${opts.remove}\n`)
+      return
+    }
+
+    const input = opts?.input
+    const output = opts?.output
+    const cacheRead = opts?.cacheRead
+    const cacheCreation = opts?.cacheCreation
+    if (!model || input === undefined || output === undefined) {
+      console.error('\n  Usage: codeburn price-override <model> --input <usd-per-1M> --output <usd-per-1M> [--cache-read <usd-per-1M>] [--cache-creation <usd-per-1M>]\n')
+      process.exitCode = 1
+      return
+    }
+
+    const invalidRate = [
+      invalidUsdPerMillionRate('--input', input),
+      invalidUsdPerMillionRate('--output', output),
+      invalidUsdPerMillionRate('--cache-read', cacheRead),
+      invalidUsdPerMillionRate('--cache-creation', cacheCreation),
+    ].find((message): message is string => message !== null)
+    if (invalidRate) {
+      console.error(`\n  ${invalidRate}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    const override: PriceOverrideConfig = {
+      input,
+      output,
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheCreation !== undefined ? { cacheCreation } : {}),
+    }
+    overrides.set(model, override)
+    config.priceOverrides = Object.fromEntries(overrides)
+    await saveConfig(config)
+    console.log(`\n  Price override saved: ${model}: ${formatPriceOverrideParts(override)}`)
+    console.log('  Unit: USD per 1,000,000 tokens')
     console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 

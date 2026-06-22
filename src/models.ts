@@ -14,6 +14,13 @@ export type ModelCosts = {
   fastMultiplier: number
 }
 
+type PriceOverrideRates = {
+  input: number
+  output: number
+  cacheRead?: number
+  cacheCreation?: number
+}
+
 type LiteLLMEntry = {
   input_cost_per_token?: number
   output_cost_per_token?: number
@@ -332,11 +339,85 @@ const BUILTIN_ALIASES: Record<string, string> = {
 }
 
 let userAliases: Record<string, string> = {}
+let userPriceOverrides: Map<string, ModelCosts> = new Map()
+let userPriceOverridesConfig: Record<string, PriceOverrideRates> = {}
+let sortedPriceOverrideKeys: string[] | null = null
+let lowercasePriceOverrideIndex: Map<string, ModelCosts> | null = null
 
 // Called once during CLI startup after config is loaded.
 // User aliases take precedence over built-ins.
 export function setModelAliases(aliases: Record<string, string>): void {
   userAliases = aliases
+}
+
+function priceOverrideRatePerToken(usdPerMillion: number | undefined): number | null {
+  if (typeof usdPerMillion !== 'number') return null
+  return safePerTokenRate(usdPerMillion / 1_000_000)
+}
+
+// Called once during CLI startup after config is loaded.
+// Config/CLI rates are USD per 1,000,000 tokens; ModelCosts stores USD/token.
+export function setPriceOverrides(overrides: Record<string, PriceOverrideRates>): void {
+  const next = new Map<string, ModelCosts>()
+  const nextConfig: Record<string, PriceOverrideRates> = {}
+  for (const [model, rates] of Object.entries(overrides)) {
+    if (!model || !rates || typeof rates !== 'object') continue
+    nextConfig[model] = { ...rates }
+    const input = priceOverrideRatePerToken(rates.input)
+    const output = priceOverrideRatePerToken(rates.output)
+    if (input === null || output === null) continue
+    next.set(model, buildCosts(
+      input,
+      output,
+      priceOverrideRatePerToken(rates.cacheCreation),
+      priceOverrideRatePerToken(rates.cacheRead),
+      undefined,
+    ))
+  }
+  userPriceOverrides = next
+  userPriceOverridesConfig = nextConfig
+  sortedPriceOverrideKeys = null
+  lowercasePriceOverrideIndex = null
+}
+
+function getSortedPriceOverrideKeys(): string[] {
+  if (sortedPriceOverrideKeys === null) {
+    sortedPriceOverrideKeys = Array.from(userPriceOverrides.keys()).sort((a, b) => b.length - a.length)
+  }
+  return sortedPriceOverrideKeys
+}
+
+function getLowercasePriceOverrideIndex(): Map<string, ModelCosts> {
+  if (lowercasePriceOverrideIndex === null) {
+    lowercasePriceOverrideIndex = new Map()
+    for (const [key, costs] of userPriceOverrides) {
+      const lk = key.toLowerCase()
+      if (!lowercasePriceOverrideIndex.has(lk)) lowercasePriceOverrideIndex.set(lk, costs)
+    }
+  }
+  return lowercasePriceOverrideIndex
+}
+
+function getPriceOverrideExact(...keys: string[]): ModelCosts | null {
+  for (const key of keys) {
+    const costs = userPriceOverrides.get(key)
+    if (costs) return costs
+  }
+  return null
+}
+
+function getPriceOverridePrefix(canonical: string): ModelCosts | null {
+  for (const key of getSortedPriceOverrideKeys()) {
+    if (canonical.startsWith(key + '-') || canonical === key) {
+      return userPriceOverrides.get(key)!
+    }
+  }
+  return null
+}
+
+function getPriceOverrideCaseInsensitive(canonical: string, withPrefix: string): ModelCosts | null {
+  const lowerIndex = getLowercasePriceOverrideIndex()
+  return lowerIndex.get(canonical.toLowerCase()) ?? lowerIndex.get(withPrefix.toLowerCase()) ?? null
 }
 
 // Local-model savings config. Kept separate from userAliases: a `modelAliases`
@@ -399,6 +480,22 @@ export function getLocalModelSavingsConfigHash(): string {
   const keys = Object.keys(userLocalModelSavings).sort()
   if (keys.length === 0) return ''
   const parts = keys.map(k => `${k}\u0001${userLocalModelSavings[k]}`)
+  return parts.join('\u0002')
+}
+
+export function getPriceOverridesConfigHash(): string {
+  const keys = Object.keys(userPriceOverridesConfig).sort()
+  if (keys.length === 0) return ''
+  const parts = keys.map(k => {
+    const rates = userPriceOverridesConfig[k]
+    return [
+      k,
+      rates.input,
+      rates.output,
+      rates.cacheRead ?? '',
+      rates.cacheCreation ?? '',
+    ].join('\u0001')
+  })
   return parts.join('\u0002')
 }
 
@@ -472,6 +569,9 @@ export function getModelCosts(model: string): ModelCosts | null {
   const canonicalName = getCanonicalName(model)
   const canonical = resolveAlias(canonicalName)
 
+  const override = getPriceOverrideExact(model, withPrefix, canonicalName, canonical)
+  if (override) return override
+
   // An explicit alias for a bare (un-prefixed) model name is authoritative: it
   // must win over a coincidental stripped reseller key of the same name. LiteLLM
   // ships `snowflake/claude-4-opus` ($5), which the bundler strips to a bare
@@ -485,6 +585,9 @@ export function getModelCosts(model: string): ModelCosts | null {
 
   if (pricingCache.has(canonical)) return pricingCache.get(canonical)!
 
+  const prefixOverride = getPriceOverridePrefix(canonical)
+  if (prefixOverride) return prefixOverride
+
   // Iterate keys longest-first so a model id like `gpt-5-mini` matches the
   // `gpt-5-mini` entry rather than collapsing to the shorter `gpt-5` entry
   // due to dictionary insertion order.
@@ -493,6 +596,9 @@ export function getModelCosts(model: string): ModelCosts | null {
       return pricingCache.get(key)!
     }
   }
+
+  const caseInsensitiveOverride = getPriceOverrideCaseInsensitive(canonical, withPrefix)
+  if (caseInsensitiveOverride) return caseInsensitiveOverride
 
   // Case-insensitive fallback: gap-filled keys from OpenRouter are lowercase
   // slugs (e.g. `minimax-m3`), but sessions report `MiniMax-M3`. Only consulted

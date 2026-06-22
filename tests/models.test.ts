@@ -3,13 +3,28 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 
-import { getModelCosts, getShortModelName, calculateCost, loadPricing, setModelAliases } from '../src/models.js'
+import {
+  getModelCosts,
+  getShortModelName,
+  calculateCost,
+  loadPricing,
+  setModelAliases,
+  setPriceOverrides,
+  setLocalModelSavings,
+  getLocalModelSavingsConfigHash,
+  getPriceOverridesConfigHash,
+} from '../src/models.js'
+import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 
 beforeAll(async () => {
   await loadPricing()
 })
 
-afterEach(() => setModelAliases({}))
+afterEach(() => {
+  setModelAliases({})
+  setPriceOverrides({})
+  setLocalModelSavings({})
+})
 
 describe('getModelCosts', () => {
   it('does not match short canonical against longer pricing key', () => {
@@ -226,6 +241,98 @@ describe('user aliases via setModelAliases', () => {
     setModelAliases({ 'anthropic--claude-4.6-opus': 'claude-sonnet-4-5' })
     setModelAliases({})
     expect(getModelCosts('anthropic--claude-4.6-opus')).toEqual(getModelCosts('claude-opus-4-6'))
+  })
+})
+
+describe('user price overrides', () => {
+  it('prices a model missing from the pricing snapshot', () => {
+    const model = 'zz-price-override-missing-model-390'
+    expect(getModelCosts(model)).toBeNull()
+
+    setPriceOverrides({
+      [model]: { input: 1.25, output: 2.5 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.inputCostPerToken).toBe(1.25e-6)
+    expect(costs!.outputCostPerToken).toBe(2.5e-6)
+    expect(calculateCost(model, 1_000_000, 1_000_000, 0, 0, 0)).toBe(3.75)
+  })
+
+  it('wins over snapshot pricing and configured aliases', () => {
+    setModelAliases({
+      'price-override-aliased-model': 'claude-opus-4-6',
+      'price-override-canonical-source': 'price-override-canonical-target',
+    })
+    setPriceOverrides({
+      'gpt-4o': { input: 7, output: 8 },
+      'claude-opus-4-6': { input: 4, output: 5 },
+      'price-override-aliased-model': { input: 2, output: 3 },
+      'price-override-canonical-target': { input: 6, output: 7 },
+    })
+
+    expect(getModelCosts('gpt-4o')!.inputCostPerToken).toBe(7e-6)
+    expect(getModelCosts('price-override-aliased-model')!.inputCostPerToken).toBe(2e-6)
+    expect(getModelCosts('price-override-canonical-source')!.inputCostPerToken).toBe(6e-6)
+  })
+
+  it('converts USD per 1,000,000 tokens to per-token ModelCosts exactly', () => {
+    const model = 'price-override-unit-conversion'
+    setPriceOverrides({
+      [model]: { input: 1, output: 0 },
+    })
+
+    expect(getModelCosts(model)!.inputCostPerToken).toBe(1e-6)
+    expect(calculateCost(model, 1_000_000, 0, 0, 0, 0)).toBe(1)
+  })
+
+  it('defaults cache rates from input pricing when omitted', () => {
+    const model = 'price-override-cache-defaults'
+    setPriceOverrides({
+      [model]: { input: 10, output: 20 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.cacheWriteCostPerToken).toBeCloseTo(12.5e-6, 12)
+    expect(costs!.cacheReadCostPerToken).toBeCloseTo(1e-6, 12)
+  })
+
+  it('wins for case-insensitive and prefix matches without shadowing a more-specific exact snapshot entry', () => {
+    const miniSnapshot = getModelCosts('gpt-5-mini')
+    expect(miniSnapshot).not.toBeNull()
+
+    setPriceOverrides({
+      'gpt-5': { input: 91, output: 92 },
+    })
+
+    expect(getModelCosts('GPT-5')!.inputCostPerToken).toBe(91e-6)
+    expect(getModelCosts('gpt-5-foo')!.inputCostPerToken).toBe(91e-6)
+
+    const mini = getModelCosts('gpt-5-mini')
+    expect(mini).not.toBeNull()
+    expect(mini!.inputCostPerToken).toBe(miniSnapshot!.inputCostPerToken)
+    expect(mini!.outputCostPerToken).toBe(miniSnapshot!.outputCostPerToken)
+  })
+
+  it('includes price overrides in the daily cache config hash without changing the empty-override hash', () => {
+    setLocalModelSavings({ local: 'gpt-4o' })
+    setPriceOverrides({})
+
+    const savingsOnly = getLocalModelSavingsConfigHash()
+    expect(getPriceOverridesConfigHash()).toBe('')
+    expect(getDailyCacheConfigHash()).toBe(savingsOnly)
+
+    setPriceOverrides({ 'price-hash-model': { input: 1, output: 2 } })
+    const firstCombined = getDailyCacheConfigHash()
+
+    setPriceOverrides({ 'price-hash-model': { input: 3, output: 2 } })
+    const secondCombined = getDailyCacheConfigHash()
+
+    expect(firstCombined).not.toBe(savingsOnly)
+    expect(secondCombined).not.toBe(savingsOnly)
+    expect(secondCombined).not.toBe(firstCombined)
   })
 })
 
