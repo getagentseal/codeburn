@@ -58,7 +58,7 @@
 - Support installer HTTP proxies. (#475, thanks @sleicht)
 - Surface the CLI's stdout/stderr on a decode failure so a stray banner is
   self-diagnosing. (#515, #547)
-- Reduce repeated status parsing and guard against clock skew. (#486, #499)
+- Reduce repeated status parsing and guard against clock skew. (#486, thanks @vaibhavarora14; #499)
 - The cost budget stays in USD and an empty custom budget is flagged. (#508)
 - Drop the ` tok` suffix from the Total Tokens metric. (#511)
 
