@@ -1078,6 +1078,9 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case crush = "Crush"
     case antigravity = "Antigravity"
     case goose = "Goose"
+    case grok = "Grok"
+    case hermes = "Hermes"
+    case zcode = "ZCode"
 
     var id: String { rawValue }
 
@@ -1092,6 +1095,8 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .openclaw: ["openclaw"]
         case .antigravity: ["antigravity"]
         case .goose: ["goose"]
+        case .grok: ["grok", "grok build"]
+        case .hermes: ["hermes", "hermes agent"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1121,6 +1126,9 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .crush: "crush"
         case .antigravity: "antigravity"
         case .goose: "goose"
+        case .grok: "grok"
+        case .hermes: "hermes"
+        case .zcode: "zcode"
         }
     }
 }

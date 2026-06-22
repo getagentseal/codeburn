@@ -108,23 +108,19 @@ struct AgentTabStrip: View {
         .frame(height: 38)
     }
 
-    private var todayAll: MenubarPayload {
-        store.todayPayload ?? store.payload
-    }
-
     private var periodAll: MenubarPayload {
         store.periodAllPayload ?? store.payload
     }
 
     private var visibleFilters: [ProviderFilter] {
-        let detectedKeys = Set(
-            todayAll.current.providers.keys.map { $0.lowercased() }
-        )
+        // Tabs reflect the SELECTED range: every provider with usage (cost > 0)
+        // in the period, ordered by usage. Providers with no usage in the range
+        // are omitted. `.all` always leads. cost(for:) reads periodAll, so this
+        // updates as the user switches periods.
+        let costs = Dictionary(uniqueKeysWithValues: ProviderFilter.allCases.map { ($0, cost(for: $0) ?? 0) })
         let detected = ProviderFilter.allCases.filter { filter in
-            if filter == .all { return true }
-            return filter.providerKeys.contains(where: detectedKeys.contains)
+            filter == .all || (costs[filter] ?? 0) > 0
         }
-        let costs = Dictionary(uniqueKeysWithValues: detected.map { ($0, cost(for: $0) ?? 0) })
         return detected.sorted { a, b in
             if a == .all { return true }
             if b == .all { return false }
@@ -506,6 +502,9 @@ extension ProviderFilter {
         case .crush: return Color(red: 0xE0/255.0, green: 0x6C/255.0, blue: 0x9F/255.0)
         case .antigravity: return Color(red: 0xFF/255.0, green: 0x7A/255.0, blue: 0x45/255.0)
         case .goose: return Color(red: 0xB7/255.0, green: 0x8D/255.0, blue: 0x52/255.0)
+        case .grok: return Color(red: 0x8E/255.0, green: 0x8E/255.0, blue: 0x93/255.0)
+        case .hermes: return Color(red: 0xC7/255.0, green: 0x52/255.0, blue: 0x3E/255.0)
+        case .zcode: return Color(red: 0x52/255.0, green: 0x6E/255.0, blue: 0xD6/255.0)
         }
     }
 }
