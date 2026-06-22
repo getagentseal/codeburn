@@ -663,6 +663,14 @@ const SHORT_NAMES: Record<string, string> = {
   'o3': 'o3',
   'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
   'MiniMax-M2.7': 'MiniMax M2.7',
+  // Grok (xAI) and GLM ids that otherwise surface raw or as a pricing key in
+  // reports. grok-build and GLM-5.2 price via sibling aliases, so
+  // getShortModelName resolves to the pricing key before this lookup; map each
+  // back to the real model name. grok-composer has no alias, it just lacked an
+  // entry.
+  'glm-5p1': 'GLM-5.2',                               // ZCode/Hermes run GLM-5.2 (priced as the GLM-5.1 sibling)
+  'grok-build-0.1': 'Grok Build',                     // Grok Build prices through the 0.1 sibling
+  'grok-composer-2.5-fast': 'Grok Composer 2.5 Fast',
 }
 
 // Sorted longest-first so more-specific prefixes match before shorter ones.

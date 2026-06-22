@@ -88,6 +88,19 @@ describe('getShortModelName', () => {
     expect(getShortModelName('claude-haiku-5')).toBe('Haiku 5')
     expect(getShortModelName('claude-opus-9-9-20300101')).toBe('Opus 9.9')
   })
+
+  it('shows the real model name for pricing-sibling aliases, not the internal key', () => {
+    // GLM-5.2 (and its lowercase Hermes spelling) price via the glm-5p1 sibling;
+    // reports must show GLM-5.2, not the pricing key.
+    expect(getShortModelName('GLM-5.2')).toBe('GLM-5.2')
+    expect(getShortModelName('glm-5.2')).toBe('GLM-5.2')
+    expect(getShortModelName('glm-5p1')).toBe('GLM-5.2')
+    // Grok Build prices via the grok-build-0.1 sibling.
+    expect(getShortModelName('grok-build')).toBe('Grok Build')
+    expect(getShortModelName('grok-build-0.1')).toBe('Grok Build')
+    // grok-composer has no alias, just a missing display entry.
+    expect(getShortModelName('grok-composer-2.5-fast')).toBe('Grok Composer 2.5 Fast')
+  })
 })
 
 describe('claude-fable-5 pricing + name', () => {
