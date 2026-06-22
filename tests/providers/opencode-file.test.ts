@@ -138,6 +138,47 @@ describe('opencode file-based provider - parsing', () => {
     expect(c.deduplicationKey).toBe('opencode:ses_test1:msg_a')
   })
 
+  it('extracts skill names and subagent types from skill/task tool parts', async () => {
+    await writeSession({
+      messages: [{
+        id: 'msg_a',
+        data: {
+          role: 'assistant', modelID: 'gpt-5.3-codex-spark', cost: 0,
+          tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1 },
+        },
+        parts: [
+          { type: 'tool', tool: 'skill', state: { input: { name: 'commit' } } },
+          { type: 'tool', tool: 'task', state: { input: { description: 'find files', subagent_type: 'explore' } } },
+          { type: 'text', text: 'done' },
+        ],
+      }],
+    })
+    const calls = await parseAll()
+    expect(calls).toHaveLength(1)
+    const c = calls[0]!
+    expect(c.tools).toEqual(['Skill', 'Agent'])
+    expect(c.skills).toEqual(['commit'])
+    expect(c.subagentTypes).toEqual(['explore'])
+  })
+
+  it('leaves skills and subagentTypes empty when no skill/task parts are present', async () => {
+    await writeSession({
+      messages: [{
+        id: 'msg_a',
+        data: {
+          role: 'assistant', modelID: 'gpt-5.3-codex-spark', cost: 0,
+          tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1 },
+        },
+        parts: [{ type: 'tool', tool: 'bash', state: { input: { command: 'ls' } } }],
+      }],
+    })
+    const calls = await parseAll()
+    expect(calls[0]!.skills).toEqual([])
+    expect(calls[0]!.subagentTypes).toEqual([])
+  })
+
   it('skips an errored or empty assistant turn (all-zero tokens, no parts)', async () => {
     await writeSession({
       messages: [{
