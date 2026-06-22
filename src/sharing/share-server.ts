@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'http'
 import type { TLSSocket } from 'tls'
 import type { AddressInfo } from 'net'
 
+import { UsageQueryError } from '../cli-date.js'
 import { certFingerprint, pairingCode, PeerStore, PairingWindow } from './pairing.js'
 import type { Identity } from './identity.js'
 
@@ -82,7 +83,10 @@ export class ShareServer {
     } catch (err) {
       // Never leave a request hanging (a hung peer makes the caller time out
       // and drop this device); always answer, even on an internal error.
-      if (!res.headersSent) json(500, { error: err instanceof Error ? err.message : String(err) })
+      if (!res.headersSent) {
+        const message = err instanceof Error ? err.message : String(err)
+        json(err instanceof UsageQueryError ? 400 : 500, { error: message })
+      }
     }
   }
 

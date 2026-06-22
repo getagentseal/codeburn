@@ -31,20 +31,35 @@ export const PERIOD_LABELS: Record<Period, string> = {
 
 const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all']
 
-export function toPeriod(s: string): Period {
+export class UsageQueryError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UsageQueryError'
+  }
+}
+
+export function parsePeriodOrThrow(s: string): Period {
   if ((VALID_PERIODS as readonly string[]).includes(s)) return s as Period
-  // Fail loudly instead of silently coercing to 'week'. Previously a typo
-  // like `-p mounth` produced a quiet 7-day report and the user thought
-  // they were viewing the month.
-  process.stderr.write(
-    `codeburn: unknown period "${s}". Valid values: ${VALID_PERIODS.join(', ')}.\n`
-  )
-  process.exit(1)
+  throw new UsageQueryError(`Unknown period "${s}". Valid values: ${VALID_PERIODS.join(', ')}.`)
+}
+
+export function toPeriod(s: string): Period {
+  try {
+    return parsePeriodOrThrow(s)
+  } catch {
+    // Fail loudly instead of silently coercing to 'week'. Previously a typo
+    // like `-p mounth` produced a quiet 7-day report and the user thought
+    // they were viewing the month.
+    process.stderr.write(
+      `codeburn: unknown period "${s}". Valid values: ${VALID_PERIODS.join(', ')}.\n`
+    )
+    process.exit(1)
+  }
 }
 
 function parseLocalDate(s: string): Date {
   if (!ISO_DATE_RE.test(s)) {
-    throw new Error(`Invalid date format "${s}": expected YYYY-MM-DD`)
+    throw new UsageQueryError(`Invalid date format "${s}": expected YYYY-MM-DD`)
   }
   const [y, m, d] = s.split('-').map(Number) as [number, number, number]
   const date = new Date(y, m - 1, d)
@@ -53,7 +68,7 @@ function parseLocalDate(s: string): Date {
   // dated Feb 28 - Mar 2. Reject overflow so the user gets a loud error
   // instead of an off-by-N-days date range.
   if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) {
-    throw new Error(`Invalid date "${s}": ${m}/${d}/${y} is not a real calendar date`)
+    throw new UsageQueryError(`Invalid date "${s}": ${m}/${d}/${y} is not a real calendar date`)
   }
   return date
 }
@@ -118,7 +133,7 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
   const end = endOfLocalDay(endDate)
 
   if (start > end) {
-    throw new Error(`--from must not be after --to (got ${from} > ${to})`)
+    throw new UsageQueryError(`--from must not be after --to (got ${from} > ${to})`)
   }
   return { start, end }
 }
@@ -197,4 +212,16 @@ export function parseDaysFlag(days: string | undefined): { days: Set<string>; ra
 
 export function formatDateRangeLabel(from: string | undefined, to: string | undefined): string {
   return `${from ?? 'all'} to ${to ?? 'today'}`
+}
+
+/** Resolve a usage query period for HTTP handlers without calling process.exit. */
+export function periodInfoFromQuery(
+  q: { period?: string; from?: string; to?: string },
+  defaultPeriod: string,
+): { range: DateRange; label: string } {
+  const customRange = parseDateRangeFlags(q.from, q.to)
+  if (customRange) {
+    return { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
+  }
+  return getDateRange(parsePeriodOrThrow(q.period ?? defaultPeriod))
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   approvePairing,
@@ -354,7 +354,6 @@ export function App() {
   const { data, isError, error, refetch } = useQuery({
     queryKey: ['devices', period, provider],
     queryFn: () => fetchDevices(period, provider),
-    placeholderData: keepPreviousData,
     // When devices are paired, re-pull periodically so a device that briefly
     // dropped (asleep/network blip) reappears on its own instead of staying
     // gone until you switch tabs.

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { generateIdentity, type Identity } from '../../src/sharing/identity.js'
 import { PeerStore } from '../../src/sharing/pairing.js'
 import { ShareServer } from '../../src/sharing/share-server.js'
+import { getDateRange, parsePeriodOrThrow } from '../../src/cli-date.js'
 import { hello, pair, fetchUsage } from '../../src/sharing/client.js'
 
 describe('device sharing transport (loopback mutual TLS)', () => {
@@ -50,6 +51,80 @@ describe('device sharing transport (loopback mutual TLS)', () => {
     const ur = await fetchUsage({ ...ep(), expectedFingerprint: serverId.fingerprint }, token)
     expect(ur.status).toBe(200)
     expect((ur.json as { current: { cost: number } }).current.cost).toBe(42)
+  })
+
+  it('returns bad request when getUsage rejects an invalid period', async () => {
+    const badServer = new ShareServer({
+      identity: serverId,
+      peers,
+      getUsage: async (q) => {
+        getDateRange(parsePeriodOrThrow(q.period ?? 'month'))
+        return { current: { cost: 0 } }
+      },
+    })
+    const badPort = await badServer.listen(0, '127.0.0.1')
+    try {
+      const pin = badServer.openPairing()
+      const pr = await pair({ ...ep(), port: badPort }, pin, 'Mac Studio')
+      const token = (pr.json as { token: string }).token
+      const ur = await fetchUsage(
+        { ...ep(), port: badPort, expectedFingerprint: serverId.fingerprint },
+        token,
+        { period: 'garbage' },
+      )
+      expect(ur.status).toBe(400)
+      expect((ur.json as { error: string }).error).toMatch(/Unknown period "garbage"/)
+    } finally {
+      await badServer.close()
+    }
+  })
+
+  it('keeps unexpected getUsage failures as internal errors', async () => {
+    const badServer = new ShareServer({
+      identity: serverId,
+      peers,
+      getUsage: async () => {
+        throw new Error('database temporarily unavailable')
+      },
+    })
+    const badPort = await badServer.listen(0, '127.0.0.1')
+    try {
+      const pin = badServer.openPairing()
+      const pr = await pair({ ...ep(), port: badPort }, pin, 'Mac Studio')
+      const token = (pr.json as { token: string }).token
+      const ur = await fetchUsage(
+        { ...ep(), port: badPort, expectedFingerprint: serverId.fingerprint },
+        token,
+      )
+      expect(ur.status).toBe(500)
+      expect((ur.json as { error: string }).error).toMatch(/database temporarily unavailable/)
+    } finally {
+      await badServer.close()
+    }
+  })
+
+  it('does not classify plain string-matched errors as usage validation errors', async () => {
+    const badServer = new ShareServer({
+      identity: serverId,
+      peers,
+      getUsage: async () => {
+        throw new Error('Unknown period "garbage". Valid values: today, week, 30days, month, all.')
+      },
+    })
+    const badPort = await badServer.listen(0, '127.0.0.1')
+    try {
+      const pin = badServer.openPairing()
+      const pr = await pair({ ...ep(), port: badPort }, pin, 'Mac Studio')
+      const token = (pr.json as { token: string }).token
+      const ur = await fetchUsage(
+        { ...ep(), port: badPort, expectedFingerprint: serverId.fingerprint },
+        token,
+      )
+      expect(ur.status).toBe(500)
+      expect((ur.json as { error: string }).error).toMatch(/Unknown period "garbage"/)
+    } finally {
+      await badServer.close()
+    }
   })
 
   it('rejects a wrong PIN', async () => {

@@ -10,7 +10,7 @@ import { hostname } from 'os'
 
 import { loadPricing } from './models.js'
 import { buildMenubarPayloadForRange } from './usage-aggregator.js'
-import { getDateRange, parseDateRangeFlags, formatDateRangeLabel, toPeriod } from './cli-date.js'
+import { periodInfoFromQuery, UsageQueryError } from './cli-date.js'
 import { pullDevices, linkRemote } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
 import { loadOrCreateIdentity } from './sharing/identity.js'
@@ -29,6 +29,11 @@ function readBody(req: import('http').IncomingMessage): Promise<string> {
     req.on('end', () => resolve(body))
     req.on('error', reject)
   })
+}
+
+function writeJsonError(res: import('http').ServerResponse, status: number, error: string): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ error }))
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -94,10 +99,7 @@ export async function runWebDashboard(opts: {
   // Sharing this device serves the SANITIZED aggregate (no project names/paths
   // or per-session detail), unlike the local /api/usage which shows everything.
   const shareGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
-    const customRange = parseDateRangeFlags(q.from, q.to)
-    const periodInfo = customRange
-      ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
-      : getDateRange(toPeriod(q.period ?? opts.period))
+    const periodInfo = periodInfoFromQuery(q, opts.period)
     return sanitizeForSharing(await buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false }))
   }
   const share = new ShareController(shareGetUsage)
@@ -126,10 +128,14 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
-        const customRange = parseDateRangeFlags(from, to)
-        const periodInfo = customRange
-          ? { range: customRange, label: formatDateRangeLabel(from, to) }
-          : getDateRange(toPeriod(period))
+        let periodInfo
+        try {
+          periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
+        } catch (err) {
+          if (!(err instanceof UsageQueryError)) throw err
+          writeJsonError(res, 400, err instanceof Error ? err.message : String(err))
+          return
+        }
         const payload = await buildMenubarPayloadForRange(periodInfo, {
           provider,
           project: opts.project,
@@ -148,11 +154,15 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
+        try {
+          periodInfoFromQuery({ period, from, to }, opts.period)
+        } catch (err) {
+          if (!(err instanceof UsageQueryError)) throw err
+          writeJsonError(res, 400, err instanceof Error ? err.message : String(err))
+          return
+        }
         const localGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
-          const customRange = parseDateRangeFlags(q.from, q.to)
-          const periodInfo = customRange
-            ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
-            : getDateRange(toPeriod(q.period ?? period))
+          const periodInfo = periodInfoFromQuery(q, period)
           return buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
         }
         const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
