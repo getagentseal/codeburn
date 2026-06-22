@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.9.14 - 2026-06-22
+
+### Added (CLI)
+- **Browser dashboard.** `codeburn web` serves a local React dashboard in your
+  browser with the same task, model, tool, and project breakdowns as the TUI,
+  plus charts. Data is read locally and the server binds to localhost. (#531, #533)
+- **Combine usage across your devices.** `codeburn share` exposes one device's
+  usage over your local network (PIN-paired), and `codeburn devices` shows
+  combined totals by machine. Devices can also be discovered and paired from the
+  browser dashboard. (#532, #534, #536)
+- **New providers:** Grok Build (#521), ZCode (z.ai GLM-5.2) (#537), Hermes Agent
+  (#544), Kiro CLI sessions (#502), and zerostack (#519, thanks @kevinpauer).
+- **`codeburn overview`.** Plain-text monthly usage summary that is
+  copy-pasteable, with `--no-color` and `--from`/`--to`. (#528, #535)
+- **Codex credit usage.** Compute and surface Codex credit consumption alongside
+  dollar cost. (#408, #495, #510)
+- **MCP server usage in exports.** `codeburn export` now includes per-MCP-server
+  usage in both JSON and CSV. (#496, #514)
+- **JSON output for `optimize` and `yield`.** (#492, #500)
+- **Claude-scoped agent-type breakdown** in the report.
+- **OpenCode 1.1+ file-based JSON sessions.** (#523)
+- **Copilot OTel cache-token parsing.** (#477, thanks @steelp02; #498)
+
+### Fixed (CLI)
+- **Model names in reports.** Models priced through a sibling alias no longer
+  show their internal pricing key: ZCode/Hermes GLM-5.2 and Grok Build display
+  their real names, gpt-5.5 labels as GPT-5.5, and gpt-5.3-codex-spark is
+  distinguished from base GPT-5.3 Codex. (#548, #550, #539 thanks @ozymandiashh)
+- **Hermes lowercase glm-5.2** prices the same as GLM-5.2. (#545, thanks @ozymandiashh)
+- **Daily cache** purges cached today/future entries on hydration and is bumped
+  to v9 so newly supported providers backfill across history without a manual
+  cache clear. (#550)
+- **Cursor** scans the requested window instead of a blind 250k ROWID cap. (#482, #512)
+- **cursor-agent** ingests the workspace-less CLI transcript layout. (#542, thanks @ozymandiashh)
+- **Claude Code project names** no longer collapse to a parent folder, and stray
+  `.git` directories no longer over-group projects. (#540, thanks @ozymandiashh)
+- **Copilot** shell commands and skills/agents display correctly. (#527, thanks @jonjozwiak)
+- **Codex** attributes MCP calls emitted as `event_msg`/`mcp_tool_call_end`. (#513)
+- **Antigravity** reads the current `agy` CLI on-disk layout. (#541, thanks @ozymandiashh)
+- Workflow/ultracode subagent usage is now counted. (#470)
+- `--provider` is validated and the non-TTY report is deterministic. (#501)
+- The dashboard plan banner is scoped to its own provider tab. (#524)
+- Test isolation and environment-collision fixes. (#530, thanks @tvcsantos)
+
+### Added (macOS menubar)
+- **Custom daily budget.** Set a custom daily budget amount; the alert respects
+  the display metric (Cost or Tokens). (#497, #505, #506)
+- **Agent tabs** show every active agent for the selected range, ordered by
+  usage. (#549)
+- Polished status-item menu and About tab (Star and Sponsor links). (#509)
+
+### Fixed (macOS menubar)
+- **Keychain prompts.** Stop repeated keychain prompts on token refresh; read the
+  Claude keychain via the `security` CLI on silent refresh. (#490, #491)
+- Restore the right-click status-item menu on macOS 27. (#472, thanks @theparlor)
+- Support installer HTTP proxies. (#475, thanks @sleicht)
+- Surface the CLI's stdout/stderr on a decode failure so a stray banner is
+  self-diagnosing. (#515, #547)
+- Reduce repeated status parsing and guard against clock skew. (#486, #499)
+- The cost budget stays in USD and an empty custom budget is flagged. (#508)
+- Drop the ` tok` suffix from the Total Tokens metric. (#511)
+
 ## 0.9.12 - 2026-06-09
 
 ### Added (CLI)

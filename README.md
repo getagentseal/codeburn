@@ -176,6 +176,35 @@ Did the spend actually ship? `codeburn yield` correlates AI sessions with git co
 
 Requires a git repository. Run from your project directory.
 
+## Browser dashboard
+
+```bash
+codeburn web                    # opens http://localhost:4747 in your browser
+codeburn web -p 30days          # start on a different period
+codeburn web --port 8080        # pick a port (falls back to a free one if taken)
+codeburn web --no-open          # start the server without opening a browser
+```
+
+A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
+
+### Combine usage across your devices
+
+See one total across your laptop, desktop, and work machine on the same network. On each other device, share its usage:
+
+```bash
+codeburn share --pair           # opens a pairing window and prints a PIN
+```
+
+Then add it once from your main device (the PIN authorizes the pairing):
+
+```bash
+codeburn devices add            # find nearby devices and pair, or: add <host> --pin <pin>
+codeburn devices                # combined totals by machine
+codeburn devices rm <name>      # forget a device
+```
+
+Pairing is PIN-authorized and stays on your local network. You can also discover and pair devices straight from the browser dashboard.
+
 ## Menu bar
 
 ```bash
@@ -248,7 +277,7 @@ If multiple providers have session data on disk, press `p` in the dashboard to t
 
 Each provider doc lists the exact data location, storage format, and known quirks. Linux and Windows paths are detected automatically. If a path has changed or is wrong, please [open an issue](https://github.com/getagentseal/codeburn/issues).
 
-The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `overview`, `status`, `export`, `optimize`, `compare`, `yield`.
+The `--provider` flag filters any command to a single provider: `codeburn report --provider claude`, `codeburn today --provider codex`, `codeburn export --provider cursor`. Works on all commands: `report`, `today`, `month`, `overview`, `status`, `export`, `web`, `optimize`, `compare`, `yield`.
 
 Adding a new provider is a single file. See `src/providers/codex.ts` for an example.
 
@@ -281,6 +310,15 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 | `codeburn status --format json` | The same totals as JSON |
 | `codeburn export` | CSV covering today, 7 days, and 30 days |
 | `codeburn export -f json` | Export as JSON instead of CSV |
+
+**Web & devices**
+
+| Command | What it does |
+|---------|--------------|
+| `codeburn web` | Local browser dashboard with charts (http://localhost:4747) |
+| `codeburn share --pair` | Share this device's usage to your other devices (PIN pairing) |
+| `codeburn devices add` | Find and pair a nearby device |
+| `codeburn devices` | Combined usage totals across your paired devices |
 
 **Analysis**
 
