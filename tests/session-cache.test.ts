@@ -22,6 +22,10 @@ import {
 } from '../src/session-cache.js'
 
 const TMP_DIR = join(tmpdir(), `codeburn-scache-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+const EXACT_UNSAFE_TOKEN_COUNTS = [
+  '221360928884514260000',
+  '18446744073709527000',
+] as const
 
 beforeEach(() => {
   process.env['CODEBURN_CACHE_DIR'] = TMP_DIR
@@ -244,6 +248,41 @@ describe('fingerprintFile', () => {
     expect(fp).not.toBeNull()
     expect(fp!.sizeBytes).toBe(9)
   })
+
+  it('records WAL and SHM sidecar metadata when present', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const dbPath = join(TMP_DIR, 'antigravity.db')
+    await writeFile(dbPath, 'sqlite-base')
+    await writeFile(`${dbPath}-wal`, 'wal-data')
+    await writeFile(`${dbPath}-shm`, 'shm-data')
+
+    const fp = await fingerprintFile(dbPath)
+    expect(fp).not.toBeNull()
+    expect(fp!.walMtimeMs).toBeGreaterThan(0)
+    expect(fp!.walSizeBytes).toBe(8)
+    expect(fp!.shmMtimeMs).toBeGreaterThan(0)
+    expect(fp!.shmSizeBytes).toBe(8)
+  })
+
+  it('records sidecar metadata for compound DB paths', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const hashDbPath = join(TMP_DIR, 'state.vscdb')
+    const colonDbPath = join(TMP_DIR, 'opencode.db')
+    await writeFile(hashDbPath, 'cursor-data')
+    await writeFile(`${hashDbPath}-wal`, 'cursor-wal')
+    await writeFile(colonDbPath, 'opencode-data')
+    await writeFile(`${colonDbPath}-shm`, 'opencode-shm')
+
+    const hashFp = await fingerprintFile(`${hashDbPath}#cursor-ws=__orphan__`)
+    expect(hashFp).not.toBeNull()
+    expect(hashFp!.walSizeBytes).toBe(10)
+    expect(hashFp!.shmSizeBytes).toBeUndefined()
+
+    const colonFp = await fingerprintFile(`${colonDbPath}:ses_abc123`)
+    expect(colonFp).not.toBeNull()
+    expect(colonFp!.shmSizeBytes).toBe(12)
+    expect(colonFp!.walSizeBytes).toBeUndefined()
+  })
 })
 
 // ── reconcileFile ──────────────────────────────────────────────────────
@@ -326,6 +365,49 @@ describe('reconcileFile', () => {
     })
     const current: FileFingerprint = { dev: 2, ino: 100, mtimeMs: 2000, sizeBytes: 8000 }
     expect(reconcileFile(current, cached)).toEqual({ action: 'modified' })
+  })
+
+  it('returns "modified" when WAL sidecar size changes but base is unchanged', () => {
+    const cached = makeCachedFile({
+      fingerprint: { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000, walMtimeMs: 2000, walSizeBytes: 100 },
+    })
+    const current: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000, walMtimeMs: 2000, walSizeBytes: 120 }
+    expect(reconcileFile(current, cached)).toEqual({ action: 'modified' })
+  })
+
+  it('returns "modified" when SHM sidecar mtime changes but base is unchanged', () => {
+    const cached = makeCachedFile({
+      fingerprint: { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000, shmMtimeMs: 2000, shmSizeBytes: 100 },
+    })
+    const current: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000, shmMtimeMs: 3000, shmSizeBytes: 100 }
+    expect(reconcileFile(current, cached)).toEqual({ action: 'modified' })
+  })
+
+  it('returns "modified" when a WAL sidecar appears or disappears with unchanged base', () => {
+    const cachedWithoutWal = makeCachedFile({
+      fingerprint: { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 },
+    })
+    const currentWithWal: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000, walMtimeMs: 2000, walSizeBytes: 100 }
+    expect(reconcileFile(currentWithWal, cachedWithoutWal)).toEqual({ action: 'modified' })
+
+    const cachedWithWal = makeCachedFile({ fingerprint: currentWithWal })
+    const currentWithoutWal: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 }
+    expect(reconcileFile(currentWithoutWal, cachedWithWal)).toEqual({ action: 'modified' })
+  })
+
+  it('returns "unchanged" when sidecar metadata and base fields match', () => {
+    const fp: FileFingerprint = {
+      dev: 1,
+      ino: 100,
+      mtimeMs: 1000,
+      sizeBytes: 5000,
+      walMtimeMs: 2000,
+      walSizeBytes: 100,
+      shmMtimeMs: 1500,
+      shmSizeBytes: 64,
+    }
+    const cached = makeCachedFile({ fingerprint: { ...fp } })
+    expect(reconcileFile({ ...fp }, cached)).toEqual({ action: 'unchanged' })
   })
 })
 
@@ -433,6 +515,60 @@ describe('loadCache validation', () => {
     expect((await loadCache()).providers).toEqual({})
   })
 
+  it('drops a provider with unsafe token counts without discarding other valid providers', async () => {
+    const unsafeUsage = {
+      inputTokens: Number.MAX_SAFE_INTEGER + 1,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: 0,
+      cacheCreationOneHourTokens: 0,
+    }
+    const unsafeCall = {
+      ...validCallJson(),
+      provider: 'antigravity',
+      usage: unsafeUsage,
+    }
+    const validCopilotCall = {
+      ...validCallJson(),
+      provider: 'copilot',
+      model: 'gpt-5.5',
+    }
+    await writeRawCache({
+      version: CACHE_VERSION,
+      providers: {
+        antigravity: {
+          envFingerprint: 'bad',
+          files: {
+            '/bad.pb': {
+              fingerprint: { dev: 1, ino: 2, mtimeMs: 3, sizeBytes: 4 },
+              mcpInventory: [],
+              turns: [{ timestamp: 'x', sessionId: 'bad', userMessage: 'bad', calls: [unsafeCall] }],
+            },
+          },
+        },
+        copilot: {
+          envFingerprint: 'good',
+          durable: true,
+          files: {
+            '/durable': {
+              fingerprint: { dev: 5, ino: 6, mtimeMs: 7, sizeBytes: 8 },
+              mcpInventory: [],
+              turns: [{ timestamp: 'x', sessionId: 'good', userMessage: 'good', calls: [validCopilotCall] }],
+            },
+          },
+        },
+      },
+    })
+
+    const loaded = await loadCache()
+    expect(loaded.providers['antigravity']).toBeUndefined()
+    expect(Object.keys(loaded.providers['copilot']!.files)).toEqual(['/durable'])
+    expect(loaded.providers['copilot']!.durable).toBe(true)
+  })
+
   function validCallJson() {
     return {
       provider: 'claude', model: 'm', deduplicationKey: 'k', timestamp: 't', speed: 'standard',
@@ -460,6 +596,29 @@ describe('loadCache validation', () => {
       } } },
     }
   }
+
+  it('rejects exact unsafe token counts in usage', async () => {
+    for (const value of EXACT_UNSAFE_TOKEN_COUNTS) {
+      await writeRawCache(wrapCall({
+        usage: { ...validCallJson().usage, inputTokens: Number(value) },
+      }))
+      expect((await loadCache()).providers).toEqual({})
+    }
+  })
+
+  it('rejects negative token counts in usage', async () => {
+    await writeRawCache(wrapCall({
+      usage: { ...validCallJson().usage, cacheReadInputTokens: -1 },
+    }))
+    expect((await loadCache()).providers).toEqual({})
+  })
+
+  it('rejects fractional token counts in usage', async () => {
+    await writeRawCache(wrapCall({
+      usage: { ...validCallJson().usage, outputTokens: 1.5 },
+    }))
+    expect((await loadCache()).providers).toEqual({})
+  })
 
   it('rejects tools containing non-string element', async () => {
     await writeRawCache(wrapCall({ tools: ['Read', 42] }))

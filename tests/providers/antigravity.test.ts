@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -8,12 +8,15 @@ import { isSqliteAvailable } from '../../src/sqlite.js'
 import {
   antigravityAppDataDirFromSourcePath,
   antigravityCascadeIdFromPath,
+  buildCallsFromGeneratorMetadata,
+  computeAntigravityCacheFingerprint,
   createAntigravityProvider,
   discoverAntigravitySessionSources,
   extractAntigravityAppDataDirFromLine,
   extractAntigravityGeneratorMetadata,
   extractAntigravityModelMap,
   getAntigravityStatusLineEventsPath,
+  parseAntigravityTokenCount,
   parseAntigravityServerInfo,
   parseAntigravityServerInfoFromLine,
   recordAntigravityStatusLinePayload,
@@ -22,6 +25,10 @@ import {
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 const requireForTest = createRequire(import.meta.url)
+const EXACT_UNSAFE_TOKEN_COUNTS = [
+  '221360928884514260000',
+  '18446744073709527000',
+] as const
 
 type CurrentCliFixture = {
   conversationId: string
@@ -206,6 +213,83 @@ describe('antigravity provider helpers', () => {
     expect(extractAntigravityGeneratorMetadata(null)).toEqual([])
   })
 
+  it('keeps output-only generator metadata calls when split tokens recover output', () => {
+    const calls = buildCallsFromGeneratorMetadata('split-output-cascade', [{
+      chatModel: {
+        usage: {
+          model: 'gemini-3.5-flash-high',
+          inputTokens: '0',
+          outputTokens: '0',
+          responseOutputTokens: '7',
+          thinkingOutputTokens: '3',
+          responseId: 'split-output-only',
+        },
+        chatStartMetadata: {
+          createdAt: '2026-06-22T00:00:00Z',
+        },
+      },
+    }], {})
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      provider: 'antigravity',
+      model: 'gemini-3.5-flash-high',
+      inputTokens: 0,
+      outputTokens: 7,
+      reasoningTokens: 3,
+      sessionId: 'split-output-cascade',
+      deduplicationKey: 'antigravity:split-output-cascade:split-output-only',
+    })
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('infers missing responseOutputTokens from total outputTokens when thinking tokens are present', () => {
+    const calls = buildCallsFromGeneratorMetadata('infer-response', [{
+      chatModel: {
+        usage: {
+          model: 'gemini-3.5-flash-high',
+          inputTokens: '5',
+          outputTokens: '10',
+          thinkingOutputTokens: '3',
+          responseId: 'infer-response-id',
+        },
+        chatStartMetadata: {
+          createdAt: '2026-06-22T00:00:00Z',
+        },
+      },
+    }], {})
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      provider: 'antigravity',
+      model: 'gemini-3.5-flash-high',
+      inputTokens: 5,
+      outputTokens: 7,
+      reasoningTokens: 3,
+      sessionId: 'infer-response',
+      deduplicationKey: 'antigravity:infer-response:infer-response-id',
+    })
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('parses token counts via BigInt and rejects unsafe values', () => {
+    expect(parseAntigravityTokenCount('42')).toBe(42)
+    expect(parseAntigravityTokenCount(42n)).toBe(42)
+    expect(parseAntigravityTokenCount(`${Number.MAX_SAFE_INTEGER}`)).toBe(Number.MAX_SAFE_INTEGER)
+    expect(parseAntigravityTokenCount(BigInt(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER)
+    for (const value of EXACT_UNSAFE_TOKEN_COUNTS) {
+      expect(parseAntigravityTokenCount(value)).toBe(0)
+      expect(parseAntigravityTokenCount(Number(value))).toBe(0)
+      expect(parseAntigravityTokenCount(BigInt(value))).toBe(0)
+    }
+    expect(parseAntigravityTokenCount('18446744073709551615')).toBe(0)
+    expect(parseAntigravityTokenCount(Number.MAX_SAFE_INTEGER + 1)).toBe(0)
+    expect(parseAntigravityTokenCount(-1)).toBe(0)
+    expect(parseAntigravityTokenCount(1.5)).toBe(0)
+    expect(parseAntigravityTokenCount('1.5')).toBe(0)
+    expect(parseAntigravityTokenCount('10tokens')).toBe(0)
+  })
+
   it('derives cascade ids from legacy .pb and Antigravity 2 .db files', () => {
     expect(antigravityCascadeIdFromPath('/tmp/123.pb')).toBe('123')
     expect(antigravityCascadeIdFromPath('/tmp/456.db')).toBe('456')
@@ -357,6 +441,53 @@ describe('antigravity provider helpers', () => {
       })
       expect(calls[0]!.projectPath).toBeUndefined()
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('sanitizes unsafe statusLine token counts before recording fallback calls', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-overflow-'))
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    try {
+      const payload = {
+        conversation_id: 'overflow-statusline',
+        session_id: 'session-1',
+        model: 'Gemini 3.5 Flash (High)',
+        context_window: {
+          current_usage: {
+            input_tokens: EXACT_UNSAFE_TOKEN_COUNTS[1],
+            output_tokens: 7,
+            cache_creation_input_tokens: EXACT_UNSAFE_TOKEN_COUNTS[0],
+            cache_read_input_tokens: Number(EXACT_UNSAFE_TOKEN_COUNTS[1]),
+          },
+        },
+      }
+
+      expect(await recordAntigravityStatusLinePayload(payload)).toBe(true)
+      expect(await recordAntigravityStatusLinePayload(payload)).toBe(true)
+
+      const recorded = await readFile(getAntigravityStatusLineEventsPath(), 'utf-8')
+      expect(recorded).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[0])
+      expect(recorded).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[1])
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, new Set())
+
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({
+        inputTokens: 0,
+        outputTokens: 7,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      })
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -599,6 +730,98 @@ describe('antigravity provider helpers', () => {
       for await (const call of parser.parse()) calls.push(call)
 
       expect(calls).toEqual([])
+    } finally {
+      if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
+      await rm(tempHome, { recursive: true, force: true })
+    }
+  })
+
+  it('includes WAL and SHM sidecar stats in .db fingerprint but not in .pb', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-fingerprint-'))
+
+    try {
+      // .pb: only base stats, no sidecar fields
+      const pbPath = join(dir, 'session.pb')
+      await writeFile(pbPath, 'legacy pb bytes')
+      const pbStat = await stat(pbPath)
+      const pbFp = await computeAntigravityCacheFingerprint(pbPath)
+      expect(pbFp).not.toBeNull()
+      expect(pbFp!.fingerprint).toBe(`${pbStat.mtimeMs}:${pbStat.size}`)
+      expect(pbFp!.fingerprint).not.toContain(':0:0:0:0')
+
+      // .db without sidecars: base + four zeros
+      const dbPath = join(dir, 'session.db')
+      const { DatabaseSync: Database } = requireForTest('node:sqlite')
+      const db = new Database(dbPath)
+      db.exec('CREATE TABLE gen_metadata (idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx))')
+      db.close()
+      const dbStat = await stat(dbPath)
+      const dbFp = await computeAntigravityCacheFingerprint(dbPath)
+      expect(dbFp).not.toBeNull()
+      expect(dbFp!.fingerprint).toBe(`${dbStat.mtimeMs}:${dbStat.size}:0:0:0:0`)
+
+      // .db with WAL sidecar present: fingerprint differs from no-WAL case
+      await writeFile(`${dbPath}-wal`, 'wal journal bytes')
+      const walStat = await stat(`${dbPath}-wal`)
+      const dbWalFp = await computeAntigravityCacheFingerprint(dbPath)
+      expect(dbWalFp).not.toBeNull()
+      expect(dbWalFp!.fingerprint).toBe(
+        `${dbStat.mtimeMs}:${dbStat.size}:${walStat.mtimeMs}:${walStat.size}:0:0`,
+      )
+      expect(dbFp!.fingerprint).not.toBe(dbWalFp!.fingerprint)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reparses a cached .db source when its WAL sidecar mtime changes', async () => {
+    if (!isSqliteAvailable()) return
+
+    const tempHome = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-wal-reparse-'))
+    const cacheDir = join(tempHome, 'cache')
+    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+
+    try {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-cli', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      // First parse: populates the in-memory cache with fingerprint A
+      const sources = await discoverAntigravitySessionSources([{
+        dir: conversationsDir,
+        project: 'antigravity-cli',
+        extensions: ['.pb', '.db'],
+      }])
+      expect(sources).toHaveLength(1)
+
+      const firstCalls = await collectAntigravityCalls(sources[0]!)
+      expect(firstCalls.length).toBeGreaterThanOrEqual(1)
+
+      // Touch the -wal sidecar so its mtime changes while the base .db is unchanged
+      const walPath = `${dbPath}-wal`
+      await writeFile(walPath, 'touched wal journal')
+      // Ensure mtime actually advanced (some filesystems have coarse resolution)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      const walTouchStat = await stat(walPath)
+
+      // Compute fingerprint now → must differ from the cached fingerprint
+      const fpAfter = await computeAntigravityCacheFingerprint(dbPath)
+      expect(fpAfter).not.toBeNull()
+      expect(fpAfter!.fingerprint).toContain(`${walTouchStat.mtimeMs}:${walTouchStat.size}`)
+
+      // Second parse with same source: fingerprint changed → cache miss → re-read
+      const secondCalls = await collectAntigravityCalls(sources[0]!)
+      expect(secondCalls.length).toBeGreaterThanOrEqual(1)
+      // The re-read should produce equivalent calls (same underlying DB rows)
+      expect(secondCalls.length).toBe(firstCalls.length)
     } finally {
       if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
       else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir

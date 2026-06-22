@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { buildMenubarPayload, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
+const EXACT_UNSAFE_TOKEN_COUNTS = [
+  '221360928884514260000',
+  '18446744073709527000',
+] as const
+
 function emptyPeriod(label: string): PeriodData {
   return {
     label,
@@ -230,5 +235,76 @@ describe('buildMenubarPayload', () => {
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45 })
+  })
+
+  it('sanitizes unsafe token fields before emitting menubar JSON', () => {
+    const unsafe = Number(EXACT_UNSAFE_TOKEN_COUNTS[1])
+    const unsafeRuntimeString = EXACT_UNSAFE_TOKEN_COUNTS[0] as unknown as number
+    const period: PeriodData = {
+      ...emptyPeriod('Today'),
+      inputTokens: unsafe,
+      outputTokens: unsafeRuntimeString,
+      cacheReadTokens: 100,
+      projects: [{
+        name: 'project',
+        cost: 1,
+        savingsUSD: 0,
+        sessions: 1,
+        sessionDetails: [{
+          cost: 1,
+          savingsUSD: 0,
+          calls: 1,
+          inputTokens: unsafe,
+          outputTokens: Number(EXACT_UNSAFE_TOKEN_COUNTS[0]),
+          date: '2026-06-21',
+          models: [],
+        }],
+      }],
+    }
+    const history = [{
+      date: '2026-06-21',
+      cost: 1,
+      savingsUSD: 0,
+      calls: 1,
+      inputTokens: unsafe,
+      outputTokens: -1,
+      cacheReadTokens: unsafeRuntimeString,
+      cacheWriteTokens: 10,
+      topModels: [{ name: 'Gemini 3.5 Flash', cost: 1, savingsUSD: 0, calls: 1, inputTokens: unsafeRuntimeString, outputTokens: -1 }],
+    }]
+
+    const payload = buildMenubarPayload(period, [], null, history, undefined, undefined, {
+      localModelSavings: {
+        totalUSD: 1,
+        calls: 1,
+        byModel: [{
+          name: 'local',
+          calls: 1,
+          actualUSD: 0,
+          savingsUSD: 1,
+          baselineModel: 'paid',
+          inputTokens: unsafeRuntimeString,
+          outputTokens: -1,
+        }],
+        byProvider: [],
+      },
+    })
+
+    expect(payload.current.inputTokens).toBe(0)
+    expect(payload.current.outputTokens).toBe(0)
+    expect(payload.current.cacheHitPercent).toBe(100)
+    expect(payload.current.topProjects[0]!.sessionDetails[0]!.inputTokens).toBe(0)
+    expect(payload.current.topProjects[0]!.sessionDetails[0]!.outputTokens).toBe(0)
+    expect(payload.history.daily[0]!.inputTokens).toBe(0)
+    expect(payload.history.daily[0]!.outputTokens).toBe(0)
+    expect(payload.history.daily[0]!.cacheReadTokens).toBe(0)
+    expect(payload.history.daily[0]!.cacheWriteTokens).toBe(10)
+    expect(payload.history.daily[0]!.topModels[0]!.inputTokens).toBe(0)
+    expect(payload.history.daily[0]!.topModels[0]!.outputTokens).toBe(0)
+    expect(payload.current.localModelSavings.byModel[0]!.inputTokens).toBe(0)
+    expect(payload.current.localModelSavings.byModel[0]!.outputTokens).toBe(0)
+    const json = JSON.stringify(payload)
+    expect(json).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[0])
+    expect(json).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[1])
   })
 })

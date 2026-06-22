@@ -1,5 +1,37 @@
 import Foundation
 
+private let maxSafeTokenCount = 9_007_199_254_740_991
+
+private func sanitizedTokenCount(_ value: Int) -> Int {
+    value >= 0 && value <= maxSafeTokenCount ? value : 0
+}
+
+private extension KeyedDecodingContainer {
+    func decodeTokenCount(forKey key: Key) -> Int {
+        guard contains(key) else { return 0 }
+        if let value = try? decode(Int.self, forKey: key) {
+            return sanitizedTokenCount(value)
+        }
+        if let value = try? decode(Double.self, forKey: key),
+           value.isFinite,
+           value >= 0,
+           value <= Double(maxSafeTokenCount),
+           value.rounded(.towardZero) == value {
+            return Int(value)
+        }
+        if let value = try? decode(String.self, forKey: key) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  let parsed = Int(trimmed) else {
+                return 0
+            }
+            return sanitizedTokenCount(parsed)
+        }
+        return 0
+    }
+}
+
 /// Shape of `codeburn status --format menubar-json --period <period>`.
 /// `current` is scoped to the requested period; the whole payload reflects that slice.
 struct MenubarPayload: Codable, Sendable {
@@ -32,8 +64,8 @@ struct DailyModelBreakdown: Codable, Sendable {
         cost = try c.decode(Double.self, forKey: .cost)
         savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         calls = try c.decode(Int.self, forKey: .calls)
-        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
-        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        inputTokens = c.decodeTokenCount(forKey: .inputTokens)
+        outputTokens = c.decodeTokenCount(forKey: .outputTokens)
     }
 }
 
@@ -66,10 +98,10 @@ extension DailyHistoryEntry {
         cost = try c.decode(Double.self, forKey: .cost)
         savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         calls = try c.decode(Int.self, forKey: .calls)
-        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
-        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
-        cacheReadTokens = try c.decode(Int.self, forKey: .cacheReadTokens)
-        cacheWriteTokens = try c.decode(Int.self, forKey: .cacheWriteTokens)
+        inputTokens = c.decodeTokenCount(forKey: .inputTokens)
+        outputTokens = c.decodeTokenCount(forKey: .outputTokens)
+        cacheReadTokens = c.decodeTokenCount(forKey: .cacheReadTokens)
+        cacheWriteTokens = c.decodeTokenCount(forKey: .cacheWriteTokens)
         topModels = try c.decodeIfPresent([DailyModelBreakdown].self, forKey: .topModels) ?? []
     }
 }
@@ -144,8 +176,8 @@ extension CurrentBlock {
         calls = try c.decode(Int.self, forKey: .calls)
         sessions = try c.decode(Int.self, forKey: .sessions)
         oneShotRate = try c.decodeIfPresent(Double.self, forKey: .oneShotRate)
-        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
-        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        inputTokens = c.decodeTokenCount(forKey: .inputTokens)
+        outputTokens = c.decodeTokenCount(forKey: .outputTokens)
         cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
         codexCredits = try c.decodeIfPresent(Double.self, forKey: .codexCredits)
         topActivities = try c.decodeIfPresent([ActivityEntry].self, forKey: .topActivities) ?? []
@@ -172,6 +204,23 @@ struct LocalModelSavingsByModel: Codable, Sendable {
     let baselineModel: String
     let inputTokens: Int
     let outputTokens: Int
+}
+
+extension LocalModelSavingsByModel {
+    enum CodingKeys: String, CodingKey {
+        case name, calls, actualUSD, savingsUSD, baselineModel, inputTokens, outputTokens
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        calls = try c.decode(Int.self, forKey: .calls)
+        actualUSD = try c.decode(Double.self, forKey: .actualUSD)
+        savingsUSD = try c.decode(Double.self, forKey: .savingsUSD)
+        baselineModel = try c.decode(String.self, forKey: .baselineModel)
+        inputTokens = c.decodeTokenCount(forKey: .inputTokens)
+        outputTokens = c.decodeTokenCount(forKey: .outputTokens)
+    }
 }
 
 struct LocalModelSavingsByProvider: Codable, Sendable {
@@ -260,8 +309,8 @@ struct SessionDetailEntry: Codable, Sendable {
         cost = try c.decode(Double.self, forKey: .cost)
         savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         calls = try c.decode(Int.self, forKey: .calls)
-        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
-        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        inputTokens = c.decodeTokenCount(forKey: .inputTokens)
+        outputTokens = c.decodeTokenCount(forKey: .outputTokens)
         date = try c.decode(String.self, forKey: .date)
         models = try c.decodeIfPresent([SessionModelEntry].self, forKey: .models) ?? []
     }

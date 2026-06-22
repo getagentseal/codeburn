@@ -38,6 +38,10 @@ function emptyDay(date: string, cost = 0, calls = 0): DailyEntry {
 }
 
 const TMP_CACHE_ROOT = join(tmpdir(), `codeburn-cache-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+const EXACT_UNSAFE_TOKEN_COUNTS = [
+  '221360928884514260000',
+  '18446744073709527000',
+] as const
 
 beforeEach(() => {
   process.env['CODEBURN_CACHE_DIR'] = TMP_CACHE_ROOT
@@ -148,6 +152,71 @@ describe('loadDailyCache', () => {
     await saveDailyCache(saved)
     const loaded = await loadDailyCache()
     expect(loaded).toEqual(saved)
+  })
+
+  it('rejects a current cache with an unsafe day token count', async () => {
+    const saved = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-04-10',
+      days: [{ ...emptyDay('2026-04-10'), inputTokens: Number(EXACT_UNSAFE_TOKEN_COUNTS[1]) }],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+
+    const cache = await loadDailyCache()
+    expect(cache.days).toEqual([])
+    expect(cache.lastComputedDate).toBeNull()
+    expect(existsSync(join(TMP_CACHE_ROOT, `daily-cache.json.v${DAILY_CACHE_VERSION}.bak`))).toBe(true)
+  })
+
+  it('rejects a current cache with an unsafe model token count', async () => {
+    const saved = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-04-10',
+      days: [{
+        ...emptyDay('2026-04-10'),
+        models: {
+          'Gemini 3.5 Flash': {
+            calls: 1,
+            cost: 0.01,
+            savingsUSD: 0,
+            inputTokens: 10,
+            outputTokens: EXACT_UNSAFE_TOKEN_COUNTS[0],
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        },
+      }],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+
+    const cache = await loadDailyCache()
+    expect(cache.days).toEqual([])
+    expect(cache.lastComputedDate).toBeNull()
+    expect(existsSync(join(TMP_CACHE_ROOT, `daily-cache.json.v${DAILY_CACHE_VERSION}.bak`))).toBe(true)
+  })
+
+  it('backs up a pre-v9 cache so stale token rollups are recomputed', async () => {
+    const staleVersion = DAILY_CACHE_VERSION - 1
+    const saved = {
+      version: staleVersion,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-04-10',
+      days: [{ ...emptyDay('2026-04-10'), inputTokens: Number(EXACT_UNSAFE_TOKEN_COUNTS[1]) }],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+
+    const cache = await loadDailyCache()
+    expect(cache.days).toEqual([])
+    expect(cache.lastComputedDate).toBeNull()
+    expect(existsSync(join(TMP_CACHE_ROOT, `daily-cache.json.v${staleVersion}.bak`))).toBe(true)
   })
 })
 

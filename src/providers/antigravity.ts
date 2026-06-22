@@ -43,7 +43,7 @@ const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
     extensions: ['.pb'],
   },
 ] as const
-const CACHE_VERSION = 2
+const CACHE_VERSION = 4
 
 const RPC_TIMEOUT_MS = 5000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -95,10 +95,10 @@ type GeneratorMetadataResponse = {
 }
 
 type StatusLineCurrentUsage = {
-  input_tokens?: number
-  output_tokens?: number
-  cache_creation_input_tokens?: number
-  cache_read_input_tokens?: number
+  input_tokens?: number | string
+  output_tokens?: number | string
+  cache_creation_input_tokens?: number | string
+  cache_read_input_tokens?: number | string
 }
 
 type StatusLinePayload = {
@@ -129,6 +129,7 @@ type StatusLineEvent = {
 type CachedCascade = {
   mtimeMs: number
   sizeBytes: number
+  fingerprint: string
   calls: ParsedProviderCall[]
 }
 
@@ -644,8 +645,7 @@ function protoFieldText(field: ProtoField | undefined): string | undefined {
 
 function protoFieldPositiveInteger(field: ProtoField | undefined): number {
   if (field?.value === undefined) return 0
-  const value = Number(field.value)
-  return Number.isSafeInteger(value) && value > 0 ? value : 0
+  return bigintToSafeTokenCount(field.value)
 }
 
 function protoFieldBytes(field: ProtoField | undefined): Uint8Array | undefined {
@@ -702,19 +702,24 @@ function buildCallFromSqliteGenMetadataRow(cascadeId: string, row: AntigravityGe
   let responseTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 9))
   let thinkingTokens = protoFieldPositiveInteger(firstProtoField(usageFields, 10))
 
+  let splitOutputTokens = safeTokenSum(responseTokens, thinkingTokens)
   if (responseTokens === 0 && thinkingTokens === 0) {
     responseTokens = totalOutputTokens
-  } else if (totalOutputTokens > 0 && responseTokens + thinkingTokens !== totalOutputTokens) {
+    splitOutputTokens = responseTokens
+  } else if (totalOutputTokens > 0 && splitOutputTokens !== totalOutputTokens) {
     const adjustedResponseTokens = totalOutputTokens - thinkingTokens
-    if (adjustedResponseTokens >= 0) responseTokens = adjustedResponseTokens
+    if (adjustedResponseTokens >= 0) {
+      responseTokens = adjustedResponseTokens
+      splitOutputTokens = safeTokenSum(responseTokens, thinkingTokens)
+    }
   }
 
-  if (inputTokens === 0 && totalOutputTokens === 0) return null
+  if (inputTokens === 0 && splitOutputTokens === 0) return null
 
   const responseId = antigravitySqliteResponseId(usageFields, String(row.idx))
   const model = antigravitySqliteModel(chatFields)
   const pricingModel = normalizePricingModel(model)
-  const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+  const costUSD = calculateCost(pricingModel, inputTokens, splitOutputTokens, 0, 0, 0)
 
   return {
     provider: 'antigravity',
@@ -771,10 +776,38 @@ async function parseSqliteGenMetadataCalls(filePath: string, cascadeId: string):
   }
 }
 
-function parseFiniteToken(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : 0
+function bigintToSafeTokenCount(value: bigint): number {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return 0
+  return Number(value)
+}
+
+export function parseAntigravityTokenCount(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0
+  }
+  if (typeof value === 'bigint') {
+    return bigintToSafeTokenCount(value)
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!/^\d+$/.test(trimmed)) return 0
+    try {
+      return bigintToSafeTokenCount(BigInt(trimmed))
+    } catch {
+      return 0
+    }
+  }
+  return 0
+}
+
+function safeTokenSum(...values: number[]): number {
+  let total = 0
+  for (const value of values) {
+    if (!Number.isSafeInteger(value) || value < 0) return 0
+    if (total > Number.MAX_SAFE_INTEGER - value) return 0
+    total += value
+  }
+  return total
 }
 
 function usageSignature(event: StatusLineEvent): string {
@@ -819,7 +852,7 @@ export function antigravityCascadeIdFromPath(path: string): string {
   return basename(path).replace(/\.(pb|db)$/i, '')
 }
 
-function buildCallsFromGeneratorMetadata(
+export function buildCallsFromGeneratorMetadata(
   cascadeId: string,
   metadata: GeneratorMetadata[],
   modelMap: ModelMap,
@@ -831,12 +864,29 @@ function buildCallsFromGeneratorMetadata(
     const usage = entry.chatModel?.usage
     if (!usage) continue
 
-    const inputTokens = parseInt(usage.inputTokens ?? '0', 10)
-    const outputTokens = parseInt(usage.outputTokens ?? '0', 10)
-    const thinkingTokens = parseInt(usage.thinkingOutputTokens ?? '0', 10)
-    const responseTokens = parseInt(usage.responseOutputTokens ?? '0', 10)
+    const inputTokens = parseAntigravityTokenCount(usage.inputTokens)
+    const outputTokens = parseAntigravityTokenCount(usage.outputTokens)
+    const thinkingTokens = parseAntigravityTokenCount(usage.thinkingOutputTokens)
+    let assertionResponseTokens = parseAntigravityTokenCount(usage.responseOutputTokens)
 
-    if (inputTokens === 0 && outputTokens === 0) continue
+    // Mirror SQLite invariant: when total outputTokens exists and the
+    // response+thinking split does not equal it, infer the missing
+    // response tokens from the gap so billing covers the full output.
+    if (assertionResponseTokens === 0 && thinkingTokens === 0) {
+      assertionResponseTokens = outputTokens
+    } else if (outputTokens > 0) {
+      const splitSum = safeTokenSum(assertionResponseTokens, thinkingTokens)
+      if (splitSum !== outputTokens) {
+        const adjusted = outputTokens - thinkingTokens
+        if (adjusted >= 0) {
+          assertionResponseTokens = adjusted
+        }
+      }
+    }
+
+    const finalOutputCostTokens = safeTokenSum(assertionResponseTokens, thinkingTokens)
+
+    if (inputTokens === 0 && finalOutputCostTokens === 0) continue
 
     const responseId = usage.responseId || String(i)
     const dedupKey = `antigravity:${cascadeId}:${responseId}`
@@ -844,13 +894,13 @@ function buildCallsFromGeneratorMetadata(
     const model = modelMap[usage.model] ?? usage.model
     const pricingModel = normalizePricingModel(model)
     const timestamp = entry.chatModel?.chatStartMetadata?.createdAt ?? ''
-    const costUSD = calculateCost(pricingModel, inputTokens, responseTokens + thinkingTokens, 0, 0, 0)
+    const costUSD = calculateCost(pricingModel, inputTokens, finalOutputCostTokens, 0, 0, 0)
 
     results.push({
       provider: 'antigravity',
       model,
       inputTokens,
-      outputTokens: responseTokens,
+      outputTokens: assertionResponseTokens,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 0,
       cachedInputTokens: 0,
@@ -935,10 +985,10 @@ function parseStatusLinePayload(input: unknown): StatusLineEvent | null {
       ? payload.model
       : payload.model?.id ?? payload.model?.display_name ?? 'unknown',
     usage: {
-      inputTokens: parseFiniteToken(usage.input_tokens),
-      outputTokens: parseFiniteToken(usage.output_tokens),
-      cacheCreationInputTokens: parseFiniteToken(usage.cache_creation_input_tokens),
-      cacheReadInputTokens: parseFiniteToken(usage.cache_read_input_tokens),
+      inputTokens: parseAntigravityTokenCount(usage.input_tokens),
+      outputTokens: parseAntigravityTokenCount(usage.output_tokens),
+      cacheCreationInputTokens: parseAntigravityTokenCount(usage.cache_creation_input_tokens),
+      cacheReadInputTokens: parseAntigravityTokenCount(usage.cache_read_input_tokens),
     },
   }
 
@@ -974,10 +1024,10 @@ function parseStatusLineEvent(input: unknown): StatusLineEvent | null {
   if (!event.usage || typeof event.usage !== 'object') return null
 
   const usage = {
-    inputTokens: parseFiniteToken(event.usage.inputTokens),
-    outputTokens: parseFiniteToken(event.usage.outputTokens),
-    cacheCreationInputTokens: parseFiniteToken(event.usage.cacheCreationInputTokens),
-    cacheReadInputTokens: parseFiniteToken(event.usage.cacheReadInputTokens),
+    inputTokens: parseAntigravityTokenCount(event.usage.inputTokens),
+    outputTokens: parseAntigravityTokenCount(event.usage.outputTokens),
+    cacheCreationInputTokens: parseAntigravityTokenCount(event.usage.cacheCreationInputTokens),
+    cacheReadInputTokens: parseAntigravityTokenCount(event.usage.cacheReadInputTokens),
   }
 
   if (
@@ -1099,6 +1149,40 @@ export function shouldReparseAntigravitySource(path: string, cachedTurnCount: nu
   return isAntigravityStatusLineEventsPath(path)
 }
 
+export async function computeAntigravityCacheFingerprint(filePath: string): Promise<{
+  fingerprint: string
+  baseMtimeMs: number
+  baseSize: number
+} | null> {
+  const base = await stat(filePath).catch(() => null)
+  if (!base) return null
+
+  // Legacy .pb: fingerprint is base mtime + size alone
+  if (!filePath.toLowerCase().endsWith('.db')) {
+    return {
+      fingerprint: `${base.mtimeMs}:${base.size}`,
+      baseMtimeMs: base.mtimeMs,
+      baseSize: base.size,
+    }
+  }
+
+  // SQLite WAL-mode .db: include sidecars so a WAL checkpoint or write
+  // that touches -wal/-shm invalidates the cache even when the base .db
+  // mtime and size haven't changed yet.
+  const wal = await stat(`${filePath}-wal`).catch(() => null)
+  const shm = await stat(`${filePath}-shm`).catch(() => null)
+
+  return {
+    fingerprint: [
+      base.mtimeMs, base.size,
+      wal?.mtimeMs ?? 0, wal?.size ?? 0,
+      shm?.mtimeMs ?? 0, shm?.size ?? 0,
+    ].join(':'),
+    baseMtimeMs: base.mtimeMs,
+    baseSize: base.size,
+  }
+}
+
 async function findCascadeSource(cascadeId: string): Promise<SessionSource | null> {
   const sources = await discoverAntigravitySessionSources()
   return sources.find(source => {
@@ -1116,12 +1200,12 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
   const source = await findCascadeSource(cascadeId)
   if (!source) return false
 
-  const s = await stat(source.path).catch(() => null)
-  if (!s) return false
+  const fp = await computeAntigravityCacheFingerprint(source.path)
+  if (!fp) return false
 
   const cache = await loadCache()
   const cached = cache.cascades[cascadeId]
-  if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size && cached.calls.length > 0) {
+  if (cached && cached.fingerprint === fp.fingerprint && cached.calls.length > 0) {
     return true
   }
 
@@ -1135,8 +1219,9 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
       await rpc(server, 'GetCascadeTrajectoryGeneratorMetadata', { cascadeId }),
     )
     cache.cascades[cascadeId] = {
-      mtimeMs: s.mtimeMs,
-      sizeBytes: s.size,
+      mtimeMs: fp.baseMtimeMs,
+      sizeBytes: fp.baseSize,
+      fingerprint: fp.fingerprint,
       calls: buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap),
     }
     cacheDirty = true
@@ -1211,13 +1296,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const cascadeId = antigravityCascadeIdFromPath(source.path)
       const cache = await loadCache()
 
-      const s = await stat(source.path).catch(() => null)
-      if (!s) return
+      const fp = await computeAntigravityCacheFingerprint(source.path)
+      if (!fp) return
 
       const projectPath = await extractWorkspacePath(source.path)
 
       const cached = cache.cascades[cascadeId]
-      if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size && cached.calls.length > 0) {
+      if (cached && cached.fingerprint === fp.fingerprint && cached.calls.length > 0) {
         for (const call of cached.calls) {
           applyAntigravityProject(call, source, projectPath)
           if (seenKeys.has(call.deduplicationKey)) continue
@@ -1234,8 +1319,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         cache.cascades[cascadeId] = {
-          mtimeMs: s.mtimeMs,
-          sizeBytes: s.size,
+          mtimeMs: fp.baseMtimeMs,
+          sizeBytes: fp.baseSize,
+          fingerprint: fp.fingerprint,
           calls: sqliteResults,
         }
         cacheDirty = true
@@ -1286,8 +1372,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       }
 
       cache.cascades[cascadeId] = {
-        mtimeMs: s.mtimeMs,
-        sizeBytes: s.size,
+        mtimeMs: fp.baseMtimeMs,
+        sizeBytes: fp.baseSize,
+        fingerprint: fp.fingerprint,
         calls: results,
       }
       cacheDirty = true
