@@ -154,4 +154,163 @@ describe('codeburn status --format menubar-json', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('attaches combined local-only usage for --scope combined and omits it for local scope', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-combined-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+
+      const now = new Date()
+      const h = now.getUTCHours()
+      const base = h >= 2 ? new Date(now.getTime() - 2 * 3600_000) : new Date(now.getTime() - h * 3600_000 - 300_000)
+      const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
+      const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
+
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [
+          userLine('s1', ts1),
+          assistantLine('s1', ts2, 'msg-1'),
+        ].join('\n'),
+      )
+
+      const combinedResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--scope', 'combined',
+        '--period', 'today',
+        '--provider', 'all',
+        '--no-optimize',
+      ], home)
+
+      expect(combinedResult.status, `stderr: ${combinedResult.stderr}`).toBe(0)
+
+      const payload = JSON.parse(combinedResult.stdout) as {
+        current: {
+          cost: number
+          calls: number
+          sessions: number
+          inputTokens: number
+          outputTokens: number
+        }
+        history: {
+          daily: Array<{ cacheWriteTokens?: number; cacheReadTokens?: number }>
+        }
+        combined?: {
+          perDevice: Array<{
+            id: string
+            local: boolean
+            cost: number
+            calls: number
+            sessions: number
+            inputTokens: number
+            outputTokens: number
+            cacheCreateTokens: number
+            cacheReadTokens: number
+            totalTokens: number
+          }>
+          combined: {
+            cost: number
+            calls: number
+            sessions: number
+            inputTokens: number
+            outputTokens: number
+            cacheCreateTokens: number
+            cacheReadTokens: number
+            totalTokens: number
+            deviceCount: number
+            reachableCount: number
+          }
+        }
+      }
+
+      expect(payload.combined).toBeDefined()
+      expect(payload.combined!.perDevice).toHaveLength(1)
+      const local = payload.combined!.perDevice[0]!
+      const cacheCreateTokens = payload.history.daily.reduce((sum, d) => sum + (d.cacheWriteTokens ?? 0), 0)
+      const cacheReadTokens = payload.history.daily.reduce((sum, d) => sum + (d.cacheReadTokens ?? 0), 0)
+      const totalTokens = payload.current.inputTokens + payload.current.outputTokens + cacheCreateTokens + cacheReadTokens
+
+      expect(local).toMatchObject({
+        id: 'local',
+        local: true,
+        cost: payload.current.cost,
+        calls: payload.current.calls,
+        sessions: payload.current.sessions,
+        inputTokens: payload.current.inputTokens,
+        outputTokens: payload.current.outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        totalTokens,
+      })
+      expect(payload.combined!.combined).toEqual({
+        cost: payload.current.cost,
+        calls: payload.current.calls,
+        sessions: payload.current.sessions,
+        inputTokens: payload.current.inputTokens,
+        outputTokens: payload.current.outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        totalTokens,
+        deviceCount: 1,
+        reachableCount: 1,
+      })
+
+      const localResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--scope', 'local',
+        '--period', 'today',
+        '--provider', 'all',
+        '--no-optimize',
+      ], home)
+      expect(localResult.status, `stderr: ${localResult.stderr}`).toBe(0)
+      expect(JSON.parse(localResult.stdout)).not.toHaveProperty('combined')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['--provider', ['--provider', 'claude']],
+    ['--project', ['--project', 'x']],
+    ['--exclude', ['--exclude', 'y']],
+  ])('rejects combined scope with filtered local payloads from %s', async (_name, filterArgs) => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-combined-filter-'))
+
+    try {
+      const result = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--scope', 'combined',
+        ...filterArgs,
+        '--no-optimize',
+      ], home)
+
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('error: --scope combined cannot be combined with --provider, --project, or --exclude (paired devices report unfiltered usage)')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid menubar-json scope values', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-scope-'))
+
+    try {
+      const result = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--scope', 'remote',
+        '--no-optimize',
+      ], home)
+
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('unknown scope "remote"')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

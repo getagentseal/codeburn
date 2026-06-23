@@ -17,10 +17,11 @@ import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
 import { hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
-import { addRemote, linkRemote, pullDevices, renderDevices } from './sharing/host.js'
+import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
 import { promptChoice } from './sharing/prompt.js'
 import { loadRemotes, saveRemotes } from './sharing/store.js'
+import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
 import { renderCompare } from './compare.js'
@@ -146,6 +147,15 @@ function assertProvider(value: string, command: string): void {
     `codeburn ${command}: unknown provider "${value}". Valid values: all, ${names.join(', ')}.\n`
   )
   process.exit(1)
+}
+
+function assertScope(value: string, allowed: readonly string[], command: string): void {
+  if (!allowed.includes(value)) {
+    process.stderr.write(
+      `codeburn ${command}: unknown scope "${value}". Valid values: ${allowed.join(', ')}.\n`
+    )
+    process.exit(1)
+  }
 }
 
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
@@ -605,6 +615,7 @@ program
   .command('status')
   .description('Compact status output (today + month)')
   .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
+  .option('--scope <scope>', 'Usage scope for menubar-json: local, combined', 'local')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -616,6 +627,7 @@ program
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
+    assertScope(opts.scope, ['local', 'combined'], 'status')
     assertProvider(opts.provider, 'status')
     if (opts.day && (opts.from || opts.to)) {
       process.stderr.write('error: --day cannot be combined with --from or --to\n')
@@ -623,6 +635,14 @@ program
     }
     if (opts.days && (opts.day || opts.from || opts.to)) {
       process.stderr.write('error: --days cannot be combined with --day, --from, or --to\n')
+      process.exit(1)
+    }
+    if (opts.format === 'menubar-json' && opts.scope === 'combined' && opts.days) {
+      process.stderr.write('error: --scope combined cannot be combined with --days\n')
+      process.exit(1)
+    }
+    if (opts.scope === 'combined' && (opts.provider !== 'all' || opts.project.length > 0 || opts.exclude.length > 0)) {
+      process.stderr.write('error: --scope combined cannot be combined with --provider, --project, or --exclude (paired devices report unfiltered usage)\n')
       process.exit(1)
     }
     await loadPricing()
@@ -644,6 +664,19 @@ program
         daysSelection,
         optimize: opts.optimize !== false,
       })
+      if (opts.scope === 'combined') {
+        const query: UsageQuery = customRange
+          ? { from: opts.from, to: opts.to }
+          : daySelection
+          ? { from: daySelection.day, to: daySelection.day }
+          : { period: opts.period }
+        const localGetUsage = async (): Promise<typeof payload> => payload
+        const results = await pullDevices(localGetUsage, query, hostname(), {})
+        payload.combined = summarizeDeviceUsage(results, {
+          start: toDateString(periodInfo.range.start),
+          end: toDateString(periodInfo.range.end),
+        })
+      }
       console.log(JSON.stringify(payload))
       return
     }

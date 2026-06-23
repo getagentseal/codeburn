@@ -5,16 +5,23 @@ import { sanitizeForSharing } from './sanitize.js'
 import type { DiscoveredDevice } from './discovery.js'
 import type { UsageQuery } from './share-server.js'
 import { getSharingDir, loadRemotes, saveRemotes, type RemoteDevice } from './store.js'
-import type { MenubarPayload } from '../menubar-json.js'
+import type { CombinedUsage, DeviceSummary, MenubarPayload } from '../menubar-json.js'
 import { formatCost } from '../currency.js'
 import { renderTable } from '../text-table.js'
 import { Chalk } from 'chalk'
+
+export type { CombinedUsage, DeviceSummary } from '../menubar-json.js'
 
 // Minimal shape we read from a device's usage payload (the menubar payload).
 // Cache create/read are only in the daily history, so we sum those.
 type DevicePayload = {
   current?: { cost?: number; calls?: number; sessions?: number; inputTokens?: number; outputTokens?: number }
-  history?: { daily?: Array<{ cacheReadTokens?: number; cacheWriteTokens?: number }> }
+  history?: { daily?: Array<{ date?: string; cacheReadTokens?: number; cacheWriteTokens?: number }> }
+}
+
+type SummaryWindow = {
+  start: string
+  end: string
 }
 
 export type DeviceUsage = {
@@ -23,6 +30,80 @@ export type DeviceUsage = {
   local: boolean
   payload?: DevicePayload
   error?: string
+}
+
+const zeroUsage = {
+  cost: 0,
+  calls: 0,
+  sessions: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheCreateTokens: 0,
+  cacheReadTokens: 0,
+  totalTokens: 0,
+}
+
+function num(n: number | undefined): number {
+  return n ?? 0
+}
+
+function summarizeOneDevice(d: DeviceUsage, window?: SummaryWindow): DeviceSummary {
+  const error = d.error !== undefined ? d.error : d.payload === undefined ? 'no usage payload' : undefined
+  if (error !== undefined || d.payload === undefined) {
+    return {
+      id: d.id,
+      name: d.name,
+      local: d.local,
+      error,
+      ...zeroUsage,
+    }
+  }
+
+  const cur = d.payload.current
+  const daily = (d.payload.history?.daily ?? []).filter((e) => {
+    if (window === undefined) return true
+    return e.date !== undefined && window.start <= e.date && e.date <= window.end
+  })
+  const inputTokens = num(cur?.inputTokens)
+  const outputTokens = num(cur?.outputTokens)
+  const cacheCreateTokens = daily.reduce((s, e) => s + num(e.cacheWriteTokens), 0)
+  const cacheReadTokens = daily.reduce((s, e) => s + num(e.cacheReadTokens), 0)
+  return {
+    id: d.id,
+    name: d.name,
+    local: d.local,
+    cost: num(cur?.cost),
+    calls: num(cur?.calls),
+    sessions: num(cur?.sessions),
+    inputTokens,
+    outputTokens,
+    cacheCreateTokens,
+    cacheReadTokens,
+    totalTokens: inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens,
+  }
+}
+
+export function summarizeDeviceUsage(results: DeviceUsage[], window?: SummaryWindow): CombinedUsage {
+  const perDevice = results.map((d) => summarizeOneDevice(d, window))
+  const combined = perDevice.reduce(
+    (a, d) => {
+      if (d.error !== undefined) return a
+      return {
+        cost: a.cost + d.cost,
+        calls: a.calls + d.calls,
+        sessions: a.sessions + d.sessions,
+        inputTokens: a.inputTokens + d.inputTokens,
+        outputTokens: a.outputTokens + d.outputTokens,
+        cacheCreateTokens: a.cacheCreateTokens + d.cacheCreateTokens,
+        cacheReadTokens: a.cacheReadTokens + d.cacheReadTokens,
+        totalTokens: a.totalTokens + d.totalTokens,
+        deviceCount: a.deviceCount,
+        reachableCount: a.reachableCount + 1,
+      }
+    },
+    { ...zeroUsage, deviceCount: perDevice.length, reachableCount: 0 },
+  )
+  return { perDevice, combined }
 }
 
 function parseHostPort(input: string, defaultPort: number): { host: string; port: number } {
@@ -118,38 +199,20 @@ export async function pullDevices(
 // Joined "Totals by machine" report: one row per device plus a bold Combined
 // row. Tokens are shown as full, comma-grouped numbers.
 export function renderDevices(results: DeviceUsage[]): string {
-  const num = (n: number | undefined): number => n ?? 0
   const n = (x: number): string => Math.round(x).toLocaleString()
   const money = (x: number): string => formatCost(x).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
-  const rows = results.map((d) => {
-    const cur = d.payload?.current
-    const daily = d.payload?.history?.daily ?? []
-    const input = num(cur?.inputTokens)
-    const output = num(cur?.outputTokens)
-    const cacheCreate = daily.reduce((s, e) => s + num(e.cacheWriteTokens), 0)
-    const cacheRead = daily.reduce((s, e) => s + num(e.cacheReadTokens), 0)
-    return {
-      name: d.name + (d.local ? ' (this Mac)' : ''),
-      error: d.error,
-      cost: num(cur?.cost),
-      input,
-      output,
-      cacheCreate,
-      cacheRead,
-      total: input + output + cacheCreate + cacheRead,
-    }
-  })
-  const combined = rows.reduce(
-    (a, r) => ({
-      cost: a.cost + r.cost,
-      input: a.input + r.input,
-      output: a.output + r.output,
-      cacheCreate: a.cacheCreate + r.cacheCreate,
-      cacheRead: a.cacheRead + r.cacheRead,
-      total: a.total + r.total,
-    }),
-    { cost: 0, input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
-  )
+  const summary = summarizeDeviceUsage(results)
+  const rows = summary.perDevice.map((d) => ({
+    name: d.name + (d.local ? ' (this Mac)' : ''),
+    error: d.error,
+    cost: d.cost,
+    input: d.inputTokens,
+    output: d.outputTokens,
+    cacheCreate: d.cacheCreateTokens,
+    cacheRead: d.cacheReadTokens,
+    total: d.totalTokens,
+  }))
+  const combined = summary.combined
 
   const tableRows = [
     ...rows.map((r) =>
@@ -157,7 +220,7 @@ export function renderDevices(results: DeviceUsage[]): string {
         ? [r.name, r.error, '-', '-', '-', '-', '-']
         : [r.name, money(r.cost), n(r.total), n(r.input), n(r.output), n(r.cacheCreate), n(r.cacheRead)],
     ),
-    ['Combined', money(combined.cost), n(combined.total), n(combined.input), n(combined.output), n(combined.cacheCreate), n(combined.cacheRead)],
+    ['Combined', money(combined.cost), n(combined.totalTokens), n(combined.inputTokens), n(combined.outputTokens), n(combined.cacheCreateTokens), n(combined.cacheReadTokens)],
   ]
   const table = renderTable(
     [

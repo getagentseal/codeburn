@@ -77,6 +77,37 @@ export type LocalModelSavings = {
   byProvider: Array<{ name: string; calls: number; savingsUSD: number }>
 }
 
+export type DeviceSummary = {
+  id: string
+  name: string
+  local: boolean
+  error?: string
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheCreateTokens: number
+  cacheReadTokens: number
+  totalTokens: number
+}
+
+export type CombinedUsage = {
+  perDevice: DeviceSummary[]
+  combined: {
+    cost: number
+    calls: number
+    sessions: number
+    inputTokens: number
+    outputTokens: number
+    cacheCreateTokens: number
+    cacheReadTokens: number
+    totalTokens: number
+    deviceCount: number
+    reachableCount: number
+  }
+}
+
 export type MenubarPayload = {
   generated: string
   current: {
@@ -180,6 +211,7 @@ export type MenubarPayload = {
   history: {
     daily: DailyHistoryEntry[]
   }
+  combined?: CombinedUsage
 }
 
 function oneShotRateFor(editTurns: number, oneShotTurns: number): number | null {

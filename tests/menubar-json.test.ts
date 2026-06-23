@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMenubarPayload, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
+import { buildMenubarPayload, type CombinedUsage, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
 function emptyPeriod(label: string): PeriodData {
@@ -230,5 +230,43 @@ describe('buildMenubarPayload', () => {
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45 })
+  })
+
+  it('omits combined usage by default and accepts the documented combined shape when attached', () => {
+    const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
+    expect(payload).not.toHaveProperty('combined')
+
+    const combined: CombinedUsage = {
+      perDevice: [
+        {
+          id: 'local',
+          name: 'Mac Studio',
+          local: true,
+          cost: 1,
+          calls: 2,
+          sessions: 1,
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheCreateTokens: 10,
+          cacheReadTokens: 20,
+          totalTokens: 180,
+        },
+      ],
+      combined: {
+        cost: 1,
+        calls: 2,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheCreateTokens: 10,
+        cacheReadTokens: 20,
+        totalTokens: 180,
+        deviceCount: 1,
+        reachableCount: 1,
+      },
+    }
+    payload.combined = combined
+
+    expect(payload.combined).toEqual(combined)
   })
 })
