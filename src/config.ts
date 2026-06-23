@@ -6,6 +6,7 @@ import { PLAN_PROVIDERS } from './plans.js'
 
 export type PlanId = 'claude-pro' | 'claude-max' | 'claude-max-5x' | 'cursor-pro' | 'custom' | 'none'
 export type PlanProvider = 'claude' | 'codex' | 'cursor' | 'all'
+export type SubscriptionCostMode = 'api-equivalent' | 'amortized' | 'actual-payments'
 
 export type Plan = {
   id: PlanId
@@ -19,6 +20,15 @@ export type PlanConfig = Omit<Plan, 'provider' | 'setAt'> & Partial<Pick<Plan, '
 export type PlanConfigMap = Partial<Record<PlanProvider, PlanConfig>>
 export type PlanMap = Partial<Record<PlanProvider, Plan>>
 
+export type TokenPackage = {
+  id?: string
+  provider: PlanProvider
+  amountUsd: number
+  purchasedAt: string
+  tokens?: number
+  note?: string
+}
+
 export type CodeburnConfig = {
   currency?: {
     code: string
@@ -29,6 +39,8 @@ export type CodeburnConfig = {
   }
   plan?: Plan
   plans?: PlanConfigMap
+  subscriptionCostMode?: Partial<Record<PlanProvider, SubscriptionCostMode>>
+  tokenPackages?: TokenPackage[]
   modelAliases?: Record<string, string>
   // Extra Claude config directories to aggregate usage across (e.g. work /
   // personal accounts). Honored by getClaudeConfigDirs() below the

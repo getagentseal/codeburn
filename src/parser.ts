@@ -1278,6 +1278,7 @@ function buildSessionSummary(
   let totalSavings = 0
   let totalInput = 0
   let totalOutput = 0
+  let totalReasoning = 0
   let totalCacheRead = 0
   let totalCacheWrite = 0
   let apiCalls = 0
@@ -1328,6 +1329,7 @@ function buildSessionSummary(
       totalSavings += callSavings
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
+      totalReasoning += call.usage.reasoningTokens
       totalCacheRead += call.usage.cacheReadInputTokens
       totalCacheWrite += call.usage.cacheCreationInputTokens
       apiCalls++
@@ -1346,6 +1348,9 @@ function buildSessionSummary(
       modelBreakdown[modelKey].savingsUSD += callSavings
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
+      modelBreakdown[modelKey].tokens.reasoningTokens += call.usage.reasoningTokens
+      modelBreakdown[modelKey].tokens.cachedInputTokens += call.usage.cachedInputTokens
+      modelBreakdown[modelKey].tokens.webSearchRequests += call.usage.webSearchRequests
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
       modelBreakdown[modelKey].tokens.cacheCreationInputTokens += call.usage.cacheCreationInputTokens
 
@@ -1381,6 +1386,7 @@ function buildSessionSummary(
     totalSavingsUSD: totalSavings,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
+    totalReasoningTokens: totalReasoning,
     totalCacheReadTokens: totalCacheRead,
     totalCacheWriteTokens: totalCacheWrite,
     apiCalls,

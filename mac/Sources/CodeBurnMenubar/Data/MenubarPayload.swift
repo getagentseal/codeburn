@@ -104,9 +104,33 @@ struct RoutingWaste: Codable, Sendable {
     let byModel: [RoutingWasteModelEntry]
 }
 
+struct SubscriptionPlanCost: Codable, Sendable {
+    let provider: String
+    let mode: String
+    let monthlyUsd: Double
+    let allocatedCost: Double
+    let apiEquivalentCost: Double
+    let periodStart: String
+    let periodEnd: String
+}
+
+struct SubscriptionTopUpCost: Codable, Sendable {
+    let id: String
+    let provider: String
+    let amountUsd: Double
+    let purchasedAt: String
+    let tokens: Int?
+    let note: String
+}
+
 struct CurrentBlock: Codable, Sendable {
     let label: String
+    let apiEquivalentCost: Double
     let cost: Double
+    let subscriptionCost: Double
+    let subscriptionCostMode: String
+    let subscriptionPlans: [SubscriptionPlanCost]
+    let subscriptionTopUps: [SubscriptionTopUpCost]
     let calls: Int
     let sessions: Int
     let oneShotRate: Double?
@@ -131,7 +155,8 @@ struct CurrentBlock: Codable, Sendable {
 
 extension CurrentBlock {
     enum CodingKeys: String, CodingKey {
-        case label, cost, calls, sessions, oneShotRate, inputTokens, outputTokens,
+        case label, apiEquivalentCost, cost, subscriptionCost, subscriptionCostMode,
+             subscriptionPlans, subscriptionTopUps, calls, sessions, oneShotRate, inputTokens, outputTokens,
              cacheHitPercent, topActivities, topModels, localModelSavings, providers, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers, codexChats48h
@@ -140,6 +165,11 @@ extension CurrentBlock {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         label = try c.decode(String.self, forKey: .label)
         cost = try c.decode(Double.self, forKey: .cost)
+        apiEquivalentCost = try c.decodeIfPresent(Double.self, forKey: .apiEquivalentCost) ?? cost
+        subscriptionCost = try c.decodeIfPresent(Double.self, forKey: .subscriptionCost) ?? 0
+        subscriptionCostMode = try c.decodeIfPresent(String.self, forKey: .subscriptionCostMode) ?? "api-equivalent"
+        subscriptionPlans = try c.decodeIfPresent([SubscriptionPlanCost].self, forKey: .subscriptionPlans) ?? []
+        subscriptionTopUps = try c.decodeIfPresent([SubscriptionTopUpCost].self, forKey: .subscriptionTopUps) ?? []
         calls = try c.decode(Int.self, forKey: .calls)
         sessions = try c.decode(Int.self, forKey: .sessions)
         oneShotRate = try c.decodeIfPresent(Double.self, forKey: .oneShotRate)
@@ -365,6 +395,11 @@ struct ProjectEntry: Codable, Sendable {
     let cost: Double
     let savingsUSD: Double
     let sessions: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheReadTokens: Int
+    let cacheWriteTokens: Int
+    let totalTokens: Int
     let avgCostPerSession: Double
     let sessionDetails: [SessionDetailEntry]
 
@@ -374,12 +409,18 @@ struct ProjectEntry: Codable, Sendable {
         cost = try c.decode(Double.self, forKey: .cost)
         savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         sessions = try c.decode(Int.self, forKey: .sessions)
+        inputTokens = try c.decodeIfPresent(Int.self, forKey: .inputTokens) ?? 0
+        outputTokens = try c.decodeIfPresent(Int.self, forKey: .outputTokens) ?? 0
+        cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens) ?? 0
+        cacheWriteTokens = try c.decodeIfPresent(Int.self, forKey: .cacheWriteTokens) ?? 0
+        totalTokens = try c.decodeIfPresent(Int.self, forKey: .totalTokens)
+            ?? inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
         avgCostPerSession = try c.decode(Double.self, forKey: .avgCostPerSession)
         sessionDetails = try c.decodeIfPresent([SessionDetailEntry].self, forKey: .sessionDetails) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, cost, savingsUSD, sessions, avgCostPerSession, sessionDetails
+        case name, cost, savingsUSD, sessions, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, totalTokens, avgCostPerSession, sessionDetails
     }
 }
 
@@ -453,7 +494,12 @@ extension MenubarPayload {
         generated: "",
         current: CurrentBlock(
             label: "",
+            apiEquivalentCost: 0,
             cost: 0,
+            subscriptionCost: 0,
+            subscriptionCostMode: "api-equivalent",
+            subscriptionPlans: [],
+            subscriptionTopUps: [],
             calls: 0,
             sessions: 0,
             oneShotRate: nil,

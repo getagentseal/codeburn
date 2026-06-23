@@ -196,6 +196,7 @@ function buildStateFallbackCall(
   const projectPath = usage.cwd
   const project = projectPath ? sanitizeProject(projectPath) : source.project
   const userMessage = usage.first_user_message ?? usage.title ?? sessionName ?? ''
+  const chatTitle = codexChatTitle(usage.title, usage.first_user_message, sessionName)
   const fallbackInputTokens = 0
   const dedupKey = `codex-state:${usage.id}:${usage.tokens_used}`
 
@@ -219,11 +220,32 @@ function buildStateFallbackCall(
     turnId: `${usage.id}:state`,
     userMessage,
     sessionId: usage.id,
-    chatTitle: usage.title ?? sessionName,
+    chatTitle,
     project,
     projectPath,
     metadataOnly: true,
   }
+}
+
+function isCodexServiceTitle(title: string | undefined): boolean {
+  const trimmed = title?.trim()
+  return !trimmed
+    || trimmed === 'automation_update'
+    || trimmed.startsWith('# AGENTS.md instructions')
+    || trimmed.startsWith('<environment_context>')
+    || trimmed.startsWith('<permissions instructions>')
+    || trimmed.startsWith('<app-context>')
+    || trimmed.startsWith('<skills_instructions>')
+    || trimmed.startsWith('<plugins_instructions>')
+}
+
+function codexChatTitle(title?: string, firstUserMessage?: string, sessionName?: string): string | undefined {
+  const cleanedTitle = title?.trim()
+  if (!isCodexServiceTitle(cleanedTitle)) return cleanedTitle
+  const cleanedFirst = firstUserMessage?.trim()
+  if (!isCodexServiceTitle(cleanedFirst)) return cleanedFirst
+  const cleanedSessionName = sessionName?.trim()
+  return isCodexServiceTitle(cleanedSessionName) ? undefined : cleanedSessionName
 }
 
 function sanitizeProject(cwd: string): string {
@@ -674,7 +696,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, codexDir = g
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
               userMessage: pendingUserMessage,
               sessionId,
-              chatTitle: sessionName,
+              chatTitle: codexChatTitle(sessionName, pendingUserMessage),
             })
 
             pendingTools = []
@@ -785,7 +807,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, codexDir = g
             toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
             userMessage: pendingUserMessage,
             sessionId,
-            chatTitle: sessionName,
+            chatTitle: codexChatTitle(sessionName, pendingUserMessage),
           })
 
           pendingTools = []
@@ -832,7 +854,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, codexDir = g
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
               userMessage: firstTranscriptUserMessage || pendingUserMessage,
               sessionId: fallbackSessionId,
-              chatTitle: sessionName,
+              chatTitle: codexChatTitle(sessionName, firstTranscriptUserMessage || pendingUserMessage),
               project: source.project,
             })
           }

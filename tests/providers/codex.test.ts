@@ -16,7 +16,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
 })
 
-function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string; forked_from_id?: string; timestamp?: string } = {}) {
+function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string; forked_from_id?: string; timestamp?: string; name?: string } = {}) {
   return JSON.stringify({
     type: 'session_meta',
     timestamp: opts.timestamp ?? '2026-04-14T10:00:00Z',
@@ -25,6 +25,7 @@ function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: str
       originator: opts.originator ?? 'codex-cli',
       session_id: opts.session_id ?? 'sess-001',
       model: opts.model ?? 'gpt-5.3-codex',
+      ...(opts.name ? { name: opts.name } : {}),
       ...(opts.forked_from_id ? { forked_from_id: opts.forked_from_id } : {}),
     },
   })
@@ -303,6 +304,29 @@ describe('codex provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['Agent', 'Agent', 'Agent'])
+  })
+
+  it('uses the first user message instead of the automation service name for chat titles', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-service-title.jsonl', [
+      sessionMeta({ session_id: 'sess-service-title', model: 'gpt-5.5', name: 'automation_update' }),
+      userMessage('fix chat names'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.chatTitle).toBe('fix chat names')
   })
 
   it('skips duplicate token_count events', async () => {

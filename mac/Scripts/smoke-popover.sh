@@ -23,4 +23,4 @@ ln -sf "$ROOT_DIR/dist/cli.js" "$TMP_CLI_DIR/cli.js"
 )
 
 echo "Smoke report: $OUT_DIR/report.json"
-echo "Smoke screenshot: $OUT_DIR/popover-today-trend.png"
+echo "Smoke screenshot: see $OUT_DIR/report.json"

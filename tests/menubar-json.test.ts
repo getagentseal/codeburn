@@ -43,6 +43,65 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.outputTokens).toBe(675600)
   })
 
+  it('groups duplicate project rows before rendering top projects', () => {
+    const period = emptyPeriod('Today')
+    period.projects = [
+      {
+        name: 'Baza',
+        cost: 1,
+        savingsUSD: 0,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 10,
+        reasoningTokens: 4,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 1,
+        sessionDetails: [],
+      },
+      {
+        name: 'Baza',
+        cost: 2,
+        savingsUSD: 0,
+        sessions: 3,
+        inputTokens: 200,
+        outputTokens: 20,
+        reasoningTokens: 5,
+        cacheReadTokens: 6,
+        cacheWriteTokens: 2,
+        sessionDetails: [],
+      },
+      {
+        name: 'Life',
+        cost: 4,
+        savingsUSD: 0,
+        sessions: 2,
+        inputTokens: 400,
+        outputTokens: 40,
+        reasoningTokens: 0,
+        cacheReadTokens: 7,
+        cacheWriteTokens: 3,
+        sessionDetails: [],
+      },
+    ]
+
+    const payload = buildMenubarPayload(period, [], null)
+    const baza = payload.current.topProjects.find(p => p.name === 'Baza')!
+
+    expect(payload.current.topProjects.map(p => p.name)).toEqual([
+      'Life',
+      'Baza',
+    ])
+    expect(baza.cost).toBe(3)
+    expect(baza.sessions).toBe(4)
+    expect(baza.avgCostPerSession).toBe(0.75)
+    expect(baza.inputTokens).toBe(300)
+    expect(baza.outputTokens).toBe(30)
+    expect(baza.reasoningTokens).toBe(9)
+    expect(baza.cacheReadTokens).toBe(11)
+    expect(baza.cacheWriteTokens).toBe(3)
+    expect(baza.totalTokens).toBe(353)
+  })
+
   it('computes per-category oneShotRate from editTurns and skips categories without edits', () => {
     const period: PeriodData = {
       label: 'Today',

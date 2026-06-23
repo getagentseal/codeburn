@@ -14,11 +14,12 @@ export type PeriodData = {
   sessions: number
   inputTokens: number
   outputTokens: number
+  reasoningTokens?: number
   cacheReadTokens: number
   cacheWriteTokens: number
   categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
   models: Array<{ name: string; cost: number; savingsUSD: number; calls: number }>
-  projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
+  projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; inputTokens: number; outputTokens: number; reasoningTokens?: number; cacheReadTokens: number; cacheWriteTokens: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; reasoningTokens?: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
   topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string }>
 }
@@ -74,6 +75,25 @@ export type LocalModelSavings = {
   byProvider: Array<{ name: string; calls: number; savingsUSD: number }>
 }
 
+export type SubscriptionPlanCost = {
+  provider: string
+  mode: 'amortized' | 'actual-payments'
+  monthlyUsd: number
+  allocatedCost: number
+  apiEquivalentCost: number
+  periodStart: string
+  periodEnd: string
+}
+
+export type SubscriptionTopUpCost = {
+  id: string
+  provider: string
+  amountUsd: number
+  purchasedAt: string
+  tokens: number | null
+  note: string
+}
+
 export type CodexChatsReport = {
   label: string
   provider: 'codex'
@@ -85,6 +105,7 @@ export type CodexChatsReport = {
     cost: number
     inputTokens: number
     outputTokens: number
+    reasoningTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
     totalTokens: number
@@ -102,6 +123,7 @@ export type CodexChatsReport = {
     cost: number
     inputTokens: number
     outputTokens: number
+    reasoningTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
     totalTokens: number
@@ -111,6 +133,7 @@ export type CodexChatsReport = {
       cost: number
       inputTokens: number
       outputTokens: number
+      reasoningTokens: number
       cacheReadTokens: number
       cacheWriteTokens: number
     }>
@@ -121,7 +144,12 @@ export type MenubarPayload = {
   generated: string
   current: {
     label: string
+    apiEquivalentCost: number
     cost: number
+    subscriptionCost: number
+    subscriptionCostMode: 'api-equivalent' | 'amortized' | 'actual-payments'
+    subscriptionPlans: SubscriptionPlanCost[]
+    subscriptionTopUps: SubscriptionTopUpCost[]
     calls: number
     sessions: number
     oneShotRate: number | null
@@ -154,6 +182,12 @@ export type MenubarPayload = {
       cost: number
       savingsUSD: number
       sessions: number
+      inputTokens: number
+      outputTokens: number
+      reasoningTokens: number
+      cacheReadTokens: number
+      cacheWriteTokens: number
+      totalTokens: number
       avgCostPerSession: number
       sessionDetails: Array<{
         cost: number
@@ -161,6 +195,7 @@ export type MenubarPayload = {
         calls: number
         inputTokens: number
         outputTokens: number
+        reasoningTokens?: number
         date: string
         models: Array<{ name: string; cost: number; savingsUSD: number }>
       }>
@@ -295,8 +330,34 @@ function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['h
 }
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
-  return (projects ?? [])
-    .filter(p => p.sessions > 0)
+  const grouped = new Map<
+    string,
+    NonNullable<PeriodData['projects']>[number]
+  >()
+  for (const project of projects ?? []) {
+    if (project.sessions <= 0) continue
+    const existing = grouped.get(project.name)
+    if (existing) {
+      existing.cost += project.cost
+      existing.savingsUSD += project.savingsUSD
+      existing.sessions += project.sessions
+      existing.inputTokens += project.inputTokens
+      existing.outputTokens += project.outputTokens
+      existing.reasoningTokens = (existing.reasoningTokens ?? 0) + (project.reasoningTokens ?? 0)
+      existing.cacheReadTokens += project.cacheReadTokens
+      existing.cacheWriteTokens += project.cacheWriteTokens
+      existing.sessionDetails = [
+        ...(existing.sessionDetails ?? []),
+        ...(project.sessionDetails ?? []),
+      ]
+    } else {
+      grouped.set(project.name, {
+        ...project,
+        sessionDetails: [...(project.sessionDetails ?? [])],
+      })
+    }
+  }
+  return [...grouped.values()]
     .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
     .slice(0, TOP_PROJECTS_LIMIT)
     .map(p => ({
@@ -304,6 +365,12 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
       cost: p.cost,
       savingsUSD: p.savingsUSD,
       sessions: p.sessions,
+      inputTokens: p.inputTokens,
+      outputTokens: p.outputTokens,
+      reasoningTokens: p.reasoningTokens ?? 0,
+      cacheReadTokens: p.cacheReadTokens,
+      cacheWriteTokens: p.cacheWriteTokens,
+      totalTokens: p.inputTokens + p.outputTokens + (p.reasoningTokens ?? 0) + p.cacheReadTokens + p.cacheWriteTokens,
       avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,
@@ -311,6 +378,7 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
         calls: s.calls,
         inputTokens: s.inputTokens,
         outputTokens: s.outputTokens,
+        reasoningTokens: s.reasoningTokens ?? 0,
         date: s.date,
         models: s.models,
       })),
@@ -344,6 +412,11 @@ export type BreakdownArrays = {
   /// schema stable for consumers that don't care about local savings.
   localModelSavings?: LocalModelSavings
   codexChats48h?: CodexChatsReport
+  apiEquivalentCost?: number
+  subscriptionCost?: number
+  subscriptionCostMode?: 'api-equivalent' | 'amortized' | 'actual-payments'
+  subscriptionPlans?: SubscriptionPlanCost[]
+  subscriptionTopUps?: SubscriptionTopUpCost[]
 }
 
 export function buildMenubarPayload(
@@ -359,7 +432,12 @@ export function buildMenubarPayload(
     generated: new Date().toISOString(),
     current: {
       label: current.label,
+      apiEquivalentCost: breakdowns?.apiEquivalentCost ?? current.cost,
       cost: current.cost,
+      subscriptionCost: breakdowns?.subscriptionCost ?? 0,
+      subscriptionCostMode: breakdowns?.subscriptionCostMode ?? 'api-equivalent',
+      subscriptionPlans: breakdowns?.subscriptionPlans ?? [],
+      subscriptionTopUps: breakdowns?.subscriptionTopUps ?? [],
       calls: current.calls,
       sessions: current.sessions,
       oneShotRate: aggregateOneShotRate(current.categories),
@@ -385,7 +463,7 @@ export function buildMenubarPayload(
         hours: 48,
         totalChats: 0,
         returnedChats: 0,
-        totals: { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 },
+        totals: { calls: 0, cost: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 },
         chats: [],
       },
     },

@@ -1194,6 +1194,43 @@ private struct OptimizeSavingsBadge: View {
 
 // MARK: - Codex Chats
 
+func groupCodexChatProjects(_ chats: [CodexChatEntry]) -> [CodexChatProject] {
+    let grouped = Dictionary(grouping: chats) { chat in
+        codexChatProjectGroupName(chat)
+    }
+    return grouped.map { key, chats in
+        let sortedChats = chats.sorted { $0.totalTokens > $1.totalTokens }
+        return CodexChatProject(
+            id: key,
+            name: key,
+            path: preferredCodexChatProjectPath(sortedChats),
+            chats: sortedChats
+        )
+    }
+    .sorted { $0.totalTokens > $1.totalTokens }
+}
+
+func codexChatProjectGroupName(_ chat: CodexChatEntry) -> String {
+    let displayName = chat.projectDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !displayName.isEmpty { return displayName }
+
+    let projectName = projectDisplayName(chat.project).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !projectName.isEmpty { return projectName }
+
+    let pathName = projectDisplayName(chat.projectPath).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !pathName.isEmpty { return pathName }
+
+    return "Unknown project"
+}
+
+func preferredCodexChatProjectPath(_ chats: [CodexChatEntry]) -> String {
+    if let stablePath = chats.first(where: { !$0.projectPath.contains("/.codex/worktrees/") })?.projectPath {
+        return stablePath
+    }
+
+    return chats.first?.projectPath ?? ""
+}
+
 private struct CodexChatsInsight: View {
     let report: CodexChatsReport
     let selectedWindow: CodexChatWindow
@@ -1201,20 +1238,7 @@ private struct CodexChatsInsight: View {
     @State private var expandedProjectID: String?
 
     private var projects: [CodexChatProject] {
-        let grouped = Dictionary(grouping: report.chats) { chat in
-            chat.projectPath.isEmpty ? chat.projectDisplayName : chat.projectPath
-        }
-        return grouped.map { key, chats in
-            let sortedChats = chats.sorted { $0.totalTokens > $1.totalTokens }
-            let first = sortedChats[0]
-            return CodexChatProject(
-                id: key,
-                name: first.projectDisplayName.isEmpty ? projectDisplayName(first.project) : first.projectDisplayName,
-                path: first.projectPath,
-                chats: sortedChats
-            )
-        }
-        .sorted { $0.totalTokens > $1.totalTokens }
+        groupCodexChatProjects(report.chats)
     }
 
     private var maxTokens: Int {
@@ -1313,7 +1337,7 @@ private struct CodexChatsInsight: View {
     }
 }
 
-private struct CodexChatProject: Identifiable {
+struct CodexChatProject: Identifiable {
     let id: String
     let name: String
     let path: String
@@ -1345,9 +1369,11 @@ private struct CodexChatProjectRow: View {
                     .frame(width: max(4, 54 * ratio), height: 6)
                 Text(project.name)
                     .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .frame(minWidth: 42, alignment: .leading)
+                    .layoutPriority(1)
                 Spacer(minLength: 8)
                 Text("\(project.chats.count) chats")
                     .font(.system(size: 9.5))
@@ -1414,8 +1440,9 @@ private struct CodexChatRow: View {
             HStack(spacing: 6) {
                 Text(chat.chatTitle)
                     .font(.system(size: 10.2, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(2)
+                    .layoutPriority(1)
                 Spacer(minLength: 8)
                 Text(compactTokens(chat.totalTokens))
                     .font(.codeMono(size: 10.5, weight: .semibold))
@@ -1645,7 +1672,7 @@ private struct StatRow: View {
     }
 }
 
-private func projectDisplayName(_ path: String) -> String {
+func projectDisplayName(_ path: String) -> String {
     path.split(separator: "/").last.map(String.init) ?? path
 }
 
@@ -1675,6 +1702,10 @@ private struct TopProjectsList: View {
                         Text("\(project.sessions) sess")
                             .font(.system(size: 9.5))
                             .foregroundStyle(.quaternary)
+                        Text(compactTokens(project.totalTokens))
+                            .font(.codeMono(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
                         Text(project.cost.asCompactCurrency())
                             .font(.codeMono(size: 10.5, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -1701,6 +1732,14 @@ private struct TopProjectsList: View {
                 }
             }
         }
+    }
+
+    private func compactTokens(_ n: Int) -> String {
+        let d = Double(n)
+        if d >= 1_000_000_000 { return String(format: "%.1fB", d / 1_000_000_000) }
+        if d >= 1_000_000 { return String(format: "%.1fM", d / 1_000_000) }
+        if d >= 1_000 { return String(format: "%.0fK", d / 1_000) }
+        return "\(n)"
     }
 }
 

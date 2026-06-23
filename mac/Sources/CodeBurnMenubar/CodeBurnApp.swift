@@ -3,7 +3,7 @@ import AppKit
 import Observation
 import Foundation
 
-private let refreshIntervalSeconds: UInt64 = 30
+private let refreshIntervalSeconds: UInt64 = 5 * 60
 private let forceRefreshWatchdogSeconds: TimeInterval = 90
 private let refreshLoopWatchdogSeconds: TimeInterval = 90
 private let statusPayloadRefreshWatchdogSeconds: TimeInterval = 60
@@ -107,6 +107,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
+    private func smokeInsightMode() -> InsightMode {
+        guard let requested = ProcessInfo.processInfo.environment["CODEBURN_MENUBAR_SMOKE_INSIGHT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !requested.isEmpty else { return .trend }
+        return InsightMode.allCases.first { $0.rawValue.caseInsensitiveCompare(requested) == .orderedSame } ?? .trend
+    }
+
+    private func smokeChatWindow() -> CodexChatWindow {
+        guard let requested = ProcessInfo.processInfo.environment["CODEBURN_MENUBAR_SMOKE_CHAT_WINDOW"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !requested.isEmpty else { return .twentyFourHours }
+        return CodexChatWindow.allCases.first { $0.rawValue.caseInsensitiveCompare(requested) == .orderedSame } ?? .twentyFourHours
+    }
+
     private func runMenubarSmoke(outputDir: URL) async {
         do {
             try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -114,13 +126,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.selectedProvider = .all
             store.selectedPeriod = .today
             store.selectedDays = []
-            store.selectedInsight = .trend
-            store.selectedChatWindow = .twentyFourHours
+            let smokeInsight = smokeInsightMode()
+            store.selectedInsight = smokeInsight
+            store.selectedChatWindow = smokeChatWindow()
             await store.refresh(includeOptimize: false, force: true, showLoading: false)
             refreshStatusButton()
             showPopoverForSmoke()
             try await Task.sleep(nanoseconds: 900_000_000)
-            let screenshotURL = outputDir.appendingPathComponent("popover-today-trend.png")
+            let screenshotName = "popover-today-\(smokeInsight.rawValue.lowercased()).png"
+            let screenshotURL = outputDir.appendingPathComponent(screenshotName)
             try capturePopoverScreenshot(to: screenshotURL)
             try writeMenubarSmokeReport(to: outputDir.appendingPathComponent("report.json"), screenshotURL: screenshotURL)
         } catch {
@@ -156,6 +170,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let payload = store.payload
         let todayDate = AppStore.dayString(from: Date())
         let today = payload.history.daily.first { $0.date == todayDate }
+        let chatProjects = groupCodexChatProjects(payload.current.codexChats48h.chats)
+        let duplicateProjectNames = Dictionary(grouping: chatProjects, by: { $0.name })
+            .filter { $0.value.count > 1 }
+            .map { $0.key }
+            .sorted()
+        let chatProjectRows = chatProjects.map { project in
+            [
+                "name": project.name,
+                "path": project.path,
+                "chats": project.chats.count,
+                "tokens": project.totalTokens,
+                "calls": project.calls,
+            ] as [String: Any]
+        }
         let report: [String: Any] = [
             "ok": true,
             "selectedProvider": store.selectedProvider.rawValue,
@@ -165,8 +193,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             "currentInputTokens": payload.current.inputTokens,
             "currentOutputTokens": payload.current.outputTokens,
             "currentCalls": payload.current.calls,
+            "chatHours": payload.current.codexChats48h.hours,
             "chatReturned": payload.current.codexChats48h.returnedChats,
+            "chatTotalChats": payload.current.codexChats48h.totalChats,
+            "chatCalls": payload.current.codexChats48h.totals.calls,
+            "chatCost": payload.current.codexChats48h.totals.cost,
             "chatTotalTokens": payload.current.codexChats48h.totals.totalTokens,
+            "chatProjectRowCount": chatProjects.count,
+            "chatProjectRows": chatProjectRows,
+            "chatDuplicateProjectNames": duplicateProjectNames,
             "trendLabelExpected": "Today",
             "trendDayCountExpected": 1,
             "todayHistory": [
@@ -688,12 +723,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = self.store.menubarPeriod
             _ = self.store.menubarPayload
             // Track currency so the menubar title catches up immediately on
-            // currency switch instead of waiting for the next 30s payload tick.
+            // currency switch instead of waiting for the next 5-minute payload tick.
             _ = self.store.currency
             _ = self.store.displayMetric
             _ = self.store.dailyBudget
             // Track the live-quota state too so the flame icon re-tints on
-            // every subscription / codex usage update, not just every 30s.
+            // every subscription / codex usage update, not just every 5-minute tick.
             _ = self.store.subscription
             _ = self.store.subscriptionLoadState
             _ = self.store.codexUsage

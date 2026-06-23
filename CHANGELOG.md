@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - 2026-06-23
+
+### Fixed (macOS menubar)
+- **CodeBurn menubar restore verification.** The existing native macOS menubar
+  path now has documented restore evidence for the status item, real Codex token
+  totals, and smoke output; no duplicate widget or fake data path was added.
+
+### Fixed (CLI)
+- **Codex menubar JSON real-token evidence.** `status --format menubar-json`
+  verification now covers Today, Last 7 Days, Month, and Codex-specific payloads
+  with non-empty, finite token and cost fields.
+
 ## 0.9.12 - 2026-06-09
 
 ### Added (CLI)
@@ -41,6 +53,35 @@
 - **Codex stale cache invalidation.** Codex per-file, session, and daily
   rollup caches now invalidate old entries that could preserve pre-fix token
   totals, so Today recomputes from current session files.
+- **Codex chat titles in the menubar.** Service names such as
+  `automation_update` now fall back to the first user message or Codex state
+  metadata, injected context such as `AGENTS.md instructions` no longer
+  masks saved Codex thread titles, and zero-token Codex state rows can still
+  name active parsed chats without adding token spend.
+- **Codex worktree project names in the menubar.** Automatic Codex worktree
+  paths now display and group under the real project name, including the Chats
+  project list, so task-slug tails like `tovarov`, `redaktirovan`, or
+  `momentalno` no longer appear as duplicate projects. The menubar smoke
+  harness can now open Chats directly and reports duplicate project rows.
+- **Project token totals in the menubar.** Top project rows now carry and render
+  aggregated input/output/cache token totals, matching the summed chat/session
+  details instead of exposing only cost and session counts.
+- **Codex Chats time-window filtering.** The menubar Chats insight now selects
+  Codex chats by each chat's last message timestamp for 24h/48h/3d/7d windows,
+  so tokens, cost, calls, and related totals change with the selected window.
+- **Codex Chats live token refresh.** Fresh `threads.tokens_used` values from
+  Codex sqlite state now update displayed chat token totals within a five-minute
+  freshness window without changing API-equivalent spend.
+- **Codex monthly-plan menubar cost.** When `subscriptionCostMode.codex` is
+  `amortized` or `actual-payments`, the macOS menubar payload reports the selected
+  period from subscription payments while preserving API-equivalent cost separately.
+  `actual-payments` also includes configured `tokenPackages` purchases in period cost,
+  and Activity, Models, Projects, Sessions, Calendar/Forecast/Stats, and Optimize
+  findings now use the same raw session totals before applying the subscription
+  adjustment for both All and provider-specific views.
+- **Codex reasoning token totals.** Codex session summaries, Chats, top project
+  rows, and CLI JSON session totals now expose `reasoningTokens` and include them
+  in `totalTokens`, matching the real `token_count` data already used for pricing.
 - **Model-name matching on the version boundary** so e.g. `claude-opus-4-6`
   and `claude-opus-4-8` no longer collapse to the same tier. (#417)
 - Vercel AI Gateway data now flows through aggregation instead of reporting $0;
@@ -63,6 +104,9 @@
 - **Refresh reliability.** The app awaits the CLI's exit via its termination
   handler instead of blocking a queue thread, and caps concurrent CLI spawns —
   fixing the menubar wedging on "Loading…" after a long idle. (#462)
+- **Passive refresh cadence.** The menubar payload refresh loop now runs every
+  five minutes, while manual refresh, wake recovery, and settings-triggered
+  refreshes still bypass the passive timer.
 - Recover from stuck loading when an in-flight refresh is orphaned across
   sleep/wake. (#412)
 - Use the correct currency enum in the Settings picker. (#435)

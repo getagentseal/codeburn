@@ -172,6 +172,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
   const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
   const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
+  const totalReasoning = sessions.reduce((s, sess) => s + (sess.totalReasoningTokens ?? 0), 0)
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
   // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
@@ -239,16 +240,17 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     sessions: p.sessions.length,
   }))
 
-  const modelMap: Record<string, { calls: number; cost: number; savings: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
+  const modelMap: Record<string, { calls: number; cost: number; savings: number; inputTokens: number; outputTokens: number; reasoningTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const sess of sessions) {
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, savings: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' } }
+      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, savings: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' } }
       modelMap[model].calls += d.calls
       modelMap[model].cost += d.costUSD
       modelMap[model].savings += d.savingsUSD
       modelMap[model].inputTokens += d.tokens.inputTokens
       modelMap[model].outputTokens += d.tokens.outputTokens
+      modelMap[model].reasoningTokens += d.tokens.reasoningTokens ?? 0
       modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
       modelMap[model].cacheWriteTokens += d.tokens.cacheCreationInputTokens
     }
@@ -373,9 +375,10 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       calls: s.apiCalls,
       inputTokens: s.totalInputTokens,
       outputTokens: s.totalOutputTokens,
+      reasoningTokens: s.totalReasoningTokens ?? 0,
       cacheReadTokens: s.totalCacheReadTokens,
       cacheWriteTokens: s.totalCacheWriteTokens,
-      totalTokens: s.totalInputTokens + s.totalOutputTokens + s.totalCacheReadTokens + s.totalCacheWriteTokens,
+      totalTokens: s.totalInputTokens + s.totalOutputTokens + (s.totalReasoningTokens ?? 0) + s.totalCacheReadTokens + s.totalCacheWriteTokens,
     })))
     .sort((a, b) => (b.lastSeenAt ?? "").localeCompare(a.lastSeenAt ?? ""))
 
@@ -403,6 +406,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       tokens: {
         input: totalInput,
         output: totalOutput,
+        reasoning: totalReasoning,
         cacheRead: totalCacheRead,
         cacheWrite: totalCacheWrite,
       },
@@ -572,8 +576,8 @@ program
     const hours = Math.max(1, Math.floor(opts.hours ?? 48))
     const limit = Math.max(1, Math.floor(opts.limit ?? 5000))
     const now = new Date()
-    const projects = await parseAllSessions({ start: new Date(now.getTime() - hours * 60 * 60 * 1000), end: now }, 'codex')
-    const report = buildCodexChatsReport(projects, hours, limit)
+    const projects = await parseAllSessions(undefined, 'codex')
+    const report = buildCodexChatsReport(projects, hours, limit, now)
     if (opts.format === 'json') {
       console.log(JSON.stringify(report, null, 2))
       return
