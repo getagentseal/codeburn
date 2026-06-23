@@ -8,11 +8,11 @@
 //   cache-read tokens, and cache-creation tokens are never written there, so
 //   CodeBurn underreports Copilot costs by 60-80%.
 //
-//   This modified version adds a SECOND data source: VS Code Copilot Chat's
-//   OTel SQLite store (agent-traces.db). When present, it contains full
-//   per-LLM-call token breakdowns (input, output, cache_read, cache_creation)
-//   from the OpenTelemetry GenAI semantic conventions. We prefer OTel data
-//   when available and fall back to the original JSONL parsing.
+//   This modified version adds VS Code sources that can carry fuller token
+//   data: the OTel SQLite store (agent-traces.db), VS Code core chatSessions
+//   journals, and legacy extension transcripts. OTel and chatSessions contain
+//   input/output token breakdowns for Copilot Chat users; legacy JSONL remains
+//   a fallback when richer sources are absent.
 //
 // HOW TO ENABLE THE OTEL SQLITE STORE:
 //   TWO settings must both be enabled in VS Code settings.json:
@@ -37,11 +37,13 @@
 // ENVIRONMENT VARIABLES:
 //   CODEBURN_COPILOT_OTEL_DB    — Override the agent-traces.db path
 //   CODEBURN_COPILOT_DISABLE_OTEL=1 — Skip OTel entirely, use only JSONL
+//   CODEBURN_COPILOT_WS_STORAGE_DIR — Override VS Code workspaceStorage
+//   CODEBURN_COPILOT_GLOBAL_STORAGE_DIR — Override VS Code globalStorage
 //
 // ARCHITECTURE:
-//   discoverSessions() returns BOTH OTel sessions (one per conversation_id)
-//   and JSONL sessions. The OTel sessions are deduped against JSONL by
-//   conversation ID so we don't double-count. OTel sessions carry the full
+//   discoverSessions() returns OTel sessions and legacy JSONL sessions. When
+//   OTel is present, VS Code core chatSessions are skipped because they mirror
+//   the same Copilot turns under different IDs. OTel sessions carry the full
 //   token breakdown; JSONL sessions only carry output tokens (the original
 //   behaviour, as a fallback).
 //
@@ -188,6 +190,9 @@ type CopilotEvent =
   | { type: 'assistant.message'; data: AssistantMessageData; timestamp?: string }
   | { type: 'subagent.selected'; data: SubagentSelectedData; timestamp?: string }
 
+type ChatJournalPathSegment = string | number
+type ChatSessionRequest = Record<string, unknown>
+
 // ---------------------------------------------------------------------------
 // Types for OTel span rows from agent-traces.db
 // ---------------------------------------------------------------------------
@@ -332,6 +337,205 @@ function epochToISO(epoch: number): string {
   // If the value looks like nanoseconds (> 1e15), convert to ms
   const ms = epoch > 1e15 ? Math.floor(epoch / 1e6) : epoch > 1e12 ? epoch : epoch * 1000
   return new Date(ms).toISOString()
+}
+
+function timestampToISO(raw: unknown): string {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return epochToISO(raw)
+  }
+  if (typeof raw !== 'string') return ''
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    return epochToISO(Number(trimmed))
+  }
+  const parsed = Date.parse(trimmed)
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isReplayContainer(value: unknown): value is object {
+  return typeof value === 'object' && value !== null
+}
+
+function createReplayObject(): Record<string, unknown> {
+  return Object.create(null) as Record<string, unknown>
+}
+
+const FORBIDDEN_CHAT_JOURNAL_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
+
+function parseChatJournalPath(rawPath: unknown, fallback?: ChatJournalPathSegment[]): ChatJournalPathSegment[] | null {
+  const value = rawPath === undefined ? fallback : rawPath
+  if (!Array.isArray(value)) return null
+
+  const path: ChatJournalPathSegment[] = []
+  for (const segment of value) {
+    if (typeof segment === 'number') {
+      if (!Number.isInteger(segment) || segment < 0) return null
+      path.push(segment)
+      continue
+    }
+    if (typeof segment === 'string') {
+      if (FORBIDDEN_CHAT_JOURNAL_KEYS.has(segment)) return null
+      path.push(segment)
+      continue
+    }
+    return null
+  }
+  return path
+}
+
+function getReplayValue(container: object, segment: ChatJournalPathSegment): unknown {
+  return (container as Record<string, unknown>)[String(segment)]
+}
+
+function setReplayValue(container: object, segment: ChatJournalPathSegment, value: unknown): void {
+  ;(container as Record<string, unknown>)[String(segment)] = value
+}
+
+function createContainerForNext(segment: ChatJournalPathSegment): unknown[] | Record<string, unknown> {
+  return typeof segment === 'number' ? [] : createReplayObject()
+}
+
+function ensureReplayParent(root: object, path: ChatJournalPathSegment[]): object | null {
+  let current: object = root
+  for (let i = 0; i < path.length - 1; i++) {
+    const segment = path[i]!
+    const nextSegment = path[i + 1]!
+    let child = getReplayValue(current, segment)
+    if (!isReplayContainer(child)) {
+      const created = createContainerForNext(nextSegment)
+      setReplayValue(current, segment, created)
+      current = created
+      continue
+    }
+    current = child
+  }
+  return current
+}
+
+function applyChatJournalSet(root: unknown, path: ChatJournalPathSegment[], value: unknown): unknown {
+  if (path.length === 0) return value
+
+  const workingRoot = isReplayContainer(root) ? root : createReplayObject()
+  const parent = ensureReplayParent(workingRoot, path)
+  if (!parent) return workingRoot
+  setReplayValue(parent, path[path.length - 1]!, value)
+  return workingRoot
+}
+
+function applyChatJournalAppend(root: unknown, path: ChatJournalPathSegment[], items: unknown[]): unknown {
+  const workingRoot = isReplayContainer(root) ? root : createReplayObject()
+
+  if (path.length === 0) {
+    if (Array.isArray(workingRoot)) {
+      for (const item of items) workingRoot.push(item)
+    }
+    return workingRoot
+  }
+
+  const parent = ensureReplayParent(workingRoot, path)
+  if (!parent) return workingRoot
+
+  const last = path[path.length - 1]!
+  let target = getReplayValue(parent, last)
+  const targetArray: unknown[] = Array.isArray(target) ? target : []
+  if (target !== targetArray) {
+    setReplayValue(parent, last, targetArray)
+  }
+  for (const item of items) targetArray.push(item)
+  return workingRoot
+}
+
+function replayChatSessionJournal(content: string): unknown {
+  let root: unknown = createReplayObject()
+  const lines = content.split('\n').filter((l) => l.trim())
+
+  for (const line of lines) {
+    let entry: unknown
+    try {
+      entry = JSON.parse(line) as unknown
+    } catch {
+      continue
+    }
+    if (!isRecord(entry)) continue
+
+    const kind = entry['kind']
+    if (kind === 0) {
+      root = entry['v']
+      continue
+    }
+
+    if (kind === 1) {
+      const path = parseChatJournalPath(entry['k'])
+      if (!path) continue
+      root = applyChatJournalSet(root, path, entry['v'])
+      continue
+    }
+
+    if (kind === 2) {
+      const hasPath = Object.prototype.hasOwnProperty.call(entry, 'k')
+      const path = parseChatJournalPath(hasPath ? entry['k'] : undefined, ['requests'])
+      const items = Array.isArray(entry['v']) ? entry['v'] : []
+      if (!path) continue
+      root = applyChatJournalAppend(root, path, items)
+    }
+  }
+
+  return root
+}
+
+function numberOrZero(raw: unknown): number {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0
+}
+
+function readString(raw: unknown): string {
+  return typeof raw === 'string' ? raw : ''
+}
+
+function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<string, unknown>): string {
+  const resolved = readString(metadata['resolvedModel'])
+  if (resolved) return resolved
+
+  const modelId = readString(req['modelId']).replace(/^copilot\//, '')
+  return modelId || 'unknown'
+}
+
+function extractChatSessionTools(metadata: Record<string, unknown>): string[] {
+  const rounds = metadata['toolCallRounds']
+  if (!Array.isArray(rounds)) return []
+
+  const names = new Set<string>()
+  const addName = (raw: unknown): void => {
+    if (typeof raw === 'string' && raw.trim()) names.add(normalizeTool(raw))
+  }
+  const addFromRecord = (record: Record<string, unknown>): void => {
+    addName(record['toolName'])
+    addName(record['name'])
+    addName(record['tool'])
+  }
+
+  for (const round of rounds) {
+    if (!isRecord(round)) continue
+    addFromRecord(round)
+
+    for (const key of ['tools', 'toolCalls', 'toolRequests']) {
+      const entries = round[key]
+      if (!Array.isArray(entries)) continue
+      for (const entry of entries) {
+        if (typeof entry === 'string') {
+          addName(entry)
+        } else if (isRecord(entry)) {
+          addFromRecord(entry)
+        }
+      }
+    }
+  }
+
+  return [...names]
 }
 
 /**
@@ -565,6 +769,71 @@ function createJsonlParser(
             userMessage: pendingUserMessage,
           }
           pendingUserMessage = ''
+        }
+      }
+    },
+  }
+}
+
+function createChatSessionParser(
+  source: SessionSource,
+  seenKeys: Set<string>
+): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const content = await readSessionFile(source.path)
+      if (!content) return
+
+      const root = replayChatSessionJournal(content)
+      if (!isRecord(root)) return
+
+      const sessionId = readString(root['sessionId']) || basename(source.path, '.jsonl')
+      const sessionCreatedAt = timestampToISO(root['creationDate'])
+      const requests = Array.isArray(root['requests']) ? root['requests'] : []
+
+      for (let index = 0; index < requests.length; index++) {
+        const rawReq = requests[index]
+        if (!isRecord(rawReq)) continue
+
+        const result = rawReq['result']
+        const resultRecord = isRecord(result) ? result : null
+        const rawMetadata = resultRecord?.['metadata']
+        const metadata = isRecord(rawMetadata) ? rawMetadata : createReplayObject()
+
+        const inputTokens = numberOrZero(metadata['promptTokens'])
+        const metadataOutputTokens = numberOrZero(metadata['outputTokens'])
+        const outputTokens = metadataOutputTokens || numberOrZero(rawReq['completionTokens'])
+
+        if (inputTokens === 0 && outputTokens === 0) continue
+
+        const requestId = readString(rawReq['requestId']) || `request-${index}`
+        const dedupKey = `copilot-chatsession:${sessionId}:${requestId}`
+        if (seenKeys.has(dedupKey)) continue
+        seenKeys.add(dedupKey)
+
+        const model = modelFromChatSessionRequest(rawReq, metadata)
+        const costUSD = calculateCost(model, inputTokens, outputTokens, 0, 0, 0)
+        const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
+
+        yield {
+          provider: 'copilot',
+          sessionId,
+          project: source.project,
+          model,
+          inputTokens,
+          outputTokens,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          webSearchRequests: 0,
+          costUSD,
+          tools: extractChatSessionTools(metadata),
+          bashCommands: [],
+          timestamp,
+          speed: 'standard' as const,
+          deduplicationKey: dedupKey,
+          userMessage: '',
         }
       }
     },
@@ -820,8 +1089,16 @@ interface JsonlSessionSource extends SessionSource {
   sourceType: 'jsonl'
 }
 
+interface ChatSessionSource extends SessionSource {
+  sourceType: 'chatsession'
+}
+
 function isOtelSource(source: SessionSource): source is OTelSessionSource {
   return (source as OTelSessionSource).sourceType === 'otel'
+}
+
+function isChatSessionSource(source: SessionSource): source is ChatSessionSource {
+  return (source as ChatSessionSource).sourceType === 'chatsession'
 }
 
 // ---------------------------------------------------------------------------
@@ -921,6 +1198,140 @@ export function getVSCodeWorkspaceStorageDirs(home: string, os: string): string[
   ]
 }
 
+export function getVSCodeGlobalStorageDirs(home: string, os: string): string[] {
+  const j = os === 'win32' ? win32.join : posix.join
+  if (os === 'darwin') {
+    return [
+      j(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage'),
+      j(home, 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage'),
+      j(home, 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage'),
+    ]
+  }
+  if (os === 'linux') {
+    return [
+      j(home, '.config', 'Code', 'User', 'globalStorage'),
+      j(home, '.config', 'Code - Insiders', 'User', 'globalStorage'),
+      j(home, '.config', 'VSCodium', 'User', 'globalStorage'),
+    ]
+  }
+  return [
+    j(home, 'AppData', 'Roaming', 'Code', 'User', 'globalStorage'),
+    j(home, 'AppData', 'Roaming', 'Code - Insiders', 'User', 'globalStorage'),
+    j(home, 'AppData', 'Roaming', 'VSCodium', 'User', 'globalStorage'),
+  ]
+}
+
+async function resolveWorkspaceProject(wsDir: string, hashDir: string): Promise<string> {
+  let project = hashDir
+  try {
+    const wsJson = await readSessionFile(join(wsDir, hashDir, 'workspace.json'))
+    if (wsJson) {
+      const data = JSON.parse(wsJson) as { folder?: string }
+      if (typeof data.folder === 'string') {
+        // folder is a URI like 'file:///home/user/myapp' or 'file:///C:/Users/...'
+        const folder = data.folder.replace(/^file:\/\//, '').replace(/\/+$/, '')
+        const name = basename(folder)
+        if (name) project = name
+      }
+    }
+  } catch {
+    // workspace.json may be absent or malformed
+  }
+  return project
+}
+
+async function hasChatSessionFiles(chatSessionsDir: string): Promise<boolean> {
+  let files: string[]
+  try {
+    files = await readdir(chatSessionsDir)
+  } catch {
+    return false
+  }
+
+  for (const file of files) {
+    if (!file.endsWith('.jsonl')) continue
+    const s = await stat(join(chatSessionsDir, file)).catch(() => null)
+    if (s?.isFile()) return true
+  }
+  return false
+}
+
+// ---------------------------------------------------------------------------
+// Session discovery: VS Code core chatSessions
+// ---------------------------------------------------------------------------
+
+async function discoverWorkspaceChatSessions(
+  workspaceStorageDirs: string[]
+): Promise<ChatSessionSource[]> {
+  const sources: ChatSessionSource[] = []
+
+  for (const wsDir of workspaceStorageDirs) {
+    let hashDirs: string[]
+    try {
+      hashDirs = await readdir(wsDir)
+    } catch {
+      continue
+    }
+
+    for (const hashDir of hashDirs) {
+      const chatSessionsDir = join(wsDir, hashDir, 'chatSessions')
+      let files: string[]
+      try {
+        files = await readdir(chatSessionsDir)
+      } catch {
+        continue
+      }
+
+      const project = await resolveWorkspaceProject(wsDir, hashDir)
+      for (const file of files) {
+        if (!file.endsWith('.jsonl')) continue
+        const path = join(chatSessionsDir, file)
+        const s = await stat(path).catch(() => null)
+        if (!s?.isFile()) continue
+        sources.push({
+          path,
+          project,
+          provider: 'copilot',
+          sourceType: 'chatsession',
+        })
+      }
+    }
+  }
+
+  return sources
+}
+
+async function discoverEmptyWindowChatSessions(
+  globalStorageDirs: string[]
+): Promise<ChatSessionSource[]> {
+  const sources: ChatSessionSource[] = []
+
+  for (const globalDir of globalStorageDirs) {
+    const chatSessionsDir = join(globalDir, 'emptyWindowChatSessions')
+    let files: string[]
+    try {
+      files = await readdir(chatSessionsDir)
+    } catch {
+      continue
+    }
+
+    for (const file of files) {
+      if (!file.endsWith('.jsonl')) continue
+      const path = join(chatSessionsDir, file)
+      const s = await stat(path).catch(() => null)
+      if (!s?.isFile()) continue
+      sources.push({
+        path,
+        project: 'copilot-chat',
+        provider: 'copilot',
+        sourceType: 'chatsession',
+      })
+    }
+  }
+
+  return sources
+}
+
 // ---------------------------------------------------------------------------
 // Session discovery: VS Code workspace transcripts
 // ---------------------------------------------------------------------------
@@ -944,24 +1355,11 @@ async function discoverTranscriptSessions(
     }
 
     for (const hashDir of hashDirs) {
-      const transcriptsDir = join(wsDir, hashDir, 'GitHub.copilot-chat', 'transcripts')
+      const chatSessionsDir = join(wsDir, hashDir, 'chatSessions')
+      if (await hasChatSessionFiles(chatSessionsDir)) continue
 
-      // Resolve project name from workspace.json
-      let project = hashDir
-      try {
-        const wsJson = await readSessionFile(join(wsDir, hashDir, 'workspace.json'))
-        if (wsJson) {
-          const data = JSON.parse(wsJson) as { folder?: string }
-          if (typeof data.folder === 'string') {
-            // folder is a URI like 'file:///home/user/myapp' or 'file:///C:/Users/...'
-            const folder = data.folder.replace(/^file:\/\//, '').replace(/\/+$/, '')
-            const name = basename(folder)
-            if (name) project = name
-          }
-        }
-      } catch {
-        // workspace.json may be absent or malformed
-      }
+      const transcriptsDir = join(wsDir, hashDir, 'GitHub.copilot-chat', 'transcripts')
+      const project = await resolveWorkspaceProject(wsDir, hashDir)
 
       let transcriptFiles: string[]
       try {
@@ -987,7 +1385,11 @@ async function discoverTranscriptSessions(
   return sources
 }
 
-export function createCopilotProvider(sessionStateDir?: string, workspaceStorageDir?: string): Provider {
+export function createCopilotProvider(
+  sessionStateDir?: string,
+  workspaceStorageDir?: string,
+  globalStorageDir?: string
+): Provider {
   // jsonlDir is resolved lazily inside discoverSessions so that env-var
   // overrides set after module load (e.g. in tests) are respected.
 
@@ -1003,6 +1405,13 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
     const envDir = process.env['CODEBURN_COPILOT_WS_STORAGE_DIR']
     if (envDir) return [envDir]
     return getVSCodeWorkspaceStorageDirs(homedir(), platform())
+  }
+
+  function getGlobalDirs(): string[] {
+    if (globalStorageDir !== undefined) return [globalStorageDir]
+    const envDir = process.env['CODEBURN_COPILOT_GLOBAL_STORAGE_DIR']
+    if (envDir) return [envDir]
+    return getVSCodeGlobalStorageDirs(homedir(), platform())
   }
 
   return {
@@ -1023,6 +1432,7 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
 
     async discoverSessions(): Promise<SessionSource[]> {
       const sources: SessionSource[] = []
+      let discoveredOtel = false
 
       // 1. Discover OTel sessions (preferred — full token data)
       const disableOtel = process.env['CODEBURN_COPILOT_DISABLE_OTEL'] === '1'
@@ -1031,6 +1441,7 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
         if (dbPath) {
           try {
             const otelSources = await discoverOtelSessions(dbPath)
+            discoveredOtel = otelSources.length > 0
             sources.push(...otelSources)
           } catch {
             // OTel discovery failed — fall through to JSONL
@@ -1047,7 +1458,27 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
         // JSONL discovery failed
       }
 
-      // 3. Discover VS Code workspace transcript sessions
+      // Prefer OTel over chatSessions: they can mirror the same turns under
+      // incompatible IDs, and OTel carries richer token/cache data.
+      if (!discoveredOtel) {
+        // 3. Discover VS Code core chatSessions journals
+        try {
+          const chatSessionSources = await discoverWorkspaceChatSessions(getWsDirs())
+          sources.push(...chatSessionSources)
+        } catch {
+          // Workspace chatSessions discovery failed
+        }
+
+        // 4. Discover VS Code empty-window chatSessions journals
+        try {
+          const emptyWindowSources = await discoverEmptyWindowChatSessions(getGlobalDirs())
+          sources.push(...emptyWindowSources)
+        } catch {
+          // Empty-window chatSessions discovery failed
+        }
+      }
+
+      // 5. Discover VS Code workspace transcript sessions
       try {
         const transcriptSources = await discoverTranscriptSessions(getWsDirs())
         sources.push(...transcriptSources)
@@ -1068,6 +1499,9 @@ export function createCopilotProvider(sessionStateDir?: string, workspaceStorage
       // the matching assistant.message (and vice versa).
       if (isOtelSource(source)) {
         return createOtelParser(source, seenKeys)
+      }
+      if (isChatSessionSource(source)) {
+        return createChatSessionParser(source, seenKeys)
       }
       return createJsonlParser(source, seenKeys)
     },

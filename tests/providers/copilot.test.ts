@@ -4,7 +4,7 @@ import { join, posix, win32 } from 'path'
 import { tmpdir } from 'os'
 import { createRequire } from 'node:module'
 
-import { copilot, createCopilotProvider, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
+import { copilot, createCopilotProvider, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
@@ -61,6 +61,34 @@ function transcriptAssistantMessage(opts: { messageId: string; content?: string;
       })),
     },
   })
+}
+
+function chatSessionSampleRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    requestId: 'request_8c8ce017-6e3f-460a-9931-5a16825d231a',
+    modelId: 'copilot/claude-sonnet-4.6',
+    completionTokens: 490,
+    result: {
+      metadata: {
+        promptTokens: 32543,
+        outputTokens: 60,
+        resolvedModel: 'claude-sonnet-4-6',
+        toolCallRounds: [{ thinking: { tokens: 0 }, modelId: 'claude-sonnet-4.6' }],
+        agentId: 'github.copilot.editsAgent',
+      },
+    },
+    ...overrides,
+  }
+}
+
+async function createChatSessionFile(filePath: string, entries: unknown[]) {
+  await writeFile(filePath, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n')
+}
+
+async function collectCalls(source: { path: string; project: string; provider: string; sourceType?: string }, seenKeys = new Set<string>()) {
+  const calls: ParsedProviderCall[] = []
+  for await (const call of copilot.createSessionParser(source, seenKeys).parse()) calls.push(call)
+  return calls
 }
 
 describe('copilot provider - JSONL parsing', () => {
@@ -362,6 +390,181 @@ describe('copilot provider - JSONL parsing', () => {
   })
 })
 
+describe('copilot provider - chatSessions parsing', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-chatsessions-test-'))
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  it('parses sample journal token counts and cost', async () => {
+    const filePath = join(tmpDir, 'sample.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-session-1', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(32543)
+    expect(calls[0]!.outputTokens).toBe(60)
+    expect(calls[0]!.model).toBe('claude-sonnet-4-6')
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('returns no calls for an empty reconstructed requests array', async () => {
+    const filePath = join(tmpDir, 'empty.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-empty', requests: [] } },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(0)
+  })
+
+  it('discovers and parses emptyWindowChatSessions from globalStorage', async () => {
+    const globalDir = join(tmpDir, 'globalStorage')
+    const emptyWindowDir = join(globalDir, 'emptyWindowChatSessions')
+    await mkdir(emptyWindowDir, { recursive: true })
+    const filePath = join(emptyWindowDir, 'empty-window.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'empty-window-session', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+    ])
+
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', globalDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.project).toBe('copilot-chat')
+    expect((sessions[0] as { sourceType?: string }).sourceType).toBe('chatsession')
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(call)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(32543)
+  })
+
+  it('skips chatSessions discovery when an OTel source is present', async () => {
+    if (!isSqliteAvailable()) return
+
+    vi.unstubAllEnvs()
+    const dbPath = join(tmpDir, 'agent-traces.db')
+    vi.stubEnv('CODEBURN_COPILOT_OTEL_DB', dbPath)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '')
+    createOtelDb(dbPath)
+    insertSpan(dbPath, {
+      spanId: 'span-chatsession-skip',
+      traceId: 'trace-chatsession-skip',
+      operationName: 'chat',
+      startTimeMs: 1000,
+      attrs: {
+        'gen_ai.conversation.id': 'conv-chatsession-skip',
+        'gen_ai.response.model': 'gpt-4.1',
+        'gen_ai.usage.input_tokens': 100,
+        'gen_ai.usage.output_tokens': 10,
+      },
+    })
+
+    const wsDir = join(tmpDir, 'vscode-ws')
+    const hashDir = join(wsDir, 'abc123')
+    const workspaceChatSessionsDir = join(hashDir, 'chatSessions')
+    const globalDir = join(tmpDir, 'globalStorage')
+    const emptyWindowDir = join(globalDir, 'emptyWindowChatSessions')
+    await mkdir(workspaceChatSessionsDir, { recursive: true })
+    await mkdir(emptyWindowDir, { recursive: true })
+    await writeFile(join(hashDir, 'workspace.json'), JSON.stringify({ folder: 'file:///home/user/myapp' }))
+    await createChatSessionFile(join(workspaceChatSessionsDir, 'workspace.jsonl'), [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-workspace', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+    ])
+    await createChatSessionFile(join(emptyWindowDir, 'empty-window.jsonl'), [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-empty-window', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({ requestId: 'request-empty-window' })] },
+    ])
+
+    const provider = createCopilotProvider('/nonexistent/legacy', wsDir, globalDir)
+    const sources = await provider.discoverSessions()
+
+    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'otel')).toHaveLength(1)
+    expect(sources.filter(s => (s as { sourceType?: string }).sourceType === 'chatsession')).toHaveLength(0)
+  })
+
+  it('applies append-then-edit journal updates', async () => {
+    const filePath = join(tmpDir, 'append-edit.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-edit', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+      { kind: 1, k: ['requests', 0, 'result', 'metadata', 'outputTokens'], v: 88 },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBe(88)
+  })
+
+  it('deduplicates by requestId across parser runs', async () => {
+    const filePath = join(tmpDir, 'dedupe.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-dedupe', requests: [] } },
+      { kind: 2, v: [chatSessionSampleRequest()] },
+    ])
+    const source = { path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' }
+    const seenKeys = new Set<string>()
+
+    const calls1 = await collectCalls(source, seenKeys)
+    const calls2 = await collectCalls(source, seenKeys)
+
+    expect(calls1).toHaveLength(1)
+    expect(calls2).toHaveLength(0)
+  })
+
+  it('ignores prototype-pollution journal paths without crashing', async () => {
+    const filePath = join(tmpDir, 'proto.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-proto', requests: [] } },
+      { kind: 1, k: ['__proto__', 'polluted'], v: true },
+      { kind: 1, k: ['constructor', 'prototype', 'polluted'], v: true },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+    ])
+
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls).toHaveLength(1)
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined()
+  })
+
+  it('skips legacy transcripts for a workspace hash that has chatSessions', async () => {
+    const wsDir = join(tmpDir, 'vscode-ws')
+    const hashDir = join(wsDir, 'abc123')
+    const chatSessionsDir = join(hashDir, 'chatSessions')
+    const transcriptsDir = join(hashDir, 'GitHub.copilot-chat', 'transcripts')
+    await mkdir(chatSessionsDir, { recursive: true })
+    await mkdir(transcriptsDir, { recursive: true })
+    await writeFile(join(hashDir, 'workspace.json'), JSON.stringify({ folder: 'file:///home/user/myapp' }))
+    await createChatSessionFile(join(chatSessionsDir, 'chat.jsonl'), [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-modern', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest()] },
+    ])
+    await writeFile(join(transcriptsDir, 'legacy.jsonl'), transcriptSessionStart('legacy') + '\n')
+
+    const provider = createCopilotProvider('/nonexistent/legacy', wsDir, '/nonexistent/global')
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect((sessions[0] as { sourceType?: string }).sourceType).toBe('chatsession')
+    expect(sessions[0]!.path).toContain(`${join('abc123', 'chatSessions')}`)
+  })
+})
+
 describe('copilot provider - discoverSessions', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'copilot-test-'))
@@ -448,6 +651,18 @@ describe('copilot provider - discoverSessions', () => {
     )
     expect(getVSCodeWorkspaceStorageDirs('/home/test', 'linux')).toContain(
       posix.join('/home/test', '.config', 'VSCodium', 'User', 'workspaceStorage'),
+    )
+  })
+
+  it('includes VSCodium globalStorage paths on all supported platforms', () => {
+    expect(getVSCodeGlobalStorageDirs('/Users/test', 'darwin')).toContain(
+      posix.join('/Users/test', 'Library', 'Application Support', 'VSCodium', 'User', 'globalStorage'),
+    )
+    expect(getVSCodeGlobalStorageDirs('C:\\Users\\test', 'win32')).toContain(
+      win32.join('C:\\Users\\test', 'AppData', 'Roaming', 'VSCodium', 'User', 'globalStorage'),
+    )
+    expect(getVSCodeGlobalStorageDirs('/home/test', 'linux')).toContain(
+      posix.join('/home/test', '.config', 'VSCodium', 'User', 'globalStorage'),
     )
   })
 })
