@@ -40,25 +40,20 @@ struct CLIDecodeFailure: Error, CustomStringConvertible {
 /// Runs the CLI via argv (no shell interpretation). See `CodeburnCLI` for why we never route
 /// commands through `/bin/zsh -c` anymore.
 struct DataClient {
-    static func fetch(period: Period, day: String? = nil, days: Set<String> = [], provider: ProviderFilter, includeOptimize: Bool) async throws -> MenubarPayload {
-        var subcommand = [
-            "status",
-            "--format", "menubar-json",
-            "--provider", provider.cliArg,
-        ]
-        if days.count > 1 {
-            subcommand.append(contentsOf: ["--days", days.sorted().joined(separator: ",")])
-        } else if let day {
-            subcommand.append(contentsOf: ["--day", day])
-        } else if let d = days.first {
-            subcommand.append(contentsOf: ["--day", d])
-        } else {
-            subcommand.append(contentsOf: ["--period", period.cliArg])
-        }
-        if !includeOptimize {
-            subcommand.append("--no-optimize")
-        }
-
+    static func fetch(period: Period,
+                      day: String? = nil,
+                      days: Set<String> = [],
+                      provider: ProviderFilter,
+                      includeOptimize: Bool,
+                      scope: MenubarScope = .local) async throws -> MenubarPayload {
+        let subcommand = statusSubcommand(
+            period: period,
+            day: day,
+            days: days,
+            provider: provider,
+            includeOptimize: includeOptimize,
+            scope: scope
+        )
         let result = try await runCLI(subcommand: subcommand)
         guard result.exitCode == 0 else {
             throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
@@ -74,6 +69,37 @@ struct DataClient {
                 stderr: result.stderr
             ))
         }
+    }
+
+    static func statusSubcommand(period: Period,
+                                 day: String? = nil,
+                                 days: Set<String> = [],
+                                 provider: ProviderFilter,
+                                 includeOptimize: Bool,
+                                 scope: MenubarScope = .local) -> [String] {
+        let effectiveScope: MenubarScope = days.count > 1 ? .local : scope
+        let effectiveProvider: ProviderFilter = effectiveScope == .combined ? .all : provider
+        var subcommand = [
+            "status",
+            "--format", "menubar-json",
+            "--provider", effectiveProvider.cliArg,
+        ]
+        if effectiveScope == .combined {
+            subcommand.append(contentsOf: ["--scope", effectiveScope.cliArg])
+        }
+        if days.count > 1 {
+            subcommand.append(contentsOf: ["--days", days.sorted().joined(separator: ",")])
+        } else if let day {
+            subcommand.append(contentsOf: ["--day", day])
+        } else if let d = days.first {
+            subcommand.append(contentsOf: ["--day", d])
+        } else {
+            subcommand.append(contentsOf: ["--period", period.cliArg])
+        }
+        if !includeOptimize {
+            subcommand.append("--no-optimize")
+        }
+        return subcommand
     }
 
     struct ProcessResult {

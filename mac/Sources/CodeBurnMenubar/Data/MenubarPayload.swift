@@ -7,6 +7,40 @@ struct MenubarPayload: Codable, Sendable {
     let current: CurrentBlock
     let optimize: OptimizeBlock
     let history: HistoryBlock
+    let combined: CombinedUsage?
+}
+
+struct CombinedUsage: Codable, Sendable {
+    let perDevice: [CombinedDeviceUsage]
+    let combined: CombinedUsageTotals
+}
+
+struct CombinedDeviceUsage: Codable, Sendable {
+    let id: String
+    let name: String
+    let local: Bool
+    let error: String?
+    let cost: Double
+    let calls: Int
+    let sessions: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheCreateTokens: Int
+    let cacheReadTokens: Int
+    let totalTokens: Int
+}
+
+struct CombinedUsageTotals: Codable, Sendable {
+    let cost: Double
+    let calls: Int
+    let sessions: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheCreateTokens: Int
+    let cacheReadTokens: Int
+    let totalTokens: Int
+    let deviceCount: Int
+    let reachableCount: Int
 }
 
 struct HistoryBlock: Codable, Sendable {
@@ -387,6 +421,7 @@ extension MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: []),
+        combined: nil
     )
 }
