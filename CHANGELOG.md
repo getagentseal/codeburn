@@ -54,6 +54,8 @@
 ### Fixed (macOS menubar)
 - **Keychain prompts.** Stop repeated keychain prompts on token refresh; read the
   Claude keychain via the `security` CLI on silent refresh. (#490, #491)
+- Menubar project rows are now grouped by project name with token totals preserved,
+  preventing duplicate project rows in the popover smoke path.
 - Restore the right-click status-item menu on macOS 27. (#472, thanks @theparlor)
 - Support installer HTTP proxies. (#475, thanks @sleicht)
 - Surface the CLI's stdout/stderr on a decode failure so a stray banner is
