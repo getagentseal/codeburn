@@ -9,10 +9,11 @@ export const LARGE_STREAM_LINE_BYTES = 32 * 1024
 
 // Line-by-line streaming has bounded memory (one line at a time) and is not
 // constrained by V8's string limit, so it can safely handle multi-GB session
-// files. The cap here is purely a sanity check against pathological inputs;
-// real Codex sessions for heavy users have been observed at 250+ MB and will
-// continue to grow as context windows expand.
-export const MAX_STREAM_SESSION_FILE_BYTES = 2 * 1024 * 1024 * 1024
+// files. Heavy Codex sessions routinely reach several GB (image-heavy compacted
+// turns), so the cap is generous and exists only to guard against truly
+// pathological inputs. When a file IS skipped, notice() surfaces it (always on,
+// not verbose-gated) so a dropped session never silently understates usage.
+export const MAX_STREAM_SESSION_FILE_BYTES = 4 * 1024 * 1024 * 1024
 
 function verbose(): boolean {
   return process.env.CODEBURN_VERBOSE === '1'
@@ -20,6 +21,12 @@ function verbose(): boolean {
 
 function warn(msg: string): void {
   if (verbose()) process.stderr.write(`codeburn: ${msg}\n`)
+}
+
+// Always surfaced (not verbose-gated): dropping an entire session file silently
+// understates reported usage with no signal, so oversize skips use this.
+function notice(msg: string): void {
+  process.stderr.write(`codeburn: ${msg}\n`)
 }
 
 export async function readSessionFile(filePath: string): Promise<string | null> {
@@ -73,6 +80,7 @@ type ReadSessionLinesOptions = {
   largeLineThresholdBytes?: number
   startByteOffset?: number
   byteOffsetTracker?: { lastCompleteLineOffset: number }
+  maxBytes?: number
 }
 
 export function readSessionLines(
@@ -97,9 +105,10 @@ export async function* readSessionLines(
     return
   }
 
-  if (size > MAX_STREAM_SESSION_FILE_BYTES) {
-    warn(
-      `skipped oversize file ${filePath} (${size} bytes > stream cap ${MAX_STREAM_SESSION_FILE_BYTES})`,
+  const maxBytes = options.maxBytes ?? MAX_STREAM_SESSION_FILE_BYTES
+  if (size > maxBytes) {
+    notice(
+      `skipped oversize session ${filePath} (${size} bytes > cap ${maxBytes}); its usage is NOT counted`,
     )
     return
   }
