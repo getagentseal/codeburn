@@ -242,6 +242,307 @@ describe('devin provider', () => {
     ])
   })
 
+  it('extracts user message from ContentPart[] messages (ATIF v1.7 multimodal)', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('content-parts.json', {
+      session_id: 'cp-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          message: [
+            { type: 'text', text: 'look at this screenshot' },
+            { type: 'image', source: { media_type: 'image/png', path: '/tmp/screenshot.png' } },
+          ],
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:00.000Z' },
+        },
+        {
+          step_id: 2,
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 50 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.userMessage).toBe('look at this screenshot /tmp/screenshot.png')
+  })
+
+  it('parses ATIF v1.7 transcripts with agent.extra, final_metrics, and observations', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('atif-v17.json', {
+      schema_version: '1.7',
+      session_id: 'v17-session',
+      agent: {
+        name: 'devin',
+        version: '2.0',
+        model_name: 'claude-sonnet-4-6',
+        extra: { backend: 'cloud', permission_mode: 'auto' },
+      },
+      final_metrics: {
+        total_prompt_tokens: 500,
+        total_completion_tokens: 200,
+        total_cached_tokens: 50,
+        total_steps: 2,
+      },
+      steps: [
+        {
+          step_id: 1,
+          message: 'fix the bug',
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:00.000Z' },
+        },
+        {
+          step_id: 2,
+          source: 'assistant',
+          model_name: 'claude-sonnet-4-6',
+          message: 'I will read the file first',
+          tool_calls: [{ tool_call_id: 'tc1', function_name: 'read_file', arguments: { path: 'src/main.ts' } }],
+          observation: {
+            results: [{ source_call_id: 'tc1', content: 'file contents here' }],
+          },
+          extra: {
+            committed_acu_cost: 0.15,
+            generation_model: 'claude-sonnet-4-6',
+            telemetry: { source: 'devin-cli', operation: 'generate' },
+          },
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.15,
+            metrics: { input_tokens: 200, output_tokens: 50, cache_creation_tokens: 20, cache_read_tokens: 10 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      provider: 'devin',
+      model: 'claude-sonnet-4-6',
+      inputTokens: 200,
+      outputTokens: 50,
+      cacheCreationInputTokens: 20,
+      cacheReadInputTokens: 10,
+      costUSD: 0.15,
+      tools: ['read_file'],
+      userMessage: 'fix the bug',
+      sessionId: 'v17-session',
+    })
+  })
+
+  it('handles plain string user messages alongside ContentPart[] messages', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('mixed-messages.json', {
+      session_id: 'mixed-msg-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          message: 'plain text user message',
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:00.000Z' },
+        },
+        {
+          step_id: 2,
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 50 },
+          },
+        },
+        {
+          step_id: 3,
+          message: [{ type: 'text', text: 'multimodal user message' }],
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:02.000Z' },
+        },
+        {
+          step_id: 4,
+          metadata: {
+            created_at: '2027-01-15T08:00:03.000Z',
+            committed_acu_cost: 0.2,
+            metrics: { input_tokens: 100 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.userMessage).toBe('plain text user message')
+    expect(calls[1]!.userMessage).toBe('multimodal user message')
+  })
+
+  it('reads ACU cost from step.extra when metadata.committed_acu_cost is absent', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('extra-acu.json', {
+      session_id: 'extra-acu-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          extra: { committed_acu_cost: 0.3 },
+          metadata: {
+            created_at: '2027-01-15T08:00:00.000Z',
+            metrics: { input_tokens: 10 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costUSD).toBeCloseTo(0.3, 12)
+  })
+
+  it('prefers metadata.committed_acu_cost over extra.committed_acu_cost', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('acu-priority.json', {
+      session_id: 'acu-priority-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          extra: { committed_acu_cost: 0.99 },
+          metadata: {
+            created_at: '2027-01-15T08:00:00.000Z',
+            committed_acu_cost: 0.11,
+            metrics: { input_tokens: 10 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costUSD).toBeCloseTo(0.11, 12)
+  })
+
+  it('reads tokens from step.metrics when metadata.metrics is absent', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('step-metrics.json', {
+      session_id: 'step-metrics-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          metrics: {
+            prompt_tokens: 300,
+            completion_tokens: 75,
+            cached_tokens: 15,
+            extra: { cache_creation_input_tokens: 25 },
+          },
+          extra: { committed_acu_cost: 0.2 },
+          metadata: { created_at: '2027-01-15T08:00:00.000Z' },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      inputTokens: 300,
+      outputTokens: 75,
+      cacheCreationInputTokens: 25,
+      cacheReadInputTokens: 15,
+      cachedInputTokens: 15,
+      costUSD: 0.2,
+    })
+  })
+
+  it('prefers step.metrics over metadata.metrics when both are present', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('metrics-priority.json', {
+      session_id: 'metrics-priority-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          metrics: {
+            prompt_tokens: 500,
+            completion_tokens: 100,
+            cached_tokens: 20,
+            extra: { cache_creation_input_tokens: 30 },
+          },
+          metadata: {
+            created_at: '2027-01-15T08:00:00.000Z',
+            committed_acu_cost: 0.1,
+            metrics: {
+              input_tokens: 1,
+              output_tokens: 1,
+              cache_creation_tokens: 1,
+              cache_read_tokens: 1,
+            },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      inputTokens: 500,
+      outputTokens: 100,
+      cacheCreationInputTokens: 30,
+      cacheReadInputTokens: 20,
+      cachedInputTokens: 20,
+    })
+  })
+
+  it('handles observation results with ContentPart[] content', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('observation-content-parts.json', {
+      session_id: 'obs-cp-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          message: 'check the image',
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:00.000Z' },
+        },
+        {
+          step_id: 2,
+          source: 'assistant',
+          message: 'reading file',
+          tool_calls: [{ tool_call_id: 'tc1', function_name: 'read_file', arguments: {} }],
+          observation: {
+            results: [{
+              source_call_id: 'tc1',
+              content: [
+                { type: 'text', text: 'file output here' },
+                { type: 'image', source: { media_type: 'image/png', path: '/tmp/output.png' } },
+              ],
+            }],
+          },
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 100, output_tokens: 30 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      tools: ['read_file'],
+      costUSD: 0.1,
+      inputTokens: 100,
+      outputTokens: 30,
+    })
+  })
+
   it('ignores array-root and malformed transcripts', async () => {
     await configureDevinRate()
     const arrayPath = await writeTranscript('array.json', [])
