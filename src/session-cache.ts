@@ -48,6 +48,10 @@ export type FileFingerprint = {
   ino: number
   mtimeMs: number
   sizeBytes: number
+  walMtimeMs?: number
+  walSizeBytes?: number
+  shmMtimeMs?: number
+  shmSizeBytes?: number
 }
 
 export type CachedFile = {
@@ -117,7 +121,7 @@ const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',
-  antigravity: 'worktree-project-grouping-v3',
+  antigravity: 'safe-token-counts-v1',
 }
 
 // ── Cache Dir ──────────────────────────────────────────────────────────
@@ -148,6 +152,10 @@ export function emptyCache(): SessionCache {
 
 function isNum(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
+}
+
+function isSafeTokenCount(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 }
 
 function isStringArray(v: unknown): v is string[] {
@@ -183,10 +191,10 @@ function validateFingerprint(fp: unknown): fp is FileFingerprint {
 function validateUsage(u: unknown): u is CachedUsage {
   if (!u || typeof u !== 'object') return false
   const o = u as Record<string, unknown>
-  return isNum(o['inputTokens']) && isNum(o['outputTokens'])
-    && isNum(o['cacheCreationInputTokens']) && isNum(o['cacheReadInputTokens'])
-    && isNum(o['cachedInputTokens']) && isNum(o['reasoningTokens'])
-    && isNum(o['webSearchRequests']) && isNum(o['cacheCreationOneHourTokens'])
+  return isSafeTokenCount(o['inputTokens']) && isSafeTokenCount(o['outputTokens'])
+    && isSafeTokenCount(o['cacheCreationInputTokens']) && isSafeTokenCount(o['cacheReadInputTokens'])
+    && isSafeTokenCount(o['cachedInputTokens']) && isSafeTokenCount(o['reasoningTokens'])
+    && isNum(o['webSearchRequests']) && isSafeTokenCount(o['cacheCreationOneHourTokens'])
 }
 
 function validateCall(c: unknown): c is CachedCall {
@@ -238,6 +246,25 @@ function validateProviderSection(s: unknown): s is ProviderSection {
   return Object.values(o['files'] as Record<string, unknown>).every(validateCachedFile)
 }
 
+function sanitizeProviderSection(s: unknown): ProviderSection | null {
+  if (!s || typeof s !== 'object') return null
+  const o = s as Record<string, unknown>
+  if (typeof o['envFingerprint'] !== 'string') return null
+  if (!o['files'] || typeof o['files'] !== 'object' || Array.isArray(o['files'])) return null
+
+  const files: Record<string, CachedFile> = {}
+  for (const [path, file] of Object.entries(o['files'] as Record<string, unknown>)) {
+    if (validateCachedFile(file)) files[path] = file
+  }
+  if (Object.keys(files).length === 0) return null
+
+  return {
+    envFingerprint: o['envFingerprint'],
+    files,
+    ...(o['durable'] === true ? { durable: true } : {}),
+  }
+}
+
 function validateCache(raw: unknown): raw is SessionCache {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
@@ -246,11 +273,25 @@ function validateCache(raw: unknown): raw is SessionCache {
   return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
 }
 
+function sanitizeCache(raw: unknown): SessionCache | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (o['version'] !== CACHE_VERSION) return null
+  if (!o['providers'] || typeof o['providers'] !== 'object' || Array.isArray(o['providers'])) return null
+
+  const providers: Record<string, ProviderSection> = {}
+  for (const [provider, section] of Object.entries(o['providers'] as Record<string, unknown>)) {
+    const sanitized = sanitizeProviderSection(section)
+    if (sanitized) providers[provider] = sanitized
+  }
+  return { version: CACHE_VERSION, providers }
+}
+
 export async function loadCache(): Promise<SessionCache> {
   try {
     const raw = await readFile(getCachePath(), 'utf-8')
     const parsed = JSON.parse(raw)
-    if (!validateCache(parsed)) return emptyCache()
+    if (!validateCache(parsed)) return sanitizeCache(parsed) ?? emptyCache()
     return parsed
   } catch {
     return emptyCache()
@@ -285,9 +326,27 @@ export async function saveCache(cache: SessionCache): Promise<void> {
 // ── File Fingerprinting ────────────────────────────────────────────────
 
 export async function fingerprintFile(filePath: string): Promise<FileFingerprint | null> {
+  async function fingerprintBasePath(basePath: string): Promise<FileFingerprint> {
+    const s = await stat(basePath)
+    const fp: FileFingerprint = { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+
+    const wal = await stat(`${basePath}-wal`).catch(() => null)
+    if (wal) {
+      fp.walMtimeMs = wal.mtimeMs
+      fp.walSizeBytes = wal.size
+    }
+
+    const shm = await stat(`${basePath}-shm`).catch(() => null)
+    if (shm) {
+      fp.shmMtimeMs = shm.mtimeMs
+      fp.shmSizeBytes = shm.size
+    }
+
+    return fp
+  }
+
   try {
-    const s = await stat(filePath)
-    return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+    return await fingerprintBasePath(filePath)
   } catch {
     // Providers encode extra context into source paths using virtual suffixes:
     // - Cursor: `<dbPath>#cursor-ws=<workspace>` (workspace-aware routing)
@@ -298,8 +357,7 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     const hashIdx = filePath.indexOf('#')
     if (hashIdx > 0) {
       try {
-        const s = await stat(filePath.slice(0, hashIdx))
-        return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+        return await fingerprintBasePath(filePath.slice(0, hashIdx))
       } catch {
         // fall through to colon check
       }
@@ -307,8 +365,7 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     const colonIdx = filePath.lastIndexOf(':')
     if (colonIdx > 0) {
       try {
-        const s = await stat(filePath.slice(0, colonIdx))
-        return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+        return await fingerprintBasePath(filePath.slice(0, colonIdx))
       } catch {
         return null
       }
@@ -332,6 +389,14 @@ export function reconcileFile(
   if (!cached) return { action: 'new' }
 
   const fp = cached.fingerprint
+  if (
+    fp.walMtimeMs !== current.walMtimeMs ||
+    fp.walSizeBytes !== current.walSizeBytes ||
+    fp.shmMtimeMs !== current.shmMtimeMs ||
+    fp.shmSizeBytes !== current.shmSizeBytes
+  ) {
+    return { action: 'modified' }
+  }
 
   if (
     fp.dev === current.dev &&

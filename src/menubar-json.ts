@@ -204,6 +204,41 @@ function cacheHitPercent(inputTokens: number, cacheReadTokens: number): number {
   return (cacheReadTokens / denom) * 100
 }
 
+function safeMenubarToken(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+function sanitizeDailyModelBreakdown(model: DailyModelBreakdown): DailyModelBreakdown {
+  return {
+    ...model,
+    inputTokens: safeMenubarToken(model.inputTokens),
+    outputTokens: safeMenubarToken(model.outputTokens),
+  }
+}
+
+function sanitizeDailyHistoryEntry(entry: DailyHistoryEntry): DailyHistoryEntry {
+  return {
+    ...entry,
+    inputTokens: safeMenubarToken(entry.inputTokens),
+    outputTokens: safeMenubarToken(entry.outputTokens),
+    cacheReadTokens: safeMenubarToken(entry.cacheReadTokens),
+    cacheWriteTokens: safeMenubarToken(entry.cacheWriteTokens),
+    topModels: entry.topModels.map(sanitizeDailyModelBreakdown),
+  }
+}
+
+function sanitizeLocalModelSavings(savings: LocalModelSavings | undefined): LocalModelSavings {
+  if (!savings) return { totalUSD: 0, calls: 0, byModel: [], byProvider: [] }
+  return {
+    ...savings,
+    byModel: savings.byModel.map(model => ({
+      ...model,
+      inputTokens: safeMenubarToken(model.inputTokens),
+      outputTokens: safeMenubarToken(model.outputTokens),
+    })),
+  }
+}
+
 function buildTopActivities(categories: PeriodData['categories']): MenubarPayload['current']['topActivities'] {
   return categories.slice(0, TOP_ACTIVITIES_LIMIT).map(cat => ({
     name: cat.name,
@@ -252,7 +287,7 @@ function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['h
   if (!daily || daily.length === 0) return { daily: [] }
   const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date))
   const trimmed = sorted.slice(-HISTORY_DAYS_LIMIT)
-  return { daily: trimmed }
+  return { daily: trimmed.map(sanitizeDailyHistoryEntry) }
 }
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
@@ -270,8 +305,8 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
         cost: s.cost,
         savingsUSD: s.savingsUSD,
         calls: s.calls,
-        inputTokens: s.inputTokens,
-        outputTokens: s.outputTokens,
+        inputTokens: safeMenubarToken(s.inputTokens),
+        outputTokens: safeMenubarToken(s.outputTokens),
         date: s.date,
         models: s.models,
       })),
@@ -315,6 +350,9 @@ export function buildMenubarPayload(
   routingWaste?: MenubarPayload['current']['routingWaste'],
   breakdowns?: BreakdownArrays,
 ): MenubarPayload {
+  const inputTokens = safeMenubarToken(current.inputTokens)
+  const outputTokens = safeMenubarToken(current.outputTokens)
+  const cacheReadTokens = safeMenubarToken(current.cacheReadTokens)
   return {
     generated: new Date().toISOString(),
     current: {
@@ -323,13 +361,13 @@ export function buildMenubarPayload(
       calls: current.calls,
       sessions: current.sessions,
       oneShotRate: aggregateOneShotRate(current.categories),
-      inputTokens: current.inputTokens,
-      outputTokens: current.outputTokens,
-      cacheHitPercent: cacheHitPercent(current.inputTokens, current.cacheReadTokens),
+      inputTokens,
+      outputTokens,
+      cacheHitPercent: cacheHitPercent(inputTokens, cacheReadTokens),
       codexCredits: current.codexCredits ?? 0,
       topActivities: buildTopActivities(current.categories),
       topModels: buildTopModels(current.models),
-      localModelSavings: breakdowns?.localModelSavings ?? { totalUSD: 0, calls: 0, byModel: [], byProvider: [] },
+      localModelSavings: sanitizeLocalModelSavings(breakdowns?.localModelSavings),
       providers: buildProviders(providers),
       topProjects: buildTopProjects(current.projects ?? []),
       modelEfficiency: buildModelEfficiency(current.modelEfficiency ?? []),

@@ -11,6 +11,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // forces a one-time full re-hydration so newly supported providers backfill
 // without a manual cache clear.
 //
+// v9 also requires token counts to be non-negative safe integers. Older daily
+// rollups may contain unsafe Antigravity uint64-underflow values that can crash
+// the menubar Swift decoder, so the same re-hydration clears unsafe token data.
+//
 // v8 added local-model savings to the daily rollup (savingsUSD per day / model /
 // category / provider). The `savingsConfigHash` field is invalidated separately
 // when the user changes their `localModelSavings` mapping so historical "saved"
@@ -75,23 +79,80 @@ function isMigratableCache(parsed: unknown): parsed is { version: number; lastCo
   return c.version >= MIN_SUPPORTED_VERSION && c.version <= DAILY_CACHE_VERSION
 }
 
-function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
-  return days.map(d => ({
+function safeTokenCount(value: unknown): number | null {
+  if (value === undefined) return 0
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
+function migrateModels(models: unknown): DailyEntry['models'] | null {
+  if (models === undefined) return {}
+  if (!models || typeof models !== 'object' || Array.isArray(models)) return null
+  const migrated: DailyEntry['models'] = {}
+  for (const [name, raw] of Object.entries(models as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    const m = raw as Record<string, unknown>
+    const inputTokens = safeTokenCount(m.inputTokens)
+    const outputTokens = safeTokenCount(m.outputTokens)
+    const cacheReadTokens = safeTokenCount(m.cacheReadTokens)
+    const cacheWriteTokens = safeTokenCount(m.cacheWriteTokens)
+    if (
+      inputTokens === null ||
+      outputTokens === null ||
+      cacheReadTokens === null ||
+      cacheWriteTokens === null
+    ) return null
+    migrated[name] = {
+      calls: (m.calls as number) ?? 0,
+      cost: (m.cost as number) ?? 0,
+      savingsUSD: (m.savingsUSD as number) ?? 0,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    }
+  }
+  return migrated
+}
+
+function migrateDay(d: Record<string, unknown>): DailyEntry | null {
+  const inputTokens = safeTokenCount(d.inputTokens)
+  const outputTokens = safeTokenCount(d.outputTokens)
+  const cacheReadTokens = safeTokenCount(d.cacheReadTokens)
+  const cacheWriteTokens = safeTokenCount(d.cacheWriteTokens)
+  const models = migrateModels(d.models)
+  if (
+    inputTokens === null ||
+    outputTokens === null ||
+    cacheReadTokens === null ||
+    cacheWriteTokens === null ||
+    models === null
+  ) return null
+  return {
     date: d.date as string,
     cost: (d.cost as number) ?? 0,
     savingsUSD: (d.savingsUSD as number) ?? 0,
     calls: (d.calls as number) ?? 0,
     sessions: (d.sessions as number) ?? 0,
-    inputTokens: (d.inputTokens as number) ?? 0,
-    outputTokens: (d.outputTokens as number) ?? 0,
-    cacheReadTokens: (d.cacheReadTokens as number) ?? 0,
-    cacheWriteTokens: (d.cacheWriteTokens as number) ?? 0,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     editTurns: (d.editTurns as number) ?? 0,
     oneShotTurns: (d.oneShotTurns as number) ?? 0,
-    models: (d.models as DailyEntry['models']) ?? {},
+    models,
     categories: (d.categories as DailyEntry['categories']) ?? {},
     providers: (d.providers as DailyEntry['providers']) ?? {},
-  }))
+  }
+}
+
+function migrateDays(days: Record<string, unknown>[]): DailyEntry[] | null {
+  const migrated: DailyEntry[] = []
+  for (const day of days) {
+    const entry = migrateDay(day)
+    if (!entry) return null
+    migrated.push(entry)
+  }
+  return migrated
 }
 
 async function backupOldCache(path: string, version: number): Promise<void> {
@@ -106,11 +167,16 @@ export async function loadDailyCache(): Promise<DailyCache> {
     const raw = await readFile(path, 'utf-8')
     const parsed: unknown = JSON.parse(raw)
     if (isMigratableCache(parsed)) {
+      const days = migrateDays(parsed.days)
+      if (!days) {
+        await backupOldCache(path, parsed.version).catch(() => {})
+        return emptyCache()
+      }
       const migrated: DailyCache = {
         version: DAILY_CACHE_VERSION,
         savingsConfigHash: parsed.savingsConfigHash ?? '',
         lastComputedDate: parsed.lastComputedDate,
-        days: migrateDays(parsed.days),
+        days,
       }
       if (parsed.version < DAILY_CACHE_VERSION) {
         await saveDailyCache(migrated).catch(() => {})
