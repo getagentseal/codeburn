@@ -543,6 +543,65 @@ describe('devin provider', () => {
     })
   })
 
+  it('falls back to metadata.metrics when step.metrics is present but empty', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('empty-step-metrics.json', {
+      session_id: 'empty-metrics-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          metrics: {},
+          metadata: {
+            created_at: '2027-01-15T08:00:00.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 80, output_tokens: 20, cache_read_tokens: 5 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      inputTokens: 80,
+      outputTokens: 20,
+      cacheReadInputTokens: 5,
+      costUSD: 0.1,
+    })
+  })
+
+  it('normalizes an image-only ContentPart[] user message to its path', async () => {
+    await configureDevinRate()
+    const filePath = await writeTranscript('image-only.json', {
+      session_id: 'image-only-session',
+      agent: { model_name: 'agent-model' },
+      steps: [
+        {
+          step_id: 1,
+          message: [
+            { type: 'image', source: { media_type: 'image/png', path: '/tmp/only.png' } },
+          ],
+          metadata: { is_user_input: true, created_at: '2027-01-15T08:00:00.000Z' },
+        },
+        {
+          step_id: 2,
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 40 },
+          },
+        },
+      ],
+    })
+
+    const calls = await parseTranscript(filePath)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.userMessage).toBe('/tmp/only.png')
+  })
+
   it('ignores array-root and malformed transcripts', async () => {
     await configureDevinRate()
     const arrayPath = await writeTranscript('array.json', [])

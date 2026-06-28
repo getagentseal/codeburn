@@ -13,7 +13,6 @@ import type {
 } from "./types.js";
 import { readSessionFile } from "../fs-utils.js";
 import { isPositiveNumber, safeNumber } from "../parser.js";
-import { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
 
 type AgentTrajectory<StepType extends Step = Step, AgentExtra = unknown> = {
   schema_version: string;
@@ -39,19 +38,8 @@ type Agent<Extra = unknown> = {
   name: string;
   version: string;
   model_name?: string;
-  tool_definitions?: ToolDefinition;
+  tool_definitions?: unknown;
   extra?: Extra;
-};
-
-type ToolDefinition = {
-  type: "function";
-  function: FunctionDefinition;
-};
-
-type FunctionDefinition = {
-  name: string;
-  description: string;
-  parameters: JsonSchemaType;
 };
 
 type ToolCall = {
@@ -95,13 +83,7 @@ type ContentPartImage = {
 function isTextContentPart(
   contentPart: ContentPart,
 ): contentPart is ContentPartText {
-  return "text" in contentPart;
-}
-
-function isImageContentPart(
-  contentPart: ContentPart,
-): contentPart is ContentPartImage {
-  return "image" in contentPart;
+  return contentPart.type === "text";
 }
 
 type ImageSource = {
@@ -212,16 +194,33 @@ function getCommittedAcuCost(step: DevinStep): number {
   return acuCost.shift() || 0;
 }
 
+function hasAnyTokenField(
+  metrics: Metrics<DevinMetricsExtra> | null | undefined,
+): boolean {
+  if (!metrics) return false;
+  return [
+    metrics.prompt_tokens,
+    metrics.completion_tokens,
+    metrics.cached_tokens,
+    metrics.extra?.cache_creation_input_tokens,
+  ].some((value) => value != null);
+}
+
 function getMetricsFromStep(
   step: DevinStep,
 ): Metrics<DevinMetricsExtra> | null {
-  let metrics = step.metrics || null;
-
-  if (!metrics && step.metadata) {
-    metrics = getDevinMetricsFromMetadata(step.metadata);
+  // Prefer step.metrics (standard ATIF v1.7) only when it actually carries
+  // token fields; a present-but-empty metrics object must not shadow the
+  // legacy metadata.metrics location.
+  if (hasAnyTokenField(step.metrics)) {
+    return step.metrics ?? null;
   }
 
-  return metrics;
+  if (step.metadata) {
+    return getDevinMetricsFromMetadata(step.metadata);
+  }
+
+  return step.metrics ?? null;
 }
 
 function getDevinMetricsFromMetadata(
