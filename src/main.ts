@@ -665,17 +665,25 @@ program
         optimize: opts.optimize !== false,
       })
       if (opts.scope === 'combined') {
-        const query: UsageQuery = customRange
-          ? { from: opts.from, to: opts.to }
-          : daySelection
-          ? { from: daySelection.day, to: daySelection.day }
-          : { period: opts.period }
-        const localGetUsage = async (): Promise<typeof payload> => payload
-        const results = await pullDevices(localGetUsage, query, hostname(), {})
-        payload.combined = summarizeDeviceUsage(results, {
-          start: toDateString(periodInfo.range.start),
-          end: toDateString(periodInfo.range.end),
-        })
+        // Combined multi-device usage is best-effort enrichment on the menubar's
+        // hot path. Never let pulling peers (or a corrupt remotes store) take
+        // down the base local payload: on any failure, emit local data with
+        // `combined` omitted so the menubar always gets a valid response.
+        try {
+          const query: UsageQuery = customRange
+            ? { from: opts.from, to: opts.to }
+            : daySelection
+            ? { from: daySelection.day, to: daySelection.day }
+            : { period: opts.period }
+          const localGetUsage = async (): Promise<typeof payload> => payload
+          const results = await pullDevices(localGetUsage, query, hostname(), {})
+          payload.combined = summarizeDeviceUsage(results, {
+            start: toDateString(periodInfo.range.start),
+            end: toDateString(periodInfo.range.end),
+          })
+        } catch {
+          // best-effort only: the local payload is still emitted below
+        }
       }
       console.log(JSON.stringify(payload))
       return

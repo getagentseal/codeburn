@@ -313,4 +313,42 @@ describe('codeburn status --format menubar-json', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('still emits a valid combined menubar payload when the remotes store is corrupt', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-corrupt-remotes-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+      const now = new Date()
+      const h = now.getUTCHours()
+      const base = h >= 2 ? new Date(now.getTime() - 2 * 3600_000) : new Date(now.getTime() - h * 3600_000 - 300_000)
+      const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
+      const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
+      await writeFile(join(projectDir, 'session.jsonl'), [userLine('s1', ts1), assistantLine('s1', ts2, 'msg-1')].join('\n'))
+
+      // Corrupt the remotes store the combined path reads. The menubar must
+      // still get a valid payload (combined degrades to local-only).
+      const sharingDir = join(home, '.config', 'codeburn', 'sharing')
+      await mkdir(sharingDir, { recursive: true })
+      await writeFile(join(sharingDir, 'remote-devices.json'), '{ this is : not valid json ]')
+
+      const result = runCli([
+        'status', '--format', 'menubar-json', '--scope', 'combined',
+        '--period', 'today', '--no-optimize',
+      ], home)
+
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+      const payload = JSON.parse(result.stdout) as {
+        current: { cost: number }
+        combined?: { perDevice: unknown[]; combined: { deviceCount: number; reachableCount: number } }
+      }
+      expect(payload.combined).toBeDefined()
+      expect(payload.combined!.perDevice).toHaveLength(1)
+      expect(payload.combined!.combined.deviceCount).toBe(1)
+      expect(payload.combined!.combined.reachableCount).toBe(1)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })
