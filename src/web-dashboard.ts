@@ -1,4 +1,4 @@
-import { createServer } from 'http'
+import { createServer, type Server } from 'http'
 import { exec } from 'child_process'
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -92,7 +92,7 @@ export async function runWebDashboard(opts: {
   exclude: string[]
   port: number
   open: boolean
-}): Promise<void> {
+}): Promise<Server> {
   await loadPricing()
   const dashDir = resolveDashDir()
 
@@ -154,17 +154,16 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
+        let periodInfo
         try {
-          periodInfoFromQuery({ period, from, to }, opts.period)
+          periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
         } catch (err) {
           if (!(err instanceof UsageQueryError)) throw err
           writeJsonError(res, 400, err instanceof Error ? err.message : String(err))
           return
         }
-        const localGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
-          const periodInfo = periodInfoFromQuery(q, period)
-          return buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
-        }
+        const localGetUsage = async () =>
+          buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
         const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ devices: results }))
@@ -311,6 +310,8 @@ export async function runWebDashboard(opts: {
   process.on('SIGINT', () => {
     void share.stop().finally(() => process.exit(0))
   })
+
+  return server
 
   await new Promise<never>(() => {
     /* run until interrupted */
