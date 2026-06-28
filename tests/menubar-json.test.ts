@@ -231,4 +231,74 @@ describe('buildMenubarPayload', () => {
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45 })
   })
+
+  it('groups duplicate top project rows and preserves real token totals', () => {
+    const period: PeriodData = {
+      ...emptyPeriod('Today'),
+      projects: [
+        {
+          name: 'codeburn',
+          cost: 4,
+          savingsUSD: 0,
+          sessions: 1,
+          inputTokens: 100,
+          outputTokens: 20,
+          reasoningTokens: 7,
+          cacheReadTokens: 300,
+          cacheWriteTokens: 10,
+          sessionDetails: [
+            {
+              cost: 4,
+              savingsUSD: 0,
+              calls: 2,
+              inputTokens: 100,
+              outputTokens: 20,
+              reasoningTokens: 7,
+              date: '2026-06-23',
+              models: [{ name: 'gpt-5.1-codex', cost: 4, savingsUSD: 0 }],
+            },
+          ],
+        },
+        {
+          name: 'codeburn',
+          cost: 2,
+          savingsUSD: 0,
+          sessions: 2,
+          inputTokens: 50,
+          outputTokens: 15,
+          reasoningTokens: 3,
+          cacheReadTokens: 80,
+          cacheWriteTokens: 5,
+          sessionDetails: [
+            {
+              cost: 2,
+              savingsUSD: 0,
+              calls: 1,
+              inputTokens: 50,
+              outputTokens: 15,
+              reasoningTokens: 3,
+              date: '2026-06-23',
+              models: [{ name: 'gpt-5.1-codex', cost: 2, savingsUSD: 0 }],
+            },
+          ],
+        },
+      ],
+    }
+
+    const payload = buildMenubarPayload(period, [], null)
+
+    expect(payload.current.topProjects).toHaveLength(1)
+    expect(payload.current.topProjects[0]).toMatchObject({
+      name: 'codeburn',
+      cost: 6,
+      sessions: 3,
+      inputTokens: 150,
+      outputTokens: 35,
+      reasoningTokens: 10,
+      cacheReadTokens: 380,
+      cacheWriteTokens: 15,
+      totalTokens: 590,
+    })
+    expect(payload.current.topProjects[0]!.sessionDetails).toHaveLength(2)
+  })
 })

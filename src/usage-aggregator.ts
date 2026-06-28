@@ -288,6 +288,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     cost: p.totalCostUSD,
     savingsUSD: p.totalSavingsUSD,
     sessions: p.sessions.length,
+    inputTokens: p.sessions.reduce((s, session) => s + session.totalInputTokens, 0),
+    outputTokens: p.sessions.reduce((s, session) => s + session.totalOutputTokens, 0),
+    reasoningTokens: p.sessions.reduce((s, session) => s + session.totalReasoningTokens, 0),
+    cacheReadTokens: p.sessions.reduce((s, session) => s + session.totalCacheReadTokens, 0),
+    cacheWriteTokens: p.sessions.reduce((s, session) => s + session.totalCacheWriteTokens, 0),
     sessionDetails: [...p.sessions]
       .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
       .slice(0, 10)
@@ -297,6 +302,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         calls: s.apiCalls,
         inputTokens: s.totalInputTokens,
         outputTokens: s.totalOutputTokens,
+        reasoningTokens: s.totalReasoningTokens,
         date: s.firstTimestamp?.split('T')[0] ?? '',
         models: Object.entries(s.modelBreakdown)
           .map(([name, m]) => ({ name, cost: m.costUSD, savingsUSD: m.savingsUSD }))

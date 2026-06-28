@@ -13,6 +13,12 @@ private let popoverWidth: CGFloat = 360
 private let popoverHeight: CGFloat = 660
 private let menubarTitleFontSize: CGFloat = 13
 
+enum MenubarSmokeError: Error {
+    case missingPopoverView
+    case invalidPopoverBounds
+    case screenshotEncodingFailed
+}
+
 @main
 struct CodeBurnApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
@@ -96,6 +102,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         registerLoginItemIfNeeded()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
+        runMenubarSmokeIfRequested()
+    }
+
+    private func runMenubarSmokeIfRequested() {
+        guard let output = ProcessInfo.processInfo.environment["CODEBURN_MENUBAR_SMOKE_OUTPUT"],
+              !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let outputDir = URL(fileURLWithPath: output, isDirectory: true)
+        Task { [weak self] in
+            guard let self else { return }
+            await self.runMenubarSmoke(outputDir: outputDir)
+        }
+    }
+
+    private func smokeInsightMode() -> InsightMode {
+        guard let requested = ProcessInfo.processInfo.environment["CODEBURN_MENUBAR_SMOKE_INSIGHT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !requested.isEmpty else { return .trend }
+        return InsightMode.allCases.first { $0.rawValue.caseInsensitiveCompare(requested) == .orderedSame } ?? .trend
+    }
+
+    private func runMenubarSmoke(outputDir: URL) async {
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+            store.resetRefreshState(clearCache: true)
+            store.selectedProvider = .all
+            store.selectedPeriod = .today
+            store.selectedDays = []
+            let smokeInsight = smokeInsightMode()
+            store.selectedInsight = smokeInsight
+            await store.refresh(includeOptimize: false, force: true, showLoading: false)
+            refreshStatusButton()
+            showPopoverForSmoke()
+            try await Task.sleep(nanoseconds: 900_000_000)
+            let screenshotName = "popover-today-\(smokeInsight.rawValue.lowercased()).png"
+            let screenshotURL = outputDir.appendingPathComponent(screenshotName)
+            try capturePopoverScreenshot(to: screenshotURL)
+            try writeMenubarSmokeReport(to: outputDir.appendingPathComponent("report.json"), screenshotURL: screenshotURL)
+        } catch {
+            writeMenubarSmokeFailure(to: outputDir, error: error)
+            NSLog("CodeBurn: menubar smoke failed: \(error)")
+        }
+
+        if ProcessInfo.processInfo.environment["CODEBURN_MENUBAR_SMOKE_KEEP_OPEN"] != "1" {
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func showPopoverForSmoke() {
+        guard let button = statusItem.button else { return }
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        popover.contentViewController?.view.displayIfNeeded()
+    }
+
+    private func writeMenubarSmokeFailure(to outputDir: URL, error: Error) {
+        let payload: [String: Any] = ["ok": false, "error": String(describing: error)]
+        let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try? data?.write(to: outputDir.appendingPathComponent("report.json"))
+    }
+
+    private func writeMenubarSmokeReport(to url: URL, screenshotURL: URL) throws {
+        let payload = store.payload
+        let duplicateProjectNames = Dictionary(grouping: payload.current.topProjects, by: \.name)
+            .filter { $0.value.count > 1 }
+            .map(\.key)
+            .sorted()
+        let report: [String: Any] = [
+            "ok": true,
+            "selectedProvider": store.selectedProvider.rawValue,
+            "selectedPeriod": store.selectedPeriod.rawValue,
+            "selectedInsight": store.selectedInsight.rawValue,
+            "currentLabel": payload.current.label,
+            "currentCost": payload.current.cost,
+            "currentCalls": payload.current.calls,
+            "currentSessions": payload.current.sessions,
+            "currentInputTokens": payload.current.inputTokens,
+            "currentOutputTokens": payload.current.outputTokens,
+            "currentCodexCredits": payload.current.codexCredits ?? 0,
+            "topProjectCount": payload.current.topProjects.count,
+            "topProjectDuplicateNames": duplicateProjectNames,
+            "screenshot": screenshotURL.path,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url)
+    }
+
+    private func capturePopoverScreenshot(to url: URL) throws {
+        guard let view = popover.contentViewController?.view else {
+            throw MenubarSmokeError.missingPopoverView
+        }
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        let bounds = view.bounds
+        guard !bounds.isEmpty else { throw MenubarSmokeError.invalidPopoverBounds }
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: bounds) else {
+            throw MenubarSmokeError.screenshotEncodingFailed
+        }
+        view.cacheDisplay(in: bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            throw MenubarSmokeError.screenshotEncodingFailed
+        }
+        try png.write(to: url)
     }
 
     private func setupWakeObservers() {
