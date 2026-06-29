@@ -97,6 +97,12 @@ describe('getShortModelName', () => {
     expect(getShortModelName('claude-opus-4-8')).toBe('Opus 4.8')
   })
 
+  // Regression for #461: gpt-5.3-codex-spark must keep its own display name
+  // rather than collapsing into the shorter gpt-5.3-codex bucket.
+  it('maps gpt-5.3-codex-spark to its own line (not GPT-5.3 Codex)', () => {
+    expect(getShortModelName('gpt-5.3-codex-spark')).toBe('GPT-5.3 Codex Spark')
+  })
+
   // A future version is derived from the id with no hand-maintained entry.
   it('derives an unreleased claude version with no SHORT_NAMES entry', () => {
     expect(getShortModelName('claude-sonnet-5-2')).toBe('Sonnet 5.2')
