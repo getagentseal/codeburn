@@ -1,4 +1,4 @@
-import { existsSync, statSync, readdirSync, readFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -64,17 +64,6 @@ type AgentKvRow = {
   content: Uint8Array | string | null
   request_id: string | null
   content_length: number
-}
-
-type AgentKvContent = {
-  type?: string
-  text?: string
-  providerOptions?: {
-    cursor?: {
-      modelName?: string
-      requestId?: string
-    }
-  }
 }
 
 const CHARS_PER_TOKEN = 4
@@ -497,11 +486,73 @@ function loadComposerInputTokens(db: SqliteDatabase): Map<string, number> {
   return map
 }
 
+type AgentTools = { tools: string[]; bash: string[] }
+
+// Cursor logs the agent's tool calls (Read, Grep, Shell, ...) in agentKv blobs
+// keyed by requestId. Bubbles carry the same requestId plus the composerId, so
+// joining the two attributes each conversation's tools and Shell commands.
+const BUBBLE_REQUESTID_QUERY = `
+  SELECT key as bubble_key, json_extract(value, '$.requestId') as request_id
+  FROM cursorDiskKV
+  WHERE key LIKE 'bubbleId:%' AND json_extract(value, '$.requestId') IS NOT NULL
+`
+
+function loadAgentToolsByComposer(db: SqliteDatabase): Map<string, AgentTools> {
+  const byComposer = new Map<string, AgentTools>()
+
+  const requestToComposer = new Map<string, string>()
+  try {
+    const rows = db.query<{ bubble_key: string; request_id: string | null }>(BUBBLE_REQUESTID_QUERY)
+    for (const r of rows) {
+      const composer = parseComposerIdFromKey(r.bubble_key)
+      if (composer && r.request_id) requestToComposer.set(r.request_id, composer)
+    }
+  } catch {
+    return byComposer
+  }
+
+  let rows: AgentKvRow[]
+  try {
+    rows = db.query<AgentKvRow>(AGENTKV_QUERY)
+  } catch {
+    return byComposer
+  }
+
+  // Only the turn-opening (user) agentKv row carries the requestId; the
+  // assistant rows that follow inherit it, so track it positionally.
+  let currentRequestId: string | null = null
+  for (const row of rows) {
+    if (row.request_id) currentRequestId = row.request_id
+    if (row.role !== 'assistant' || !row.content || !currentRequestId) continue
+    const composer = requestToComposer.get(currentRequestId)
+    if (!composer) continue
+    let content: unknown
+    try {
+      content = JSON.parse(blobToText(row.content))
+    } catch {
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    const bucket = byComposer.get(composer) ?? { tools: [], bash: [] }
+    for (const block of content as Array<{ type?: string; toolName?: string; args?: { command?: string } }>) {
+      if (!block || block.type !== 'tool-call' || !block.toolName) continue
+      bucket.tools.push(block.toolName)
+      if (block.toolName === 'Shell') {
+        const command = block.args?.command?.trim()
+        if (command) bucket.bash.push(command)
+      }
+    }
+    byComposer.set(composer, bucket)
+  }
+  return byComposer
+}
+
 function parseBubbles(
   db: SqliteDatabase,
   seenKeys: Set<string>,
   timeFloor: string,
   composerInput: Map<string, number>,
+  agentTools: Map<string, AgentTools>,
 ): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
@@ -569,6 +620,9 @@ function parseBubbles(
 
       let inputTokens = row.input_tokens ?? 0
       let outputTokens = row.output_tokens ?? 0
+      // The conversation's tools/bash attach to the single call that carries its
+      // real input (its first turn), so they are counted exactly once.
+      let creditedHere = false
 
       // Current Cursor leaves tokenCount at {0,0}. Use the conversation's real
       // context size (promptTokenBreakdown) for input, credited once per
@@ -579,8 +633,13 @@ function parseBubbles(
         if (row.bubble_type === 1) {
           const real = composerInput.get(conversationId)
           if (real != null) {
-            inputTokens = creditedComposers.has(conversationId) ? 0 : real
-            creditedComposers.add(conversationId)
+            if (creditedComposers.has(conversationId)) {
+              inputTokens = 0
+            } else {
+              inputTokens = real
+              creditedComposers.add(conversationId)
+              creditedHere = true
+            }
           } else {
             inputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
           }
@@ -612,7 +671,12 @@ function parseBubbles(
       const languages = extractLanguages(blobToText(row.code_blocks))
       const hasCode = languages.length > 0
 
-      const cursorTools: string[] = hasCode ? ['cursor:edit', ...languages.map(l => `lang:${l}`)] : []
+      const agentTurn = creditedHere ? agentTools.get(conversationId) : undefined
+      const cursorTools: string[] = [
+        ...(hasCode ? ['cursor:edit', ...languages.map(l => `lang:${l}`)] : []),
+        ...(agentTurn?.tools ?? []),
+      ]
+      const bashCommands = agentTurn?.bash ?? []
 
       results.push({
         provider: 'cursor',
@@ -626,7 +690,7 @@ function parseBubbles(
         webSearchRequests: 0,
         costUSD,
         tools: cursorTools,
-        bashCommands: [],
+        bashCommands,
         timestamp,
         speed: 'standard',
         deduplicationKey: dedupKey,
@@ -640,136 +704,6 @@ function parseBubbles(
 
   if (skipped > 0) {
     process.stderr.write(`codeburn: skipped ${skipped} unreadable Cursor entries\n`)
-  }
-
-  return { calls: results }
-}
-
-function extractModelFromContent(content: AgentKvContent[]): string | null {
-  for (const c of content) {
-    if (c.providerOptions?.cursor?.modelName) {
-      return c.providerOptions.cursor.modelName
-    }
-  }
-  return null
-}
-
-function extractTextLength(content: AgentKvContent[]): number {
-  let total = 0
-  for (const c of content) {
-    if (c.text) total += c.text.length
-  }
-  return total
-}
-
-function parseAgentKv(db: SqliteDatabase, seenKeys: Set<string>, dbPath: string): { calls: ParsedProviderCall[] } {
-  const results: ParsedProviderCall[] = []
-
-  // Cursor's agentKv schema does not record per-message timestamps. Use the
-  // SQLite file's mtime as a bounded "last write" timestamp for all calls;
-  // it's at least honest (no future time, no always-now). Users running
-  // codeburn against an idle Cursor install will see agentKv calls land at
-  // the actual last activity time rather than today's date.
-  let agentKvTimestamp: string
-  try {
-    agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
-  } catch {
-    agentKvTimestamp = new Date().toISOString()
-  }
-
-  let rows: AgentKvRow[]
-  try {
-    rows = db.query<AgentKvRow>(AGENTKV_QUERY)
-  } catch {
-    return { calls: results }
-  }
-
-  const sessions: Map<string, { inputChars: number; outputChars: number; model: string | null; userText: string }> = new Map()
-  let currentRequestId = 'unknown'
-  let turnIndex = 0
-
-  for (const row of rows) {
-    if (!row.role || !row.content) continue
-    const contentText = blobToText(row.content)
-
-    let content: AgentKvContent[]
-    let plainTextLength = 0
-    try {
-      const parsed = JSON.parse(contentText)
-      if (Array.isArray(parsed)) {
-        content = parsed
-      } else {
-        content = []
-        plainTextLength = contentText.length
-      }
-    } catch {
-      content = []
-      plainTextLength = contentText.length
-    }
-
-    const requestId = row.request_id ?? currentRequestId
-    if (requestId !== currentRequestId) {
-      currentRequestId = requestId
-      turnIndex = 0
-    }
-
-    const textLength = plainTextLength || extractTextLength(content)
-    const model = extractModelFromContent(content)
-
-    if (row.role === 'user') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
-      existing.inputChars += textLength
-      if (!existing.userText) {
-        const text = content[0]?.text ?? contentText
-        const queryMatch = text.match(/<user_query>([\s\S]*?)<\/user_query>/)
-        existing.userText = queryMatch ? queryMatch[1].trim().slice(0, 500) : text.slice(0, 500)
-      }
-      sessions.set(requestId, existing)
-    } else if (row.role === 'assistant') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
-      existing.outputChars += textLength
-      if (model) existing.model = model
-      sessions.set(requestId, existing)
-    } else if (row.role === 'tool' || row.role === 'system') {
-      const existing = sessions.get(requestId) ?? { inputChars: 0, outputChars: 0, model: null, userText: '' }
-      existing.inputChars += textLength
-      sessions.set(requestId, existing)
-    }
-  }
-
-  for (const [requestId, session] of sessions) {
-    if (session.inputChars === 0 && session.outputChars === 0) continue
-
-    const inputTokens = Math.ceil(session.inputChars / CHARS_PER_TOKEN)
-    const outputTokens = Math.ceil(session.outputChars / CHARS_PER_TOKEN)
-    const dedupKey = `cursor:agentKv:${requestId}`
-
-    if (seenKeys.has(dedupKey)) continue
-    seenKeys.add(dedupKey)
-
-    const pricingModel = resolveModel(session.model)
-    const displayModel = modelForDisplay(session.model)
-    const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
-
-    results.push({
-      provider: 'cursor',
-      model: displayModel,
-      inputTokens,
-      outputTokens,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
-      cachedInputTokens: 0,
-      reasoningTokens: 0,
-      webSearchRequests: 0,
-      costUSD,
-      tools: [],
-      bashCommands: [],
-      timestamp: agentKvTimestamp,
-      speed: 'standard',
-      deduplicationKey: dedupKey,
-      userMessage: session.userText,
-      sessionId: requestId,
-    })
   }
 
   return { calls: results }
@@ -845,7 +779,8 @@ function createParser(
           // which double-counted against the bubble stream. parseAgentKv is
           // kept for the tools/bash breakdown in a follow-up.
           const composerInput = loadComposerInputTokens(db)
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, composerInput)
+          const agentTools = loadAgentToolsByComposer(db)
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, composerInput, agentTools)
           allCalls = bubbleCalls
           await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {
