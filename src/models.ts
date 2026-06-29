@@ -304,11 +304,12 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'claude-4.5-haiku':               'claude-haiku-4-5',
   'claude-4.6-haiku':               'claude-haiku-4-5',
   // Cursor's house models have no LiteLLM pricing entry. composer-1 is
-  // sonnet-4.5-class per Cursor docs; composer-2 is built on Sonnet 4.6
-  // per cursor.com/blog/composer-2.
+  // sonnet-4.5-class per Cursor docs; composer-2 and composer-2.5 are built on
+  // Sonnet 4.6 per cursor.com/blog/composer-2.
   'composer-1':                     'claude-sonnet-4-5',
   'composer-1.5':                   'claude-sonnet-4-5',
   'composer-2':                     'claude-sonnet-4-6',
+  'composer-2.5':                   'claude-sonnet-4-6',
   // Cursor's "fast" routing variant of GPT-5 is the same model behind a
   // lower-latency endpoint; price as base GPT-5 until LiteLLM tracks it.
   'gpt-5-fast':                     'gpt-5',
