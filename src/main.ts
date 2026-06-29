@@ -614,7 +614,7 @@ program
 program
   .command('web')
   .description('Open the local web dashboard in your browser')
-  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all', 'month')
+  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all', 'today')
   .option('--from <date>', 'Start date (YYYY-MM-DD)')
   .option('--to <date>', 'End date (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, copilot)', 'all')

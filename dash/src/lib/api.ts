@@ -63,6 +63,12 @@ export type DeviceUsage = {
   error?: string
 }
 
+declare global {
+  interface Window {
+    __CODEBURN_BOOTSTRAP__?: { devices: DeviceUsage[] }
+  }
+}
+
 // A device may run a different CodeBurn version and send a payload missing
 // fields we treat as required. Fill safe defaults at the boundary so the UI
 // can iterate them without crashing (the alternative is a white screen for an

@@ -10,6 +10,7 @@ import { hostname } from 'os'
 
 import { loadPricing } from './models.js'
 import { buildMenubarPayloadForRange } from './usage-aggregator.js'
+import type { MenubarPayload } from './menubar-json.js'
 import { periodInfoFromQuery, UsageQueryError } from './cli-date.js'
 import { pullDevices, linkRemote } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
@@ -35,6 +36,10 @@ function writeJsonError(res: import('http').ServerResponse, status: number, erro
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify({ error }))
 }
+
+// Cap on the cached local payload, matched to the parser's own session cache
+// (parser.ts) so the assembled payload is never staler than its source data.
+const LOCAL_PAYLOAD_TTL_MS = 180_000
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -105,6 +110,37 @@ export async function runWebDashboard(opts: {
   const share = new ShareController(shareGetUsage)
   if (await loadShareAlways()) await share.start(true).catch(() => {})
 
+  // The server is long-lived, so cache this machine's parsed payload (the CLI
+  // process cannot). Store the promise before any await so concurrent identical
+  // requests collapse into one parse instead of racing.
+  const localPayloadCache = new Map<string, { at: number; payload: Promise<MenubarPayload> }>()
+  const getLocalPayload = (period: string, provider: string, from?: string, to?: string): Promise<MenubarPayload> => {
+    const key = `${period}|${provider}|${from ?? ''}|${to ?? ''}`
+    const hit = localPayloadCache.get(key)
+    if (hit && Date.now() - hit.at < LOCAL_PAYLOAD_TTL_MS) return hit.payload
+    const periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
+    const payload = buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
+    const now = Date.now()
+    localPayloadCache.set(key, { at: now, payload })
+    for (const [k, v] of localPayloadCache) if (now - v.at >= LOCAL_PAYLOAD_TTL_MS) localPayloadCache.delete(k)
+    void payload.catch(() => localPayloadCache.delete(key))
+    return payload
+  }
+
+  // Embed this machine's prewarmed payload in index.html for an instant first
+  // paint with no data round-trip. Only the local device is inlined: no remote
+  // network wait, and paired devices stream in via the live fetch right after.
+  const serveIndexHtml = async (res: import('http').ServerResponse, filePath: string): Promise<void> => {
+    const html = await readFile(filePath, 'utf8')
+    const payload = await getLocalPayload(opts.period, opts.provider, opts.from, opts.to)
+    const devices = [{ id: 'local', name: hostname(), local: true, payload }]
+    // Escape every '<' so a device/model/project name can't close the <script>.
+    const json = JSON.stringify({ devices }).replace(/</g, String.fromCharCode(92) + 'u003c')
+    const injected = html.replace('<script type="module"', `<script>window.__CODEBURN_BOOTSTRAP__=${json}</script>\n    <script type="module"`)
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(injected)
+  }
+
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
@@ -128,20 +164,14 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
-        let periodInfo
+        let payload
         try {
-          periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
+          payload = await getLocalPayload(period, provider, from, to)
         } catch (err) {
           if (!(err instanceof UsageQueryError)) throw err
-          writeJsonError(res, 400, err instanceof Error ? err.message : String(err))
+          writeJsonError(res, 400, err.message)
           return
         }
-        const payload = await buildMenubarPayloadForRange(periodInfo, {
-          provider,
-          project: opts.project,
-          exclude: opts.exclude,
-          optimize: false,
-        })
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify(payload))
         return
@@ -154,17 +184,14 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
-        let periodInfo
+        let results
         try {
-          periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
+          results = await pullDevices(() => getLocalPayload(period, provider, from, to), { period, from, to }, hostname(), {})
         } catch (err) {
           if (!(err instanceof UsageQueryError)) throw err
-          writeJsonError(res, 400, err instanceof Error ? err.message : String(err))
+          writeJsonError(res, 400, err.message)
           return
         }
-        const localGetUsage = async () =>
-          buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
-        const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ devices: results }))
         return
@@ -271,14 +298,16 @@ export async function runWebDashboard(opts: {
         return
       }
       try {
-        const buf = await readFile(filePath)
-        res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream' })
-        res.end(buf)
+        if (extname(filePath) === '.html') {
+          await serveIndexHtml(res, filePath)
+        } else {
+          const buf = await readFile(filePath)
+          res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream' })
+          res.end(buf)
+        }
       } catch {
         // Unknown path: serve index.html so the SPA can route it.
-        const buf = await readFile(join(dashDir, 'index.html'))
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        res.end(buf)
+        await serveIndexHtml(res, join(dashDir, 'index.html'))
       }
     } catch (err) {
       res.writeHead(500, { 'content-type': 'application/json' })
@@ -298,6 +327,8 @@ export async function runWebDashboard(opts: {
   })
   // Durable handler so a post-bind socket error never crashes the process.
   server.on('error', () => {})
+
+  void Promise.resolve().then(() => getLocalPayload(opts.period, opts.provider, opts.from, opts.to)).catch(() => {})
 
   const url = `http://127.0.0.1:${port}`
   if (!dashDir) {
