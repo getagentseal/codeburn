@@ -1335,7 +1335,7 @@ function buildSessionSummary(
       totalCacheWrite += call.usage.cacheCreationInputTokens
       apiCalls++
 
-      const modelKey = getShortModelName(call.model)
+      const modelKey = call.provider === 'devin' ? call.model : getShortModelName(call.model)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
           calls: 0,

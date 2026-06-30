@@ -171,6 +171,7 @@ const DEVIN_PROVIDER_NAME = "devin";
 const DEVIN_PROVIDER_DISPLAY_NAME = "Devin";
 const DEVIN_TRANSCRIPTS_SUBDIR = "transcripts";
 const DEVIN_SESSIONS_DB = "sessions.db";
+const DEVIN_EFFORT_TIERS = new Set(["xhigh", "high", "medium", "low"]);
 
 function parseTranscript(raw: string): DevinAgentTrajectory | null {
   try {
@@ -303,21 +304,71 @@ function getTimestamp(
     .shift();
 }
 
+function firstPresentString(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
+}
+
+function getFriendlyGptName(model: string): string {
+  const shortName = getShortModelName(model);
+  const match = model.match(/^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/);
+  if (!match) return shortName;
+
+  const suffix = match[2]
+    ?.split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+  const reconstructed = `GPT-${match[1]}${suffix ? ` ${suffix}` : ""}`;
+  if (shortName !== model && (!suffix || shortName !== `GPT-${match[1]}`)) {
+    return shortName;
+  }
+
+  return reconstructed;
+}
+
+function getDevinDisplayModelName(
+  generationModel: string | undefined,
+  modelName: string,
+): string {
+  if (!generationModel || /^MODEL_/.test(generationModel)) {
+    return getShortModelName(modelName);
+  }
+
+  if (generationModel.startsWith("gpt-")) {
+    const normalized = generationModel.replace(/^gpt-(\d+)-(\d+)/, "gpt-$1.$2");
+    const effortMatch = normalized.match(/-([^-]+)$/);
+    const effort = effortMatch && DEVIN_EFFORT_TIERS.has(effortMatch[1]!)
+      ? effortMatch[1]
+      : undefined;
+    const base = effort ? normalized.slice(0, -(effort.length + 1)) : normalized;
+    const friendlyBase = getFriendlyGptName(base);
+    return effort ? `${friendlyBase} (${effort})` : friendlyBase;
+  }
+
+  return getShortModelName(generationModel);
+}
+
 function getModelName(
   transcript: DevinAgentTrajectory,
   step: DevinStep,
   session: DevinSessionMetadata | null,
 ): string {
-  return (
-    [
-      step.metadata?.generation_model,
-      step.model_name,
-      transcript.agent?.model_name,
-      session?.model,
-    ]
-      .filter(Boolean)
-      .shift() || DEFAULT_MODEL_NAME
+  const generationModel = firstPresentString(
+    step.metadata?.generation_model,
+    step.extra?.generation_model,
   );
+  const modelName = firstPresentString(
+    step.model_name,
+    transcript.agent?.model_name,
+    session?.model,
+  ) ?? DEFAULT_MODEL_NAME;
+
+  return getDevinDisplayModelName(generationModel, modelName);
 }
 
 function getToolNames(step: DevinStep): string[] {
@@ -479,7 +530,7 @@ export function createDevinProvider(cliDir: string): Provider {
     displayName: DEVIN_PROVIDER_DISPLAY_NAME,
 
     modelDisplayName(model: string): string {
-      return getShortModelName(model);
+      return model;
     },
 
     toolDisplayName(rawTool: string): string {

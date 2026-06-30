@@ -141,7 +141,7 @@ describe('devin provider', () => {
     expect(calls.reduce((sum, call) => sum + call.costUSD, 0)).toBeCloseTo(0.026182499248534442, 15)
     expect(calls[0]).toMatchObject({
       provider: 'devin',
-      model: 'claude-opus-4-6',
+      model: 'Opus 4.6',
       inputTokens: 100,
       outputTokens: 20,
       cacheCreationInputTokens: 10,
@@ -155,11 +155,127 @@ describe('devin provider', () => {
       sessionId: 'session-123',
     })
     expect(calls[1]).toMatchObject({
-      model: 'claude-sonnet-4-6',
+      model: 'Sonnet 4.6',
       timestamp: '2027-01-15T08:00:02.000Z',
       tools: ['str_replace'],
       deduplicationKey: 'devin:session-123:3',
     })
+  })
+
+  it('renders Devin generation_model variants as friendly display names with effort tiers', async () => {
+    await configureDevinRate()
+    const cases = [
+      {
+        schema: '1.4',
+        modelName: 'GPT-5.4',
+        location: 'metadata',
+        generationModel: 'gpt-5-3-codex-xhigh',
+        expected: 'GPT-5.3 Codex (xhigh)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5.5',
+        location: 'metadata',
+        generationModel: 'gpt-5-4-low',
+        expected: 'GPT-5.4 (low)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5.5',
+        location: 'metadata',
+        generationModel: 'gpt-5-5-medium',
+        expected: 'GPT-5.5 (medium)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'Gemini 3 Flash',
+        location: 'metadata',
+        generationModel: 'MODEL_PRIVATE_11',
+        expected: 'Gemini 3 Flash',
+      },
+      {
+        schema: '1.4',
+        modelName: 'Gemini 3 Flash',
+        location: 'metadata',
+        generationModel: 'MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL',
+        expected: 'Gemini 3 Flash',
+      },
+      {
+        schema: '1.7',
+        modelName: 'GPT-5.3-Codex',
+        location: 'extra',
+        generationModel: 'gpt-5-3-codex-xhigh',
+        expected: 'GPT-5.3 Codex (xhigh)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5',
+        location: 'metadata',
+        generationModel: 'gpt-5',
+        expected: 'GPT-5',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5.6',
+        location: 'metadata',
+        generationModel: 'gpt-5-6-medium',
+        expected: 'GPT-5.6 (medium)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5',
+        location: 'metadata',
+        generationModel: 'gpt-5-codex-xhigh',
+        expected: 'GPT-5 Codex (xhigh)',
+      },
+      {
+        schema: '1.4',
+        modelName: 'GPT-5',
+        location: 'metadata',
+        generationModel: 'gpt-5-codex',
+        expected: 'GPT-5 Codex',
+      },
+    ] as const
+
+    for (let index = 0; index < cases.length; index++) {
+      const row = cases[index]!
+      const metadata: Record<string, unknown> = {
+        created_at: '2027-01-15T08:00:01.000Z',
+        committed_acu_cost: 0.1,
+        metrics: { input_tokens: 1 },
+      }
+      const extra: Record<string, unknown> = {}
+      if (row.location === 'metadata') {
+        metadata['generation_model'] = row.generationModel
+      } else {
+        extra['generation_model'] = row.generationModel
+      }
+
+      const step: Record<string, unknown> = {
+        step_id: index + 1,
+        source: 'assistant',
+        message: 'working',
+        metadata,
+      }
+      if (row.location === 'extra') step['extra'] = extra
+
+      const filePath = await writeTranscript(`model-variant-${index}.json`, {
+        schema_version: row.schema,
+        session_id: `model-variant-${index}`,
+        agent: { model_name: row.modelName },
+        steps: [step],
+      })
+
+      const calls = await parseTranscript(filePath)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.model).toBe(row.expected)
+    }
+  })
+
+  it('leaves already-friendly Devin model display names unchanged', () => {
+    const provider = createDevinProvider(tmpDir)
+
+    expect(provider.modelDisplayName('GPT-5.3 Codex (xhigh)')).toBe('GPT-5.3 Codex (xhigh)')
   })
 
   it('includes token-only steps and skips user-input or empty steps', async () => {
@@ -324,7 +440,7 @@ describe('devin provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
       provider: 'devin',
-      model: 'claude-sonnet-4-6',
+      model: 'Sonnet 4.6',
       inputTokens: 200,
       outputTokens: 50,
       cacheCreationInputTokens: 20,
@@ -655,7 +771,7 @@ skipUnlessSqlite('devin provider sessions.db enrichment', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
-      model: 'claude-sonnet-4-6',
+      model: 'Sonnet 4.6',
       project: 'codeburn',
       projectPath: '/Users/example/work/codeburn',
       timestamp: '2027-01-15T08:00:10.000Z',
