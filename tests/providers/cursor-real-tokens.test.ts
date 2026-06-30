@@ -198,13 +198,15 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(credited).toBeDefined()
   })
 
-  it('attributes tools and bash commands from agentKv to the correct conversation', async () => {
+  it('attributes aggregated agentKv tools once in a multi-bubble conversation', async () => {
     const composerId = 'eeee1111-2222-3333-4444-555566667777'
     const requestId = 'req-001'
     const dbPath = buildDb((db) => {
       insertComposerData(db, { composerId, totalUsedTokens: 10000 })
       insertBubble(db, { composerId, bubbleUuid: 'b1', type: 1, text: 'do stuff', requestId })
       insertBubble(db, { composerId, bubbleUuid: 'b2', type: 2, text: 'doing stuff', model: 'gpt-5' })
+      insertBubble(db, { composerId, bubbleUuid: 'b3', type: 1, text: 'do more stuff', requestId: 'req-002' })
+      insertBubble(db, { composerId, bubbleUuid: 'b4', type: 2, text: 'doing more stuff', model: 'gpt-5' })
       // agentKv with tool calls
       insertAgentKv(db, {
         blobId: 'akv-1', role: 'user',
@@ -228,6 +230,12 @@ describe.skipIf(skipReason !== null)('cursor real context tokens (#575)', () => 
     expect(callWithTools!.tools).toContain('Read')
     expect(callWithTools!.tools).toContain('Shell')
     expect(callWithTools!.bashCommands).toContain('npm test')
+
+    const allTools = calls.flatMap(c => c.tools)
+    const allBashCommands = calls.flatMap(c => c.bashCommands)
+    expect(allTools.filter(t => t === 'Read').length).toBe(1)
+    expect(allTools.filter(t => t === 'Shell').length).toBe(1)
+    expect(allBashCommands.filter(cmd => cmd === 'npm test').length).toBe(1)
   })
 
   it('uses conversation model for pricing when input is on a user bubble', async () => {

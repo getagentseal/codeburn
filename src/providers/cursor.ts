@@ -480,9 +480,7 @@ function loadComposerInputTokens(db: SqliteDatabase): Map<string, number> {
   try {
     const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null }>(COMPOSER_TOKENS_QUERY)
     for (const r of rows) {
-      // Distinguish null (field absent) from 0 (valid token count).
-      // `used ?? ctx` would fall through on 0, suppressing a real zero.
-      const tokens = r.used !== null ? r.used : (r.ctx ?? 0)
+      const tokens = r.used ?? r.ctx ?? 0
       if (r.composer_id && tokens > 0) map.set(r.composer_id, tokens)
     }
   } catch {
@@ -641,6 +639,9 @@ function parseBubbles(
 
       let inputTokens = row.input_tokens ?? 0
       let outputTokens = row.output_tokens ?? 0
+      // The conversation's tools/bash attach to the single call that carries its
+      // real input (its first turn), so they are counted exactly once.
+      let creditedHere = false
 
       // Current Cursor leaves tokenCount at {0,0}. Use the conversation's real
       // context size (promptTokenBreakdown) for input, credited once per
@@ -656,6 +657,7 @@ function parseBubbles(
             } else {
               inputTokens = real
               creditedComposers.add(conversationId)
+              creditedHere = true
             }
           } else {
             inputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
@@ -692,7 +694,7 @@ function parseBubbles(
       const languages = extractLanguages(blobToText(row.code_blocks))
       const hasCode = languages.length > 0
 
-      const agentTurn = agentTools.get(conversationId)
+      const agentTurn = creditedHere ? agentTools.get(conversationId) : undefined
       const cursorTools: string[] = [
         ...(hasCode ? ['cursor:edit', ...languages.map(l => `lang:${l}`)] : []),
         ...(agentTurn?.tools ?? []),
