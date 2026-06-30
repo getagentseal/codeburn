@@ -462,9 +462,12 @@ function scanBubblesPaged(
   return { rows: collected, truncated }
 }
 
-// Cursor leaves the per-bubble tokenCount at {0,0} on current builds; the only
-// real input figure on disk is the conversation's context size, which Cursor
-// records in composerData.promptTokenBreakdown (the in-app context meter).
+// Cursor leaves the per-bubble tokenCount at {0,0} on current builds. The only
+// real input figure on disk is the latest context-window snapshot, which Cursor
+// records in composerData.promptTokenBreakdown.totalUsedTokens or
+// contextTokensUsed (the in-app context meter). This is not cumulative per-turn,
+// so local SQLite undercounts admin-console usage; parity requires the opt-in
+// Cursor Admin API: POST api.cursor.com/teams/filtered-usage-events.
 // Keyed by composerId so parseBubbles can credit it to the right conversation.
 const COMPOSER_TOKENS_QUERY = `
   SELECT
@@ -643,10 +646,14 @@ function parseBubbles(
       // real input (its first turn), so they are counted exactly once.
       let creditedHere = false
 
-      // Current Cursor leaves tokenCount at {0,0}. Use the conversation's real
-      // context size (promptTokenBreakdown) for input, credited once per
-      // conversation, and the reply text for output. Fall back to the
-      // visible-text estimate only when no breakdown was recorded (older builds).
+      // Current Cursor leaves tokenCount at {0,0}. Use the latest local
+      // context-window snapshot for input, credited once per conversation; it is
+      // not cumulative per-turn, so it undercounts Cursor Admin console totals.
+      // Output is a reply-text estimate, and cache tokens are server-side only
+      // (0 on disk). Admin-console parity requires POST
+      // api.cursor.com/teams/filtered-usage-events.
+      // Fall back to the visible-text estimate only when no breakdown was
+      // recorded (older builds).
       if (inputTokens === 0 && outputTokens === 0) {
         const textLen = row.text_length ?? 0
         if (row.bubble_type === 1) {

@@ -39,6 +39,18 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
+// Explicit USD/token prices that must override LiteLLM/cache data. Cursor
+// publishes house-model rates under provider "Cursor" in USD per 1M tokens:
+// composer-2/2.5: $0.50 input, $2.50 output, $0.20 cache read; composer-1.5:
+// $3.50/$17.50/$0.35; composer-1: $1.25/$10/$0.125. Cursor publishes no
+// separate cache-write rate for these, so cache write uses the input rate.
+const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
+  'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
+  'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
+  'composer-1.5': [3.5e-6, 17.5e-6, 3.5e-6, 0.35e-6],
+  'composer-1': [1.25e-6, 10e-6, 1.25e-6, 0.125e-6],
+}
+
 // Assemble a ModelCosts, applying the cache-cost heuristics (write = 1.25x
 // input, read = 0.1x input) when a source omits them. Shared by the bundled
 // tuple path (tupleToCosts) and the live LiteLLM path (parseLiteLLMEntry) so the
@@ -65,6 +77,13 @@ function tupleToCosts(raw: SnapshotEntry): ModelCosts {
   return buildCosts(input, output, cacheWrite, cacheRead, fast)
 }
 
+function applyBuiltinPriceOverrides(pricing: Map<string, ModelCosts>): Map<string, ModelCosts> {
+  for (const [name, raw] of Object.entries(BUILTIN_PRICE_OVERRIDES)) {
+    pricing.set(name, tupleToCosts(raw))
+  }
+  return pricing
+}
+
 function loadSnapshot(): Map<string, ModelCosts> {
   const map = new Map<string, ModelCosts>()
   for (const [name, raw] of Object.entries(snapshotData as unknown as Record<string, SnapshotEntry>)) {
@@ -85,7 +104,7 @@ const fallbackCosts: Map<string, ModelCosts> = (() => {
   return map
 })()
 
-let pricingCache: Map<string, ModelCosts> = loadSnapshot()
+let pricingCache: Map<string, ModelCosts> = applyBuiltinPriceOverrides(loadSnapshot())
 let sortedPricingKeys: string[] | null = null
 let lowercasePricingIndex: Map<string, ModelCosts> | null = null
 
@@ -202,7 +221,7 @@ function mergeSnapshotFallbacks(pricing: Map<string, ModelCosts>): Map<string, M
   for (const [name, costs] of loadSnapshot()) {
     if (!pricing.has(name)) pricing.set(name, costs)
   }
-  return pricing
+  return applyBuiltinPriceOverrides(pricing)
 }
 
 export async function loadPricing(): Promise<void> {
@@ -303,13 +322,9 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'claude-opus-4-7-thinking-high':  'claude-opus-4-7',
   'claude-4.5-haiku':               'claude-haiku-4-5',
   'claude-4.6-haiku':               'claude-haiku-4-5',
-  // Cursor's house models have no LiteLLM pricing entry. composer-1 is
-  // sonnet-4.5-class per Cursor docs; composer-2 and composer-2.5 are built on
-  // Sonnet 4.6 per cursor.com/blog/composer-2.
-  'composer-1':                     'claude-sonnet-4-5',
-  'composer-1.5':                   'claude-sonnet-4-5',
-  'composer-2':                     'claude-sonnet-4-6',
-  'composer-2.5':                   'claude-sonnet-4-6',
+  // Cursor house composer models use Cursor-published rates in
+  // BUILTIN_PRICE_OVERRIDES; keep them out of this alias map so they do not
+  // inherit Claude Sonnet proxy pricing.
   // Cursor's "fast" routing variant of GPT-5 is the same model behind a
   // lower-latency endpoint; price as base GPT-5 until LiteLLM tracks it.
   'gpt-5-fast':                     'gpt-5',
