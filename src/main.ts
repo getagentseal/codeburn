@@ -1348,6 +1348,46 @@ program
   })
 
 program
+  .command('audit')
+  .description("Token audit: raw provider token fields vs codeburn's displayed totals and cost derivation")
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
+  .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--format <format>', 'Output format: table, json', 'table')
+  .action(async (opts) => {
+    assertProvider(opts.provider, 'audit')
+    const { aggregateAudit, renderAuditTable, renderAuditJson } = await import('./audit-report.js')
+    await loadPricing()
+
+    let range
+    if (opts.from || opts.to) {
+      const customRange = parseDateRangeFlags(opts.from, opts.to)
+      if (!customRange) {
+        process.stderr.write('codeburn: --from and --to must be valid YYYY-MM-DD dates\n')
+        process.exit(1)
+      }
+      range = customRange
+    } else {
+      range = getDateRange(opts.period).range
+    }
+
+    const projects = await parseAllSessions(range, opts.provider)
+    const rows = await aggregateAudit(projects)
+
+    const fmt = (opts.format ?? 'table').toLowerCase()
+    if (fmt === 'json') {
+      process.stdout.write(renderAuditJson(rows) + '\n')
+    } else {
+      if (rows.length === 0) {
+        process.stdout.write('No model usage found for the selected period.\n')
+        return
+      }
+      process.stdout.write(renderAuditTable(rows) + '\n')
+    }
+  })
+
+program
   .command('models')
   .description('Per-model token + cost table, optionally exploded by task type')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
