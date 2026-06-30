@@ -11,7 +11,11 @@ import type { ParsedProviderCall } from './providers/types.js'
 // router relies on those composer ids to bucket calls per project.
 // Version 2 caches contain `sessionId: 'unknown'` for every call and would
 // route everything to the orphan project, so we invalidate them.
-const CURSOR_CACHE_VERSION = 4
+// Version 5: parseAgentKv was removed (it double-counted against bubbles);
+// real context tokens from composerData.promptTokenBreakdown now drive
+// input, and agentKv is used only for the tools/bash breakdown. Cached v4
+// results contain stale agentKv calls and lack the real token figures.
+const CURSOR_CACHE_VERSION = 5
 
 type ResultCache = {
   version?: number
