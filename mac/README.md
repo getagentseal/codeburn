@@ -30,6 +30,23 @@ swift build -c release
 .build/release/CodeBurnMenubar                # launch
 ```
 
+#### On macOS 14 (Sonoma) without Xcode 16
+
+`swift build` above assumes the macOS 15 SDK, whose SwiftUI marks the `View`
+protocol `@MainActor`. The Sonoma SDK (shipped with Command Line Tools) lacks
+that annotation, so a plain build fails with ~80 `main actor-isolated ... from a
+nonisolated context` errors, and a stock CI build links the macOS-15-only
+`libswift_errno.dylib` (the root of the `-10825` launch failure on Sonoma).
+
+Use the helper, which builds against the local macOS 14 SDK with a standalone
+[swift.org](https://www.swift.org/install/macos/) Swift 6.x toolchain and
+adds explicit `@MainActor` to the views in a scratch copy (repo sources stay
+clean), producing a `minos = 14.0` bundle installed to `~/Applications`:
+
+```bash
+mac/Scripts/build-local.sh         # then: codeburn menubar
+```
+
 ## Build & run (dev against a local CLI checkout)
 
 ```bash
@@ -52,7 +69,10 @@ Release installs record a persistent absolute CLI path in `~/Library/Application
 
 ```
 mac/
-├── Package.swift                     SwiftPM manifest
+├── Package.swift                     SwiftPM manifest (deployment target: macOS 14)
+├── Scripts/
+│   ├── package-app.sh                CI: universal signed .app + zip + checksum
+│   └── build-local.sh                Local macOS 14 build (Sonoma SDK + @MainActor patch)
 ├── Sources/CodeBurnMenubar/
 │   ├── CodeBurnApp.swift             @main + MenuBarExtra scene
 │   ├── AppStore.swift                @Observable store + enums
