@@ -13,9 +13,11 @@ import { Chalk } from 'chalk'
 export type { CombinedUsage, DeviceSummary } from '../menubar-json.js'
 
 // Minimal shape we read from a device's usage payload (the menubar payload).
-// Cache create/read are only in the daily history, so we sum those.
+// Cache read/write come from the period-scoped `current` (like input/output)
+// when the peer sends them; older peers only carry cache in the daily history,
+// so we fall back to summing that (scoped by `window` when provided).
 type DevicePayload = {
-  current?: { cost?: number; calls?: number; sessions?: number; inputTokens?: number; outputTokens?: number }
+  current?: { cost?: number; calls?: number; sessions?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }
   history?: { daily?: Array<{ date?: string; cacheReadTokens?: number; cacheWriteTokens?: number }> }
 }
 
@@ -66,8 +68,11 @@ function summarizeOneDevice(d: DeviceUsage, window?: SummaryWindow): DeviceSumma
   })
   const inputTokens = num(cur?.inputTokens)
   const outputTokens = num(cur?.outputTokens)
-  const cacheCreateTokens = daily.reduce((s, e) => s + num(e.cacheWriteTokens), 0)
-  const cacheReadTokens = daily.reduce((s, e) => s + num(e.cacheReadTokens), 0)
+  // Prefer the period-scoped `current` counts (issue #583); fall back to the
+  // windowed daily history for older peers that don't send them. `??` keeps a
+  // genuine 0 and only falls back when the field is absent.
+  const cacheCreateTokens = cur?.cacheWriteTokens ?? daily.reduce((s, e) => s + num(e.cacheWriteTokens), 0)
+  const cacheReadTokens = cur?.cacheReadTokens ?? daily.reduce((s, e) => s + num(e.cacheReadTokens), 0)
   return {
     id: d.id,
     name: d.name,

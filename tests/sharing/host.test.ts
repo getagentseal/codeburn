@@ -230,4 +230,29 @@ describe('host device flow', () => {
       reachableCount: 2,
     })
   })
+
+  it('prefers period-scoped current cache tokens over the 365-day daily history (#583)', () => {
+    const results: DeviceUsage[] = [
+      {
+        id: 'local',
+        name: 'Mac',
+        local: true,
+        payload: {
+          current: { cost: 1, calls: 1, sessions: 1, inputTokens: 100, outputTokens: 50, cacheReadTokens: 42, cacheWriteTokens: 7 },
+          history: {
+            daily: [
+              // A full 365-day backfill whose cache dwarfs the selected period.
+              { date: '2025-08-01', cacheWriteTokens: 900, cacheReadTokens: 5000 },
+              { date: '2026-04-10', cacheWriteTokens: 3, cacheReadTokens: 8 },
+            ],
+          },
+        },
+      },
+    ]
+
+    const summary = summarizeDeviceUsage(results)
+    // Reads current (7 / 42), not the inflated daily-history sum (903 / 5008).
+    expect(summary.perDevice[0]).toMatchObject({ cacheCreateTokens: 7, cacheReadTokens: 42 })
+    expect(summary.combined).toMatchObject({ cacheCreateTokens: 7, cacheReadTokens: 42 })
+  })
 })

@@ -27,6 +27,8 @@ export type Current = {
   oneShotRate: number | null
   inputTokens: number
   outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
   cacheHitPercent: number
   codexCredits: number
   topActivities: Array<{ name: string; cost: number; turns: number; oneShotRate: number | null }>
@@ -86,6 +88,8 @@ function normalizePayload(p?: Payload): Payload | undefined {
       oneShotRate: c.oneShotRate ?? null,
       inputTokens: c.inputTokens ?? 0,
       outputTokens: c.outputTokens ?? 0,
+      cacheReadTokens: c.cacheReadTokens ?? 0,
+      cacheWriteTokens: c.cacheWriteTokens ?? 0,
       cacheHitPercent: c.cacheHitPercent ?? 0,
       codexCredits: c.codexCredits ?? 0,
       topActivities: c.topActivities ?? [],

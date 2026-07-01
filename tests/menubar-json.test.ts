@@ -43,6 +43,35 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.outputTokens).toBe(675600)
   })
 
+  it('exposes period-scoped cache tokens on current, decoupled from the 365-day history backfill (#583)', () => {
+    const period: PeriodData = {
+      label: '30 Days',
+      cost: 5, calls: 10, sessions: 2,
+      inputTokens: 1000, outputTokens: 2000,
+      // What `report -p 30days` shows in the terminal for the same window.
+      cacheReadTokens: 1_391_100_000,
+      cacheWriteTokens: 42_000_000,
+      categories: [], models: [],
+    }
+    // history.daily is the full BACKFILL_DAYS (365) trend, whose cache totals are
+    // far larger than the selected period. The web cards used to sum these, which
+    // is the bug in #583. current must mirror the period, not the backfill.
+    const dailyHistory = [
+      { date: '2025-07-15', cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_800_000_000, cacheWriteTokens: 60_000_000, topModels: [] },
+      { date: '2026-06-30', cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 270_000_000, cacheWriteTokens: 12_000_000, topModels: [] },
+    ]
+    const payload = buildMenubarPayload(period, [], null, dailyHistory)
+
+    // current carries the period totals verbatim ...
+    expect(payload.current.cacheReadTokens).toBe(1_391_100_000)
+    expect(payload.current.cacheWriteTokens).toBe(42_000_000)
+    // ... and is independent of the larger history-backfill sum the cards used before.
+    const historyReadSum = dailyHistory.reduce((s, d) => s + d.cacheReadTokens, 0)
+    const historyWriteSum = dailyHistory.reduce((s, d) => s + d.cacheWriteTokens, 0)
+    expect(historyReadSum).toBeGreaterThan(payload.current.cacheReadTokens)
+    expect(historyWriteSum).toBeGreaterThan(payload.current.cacheWriteTokens)
+  })
+
   it('computes per-category oneShotRate from editTurns and skips categories without edits', () => {
     const period: PeriodData = {
       label: 'Today',

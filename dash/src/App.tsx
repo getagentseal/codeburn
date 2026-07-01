@@ -74,9 +74,11 @@ function Stat({ label: lbl, value }: { label: string; value: string }) {
 // project and session detail is intentionally absent.
 function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: boolean; unit: Unit }) {
   const c = payload?.current
-  const daily = payload?.history.daily ?? []
-  const cacheWrite = daily.reduce((s, d) => s + d.cacheWriteTokens, 0)
-  const cacheRead = daily.reduce((s, d) => s + d.cacheReadTokens, 0)
+  // Cache cards read the period-scoped `current` totals, matching Cost/Calls/
+  // Tokens. `history.daily` is the 365-day backfill that feeds the trend chart
+  // only; summing it here over-counted the cards for shorter periods (#583).
+  const cacheWrite = c?.cacheWriteTokens ?? 0
+  const cacheRead = c?.cacheReadTokens ?? 0
   const toolBars: BarItem[] = c
     ? Object.entries(c.providers).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
     : []
@@ -256,10 +258,11 @@ function CombinedView({ devices, unit }: { devices: DeviceUsage[]; unit: Unit })
     if (!c) continue
     inTok += c.inputTokens
     outTok += c.outputTokens
-    for (const e of d.payload?.history.daily ?? []) {
-      cacheWrite += e.cacheWriteTokens
-      cacheRead += e.cacheReadTokens
-    }
+    // Period-scoped per device (was summing each device's 365-day backfill, #583).
+    // `?? 0` mirrors DeviceView and guards the un-normalized bootstrap payload,
+    // where an older peer may not carry these fields yet (avoids NaN).
+    cacheWrite += c.cacheWriteTokens ?? 0
+    cacheRead += c.cacheReadTokens ?? 0
     for (const [k, v] of Object.entries(c.providers)) providers.set(k, (providers.get(k) ?? 0) + v)
     for (const m of c.topModels) models.set(m.name, (models.get(m.name) ?? 0) + m.cost)
     for (const a of c.topActivities) activities.set(a.name, (activities.get(a.name) ?? 0) + a.cost)
