@@ -1,5 +1,5 @@
 import { getShortModelName } from './models.js'
-import type { ProjectSummary } from './types.js'
+import type { ParsedApiCall, ProjectSummary } from './types.js'
 
 export type ModelEfficiency = {
   model: string
@@ -19,6 +19,10 @@ function rate(num: number, den: number): number | null {
   return Math.round((num / den) * 1000) / 10
 }
 
+function modelKey(call: ParsedApiCall): string {
+  return call.provider === 'devin' ? call.model : getShortModelName(call.model)
+}
+
 export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string, ModelEfficiency> {
   const byModel = new Map<string, MutableModelEfficiency>()
 
@@ -36,16 +40,16 @@ export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string
       for (const turn of session.turns) {
         if (!turn.hasEdits || turn.assistantCalls.length === 0) continue
 
-        const primaryCall = turn.assistantCalls.find(c => getShortModelName(c.model) !== '<synthetic>')
+        const primaryCall = turn.assistantCalls.find(c => modelKey(c) !== '<synthetic>')
         if (!primaryCall) continue
-        const primaryModel = getShortModelName(primaryCall.model)
+        const primaryModel = modelKey(primaryCall)
 
         const stats = ensure(primaryModel)
         stats.editTurns++
         if (turn.retries === 0) stats.oneShotTurns++
         stats.retries += turn.retries
         stats.editCostUSD += turn.assistantCalls.reduce((sum, call) => {
-          return getShortModelName(call.model) === '<synthetic>' ? sum : sum + call.costUSD
+          return modelKey(call) === '<synthetic>' ? sum : sum + call.costUSD
         }, 0)
       }
     }
