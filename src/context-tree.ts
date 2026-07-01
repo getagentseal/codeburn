@@ -1,14 +1,12 @@
 import { open, readdir, stat } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { delimiter, join } from 'path'
 import { homedir } from 'os'
 import chalk from 'chalk'
 
-import { readSessionLines } from './fs-utils.js'
+import { readSessionLines, type SessionLine } from './fs-utils.js'
 import { formatTokens } from './format.js'
 
-// zaly-style context breakdown for a single Claude Code session: what is in
-// the model's context window right now, split by role, block type, and tool.
 // Block token counts are chars/4 estimates; the "context (exact)" line comes
 // from the last assistant message's API usage. Transcripts store thinking
 // blocks with their text stripped, so reasoning is derived per message as
@@ -54,9 +52,23 @@ export type ContextTreeResult = {
   session: SessionRef
   model: string
   compactions: number
-  reported: { context: number; window: number } | null
+  reported: { context: number; window: number | null } | null
   effective: ContextSnapshot
   full: ContextSnapshot
+}
+
+// A single line above this decodes to a string near V8's limit; skip it
+// instead of letting toString abort the whole walk.
+const MAX_LINE_BYTES = 256 * 1024 * 1024
+
+export function lineToText(line: SessionLine): string | null {
+  if (typeof line === 'string') return line
+  if (line.length > MAX_LINE_BYTES) return null
+  try {
+    return line.toString('utf-8')
+  } catch {
+    return null
+  }
 }
 
 export type Acc = {
@@ -369,45 +381,44 @@ const skipFileSnapshots = (head: string): boolean => head.includes('"type":"file
 // segment's head (messages Claude Code carried across the compaction), not at
 // the boundary itself.
 async function findLastBoundary(filePath: string): Promise<{
-  boundaryIndex: number
   headUuid: string | null
   compactions: number
   maxPreTokens: number
 }> {
-  let boundaryIndex = -1
   let headUuid: string | null = null
   let compactions = 0
   let maxPreTokens = 0
-  let index = -1
-  for await (const line of readSessionLines(filePath, skipFileSnapshots)) {
-    index += 1
-    const text = line as string
-    if (!text.includes('"subtype":"compact_boundary"')) continue
+  for await (const line of readSessionLines(filePath, skipFileSnapshots, { largeLineAsBuffer: true })) {
+    if (typeof line !== 'string') continue
+    if (!line.includes('"subtype":"compact_boundary"')) continue
     let entry: RawEntry
     try {
-      entry = JSON.parse(text) as RawEntry
+      entry = JSON.parse(line) as RawEntry
     } catch {
       continue
     }
     if (entry.type !== 'system' || entry.subtype !== 'compact_boundary') continue
     compactions += 1
-    boundaryIndex = index
     headUuid = entry.compactMetadata?.preservedSegment?.headUuid ?? null
     maxPreTokens = Math.max(maxPreTokens, entry.compactMetadata?.preTokens ?? 0)
   }
-  return { boundaryIndex, headUuid, compactions, maxPreTokens }
+  return { headUuid, compactions, maxPreTokens }
 }
+
+// Claude models with a 1M window: opus-4-8 (auto-compactions on disk show
+// ~1.0M preTokens) and the "[1m]" long-context variants. Others default to
+// 200K unless the session itself proves bigger.
+const MILLION_WINDOW_RE = /opus-4-8|\[1m\]/
 
 export async function buildContextTree(session: SessionRef): Promise<ContextTreeResult> {
   const boundary = await findLastBoundary(session.filePath)
   const builder = new TreeBuilder()
   builder.maxSeenTokens = boundary.maxPreTokens
 
-  let index = -1
+  let boundariesSeen = 0
   let inPreservedSegment = false
-  for await (const line of readSessionLines(session.filePath, skipFileSnapshots)) {
-    index += 1
-    const text = line as string
+  for await (const line of readSessionLines(session.filePath, skipFileSnapshots, { largeLineAsBuffer: true })) {
+    const text = lineToText(line)
     if (!text || text.charCodeAt(0) !== 123) continue
     let entry: RawEntry
     try {
@@ -416,9 +427,12 @@ export async function buildContextTree(session: SessionRef): Promise<ContextTree
       continue
     }
     if (entry.isSidechain === true) continue
-    if (entry.type === 'system' && entry.subtype === 'compact_boundary') continue
+    if (entry.type === 'system' && entry.subtype === 'compact_boundary') {
+      boundariesSeen += 1
+      continue
+    }
     if (boundary.headUuid && entry.uuid === boundary.headUuid) inPreservedSegment = true
-    const effective = boundary.boundaryIndex === -1 || index > boundary.boundaryIndex || inPreservedSegment
+    const effective = boundariesSeen >= boundary.compactions || inPreservedSegment
     builder.addEntry(entry, effective)
   }
   builder.flushReasoning()
@@ -431,7 +445,8 @@ export async function buildContextTree(session: SessionRef): Promise<ContextTree
       (builder.lastUsage.cache_creation_input_tokens ?? 0) +
       (builder.lastUsage.output_tokens ?? 0)
     builder.maxSeenTokens = Math.max(builder.maxSeenTokens, context)
-    reported = { context, window: builder.maxSeenTokens > 220_000 ? 1_000_000 : 200_000 }
+    const million = MILLION_WINDOW_RE.test(builder.model) || builder.maxSeenTokens > 220_000
+    reported = { context, window: million ? 1_000_000 : 200_000 }
   }
 
   return {
@@ -444,44 +459,69 @@ export async function buildContextTree(session: SessionRef): Promise<ContextTree
   }
 }
 
-export async function listRecentSessions(limit = 15): Promise<SessionRef[]> {
-  const root = join(homedir(), '.claude', 'projects')
-  if (!existsSync(root)) return []
-  const refs: SessionRef[] = []
-  let projectDirs: string[]
-  try {
-    projectDirs = await readdir(root)
-  } catch {
-    return []
-  }
-  for (const dir of projectDirs) {
-    const projectPath = join(root, dir)
-    let files: string[]
+// Mirrors the env handling of providers/claude.ts so the context views cover
+// the same session roots as usage tracking.
+function claudeProjectRoots(): string[] {
+  const dirsEnv = process.env['CLAUDE_CONFIG_DIRS']
+  const dirs = dirsEnv ? dirsEnv.split(delimiter).filter(Boolean) : [process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude')]
+  return dirs.map((d) => join(d, 'projects'))
+}
+
+type SessionFile = { filePath: string; sessionId: string; project: string }
+
+async function listSessionFiles(): Promise<SessionFile[]> {
+  const files: SessionFile[] = []
+  for (const root of claudeProjectRoots()) {
+    if (!existsSync(root)) continue
+    let projectDirs: string[]
     try {
-      files = await readdir(projectPath)
+      projectDirs = await readdir(root)
     } catch {
       continue
     }
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      const filePath = join(projectPath, file)
+    for (const dir of projectDirs) {
+      let names: string[]
       try {
-        const info = await stat(filePath)
-        if (!info.isFile() || info.size === 0) continue
-        refs.push({
-          filePath,
-          sessionId: file.slice(0, -'.jsonl'.length),
-          project: dir.split('-').filter(Boolean).pop() ?? dir,
-          mtimeMs: info.mtimeMs,
-          sizeBytes: info.size,
-        })
+        names = await readdir(join(root, dir))
       } catch {
         continue
       }
+      for (const name of names) {
+        if (!name.endsWith('.jsonl')) continue
+        files.push({
+          filePath: join(root, dir, name),
+          sessionId: name.slice(0, -'.jsonl'.length),
+          project: dir.split('-').filter(Boolean).pop() ?? dir,
+        })
+      }
     }
   }
-  refs.sort((a, b) => b.mtimeMs - a.mtimeMs)
-  return refs.slice(0, limit)
+  return files
+}
+
+async function statRef(file: SessionFile): Promise<SessionRef | null> {
+  try {
+    const info = await stat(file.filePath)
+    if (!info.isFile() || info.size === 0) return null
+    return { ...file, mtimeMs: info.mtimeMs, sizeBytes: info.size }
+  } catch {
+    return null
+  }
+}
+
+function newestFirst(refs: Array<SessionRef | null>): SessionRef[] {
+  return refs.filter((r): r is SessionRef => r !== null).sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+export async function listRecentSessions(limit = 15): Promise<SessionRef[]> {
+  const files = await listSessionFiles()
+  return newestFirst(await Promise.all(files.map(statRef))).slice(0, limit)
+}
+
+// Id lookups match filenames directly so only the matching files get stated.
+export async function findClaudeSession(idPrefix: string): Promise<SessionRef | null> {
+  const matches = (await listSessionFiles()).filter((f) => f.sessionId.startsWith(idPrefix))
+  return newestFirst(await Promise.all(matches.map(statRef)))[0] ?? null
 }
 
 // Claude Code stores an AI-generated session name as "ai-title" entries (the
@@ -513,7 +553,7 @@ function titleFromChunk(chunk: string): string {
   return title || summary
 }
 
-async function readChunk(filePath: string, start: number, length: number): Promise<string> {
+export async function readChunk(filePath: string, start: number, length: number): Promise<string> {
   const fd = await open(filePath, 'r')
   try {
     const buf = Buffer.alloc(length)
@@ -535,7 +575,7 @@ export async function readSessionTitle(ref: SessionRef): Promise<string> {
   }
 }
 
-async function resolveSession(arg: string | undefined): Promise<SessionRef | null> {
+async function resolveSession(arg: string | undefined, provider: 'claude' | 'codex'): Promise<SessionRef | null> {
   if (arg && (arg.endsWith('.jsonl') || arg.includes('/'))) {
     if (!existsSync(arg)) return null
     const info = await stat(arg)
@@ -548,16 +588,20 @@ async function resolveSession(arg: string | undefined): Promise<SessionRef | nul
       sizeBytes: info.size,
     }
   }
-  const recent = await listRecentSessions(5000)
-  if (!arg) return recent[0] ?? null
-  return recent.find((r) => r.sessionId.startsWith(arg)) ?? null
+  if (provider === 'codex') {
+    const codex = await import('./context-tree-codex.js')
+    if (!arg) return (await codex.listRecentCodexSessions(1))[0] ?? null
+    return codex.findCodexSession(arg)
+  }
+  if (!arg) return (await listRecentSessions(1))[0] ?? null
+  return findClaudeSession(arg)
 }
 
 function num(n: number): string {
   return n.toLocaleString('en-US')
 }
 
-function relativeAge(mtimeMs: number): string {
+export function relativeAge(mtimeMs: number): string {
   const mins = Math.max(0, Math.round((Date.now() - mtimeMs) / 60_000))
   if (mins < 60) return `${mins}m ago`
   if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`
@@ -566,7 +610,6 @@ function relativeAge(mtimeMs: number): string {
 
 export type ContextRow = { depth: number; label: string; count: number; tokens: number; bold?: boolean }
 
-// The tree flattened to rows, shared by the static CLI renderer and the TUI.
 export function snapshotRows(view: ContextSnapshot): ContextRow[] {
   const rows: ContextRow[] = []
   rows.push({ depth: 0, label: 'assistant', count: view.assistant.count, tokens: view.assistant.tokens, bold: true })
@@ -622,8 +665,9 @@ export function renderContextTree(result: ContextTreeResult, opts: { full?: bool
     lines.push(`    ${chalk.dim('◦')} ${formatTokens(result.effective.tokens)} ${chalk.dim(`effective (${pct}%)`)}`)
   }
   if (result.reported) {
-    const pct = Math.round((result.reported.context / result.reported.window) * 100)
-    lines.push(`  context (exact, last turn): ${chalk.bold(formatTokens(result.reported.context))} ${chalk.dim(`of ${formatTokens(result.reported.window)} window (${pct}%)`)}`)
+    const { context, window } = result.reported
+    const windowPart = window ? ` ${chalk.dim(`of ${formatTokens(window)} window (${Math.round((context / window) * 100)}%)`)}` : ''
+    lines.push(`  context (exact, last turn): ${chalk.bold(formatTokens(context))}${windowPart}`)
     const overhead = result.reported.context - result.effective.tokens
     if (overhead >= 0) {
       lines.push(`    ${chalk.dim('◦')} ${formatTokens(overhead)} ${chalk.dim('system prompt, tools & memory (derived)')}`)
@@ -641,42 +685,57 @@ export function renderContextTree(result: ContextTreeResult, opts: { full?: bool
   return lines.join('\n')
 }
 
-function renderSessionList(refs: SessionRef[], titles: string[]): string {
-  const lines = ['', `  ${chalk.bold('Recent Claude Code sessions')}`, '']
+export type TitledSessionRef = SessionRef & { title: string }
+
+function renderSessionList(refs: TitledSessionRef[], provider: 'claude' | 'codex'): string {
+  const heading = provider === 'codex' ? 'Recent Codex sessions' : 'Recent Claude Code sessions'
+  const hint = provider === 'codex' ? 'codeburn context <id> --provider codex to inspect one' : 'codeburn context <id> to inspect one'
+  const lines = ['', `  ${chalk.bold(heading)}`, '']
   const projectWidth = Math.max(...refs.map((r) => r.project.length))
-  for (const [i, ref] of refs.entries()) {
+  for (const ref of refs) {
     const sizeMb = (ref.sizeBytes / 1024 / 1024).toFixed(1).padStart(6)
-    const title = titles[i] ?? ''
-    const shortTitle = title.length > 48 ? `${title.slice(0, 47)}…` : title
+    const shortTitle = ref.title.length > 48 ? `${ref.title.slice(0, 47)}…` : ref.title
     lines.push(`  ${chalk.cyan(ref.sessionId.slice(0, 8))}  ${chalk.dim(`${sizeMb}MB`)}  ${relativeAge(ref.mtimeMs).padStart(7)}  ${chalk.dim(ref.project.padEnd(projectWidth))}  ${shortTitle}`)
   }
   lines.push('')
-  lines.push(chalk.dim('  codeburn context <id> to inspect one'))
+  lines.push(chalk.dim(`  ${hint}`))
   lines.push('')
   return lines.join('\n')
 }
 
+export async function listRecentTitledSessions(limit = 15): Promise<TitledSessionRef[]> {
+  const refs = await listRecentSessions(limit)
+  const titles = await Promise.all(refs.map(readSessionTitle))
+  return refs.map((r, i) => ({ ...r, title: titles[i] ?? '' }))
+}
+
 export async function runContextCommand(
   sessionArg: string | undefined,
-  opts: { list?: boolean; full?: boolean; json?: boolean },
+  opts: { list?: boolean; full?: boolean; json?: boolean; provider?: string },
 ): Promise<void> {
+  const provider: 'claude' | 'codex' = opts.provider === 'codex' ? 'codex' : 'claude'
   if (opts.list) {
-    const refs = await listRecentSessions(15)
+    const refs =
+      provider === 'codex' ? await (await import('./context-tree-codex.js')).listRecentCodexSessions(15) : await listRecentTitledSessions(15)
     if (refs.length === 0) {
-      console.log('No Claude Code sessions found under ~/.claude/projects.')
+      console.log(provider === 'codex' ? 'No Codex sessions found.' : 'No Claude Code sessions found.')
       return
     }
-    const titles = await Promise.all(refs.map(readSessionTitle))
-    console.log(renderSessionList(refs, titles))
+    if (opts.json) {
+      console.log(JSON.stringify({ sessions: refs }, null, 2))
+      return
+    }
+    console.log(renderSessionList(refs, provider))
     return
   }
-  const session = await resolveSession(sessionArg)
+  const session = await resolveSession(sessionArg, provider)
   if (!session) {
-    console.error(sessionArg ? `No session matching "${sessionArg}".` : 'No Claude Code sessions found under ~/.claude/projects.')
+    console.error(sessionArg ? `No ${provider} session matching "${sessionArg}".` : `No ${provider} sessions found.`)
     process.exitCode = 1
     return
   }
-  const result = await buildContextTree(session)
+  const result =
+    provider === 'codex' ? await (await import('./context-tree-codex.js')).buildCodexContextTree(session) : await buildContextTree(session)
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2))
     return

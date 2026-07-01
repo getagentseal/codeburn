@@ -19,8 +19,8 @@ import { pairingCode } from './sharing/pairing.js'
 import { getSharingDir, loadRemotes, loadShareAlways, saveShareAlways } from './sharing/store.js'
 import { ShareController } from './sharing/share-controller.js'
 import { sanitizeForSharing } from './sharing/sanitize.js'
-import { buildContextTree, listRecentSessions, readSessionTitle, type ContextTreeResult, type SessionRef } from './context-tree.js'
-import { buildCodexContextTree, listCodexSessionRefs, listRecentCodexSessions } from './context-tree-codex.js'
+import { buildContextTree, findClaudeSession, listRecentTitledSessions, snapshotRows, type ContextTreeResult, type SessionRef } from './context-tree.js'
+import { buildCodexContextTree, findCodexSession, listRecentCodexSessions } from './context-tree-codex.js'
 
 function readBody(req: import('http').IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -135,7 +135,12 @@ export async function runWebDashboard(opts: {
   const getContextTree = (provider: 'claude' | 'codex', ref: SessionRef): Promise<ContextTreeResult> => {
     const key = `${provider}:${ref.sessionId}:${ref.mtimeMs}`
     const hit = contextTreeCache.get(key)
-    if (hit) return hit
+    if (hit) {
+      // Re-insert so eviction is LRU rather than insertion order.
+      contextTreeCache.delete(key)
+      contextTreeCache.set(key, hit)
+      return hit
+    }
     const tree = provider === 'claude' ? buildContextTree(ref) : buildCodexContextTree(ref)
     contextTreeCache.set(key, tree)
     void tree.catch(() => contextTreeCache.delete(key))
@@ -295,23 +300,17 @@ export async function runWebDashboard(opts: {
         res.end(JSON.stringify(await share.status()))
         return
       }
-      // Context explorer: recent sessions per provider, and the per-session
-      // token tree. Session ids are resolved against the discovered session
-      // files only, never joined into a path from user input.
+      // Session ids are resolved against the discovered session files only,
+      // never joined into a path from user input, and responses never carry
+      // local file paths.
       if (url.pathname === '/api/context/sessions') {
         const provider = url.searchParams.get('provider') ?? 'claude'
         if (provider !== 'claude' && provider !== 'codex') {
           writeJsonError(res, 400, 'provider must be claude or codex')
           return
         }
-        let sessions
-        if (provider === 'claude') {
-          const refs = await listRecentSessions(15)
-          const titles = await Promise.all(refs.map(readSessionTitle))
-          sessions = refs.map((r, i) => ({ provider, sessionId: r.sessionId, project: r.project, title: titles[i] ?? '', mtimeMs: r.mtimeMs, sizeBytes: r.sizeBytes }))
-        } else {
-          sessions = (await listRecentCodexSessions(15)).map((r) => ({ provider, sessionId: r.sessionId, project: r.project, title: r.title, mtimeMs: r.mtimeMs, sizeBytes: r.sizeBytes }))
-        }
+        const refs = provider === 'claude' ? await listRecentTitledSessions(15) : await listRecentCodexSessions(15)
+        const sessions = refs.map((r) => ({ provider, sessionId: r.sessionId, project: r.project, title: r.title, mtimeMs: r.mtimeMs, sizeBytes: r.sizeBytes }))
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ sessions }))
         return
@@ -323,15 +322,20 @@ export async function runWebDashboard(opts: {
           writeJsonError(res, 400, 'provider (claude|codex) and id are required')
           return
         }
-        const refs = provider === 'claude' ? await listRecentSessions(5000) : await listCodexSessionRefs()
-        const ref = refs.find((r) => r.sessionId === id)
-        if (!ref) {
+        const ref = provider === 'claude' ? await findClaudeSession(id) : await findCodexSession(id)
+        if (!ref || ref.sessionId !== id) {
           writeJsonError(res, 404, `no ${provider} session ${id}`)
           return
         }
         const tree = await getContextTree(provider, ref)
+        const payload = {
+          ...tree,
+          session: { sessionId: tree.session.sessionId, project: tree.session.project, mtimeMs: tree.session.mtimeMs, sizeBytes: tree.session.sizeBytes },
+          effectiveRows: snapshotRows(tree.effective),
+          fullRows: snapshotRows(tree.full),
+        }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify(tree))
+        res.end(JSON.stringify(payload))
         return
       }
 

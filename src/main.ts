@@ -1338,14 +1338,20 @@ program
 
 program
   .command('context [session]')
-  .description('Context token breakdown per session: what fills the window, by role, block type, and tool (experimental). No arguments opens an interactive browser.')
+  .description('Context token breakdown per session: what fills the window, by role, block type, and tool (experimental). No session argument opens an interactive browser.')
   .option('--list', 'List recent sessions to pick from')
   .option('--full', 'Cover the whole session history instead of the live (post-compaction) window')
   .option('--json', 'JSON output')
-  .action(async (session: string | undefined, opts: { list?: boolean; full?: boolean; json?: boolean }) => {
-    if (!session && !opts.list && !opts.json && !opts.full && process.stdout.isTTY && process.stdin.isTTY) {
+  .option('--provider <provider>', 'Session source: claude or codex', 'claude')
+  .action(async (session: string | undefined, opts: { list?: boolean; full?: boolean; json?: boolean; provider?: string }) => {
+    if (opts.provider !== 'claude' && opts.provider !== 'codex') {
+      console.error('context: --provider must be claude or codex')
+      process.exitCode = 1
+      return
+    }
+    if (!session && !opts.list && !opts.json && process.stdout.isTTY && process.stdin.isTTY) {
       const { runContextTui } = await import('./context-tui.js')
-      await runContextTui()
+      await runContextTui({ initialScope: opts.full ? 'full' : 'effective' })
       return
     }
     await runContextCommand(session, opts)

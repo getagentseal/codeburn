@@ -5,8 +5,8 @@ import {
   fetchContextSessions,
   fetchContextTree,
   type ContextProvider,
+  type ContextRow,
   type ContextSessionInfo,
-  type ContextSnapshot,
 } from '@/lib/api'
 import { cn, fmtNum, fmtTokens, label } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
@@ -24,47 +24,26 @@ function ago(mtimeMs: number): string {
   return `${Math.round(mins / (60 * 24))}d ago`
 }
 
-type TreeRow = { depth: number; name: string; count: number; tokens: number; section?: boolean }
-
-function treeRows(view: ContextSnapshot): TreeRow[] {
-  const rows: TreeRow[] = []
-  rows.push({ depth: 0, name: 'assistant', count: view.assistant.count, tokens: view.assistant.tokens, section: true })
-  rows.push({ depth: 1, name: 'text', count: view.assistant.text.count, tokens: view.assistant.text.tokens })
-  if (view.assistant.reasoning.count > 0) rows.push({ depth: 1, name: 'reasoning', count: view.assistant.reasoning.count, tokens: view.assistant.reasoning.tokens })
-  rows.push({ depth: 1, name: 'tool-call', count: view.assistant.toolCall.count, tokens: view.assistant.toolCall.tokens })
-  for (const t of view.assistant.byTool) rows.push({ depth: 2, name: t.tool, count: t.count, tokens: t.tokens })
-  rows.push({ depth: 0, name: 'user', count: view.user.count, tokens: view.user.tokens, section: true })
-  rows.push({ depth: 1, name: 'text', count: view.user.text.count, tokens: view.user.text.tokens })
-  if (view.user.image.count > 0) rows.push({ depth: 1, name: 'image', count: view.user.image.count, tokens: view.user.image.tokens })
-  if (view.user.compactSummary.count > 0) rows.push({ depth: 1, name: 'compact-summary', count: view.user.compactSummary.count, tokens: view.user.compactSummary.tokens })
-  if (view.user.meta.count > 0) rows.push({ depth: 1, name: 'meta', count: view.user.meta.count, tokens: view.user.meta.tokens })
-  rows.push({ depth: 0, name: 'tool', count: view.toolResult.count, tokens: view.toolResult.tokens, section: true })
-  rows.push({ depth: 1, name: 'tool-result', count: view.toolResult.count, tokens: view.toolResult.tokens })
-  if (view.system.count > 0) rows.push({ depth: 0, name: 'system', count: view.system.count, tokens: view.system.tokens, section: true })
-  return rows
-}
-
-function TreeTable({ view }: { view: ContextSnapshot }) {
-  const rows = treeRows(view)
-  const max = Math.max(1, ...rows.filter((r) => !r.section).map((r) => r.tokens))
+function TreeTable({ rows }: { rows: ContextRow[] }) {
+  const max = Math.max(1, ...rows.filter((r) => !r.bold).map((r) => r.tokens))
   return (
     <div className="flex flex-col">
       {rows.map((r, i) => (
-        <div key={i} className={cn('relative flex items-center gap-3 rounded-sm px-2 py-[3px]', r.section && i > 0 && 'mt-2')}>
-          {!r.section && (
+        <div key={i} className={cn('relative flex items-center gap-3 rounded-sm px-2 py-[3px]', r.bold && i > 0 && 'mt-2')}>
+          {!r.bold && (
             <span
               className="absolute inset-y-[3px] left-0 rounded-sm bg-primary/[0.07]"
               style={{ width: `${Math.max(1, (r.tokens / max) * 100)}%` }}
             />
           )}
           <span
-            className={cn('relative min-w-0 flex-1 truncate text-[13px]', r.section ? 'font-semibold text-foreground' : 'text-muted-foreground')}
+            className={cn('relative min-w-0 flex-1 truncate text-[13px]', r.bold ? 'font-semibold text-foreground' : 'text-muted-foreground')}
             style={{ paddingLeft: r.depth * 16 }}
           >
-            {r.name}
+            {r.label}
           </span>
           <span className="relative w-16 shrink-0 text-right text-xs tabular-nums text-tertiary-foreground">{fmtNum(r.count)}x</span>
-          <span className={cn('relative w-20 shrink-0 text-right text-[13px] tabular-nums', r.section ? 'font-semibold text-foreground' : 'text-foreground')}>
+          <span className={cn('relative w-20 shrink-0 text-right text-[13px] tabular-nums', r.bold ? 'font-semibold text-foreground' : 'text-foreground')}>
             {fmtTokens(r.tokens)}
           </span>
         </div>
@@ -104,7 +83,9 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
   }
 
   const view = scope === 'full' ? data.full : data.effective
-  const pct = data.reported ? Math.min(100, Math.round((data.reported.context / data.reported.window) * 100)) : null
+  const rows = scope === 'full' ? data.fullRows : data.effectiveRows
+  const window = data.reported?.window ?? null
+  const pct = data.reported && window ? Math.min(100, Math.round((data.reported.context / window) * 100)) : null
 
   return (
     <div className="flex flex-col gap-3 px-4 py-4">
@@ -113,7 +94,7 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
         <Chip label="Est. tokens" value={fmtTokens(view.tokens)} />
         <Chip
           label="Context (exact)"
-          value={data.reported ? `${fmtTokens(data.reported.context)} / ${fmtTokens(data.reported.window)}` : '—'}
+          value={data.reported ? (window ? `${fmtTokens(data.reported.context)} / ${fmtTokens(window)}` : fmtTokens(data.reported.context)) : '—'}
         />
         <Chip label="Compactions" value={fmtNum(data.compactions)} />
       </div>
@@ -149,7 +130,7 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
         <span className="text-[11px] text-tertiary-foreground">token counts are estimates; “Context (exact)” comes from API usage</span>
       </div>
 
-      <TreeTable view={view} />
+      <TreeTable rows={rows} />
     </div>
   )
 }

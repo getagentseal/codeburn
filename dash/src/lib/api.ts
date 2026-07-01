@@ -198,13 +198,17 @@ export type ContextSnapshot = {
   system: BlockStat
 }
 
+export type ContextRow = { depth: number; label: string; count: number; tokens: number; bold?: boolean }
+
 export type ContextTree = {
   session: { sessionId: string; project: string; mtimeMs: number; sizeBytes: number }
   model: string
   compactions: number
-  reported: { context: number; window: number } | null
+  reported: { context: number; window: number | null } | null
   effective: ContextSnapshot
   full: ContextSnapshot
+  effectiveRows: ContextRow[]
+  fullRows: ContextRow[]
 }
 
 export async function fetchContextSessions(provider: ContextProvider): Promise<ContextSessionInfo[]> {

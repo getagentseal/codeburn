@@ -506,6 +506,8 @@ export function App() {
 
         <div className="flex min-h-0 flex-1 gap-2.5">
           <aside className="flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5">
+            {page === 'usage' && (
+            <>
             <div className="flex flex-col gap-1">
               <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Devices</p>
               {multi && (
@@ -537,6 +539,8 @@ export function App() {
               </svg>
               Search local devices
             </button>
+            </>
+            )}
 
             <div className="border-t border-border pt-4">
               <p className="mb-2 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Share</p>
@@ -624,7 +628,7 @@ export function App() {
               <DeviceView payload={primary?.payload} isRemote={!!viewing && !viewing.local} unit={unit} />
             )}
 
-            {isError && (
+            {page === 'usage' && isError && (
               <div className="mt-4 text-sm text-tertiary-foreground">Failed to load: {String((error as Error)?.message)}</div>
             )}
           </main>

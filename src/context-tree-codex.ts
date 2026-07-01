@@ -1,4 +1,4 @@
-import { open, readdir, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { existsSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
@@ -8,11 +8,14 @@ import {
   add,
   estimateTokens,
   IMAGE_TOKEN_FALLBACK,
+  lineToText,
   newAcc,
+  readChunk,
   snapshot,
   type Acc,
   type ContextTreeResult,
   type SessionRef,
+  type TitledSessionRef,
 } from './context-tree.js'
 
 // Codex rollout counterpart of the Claude Code context tree. Rollouts carry
@@ -97,6 +100,22 @@ function addCodexItem(accs: Acc[], item: CodexItem): void {
         }
       }
     }
+  } else if (item.type === 'message' && item.role === 'developer') {
+    // Injected per-turn instructions (permissions, harness rules), not user text.
+    if (!Array.isArray(item.content)) return
+    for (const block of item.content) {
+      if (block == null || typeof block !== 'object') continue
+      const b = block as { type?: string; text?: unknown }
+      if ((b.type === 'input_text' || b.type === 'text') && typeof b.text === 'string') {
+        for (const acc of accs) add(acc.userMeta, estimateTokens(b.text))
+      }
+    }
+  } else if (item.type === 'compaction') {
+    // The compaction summary ships encrypted; base64 is ~4/3 of the plaintext,
+    // so estimate from the decoded size.
+    const encrypted = (item as { encrypted_content?: unknown }).encrypted_content
+    const chars = typeof encrypted === 'string' ? encrypted.length * 0.75 : 0
+    for (const acc of accs) add(acc.userCompactSummary, Math.ceil(chars / 4))
   } else if (item.type === 'reasoning') {
     // Tokens are patched from cumulative usage after the walk.
     for (const acc of accs) acc.assistantReasoning.count += 1
@@ -152,8 +171,8 @@ export async function buildCodexContextTree(session: SessionRef): Promise<Contex
   let segmentStartReasoning = 0
   let lastUsage: { input_tokens?: number; output_tokens?: number; total_tokens?: number } | null = null
 
-  for await (const line of readSessionLines(session.filePath)) {
-    const text = line as string
+  for await (const line of readSessionLines(session.filePath, undefined, { largeLineAsBuffer: true })) {
+    const text = lineToText(line)
     if (!text || text.charCodeAt(0) !== 123) continue
     let entry: CodexEntry
     try {
@@ -207,7 +226,9 @@ export async function buildCodexContextTree(session: SessionRef): Promise<Contex
   if (lastUsage) {
     const context = lastUsage.total_tokens ?? (lastUsage.input_tokens ?? 0) + (lastUsage.output_tokens ?? 0)
     if (context > 0) {
-      reported = { context, window: contextWindow ?? (context > 220_000 ? 1_000_000 : 200_000) }
+      // No guessing for OpenAI windows: without model_context_window the
+      // percentage is omitted rather than computed against a wrong constant.
+      reported = { context, window: contextWindow }
     }
   }
 
@@ -223,8 +244,15 @@ export async function buildCodexContextTree(session: SessionRef): Promise<Contex
 
 const ROLLOUT_RE = /^rollout-.{19}-(.+)\.jsonl$/
 
-export async function listCodexSessionRefs(): Promise<SessionRef[]> {
-  const root = join(homedir(), '.codex', 'sessions')
+// Mirrors the CODEX_HOME handling of providers/codex.ts.
+function codexSessionsRoot(): string {
+  return join(process.env['CODEX_HOME'] ?? join(homedir(), '.codex'), 'sessions')
+}
+
+type RolloutFile = { filePath: string; sessionId: string }
+
+async function listRolloutFiles(): Promise<RolloutFile[]> {
+  const root = codexSessionsRoot()
   if (!existsSync(root)) return []
   let files: string[]
   try {
@@ -232,28 +260,37 @@ export async function listCodexSessionRefs(): Promise<SessionRef[]> {
   } catch {
     return []
   }
-  const refs: SessionRef[] = []
+  const rollouts: RolloutFile[] = []
   for (const rel of files) {
-    const base = basename(rel)
-    const match = ROLLOUT_RE.exec(base)
-    if (!match) continue
-    const filePath = join(root, rel)
-    try {
-      const info = await stat(filePath)
-      if (!info.isFile() || info.size === 0) continue
-      refs.push({
-        filePath,
-        sessionId: match[1],
-        project: '',
-        mtimeMs: info.mtimeMs,
-        sizeBytes: info.size,
-      })
-    } catch {
-      continue
-    }
+    const match = ROLLOUT_RE.exec(basename(rel))
+    if (match) rollouts.push({ filePath: join(root, rel), sessionId: match[1] })
   }
-  refs.sort((a, b) => b.mtimeMs - a.mtimeMs)
-  return refs
+  return rollouts
+}
+
+async function statRef(file: RolloutFile): Promise<SessionRef | null> {
+  try {
+    const info = await stat(file.filePath)
+    if (!info.isFile() || info.size === 0) return null
+    return { ...file, project: '', mtimeMs: info.mtimeMs, sizeBytes: info.size }
+  } catch {
+    return null
+  }
+}
+
+function newestFirst(refs: Array<SessionRef | null>): SessionRef[] {
+  return refs.filter((r): r is SessionRef => r !== null).sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+export async function listCodexSessionRefs(): Promise<SessionRef[]> {
+  const files = await listRolloutFiles()
+  return newestFirst(await Promise.all(files.map(statRef)))
+}
+
+// Id lookups match filenames directly so only the matching files get stated.
+export async function findCodexSession(idPrefix: string): Promise<SessionRef | null> {
+  const matches = (await listRolloutFiles()).filter((f) => f.sessionId.startsWith(idPrefix))
+  return newestFirst(await Promise.all(matches.map(statRef)))[0] ?? null
 }
 
 // Codex stores no session name; use the head chunk for the cwd (project) and
@@ -261,14 +298,7 @@ export async function listCodexSessionRefs(): Promise<SessionRef[]> {
 async function readCodexHeadInfo(ref: SessionRef): Promise<{ project: string; title: string }> {
   let chunk: string
   try {
-    const fd = await open(ref.filePath, 'r')
-    try {
-      const buf = Buffer.alloc(262_144)
-      const { bytesRead } = await fd.read(buf, 0, buf.length, 0)
-      chunk = buf.subarray(0, bytesRead).toString('utf-8')
-    } finally {
-      await fd.close()
-    }
+    chunk = await readChunk(ref.filePath, 0, 262_144)
   } catch {
     return { project: '', title: '' }
   }
@@ -300,7 +330,7 @@ async function readCodexHeadInfo(ref: SessionRef): Promise<{ project: string; ti
   return { project, title }
 }
 
-export async function listRecentCodexSessions(limit = 15): Promise<Array<SessionRef & { title: string }>> {
+export async function listRecentCodexSessions(limit = 15): Promise<TitledSessionRef[]> {
   const refs = (await listCodexSessionRefs()).slice(0, limit)
   return Promise.all(
     refs.map(async (ref) => {
