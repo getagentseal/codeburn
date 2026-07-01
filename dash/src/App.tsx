@@ -520,7 +520,7 @@ export function App() {
               type="button"
               aria-label="Close menu"
               onClick={() => setSidebarOpen(false)}
-              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-md text-tertiary-foreground transition-colors hover:bg-interactive-secondary hover:text-foreground md:hidden"
+              className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-tertiary-foreground transition-colors hover:bg-interactive-secondary hover:text-foreground md:hidden"
             >
               <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                 <path d="M4 4l8 8M12 4l-8 8" />
