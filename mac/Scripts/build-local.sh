@@ -4,17 +4,19 @@
 # ============================================================================
 # Why this exists
 # ---------------
-# The released .app is built in CI with the macOS 15 SDK + Swift 6. That binary
-# hard-links /usr/lib/swift/libswift_errno.dylib, which only ships in macOS 15,
-# so `codeburn menubar` fails on Sonoma with:
-#     kLSIncompatibleSystemVersionErr (-10825)
+# Package.swift's `.macOS(.v14)` deployment target already fixes the -10825
+# launch failure for every build, including the CI-distributed release: ld64
+# drops the macOS-15-only libswift_errno.dylib dependency based on the
+# deployment target, not the SDK used to build. This script is not about that.
 #
-# This script builds an arm64 bundle locally against the machine's macOS 14 SDK
-# (no libswift_errno dependency, minos = 14.0) using a swift.org Swift 6.2
-# toolchain. Because the macOS 14 SDK's SwiftUI does NOT carry the @MainActor
-# annotations that the macOS 15 SDK added to the `View` protocol, the sources
-# are copied to a scratch dir and every `View`/`App` struct is given an explicit
-# `@MainActor` there — the repo sources stay untouched.
+# It exists for the narrower case of building on a Sonoma machine that only
+# has the Command Line Tools (macOS 14 SDK). That SDK's SwiftUI does NOT carry
+# the @MainActor annotations the macOS 15 SDK added to the `View` protocol, so
+# a plain `swift build` there fails with ~80 `main actor-isolated ... from a
+# nonisolated context` errors. This script copies the sources to a scratch
+# dir, gives every `View`/`App` conformance an explicit `@MainActor` there
+# (repo sources stay untouched), and builds a universal bundle with a
+# swift.org Swift 6.2 toolchain against the local macOS 14 SDK.
 #
 # Prerequisites
 #   - Command Line Tools (provides the macOS 14 SDK + sips/iconutil/codesign)
@@ -53,8 +55,18 @@ if [[ -z "${TC}" ]]; then
 fi
 SWIFT="${TC}/usr/bin/swift"
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+case "${SDK_VERSION}" in
+  14.*) ;;
+  *)
+    echo "✗ Active SDK is macOS ${SDK_VERSION}, not 14.x — xcode-select is likely" >&2
+    echo "  pointed at a newer Xcode instead of the Command Line Tools. Run:" >&2
+    echo "    sudo xcode-select -s /Library/Developer/CommandLineTools" >&2
+    exit 1
+    ;;
+esac
 echo "▸ Toolchain : $("${SWIFT}" --version | head -1)"
-echo "▸ SDK       : ${SDKROOT} ($(xcrun --sdk macosx --show-sdk-version))"
+echo "▸ SDK       : ${SDKROOT} (${SDK_VERSION})"
 
 # --- copy sources and add explicit @MainActor to SwiftUI views --------------
 echo "▸ Staging sources in ${SCRATCH}..."
@@ -62,19 +74,34 @@ echo "▸ Staging sources in ${SCRATCH}..."
 # (product only) never compiles it, so it needs no @MainActor patching.
 cp -R "${MAC_DIR}/Sources" "${MAC_DIR}/Tests" "${MAC_DIR}/Package.swift" "${SCRATCH}/"
 find "${SCRATCH}/Sources" -name "*.swift" -print0 | while IFS= read -r -d '' f; do
-  perl -i -pe 's/^((?:private |public |fileprivate )?struct \b.*: .*\bView\b.*\{)/\@MainActor\n$1/; s/^(struct \w+ *: *App\b.*\{)/\@MainActor\n$1/' "$f"
-  perl -0777 -i -pe 's/\@MainActor\n\@MainActor\n/\@MainActor\n/g' "$f"
+  # Slurp mode ([^{]* spans newlines) so this also catches multi-line generic
+  # struct headers and `extension X: View` conformances, not just the
+  # single-line `struct X: View {` shape the current sources happen to use.
+  perl -0777 -i -pe '
+    s/^((?:private |public |fileprivate |internal )?(?:struct|extension)\s+\w+(?:<[^{]*?>)?\s*:[^{]*\bView\b[^{]*\{)/\@MainActor\n$1/gm;
+    s/^(struct\s+\w+\s*:[^{]*\bApp\b[^{]*\{)/\@MainActor\n$1/gm;
+    s/\@MainActor\n\@MainActor\n/\@MainActor\n/g;
+  ' "$f"
 done
 
-# --- build arm64 release (single-arch avoids xcbuild, absent from CLT) -------
-echo "▸ Building arm64 release..."
-( cd "${SCRATCH}" && "${SWIFT}" build -c release )
-BIN="$(cd "${SCRATCH}" && "${SWIFT}" build -c release --show-bin-path)/${EXE}"
-[[ -x "${BIN}" ]] || { echo "✗ build produced no binary" >&2; exit 1; }
+# --- build each arch separately, then lipo into one universal binary --------
+# `swift build --arch arm64 --arch x86_64` together shells out to xcbuild,
+# which the Command Line Tools doesn't ship — each arch alone stays on the
+# plain SwiftPM build path, so build twice and merge with lipo instead.
+BINS=()
+for arch in arm64 x86_64; do
+  echo "▸ Building ${arch} release..."
+  ( cd "${SCRATCH}" && "${SWIFT}" build -c release --arch "${arch}" )
+  bin="$(cd "${SCRATCH}" && "${SWIFT}" build -c release --arch "${arch}" --show-bin-path)/${EXE}"
+  [[ -x "${bin}" ]] || { echo "✗ ${arch} build produced no binary" >&2; exit 1; }
+  BINS+=("${bin}")
+done
+BIN="${SCRATCH}/${EXE}-universal"
+lipo -create -output "${BIN}" "${BINS[@]}"
 
 # --- assemble the .app bundle ------------------------------------------------
 echo "▸ Assembling ${BUNDLE}..."
-pkill -f "${EXE}" 2>/dev/null || true; sleep 1
+pkill -x "${EXE}" 2>/dev/null || true; sleep 1
 rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp "${BIN}" "${BUNDLE}/Contents/MacOS/${EXE}"
@@ -118,5 +145,6 @@ codesign --verify --deep --strict "${BUNDLE}"
 
 echo ""
 echo "✓ Installed ${BUNDLE}"
+lipo -info "${BUNDLE}/Contents/MacOS/${EXE}" | sed 's/^/  /'
 vtool -show-build "${BUNDLE}/Contents/MacOS/${EXE}" 2>/dev/null | grep -iE "minos|sdk" | sed 's/^/  /'
 echo "  Launch with: codeburn menubar   (or: open '${BUNDLE}')"

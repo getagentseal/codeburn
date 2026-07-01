@@ -35,8 +35,15 @@ swift build -c release
 `swift build` above assumes the macOS 15 SDK, whose SwiftUI marks the `View`
 protocol `@MainActor`. The Sonoma SDK (shipped with Command Line Tools) lacks
 that annotation, so a plain build fails with ~80 `main actor-isolated ... from a
-nonisolated context` errors, and a stock CI build links the macOS-15-only
-`libswift_errno.dylib` (the root of the `-10825` launch failure on Sonoma).
+nonisolated context` errors.
+
+(The `-10825` launch failure itself is fixed by `Package.swift`'s `.macOS(.v14)`
+deployment target: ld64 drops the macOS-15-only `libswift_errno.dylib`
+dependency for any build with that target, regardless of which SDK built it —
+including the CI-distributed release. This local-build path exists only for
+the narrower case of building on a Sonoma machine with nothing but the
+Command Line Tools, where the SDK's un-annotated `View` protocol needs the
+`@MainActor` patch below.)
 
 Use the helper, which builds against the local macOS 14 SDK with a standalone
 [swift.org](https://www.swift.org/install/macos/) Swift 6.x toolchain and
