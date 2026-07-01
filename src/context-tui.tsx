@@ -1,20 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { render, Box, Text, useApp, useInput } from 'ink'
 
 import { formatTokens } from './format.js'
 import { patchStdoutForWindows } from './ink-win.js'
 import {
   buildContextTree,
-  listRecentSessions,
-  readSessionTitle,
+  listRecentTitledSessions,
+  relativeAge,
   snapshotRows,
   type ContextTreeResult,
-  type SessionRef,
+  type TitledSessionRef,
 } from './context-tree.js'
 import { buildCodexContextTree, listRecentCodexSessions } from './context-tree-codex.js'
 
 type Provider = 'claude' | 'codex'
-type SessionRow = SessionRef & { title: string }
+type Scope = 'effective' | 'full'
 
 const ORANGE = '#FF8C42'
 const DIM = '#555555'
@@ -24,25 +24,15 @@ const PROVIDERS: Array<{ key: Provider; label: string }> = [
   { key: 'codex', label: 'Codex' },
 ]
 
-function ago(mtimeMs: number): string {
-  const mins = Math.max(0, Math.round((Date.now() - mtimeMs) / 60_000))
-  if (mins < 60) return `${mins}m`
-  if (mins < 60 * 24) return `${Math.round(mins / 60)}h`
-  return `${Math.round(mins / (60 * 24))}d`
-}
-
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
-async function loadSessions(provider: Provider): Promise<SessionRow[]> {
-  if (provider === 'codex') return listRecentCodexSessions(15)
-  const refs = await listRecentSessions(15)
-  const titles = await Promise.all(refs.map(readSessionTitle))
-  return refs.map((r, i) => ({ ...r, title: titles[i] ?? '' }))
+async function loadSessions(provider: Provider): Promise<TitledSessionRef[]> {
+  return provider === 'codex' ? listRecentCodexSessions(15) : listRecentTitledSessions(15)
 }
 
-function TreeDetails({ tree, scope }: { tree: ContextTreeResult; scope: 'effective' | 'full' }) {
+function TreeDetails({ tree, scope }: { tree: ContextTreeResult; scope: Scope }) {
   const view = scope === 'full' ? tree.full : tree.effective
   const rows = snapshotRows(view)
   const labelWidth = Math.max(...rows.map((r) => r.depth * 2 + r.label.length)) + 2
@@ -51,8 +41,8 @@ function TreeDetails({ tree, scope }: { tree: ContextTreeResult; scope: 'effecti
 
   const headline: string[] = [`model ${tree.model}`, `messages ${view.messages.toLocaleString('en-US')}`, `est ${formatTokens(view.tokens)}`]
   if (tree.reported) {
-    const pct = Math.round((tree.reported.context / tree.reported.window) * 100)
-    headline.push(`context ${formatTokens(tree.reported.context)} / ${formatTokens(tree.reported.window)} (${pct}%)`)
+    const { context, window } = tree.reported
+    headline.push(window ? `context ${formatTokens(context)} / ${formatTokens(window)} (${Math.round((context / window) * 100)}%)` : `context ${formatTokens(context)} (exact)`)
   }
   if (tree.compactions > 0) headline.push(`${tree.compactions} compaction${tree.compactions === 1 ? '' : 's'}`)
 
@@ -81,17 +71,17 @@ function TreeDetails({ tree, scope }: { tree: ContextTreeResult; scope: 'effecti
   )
 }
 
-function ContextTuiApp() {
+function ContextTuiApp({ initialScope }: { initialScope: Scope }) {
   const { exit } = useApp()
   const [provider, setProvider] = useState<Provider>('claude')
-  const [sessions, setSessions] = useState<SessionRow[] | null>(null)
+  const [sessions, setSessions] = useState<TitledSessionRef[] | null>(null)
   const [cursor, setCursor] = useState(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [scope, setScope] = useState<'effective' | 'full'>('effective')
+  const [scope, setScope] = useState<Scope>(initialScope)
   const [building, setBuilding] = useState(false)
   const [frame, setFrame] = useState(0)
-  const [, forceRender] = useState(0)
-  const trees = useRef(new Map<string, ContextTreeResult>())
+  const [trees, setTrees] = useState<Record<string, ContextTreeResult>>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
     let alive = true
@@ -112,22 +102,20 @@ function ContextTuiApp() {
     return () => clearInterval(t)
   }, [building])
 
-  const toggleExpand = (session: SessionRow) => {
+  const toggleExpand = (session: TitledSessionRef) => {
     if (expandedId === session.sessionId) {
       setExpandedId(null)
       return
     }
     setExpandedId(session.sessionId)
     const key = `${provider}:${session.sessionId}:${session.mtimeMs}`
-    if (trees.current.has(key)) return
+    if (trees[key]) return
     setBuilding(true)
+    setErrors((e) => ({ ...e, [key]: '' }))
     const build = provider === 'claude' ? buildContextTree(session) : buildCodexContextTree(session)
     void build
-      .then((tree) => {
-        trees.current.set(key, tree)
-        forceRender((n) => n + 1)
-      })
-      .catch(() => {})
+      .then((tree) => setTrees((t) => ({ ...t, [key]: tree })))
+      .catch((err: unknown) => setErrors((e) => ({ ...e, [key]: err instanceof Error ? err.message : String(err) })))
       .finally(() => setBuilding(false))
   }
 
@@ -170,7 +158,8 @@ function ContextTuiApp() {
         const selected = i === cursor
         const expanded = expandedId === s.sessionId
         const key = `${provider}:${s.sessionId}:${s.mtimeMs}`
-        const tree = trees.current.get(key)
+        const tree = trees[key]
+        const error = errors[key]
         return (
           <Box key={s.filePath} flexDirection="column">
             <Text>
@@ -182,10 +171,15 @@ function ContextTuiApp() {
               </Text>
               <Text color={DIM}>
                 {'  '}
-                {truncate(s.project, 12).padEnd(12)} {ago(s.mtimeMs).padStart(4)} {`${(s.sizeBytes / 1024 / 1024).toFixed(1)}MB`.padStart(8)}
+                {truncate(s.project, 12).padEnd(12)} {relativeAge(s.mtimeMs).padStart(8)} {`${(s.sizeBytes / 1024 / 1024).toFixed(1)}MB`.padStart(8)}
               </Text>
             </Text>
-            {expanded && !tree && (
+            {expanded && error && (
+              <Box marginLeft={4} marginBottom={1}>
+                <Text color="red">could not read this session: {error}</Text>
+              </Box>
+            )}
+            {expanded && !tree && !error && (
               <Box marginLeft={4} marginBottom={1}>
                 <Text color={ORANGE}>{SPINNER[frame % SPINNER.length]} </Text>
                 <Text color={DIM}>reading transcript ({(s.sizeBytes / 1024 / 1024).toFixed(0)}MB)…</Text>
@@ -202,8 +196,8 @@ function ContextTuiApp() {
   )
 }
 
-export async function runContextTui(): Promise<void> {
+export async function runContextTui(opts: { initialScope?: Scope } = {}): Promise<void> {
   patchStdoutForWindows()
-  const instance = render(<ContextTuiApp />)
+  const instance = render(<ContextTuiApp initialScope={opts.initialScope ?? 'effective'} />)
   await instance.waitUntilExit()
 }
