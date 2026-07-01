@@ -235,6 +235,13 @@ describe('devin provider', () => {
         generationModel: 'gpt-5-codex',
         expected: 'GPT-5 Codex',
       },
+      {
+        schema: '1.4',
+        modelName: 'GPT-4',
+        location: 'metadata',
+        generationModel: 'gpt-4-1106-preview',
+        expected: 'gpt-4-1106-preview',
+      },
     ] as const
 
     for (let index = 0; index < cases.length; index++) {

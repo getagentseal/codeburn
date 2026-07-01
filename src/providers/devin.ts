@@ -317,9 +317,14 @@ function getFriendlyGptName(model: string): string {
   const match = model.match(/^gpt-(\d+(?:\.\d+)*)(?:-(.+))?$/);
   if (!match) return shortName;
 
-  const suffix = match[2]
-    ?.split("-")
-    .filter(Boolean)
+  const suffixParts = match[2]?.split("-").filter(Boolean) ?? [];
+  // A purely numeric suffix token means this is a dated snapshot id such as
+  // gpt-4-1106-preview, not a clean version+word id. Fabricating a friendly
+  // name here would mislabel the date as text (e.g. "GPT-4 1106 Preview"), so
+  // defer to getShortModelName, which passes unknown snapshots through raw.
+  if (suffixParts.some((part) => /^\d+$/.test(part))) return shortName;
+
+  const suffix = suffixParts
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
@@ -340,7 +345,10 @@ function getDevinDisplayModelName(
   }
 
   if (generationModel.startsWith("gpt-")) {
-    const normalized = generationModel.replace(/^gpt-(\d+)-(\d+)/, "gpt-$1.$2");
+    // Devin minor versions are always a single digit (gpt-5-3-codex). Restrict
+    // the dash-to-dot rewrite to a single-digit minor at a token boundary so a
+    // dated snapshot like gpt-4-1106-preview is not misread as version 4.1106.
+    const normalized = generationModel.replace(/^gpt-(\d+)-(\d)(?=-|$)/, "gpt-$1.$2");
     const effortMatch = normalized.match(/-([^-]+)$/);
     const effort = effortMatch && DEVIN_EFFORT_TIERS.has(effortMatch[1]!)
       ? effortMatch[1]
