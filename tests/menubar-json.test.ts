@@ -232,6 +232,22 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.providers).toEqual({ claude: 76.45 })
   })
 
+  it('includes cacheReadTokens and cacheWriteTokens in current so the web dashboard can display period-scoped cache metrics', () => {
+    const period: PeriodData = {
+      label: '30 Days',
+      cost: 100, calls: 500, sessions: 20,
+      inputTokens: 120_800_000,
+      outputTokens: 5_600_000,
+      cacheReadTokens: 1_391_100_000,
+      cacheWriteTokens: 2_300_000,
+      categories: [],
+      models: [],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    expect(payload.current.cacheReadTokens).toBe(1_391_100_000)
+    expect(payload.current.cacheWriteTokens).toBe(2_300_000)
+  })
+
   it('omits combined usage by default and accepts the documented combined shape when attached', () => {
     const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
     expect(payload).not.toHaveProperty('combined')

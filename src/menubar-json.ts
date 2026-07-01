@@ -198,6 +198,8 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
+    cacheReadTokens: number
+    cacheWriteTokens: number
   }
   optimize: {
     findingCount: number
@@ -372,6 +374,8 @@ export function buildMenubarPayload(
       skills: breakdowns?.skills ?? [],
       subagents: breakdowns?.subagents ?? [],
       mcpServers: breakdowns?.mcpServers ?? [],
+      cacheReadTokens: current.cacheReadTokens,
+      cacheWriteTokens: current.cacheWriteTokens,
     },
     optimize: buildOptimize(optimize),
     history: buildHistory(dailyHistory),
