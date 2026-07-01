@@ -20,6 +20,7 @@ import { BarList, type BarItem } from '@/components/BarList'
 import { DataTable } from '@/components/DataTable'
 import { UsageChart, DeviceUsageChart, type Unit } from '@/components/UsageChart'
 import { DeviceSearchModal } from '@/components/DeviceSearchModal'
+import { ContextExplorer } from '@/components/ContextExplorer'
 
 const n = (v: number | undefined): number => v ?? 0
 
@@ -342,6 +343,7 @@ function CombinedView({ devices, unit }: { devices: DeviceUsage[]; unit: Unit })
 }
 
 export function App() {
+  const [page, setPage] = useState<'usage' | 'context'>('usage')
   const [period, setPeriod] = useState<Period>('today')
   const [provider, setProvider] = useState('all')
   const [view, setView] = useState<string>('all')
@@ -436,7 +438,25 @@ export function App() {
             <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground">usage</span>
           </div>
 
+          <div className="ml-6 flex rounded-md border border-border bg-interactive-secondary p-0.5">
+            {(['usage', 'context'] as const).map((pg) => (
+              <button
+                key={pg}
+                type="button"
+                onClick={() => setPage(pg)}
+                className={cn(
+                  'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                  page === pg ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
+                )}
+              >
+                {pg === 'usage' ? 'Usage' : 'Context'}
+              </button>
+            ))}
+          </div>
+
           <div className="ml-auto flex items-center gap-2">
+            {page === 'usage' && (
+            <>
             <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5">
               {PERIODS.map((p) => (
                 <button
@@ -479,6 +499,8 @@ export function App() {
                 </option>
               ))}
             </select>
+            </>
+            )}
           </div>
         </header>
 
@@ -590,11 +612,13 @@ export function App() {
 
           <main className="min-w-0 flex-1 overflow-y-auto pr-0.5">
             <div className="mb-3 flex items-baseline justify-between">
-              <h1 className="font-display text-xl tracking-tight text-foreground">{viewTitle}</h1>
-              <span className="text-xs text-tertiary-foreground">{label}</span>
+              <h1 className="font-display text-xl tracking-tight text-foreground">{page === 'context' ? 'Context' : viewTitle}</h1>
+              <span className="text-xs text-tertiary-foreground">{page === 'usage' ? label : ''}</span>
             </div>
 
-            {showCombined ? (
+            {page === 'context' ? (
+              <ContextExplorer />
+            ) : showCombined ? (
               <CombinedView devices={devices} unit={unit} />
             ) : (
               <DeviceView payload={primary?.payload} isRemote={!!viewing && !viewing.local} unit={unit} />

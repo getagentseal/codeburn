@@ -162,6 +162,64 @@ export async function pairDevice(d: DiscoveredDevice): Promise<{ ok: boolean; na
   return res.json() as Promise<{ ok: boolean; name?: string; error?: string }>
 }
 
+export type ContextProvider = 'claude' | 'codex'
+
+export type ContextSessionInfo = {
+  provider: ContextProvider
+  sessionId: string
+  project: string
+  title: string
+  mtimeMs: number
+  sizeBytes: number
+}
+
+export type BlockStat = { count: number; tokens: number }
+
+export type ContextSnapshot = {
+  messages: number
+  tokens: number
+  assistant: {
+    count: number
+    tokens: number
+    text: BlockStat
+    reasoning: BlockStat
+    toolCall: BlockStat
+    byTool: Array<{ tool: string; count: number; tokens: number }>
+  }
+  user: {
+    count: number
+    tokens: number
+    text: BlockStat
+    image: BlockStat
+    compactSummary: BlockStat
+    meta: BlockStat
+  }
+  toolResult: BlockStat
+  system: BlockStat
+}
+
+export type ContextTree = {
+  session: { sessionId: string; project: string; mtimeMs: number; sizeBytes: number }
+  model: string
+  compactions: number
+  reported: { context: number; window: number } | null
+  effective: ContextSnapshot
+  full: ContextSnapshot
+}
+
+export async function fetchContextSessions(provider: ContextProvider): Promise<ContextSessionInfo[]> {
+  const res = await fetch(`/api/context/sessions?provider=${encodeURIComponent(provider)}`)
+  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  const json = (await res.json()) as { sessions: ContextSessionInfo[] }
+  return json.sessions ?? []
+}
+
+export async function fetchContextTree(provider: ContextProvider, id: string): Promise<ContextTree> {
+  const res = await fetch(`/api/context/tree?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(id)}`)
+  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  return res.json() as Promise<ContextTree>
+}
+
 export type PendingPairing = { id: string; name: string; code: string }
 export type ShareStatus = {
   sharing: boolean

@@ -15,7 +15,7 @@ import { formatTokens } from './format.js'
 // output_tokens minus the estimated visible output.
 
 const CHARS_PER_TOKEN = 4
-const IMAGE_TOKEN_FALLBACK = 1600
+export const IMAGE_TOKEN_FALLBACK = 1600
 
 export type BlockStat = { count: number; tokens: number }
 
@@ -59,7 +59,7 @@ export type ContextTreeResult = {
   full: ContextSnapshot
 }
 
-type Acc = {
+export type Acc = {
   messages: number
   assistantCount: number
   assistantText: BlockStat
@@ -115,7 +115,7 @@ function newBlockStat(): BlockStat {
   return { count: 0, tokens: 0 }
 }
 
-function newAcc(): Acc {
+export function newAcc(): Acc {
   return {
     messages: 0,
     assistantCount: 0,
@@ -133,11 +133,11 @@ function newAcc(): Acc {
   }
 }
 
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN)
 }
 
-function add(stat: BlockStat, tokens: number): void {
+export function add(stat: BlockStat, tokens: number): void {
   stat.count += 1
   stat.tokens += tokens
 }
@@ -333,7 +333,7 @@ class TreeBuilder {
   }
 }
 
-function snapshot(acc: Acc): ContextSnapshot {
+export function snapshot(acc: Acc): ContextSnapshot {
   const assistantTokens = acc.assistantText.tokens + acc.assistantReasoning.tokens + acc.toolCall.tokens
   const userTokens = acc.userText.tokens + acc.userImage.tokens + acc.userCompactSummary.tokens + acc.userMeta.tokens
   const byTool = [...acc.byTool.entries()]
