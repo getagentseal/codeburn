@@ -1338,11 +1338,16 @@ program
 
 program
   .command('context [session]')
-  .description('Context token breakdown for a Claude Code session: what fills the window, by role, block type, and tool (experimental)')
+  .description('Context token breakdown per session: what fills the window, by role, block type, and tool (experimental). No arguments opens an interactive browser.')
   .option('--list', 'List recent sessions to pick from')
   .option('--full', 'Cover the whole session history instead of the live (post-compaction) window')
   .option('--json', 'JSON output')
   .action(async (session: string | undefined, opts: { list?: boolean; full?: boolean; json?: boolean }) => {
+    if (!session && !opts.list && !opts.json && !opts.full && process.stdout.isTTY && process.stdin.isTTY) {
+      const { runContextTui } = await import('./context-tui.js')
+      await runContextTui()
+      return
+    }
     await runContextCommand(session, opts)
   })
 
