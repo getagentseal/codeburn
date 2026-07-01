@@ -24,6 +24,7 @@ import { loadRemotes, saveRemotes } from './sharing/store.js'
 import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
+import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
 import {
   installAntigravityStatusLineHook,
@@ -1333,6 +1334,16 @@ program
     const { range, label } = getDateRange(opts.period)
     const projects = await parseAllSessions(range, opts.provider)
     await runOptimize(projects, label, range, { format: opts.format })
+  })
+
+program
+  .command('context [session]')
+  .description('Context token breakdown for a Claude Code session: what fills the window, by role, block type, and tool (experimental)')
+  .option('--list', 'List recent sessions to pick from')
+  .option('--full', 'Cover the whole session history instead of the live (post-compaction) window')
+  .option('--json', 'JSON output')
+  .action(async (session: string | undefined, opts: { list?: boolean; full?: boolean; json?: boolean }) => {
+    await runContextCommand(session, opts)
   })
 
 program
