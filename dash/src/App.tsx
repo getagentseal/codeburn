@@ -38,7 +38,7 @@ function SideLink({ active, onClick, children }: { active: boolean; onClick: () 
       type="button"
       onClick={onClick}
       className={cn(
-        'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13.5px] transition-colors',
+        'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13.5px] transition-colors max-md:min-h-9',
         active ? 'bg-interactive-secondary font-medium text-foreground' : 'font-light text-muted-foreground hover:text-foreground',
       )}
     >
@@ -347,6 +347,9 @@ export function App() {
   const [view, setView] = useState<string>('all')
   const [unit, setUnit] = useState<Unit>('cost')
   const [searchOpen, setSearchOpen] = useState(false)
+  // Mobile only: the sidebar collapses to an off-canvas drawer below md.
+  // On desktop this flag is inert (the max-md: transform classes don't apply).
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [responded, setResponded] = useState<Set<string>>(new Set())
 
   const qc = useQueryClient()
@@ -425,26 +428,38 @@ export function App() {
   const label = local?.payload?.current?.label ?? ''
 
   return (
-    <div className="min-h-screen bg-outer-background p-2.5">
-      <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5">
-        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
-          <div className="flex items-center gap-2">
+    <div className="min-h-screen bg-outer-background p-2.5 max-md:min-h-[100dvh]">
+      <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5 max-md:h-[calc(100dvh-20px)]">
+        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)] max-md:gap-3 max-md:px-3">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={sidebarOpen}
+            aria-controls="dashboard-sidebar"
+            className="-ml-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-interactive-secondary md:hidden"
+          >
+            <svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            </svg>
+          </button>
+          <div className="flex items-center gap-2 max-md:shrink-0">
             <img src="/codeburn-logo.png" alt="CodeBurn" className="h-6 w-6" />
             <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">
               Code<span className="text-[#e8553a]">Burn</span>
             </span>
-            <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground">usage</span>
+            <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground max-sm:hidden">usage</span>
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
-            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5">
+          <div className="ml-auto flex items-center gap-2 max-md:min-w-0 max-md:overflow-x-auto max-md:[-ms-overflow-style:none] max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden">
+            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5 max-md:shrink-0">
               {PERIODS.map((p) => (
                 <button
                   key={p.key}
                   type="button"
                   onClick={() => setPeriod(p.key)}
                   className={cn(
-                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
                     period === p.key ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                   )}
                 >
@@ -452,14 +467,14 @@ export function App() {
                 </button>
               ))}
             </div>
-            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5">
+            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5 max-md:shrink-0">
               {(['cost', 'tokens'] as Unit[]).map((u) => (
                 <button
                   key={u}
                   type="button"
                   onClick={() => setUnit(u)}
                   className={cn(
-                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
                     unit === u ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                   )}
                 >
@@ -470,7 +485,7 @@ export function App() {
             <select
               value={provider}
               onChange={(e) => setProvider(e.target.value)}
-              className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none"
+              className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none max-md:min-h-9 max-md:shrink-0"
             >
               <option value="all">All tools</option>
               {providerOptions.map((p) => (
@@ -483,11 +498,38 @@ export function App() {
         </header>
 
         <div className="flex min-h-0 flex-1 gap-2.5">
-          <aside className="flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5">
+          {sidebarOpen && (
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={() => setSidebarOpen(false)}
+              className="fixed inset-0 z-30 bg-black/40 md:hidden"
+            />
+          )}
+          <aside
+            id="dashboard-sidebar"
+            className={cn(
+              'flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5',
+              'max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:rounded-none max-md:shadow-2xl max-md:transition-[transform,visibility] max-md:duration-200 max-md:ease-out',
+              // Closed below md: slide off-canvas AND go visibility:hidden so its
+              // links leave the tab order / a11y tree (not just visually hidden).
+              sidebarOpen ? 'max-md:visible max-md:translate-x-0' : 'max-md:invisible max-md:-translate-x-full',
+            )}
+          >
+            <button
+              type="button"
+              aria-label="Close menu"
+              onClick={() => setSidebarOpen(false)}
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-md text-tertiary-foreground transition-colors hover:bg-interactive-secondary hover:text-foreground md:hidden"
+            >
+              <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </button>
             <div className="flex flex-col gap-1">
               <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Devices</p>
               {multi && (
-                <SideLink active={view === 'all'} onClick={() => setView('all')}>
+                <SideLink active={view === 'all'} onClick={() => { setView('all'); setSidebarOpen(false) }}>
                   All devices
                 </SideLink>
               )}
@@ -495,7 +537,7 @@ export function App() {
                 <SideLink
                   key={d.id}
                   active={view === d.id || (!multi && view === 'all' && d.local)}
-                  onClick={() => setView(d.id)}
+                  onClick={() => { setView(d.id); setSidebarOpen(false) }}
                 >
                   {d.name}
                   {d.local ? ' · this Mac' : ''}
@@ -506,8 +548,8 @@ export function App() {
 
             <button
               type="button"
-              onClick={() => setSearchOpen(true)}
-              className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-interactive-secondary"
+              onClick={() => { setSearchOpen(true); setSidebarOpen(false) }}
+              className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-interactive-secondary max-md:min-h-9"
             >
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
                 <circle cx="7" cy="7" r="4.5" />
@@ -521,7 +563,7 @@ export function App() {
               <button
                 type="button"
                 onClick={() => void toggleShare()}
-                className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-[13.5px] text-foreground transition-colors hover:bg-interactive-secondary"
+                className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-[13.5px] text-foreground transition-colors hover:bg-interactive-secondary max-md:min-h-9"
               >
                 <span>Share this device</span>
                 <Switch on={!!shareInfo?.sharing} />
