@@ -347,6 +347,7 @@ export function App() {
   const [view, setView] = useState<string>('all')
   const [unit, setUnit] = useState<Unit>('cost')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [responded, setResponded] = useState<Set<string>>(new Set())
 
   const qc = useQueryClient()
@@ -427,8 +428,20 @@ export function App() {
   return (
     <div className="min-h-screen bg-outer-background p-2.5">
       <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5">
-        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)]">
+        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)] sticky top-0 z-40">
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="md:hidden flex items-center justify-center w-9 h-9 rounded-md border border-border bg-interactive-secondary text-foreground"
+              aria-label="Toggle sidebar"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
             <img src="/codeburn-logo.png" alt="CodeBurn" className="h-6 w-6" />
             <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">
               Code<span className="text-[#e8553a]">Burn</span>
@@ -482,12 +495,23 @@ export function App() {
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 gap-2.5">
-          <aside className="flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5">
+        <div className="flex min-h-0 flex-1 gap-2.5 flex-col md:flex-row">
+          {sidebarOpen && (
+            <div
+              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
+              onClick={() => setSidebarOpen(false)}
+            />
+          )}
+          <aside className={cn(
+            "flex w-60 shrink-0 flex-col gap-5 overflow-y-auto rounded-md border border-border bg-card p-5",
+            "fixed inset-y-0 left-0 z-50 transition-transform duration-300",
+            "md:relative md:translate-x-0",
+            sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+          )}>
             <div className="flex flex-col gap-1">
               <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Devices</p>
               {multi && (
-                <SideLink active={view === 'all'} onClick={() => setView('all')}>
+                <SideLink active={view === 'all'} onClick={() => { setView('all'); setSidebarOpen(false) }}>
                   All devices
                 </SideLink>
               )}
@@ -495,7 +519,7 @@ export function App() {
                 <SideLink
                   key={d.id}
                   active={view === d.id || (!multi && view === 'all' && d.local)}
-                  onClick={() => setView(d.id)}
+                  onClick={() => { setView(d.id); setSidebarOpen(false) }}
                 >
                   {d.name}
                   {d.local ? ' · this Mac' : ''}
@@ -588,7 +612,7 @@ export function App() {
             </div>
           </aside>
 
-          <main className="min-w-0 flex-1 overflow-y-auto pr-0.5">
+          <main className="min-w-0 flex-1 overflow-y-auto pr-0.5 w-full">
             <div className="mb-3 flex items-baseline justify-between">
               <h1 className="font-display text-xl tracking-tight text-foreground">{viewTitle}</h1>
               <span className="text-xs text-tertiary-foreground">{label}</span>
