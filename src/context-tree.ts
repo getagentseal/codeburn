@@ -564,10 +564,29 @@ function relativeAge(mtimeMs: number): string {
   return `${Math.round(mins / (60 * 24))}d ago`
 }
 
-type Row = { depth: number; label: string; count: number; tokens: number; bold?: boolean }
+export type ContextRow = { depth: number; label: string; count: number; tokens: number; bold?: boolean }
 
-function renderRows(rows: Row[]): string[] {
-  const leftLen = (r: Row): number => r.depth * 2 + (r.depth > 0 ? 2 : 0) + r.label.length
+// The tree flattened to rows, shared by the static CLI renderer and the TUI.
+export function snapshotRows(view: ContextSnapshot): ContextRow[] {
+  const rows: ContextRow[] = []
+  rows.push({ depth: 0, label: 'assistant', count: view.assistant.count, tokens: view.assistant.tokens, bold: true })
+  rows.push({ depth: 1, label: 'text', count: view.assistant.text.count, tokens: view.assistant.text.tokens })
+  if (view.assistant.reasoning.count > 0) rows.push({ depth: 1, label: 'reasoning', count: view.assistant.reasoning.count, tokens: view.assistant.reasoning.tokens })
+  rows.push({ depth: 1, label: 'tool-call', count: view.assistant.toolCall.count, tokens: view.assistant.toolCall.tokens })
+  for (const t of view.assistant.byTool) rows.push({ depth: 2, label: t.tool, count: t.count, tokens: t.tokens })
+  rows.push({ depth: 0, label: 'user', count: view.user.count, tokens: view.user.tokens, bold: true })
+  rows.push({ depth: 1, label: 'text', count: view.user.text.count, tokens: view.user.text.tokens })
+  if (view.user.image.count > 0) rows.push({ depth: 1, label: 'image', count: view.user.image.count, tokens: view.user.image.tokens })
+  if (view.user.compactSummary.count > 0) rows.push({ depth: 1, label: 'compact-summary', count: view.user.compactSummary.count, tokens: view.user.compactSummary.tokens })
+  if (view.user.meta.count > 0) rows.push({ depth: 1, label: 'meta', count: view.user.meta.count, tokens: view.user.meta.tokens })
+  rows.push({ depth: 0, label: 'tool', count: view.toolResult.count, tokens: view.toolResult.tokens, bold: true })
+  rows.push({ depth: 1, label: 'tool-result', count: view.toolResult.count, tokens: view.toolResult.tokens })
+  if (view.system.count > 0) rows.push({ depth: 0, label: 'system', count: view.system.count, tokens: view.system.tokens, bold: true })
+  return rows
+}
+
+function renderRows(rows: ContextRow[]): string[] {
+  const leftLen = (r: ContextRow): number => r.depth * 2 + (r.depth > 0 ? 2 : 0) + r.label.length
   const labelWidth = Math.max(...rows.map(leftLen)) + 2
   const countWidth = Math.max(...rows.map((r) => num(r.count).length)) + 1
   const tokenWidth = Math.max(...rows.map((r) => num(r.tokens).length))
@@ -612,21 +631,7 @@ export function renderContextTree(result: ContextTreeResult, opts: { full?: bool
   }
   lines.push('')
 
-  const rows: Row[] = []
-  rows.push({ depth: 0, label: 'assistant', count: view.assistant.count, tokens: view.assistant.tokens, bold: true })
-  rows.push({ depth: 1, label: 'text', count: view.assistant.text.count, tokens: view.assistant.text.tokens })
-  if (view.assistant.reasoning.count > 0) rows.push({ depth: 1, label: 'reasoning', count: view.assistant.reasoning.count, tokens: view.assistant.reasoning.tokens })
-  rows.push({ depth: 1, label: 'tool-call', count: view.assistant.toolCall.count, tokens: view.assistant.toolCall.tokens })
-  for (const t of view.assistant.byTool) rows.push({ depth: 2, label: t.tool, count: t.count, tokens: t.tokens })
-  rows.push({ depth: 0, label: 'user', count: view.user.count, tokens: view.user.tokens, bold: true })
-  rows.push({ depth: 1, label: 'text', count: view.user.text.count, tokens: view.user.text.tokens })
-  if (view.user.image.count > 0) rows.push({ depth: 1, label: 'image', count: view.user.image.count, tokens: view.user.image.tokens })
-  if (view.user.compactSummary.count > 0) rows.push({ depth: 1, label: 'compact-summary', count: view.user.compactSummary.count, tokens: view.user.compactSummary.tokens })
-  if (view.user.meta.count > 0) rows.push({ depth: 1, label: 'meta', count: view.user.meta.count, tokens: view.user.meta.tokens })
-  rows.push({ depth: 0, label: 'tool', count: view.toolResult.count, tokens: view.toolResult.tokens, bold: true })
-  rows.push({ depth: 1, label: 'tool-result', count: view.toolResult.count, tokens: view.toolResult.tokens })
-  if (view.system.count > 0) rows.push({ depth: 0, label: 'system', count: view.system.count, tokens: view.system.tokens, bold: true })
-  lines.push(...renderRows(rows))
+  lines.push(...renderRows(snapshotRows(view)))
 
   lines.push('')
   lines.push(chalk.dim('  block tokens are estimated (chars/4, images by pixel count, reasoning from per-message usage);'))
