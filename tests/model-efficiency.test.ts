@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { aggregateModelEfficiency } from '../src/model-efficiency.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary } from '../src/types.js'
 
-function call(model: string, costUSD = 1): ParsedApiCall {
+function call(model: string, costUSD = 1, provider: 'claude' | 'devin' = 'claude'): ParsedApiCall {
   return {
-    provider: 'claude',
+    provider,
     model,
     usage: {
       inputTokens: 100,
@@ -25,7 +25,7 @@ function call(model: string, costUSD = 1): ParsedApiCall {
     speed: 'standard',
     timestamp: '2026-05-05T00:00:00Z',
     bashCommands: [],
-    deduplicationKey: `${model}-${costUSD}`,
+    deduplicationKey: `${provider}-${model}-${costUSD}`,
   }
 }
 
@@ -137,5 +137,19 @@ describe('aggregateModelEfficiency', () => {
     ])])
 
     expect(stats.size).toBe(0)
+  })
+
+  it('keeps Devin model variants as raw model ids', () => {
+    const stats = aggregateModelEfficiency([project([
+      turn('gpt-5-3-codex-xhigh', { hasEdits: true, retries: 0, costUSD: 2 }),
+      turn('gpt-5-4-low', { hasEdits: true, retries: 1, costUSD: 3 }),
+    ].map(t => ({
+      ...t,
+      assistantCalls: t.assistantCalls.map(c => ({ ...c, provider: 'devin' as const })),
+    })))])
+
+    expect(stats.has('gpt-5-3-codex-xhigh')).toBe(true)
+    expect(stats.has('gpt-5-4-low')).toBe(true)
+    expect(stats.has('GPT-5')).toBe(false)
   })
 })

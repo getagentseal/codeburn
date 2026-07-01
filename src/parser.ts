@@ -1294,6 +1294,11 @@ function buildSessionSummary(
   let firstTs = ''
   let lastTs = ''
 
+  function modelBreakdownKey(call: ParsedApiCall): string {
+    if (call.provider === 'devin') return call.model
+    return getShortModelName(call.model)
+  }
+
   for (const turn of turns) {
     const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
     const turnSavings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
@@ -1335,7 +1340,7 @@ function buildSessionSummary(
       totalCacheWrite += call.usage.cacheCreationInputTokens
       apiCalls++
 
-      const modelKey = getShortModelName(call.model)
+      const modelKey = modelBreakdownKey(call)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
           calls: 0,
