@@ -5,6 +5,39 @@ import { tmpdir } from 'os'
 
 import { createPiProvider } from '../../src/providers/pi.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
+import { classifyTurn } from '../../src/classifier.js'
+import type { ParsedApiCall, ParsedTurn } from '../../src/types.js'
+
+// Mirrors src/parser.ts providerCallToTurn so we can assert that a Pi call's
+// skills survive the classifier into `subCategory`, which is the sole input the
+// session summary reads to build the "Skills & Agents" breakdown (#588).
+function turnFromPiCall(call: ParsedProviderCall, userMessage = ''): ParsedTurn {
+  const apiCall: ParsedApiCall = {
+    provider: call.provider,
+    model: call.model,
+    usage: {
+      inputTokens: call.inputTokens,
+      outputTokens: call.outputTokens,
+      cacheCreationInputTokens: call.cacheCreationInputTokens,
+      cacheReadInputTokens: call.cacheReadInputTokens,
+      cachedInputTokens: call.cachedInputTokens,
+      reasoningTokens: call.reasoningTokens,
+      webSearchRequests: call.webSearchRequests,
+    },
+    costUSD: call.costUSD,
+    tools: call.tools,
+    mcpTools: call.tools.filter(t => t.startsWith('mcp__')),
+    skills: call.skills ?? [],
+    subagentTypes: call.subagentTypes ?? [],
+    hasAgentSpawn: call.tools.includes('Agent'),
+    hasPlanMode: call.tools.includes('EnterPlanMode'),
+    speed: call.speed,
+    timestamp: call.timestamp,
+    bashCommands: call.bashCommands,
+    deduplicationKey: call.deduplicationKey,
+  }
+  return { userMessage, assistantCalls: [apiCall], timestamp: call.timestamp, sessionId: call.sessionId }
+}
 
 let tmpDir: string
 
@@ -48,14 +81,20 @@ function assistantMessage(opts: {
   output?: number
   cacheRead?: number
   cacheWrite?: number
-  tools?: Array<{ name: string; command?: string }>
+  tools?: Array<{ name: string; command?: string; path?: string; filePath?: string }>
 }) {
-  const content = (opts.tools ?? []).map(t => ({
-    type: 'toolCall',
-    id: `call-${t.name}`,
-    name: t.name,
-    arguments: t.command !== undefined ? { command: t.command } : {},
-  }))
+  const content = (opts.tools ?? []).map(t => {
+    const args: Record<string, unknown> = {}
+    if (t.command !== undefined) args['command'] = t.command
+    if (t.path !== undefined) args['path'] = t.path
+    if (t.filePath !== undefined) args['file_path'] = t.filePath
+    return {
+      type: 'toolCall',
+      id: `call-${t.name}`,
+      name: t.name,
+      arguments: args,
+    }
+  })
 
   return JSON.stringify({
     type: 'message',
@@ -261,6 +300,115 @@ describe('pi provider - JSONL parsing', () => {
     }
 
     expect(calls[0]!.bashCommands).toEqual(['git', 'bun'])
+  })
+
+  it('classifies a SKILL.md read as a skill load, not a Read (#588)', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta(),
+      assistantMessage({
+        tools: [
+          { name: 'read', path: '/Volumes/T7/repos/cuneiform/.pi/skills/bmad-create-story/SKILL.md' },
+          { name: 'read', path: '/Volumes/T7/repos/cuneiform/workflow.md' },
+          { name: 'edit', path: '/Volumes/T7/repos/cuneiform/workflow.md' },
+        ],
+      }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    // The SKILL.md read is surfaced as the Skill tool (not Read); the plain
+    // read stays a Read.
+    expect(calls[0]!.skills).toEqual(['bmad-create-story'])
+    expect(calls[0]!.tools).toEqual(['Skill', 'Read', 'Edit'])
+  })
+
+  it('classifies a skill:// read as a skill load (OMP-style URI)', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta(),
+      assistantMessage({
+        tools: [{ name: 'read', path: 'skill://commit-workflow' }],
+      }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls[0]!.skills).toEqual(['commit-workflow'])
+    expect(calls[0]!.tools).toEqual(['Skill'])
+  })
+
+  it('reads the file_path key as a fallback for skill loads', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta(),
+      assistantMessage({
+        tools: [{ name: 'read', filePath: '/home/u/.agents/skills/deep-research/SKILL.md' }],
+      }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls[0]!.skills).toEqual(['deep-research'])
+    expect(calls[0]!.tools).toEqual(['Skill'])
+  })
+
+  it('leaves a normal read (no SKILL.md) as a Read with no skills', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta(),
+      assistantMessage({
+        tools: [{ name: 'read', path: '/home/u/project/src/skill-loader.ts' }],
+      }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    expect(calls[0]!.skills).toEqual([])
+    expect(calls[0]!.tools).toEqual(['Read'])
+  })
+
+  it('a pure skill-load turn classifies as general with the skill as subCategory (feeds the Skills breakdown, #588)', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const filePath = await writeSession(projectDir, 'session.jsonl', [
+      sessionMeta(),
+      assistantMessage({
+        tools: [{ name: 'read', path: '/home/u/.pi/agent/skills/systematic-debugging/SKILL.md' }],
+      }),
+    ])
+
+    const provider = createPiProvider(tmpDir)
+    const source = { path: filePath, project: 'myproject', provider: 'pi' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+      calls.push(call)
+    }
+
+    // End to end: the parsed skill load must reach `subCategory`, or the
+    // Skills & Agents breakdown stays empty (the second half of #588).
+    const classified = classifyTurn(turnFromPiCall(calls[0]!))
+    expect(classified.category).toBe('general')
+    expect(classified.subCategory).toBe('systematic-debugging')
   })
 
   it('skips assistant messages with zero tokens', async () => {

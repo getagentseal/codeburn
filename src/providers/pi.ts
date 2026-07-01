@@ -35,6 +35,34 @@ const toolNameMap: Record<string, string> = {
 // Pre-sorted by key length descending so longer/more-specific keys match first
 const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
+// Pi/OMP have no dedicated skill tool the way Claude Code does. A native skill
+// load is emitted as an ordinary `read` tool call whose path points at the
+// skill's `SKILL.md` (Pi resolves skills from many roots: ~/.pi/agent/skills,
+// project .pi/skills, .agents/skills, package skills/, --skill <path>), or, in
+// newer OMP builds, at a `skill://<name>` URI. Left untouched these inflate the
+// Read tool count and leave the Skills dimension empty (issue #588). Return the
+// skill name when a read is really a skill load, else null so it stays a Read.
+function skillLoadName(name: string | undefined, args: Record<string, unknown> | undefined): string | null {
+  if (name !== 'read') return null
+  const raw = args?.['path'] ?? args?.['file_path']
+  if (typeof raw !== 'string') return null
+  const path = raw.trim()
+  if (path.length === 0) return null
+
+  if (path.startsWith('skill://')) {
+    const rest = path.slice('skill://'.length).replace(/^\/+/, '')
+    const first = rest.split(/[/?#]/)[0]?.trim() ?? ''
+    return first.length > 0 ? first : null
+  }
+
+  // Match on the SKILL.md basename, not a directory prefix, because skill roots
+  // live in many locations. Split on both separators so Windows paths work.
+  const segments = path.split(/[\\/]/).filter(Boolean)
+  if (segments[segments.length - 1] !== 'SKILL.md') return null
+  const parent = segments[segments.length - 2]?.trim()
+  return parent && parent.length > 0 ? parent : null
+}
+
 type PiEntry = {
   type: string
   id?: string
@@ -169,7 +197,25 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         seenKeys.add(dedupKey)
 
         const toolCalls = normalizeContentBlocks(msg.content).filter(c => c.type === 'toolCall' && c.name)
-        const tools = toolCalls.map(c => toolNameMap[c.name!] ?? c.name!)
+
+        // A SKILL.md-loading read is surfaced as the `Skill` tool (not `Read`)
+        // and its name is recorded in `skills`. This mirrors how the Claude
+        // parser represents a skill invocation, so the shared classifier tags
+        // the turn `general` and the "Skills & Agents" breakdown picks it up,
+        // instead of over-counting a Read and leaving Skills empty (#588).
+        // Every other call stays a normal tool.
+        const tools: string[] = []
+        const skills: string[] = []
+        for (const c of toolCalls) {
+          const skill = skillLoadName(c.name, c.arguments)
+          if (skill !== null) {
+            skills.push(skill)
+            tools.push('Skill')
+            continue
+          }
+          tools.push(toolNameMap[c.name!] ?? c.name!)
+        }
+
         const bashCommands = toolCalls
           .filter(c => c.name === 'bash')
           .flatMap(c => {
@@ -193,6 +239,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           costUSD,
           tools,
           bashCommands,
+          skills,
           timestamp,
           speed: 'standard',
           deduplicationKey: dedupKey,
