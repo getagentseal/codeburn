@@ -1,4 +1,4 @@
-import { readdir, stat } from 'fs/promises'
+import { open, readdir, stat } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -484,6 +484,57 @@ export async function listRecentSessions(limit = 15): Promise<SessionRef[]> {
   return refs.slice(0, limit)
 }
 
+// Claude Code stores an AI-generated session name as "ai-title" entries (the
+// last one is current; sessions get re-titled) and, in older sessions, as
+// "summary" entries near the top. Scanning one tail and one head chunk finds
+// it without reading a potentially 100MB transcript.
+const TITLE_CHUNK_BYTES = 262_144
+
+function titleFromChunk(chunk: string): string {
+  let title = ''
+  let summary = ''
+  for (const line of chunk.split('\n')) {
+    if (line.includes('"type":"ai-title"')) {
+      try {
+        const t = (JSON.parse(line) as { aiTitle?: unknown }).aiTitle
+        if (typeof t === 'string' && t) title = t
+      } catch {
+        continue
+      }
+    } else if (!summary && line.includes('"type":"summary"')) {
+      try {
+        const t = (JSON.parse(line) as { summary?: unknown }).summary
+        if (typeof t === 'string' && t) summary = t
+      } catch {
+        continue
+      }
+    }
+  }
+  return title || summary
+}
+
+async function readChunk(filePath: string, start: number, length: number): Promise<string> {
+  const fd = await open(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(length)
+    const { bytesRead } = await fd.read(buf, 0, length, start)
+    return buf.subarray(0, bytesRead).toString('utf-8')
+  } finally {
+    await fd.close()
+  }
+}
+
+export async function readSessionTitle(ref: SessionRef): Promise<string> {
+  try {
+    const tailStart = Math.max(0, ref.sizeBytes - TITLE_CHUNK_BYTES)
+    let title = titleFromChunk(await readChunk(ref.filePath, tailStart, TITLE_CHUNK_BYTES))
+    if (!title && tailStart > 0) title = titleFromChunk(await readChunk(ref.filePath, 0, TITLE_CHUNK_BYTES))
+    return title.replace(/\s+/g, ' ').trim()
+  } catch {
+    return ''
+  }
+}
+
 async function resolveSession(arg: string | undefined): Promise<SessionRef | null> {
   if (arg && (arg.endsWith('.jsonl') || arg.includes('/'))) {
     if (!existsSync(arg)) return null
@@ -585,11 +636,14 @@ export function renderContextTree(result: ContextTreeResult, opts: { full?: bool
   return lines.join('\n')
 }
 
-function renderSessionList(refs: SessionRef[]): string {
+function renderSessionList(refs: SessionRef[], titles: string[]): string {
   const lines = ['', `  ${chalk.bold('Recent Claude Code sessions')}`, '']
-  for (const ref of refs) {
+  const projectWidth = Math.max(...refs.map((r) => r.project.length))
+  for (const [i, ref] of refs.entries()) {
     const sizeMb = (ref.sizeBytes / 1024 / 1024).toFixed(1).padStart(6)
-    lines.push(`  ${chalk.cyan(ref.sessionId.slice(0, 8))}  ${chalk.dim(`${sizeMb}MB`)}  ${relativeAge(ref.mtimeMs).padStart(7)}  ${ref.project}`)
+    const title = titles[i] ?? ''
+    const shortTitle = title.length > 48 ? `${title.slice(0, 47)}…` : title
+    lines.push(`  ${chalk.cyan(ref.sessionId.slice(0, 8))}  ${chalk.dim(`${sizeMb}MB`)}  ${relativeAge(ref.mtimeMs).padStart(7)}  ${chalk.dim(ref.project.padEnd(projectWidth))}  ${shortTitle}`)
   }
   lines.push('')
   lines.push(chalk.dim('  codeburn context <id> to inspect one'))
@@ -607,7 +661,8 @@ export async function runContextCommand(
       console.log('No Claude Code sessions found under ~/.claude/projects.')
       return
     }
-    console.log(renderSessionList(refs))
+    const titles = await Promise.all(refs.map(readSessionTitle))
+    console.log(renderSessionList(refs, titles))
     return
   }
   const session = await resolveSession(sessionArg)
