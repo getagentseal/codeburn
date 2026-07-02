@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
+import { extractBashCommands } from '../bash-utils.js'
 import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
-import { isSqliteAvailable, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
+import { isSqliteAvailable, isSqliteBusyError, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
 import type { DateRange } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -48,7 +49,7 @@ type BubbleRow = {
   output_tokens: number | null
   model: string | null
   created_at: string | null
-  conversation_id: string | null
+  request_id: string | null
   user_text: Uint8Array | string | null
   text_length: number | null
   bubble_type: number | null
@@ -59,11 +60,18 @@ type BubbleRow = {
 }
 
 type AgentKvRow = {
-  key: string
   role: string | null
   content: Uint8Array | string | null
   request_id: string | null
-  content_length: number
+  model: string | null
+}
+
+// SQLITE_BUSY must reach parser.ts, whose busy path skips the source without
+// caching; swallowing it here would stamp a silently degraded parse into the
+// results cache under an unchanged DB fingerprint (Cursor writes via WAL, so
+// contention does not change the main file's stat).
+function rethrowBusy(err: unknown): void {
+  if (isSqliteBusyError(err)) throw err
 }
 
 const CHARS_PER_TOKEN = 4
@@ -298,7 +306,7 @@ const BUBBLE_QUERY_BASE = `
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
     json_extract(value, '$.createdAt') as created_at,
-    json_extract(value, '$.conversationId') as conversation_id,
+    json_extract(value, '$.requestId') as request_id,
     CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as user_text,
     length(json_extract(value, '$.text')) as text_length,
     json_extract(value, '$.type') as bubble_type,
@@ -309,11 +317,10 @@ const BUBBLE_QUERY_BASE = `
 
 const AGENTKV_QUERY = `
   SELECT
-    key,
     json_extract(value, '$.role') as role,
     CAST(json_extract(value, '$.content') AS BLOB) as content,
     json_extract(value, '$.providerOptions.cursor.requestId') as request_id,
-    length(value) as content_length
+    json_extract(value, '$.providerOptions.cursor.modelName') as model
   FROM cursorDiskKV
   WHERE key LIKE 'agentKv:blob:%'
     AND hex(substr(value, 1, 1)) = '7B'
@@ -356,7 +363,7 @@ const BUBBLE_QUERY_PAGE = `
     json_extract(value, '$.tokenCount.outputTokens') as output_tokens,
     json_extract(value, '$.modelInfo.modelName') as model,
     json_extract(value, '$.createdAt') as created_at,
-    json_extract(value, '$.conversationId') as conversation_id,
+    json_extract(value, '$.requestId') as request_id,
     CAST(substr(json_extract(value, '$.text'), 1, 500) AS BLOB) as user_text,
     length(json_extract(value, '$.text')) as text_length,
     json_extract(value, '$.type') as bubble_type,
@@ -373,7 +380,8 @@ function validateSchema(db: SqliteDatabase): boolean {
       "SELECT COUNT(*) as cnt FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' LIMIT 1"
     )
     return rows.length > 0
-  } catch {
+  } catch (err) {
+    rethrowBusy(err)
     return false
   }
 }
@@ -406,7 +414,9 @@ function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string,
         map.set(composerId, { messages: [text], pos: 0 })
       }
     }
-  } catch {}
+  } catch (err) {
+    rethrowBusy(err)
+  }
   return map
 }
 
@@ -438,7 +448,8 @@ function scanBubblesPaged(
     let batch: BubbleRow[]
     try {
       batch = db.query<BubbleRow>(BUBBLE_QUERY_PAGE, [beforeRowId, BATCH])
-    } catch {
+    } catch (err) {
+      rethrowBusy(err)
       break
     }
     if (batch.length === 0) break
@@ -468,82 +479,146 @@ function scanBubblesPaged(
 // contextTokensUsed (the in-app context meter). This is not cumulative per-turn,
 // so local SQLite undercounts admin-console usage; parity requires the opt-in
 // Cursor Admin API: POST api.cursor.com/teams/filtered-usage-events.
-// Keyed by composerId so parseBubbles can credit it to the right conversation.
-const COMPOSER_TOKENS_QUERY = `
+// The key-range predicate seeks the primary key instead of scanning the table.
+const COMPOSER_META_QUERY = `
   SELECT
-    substr(key, 14) as composer_id,
+    substr(key, length('composerData:') + 1) as composer_id,
     json_extract(value, '$.promptTokenBreakdown.totalUsedTokens') as used,
-    json_extract(value, '$.contextTokensUsed') as ctx
+    json_extract(value, '$.contextTokensUsed') as ctx,
+    json_extract(value, '$.createdAt') as created_at
   FROM cursorDiskKV
-  WHERE key LIKE 'composerData:%'
+  WHERE key >= 'composerData:' AND key < 'composerData;'
 `
 
-function loadComposerInputTokens(db: SqliteDatabase): Map<string, number> {
-  const map = new Map<string, number>()
+type ComposerMeta = { tokens: number; createdAt: number | null }
+
+function loadComposerMeta(db: SqliteDatabase): Map<string, ComposerMeta> {
+  const map = new Map<string, ComposerMeta>()
   try {
-    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null }>(COMPOSER_TOKENS_QUERY)
+    const rows = db.query<{ composer_id: string; used: number | null; ctx: number | null; created_at: number | null }>(COMPOSER_META_QUERY)
     for (const r of rows) {
-      const tokens = r.used ?? r.ctx ?? 0
-      if (r.composer_id && tokens > 0) map.set(r.composer_id, tokens)
+      // `||` rather than `??`: a recorded-but-zero breakdown must fall through
+      // to the context meter instead of shadowing it.
+      const tokens = (r.used || r.ctx) ?? 0
+      if (r.composer_id && tokens > 0) map.set(r.composer_id, { tokens, createdAt: r.created_at ?? null })
     }
-  } catch {
+  } catch (err) {
+    rethrowBusy(err)
     /* best-effort: callers fall back to the per-bubble text estimate */
   }
   return map
 }
 
-type AgentTools = { tools: string[]; bash: string[]; userChars: number }
+type AgentStream = {
+  tools: string[]
+  bash: string[]
+  userChars: number
+  contextChars: number
+  assistantChars: number
+  model: string | null
+}
 
-// Cursor logs the agent's tool calls (Read, Grep, Shell, ...) in agentKv blobs
-// keyed by requestId. Bubbles carry the same requestId plus the composerId, so
-// joining the two attributes each conversation's tools and Shell commands.
-const BUBBLE_REQUESTID_QUERY = `
-  SELECT key as bubble_key, json_extract(value, '$.requestId') as request_id
-  FROM cursorDiskKV
-  WHERE key LIKE 'bubbleId:%' AND json_extract(value, '$.requestId') IS NOT NULL
-`
+function newAgentStream(): AgentStream {
+  return { tools: [], bash: [], userChars: 0, contextChars: 0, assistantChars: 0, model: null }
+}
 
-function loadAgentToolsByComposer(db: SqliteDatabase): Map<string, AgentTools> {
-  const byComposer = new Map<string, AgentTools>()
-
-  const requestToComposer = new Map<string, string>()
-  try {
-    const rows = db.query<{ bubble_key: string; request_id: string | null }>(BUBBLE_REQUESTID_QUERY)
-    for (const r of rows) {
-      const composer = parseComposerIdFromKey(r.bubble_key)
-      if (composer && r.request_id) requestToComposer.set(r.request_id, composer)
+// agentKv rows store content as a plain string or a block array; count only
+// the text inside blocks so the JSON envelope and non-text parts are not
+// billed as prompt characters.
+function contentTextLength(raw: string): number {
+  const trimmed = raw.trimStart()
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      const blocks = Array.isArray(parsed) ? parsed : [parsed]
+      let len = 0
+      for (const block of blocks) {
+        if (block == null || typeof block !== 'object') continue
+        const b = block as { text?: unknown; content?: unknown }
+        if (typeof b.text === 'string') len += b.text.length
+        else if (typeof b.content === 'string') len += b.content.length
+      }
+      return len
+    } catch {
+      return raw.length
     }
-  } catch {
-    return byComposer
   }
+  return raw.length
+}
+
+// Cursor logs the agent's stream (prompt, injected context, tool calls, reply
+// deltas) in agentKv blobs keyed by requestId. Bubbles carry the same
+// requestId, so the map built from the scanned bubbles joins each request to
+// its conversation. Requests with no matching bubble are kept separately:
+// they are real sessions (background runs, older builds) that would otherwise
+// vanish from totals.
+function loadAgentStreams(
+  db: SqliteDatabase,
+  requestToComposer: Map<string, string>,
+): { byComposer: Map<string, AgentStream>; unjoined: Map<string, AgentStream> } {
+  const byComposer = new Map<string, AgentStream>()
+  const unjoined = new Map<string, AgentStream>()
 
   let rows: AgentKvRow[]
   try {
     rows = db.query<AgentKvRow>(AGENTKV_QUERY)
-  } catch {
-    return byComposer
+  } catch (err) {
+    rethrowBusy(err)
+    return { byComposer, unjoined }
   }
 
-  // Only the turn-opening (user) agentKv row carries the requestId; the
-  // assistant rows that follow inherit it, so track it positionally.
-  let currentRequestId: string | null = null
-  for (const row of rows) {
-    if (row.request_id) currentRequestId = row.request_id
-    if (!row.content || !currentRequestId) continue
-    const composer = requestToComposer.get(currentRequestId)
-    if (!composer) continue
+  const bucketFor = (requestId: string): AgentStream => {
+    const composer = requestToComposer.get(requestId)
+    const map = composer ? byComposer : unjoined
+    const key = composer ?? requestId
+    const existing = map.get(key)
+    if (existing) return existing
+    const fresh = newAgentStream()
+    map.set(key, fresh)
+    return fresh
+  }
 
-    // A user turn stores its prompt (plus injected context) as a plain string.
-    // Track its length so a turn whose bubble text is empty — non-Composer
-    // sessions such as GPT keep it in the agent stream — can still be
-    // estimated instead of dropped.
-    if (row.role === 'user') {
-      const bucket = byComposer.get(composer) ?? { tools: [], bash: [], userChars: 0 }
-      bucket.userChars += blobToText(row.content).length
-      byComposer.set(composer, bucket)
+  // Only the turn-opening (user) agentKv row carries the requestId; rows that
+  // follow inherit it. Rows written BEFORE their request's id appears (the
+  // system prompt and opening user prompt at a conversation start) buffer
+  // until the next id, and a system row closes the previous request so
+  // interleaved sessions cannot inherit across a conversation boundary.
+  let currentRequestId: string | null = null
+  let pendingUserChars = 0
+  let pendingContextChars = 0
+  for (const row of rows) {
+    if (row.request_id) {
+      currentRequestId = row.request_id
+      if (pendingUserChars > 0 || pendingContextChars > 0) {
+        const bucket = bucketFor(currentRequestId)
+        bucket.userChars += pendingUserChars
+        bucket.contextChars += pendingContextChars
+        pendingUserChars = 0
+        pendingContextChars = 0
+      }
+    }
+    if (row.model && currentRequestId) {
+      const bucket = bucketFor(currentRequestId)
+      if (!bucket.model) bucket.model = row.model
+    }
+    if (!row.content) continue
+
+    if (row.role === 'system') {
+      pendingContextChars += contentTextLength(blobToText(row.content))
+      currentRequestId = null
       continue
     }
-    if (row.role !== 'assistant') continue
+    if (row.role === 'user') {
+      const len = contentTextLength(blobToText(row.content))
+      if (currentRequestId) bucketFor(currentRequestId).userChars += len
+      else pendingUserChars += len
+      continue
+    }
+    if (row.role === 'tool') {
+      if (currentRequestId) bucketFor(currentRequestId).contextChars += contentTextLength(blobToText(row.content))
+      continue
+    }
+    if (row.role !== 'assistant' || !currentRequestId) continue
 
     let content: unknown
     try {
@@ -552,48 +627,50 @@ function loadAgentToolsByComposer(db: SqliteDatabase): Map<string, AgentTools> {
       continue
     }
     if (!Array.isArray(content)) continue
-    const bucket = byComposer.get(composer) ?? { tools: [], bash: [], userChars: 0 }
-    for (const block of content as Array<{ type?: string; toolName?: string; args?: { command?: string } }>) {
-      if (!block || block.type !== 'tool-call' || !block.toolName) continue
-      bucket.tools.push(block.toolName)
-      if (block.toolName === 'Shell') {
-        const command = block.args?.command?.trim()
-        if (command) bucket.bash.push(command)
+    const bucket = bucketFor(currentRequestId)
+    for (const block of content as Array<{ type?: string; text?: unknown; toolName?: unknown; args?: { command?: unknown } }>) {
+      if (block == null || typeof block !== 'object') continue
+      if (typeof block.text === 'string') bucket.assistantChars += block.text.length
+      if (block.type !== 'tool-call' || typeof block.toolName !== 'string' || !block.toolName) continue
+      // Cursor's terminal tool is 'Shell'; emit the canonical 'Bash' so the
+      // cross-provider tool and command breakdowns merge.
+      bucket.tools.push(block.toolName === 'Shell' ? 'Bash' : block.toolName)
+      if (block.toolName === 'Shell' && typeof block.args?.command === 'string') {
+        bucket.bash.push(...extractBashCommands(block.args.command))
       }
     }
-    byComposer.set(composer, bucket)
   }
-  return byComposer
+  return { byComposer, unjoined }
+}
+
+// What drives a conversation's input figure, decided once per conversation so
+// the sources can never stack on each other:
+//   bubbleTokens - some bubble carries a real tokenCount (older builds), so
+//                  per-turn counts are authoritative and nothing is estimated.
+//   meter        - the composerData context meter exists; one conversation
+//                  record carries it.
+//   stream       - no meter, but the agent stream holds the prompt/context; one
+//                  conversation record carries the estimate.
+//   text         - only visible bubble text exists; estimated per bubble.
+type InputSource = 'bubbleTokens' | 'meter' | 'stream' | 'text'
+
+type ComposerScan = {
+  hasRealTokens: boolean
+  firstBubbleTs: string | null
+  assistantTextChars: number
+  model: string | null
 }
 
 function parseBubbles(
   db: SqliteDatabase,
   seenKeys: Set<string>,
   timeFloor: string,
-  composerInput: Map<string, number>,
-  agentTools: Map<string, AgentTools>,
+  agentKvTimestamp: string,
 ): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
-  // Each conversation's real context is credited once (on its first turn) so a
-  // multi-turn chat does not multiply the snapshot across every bubble.
-  const creditedComposers = new Set<string>()
 
-  // Build a composerId -> model map from assistant bubbles. User bubbles
-  // (type=1) carry no modelInfo, so when we credit real input tokens onto a
-  // user bubble we need the conversation's actual model for pricing.
-  const composerModel = new Map<string, string>()
-  try {
-    const modelRows = db.query<{ bubble_key: string; model: string | null }>(`
-      SELECT key as bubble_key, json_extract(value, '$.modelInfo.modelName') as model
-      FROM cursorDiskKV
-      WHERE key LIKE 'bubbleId:%' AND json_extract(value, '$.modelInfo.modelName') IS NOT NULL
-    `)
-    for (const r of modelRows) {
-      const cid = parseComposerIdFromKey(r.bubble_key)
-      if (cid && r.model && !composerModel.has(cid)) composerModel.set(cid, r.model)
-    }
-  } catch { /* best-effort */ }
+  const composerMeta = loadComposerMeta(db)
 
   // The bubble timestamp lives inside the JSON value (no index), so the date
   // filter forces a full JSON decode per row. Multi-GB Cursor DBs (500k+
@@ -612,9 +689,9 @@ function parseBubbles(
       "SELECT COUNT(*) as cnt FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'"
     )
     total = countRows[0]?.cnt ?? 0
-  } catch { /* best-effort */ }
-
-  const userMessages = buildUserMessageMap(db, timeFloor)
+  } catch (err) {
+    rethrowBusy(err)
+  }
 
   let rows: BubbleRow[]
   try {
@@ -631,121 +708,141 @@ function parseBubbles(
     } else {
       rows = db.query<BubbleRow>(BUBBLE_QUERY_SINCE, [timeFloor])
     }
-  } catch {
+  } catch (err) {
+    rethrowBusy(err)
     return { calls: results }
   }
 
+  // Pre-pass: per-conversation facts the crediting decisions need, plus the
+  // requestId join for the agent stream — all from the rows already fetched,
+  // so no extra unbudgeted table scans.
+  const scans = new Map<string, ComposerScan>()
+  const requestToComposer = new Map<string, string>()
+  for (const row of rows) {
+    const cid = parseComposerIdFromKey(row.bubble_key)
+    if (!cid) continue
+    if (row.request_id) requestToComposer.set(row.request_id, cid)
+    let scan = scans.get(cid)
+    if (!scan) {
+      scan = { hasRealTokens: false, firstBubbleTs: null, assistantTextChars: 0, model: null }
+      scans.set(cid, scan)
+    }
+    if ((row.input_tokens ?? 0) > 0 || (row.output_tokens ?? 0) > 0) scan.hasRealTokens = true
+    if (!scan.firstBubbleTs && row.created_at) scan.firstBubbleTs = row.created_at
+    if (row.bubble_type !== 1) scan.assistantTextChars += row.text_length ?? 0
+    if (!scan.model && row.model) scan.model = row.model
+  }
+
+  const { byComposer: agentStreams, unjoined } = loadAgentStreams(db, requestToComposer)
+  const userMessages = buildUserMessageMap(db, timeFloor)
+  const lastUserMsg = new Map<string, string>()
+
+  const inputSource = (cid: string): InputSource => {
+    if (scans.get(cid)?.hasRealTokens) return 'bubbleTokens'
+    if (composerMeta.has(cid)) return 'meter'
+    const stream = agentStreams.get(cid)
+    if ((stream?.userChars ?? 0) + (stream?.contextChars ?? 0) > 0) return 'stream'
+    return 'text'
+  }
+
+  const emit = (call: Omit<ParsedProviderCall, 'provider' | 'speed' | 'cacheCreationInputTokens' | 'cacheReadInputTokens' | 'cachedInputTokens' | 'reasoningTokens' | 'webSearchRequests' | 'costIsEstimated'>): void => {
+    results.push({
+      provider: 'cursor',
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: 0,
+      speed: 'standard',
+      // Output is a reply-text estimate and the input meter is the latest
+      // context snapshot, not a per-turn sum, so no cursor figure is exact.
+      costIsEstimated: true,
+      ...call,
+    })
+  }
+
+  const toolsAttached = new Set<string>()
   for (const row of rows) {
     try {
-      // The JSON `conversationId` field on bubbles is empty in current Cursor
-      // builds. The real composerId lives in the row key
-      // `bubbleId:<composerId>:<bubbleUuid>`. parseComposerIdFromKey returns
-      // null for non-UUID composer segments (Cursor stores tool-call output
-      // under `bubbleId:task-call_xxx\nfc_yyy:<bubbleUuid>` and similar shapes),
-      // which are NOT standalone sessions.
-      const parsedComposerId = parseComposerIdFromKey(row.bubble_key)
-      if (!parsedComposerId) {
+      // The real composerId lives in the row key `bubbleId:<composerId>:<uuid>`
+      // (the JSON conversationId field is empty in current builds).
+      // parseComposerIdFromKey returns null for non-UUID composer segments
+      // (tool-call output rows and similar shapes), which are NOT sessions.
+      const conversationId = parseComposerIdFromKey(row.bubble_key)
+      if (!conversationId) {
         skipped++
         continue
       }
-      const conversationId = parsedComposerId
-
-      const createdAt = row.created_at ?? ''
+      const createdAt = row.created_at
       if (!createdAt) continue
+
+      // Pair each user turn with its own prompt (even when the turn itself
+      // emits nothing) so the assistant reply that follows classifies against
+      // the right question.
+      if (row.bubble_type === 1) {
+        lastUserMsg.set(conversationId, takeUserMessage(userMessages, conversationId))
+      }
 
       let inputTokens = row.input_tokens ?? 0
       let outputTokens = row.output_tokens ?? 0
-      // The conversation's tools/bash attach to the single call that carries its
-      // real input (its first turn), so they are counted exactly once.
-      let creditedHere = false
-
-      // Current Cursor leaves tokenCount at {0,0}. Use the latest local
-      // context-window snapshot for input, credited once per conversation; it is
-      // not cumulative per-turn, so it undercounts Cursor Admin console totals.
-      // Output is a reply-text estimate, and cache tokens are server-side only
-      // (0 on disk). Admin-console parity requires POST
-      // api.cursor.com/teams/filtered-usage-events.
-      // Fall back to the visible-text estimate only when no breakdown was
-      // recorded (older builds).
       if (inputTokens === 0 && outputTokens === 0) {
         const textLen = row.text_length ?? 0
         if (row.bubble_type === 1) {
-          const real = composerInput.get(conversationId)
-          if (real != null) {
-            if (creditedComposers.has(conversationId)) {
-              inputTokens = 0
-            } else {
-              inputTokens = real
-              creditedComposers.add(conversationId)
-              creditedHere = true
-            }
-          } else if (textLen > 0) {
+          // Conversation-level input (meter or stream) is emitted once after
+          // this loop; per-bubble text only counts when it is the
+          // conversation's best available signal.
+          if (inputSource(conversationId) === 'text' && textLen > 0) {
             inputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
-          } else if (!creditedComposers.has(conversationId)) {
-            // Non-Composer sessions (e.g. GPT) record no context meter and keep
-            // the prompt in the agent stream, leaving the bubble text empty.
-            // Estimate from the stream text, credited once per conversation.
-            const agentChars = agentTools.get(conversationId)?.userChars ?? 0
-            if (agentChars > 0) {
-              inputTokens = Math.ceil(agentChars / CHARS_PER_TOKEN)
-              creditedComposers.add(conversationId)
-              creditedHere = true
-            }
           }
         } else {
           outputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
         }
         if (inputTokens === 0 && outputTokens === 0) continue
       }
+
       // Use the SQLite row key (bubbleId:<unique>) as the dedup key.
       // Cursor mutates token counts on the row in place when streaming
       // completes — including tokens in the dedup key (the previous
       // implementation) caused the same bubble to be counted twice once
       // its tokens stabilized.
       const dedupKey = `cursor:bubble:${row.bubble_key}`
-
       if (seenKeys.has(dedupKey)) continue
       seenKeys.add(dedupKey)
 
-      // User bubbles (type=1) carry no modelInfo, so when real input tokens
-      // are credited onto them, fall back to the conversation's model (found
-      // on the assistant bubble) for pricing and display.
-      const effectiveModel = row.model ?? composerModel.get(conversationId) ?? null
+      // User bubbles (type=1) carry no modelInfo, so fall back to the
+      // conversation's model seen on its assistant bubbles or agent stream.
+      const effectiveModel = row.model ?? scans.get(conversationId)?.model ?? agentStreams.get(conversationId)?.model ?? null
       const pricingModel = resolveModel(effectiveModel)
-      const displayModel = modelForDisplay(effectiveModel)
-
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
-      const timestamp = createdAt
-      const userQuestion = takeUserMessage(userMessages, conversationId)
+      const userQuestion = lastUserMsg.get(conversationId) ?? ''
       const assistantText = blobToText(row.user_text)
       const userText = (userQuestion + ' ' + assistantText).trim()
 
       const languages = extractLanguages(blobToText(row.code_blocks))
       const hasCode = languages.length > 0
 
-      const agentTurn = creditedHere ? agentTools.get(conversationId) : undefined
-      const cursorTools: string[] = [
-        ...(hasCode ? ['cursor:edit', ...languages.map(l => `lang:${l}`)] : []),
-        ...(agentTurn?.tools ?? []),
-      ]
-      const bashCommands = agentTurn?.bash ?? []
+      // Meter/stream conversations carry their agent tools on the synthetic
+      // conversation record below; the rest attach them to their first
+      // emitted call so they are counted exactly once.
+      let agentTurn: AgentStream | undefined
+      const source = inputSource(conversationId)
+      if ((source === 'text' || source === 'bubbleTokens') && !toolsAttached.has(conversationId)) {
+        agentTurn = agentStreams.get(conversationId)
+        if (agentTurn) toolsAttached.add(conversationId)
+      }
 
-      results.push({
-        provider: 'cursor',
-        model: displayModel,
+      emit({
+        model: modelForDisplay(effectiveModel),
         inputTokens,
         outputTokens,
-        cacheCreationInputTokens: 0,
-        cacheReadInputTokens: 0,
-        cachedInputTokens: 0,
-        reasoningTokens: 0,
-        webSearchRequests: 0,
         costUSD,
-        tools: cursorTools,
-        bashCommands,
-        timestamp,
-        speed: 'standard',
+        tools: [
+          ...(hasCode ? ['cursor:edit', ...languages.map(l => `lang:${l}`)] : []),
+          ...(agentTurn?.tools ?? []),
+        ],
+        bashCommands: agentTurn?.bash ?? [],
+        timestamp: createdAt,
         deduplicationKey: dedupKey,
         userMessage: userText,
         sessionId: conversationId,
@@ -753,6 +850,75 @@ function parseBubbles(
     } catch {
       skipped++
     }
+  }
+
+  // One conversation-level input record per metered/stream conversation,
+  // anchored to the conversation's own start (composerData.createdAt) so the
+  // credited day never depends on the parse window or cache state, and keyed
+  // by composerId so re-parses and daily-cache gap fills dedupe instead of
+  // multiplying. The meter is the LATEST context size, not a per-turn sum;
+  // growth after the anchor day is finalized stays uncounted, which keeps the
+  // documented undercount-vs-admin-console tradeoff but never double counts.
+  for (const [cid, scan] of scans) {
+    const source = inputSource(cid)
+    if (source !== 'meter' && source !== 'stream') continue
+    const stream = agentStreams.get(cid)
+    const meta = composerMeta.get(cid)
+    const inputTokens = source === 'meter'
+      ? meta?.tokens ?? 0
+      : Math.ceil(((stream?.userChars ?? 0) + (stream?.contextChars ?? 0)) / CHARS_PER_TOKEN)
+    // Reply text normally lives on assistant bubbles; count the stream's
+    // reply deltas only when the bubbles carried none.
+    const outputTokens = scan.assistantTextChars > 0 ? 0 : Math.ceil((stream?.assistantChars ?? 0) / CHARS_PER_TOKEN)
+    if (inputTokens === 0 && outputTokens === 0) continue
+
+    const dedupKey = `cursor:composer-input:${cid}`
+    if (seenKeys.has(dedupKey)) continue
+    seenKeys.add(dedupKey)
+
+    const createdAtMs = meta?.createdAt
+    const timestamp = typeof createdAtMs === 'number' && createdAtMs > 0 ? new Date(createdAtMs).toISOString() : scan.firstBubbleTs
+    if (!timestamp) continue
+
+    const effectiveModel = scan.model ?? stream?.model ?? null
+    emit({
+      model: modelForDisplay(effectiveModel),
+      inputTokens,
+      outputTokens,
+      costUSD: calculateCost(resolveModel(effectiveModel), inputTokens, outputTokens, 0, 0, 0),
+      tools: stream?.tools ?? [],
+      bashCommands: stream?.bash ?? [],
+      timestamp,
+      deduplicationKey: dedupKey,
+      userMessage: '',
+      sessionId: cid,
+    })
+  }
+
+  // Sessions recorded only in the agent stream (no bubble carries their
+  // requestId). agentKv stores no timestamps, so these reuse the DB file's
+  // mtime as a bounded "last write" time, like the pre-composer parser did.
+  for (const [requestId, stream] of unjoined) {
+    const inputTokens = Math.ceil((stream.userChars + stream.contextChars) / CHARS_PER_TOKEN)
+    const outputTokens = Math.ceil(stream.assistantChars / CHARS_PER_TOKEN)
+    if (inputTokens === 0 && outputTokens === 0) continue
+
+    const dedupKey = `cursor:agentKv:${requestId}`
+    if (seenKeys.has(dedupKey)) continue
+    seenKeys.add(dedupKey)
+
+    emit({
+      model: modelForDisplay(stream.model),
+      inputTokens,
+      outputTokens,
+      costUSD: calculateCost(resolveModel(stream.model), inputTokens, outputTokens, 0, 0, 0),
+      tools: stream.tools,
+      bashCommands: stream.bash,
+      timestamp: agentKvTimestamp,
+      deduplicationKey: dedupKey,
+      userMessage: '',
+      sessionId: requestId,
+    })
   }
 
   if (skipped > 0) {
@@ -815,6 +981,7 @@ function createParser(
         try {
           db = openDatabase(dbPath)
         } catch (err) {
+          rethrowBusy(err)
           process.stderr.write(`codeburn: cannot open Cursor database: ${err instanceof Error ? err.message : err}\n`)
           return
         }
@@ -827,14 +994,15 @@ function createParser(
           // seenKeys is not mutated by calls that the workspace filter is
           // about to drop. Cross-source dedup happens at yield time.
           const localSeen = new Set<string>()
-          // Real per-conversation input tokens from
-          // composerData.promptTokenBreakdown supersedes the old agentKv
-          // content-char estimate, which double-counted against the bubble
-          // stream. agentKv is now used only for the tools/bash breakdown
-          // via loadAgentToolsByComposer().
-          const composerInput = loadComposerInputTokens(db)
-          const agentTools = loadAgentToolsByComposer(db)
-          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, composerInput, agentTools)
+          // agentKv rows carry no timestamps; sessions found only there get
+          // the DB's last-write time.
+          let agentKvTimestamp: string
+          try {
+            agentKvTimestamp = new Date(statSync(dbPath).mtimeMs).toISOString()
+          } catch {
+            agentKvTimestamp = new Date().toISOString()
+          }
+          const { calls: bubbleCalls } = parseBubbles(db, localSeen, timeFloor, agentKvTimestamp)
           allCalls = bubbleCalls
           await writeCachedResults(dbPath, allCalls, timeFloor)
         } finally {

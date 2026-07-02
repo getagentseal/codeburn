@@ -40,10 +40,11 @@ const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
 // Explicit USD/token prices that must override LiteLLM/cache data. Cursor
-// publishes house-model rates under provider "Cursor" in USD per 1M tokens:
-// composer-2/2.5: $0.50 input, $2.50 output, $0.20 cache read; composer-1.5:
-// $3.50/$17.50/$0.35; composer-1: $1.25/$10/$0.125. Cursor publishes no
-// separate cache-write rate for these, so cache write uses the input rate.
+// publishes house-model rates in the models table at cursor.com/docs/models
+// (provider "Cursor", USD per 1M tokens): composer-2/2.5: $0.50 input, $2.50
+// output, $0.20 cache read; composer-1.5: $3.50/$17.50/$0.35; composer-1:
+// $1.25/$10/$0.125. Cursor publishes no separate cache-write rate for these,
+// so cache write uses the input rate.
 const BUILTIN_PRICE_OVERRIDES: Record<string, SnapshotEntry> = {
   'composer-2.5': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
   'composer-2': [0.5e-6, 2.5e-6, 0.5e-6, 0.2e-6],
@@ -501,8 +502,11 @@ export function getLocalModelSavingsConfigHash(): string {
 }
 
 export function getPriceOverridesConfigHash(): string {
+  // The builtin overrides participate so editing BUILTIN_PRICE_OVERRIDES in a
+  // release invalidates cached daily costs the same way a user override does.
+  const builtin = `builtin:${JSON.stringify(BUILTIN_PRICE_OVERRIDES)}`
   const keys = Object.keys(userPriceOverridesConfig).sort()
-  if (keys.length === 0) return ''
+  if (keys.length === 0) return builtin
   const parts = keys.map(k => {
     const rates = userPriceOverridesConfig[k]
     return [
@@ -513,7 +517,7 @@ export function getPriceOverridesConfigHash(): string {
       rates.cacheCreation ?? '',
     ].join('\u0001')
   })
-  return parts.join('\u0002')
+  return [builtin, ...parts].join('\u0002')
 }
 
 // Absolute directory prefixes whose sessions are routed through a

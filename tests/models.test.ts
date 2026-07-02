@@ -316,13 +316,16 @@ describe('user price overrides', () => {
     expect(mini!.outputCostPerToken).toBe(miniSnapshot!.outputCostPerToken)
   })
 
-  it('includes price overrides in the daily cache config hash without changing the empty-override hash', () => {
+  it('includes builtin and user price overrides in the daily cache config hash', () => {
     setLocalModelSavings({ local: 'gpt-4o' })
     setPriceOverrides({})
 
-    const savingsOnly = getLocalModelSavingsConfigHash()
-    expect(getPriceOverridesConfigHash()).toBe('')
-    expect(getDailyCacheConfigHash()).toBe(savingsOnly)
+    // The builtin overrides always participate, so a release that edits them
+    // invalidates cached daily costs even with no user overrides configured.
+    const builtinOnly = getPriceOverridesConfigHash()
+    expect(builtinOnly).toContain('builtin:')
+    expect(getPriceOverridesConfigHash()).toBe(builtinOnly)
+    const baseline = getDailyCacheConfigHash()
 
     setPriceOverrides({ 'price-hash-model': { input: 1, output: 2 } })
     const firstCombined = getDailyCacheConfigHash()
@@ -330,8 +333,8 @@ describe('user price overrides', () => {
     setPriceOverrides({ 'price-hash-model': { input: 3, output: 2 } })
     const secondCombined = getDailyCacheConfigHash()
 
-    expect(firstCombined).not.toBe(savingsOnly)
-    expect(secondCombined).not.toBe(savingsOnly)
+    expect(firstCombined).not.toBe(baseline)
+    expect(secondCombined).not.toBe(baseline)
     expect(secondCombined).not.toBe(firstCombined)
   })
 })

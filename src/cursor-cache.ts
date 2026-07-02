@@ -15,7 +15,11 @@ import type { ParsedProviderCall } from './providers/types.js'
 // real context tokens from composerData.promptTokenBreakdown now drive
 // input, and agentKv is used only for the tools/bash breakdown. Cached v4
 // results contain stale agentKv calls and lack the real token figures.
-const CURSOR_CACHE_VERSION = 5
+// Version 6: conversation input moved to composer-anchored records
+// (cursor:composer-input:<id>) with per-conversation source selection, the
+// agent stream regained tool/system context and stream-only sessions, and
+// tool names are canonicalized. v5 results mix crediting regimes.
+const CURSOR_CACHE_VERSION = 6
 
 type ResultCache = {
   version?: number
