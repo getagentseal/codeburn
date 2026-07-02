@@ -19,6 +19,8 @@ import { pairingCode } from './sharing/pairing.js'
 import { getSharingDir, loadRemotes, loadShareAlways, saveShareAlways } from './sharing/store.js'
 import { ShareController } from './sharing/share-controller.js'
 import { sanitizeForSharing } from './sharing/sanitize.js'
+import { buildContextTree, findClaudeSession, listRecentTitledSessions, snapshotRows, type ContextTreeResult, type SessionRef } from './context-tree.js'
+import { buildCodexContextTree, findCodexSession, listRecentCodexSessions } from './context-tree-codex.js'
 
 function readBody(req: import('http').IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -125,6 +127,29 @@ export async function runWebDashboard(opts: {
     for (const [k, v] of localPayloadCache) if (now - v.at >= LOCAL_PAYLOAD_TTL_MS) localPayloadCache.delete(k)
     void payload.catch(() => localPayloadCache.delete(key))
     return payload
+  }
+
+  // Context trees re-read a whole transcript (up to 100MB), so cache each by
+  // file version. Keyed on mtime: an active session invalidates itself.
+  const contextTreeCache = new Map<string, Promise<ContextTreeResult>>()
+  const getContextTree = (provider: 'claude' | 'codex', ref: SessionRef): Promise<ContextTreeResult> => {
+    const key = `${provider}:${ref.sessionId}:${ref.mtimeMs}`
+    const hit = contextTreeCache.get(key)
+    if (hit) {
+      // Re-insert so eviction is LRU rather than insertion order.
+      contextTreeCache.delete(key)
+      contextTreeCache.set(key, hit)
+      return hit
+    }
+    const tree = provider === 'claude' ? buildContextTree(ref) : buildCodexContextTree(ref)
+    contextTreeCache.set(key, tree)
+    void tree.catch(() => contextTreeCache.delete(key))
+    while (contextTreeCache.size > 12) {
+      const oldest = contextTreeCache.keys().next().value
+      if (oldest === undefined) break
+      contextTreeCache.delete(oldest)
+    }
+    return tree
   }
 
   // Embed this machine's prewarmed payload in index.html for an instant first
@@ -275,6 +300,45 @@ export async function runWebDashboard(opts: {
         res.end(JSON.stringify(await share.status()))
         return
       }
+      // Session ids are resolved against the discovered session files only,
+      // never joined into a path from user input, and responses never carry
+      // local file paths.
+      if (url.pathname === '/api/context/sessions') {
+        const provider = url.searchParams.get('provider') ?? 'claude'
+        if (provider !== 'claude' && provider !== 'codex') {
+          writeJsonError(res, 400, 'provider must be claude or codex')
+          return
+        }
+        const refs = provider === 'claude' ? await listRecentTitledSessions(15) : await listRecentCodexSessions(15)
+        const sessions = refs.map((r) => ({ provider, sessionId: r.sessionId, project: r.project, title: r.title, mtimeMs: r.mtimeMs, sizeBytes: r.sizeBytes }))
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ sessions }))
+        return
+      }
+      if (url.pathname === '/api/context/tree') {
+        const provider = url.searchParams.get('provider') ?? 'claude'
+        const id = url.searchParams.get('id') ?? ''
+        if ((provider !== 'claude' && provider !== 'codex') || !id) {
+          writeJsonError(res, 400, 'provider (claude|codex) and id are required')
+          return
+        }
+        const ref = provider === 'claude' ? await findClaudeSession(id) : await findCodexSession(id)
+        if (!ref || ref.sessionId !== id) {
+          writeJsonError(res, 404, `no ${provider} session ${id}`)
+          return
+        }
+        const tree = await getContextTree(provider, ref)
+        const payload = {
+          ...tree,
+          session: { sessionId: tree.session.sessionId, project: tree.session.project, mtimeMs: tree.session.mtimeMs, sizeBytes: tree.session.sizeBytes },
+          effectiveRows: snapshotRows(tree.effective),
+          fullRows: snapshotRows(tree.full),
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(payload))
+        return
+      }
+
       if (url.pathname === '/api/share/approve' && req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}') as { id?: string; approve?: boolean }
         const ok = typeof body.id === 'string' && share.resolvePending(body.id, !!body.approve)
