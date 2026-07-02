@@ -130,13 +130,28 @@ function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProvider
       const userMessage = row.summary ?? ''
 
       const requests = Object.entries(thread.request_token_usage ?? {}).filter(([, usage]) => usage != null && !usageIsEmpty(usage))
-      // In-progress threads can have an empty per-request map while the
-      // cumulative counter already carries tokens; fall back so they count.
-      const entries: Array<[string, TokenUsage]> = requests.length > 0
-        ? requests
-        : thread.cumulative_token_usage && !usageIsEmpty(thread.cumulative_token_usage)
-          ? [['cumulative', thread.cumulative_token_usage]]
-          : []
+      // The per-request map is keyed by user message and does not cover every
+      // request (verified on a real thread: cumulative was ~3x the map sum),
+      // so a remainder entry tops the thread up to the exact cumulative
+      // counter. Threads with an empty map degrade to one cumulative call.
+      const entries: Array<[string, TokenUsage]> = [...requests]
+      const cumulative = thread.cumulative_token_usage
+      if (cumulative && !usageIsEmpty(cumulative)) {
+        let sumIn = 0, sumOut = 0, sumWrite = 0, sumRead = 0
+        for (const [, usage] of requests) {
+          sumIn += num(usage.input_tokens)
+          sumOut += num(usage.output_tokens)
+          sumWrite += num(usage.cache_creation_input_tokens)
+          sumRead += num(usage.cache_read_input_tokens)
+        }
+        const remainder: TokenUsage = {
+          input_tokens: Math.max(0, num(cumulative.input_tokens) - sumIn),
+          output_tokens: Math.max(0, num(cumulative.output_tokens) - sumOut),
+          cache_creation_input_tokens: Math.max(0, num(cumulative.cache_creation_input_tokens) - sumWrite),
+          cache_read_input_tokens: Math.max(0, num(cumulative.cache_read_input_tokens) - sumRead),
+        }
+        if (!usageIsEmpty(remainder)) entries.push(['cumulative-remainder', remainder])
+      }
 
       for (const [requestKey, usage] of entries) {
         const call = buildCall({ threadId: row.id, requestKey, usage, model, timestamp, userMessage })

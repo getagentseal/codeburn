@@ -131,9 +131,35 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
 
     const calls = await collectCalls(dbPath)
     expect(calls.length).toBe(1)
-    expect(calls[0]!.deduplicationKey).toBe('zed:thread-2:cumulative')
+    expect(calls[0]!.deduplicationKey).toBe('zed:thread-2:cumulative-remainder')
     expect(calls[0]!.inputTokens).toBe(5400)
     expect(calls[0]!.cacheReadInputTokens).toBe(20000)
+  })
+
+  it('tops threads up to the cumulative counter when the per-request map undercounts', async () => {
+    // Mirrors a real thread: the map (keyed by user message) covered only some
+    // requests while cumulative carried ~3x the tokens.
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-real',
+        thread: {
+          model: { provider: 'zed.dev', model: 'gpt-5.4' },
+          request_token_usage: {
+            'msg-1': { input_tokens: 9514, output_tokens: 19 },
+            'msg-2': { input_tokens: 2757, output_tokens: 310, cache_read_input_tokens: 33408 },
+          },
+          cumulative_token_usage: { input_tokens: 35464, output_tokens: 1868, cache_read_input_tokens: 140288 },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(3)
+    const remainder = calls.find(c => c.deduplicationKey === 'zed:thread-real:cumulative-remainder')
+    expect(remainder).toBeDefined()
+    expect(calls.reduce((s, c) => s + c.inputTokens, 0)).toBe(35464)
+    expect(calls.reduce((s, c) => s + c.outputTokens, 0)).toBe(1868)
+    expect(calls.reduce((s, c) => s + c.cacheReadInputTokens, 0)).toBe(140288)
   })
 
   it('skips non-zstd rows and malformed blobs without dropping healthy threads', async () => {
