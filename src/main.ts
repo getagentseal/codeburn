@@ -24,6 +24,7 @@ import { loadRemotes, saveRemotes } from './sharing/store.js'
 import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
+import { registerActCommands } from './act/cli.js'
 import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
 import {
@@ -1537,5 +1538,7 @@ program
     const { startStdioServer } = await import('./mcp/server.js')
     await startStdioServer(version)
   })
+
+registerActCommands(program)
 
 program.parse()
