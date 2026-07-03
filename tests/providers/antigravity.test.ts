@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -604,5 +604,75 @@ describe('antigravity provider helpers', () => {
       else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
       await rm(tempHome, { recursive: true, force: true })
     }
+  })
+
+  async function withTempAntigravityHome(prefix: string, fn: (tempHome: string) => Promise<void>): Promise<void> {
+    const tempHome = await mkdtemp(join(tmpdir(), prefix))
+    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(tempHome, 'cache')
+    try {
+      await fn(tempHome)
+    } finally {
+      if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
+      await rm(tempHome, { recursive: true, force: true })
+    }
+  }
+
+  it('stamps file mtime as fallback timestamp for SQLite-parsed calls', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-timestamp-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-ide', 'conversations')
+
+      await mkdir(conversationsDir, { recursive: true })
+
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const beforeStat = await stat(dbPath)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: dbPath,
+        project: 'antigravity-ide',
+        provider: 'antigravity',
+      }, new Set())
+      const calls: ParsedProviderCall[] = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls.length).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call.timestamp).not.toBe('')
+        const callTime = new Date(call.timestamp).getTime()
+        expect(Math.abs(callTime - beforeStat.mtimeMs)).toBeLessThan(5000)
+      }
+    })
+  })
+
+  it('classifies APPDATA Antigravity IDE paths as antigravity-ide', () => {
+    expect(antigravityAppDataDirFromSourcePath(
+      'C:\\Users\\User\\AppData\\Roaming\\Antigravity IDE\\User\\globalStorage\\state.vscdb',
+    )).toBe('antigravity-ide')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity-ide/conversations/abc.db',
+    )).toBe('antigravity-ide')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity-cli/conversations/abc.db',
+    )).toBe('antigravity-cli')
+
+    // .gemini roots take precedence over the broad "Antigravity IDE" match.
+    expect(antigravityAppDataDirFromSourcePath(
+      'C:\\Users\\Antigravity IDE\\.gemini\\antigravity-cli\\conversations\\abc.db',
+    )).toBe('antigravity-cli')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity/conversations/abc.db',
+    )).toBe('antigravity')
   })
 })

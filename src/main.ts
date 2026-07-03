@@ -1496,9 +1496,10 @@ program
     try {
       if (action === 'install') {
         const result = await installAntigravityStatusLineHook(!!opts.force)
-        console.log(result === 'already-installed'
-          ? '\n  Antigravity CLI usage capture is already installed.\n'
-          : '\n  Antigravity CLI usage capture installed.\n')
+        const headline = result === 'already-installed'
+          ? 'Antigravity CLI usage capture is already installed.'
+          : 'Antigravity CLI usage capture installed.'
+        console.log(`\n  ${headline}\n  Note: this captures CLI (agy) sessions only. IDE sessions are read from .db files automatically.\n`)
         return
       }
       if (action === 'uninstall') {

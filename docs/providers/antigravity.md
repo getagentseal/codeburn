@@ -13,7 +13,7 @@ CodeBurn discovers Antigravity sessions from local directories on disk, then que
 1. **Session Discovery:** It scans the following folders for `.pb` or `.db` files:
    - **Antigravity CLI:** `%USERPROFILE%\.gemini\antigravity-cli\conversations` (and `implicit`)
    - **Antigravity App/older path:** `%USERPROFILE%\.gemini\antigravity\conversations`
-   - **Antigravity IDE (VSCode-based):** `%USERPROFILE%\.gemini\antigravity-ide\conversations` (and `implicit`)
+   - **Antigravity IDE:** `%USERPROFILE%\.gemini\antigravity-ide\conversations` (and `implicit`). The IDE also maintains VSCode-style global state at `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb`, but that DB stores trajectory metadata (titles, timestamps, workspace paths) — not token usage. Token usage data still comes from the `.db` conversation files.
 2. **Language Server RPC Query:** It locates the active language-server process via `ps` on POSIX or `Get-CimInstance Win32_Process` on Windows. It extracts the port and CSRF token from the process arguments, and queries the local HTTPS RPC endpoint `GetCascadeTrajectoryGeneratorMetadata` to parse the session.
 3. **Cache Fallback:** If the language server is not running, it falls back to the local results cache.
 
