@@ -7,7 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines, readSessionFileSync } from './fs-utils.js'
 import { discoverAllSessions } from './providers/index.js'
 import { parseJsonlLine, shouldSkipLine } from './parser.js'
-import type { DateRange, ProjectSummary } from './types.js'
+import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 
@@ -114,6 +114,45 @@ const CAPABILITY_RELIABILITY_LOW_MAX_CANDIDATES = 1
 const CAPABILITY_RELIABILITY_LOW_MAX_TOKENS = 50_000
 const CAPABILITY_RELIABILITY_HIGH_MIN_CANDIDATES = 5
 const CAPABILITY_RELIABILITY_HIGH_IMPACT_TOKENS = 200_000
+// "mcp-deferral-gaps" finding family (#614): MCP tool schemas that sit in the
+// prefix because tool search / deferral is off, overridden, or mistuned.
+// Claude Code's tool search tool is literally named "ToolSearch"; seeing it
+// invoked is direct transcript evidence that deferral was active.
+const TOOL_SEARCH_TOOL_NAME = 'ToolSearch'
+const ENABLE_TOOL_SEARCH_VAR = 'ENABLE_TOOL_SEARCH'
+const ANTHROPIC_BASE_URL_VAR = 'ANTHROPIC_BASE_URL'
+const CLAUDE_CODE_USE_VERTEX_VAR = 'CLAUDE_CODE_USE_VERTEX'
+// The only first-party API host. An unset ANTHROPIC_BASE_URL counts as
+// first-party; any other host is an *unknown* proxy — deferral auto-disables
+// there because most proxies don't forward tool_reference blocks, but we
+// never claim the proxy is incapable, only unknown.
+const FIRST_PARTY_API_HOST = 'api.anthropic.com'
+// Claude Code changelog v2.1.7: "Enabled MCP tool search auto mode by
+// default for all users." Sessions produced entirely by older versions
+// could not have had deferral on without explicit opt-in.
+const TOOL_SEARCH_DEFAULT_ON_VERSION = '2.1.7'
+const DEFERRAL_OFF_MIN_MCP_SESSIONS = 2
+const DEFERRAL_OFF_HIGH_IMPACT_TOKENS = 200_000
+// Conservative: flag alwaysLoad servers only when strictly below one call
+// per five sessions.
+const ALWAYSLOAD_MAX_CALLS_PER_SESSION = 0.2
+// Server-level alwaysLoad shipped in Claude Code v2.1.121; on older
+// versions the key is inert and the server's tools defer normally, so the
+// pin costs nothing there.
+const ALWAYSLOAD_MIN_VERSION = '2.1.121'
+const ALWAYSLOAD_HIGH_IMPACT_TOKENS = 200_000
+// alwaysLoad blocks session startup on the server's connection, capped at 5s.
+const ALWAYSLOAD_STARTUP_CAP_SECONDS = 5
+// ENABLE_TOOL_SEARCH=auto:N defers only when defs exceed N% of the context
+// window (default 10). Tuning advice is only worth emitting when the
+// upfront-loaded defs are substantial.
+const DEFER_THRESHOLD_CONTEXT_WINDOW_TOKENS = 200_000
+const DEFER_THRESHOLD_DEFAULT_PERCENT = 10
+// auto:N is documented for N 0-100; larger values clamp rather than reject
+// so a nonsense override still gets tuning advice instead of silence.
+const DEFER_THRESHOLD_MAX_PERCENT = 100
+const DEFER_THRESHOLD_MIN_TOKENS_PER_SESSION = 5_000
+const DEFER_THRESHOLD_MEDIUM_IMPACT_TOKENS = 200_000
 
 // ============================================================================
 // Scoring constants
@@ -197,6 +236,9 @@ export type FindingId =
   | 'unused-mcp'
   | 'mcp-low-coverage'
   | 'mcp-project-scope'
+  | 'mcp-deferral-off'
+  | 'mcp-alwaysload-hygiene'
+  | 'mcp-defer-threshold'
   | 'retry-heavy-capabilities'
   | 'low-worth-sessions'
   | 'context-heavy-sessions'
@@ -510,13 +552,25 @@ function isReadTool(name: string): boolean {
   return name === 'Read' || name === 'FileReadTool'
 }
 
-type McpConfigEntry = { normalized: string; original: string; mtime: number }
+type McpConfigEntry = {
+  normalized: string
+  original: string
+  mtime: number
+  // Config files where this server entry carries `"alwaysLoad": true`
+  // (union across all readable scopes, so the hygiene fix can name every
+  // file to edit). Server-level only: the per-tool "anthropic/alwaysLoad"
+  // variant lives in tool _meta served by the MCP server at runtime and is
+  // not observable in static config. Requires Claude Code v2.1.121+.
+  alwaysLoadPaths: string[]
+}
 
-export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpConfigEntry> {
+// `homeDir` is injectable for tests (mirrors src/act/plans.ts PlanContext);
+// production callers omit it.
+export function loadMcpConfigs(projectCwds: Iterable<string>, homeDir = homedir()): Map<string, McpConfigEntry> {
   const servers = new Map<string, McpConfigEntry>()
   const configPaths = [
-    join(homedir(), '.claude', 'settings.json'),
-    join(homedir(), '.claude', 'settings.local.json'),
+    join(homeDir, '.claude', 'settings.json'),
+    join(homeDir, '.claude', 'settings.local.json'),
   ]
   for (const cwd of projectCwds) {
     configPaths.push(join(cwd, '.mcp.json'))
@@ -531,11 +585,20 @@ export function loadMcpConfigs(projectCwds: Iterable<string>): Map<string, McpCo
     let mtime = 0
     try { mtime = statSync(p).mtimeMs } catch {}
     const serversObj = (config.mcpServers ?? {}) as Record<string, unknown>
-    for (const name of Object.keys(serversObj)) {
+    for (const [name, rawEntry] of Object.entries(serversObj)) {
       const normalized = name.replace(/:/g, '_')
       const existing = servers.get(normalized)
       if (!existing || existing.mtime < mtime) {
-        servers.set(normalized, { normalized, original: name, mtime })
+        servers.set(normalized, {
+          normalized,
+          original: name,
+          mtime,
+          alwaysLoadPaths: existing?.alwaysLoadPaths ?? [],
+        })
+      }
+      const entry = rawEntry as Record<string, unknown> | null
+      if (entry && typeof entry === 'object' && entry.alwaysLoad === true) {
+        servers.get(normalized)!.alwaysLoadPaths.push(p)
       }
     }
   }
@@ -1540,6 +1603,463 @@ export function detectUnusedMcp(
   }
 }
 
+// ============================================================================
+// MCP deferral gap detectors — the "mcp-deferral-gaps" family (#614)
+// ============================================================================
+//
+// Shared invariant: `session.mcpInventory` comes ONLY from
+// `deferred_tools_delta` attachments, which Claude Code emits only when tool
+// search / deferral is ACTIVE. Inventory presence is therefore direct
+// evidence deferral was on; deferral-off sessions still show MCP invocations
+// (mcpBreakdown, mcp__ tool calls) but never an inventory.
+
+type DeferralEnvHit = {
+  value: string
+  // Human-readable config scope, e.g. "user settings" / "project local
+  // settings" / "shell profile". Surfaced verbatim in explanations so the
+  // user knows which file carries the override.
+  scope: string
+  path: string
+}
+
+// Settings scopes are searched most-specific first (project local >
+// project > user local > user), matching Claude Code's effective settings
+// precedence, so the hit we report is the value that actually takes
+// effect. Shell profiles come last: settings "env" entries override the
+// inherited environment. `homeDir` is injectable for tests (PlanContext
+// style in src/act/plans.ts).
+export function findDeferralEnvSetting(
+  name: string,
+  projectCwds: Iterable<string>,
+  homeDir = homedir(),
+): DeferralEnvHit | null {
+  const scopes: Array<{ scope: string; path: string }> = []
+  for (const cwd of projectCwds) {
+    scopes.push({ scope: 'project local settings', path: join(cwd, '.claude', 'settings.local.json') })
+    scopes.push({ scope: 'project settings', path: join(cwd, '.claude', 'settings.json') })
+  }
+  scopes.push({ scope: 'user local settings', path: join(homeDir, '.claude', 'settings.local.json') })
+  scopes.push({ scope: 'user settings', path: join(homeDir, '.claude', 'settings.json') })
+  for (const { scope, path } of scopes) {
+    if (!existsSync(path)) continue
+    const config = readJsonFile(path)
+    const env = config?.env as Record<string, unknown> | undefined
+    const value = env?.[name]
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return { value: String(value), scope, path }
+    }
+  }
+  // Callers only pass the three *_VAR constants today, but the function is
+  // exported — escape regex metacharacters so a future caller can't
+  // silently mis-match.
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const linePattern = new RegExp(`^\\s*(?:export\\s+)?${escapedName}\\s*=\\s*['"]?([^'"\\s]+)['"]?`, 'm')
+  for (const profile of SHELL_PROFILES) {
+    const path = join(homeDir, profile)
+    if (!existsSync(path)) continue
+    const content = readSessionFileSync(path)
+    if (content === null) continue
+    const match = content.match(linePattern)
+    if (match) return { value: match[1]!, scope: 'shell profile', path }
+  }
+  return null
+}
+
+function isEnvValueFalse(value: string): boolean {
+  return value.toLowerCase() === 'false' || value === '0'
+}
+
+// Unset counts as first-party; only a URL whose host resolves to
+// api.anthropic.com does too. Anything else — including an unparseable
+// value — is an unknown proxy and we never assume its capability.
+function isFirstPartyBaseUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === FIRST_PARTY_API_HOST
+  } catch {
+    return false
+  }
+}
+
+function parseVersion(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
+  if (!match) return null
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function versionPredates(version: string, reference: string): boolean {
+  const v = parseVersion(version)
+  const ref = parseVersion(reference)
+  if (!v || !ref) return false
+  for (let i = 0; i < 3; i++) {
+    if (v[i] !== ref[i]) return v[i]! < ref[i]!
+  }
+  return false
+}
+
+function anySessionHasMcpInventory(projects: ProjectSummary[]): boolean {
+  return projects.some(p => p.sessions.some(s => (s.mcpInventory?.length ?? 0) > 0))
+}
+
+// Deferral is a Claude Code mechanism, and both suppression signals for this
+// family (ToolSearch calls, mcpInventory) exist only in Claude Code
+// transcripts. Usage evidence must therefore be Claude-scoped too: the
+// Codex/Copilot/opencode/Hermes parsers also normalize MCP calls into
+// mcpBreakdown, but those sessions can never carry the counter-evidence, so
+// counting them would flag a "deferral gap" Claude Code never had.
+function isClaudeSession(session: SessionSummary): boolean {
+  return session.turns.some(t => t.assistantCalls.some(c => c.provider === 'claude'))
+}
+
+/**
+ * mcp-deferral-off: MCP tool definitions are being loaded upfront in every
+ * session because tool search / deferral is inactive.
+ *
+ * Signal: MCP overhead exists (configured servers and/or observed mcp__
+ * invocations), yet across the whole window there is not a single ToolSearch
+ * invocation and not a single session with an mcpInventory — which
+ * deferral-active sessions always produce (see family invariant above).
+ *
+ * Cause attribution probes config in a fixed order, each producing a
+ * distinct explanation: ENABLE_TOOL_SEARCH=false override, non-first-party
+ * ANTHROPIC_BASE_URL (unknown proxy: deferral auto-disables because most
+ * proxies don't forward tool_reference blocks), CLAUDE_CODE_USE_VERTEX
+ * (tool search is disabled by default on Vertex AI, changelog v2.1.119),
+ * every observed Claude Code version predating v2.1.7 (when tool search
+ * auto mode became on by default), else a generic transcript-evidence
+ * message.
+ */
+// Cause attribution for mcp-deferral-off. Probes config in a fixed order —
+// false override, unknown proxy, Vertex, stale version, explicit-but-
+// ineffective override, generic — each producing a distinct explanation and
+// fix. Split out so the detector stays focused on evidence gathering.
+function attributeDeferralOffCause(
+  enableToolSearch: DeferralEnvHit | null,
+  projectCwds: Set<string>,
+  apiCalls: ApiCallMeta[],
+  homeDir: string,
+): { cause: string; fix: WasteAction } {
+  if (enableToolSearch && isEnvValueFalse(enableToolSearch.value)) {
+    return {
+      cause: `Cause: ${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} is set in ${enableToolSearch.scope} (${shortHomePath(enableToolSearch.path)}), forcing all tool definitions upfront.`,
+      fix: {
+        type: 'paste',
+        destination: 'prompt',
+        label: 'Ask Claude to remove the stale override:',
+        text: `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} setting from ${enableToolSearch.path}. Tool search is on by default on first-party endpoints, so deleting the override re-enables MCP tool deferral.`,
+      },
+    }
+  }
+  const baseUrl = findDeferralEnvSetting(ANTHROPIC_BASE_URL_VAR, projectCwds, homeDir)
+  if (baseUrl && !isFirstPartyBaseUrl(baseUrl.value)) {
+    return {
+      cause: `Cause: ${ANTHROPIC_BASE_URL_VAR} points at a non-first-party host in ${baseUrl.scope} (${shortHomePath(baseUrl.path)}). Tool deferral silently auto-disables behind proxies because most don't forward tool_reference blocks; whether this proxy can is unknown.`,
+      fix: {
+        type: 'paste',
+        destination: 'shell-config',
+        label: `Verify your proxy forwards tool_reference blocks first (an explicit override fails on proxies that don't), then force tool search back on with:`,
+        text: `export ${ENABLE_TOOL_SEARCH_VAR}=true`,
+      },
+    }
+  }
+  const vertex = findDeferralEnvSetting(CLAUDE_CODE_USE_VERTEX_VAR, projectCwds, homeDir)
+  if (vertex && !isEnvValueFalse(vertex.value)) {
+    return {
+      cause: `Cause: ${CLAUDE_CODE_USE_VERTEX_VAR} is set in ${vertex.scope} (${shortHomePath(vertex.path)}), and tool search is disabled by default on Vertex AI.`,
+      fix: {
+        type: 'paste',
+        destination: 'shell-config',
+        label: 'Opt in to tool search on Vertex (disabled by default there):',
+        text: `export ${ENABLE_TOOL_SEARCH_VAR}=true`,
+      },
+    }
+  }
+  const versions = apiCalls.map(c => c.version).filter(v => v.length > 0)
+  if (versions.length > 0 && versions.every(v => versionPredates(v, TOOL_SEARCH_DEFAULT_ON_VERSION))) {
+    return {
+      cause: `Cause: every observed Claude Code version in this period predates v${TOOL_SEARCH_DEFAULT_ON_VERSION}, where MCP tool search became on by default.`,
+      fix: {
+        type: 'command',
+        label: 'Update Claude Code to get default-on MCP tool deferral:',
+        text: 'claude update',
+      },
+    }
+  }
+  // false and auto values were handled earlier, so a hit here is an explicit
+  // truthy override that is already applied — re-suggesting the same export
+  // would be redundant.
+  if (enableToolSearch) {
+    return {
+      cause: `Cause: none determinable — ${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} is already set in ${enableToolSearch.scope} (${shortHomePath(enableToolSearch.path)}), yet transcripts show no deferral activity.`,
+      fix: {
+        type: 'paste',
+        destination: 'prompt',
+        label: 'The override is already on; ask Claude to investigate why deferral is still inactive:',
+        text: `${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} is set in ${enableToolSearch.path}, but sessions show no ToolSearch calls and no deferred-tool inventory. Check whether requests pass through a proxy that strips tool_reference blocks and whether the running Claude Code version supports tool search.`,
+      },
+    }
+  }
+  return {
+    cause: `Cause: none determinable from config — no disabling override, proxy, or Vertex setting found.`,
+    fix: {
+      type: 'paste',
+      destination: 'shell-config',
+      label: 'Deferral is on by default on first-party endpoints; to force it explicitly, add:',
+      text: `export ${ENABLE_TOOL_SEARCH_VAR}=true`,
+    },
+  }
+}
+
+export function detectMcpDeferralOff(
+  calls: ToolCall[],
+  projects: ProjectSummary[],
+  projectCwds: Set<string>,
+  apiCalls: ApiCallMeta[],
+  homeDir = homedir(),
+): WasteFinding | null {
+  // Deferral-active evidence anywhere in the window suppresses the finding.
+  if (calls.some(c => c.name === TOOL_SEARCH_TOOL_NAME)) return null
+  if (anySessionHasMcpInventory(projects)) return null
+
+  const configured = loadMcpConfigs(projectCwds, homeDir)
+  // Servers pinned with alwaysLoad load upfront BY DESIGN: they are never
+  // deferred (so their missing inventory is not evidence deferral is
+  // broken), and their schema cost is mcp-alwaysload-hygiene's jurisdiction
+  // — charging it here too would double-count the same tokens.
+  const pinnedServers = new Set(
+    [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0).map(e => e.normalized),
+  )
+  const configuredUnpinned = [...configured.keys()].filter(s => !pinnedServers.has(s))
+
+  // `calls` comes from scanSessions, which reads Claude Code JSONL only, so
+  // it is already Claude-scoped (see isClaudeSession for why that matters).
+  const observedServers = new Set<string>()
+  for (const call of calls) {
+    if (!call.name.startsWith('mcp__')) continue
+    const seg = call.name.split('__')[1]
+    if (seg && !pinnedServers.has(seg)) observedServers.add(seg)
+  }
+  let invocations = 0
+  let sessionsWithMcpCalls = 0
+  let totalSessions = 0
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!isClaudeSession(session)) continue
+      totalSessions++
+      let sessionCalls = 0
+      for (const [server, data] of Object.entries(session.mcpBreakdown)) {
+        if (pinnedServers.has(server)) continue
+        observedServers.add(server)
+        sessionCalls += data.calls
+      }
+      if (sessionCalls > 0) sessionsWithMcpCalls++
+      invocations += sessionCalls
+    }
+  }
+
+  const servers = new Set([...configuredUnpinned, ...observedServers])
+  if (servers.size === 0) return null
+
+  // Configured servers load their schemas into every session; with only
+  // invocation evidence we can vouch just for the sessions that called MCP.
+  const affectedSessions = configuredUnpinned.length > 0 ? totalSessions : sessionsWithMcpCalls
+  if (affectedSessions < DEFERRAL_OFF_MIN_MCP_SESSIONS) return null
+
+  const enableToolSearch = findDeferralEnvSetting(ENABLE_TOOL_SEARCH_VAR, projectCwds, homeDir)
+  // auto / auto:N overrides — including out-of-range N, which the threshold
+  // detector clamps — are the defer-threshold detector's jurisdiction (it
+  // can compute the tuned N); reporting them here too would double-flag the
+  // same schema overhead. This regex must stay identical to the one in
+  // detectMcpDeferThreshold or values could slip through both detectors.
+  if (enableToolSearch && /^auto(?::\d+)?$/.test(enableToolSearch.value)) return null
+
+  // Without deferral there is never an inventory, so per-server tool counts
+  // are unknown — follow detectUnusedMcp's convention of 5 tools x 400
+  // tokens per server.
+  const perServerSchemaTokens = TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
+  const perSessionSchemaTokens = servers.size * perServerSchemaTokens
+  const tokensSaved = perSessionSchemaTokens * affectedSessions
+  const callRate = affectedSessions > 0 ? invocations / affectedSessions : 0
+  // Pluralize on the rendered value so 0.98 and 1.0 read consistently.
+  const callRateText = callRate.toFixed(1)
+
+  const evidence =
+    `~${formatTokens(perSessionSchemaTokens)} tokens of MCP tool schema ` +
+    `(${servers.size} server${servers.size === 1 ? '' : 's'} at ~${formatTokens(perServerSchemaTokens)} tokens/server) sit in the prompt prefix of ` +
+    `${affectedSessions} session${affectedSessions === 1 ? '' : 's'} at ` +
+    `${callRateText} MCP call${callRateText === '1.0' ? '' : 's'}/session, with zero ToolSearch calls ` +
+    `and no deferred-tool inventory observed — tool deferral appears inactive. ` +
+    `Deferral would move ~all of that schema out of the prefix.`
+
+  const { cause, fix } = attributeDeferralOffCause(enableToolSearch, projectCwds, apiCalls, homeDir)
+
+  return {
+    id: 'mcp-deferral-off',
+    title: 'MCP tool deferral appears inactive',
+    explanation: `${evidence} ${cause}`,
+    impact: tokensSaved >= DEFERRAL_OFF_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
+    tokensSaved,
+    fix,
+  }
+}
+
+/**
+ * mcp-alwaysload-hygiene: servers pinned with `"alwaysLoad": true` (an
+ * .mcp.json / settings mcpServers sibling of type/url, Claude Code
+ * v2.1.121+) whose observed call rate doesn't justify exempting them from
+ * deferral. alwaysLoad puts the server's full tool schema in every
+ * session's prefix even though deferral is available, and additionally
+ * blocks session startup on that server's connection (capped at
+ * ALWAYSLOAD_STARTUP_CAP_SECONDS).
+ */
+export function detectMcpAlwaysLoadHygiene(
+  projects: ProjectSummary[],
+  projectCwds: Set<string>,
+  apiCalls: ApiCallMeta[] = [],
+  mcpCoverage = aggregateMcpCoverage(projects),
+  homeDir = homedir(),
+): WasteFinding | null {
+  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const pinned = [...configured.values()].filter(e => e.alwaysLoadPaths.length > 0)
+  if (pinned.length === 0) return null
+
+  // When every observed Claude Code version predates server-level
+  // alwaysLoad support, the key is inert — the tools defer normally, so
+  // the pin costs nothing and the finding's claim would be false.
+  const versions = apiCalls.map(c => c.version).filter(v => v.length > 0)
+  if (versions.length > 0 && versions.every(v => versionPredates(v, ALWAYSLOAD_MIN_VERSION))) return null
+
+  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
+  if (totalSessions === 0) return null
+
+  const coverageByServer = new Map(mcpCoverage.map(c => [c.server, c]))
+  const invocationsByServer = new Map<string, number>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [server, data] of Object.entries(session.mcpBreakdown)) {
+        invocationsByServer.set(server, (invocationsByServer.get(server) ?? 0) + data.calls)
+      }
+    }
+  }
+
+  const lines: string[] = []
+  const fixLines: string[] = []
+  let tokensSaved = 0
+  for (const entry of pinned) {
+    const invocations = invocationsByServer.get(entry.normalized) ?? 0
+    const callRate = invocations / totalSessions
+    if (callRate >= ALWAYSLOAD_MAX_CALLS_PER_SESSION) continue
+    // Prefer real inventory numbers when a session observed them; without
+    // an inventory fall back to the 5 tools x 400 tokens convention, and
+    // charge every session since alwaysLoad forces the load unconditionally.
+    const coverage = coverageByServer.get(entry.normalized)
+    const toolsAvailable = coverage?.toolsAvailable ?? TOOLS_PER_MCP_SERVER
+    const loadedSessions = coverage?.loadedSessions ?? totalSessions
+    tokensSaved += toolsAvailable * TOKENS_PER_MCP_TOOL * loadedSessions
+    lines.push(`${entry.original}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
+    fixLines.push(`- Remove "alwaysLoad": true from ${entry.original} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
+  }
+  if (lines.length === 0) return null
+
+  return {
+    id: 'mcp-alwaysload-hygiene',
+    title: `${lines.length} alwaysLoad MCP server${lines.length === 1 ? '' : 's'} rarely used`,
+    explanation:
+      `These servers are pinned with alwaysLoad, so their tool schemas sit in every session's prefix ` +
+      `despite deferral being available, and session startup blocks on each server's connection ` +
+      `(up to ${ALWAYSLOAD_STARTUP_CAP_SECONDS}s). Usage doesn't justify the pin: ${lines.join('; ')}.`,
+    impact: tokensSaved >= ALWAYSLOAD_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to unpin the rarely-used servers (tool search still discovers their tools on demand):',
+      text: fixLines.join('\n'),
+    },
+  }
+}
+
+/**
+ * mcp-defer-threshold: an explicit ENABLE_TOOL_SEARCH=auto or auto:N
+ * override whose threshold the configured MCP definitions never reach —
+ * auto defers only when defs exceed N% of the context window (default 10),
+ * so everything still loads upfront while carrying substantial per-session
+ * cost. Lowest priority of the family; emitted only on a substantial gap.
+ */
+export function detectMcpDeferThreshold(
+  projects: ProjectSummary[],
+  projectCwds: Set<string>,
+  homeDir = homedir(),
+): WasteFinding | null {
+  const setting = findDeferralEnvSetting(ENABLE_TOOL_SEARCH_VAR, projectCwds, homeDir)
+  if (!setting) return null
+  // Must accept exactly what detectMcpDeferralOff yields to this detector
+  // (any auto:N, N unbounded), or an out-of-range N would silently slip
+  // through both detectors. Oversized values clamp to 100% — a threshold
+  // that can never trigger, the strongest form of this finding.
+  const match = /^auto(?::(\d+))?$/.exec(setting.value)
+  if (!match) return null
+  const percent = match[1] !== undefined
+    ? Math.min(DEFER_THRESHOLD_MAX_PERCENT, parseInt(match[1], 10))
+    : DEFER_THRESHOLD_DEFAULT_PERCENT
+
+  // Inventory anywhere in the window means the auto threshold did trigger
+  // and deferral is working; nothing to tune.
+  if (anySessionHasMcpInventory(projects)) return null
+
+  const configured = loadMcpConfigs(projectCwds, homeDir)
+  const servers = new Set(configured.keys())
+  // Claude-scoped for the same reason as detectMcpDeferralOff: other
+  // providers' sessions carry MCP breakdowns but not this override's cost.
+  let totalSessions = 0
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!isClaudeSession(session)) continue
+      totalSessions++
+      for (const server of Object.keys(session.mcpBreakdown)) servers.add(server)
+    }
+  }
+  if (servers.size === 0) return null
+  if (totalSessions === 0) return null
+
+  // No inventory (see suppression above) means per-server tool counts are
+  // unknown — same 5 tools x 400 tokens convention as detectUnusedMcp.
+  const defsPerSession = servers.size * TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL
+  const onePercent = DEFER_THRESHOLD_CONTEXT_WINDOW_TOKENS / 100
+  const thresholdTokens = percent * onePercent
+  // Deferral kicks in only when defs EXCEED the threshold; at or below it,
+  // everything loads upfront.
+  if (defsPerSession > thresholdTokens) return null
+  if (defsPerSession < DEFER_THRESHOLD_MIN_TOKENS_PER_SESSION) return null
+
+  const tokensSaved = defsPerSession * totalSessions
+  // Largest integer N such that the defs still exceed N% — i.e. the loosest
+  // auto:N at which deferral actually kicks in.
+  const recommendedPercent = Math.max(0, Math.ceil(defsPerSession / onePercent) - 1)
+  // If the defs already exceed the default 10% threshold, the override is
+  // pure downside: removing it restores default auto behavior, which defers.
+  const removeOverride = defsPerSession > DEFER_THRESHOLD_DEFAULT_PERCENT * onePercent
+
+  return {
+    id: 'mcp-defer-threshold',
+    title: 'MCP tool search auto threshold never triggers',
+    explanation:
+      `${ENABLE_TOOL_SEARCH_VAR}=${setting.value} is set in ${setting.scope} (${shortHomePath(setting.path)}), ` +
+      `deferring MCP tool definitions only when they exceed ${percent}% of the ${formatTokens(DEFER_THRESHOLD_CONTEXT_WINDOW_TOKENS)}-token context window ` +
+      `(~${formatTokens(thresholdTokens)} tokens). Your estimated ~${formatTokens(defsPerSession)} tokens of definitions per session fit under that, ` +
+      `so every tool still loads upfront in all ${totalSessions} session${totalSessions === 1 ? '' : 's'}.`,
+    impact: tokensSaved >= DEFER_THRESHOLD_MEDIUM_IMPACT_TOKENS ? 'medium' : 'low',
+    tokensSaved,
+    fix: {
+      type: 'paste',
+      destination: 'prompt',
+      label: 'Ask Claude to tighten the auto threshold:',
+      text: removeOverride
+        ? `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${setting.value} override from ${setting.path}; the default auto threshold (${DEFER_THRESHOLD_DEFAULT_PERCENT}%) already defers this volume of tool definitions.`
+        : `In ${setting.path}, change ${ENABLE_TOOL_SEARCH_VAR}=${setting.value} to ${ENABLE_TOOL_SEARCH_VAR}=auto:${recommendedPercent} so ~${formatTokens(defsPerSession)} tokens of MCP tool definitions per session are deferred instead of loaded upfront.`,
+    },
+  }
+}
+
 function expandImports(filePath: string, seen: Set<string>, depth: number): { totalLines: number; importedFiles: number } {
   if (depth > MAX_IMPORT_DEPTH || seen.has(filePath)) return { totalLines: 0, importedFiles: 0 }
   seen.add(filePath)
@@ -2400,6 +2920,10 @@ export async function scanAndDetect(
     () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
     () => detectMcpToolCoverage(projects, mcpCoverage),
     () => detectMcpProfileAdvisor(projects, mcpCoverage),
+    // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
+    () => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls),
+    () => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage),
+    () => detectMcpDeferThreshold(projects, projectCwds),
     () => detectCapabilityReliability(projects),
     () => detectLowWorthSessions(projects),
     () => detectContextBloat(projects, lowWorthSessionIds),
