@@ -143,7 +143,7 @@ function ModelSelector({ models, recommendations, onSelect, onBack }: ModelSelec
               </Text>
               <Text color={DIM}>  Current:  {(rec.currentOneShotRate*100).toFixed(1)}% one-shot over {rec.currentEditTurns} edits, {formatCost(rec.currentCostPerEdit)}/edit</Text>
               <Text color={DIM}>  Candidate: {(rec.candidateOneShotRate*100).toFixed(1)}% one-shot over {rec.candidateEditTurns} edits, {formatCost(rec.candidateCostPerEdit)}/edit</Text>
-              <Text>  To apply: <Text color={CYAN}>codeburn act apply-model {rec.project}</Text></Text>
+              <Text>  To apply: <Text color="#00FFFF">codeburn act apply-model {rec.project}</Text></Text>
             </Box>
           ))}
         </Box>
