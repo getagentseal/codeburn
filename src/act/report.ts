@@ -284,6 +284,53 @@ async function guardRow(
   }
 }
 
+async function modelDefaultRow(
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
+  baseline: ActionBaseline, afterStart: Date, now: Date,
+): Promise<ActReportRow> {
+  const models = Object.keys(baseline.metrics)
+  if (models.length < 2) return { ...base, note: 'not measurable: invalid baseline' }
+  const candidateModel = models[0]!
+  const preApplyRate = baseline.metrics[candidateModel]!
+  
+  const mockProject: ProjectSummary = {
+    project: 'mock',
+    projectPath: 'mock',
+    totalCostUSD: 0,
+    totalSavingsUSD: 0,
+    totalApiCalls: 0,
+    totalProxiedCostUSD: 0,
+    sessions,
+  }
+  
+  const { aggregateModelStats } = await import('../compare-stats.js')
+  const stats = aggregateModelStats([mockProject]).find(s => s.model === candidateModel)
+  
+  if (!stats || stats.editTurns < 20) {
+    return { ...base, note: `not measurable: < 20 edit turns for ${candidateModel} since apply` }
+  }
+  
+  const postApplyRate = stats.oneShotTurns / stats.editTurns
+  
+  if (postApplyRate < preApplyRate - 0.05) {
+    return {
+      ...base,
+      status: 'measured',
+      realizedTokens: 0,
+      confidence: 'low',
+      note: `quality regression, consider undo: one-shot rate ${(preApplyRate * 100).toFixed(1)}% -> ${(postApplyRate * 100).toFixed(1)}%`
+    }
+  }
+
+  return {
+    ...base,
+    status: 'measured',
+    realizedTokens: 0,
+    confidence: 'normal',
+    note: `correlation, not attribution: one-shot rate ${(preApplyRate * 100).toFixed(1)}% -> ${(postApplyRate * 100).toFixed(1)}%`
+  }
+}
+
 async function computeRow(rec: ActionRecord, sessions: SessionSummary[], afterStart: Date, now: Date, opts: ActReportOptions): Promise<ActReportRow> {
   const estimatedAtApply = rec.baseline?.estimatedTokens ?? 0
   const base: ActReportRow = {
@@ -307,6 +354,7 @@ async function computeRow(rec: ActionRecord, sessions: SessionSummary[], afterSt
   if (rec.kind === 'claude-md-rule') return readEditRow(base, sessions, baseline, afterStart, now)
   if (rec.kind === 'shell-config') return { ...base, note: 'not measurable: bash result token sizes are not retained in the summary' }
   if (rec.kind === 'guard-install') return guardRow(base, afterStart, now, baseline, opts)
+  if (rec.kind === 'model-default') return modelDefaultRow(base, rec, sessions, baseline, afterStart, now)
   return { ...base, note: 'not measurable: kind is not tracked by act report' }
 }
 

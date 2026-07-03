@@ -66,6 +66,44 @@ export function registerActCommands(program: Command): void {
     })
 
   act
+    .command('apply-model <project>')
+    .description('Apply the model default recommendation for a project')
+    .action(async (project: string) => {
+      try {
+        const { parseAllSessions, filterProjectsByName } = await import('../parser.js')
+        const { recommendModelDefault, buildApplyModelDefaultPlan } = await import('./model-defaults.js')
+        const { runAction } = await import('./apply.js')
+        const chalk = (await import('chalk')).default
+
+        const projects = filterProjectsByName(await parseAllSessions(), [project])
+        const p = projects[0]
+        if (!p) {
+          console.error(`Project "${project}" not found in session history.`)
+          process.exitCode = 1
+          return
+        }
+
+        const recommendation = recommendModelDefault(p)
+        if (!recommendation) {
+          console.error(`No default model recommendation available for ${project} at this time.`)
+          process.exitCode = 1
+          return
+        }
+
+        const plan = await buildApplyModelDefaultPlan(recommendation)
+        const record = await runAction(plan)
+
+        console.log(`Applied default model ${chalk.green(recommendation.candidateModel)} for ${project}`)
+        console.log(chalk.dim(`  Evidence: ${recommendation.candidateEditTurns} turns, ${(recommendation.candidateOneShotRate * 100).toFixed(1)}% one-shot, $${recommendation.candidateCostPerEdit.toFixed(3)}/edit`))
+        console.log(chalk.dim(`  Undo anytime: codeburn act undo ${shortId(record.id)}`))
+        console.log(chalk.dim(`  Per-session override: --model <name>`))
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err))
+        process.exitCode = 1
+      }
+    })
+
+  act
     .command('report')
     .description('Realized vs estimated savings for applied actions older than 3 days')
     .option('--json', 'Output the realized report as JSON')

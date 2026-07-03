@@ -10,6 +10,7 @@ import { parseJsonlLine, shouldSkipLine } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
+import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
 
 // ============================================================================
 // Display constants
@@ -233,6 +234,7 @@ export type OptimizeResult = {
   costRate: number
   healthScore: number
   healthGrade: HealthGrade
+  modelRecommendations?: ModelDefaultRecommendation[]
 }
 
 export type OptimizeJsonReport = {
@@ -263,6 +265,7 @@ export type OptimizeJsonReport = {
     estimatedSavingsUSD: number
     fix: WasteAction
   }>
+  modelRecommendations?: Array<ModelDefaultRecommendation>
 }
 
 export type ToolCall = {
@@ -2370,7 +2373,7 @@ export async function scanAndDetect(
   dateRange?: DateRange,
 ): Promise<OptimizeResult> {
   if (projects.length === 0) {
-    return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A' }
+    return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A', modelRecommendations: [] }
   }
 
   const key = cacheKey(projects, dateRange)
@@ -2421,7 +2424,14 @@ export async function scanAndDetect(
 
   findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
   const { score, grade } = computeHealth(findings)
-  const result: OptimizeResult = { findings, costRate, healthScore: score, healthGrade: grade }
+  
+  const modelRecommendations: ModelDefaultRecommendation[] = []
+  for (const project of projects) {
+    const rec = recommendModelDefault(project, { now: dateRange?.end })
+    if (rec) modelRecommendations.push(rec)
+  }
+
+  const result: OptimizeResult = { findings, costRate, healthScore: score, healthGrade: grade, modelRecommendations }
   resultCache.set(key, { data: result, ts: Date.now() })
   return result
 }
@@ -2528,6 +2538,7 @@ function renderOptimize(
   healthGrade: HealthGrade,
   appliedHeader?: string,
   previouslyApplied?: Record<string, string>,
+  modelRecommendations?: ModelDefaultRecommendation[],
 ): string {
   const lines: string[] = []
   lines.push('')
@@ -2573,6 +2584,19 @@ function renderOptimize(
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
   lines.push(chalk.dim('  Estimates only.'))
   lines.push('')
+  
+  if (modelRecommendations && modelRecommendations.length > 0) {
+    lines.push(chalk.bold.hex(ORANGE)('  Model defaults recommendation'))
+    lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
+    for (const rec of modelRecommendations) {
+      lines.push(`  ${rec.project}: ${chalk.bold(rec.currentModel)} -> ${chalk.bold.hex(GREEN)(rec.candidateModel)}`)
+      lines.push(chalk.dim(`  Current:  ${(rec.currentOneShotRate*100).toFixed(1)}% one-shot over ${rec.currentEditTurns} edits, ${formatCost(rec.currentCostPerEdit)}/edit`))
+      lines.push(chalk.dim(`  Candidate: ${(rec.candidateOneShotRate*100).toFixed(1)}% one-shot over ${rec.candidateEditTurns} edits, ${formatCost(rec.candidateCostPerEdit)}/edit`))
+      lines.push(`  To apply: ${chalk.hex(CYAN)(`codeburn act apply-model ${rec.project}`)}`)
+      lines.push('')
+    }
+  }
+
   return lines.join('\n')
 }
 
@@ -2603,7 +2627,7 @@ export async function runOptimize(
     return
   }
 
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied)
+  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied, result.modelRecommendations)
   console.log(output)
 }
 
@@ -2650,5 +2674,6 @@ export function buildOptimizeJsonReport(
       estimatedSavingsUSD: f.tokensSaved * result.costRate,
       fix: f.fix,
     })),
+    modelRecommendations: result.modelRecommendations,
   }
 }
