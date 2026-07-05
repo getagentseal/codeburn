@@ -1,5 +1,6 @@
 export type ActionKind =
   | 'mcp-remove' | 'mcp-project-scope'
+  | 'defer-enable' | 'defer-alwaysload' | 'defer-threshold'
   | 'archive-skill' | 'archive-agent' | 'archive-command'
   | 'claude-md-rule' | 'shell-config'
   | 'guard-install' | 'guard-uninstall'

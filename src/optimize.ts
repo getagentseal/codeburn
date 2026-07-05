@@ -119,7 +119,9 @@ const CAPABILITY_RELIABILITY_HIGH_IMPACT_TOKENS = 200_000
 // Claude Code's tool search tool is literally named "ToolSearch"; seeing it
 // invoked is direct transcript evidence that deferral was active.
 const TOOL_SEARCH_TOOL_NAME = 'ToolSearch'
-const ENABLE_TOOL_SEARCH_VAR = 'ENABLE_TOOL_SEARCH'
+// Exported: the defer-enable / defer-threshold plan builders in
+// src/act/plans.ts edit exactly this settings env key.
+export const ENABLE_TOOL_SEARCH_VAR = 'ENABLE_TOOL_SEARCH'
 const ANTHROPIC_BASE_URL_VAR = 'ANTHROPIC_BASE_URL'
 const CLAUDE_CODE_USE_VERTEX_VAR = 'CLAUDE_CODE_USE_VERTEX'
 // The only first-party API host. An unset ANTHROPIC_BASE_URL counts as
@@ -138,11 +140,14 @@ const DEFERRAL_OFF_HIGH_IMPACT_TOKENS = 200_000
 const ALWAYSLOAD_MAX_CALLS_PER_SESSION = 0.2
 // Server-level alwaysLoad shipped in Claude Code v2.1.121; on older
 // versions the key is inert and the server's tools defer normally, so the
-// pin costs nothing there.
-const ALWAYSLOAD_MIN_VERSION = '2.1.121'
+// pin costs nothing there. Exported: the defer-alwaysload plan builder
+// (src/act/plans.ts) gates on the same boundary against the INSTALLED
+// version before offering to remove the pin.
+export const ALWAYSLOAD_MIN_VERSION = '2.1.121'
 const ALWAYSLOAD_HIGH_IMPACT_TOKENS = 200_000
 // alwaysLoad blocks session startup on the server's connection, capped at 5s.
-const ALWAYSLOAD_STARTUP_CAP_SECONDS = 5
+// Exported so the defer-alwaysload plan preview quotes the same cap.
+export const ALWAYSLOAD_STARTUP_CAP_SECONDS = 5
 // ENABLE_TOOL_SEARCH=auto:N defers only when defs exceed N% of the context
 // window (default 10). Tuning advice is only worth emitting when the
 // upfront-loaded defs are substantial.
@@ -249,6 +254,13 @@ export type FindingId =
   | 'unused-skills'
   | 'unused-commands'
 
+// Cause taxonomy for defer-enable plans (mcp-deferral-off findings).
+// 'proxy-verified' is never produced by the detector today: it is reserved
+// for the #614 part-3 proxy verifier, which upgrades 'proxy-unknown' once a
+// proxy provably forwards tool_reference blocks. The plan layer already
+// accepts it and produces a real ENABLE_TOOL_SEARCH=true plan for it.
+export type DeferEnableCause = 'env-false' | 'proxy-unknown' | 'proxy-verified' | 'vertex' | 'old-version'
+
 // Machine-readable payload the apply layer needs but the human-facing `fix`
 // text can't carry losslessly (full lists, per-server keeper paths). Only set
 // on findings that have an appliable plan; absent otherwise.
@@ -258,6 +270,19 @@ export type FindingApply =
   // only per-project containers a scoped removal may touch.
   | { kind: 'mcp-project-scope'; servers: Array<{ server: string; keepProjects: string[]; removeProjects: string[] }> }
   | { kind: 'archive'; names: string[] }
+  // settingPath/settingScope name the config file carrying the setting the
+  // cause refers to (the ENABLE_TOOL_SEARCH override for 'env-false', the
+  // ANTHROPIC_BASE_URL for the proxy causes, CLAUDE_CODE_USE_VERTEX for
+  // 'vertex'); 'old-version' carries none. value is the observed setting
+  // value, quoted in plan descriptions.
+  | { kind: 'defer-enable'; cause: DeferEnableCause; settingPath?: string; settingScope?: string; value?: string }
+  // One entry per flagged server; paths are the exact config files whose
+  // entry carries `"alwaysLoad": true` (union across readable scopes).
+  | { kind: 'defer-alwaysload'; servers: Array<{ server: string; paths: string[] }> }
+  // recommendedPercent is the tightest auto:N that still defers; when
+  // removeOverride is set the defs already exceed the default threshold, so
+  // deleting the override (restoring default auto) is the fix instead.
+  | { kind: 'defer-threshold'; settingPath: string; settingScope: string; value: string; recommendedPercent: number; removeOverride: boolean }
 
 export type WasteFinding = {
   id: FindingId
@@ -1680,13 +1705,17 @@ function isFirstPartyBaseUrl(value: string): boolean {
   }
 }
 
-function parseVersion(version: string): [number, number, number] | null {
+// Both exported: the defer-alwaysload plan builder (src/act/plans.ts) gates
+// on the installed Claude Code version with the same comparison the detector
+// uses on observed versions. versionPredates returns false for unparseable
+// input, so gates that must fail closed check parseVersion separately.
+export function parseVersion(version: string): [number, number, number] | null {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
   if (!match) return null
   return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
-function versionPredates(version: string, reference: string): boolean {
+export function versionPredates(version: string, reference: string): boolean {
   const v = parseVersion(version)
   const ref = parseVersion(reference)
   if (!v || !ref) return false
@@ -1737,7 +1766,7 @@ function attributeDeferralOffCause(
   projectCwds: Set<string>,
   apiCalls: ApiCallMeta[],
   homeDir: string,
-): { cause: string; fix: WasteAction } {
+): { cause: string; fix: WasteAction; apply?: FindingApply } {
   if (enableToolSearch && isEnvValueFalse(enableToolSearch.value)) {
     return {
       cause: `Cause: ${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} is set in ${enableToolSearch.scope} (${shortHomePath(enableToolSearch.path)}), forcing all tool definitions upfront.`,
@@ -1747,6 +1776,7 @@ function attributeDeferralOffCause(
         label: 'Ask Claude to remove the stale override:',
         text: `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${enableToolSearch.value} setting from ${enableToolSearch.path}. Tool search is on by default on first-party endpoints, so deleting the override re-enables MCP tool deferral.`,
       },
+      apply: { kind: 'defer-enable', cause: 'env-false', settingPath: enableToolSearch.path, settingScope: enableToolSearch.scope, value: enableToolSearch.value },
     }
   }
   const baseUrl = findDeferralEnvSetting(ANTHROPIC_BASE_URL_VAR, projectCwds, homeDir)
@@ -1759,6 +1789,7 @@ function attributeDeferralOffCause(
         label: `Verify your proxy forwards tool_reference blocks first (an explicit override fails on proxies that don't), then force tool search back on with:`,
         text: `export ${ENABLE_TOOL_SEARCH_VAR}=true`,
       },
+      apply: { kind: 'defer-enable', cause: 'proxy-unknown', settingPath: baseUrl.path, settingScope: baseUrl.scope, value: baseUrl.value },
     }
   }
   const vertex = findDeferralEnvSetting(CLAUDE_CODE_USE_VERTEX_VAR, projectCwds, homeDir)
@@ -1771,6 +1802,7 @@ function attributeDeferralOffCause(
         label: 'Opt in to tool search on Vertex (disabled by default there):',
         text: `export ${ENABLE_TOOL_SEARCH_VAR}=true`,
       },
+      apply: { kind: 'defer-enable', cause: 'vertex', settingPath: vertex.path, settingScope: vertex.scope, value: vertex.value },
     }
   }
   const versions = apiCalls.map(c => c.version).filter(v => v.length > 0)
@@ -1782,6 +1814,7 @@ function attributeDeferralOffCause(
         label: 'Update Claude Code to get default-on MCP tool deferral:',
         text: 'claude update',
       },
+      apply: { kind: 'defer-enable', cause: 'old-version' },
     }
   }
   // false and auto values were handled earlier, so a hit here is an explicit
@@ -1890,7 +1923,7 @@ export function detectMcpDeferralOff(
     `and no deferred-tool inventory observed — tool deferral appears inactive. ` +
     `Deferral would move ~all of that schema out of the prefix.`
 
-  const { cause, fix } = attributeDeferralOffCause(enableToolSearch, projectCwds, apiCalls, homeDir)
+  const { cause, fix, apply } = attributeDeferralOffCause(enableToolSearch, projectCwds, apiCalls, homeDir)
 
   return {
     id: 'mcp-deferral-off',
@@ -1899,6 +1932,7 @@ export function detectMcpDeferralOff(
     impact: tokensSaved >= DEFERRAL_OFF_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
     tokensSaved,
     fix,
+    ...(apply ? { apply } : {}),
   }
 }
 
@@ -1943,6 +1977,7 @@ export function detectMcpAlwaysLoadHygiene(
 
   const lines: string[] = []
   const fixLines: string[] = []
+  const applyServers: Array<{ server: string; paths: string[] }> = []
   let tokensSaved = 0
   for (const entry of pinned) {
     const invocations = invocationsByServer.get(entry.normalized) ?? 0
@@ -1957,6 +1992,9 @@ export function detectMcpAlwaysLoadHygiene(
     tokensSaved += toolsAvailable * TOKENS_PER_MCP_TOOL * loadedSessions
     lines.push(`${entry.original}: ${invocations} call${invocations === 1 ? '' : 's'} across ${totalSessions} session${totalSessions === 1 ? '' : 's'}`)
     fixLines.push(`- Remove "alwaysLoad": true from ${entry.original} in ${entry.alwaysLoadPaths.map(shortHomePath).join(', ')}.`)
+    // Original (config-key) name plus the exact files carrying the pin, so
+    // the defer-alwaysload plan edits precisely what was observed.
+    applyServers.push({ server: entry.original, paths: entry.alwaysLoadPaths })
   }
   if (lines.length === 0) return null
 
@@ -1969,6 +2007,7 @@ export function detectMcpAlwaysLoadHygiene(
       `(up to ${ALWAYSLOAD_STARTUP_CAP_SECONDS}s). Usage doesn't justify the pin: ${lines.join('; ')}.`,
     impact: tokensSaved >= ALWAYSLOAD_HIGH_IMPACT_TOKENS ? 'high' : 'medium',
     tokensSaved,
+    apply: { kind: 'defer-alwaysload', servers: applyServers },
     fix: {
       type: 'paste',
       destination: 'prompt',
@@ -2049,6 +2088,14 @@ export function detectMcpDeferThreshold(
       `so every tool still loads upfront in all ${totalSessions} session${totalSessions === 1 ? '' : 's'}.`,
     impact: tokensSaved >= DEFER_THRESHOLD_MEDIUM_IMPACT_TOKENS ? 'medium' : 'low',
     tokensSaved,
+    apply: {
+      kind: 'defer-threshold',
+      settingPath: setting.path,
+      settingScope: setting.scope,
+      value: setting.value,
+      recommendedPercent,
+      removeOverride,
+    },
     fix: {
       type: 'paste',
       destination: 'prompt',

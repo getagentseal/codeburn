@@ -641,3 +641,105 @@ describe('detectMcpDeferThreshold', () => {
     expect(detectMcpDeferThreshold([project([])], new Set([cwd]), home)).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Apply payloads: the machine data src/act/plans.ts turns into defer-enable /
+// defer-alwaysload / defer-threshold plans (#614 commit 2). Human-facing
+// explanation/fix text is covered above and must not change.
+// ---------------------------------------------------------------------------
+
+describe('deferral finding apply payloads', () => {
+  it('env-false carries a defer-enable payload naming the settings file, scope, and value', () => {
+    const home = makeDir('codeburn-home-')
+    writeJson(join(home, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'false' } })
+    const finding = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], home)
+    expect(finding!.apply).toEqual({
+      kind: 'defer-enable',
+      cause: 'env-false',
+      settingPath: join(home, '.claude', 'settings.json'),
+      settingScope: 'user settings',
+      value: 'false',
+    })
+  })
+
+  it('env-false in a shell profile keeps the shell-profile scope so the plan layer can refuse', () => {
+    const home = makeDir('codeburn-home-')
+    writeFile(join(home, '.zshrc'), 'export ENABLE_TOOL_SEARCH=false\n')
+    const finding = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], home)
+    expect(finding!.apply).toMatchObject({ kind: 'defer-enable', cause: 'env-false', settingScope: 'shell profile' })
+  })
+
+  it('an unknown proxy carries cause proxy-unknown pointing at the base-URL setting', () => {
+    const home = makeDir('codeburn-home-')
+    writeJson(join(home, '.claude', 'settings.json'), { env: { ANTHROPIC_BASE_URL: 'https://llm-proxy.corp.example' } })
+    const finding = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], home)
+    expect(finding!.apply).toMatchObject({
+      kind: 'defer-enable',
+      cause: 'proxy-unknown',
+      settingPath: join(home, '.claude', 'settings.json'),
+    })
+  })
+
+  it('Vertex and old-version carry their refusal causes', () => {
+    const homeVertex = makeDir('codeburn-home-')
+    writeFile(join(homeVertex, '.bashrc'), 'export CLAUDE_CODE_USE_VERTEX=1\n')
+    const vertexFinding = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], homeVertex)
+    expect(vertexFinding!.apply).toMatchObject({ kind: 'defer-enable', cause: 'vertex' })
+
+    const homeOld = makeDir('codeburn-home-')
+    const oldFinding = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [apiCall('2.0.14')], homeOld)
+    expect(oldFinding!.apply).toEqual({ kind: 'defer-enable', cause: 'old-version' })
+  })
+
+  it('the generic none-determinable causes carry no payload (nothing appliable)', () => {
+    const home = makeDir('codeburn-home-')
+    const generic = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], home)
+    expect(generic!.apply).toBeUndefined()
+
+    const homeTrue = makeDir('codeburn-home-')
+    writeJson(join(homeTrue, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'true' } })
+    const alreadyOn = detectMcpDeferralOff([], [project(deferralOffSessions())], new Set(), [], homeTrue)
+    expect(alreadyOn!.apply).toBeUndefined()
+  })
+
+  it('alwaysload-hygiene payload names each flagged server and the exact files carrying the pin', () => {
+    const home = makeDir('codeburn-home-')
+    const cwd = makeDir('codeburn-cwd-')
+    writeJson(join(cwd, '.mcp.json'), { mcpServers: { pinned: { command: 'x', alwaysLoad: true } } })
+    const sessions = Array.from({ length: 5 }, (_, i) => makeSession({ sessionId: `s${i}` }))
+    const finding = detectMcpAlwaysLoadHygiene([project(sessions)], new Set([cwd]), [], undefined, home)
+    expect(finding!.apply).toEqual({
+      kind: 'defer-alwaysload',
+      servers: [{ server: 'pinned', paths: [join(cwd, '.mcp.json')] }],
+    })
+  })
+
+  it('defer-threshold payload carries the override location, tightened N, and removal flag', () => {
+    const home = makeDir('codeburn-home-')
+    const cwd = makeDir('codeburn-cwd-')
+    const mcpServers: Record<string, unknown> = {}
+    for (let i = 0; i < 3; i++) mcpServers[`srv${i}`] = { command: 'x' }
+    writeJson(join(cwd, '.mcp.json'), { mcpServers })
+    writeJson(join(home, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'auto' } })
+    const finding = detectMcpDeferThreshold([project([makeSession({ turns: claudeTurns() })])], new Set([cwd]), home)
+    expect(finding!.apply).toEqual({
+      kind: 'defer-threshold',
+      settingPath: join(home, '.claude', 'settings.json'),
+      settingScope: 'user settings',
+      value: 'auto',
+      recommendedPercent: 2,
+      removeOverride: false,
+    })
+  })
+
+  it('defer-threshold payload sets removeOverride when the default threshold already defers', () => {
+    const home = makeDir('codeburn-home-')
+    const cwd = makeDir('codeburn-cwd-')
+    const mcpServers: Record<string, unknown> = {}
+    for (let i = 0; i < 15; i++) mcpServers[`srv${i}`] = { command: 'x' }
+    writeJson(join(cwd, '.mcp.json'), { mcpServers })
+    writeJson(join(home, '.claude', 'settings.json'), { env: { ENABLE_TOOL_SEARCH: 'auto:50' } })
+    const finding = detectMcpDeferThreshold([project([makeSession({ turns: claudeTurns() })])], new Set([cwd]), home)
+    expect(finding!.apply).toMatchObject({ kind: 'defer-threshold', value: 'auto:50', removeOverride: true })
+  })
+})

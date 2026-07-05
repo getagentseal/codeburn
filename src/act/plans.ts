@@ -1,8 +1,16 @@
 import { existsSync, readFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import { isAbsolute, join } from 'path'
 import { homedir } from 'os'
 import type { ActionKind, ActionPlan, PlannedChange } from './types.js'
 import { sha256 } from './backup.js'
+import {
+  ALWAYSLOAD_MIN_VERSION,
+  ALWAYSLOAD_STARTUP_CAP_SECONDS,
+  ENABLE_TOOL_SEARCH_VAR,
+  parseVersion,
+  versionPredates,
+} from '../optimize.js'
 import type { WasteFinding } from '../optimize.js'
 
 // Turns an optimize finding into a concrete, journaled file-mutation plan.
@@ -14,6 +22,9 @@ export type PlanContext = {
   homeDir?: string
   cwd?: string
   shell?: string
+  // Installed Claude Code version (null when undeterminable). Injectable so
+  // tests never shell out; production defaults to probing `claude --version`.
+  claudeVersion?: () => string | null
 }
 
 export type BuiltPlan = {
@@ -34,11 +45,32 @@ type ResolvedPaths = {
   projectSettings: string
   projectSettingsLocal: string
   userClaudeJson: string
+  userSettings: string
   skillsDir: string
   agentsDir: string
   commandsDir: string
   projectClaudeMd: string
   shellRc: string
+  // Not a path, but resolved from the same context: the injectable installed-
+  // version probe the defer-alwaysload version gate consults.
+  claudeVersion: () => string | null
+}
+
+// `claude --version` prints e.g. "2.1.130 (Claude Code)"; any failure (binary
+// missing, timeout, non-zero exit) yields null and version-gated plans
+// degrade to a manual note instead of guessing.
+const CLAUDE_VERSION_PROBE_TIMEOUT_MS = 3000
+
+function probeClaudeVersion(): string | null {
+  try {
+    return execFileSync('claude', ['--version'], {
+      encoding: 'utf-8',
+      timeout: CLAUDE_VERSION_PROBE_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
 }
 
 function resolvePaths(ctx: PlanContext): ResolvedPaths {
@@ -52,11 +84,13 @@ function resolvePaths(ctx: PlanContext): ResolvedPaths {
     projectSettings: join(cwd, '.claude', 'settings.json'),
     projectSettingsLocal: join(cwd, '.claude', 'settings.local.json'),
     userClaudeJson: join(homeDir, '.claude.json'),
+    userSettings: join(homeDir, '.claude', 'settings.json'),
     skillsDir: join(homeDir, '.claude', 'skills'),
     agentsDir: join(homeDir, '.claude', 'agents'),
     commandsDir: join(homeDir, '.claude', 'commands'),
     projectClaudeMd: join(cwd, 'CLAUDE.md'),
     shellRc: join(homeDir, /zsh/.test(shell) ? '.zshrc' : '.bashrc'),
+    claudeVersion: ctx.claudeVersion ?? probeClaudeVersion,
   }
 }
 
@@ -74,6 +108,9 @@ function buildPlan(finding: WasteFinding, r: ResolvedPaths): BuiltPlan {
     case 'mcp-low-coverage': return buildMcpRemove(finding, r)
     case 'unused-mcp': return buildMcpRemove(finding, r)
     case 'mcp-project-scope': return buildMcpProjectScope(finding, r)
+    case 'mcp-deferral-off': return buildDeferEnable(finding, r)
+    case 'mcp-alwaysload-hygiene': return buildDeferAlwaysLoad(finding, r)
+    case 'mcp-defer-threshold': return buildDeferThreshold(finding, r)
     case 'unused-skills': return buildArchive(finding, r, 'skill')
     case 'unused-agents': return buildArchive(finding, r, 'agent')
     case 'unused-commands': return buildArchive(finding, r, 'command')
@@ -230,15 +267,20 @@ function projectRemovalNote(server: string, entries: string[], homeDir: string):
   return `removes ${server} from ${entries.length} project ${noun}: ${entries.map(e => shortPath(e, homeDir)).join(', ')}`
 }
 
+// Accumulates per-file preview annotations; repeats on a path join with ";".
+function pathNoteAdder(pathNotes: Record<string, string>): (path: string, note: string) => void {
+  return (path, note) => {
+    pathNotes[path] = pathNotes[path] ? `${pathNotes[path]}; ${note}` : note
+  }
+}
+
 function buildMcpRemove(finding: WasteFinding, r: ResolvedPaths): BuiltPlan {
   const servers = finding.apply?.kind === 'mcp-remove' ? finding.apply.servers : []
   const searchPaths = [r.projectMcpJson, r.projectSettings, r.projectSettingsLocal, r.userClaudeJson]
   const docs = new ConfigDocs(r.homeDir)
   const skips: string[] = []
   const pathNotes: Record<string, string> = {}
-  const addPathNote = (path: string, note: string): void => {
-    pathNotes[path] = pathNotes[path] ? `${pathNotes[path]}; ${note}` : note
-  }
+  const addPathNote = pathNoteAdder(pathNotes)
 
   for (const server of servers) {
     let removed = false
@@ -268,9 +310,7 @@ function buildMcpProjectScope(finding: WasteFinding, r: ResolvedPaths): BuiltPla
   const docs = new ConfigDocs(r.homeDir)
   const skips: string[] = []
   const pathNotes: Record<string, string> = {}
-  const addPathNote = (path: string, note: string): void => {
-    pathNotes[path] = pathNotes[path] ? `${pathNotes[path]}; ${note}` : note
-  }
+  const addPathNote = pathNoteAdder(pathNotes)
 
   for (const { server, keepProjects, removeProjects } of entries) {
     const keepers = keepProjects.filter(p => isAbsolute(p))
@@ -333,6 +373,238 @@ function buildMcpProjectScope(finding: WasteFinding, r: ResolvedPaths): BuiltPla
 
 function mcpPlan(kind: ActionKind, findingId: string, description: string, changes: PlannedChange[]): ActionPlan {
   return { kind, findingId, description, changes }
+}
+
+// ---------------------------------------------------------------------------
+// MCP deferral plans — defer-enable / defer-alwaysload / defer-threshold (#614)
+// ---------------------------------------------------------------------------
+
+// ENABLE_TOOL_SEARCH and mcpServers config are read once at Claude Code
+// process start, so an applied plan changes nothing for sessions already
+// running. Stated on every deferral plan.
+const NEXT_SESSION_NOTE = 'takes effect on the next session (this config is read at Claude Code start)'
+
+// findDeferralEnvSetting (src/optimize.ts) reports shell-profile hits with
+// exactly this scope string; the plan layer keys its refusal on it.
+const SHELL_PROFILE_SCOPE = 'shell profile'
+
+const SHELL_TOOL_SEARCH_LINE = new RegExp(`^\\s*(?:export\\s+)?${ENABLE_TOOL_SEARCH_VAR}\\s*=.*$`, 'm')
+
+function envContainer(state: DocState): Record<string, unknown> | null {
+  const env = state.doc.env
+  return env && typeof env === 'object' ? env as Record<string, unknown> : null
+}
+
+// An emptied env object stays in place, matching deleteServer's convention
+// for emptied mcpServers containers.
+function deleteEnvKey(state: DocState, key: string): boolean {
+  const env = envContainer(state)
+  if (!env || !(key in env)) return false
+  delete env[key]
+  state.dirty = true
+  return true
+}
+
+function setEnvKey(state: DocState, key: string, value: string): void {
+  const env = envContainer(state) ?? (state.doc.env = {}) as Record<string, unknown>
+  env[key] = value
+  state.dirty = true
+}
+
+// Shell rc files only ever receive marker-block APPENDS (markerChange);
+// deleting or rewriting arbitrary user lines is out. Deferral overrides
+// found in a profile get precise by-hand instructions naming the exact file
+// and line instead of a plan. `replacement` switches the instruction from
+// "delete the line" to "change it to <replacement>".
+function shellOverrideManualNotes(path: string, homeDir: string, replacement?: string): string[] {
+  const shown = shortPath(path, homeDir)
+  let content: string | null = null
+  try {
+    content = readFileSync(path, 'utf-8')
+  } catch {
+    content = null
+  }
+  const line = content?.match(SHELL_TOOL_SEARCH_LINE)?.[0]?.trim()
+  if (!line) {
+    return [`manual: ${ENABLE_TOOL_SEARCH_VAR} was reported in ${shown} but no such line is there now; nothing to change`]
+  }
+  // Keep the original line's `export ` prefix in the suggested replacement —
+  // a user following the note verbatim would otherwise lose it.
+  const replacementLine = replacement !== undefined && line.startsWith('export ') && !replacement.startsWith('export ')
+    ? `export ${replacement}`
+    : replacement
+  const action = replacementLine === undefined
+    ? `delete the line \`${line}\` from ${shown}`
+    : `in ${shown}, change the line \`${line}\` to \`${replacementLine}\``
+  return [`manual: ${action} yourself — codeburn only appends marker blocks to shell files and never edits user lines`]
+}
+
+// mcp-deferral-off -> defer-enable. Only two causes are auto-appliable:
+// removing a stale ENABLE_TOOL_SEARCH=false from a settings file, and (for
+// the future part-3 verifier) forcing =true once a proxy is verified. The
+// rest refuse with instructions: an unknown proxy because an explicit
+// override makes requests FAIL outright on proxies that don't forward
+// tool_reference blocks (live-docs fact), Vertex because default-off there
+// is a platform property, old-version because the fix is `claude update`.
+function buildDeferEnable(finding: WasteFinding, r: ResolvedPaths): BuiltPlan {
+  const payload = finding.apply?.kind === 'defer-enable' ? finding.apply : null
+  if (!payload) return { plan: null, notes: [] }
+
+  switch (payload.cause) {
+    case 'env-false': {
+      if (!payload.settingPath) return { plan: null, notes: [] }
+      if (payload.settingScope === SHELL_PROFILE_SCOPE) {
+        return { plan: null, notes: shellOverrideManualNotes(payload.settingPath, r.homeDir) }
+      }
+      const docs = new ConfigDocs(r.homeDir)
+      const state = docs.load(payload.settingPath)
+      if (!state) return { plan: null, notes: docs.errorNotes() }
+      if (!deleteEnvKey(state, ENABLE_TOOL_SEARCH_VAR)) {
+        return { plan: null, notes: [`skipped: ${ENABLE_TOOL_SEARCH_VAR} is no longer set in ${shortPath(payload.settingPath, r.homeDir)}`] }
+      }
+      return {
+        plan: mcpPlan(
+          'defer-enable',
+          finding.id,
+          `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${payload.value ?? 'false'} override from ${shortPath(payload.settingPath, r.homeDir)}`,
+          docs.changes(),
+        ),
+        notes: [`restores default-on MCP tool deferral; ${NEXT_SESSION_NOTE}`],
+      }
+    }
+    case 'proxy-unknown': {
+      const where = payload.settingPath ? ` configured in ${payload.settingScope ?? 'settings'} (${shortPath(payload.settingPath, r.homeDir)})` : ''
+      return {
+        plan: null,
+        notes: [
+          `not auto-applied: setting ${ENABLE_TOOL_SEARCH_VAR}=true would force deferral back on, but requests fail outright on proxies that don't forward tool_reference blocks. ` +
+          `Verify that the proxy${where} forwards them before setting the override.`,
+        ],
+      }
+    }
+    case 'proxy-verified': {
+      // Part-3 verifier confirmed the proxy forwards tool_reference blocks,
+      // so the explicit opt-in is safe. User settings env is the target: it
+      // covers every project without touching shell files.
+      const docs = new ConfigDocs(r.homeDir)
+      const state = docs.load(r.userSettings)
+      if (!state) return { plan: null, notes: docs.errorNotes() }
+      setEnvKey(state, ENABLE_TOOL_SEARCH_VAR, 'true')
+      return {
+        plan: mcpPlan(
+          'defer-enable',
+          finding.id,
+          `Set ${ENABLE_TOOL_SEARCH_VAR}=true in ${shortPath(r.userSettings, r.homeDir)} (proxy verified to forward tool_reference blocks)`,
+          docs.changes(),
+        ),
+        notes: [`enables MCP tool deferral through the verified proxy; ${NEXT_SESSION_NOTE}`],
+      }
+    }
+    case 'vertex':
+      return {
+        plan: null,
+        notes: [
+          `manual: tool search is disabled by default on Vertex AI — a platform property, not a config error. ` +
+          `Opt in yourself with \`export ${ENABLE_TOOL_SEARCH_VAR}=true\` if your Vertex setup supports it.`,
+        ],
+      }
+    case 'old-version':
+      return {
+        plan: null,
+        notes: ['manual: every observed Claude Code version predates default-on tool search; run `claude update`'],
+      }
+  }
+}
+
+// mcp-alwaysload-hygiene -> defer-alwaysload: drop `"alwaysLoad": true` from
+// the flagged servers in the exact config files the finding recorded.
+function buildDeferAlwaysLoad(finding: WasteFinding, r: ResolvedPaths): BuiltPlan {
+  const entries = finding.apply?.kind === 'defer-alwaysload' ? finding.apply.servers : []
+  if (entries.length === 0) return { plan: null, notes: [] }
+
+  // Version gate: server-level alwaysLoad shipped in v2.1.121. Below that
+  // (or undeterminable) the key is inert — tools defer normally and there is
+  // no startup block — so "removing the cost" would be a false claim.
+  const installed = r.claudeVersion()
+  const parsed = installed === null ? null : parseVersion(installed)
+  if (parsed === null) {
+    return { plan: null, notes: [`skipped: could not determine the installed Claude Code version; removing alwaysLoad is only meaningful on v${ALWAYSLOAD_MIN_VERSION}+`] }
+  }
+  if (versionPredates(installed!, ALWAYSLOAD_MIN_VERSION)) {
+    return { plan: null, notes: [`skipped: installed Claude Code v${parsed.join('.')} predates v${ALWAYSLOAD_MIN_VERSION}, where server-level alwaysLoad shipped; the pin is inert there`] }
+  }
+
+  const docs = new ConfigDocs(r.homeDir)
+  const skips: string[] = []
+  const pathNotes: Record<string, string> = {}
+  const addPathNote = pathNoteAdder(pathNotes)
+
+  for (const { server, paths } of entries) {
+    let removed = false
+    for (const path of paths) {
+      const state = docs.load(path)
+      if (!state) continue
+      const container = state.doc.mcpServers
+      if (!container || typeof container !== 'object') continue
+      const key = findServerKey(container as Record<string, unknown>, server)
+      if (!key) continue
+      const entry = (container as Record<string, unknown>)[key]
+      if (!entry || typeof entry !== 'object' || (entry as Record<string, unknown>)['alwaysLoad'] !== true) continue
+      delete (entry as Record<string, unknown>)['alwaysLoad']
+      state.dirty = true
+      removed = true
+      // alwaysLoad also blocks session startup on the server's connection
+      // (capped at 5s), so unpinning removes that startup cost too.
+      addPathNote(path, `unpins ${server}: its schema defers on demand and session startup no longer blocks up to ${ALWAYSLOAD_STARTUP_CAP_SECONDS}s on its connection`)
+    }
+    if (!removed) skips.push(`skipped ${server}: no "alwaysLoad": true entry found in its config files`)
+  }
+
+  const changes = docs.changes()
+  const notes = [...docs.errorNotes(), ...skips]
+  if (changes.length === 0) return { plan: null, notes }
+  return {
+    plan: mcpPlan('defer-alwaysload', finding.id, `Unpin ${entries.length === 1 ? 'an alwaysLoad MCP server' : 'alwaysLoad MCP servers'}`, changes),
+    notes: [...notes, NEXT_SESSION_NOTE],
+    ...(Object.keys(pathNotes).length > 0 ? { pathNotes } : {}),
+  }
+}
+
+// mcp-defer-threshold -> defer-threshold: retune the ENABLE_TOOL_SEARCH auto
+// override in place. The detector found the key in config, so this is always
+// a value rewrite (or removal), never an env-object creation.
+function buildDeferThreshold(finding: WasteFinding, r: ResolvedPaths): BuiltPlan {
+  const payload = finding.apply?.kind === 'defer-threshold' ? finding.apply : null
+  if (!payload) return { plan: null, notes: [] }
+  if (payload.settingScope === SHELL_PROFILE_SCOPE) {
+    const replacement = payload.removeOverride ? undefined : `${ENABLE_TOOL_SEARCH_VAR}=auto:${payload.recommendedPercent}`
+    return { plan: null, notes: shellOverrideManualNotes(payload.settingPath, r.homeDir, replacement) }
+  }
+
+  const docs = new ConfigDocs(r.homeDir)
+  const state = docs.load(payload.settingPath)
+  if (!state) return { plan: null, notes: docs.errorNotes() }
+  const env = envContainer(state)
+  if (!env || !(ENABLE_TOOL_SEARCH_VAR in env)) {
+    return { plan: null, notes: [`skipped: ${ENABLE_TOOL_SEARCH_VAR} is no longer set in ${shortPath(payload.settingPath, r.homeDir)}`] }
+  }
+  if (payload.removeOverride) {
+    // Defs already exceed the default auto threshold: the override is pure
+    // downside, so deleting it restores default auto behavior, which defers.
+    delete env[ENABLE_TOOL_SEARCH_VAR]
+  } else {
+    env[ENABLE_TOOL_SEARCH_VAR] = `auto:${payload.recommendedPercent}`
+  }
+  state.dirty = true
+
+  const shown = shortPath(payload.settingPath, r.homeDir)
+  const description = payload.removeOverride
+    ? `Remove the ${ENABLE_TOOL_SEARCH_VAR}=${payload.value} override from ${shown} (the default auto threshold already defers this volume)`
+    : `Tighten ${ENABLE_TOOL_SEARCH_VAR} to auto:${payload.recommendedPercent} in ${shown}`
+  return {
+    plan: mcpPlan('defer-threshold', finding.id, description, docs.changes()),
+    notes: [NEXT_SESSION_NOTE],
+  }
 }
 
 // ---------------------------------------------------------------------------
