@@ -18,11 +18,12 @@ const savedEnv = {
 
 function withPlatform<T>(platform: typeof process.platform, run: () => T): T {
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-  Object.defineProperty(process, 'platform', { value: platform })
+  Object.defineProperty(process, 'platform', { value: platform, enumerable: true, configurable: true })
   try {
     return run()
   } finally {
     if (descriptor) Object.defineProperty(process, 'platform', descriptor)
+    else delete (process as { platform?: NodeJS.Platform }).platform
   }
 }
 
