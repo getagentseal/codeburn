@@ -18,6 +18,8 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
+**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 31 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
+
 You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
 
 CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **31 AI tools**.
@@ -270,6 +272,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
   <a href="docs/providers/zerostack.md" title="Zerostack"><img src="assets/providers/zerostack.png" alt="Zerostack" height="34" /></a>
   <a href="docs/providers/grok.md" title="Grok Build"><img src="assets/providers/grok.png" alt="Grok Build" height="34" /></a>
   <a href="docs/providers/zcode.md" title="ZCode"><img src="assets/providers/zcode.jpg" alt="ZCode" height="34" /></a>
+  <a href="docs/providers/zed.md" title="Zed"><img src="assets/providers/zed.jpg" alt="Zed" height="34" /></a>
   <a href="docs/providers/hermes.md" title="Hermes Agent"><img src="assets/providers/hermes.png" alt="Hermes Agent" height="34" /></a>
 </p>
 
@@ -324,6 +327,9 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 
 | Command | What it does |
 |---------|--------------|
+| `codeburn audit` | Per provider-model token source table: where every number comes from |
+| `codeburn context` | What fills a session's context window: interactive browser (Claude Code and Codex) |
+| `codeburn context <id> --json` | The same context tree, scriptable |
 | `codeburn optimize` | Scan for waste and print copy-paste fixes (last 30 days) |
 | `codeburn optimize -p week` | Scope the waste scan to the last 7 days |
 | `codeburn compare` | Side-by-side model comparison |
@@ -496,15 +502,16 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 | **Claude Code** | `~/.claude/projects/<sanitized-path>/<session-id>.jsonl` | Each assistant entry carries model name, token usage (input, output, cache read, cache write), `tool_use` blocks, and timestamps. |
 | **Claude (multiple config dirs)** | Set via `CLAUDE_CONFIG_DIRS` (e.g. `~/.claude-work:~/.claude-personal`) | Scans every listed directory and merges sessions into one row per project so totals reflect all your Claude usage. Use `:` on POSIX, `;` on Windows; overrides `CLAUDE_CONFIG_DIR`. Missing or unreadable directories are skipped. |
 | **Codex (OpenAI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Reads `token_count` events (per-call and cumulative usage) and `function_call` entries for tool tracking; attributes cost by project working directory. `codeburn report --provider codex` views Codex alone. |
-| **Cursor** | SQLite `state.vscdb` under `globalStorage`: macOS `~/Library/Application Support/Cursor/User/globalStorage/`, Linux `~/.config/Cursor/User/globalStorage/`, Windows `%APPDATA%/Cursor/User/globalStorage/`; results cached at `~/.cache/codeburn/cursor-results.json` | Token counts live in `cursorDiskKV` entries with a `bubbleId:` prefix; the cache auto-invalidates when the database changes. "Auto" mode hides the model, so cost is estimated at Sonnet rates (labeled "Auto (Sonnet est.)"), and a Languages panel replaces Core Tools/Shell/MCP since Cursor logs no individual tool calls. First run on a large database can take a minute, then results are cached. |
+| **Cursor** | SQLite `state.vscdb` under `globalStorage`: macOS `~/Library/Application Support/Cursor/User/globalStorage/`, Linux `~/.config/Cursor/User/globalStorage/`, Windows `%APPDATA%/Cursor/User/globalStorage/`; results cached at `~/.cache/codeburn/cursor-results.json` | Input tokens come from Cursor's own per-conversation context meter (`composerData.promptTokenBreakdown`), credited once per conversation on a stable anchor; tool calls and shell commands are read from the agent stream (`agentKv`), and Composer house models are priced from Cursor's published rates. Output is a reply-text estimate and cache tokens are server-side only, so figures are marked estimated and undercount the Cursor admin console for long conversations. The cache auto-invalidates when the database changes; first run on a large database can take a minute. |
 | **OpenCode** | SQLite `~/.local/share/opencode/opencode*.db` (respects `XDG_DATA_HOME`) | Queries `session`, `message`, and `part` read-only and recalculates cost via LiteLLM (falling back to OpenCode's own cost field for unpriced models). Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double counting; multiple channel databases are supported. |
 | **Gemini CLI** | `~/.gemini/tmp/<project>/chats/session-*.json` | One JSON file per session with real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Input is reported inclusive of cached, so CodeBurn subtracts cached before pricing to avoid double charging. |
 | **Antigravity (CLI & IDE)** | Session files under `.gemini/` folders, plus the running language server | Pulls granular trajectory and pricing from the language server process. For the short-lived CLI, optionally install a status-line hook with `codeburn antigravity-hook install` so usage is captured between menubar refreshes. The IDE is detected via the `--app-data-dir antigravity-ide` flag on Windows. |
-| **GitHub Copilot** | `~/.copilot/session-state/` (legacy CLI) and VS Code/VSCodium `workspaceStorage/*/GitHub.copilot-chat/transcripts/` | Editor transcripts carry no explicit token counts, so tokens are estimated from content length and the model is inferred from tool call ID prefixes. |
+| **GitHub Copilot** | `~/.copilot/session-state/` (legacy CLI); VS Code/VSCodium `workspaceStorage/*` chat sessions, `GitHub.copilot-chat/transcripts/`, and the `agent-traces.db` OpenTelemetry store; JetBrains IDEs (IntelliJ, PyCharm, …) under `~/.config/github-copilot/<ide>/<kind>/<storeId>/copilot-*-nitrite.db` | The OTel SQLite store is preferred when present (it carries real input/output/cache token counts). Other sources carry no explicit counts, so tokens are estimated from content length and the model is inferred from tool call ID prefixes. JetBrains sessions read from a Nitrite (H2 MVStore) `.db`; project comes from the plugin's `projectName` field (else the `.git` root of a referenced file). See [docs/providers/copilot.md](docs/providers/copilot.md). |
 | **Kiro** | `.chat` JSON files | Token counts are estimated from content length. The model is not exposed, so sessions are labeled `kiro-auto` and costed at Sonnet rates. |
 | **Mistral Vibe** | `~/.vibe/logs/session/` (or `$VIBE_HOME/logs/session/`); each folder has `meta.json` + `messages.jsonl` | Reads cumulative prompt/completion totals and model pricing from `meta.json`, then the first user prompt and tool calls from `messages.jsonl`. Emits one record per session (source data is cumulative, not per turn); subagent sessions under `agents/` are counted separately. |
 | **OpenClaw** | `~/.openclaw/agents/*.jsonl` (legacy `.clawdbot`, `.moltbot`, `.moldbot`) | Token usage comes from assistant message `usage` blocks; the model from `modelId` or `message.model`. |
 | **Warp** | `~/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite` (Preview fallback) | Reads `agent_conversations`, `ai_queries`, and `blocks`, emitting one call per finalized exchange. Exchange token share is estimated from prompt-size weighting normalized to conversation totals; `run_command` blocks attach to the nearest preceding exchange by timestamp. |
+| **Zed** | SQLite `~/Library/Application Support/Zed/threads/threads.db` (Linux `~/.local/share/zed/threads/`) | One row per agent thread; the blob is zstd-compressed JSON with per-request token usage (input, output, cache read, cache write) and the thread's model. Threads are topped up to the exact cumulative counter so totals match the store. Needs Node 22.15+ for built-in zstd. |
 | **Forge** | SQLite `~/.forge/.forge.db` | Queries `conversations` read-only and parses `context.messages`. Assistant usage entries provide prompt, completion, and cached counts; CodeBurn subtracts cached from prompt for input pricing, emits one call per assistant message, and extracts tool calls plus shell commands. |
 | **Pi / OMP** | `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl` (Pi), `~/.omp/agent/sessions/<sanitized-cwd>/*.jsonl` (OMP) | Each assistant message carries usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` blocks. Tool names normalize to the standard set (`bash` → `Bash`, `dispatch_agent` → `Agent`); bash commands come from `toolCall.arguments.command`. |
 | **Codebuff** (formerly Manicode) | `~/.config/manicode/projects/<project>/chats/<chatId>/chat-messages.json` (honors `CODEBUFF_DATA_DIR`; walks `manicode-dev` / `manicode-staging`) | Bills in credits, so each completed assistant message is costed at the public rate of $0.01/credit via `msg.credits`. When an upstream provider's stashed RunState records token-level usage (`message.metadata.runState.sessionState.mainAgentState.messageHistory[*].providerOptions`), the real tokens and LiteLLM cost take precedence. Native tool names (`read_files`, `str_replace`, `run_terminal_command`, `spawn_agents`) normalize to `Read`, `Edit`, `Bash`, `Agent`. |
@@ -568,6 +575,7 @@ Sponsoring as a team or company? Your logo lands right here, in front of every d
 ## License
 
 MIT
+CodeBurn is an AgentSeal open-source project and is not affiliated with CodeBurn Bt. or codeburn.hu.
 
 ## Credits
 

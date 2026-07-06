@@ -1,5 +1,6 @@
 import type { Dirent } from 'fs'
-import { readdir, readFile } from 'fs/promises'
+import { existsSync } from 'fs'
+import { readdir, readFile, stat } from 'fs/promises'
 import { basename, dirname, extname, join } from 'path'
 import { homedir } from 'os'
 
@@ -42,14 +43,20 @@ const toolNameMap: Record<string, string> = {
   runCommand: 'Bash',
   run_command: 'Bash',
   shell: 'Bash',
+  executeBash: 'Bash',
   searchFiles: 'Grep',
   search_files: 'Grep',
   grep: 'Grep',
+  grepSearch: 'Grep',
   findFiles: 'Glob',
   find_files: 'Glob',
   glob: 'Glob',
+  fileSearch: 'Glob',
   webSearch: 'WebSearch',
   web_search: 'WebSearch',
+  fsWrite: 'Edit',
+  strReplace: 'Edit',
+  listDirectory: 'LS',
 }
 
 type KiroChatMessage = {
@@ -145,7 +152,7 @@ function extractText(value: unknown): string {
   if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join('\n')
   const record = asRecord(value)
   if (!record) return ''
-  for (const key of ['content', 'text', 'message', 'value', 'parts']) {
+  for (const key of ['content', 'text', 'message', 'value', 'parts', 'entries']) {
     const text = extractText(record[key])
     if (text) return text
   }
@@ -256,7 +263,7 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
   if (modelId === 'auto' || !modelId) modelId = 'kiro-auto'
 
   const executionId = stringField(data, ['executionId', 'id']) || basename(sourcePath)
-  const sessionId = stringField(data, ['sessionId', 'conversationId', 'workflowId']) ||
+  const sessionId = stringField(data, ['sessionId', 'chatSessionId', 'conversationId', 'workflowId']) ||
     stringField(metadata, ['workflowId', 'sessionId']) ||
     basename(dirname(sourcePath)) ||
     executionId
@@ -285,29 +292,60 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
     allTools.push(...directTools)
   }
 
-  for (const key of MODERN_CONVERSATION_KEYS) {
-    const messages = data[key]
-    if (!Array.isArray(messages)) continue
+  // Check both data.context[key] and data[key] for conversation arrays.
+  // Kiro IDE stores messages at data.context.messages in current builds.
+  const context = asRecord(data['context'])
+  const conversationSources = context ? [context, data] : [data]
 
-    for (const message of messages) {
-      const text = extractText(message)
-      const role = messageRole(message)
-      const tools = extractStructuredToolNames(message, text)
+  for (const source of conversationSources) {
+    let found = false
+    for (const key of MODERN_CONVERSATION_KEYS) {
+      const messages = (source as Record<string, unknown>)[key]
+      if (!Array.isArray(messages)) continue
 
-      if (role === 'human' || role === 'user') {
-        if (!text) continue
-        inputChars += text.length
-        pendingUserMessage = text.slice(0, 500)
-      } else if (role === 'bot' || role === 'assistant' || role === 'ai' || role === 'model') {
-        if (text) outputChars += text.length
-        if (text || tools.length > 0) hasOutputActivity = true
-        allTools.push(...tools)
-      } else if (role === 'tool' || role === 'system') {
-        if (text) inputChars += text.length
-        allTools.push(...tools)
+      for (const message of messages) {
+        const text = extractText(message)
+        const role = messageRole(message)
+        const tools = extractStructuredToolNames(message, text)
+
+        if (role === 'human' || role === 'user') {
+          if (!text) continue
+          inputChars += text.length
+          pendingUserMessage = text.slice(0, 500)
+        } else if (role === 'bot' || role === 'assistant' || role === 'ai' || role === 'model') {
+          if (text) outputChars += text.length
+          if (text || tools.length > 0) hasOutputActivity = true
+          allTools.push(...tools)
+        } else if (role === 'tool' || role === 'system') {
+          if (text) inputChars += text.length
+          allTools.push(...tools)
+        }
+      }
+      found = true
+      break
+    }
+    if (found) break
+  }
+
+  // Extract tools from usageSummary (reliable structured tool list in current Kiro builds).
+  // usageSummary is an array of per-turn entries with optional usedTools field.
+  const usageSummary = data['usageSummary']
+  if (Array.isArray(usageSummary)) {
+    for (const entry of usageSummary) {
+      const rec = asRecord(entry)
+      if (!rec) continue
+      const usedTools = rec['usedTools']
+      if (Array.isArray(usedTools)) {
+        for (const tool of usedTools) {
+          if (typeof tool === 'string' && tool) {
+            // Strip mcp_ prefix for cleaner display (e.g. mcp_aws_sentral_mcp_search_accounts -> aws_sentral_mcp_search_accounts)
+            const cleaned = tool.startsWith('mcp_') ? tool.slice(4) : tool
+            allTools.push(toolNameMap[cleaned] ?? cleaned)
+            hasOutputActivity = true
+          }
+        }
       }
     }
-    break
   }
 
   if (!hasOutputActivity) return results
@@ -542,6 +580,97 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const record = asRecord(data)
       if (!record) return
 
+      // Workspace-session files (newer Kiro builds): have history[] with message.role/content
+      // and a top-level sessionId/selectedModel/workspaceDirectory.
+      const historyArr = record['history']
+      if (Array.isArray(historyArr) && typeof record['sessionId'] === 'string') {
+        const sessionId = record['sessionId'] as string
+        const modelRaw = stringField(record, ['selectedModel'])
+        let modelId = normalizeModelId(modelRaw)
+        if (modelId === 'auto' || !modelId) modelId = 'kiro-auto'
+
+        let inputChars = 0
+        let outputChars = 0
+        let pendingUserMessage = ''
+        const allTools: string[] = []
+        let hasExecutionRefs = false
+        let hasRealAssistantContent = false
+
+        for (const item of historyArr) {
+          const rec = asRecord(item)
+          if (!rec) continue
+
+          // Track if this session references execution files (which are parsed separately)
+          const execBacked = typeof rec['executionId'] === 'string'
+          if (execBacked) hasExecutionRefs = true
+
+          const msg = asRecord(rec['message'])
+          if (!msg) continue
+          const role = stringField(msg, ['role'])
+          const text = extractText(msg['content'])
+          if (role === 'user' && text) {
+            inputChars += text.length
+            pendingUserMessage = text.slice(0, 500)
+          } else if (role === 'assistant' && !execBacked && text && text !== 'On it.') {
+            // An item carrying an executionId is execution-backed: its content is
+            // counted from the execution file, so counting it here would double-count.
+            // 'On it.' is the observed placeholder text Kiro writes for such stubs
+            // when the executionId rides a separate history item.
+            outputChars += text.length
+            hasRealAssistantContent = true
+          }
+        }
+
+        // Skip workspace-session entries that are pure execution stubs:
+        // they reference executionIds (parsed separately as execution files)
+        // and have no real assistant content beyond "On it." placeholders.
+        // This avoids double-counting input tokens from both paths.
+        if (hasExecutionRefs && !hasRealAssistantContent) return
+
+        // Skip sessions with no meaningful content
+        if (inputChars === 0 && outputChars === 0) return
+
+        // Use file mtime as timestamp (workspace-session files don't carry startTime).
+        // No stat means no usable timestamp: drop the call like the other parse paths.
+        let timestamp: string
+        try {
+          const s = await stat(source.path)
+          timestamp = new Date(s.mtimeMs).toISOString()
+        } catch {
+          return
+        }
+
+        const dedupKey = `kiro:ws-session:${sessionId}`
+        if (seenKeys.has(dedupKey)) return
+        seenKeys.add(dedupKey)
+
+        const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
+        const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+        const costUSD = calculateCost(modelId, inputTokens, outputTokens, 0, 0, 0)
+
+        yield {
+          provider: 'kiro',
+          model: modelId,
+          inputTokens,
+          outputTokens,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          webSearchRequests: 0,
+          costUSD,
+          costIsEstimated: true,
+          tools: [...new Set(allTools)],
+          bashCommands: [],
+          timestamp,
+          speed: 'standard',
+          deduplicationKey: dedupKey,
+          userMessage: pendingUserMessage,
+          sessionId,
+        }
+        return
+      }
+
       const metadata = asRecord(record['metadata'])
       const calls = Array.isArray(record['chat']) && metadata
         ? parseChatFile(record as unknown as KiroChatFile, stringField(metadata, ['workflowId']) || basename(source.path, '.chat'), source.project, seenKeys)
@@ -555,15 +684,25 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
 // --- Discovery ---
 
-function getKiroAgentDir(override?: string): string {
-  if (override) return override
+function getKiroAgentDir(override?: string): string[] {
+  if (override) return [override]
   if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')
+    return [join(homedir(), 'Library', 'Application Support', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')]
   }
   if (process.platform === 'win32') {
-    return join(homedir(), 'AppData', 'Roaming', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')
+    return [join(homedir(), 'AppData', 'Roaming', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')]
   }
-  return join(homedir(), '.config', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')
+  // On Linux, scan both ~/.kiro-server/data/... (remote dev boxes) and
+  // ~/.config/Kiro/... (local installs). Both can have data simultaneously
+  // if the user switches between local and remote, or if .kiro-server exists
+  // but is stale while .config/Kiro has current sessions.
+  const paths: string[] = []
+  const kiroServer = join(homedir(), '.kiro-server', 'data', 'User', 'globalStorage', 'kiro.kiroagent')
+  const kiroConfig = join(homedir(), '.config', 'Kiro', 'User', 'globalStorage', 'kiro.kiroagent')
+  if (existsSync(kiroServer)) paths.push(kiroServer)
+  if (existsSync(kiroConfig)) paths.push(kiroConfig)
+  // Fallback to config path if neither exists (will just find nothing)
+  return paths.length > 0 ? paths : [kiroConfig]
 }
 
 function getKiroWorkspaceStorageDir(override?: string): string {
@@ -667,11 +806,36 @@ async function discoverSessions(agentDir: string, workspaceStorageDir: string, c
     }
   }
 
+  // --- Kiro IDE workspace-sessions (newer builds store session state here) ---
+  // These files contain history[].message with user prompts and assistant stubs
+  // plus executionId references. They capture sessions not written as per-execution files.
+  try {
+    const wsSessionsDir = join(agentDir, 'workspace-sessions')
+    const wsSessionDirs = await readdir(wsSessionsDir, { withFileTypes: true })
+    for (const dir of wsSessionDirs) {
+      if (!dir.isDirectory()) continue
+      // Directory name is base64-encoded workspace path
+      let project = 'kiro-ide'
+      try {
+        const decoded = Buffer.from(dir.name.replace(/_/g, '='), 'base64').toString('utf-8')
+        if (decoded) project = basename(decoded)
+      } catch {}
+      // Skip bare homedir as project name
+      if (project === basename(homedir())) project = 'kiro-ide'
+
+      const sessionFiles = await readdir(join(wsSessionsDir, dir.name), { withFileTypes: true }).catch(() => [])
+      for (const sf of sessionFiles) {
+        if (!sf.isFile() || !sf.name.endsWith('.json') || sf.name === 'sessions.json') continue
+        sources.push({ path: join(wsSessionsDir, dir.name, sf.name), project, provider: 'kiro' })
+      }
+    }
+  } catch {}
+
   return sources
 }
 
 export function createKiroProvider(agentDirOverride?: string, workspaceStorageDirOverride?: string, cliSessionsDirOverride?: string): Provider {
-  const agentDir = getKiroAgentDir(agentDirOverride)
+  const agentDirs = getKiroAgentDir(agentDirOverride)
   const wsDir = getKiroWorkspaceStorageDir(workspaceStorageDirOverride)
   // When overrides are provided (tests), don't scan real CLI sessions unless explicitly given
   const cliDir = cliSessionsDirOverride ?? (agentDirOverride ? join(agentDirOverride, '..', 'cli-sessions') : join(process.env['KIRO_HOME'] || join(homedir(), '.kiro'), 'sessions', 'cli'))
@@ -693,7 +857,19 @@ export function createKiroProvider(agentDirOverride?: string, workspaceStorageDi
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(agentDir, wsDir, cliDir)
+      const allSources: SessionSource[] = []
+      for (const agentDir of agentDirs) {
+        const sources = await discoverSessions(agentDir, wsDir, cliDir)
+        allSources.push(...sources)
+      }
+      // CLI sessions are only scanned once (first agentDir pass includes them);
+      // deduplicate by path in case multiple agentDirs share the same CLI dir.
+      const seen = new Set<string>()
+      return allSources.filter(s => {
+        if (seen.has(s.path)) return false
+        seen.add(s.path)
+        return true
+      })
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

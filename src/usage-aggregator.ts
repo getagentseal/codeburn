@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory, type DateRange } from './types.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, buildMenubarPayload } from './menubar-json.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays } from './parser.js'
-import { getLocalModelSavingsConfigHash, getShortModelName } from './models.js'
+import { getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -53,12 +53,19 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
   }
 }
 
+export function getDailyCacheConfigHash(): string {
+  const savingsHash = getLocalModelSavingsConfigHash()
+  const overridesHash = getPriceOverridesConfigHash()
+  if (!overridesHash) return savingsHash
+  return `localModelSavings=${savingsHash}\u0002priceOverrides=${overridesHash}`
+}
+
 async function hydrateCache(): Promise<DailyCache> {
   try {
     return await ensureCacheHydrated(
       (range) => parseAllSessions(range, 'all'),
       aggregateProjectsIntoDays,
-      getLocalModelSavingsConfigHash(),
+      getDailyCacheConfigHash(),
     )
   } catch (err) {
     // Previously swallowed silently, which turned any backfill failure into an

@@ -1081,7 +1081,7 @@ function applyLocalModelSavings(call: ParsedApiCall): ParsedApiCall {
   }
 }
 
-function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
+export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   if (entry.type !== 'assistant') return null
   const msg = entry.message as AssistantMessageContent | undefined
   if (!msg?.usage || !msg?.model) return null
@@ -1148,7 +1148,7 @@ function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   })
 }
 
-function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
+export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
   const firstIdxById = new Map<string, number>()
   const lastIdxById = new Map<string, number>()
   for (let i = 0; i < entries.length; i++) {
@@ -1335,7 +1335,7 @@ function buildSessionSummary(
       totalCacheWrite += call.usage.cacheCreationInputTokens
       apiCalls++
 
-      const modelKey = getShortModelName(call.model)
+      const modelKey = call.provider === 'devin' ? call.model : getShortModelName(call.model)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
           calls: 0,
@@ -1707,7 +1707,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     costUSD: call.costUSD,
     tools,
     mcpTools: extractMcpTools(tools),
-    skills: [],
+    skills: call.skills ?? [],
     subagentTypes: call.subagentTypes ?? [],
     hasAgentSpawn: tools.includes('Agent'),
     hasPlanMode: tools.includes('EnterPlanMode'),
@@ -1746,7 +1746,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     timestamp: call.timestamp,
     tools: call.tools,
     bashCommands: call.bashCommands,
-    skills: [],
+    skills: call.skills ?? [],
     subagentTypes: call.subagentTypes ?? [],
     deduplicationKey: call.deduplicationKey,
     project: call.project,

@@ -27,6 +27,9 @@ export type ParsedProviderCall = {
   // Subagent types spawned in this call (e.g. 'general-purpose'). Feeds the
   // Skills & Agents breakdown; optional since most providers don't expose it.
   subagentTypes?: string[]
+  // Skill names invoked in this call (e.g. 'commit'). Feeds the Skills & Agents
+  // breakdown; optional since most providers don't expose it.
+  skills?: string[]
   timestamp: string
   speed: 'standard' | 'fast'
   deduplicationKey: string

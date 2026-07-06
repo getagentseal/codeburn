@@ -5,6 +5,13 @@ import { certFingerprint } from './pairing.js'
 import type { Identity } from './identity.js'
 import type { UsageQuery } from './share-server.js'
 
+// req.setTimeout only arms once connected; it does not abort a stalled TCP
+// connect, so an unreachable peer would otherwise ride the OS connect timeout
+// (~75s on macOS). Cap the TCP-connect phase separately; it clears the instant
+// the socket connects, so the TLS handshake and the read/approval timeouts
+// (req.setTimeout) are unaffected even over a slow VPN link.
+const CONNECT_TIMEOUT_MS = 3000
+
 export type PeerEndpoint = {
   identity: Identity // our own identity (we present our cert so the peer can bind a token to us)
   host: string
@@ -59,6 +66,14 @@ function call(
     )
     req.on('error', reject)
     req.setTimeout(timeoutMs, () => req.destroy(new Error('peer timed out')))
+    const connectTimer = setTimeout(() => req.destroy(new Error('peer unreachable')), CONNECT_TIMEOUT_MS)
+    connectTimer.unref()
+    req.once('socket', (socket) => {
+      const clear = () => clearTimeout(connectTimer)
+      socket.once('connect', clear)
+      socket.once('secureConnect', clear)
+    })
+    req.once('close', () => clearTimeout(connectTimer))
     if (body) req.write(body)
     req.end()
   })

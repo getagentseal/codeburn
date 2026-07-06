@@ -8,6 +8,11 @@ private let cachedVersionKey = "UpdateChecker.latestVersion"
 private let cachedCliVersionKey = "UpdateChecker.latestCliVersion"
 private let updateTimeoutSeconds: UInt64 = 120
 private let maxUpdateStderrBytes = 64 * 1024
+// The installer that scans `mac-v*` releases for the menubar zip (instead of
+// `/releases/latest`, which can resolve to a CLI release that carries no menubar
+// asset) landed in CLI 0.9.9 (commit 909efcf). Older CLIs cannot perform a correct
+// `menubar --force`, so we refuse to run them and ask the user to upgrade the CLI first.
+private let minCliVersionForUpdate = "0.9.9"
 
 private final class LockedDataBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -49,6 +54,13 @@ final class UpdateChecker {
         let normalizedInstalled = AppVersion.normalize(installed)
         guard !normalizedInstalled.isEmpty else { return false }
         return normalizedLatest.compare(normalizedInstalled, options: .numeric) == .orderedDescending
+    }
+
+    /// True when the installed CLI predates the `menubar --force` fix and would fail to
+    /// install the new app. Distinct from `cliUpdateAvailable`: a CLI can be behind the
+    /// latest release yet still new enough (>= 0.9.9) to update the menubar correctly.
+    var cliTooOldForUpdate: Bool {
+        Self.isCliTooOld(installed: installedCliVersion)
     }
 
     var cliUpdateCommand: String {
@@ -146,7 +158,19 @@ final class UpdateChecker {
         return nil
     }
 
+    nonisolated static func isCliTooOld(installed: String?) -> Bool {
+        guard let installed else { return false }
+        let normalizedInstalled = AppVersion.normalize(installed)
+        guard !normalizedInstalled.isEmpty else { return false }
+        return AppVersion.normalize(minCliVersionForUpdate).compare(normalizedInstalled, options: .numeric) == .orderedDescending
+    }
+
     func performUpdate() {
+        installedCliVersion = Self.queryInstalledCliVersion()
+        if cliTooOldForUpdate {
+            updateError = "Your codeburn CLI (\(AppVersion.display(installedCliVersion ?? ""))) is too old to update the menubar. Run “\(cliUpdateCommand)” first, then try again."
+            return
+        }
         isUpdating = true
         updateError = nil
 

@@ -103,6 +103,15 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
+                Picker("Scope", selection: Binding(
+                    get: { store.menubarScope },
+                    set: { store.setMenubarScope($0) }
+                )) {
+                    ForEach(MenubarScope.allCases) { scope in
+                        Text(scope.rawValue).tag(scope)
+                    }
+                }
+                .pickerStyle(.menu)
                 Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }

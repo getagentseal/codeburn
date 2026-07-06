@@ -722,3 +722,216 @@ describe('kiro provider - CLI session discovery', () => {
     expect(sessions).toHaveLength(0)
   })
 })
+
+describe('kiro provider - context.messages with entries', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'kiro-ctx-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('parses context.messages using entries field', async () => {
+    // Simulates the real Kiro IDE format where messages use "entries" not "content"
+    const file = JSON.stringify({
+      executionId: 'exec-ctx-001',
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      chatSessionId: 'session-ctx-001',
+      context: {
+        messages: [
+          { role: 'human', entries: ['What is the meaning of life?'] },
+          { role: 'bot', entries: ['The meaning of life is 42, according to Douglas Adams.'] },
+          { role: 'human', entries: ['Tell me more'] },
+          { role: 'bot', entries: ['The answer comes from The Hitchhiker\'s Guide to the Galaxy.'] },
+        ],
+      },
+    })
+
+    const wsHash = 'a'.repeat(32)
+    const subDir = 'b'.repeat(32)
+    await mkdir(join(tmpDir, wsHash, subDir), { recursive: true })
+    await writeFile(join(tmpDir, wsHash, subDir, 'exec-ctx-001'), file)
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+    expect(sessions.length).toBeGreaterThan(0)
+
+    const calls: ParsedProviderCall[] = []
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+        calls.push(call)
+      }
+    }
+
+    expect(calls.length).toBeGreaterThan(0)
+    const call = calls[0]!
+    expect(call.inputTokens).toBeGreaterThan(0)
+    expect(call.outputTokens).toBeGreaterThan(0)
+    expect(call.sessionId).toBe('session-ctx-001')
+  })
+
+  it('extracts tools from usageSummary', async () => {
+    const file = JSON.stringify({
+      executionId: 'exec-tools-001',
+      workflowType: 'chat-agent',
+      status: 'succeed',
+      startTime: 1777333000000,
+      chatSessionId: 'session-tools-001',
+      context: {
+        messages: [
+          { role: 'human', entries: ['Search for accounts'] },
+          { role: 'bot', entries: ['Found 5 accounts.'] },
+        ],
+      },
+      usageSummary: [
+        { usedTools: ['mcp_aws_sentral_mcp_search_accounts'], usage: 0.5, unit: 'credit' },
+        { usedTools: ['executeBash', 'readFile'], usage: 1.0, unit: 'credit' },
+      ],
+    })
+
+    const wsHash = 'c'.repeat(32)
+    const subDir = 'd'.repeat(32)
+    await mkdir(join(tmpDir, wsHash, subDir), { recursive: true })
+    await writeFile(join(tmpDir, wsHash, subDir, 'exec-tools-001'), file)
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+        calls.push(call)
+      }
+    }
+
+    expect(calls.length).toBeGreaterThan(0)
+    const call = calls[0]!
+    expect(call.tools).toContain('aws_sentral_mcp_search_accounts')
+    expect(call.tools).toContain('Bash')
+    expect(call.tools).toContain('Read')
+  })
+
+  it('skips execution index files with executions array', async () => {
+    // The session index file has {executions: [...], version: 2}
+    const indexFile = JSON.stringify({
+      executions: [
+        { executionId: 'exec-001', type: 'chat-agent', status: 'succeed', startTime: 1777333000000 },
+      ],
+      version: 2,
+    })
+
+    const wsHash = 'e'.repeat(32)
+    await mkdir(join(tmpDir, wsHash), { recursive: true })
+    await writeFile(join(tmpDir, wsHash, 'f'.repeat(32)), indexFile)
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+        calls.push(call)
+      }
+    }
+
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('kiro provider - workspace-sessions format', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'kiro-wss-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('discovers and parses workspace-sessions files', async () => {
+    // Create workspace-sessions/<base64>/<sessionId>.json
+    const wsSessionsDir = join(tmpDir, 'workspace-sessions', 'L3RtcC90ZXN0')
+    await mkdir(wsSessionsDir, { recursive: true })
+
+    const sessionFile = JSON.stringify({
+      sessionId: 'ws-session-001',
+      title: 'Test session',
+      selectedModel: 'claude-opus-4.8',
+      workspaceDirectory: '/tmp/test',
+      history: [
+        { message: { role: 'user', content: [{ type: 'text', text: 'What is TypeScript?' }] } },
+        { message: { role: 'assistant', content: 'TypeScript is a typed superset of JavaScript.' } },
+        { message: { role: 'user', content: [{ type: 'text', text: 'How do I use generics?' }] } },
+        { message: { role: 'assistant', content: 'Generics allow you to create reusable components.' } },
+      ],
+    })
+
+    await writeFile(join(wsSessionsDir, 'ws-session-001.json'), sessionFile)
+    // Also need sessions.json (should be skipped)
+    await writeFile(join(wsSessionsDir, 'sessions.json'), '[]')
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+
+    const wsSessions = sessions.filter(s => s.path.includes('workspace-sessions'))
+    expect(wsSessions).toHaveLength(1)
+    expect(wsSessions[0]!.path).toContain('ws-session-001.json')
+
+    const calls: ParsedProviderCall[] = []
+    for (const source of wsSessions) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+        calls.push(call)
+      }
+    }
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.model).toBe('claude-opus-4-8')
+    expect(call.sessionId).toBe('ws-session-001')
+    expect(call.inputTokens).toBeGreaterThan(0)
+    expect(call.outputTokens).toBeGreaterThan(0)
+    expect(call.deduplicationKey).toBe('kiro:ws-session:ws-session-001')
+  })
+
+  it('skips workspace-sessions with only stub assistant replies referencing execution files', async () => {
+    const wsSessionsDir = join(tmpDir, 'workspace-sessions', 'L3RtcC90ZXN0')
+    await mkdir(wsSessionsDir, { recursive: true })
+
+    // Session where assistant only says "On it." with executionId refs
+    // (real output is in execution files — skip to avoid double-counting)
+    const sessionFile = JSON.stringify({
+      sessionId: 'ws-session-stub',
+      selectedModel: 'auto',
+      workspaceDirectory: '/tmp/test',
+      history: [
+        { message: { role: 'user', content: [{ type: 'text', text: 'Deploy the stack' }] } },
+        { message: { role: 'assistant', content: 'On it.' }, executionId: 'exec-ref-001' },
+      ],
+    })
+
+    await writeFile(join(wsSessionsDir, 'ws-session-stub.json'), sessionFile)
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for (const source of sessions) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) {
+        calls.push(call)
+      }
+    }
+
+    // Should be skipped: has executionId refs but no real assistant content
+    expect(calls).toHaveLength(0)
+  })
+
+  it('skips sessions.json file in workspace-sessions', async () => {
+    const wsSessionsDir = join(tmpDir, 'workspace-sessions', 'L3RtcC90ZXN0')
+    await mkdir(wsSessionsDir, { recursive: true })
+    await writeFile(join(wsSessionsDir, 'sessions.json'), '[]')
+
+    const provider = createKiroProvider(tmpDir, tmpDir, '/nonexistent')
+    const sessions = await provider.discoverSessions()
+    const wsSessions = sessions.filter(s => s.path.includes('workspace-sessions'))
+    expect(wsSessions).toHaveLength(0)
+  })
+})

@@ -9,7 +9,7 @@ import { sanitizeForSharing } from './sanitize.js'
 import { getSharingDir, loadPeers, savePeers } from './store.js'
 import { loadPricing } from '../models.js'
 import { buildMenubarPayloadForRange } from '../usage-aggregator.js'
-import { getDateRange, parseDateRangeFlags, formatDateRangeLabel, toPeriod } from '../cli-date.js'
+import { periodInfoFromQuery } from '../cli-date.js'
 
 function lanAddress(): string | null {
   for (const list of Object.values(networkInterfaces())) {
@@ -32,10 +32,7 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
   const peers = new PeerStore(await loadPeers(dir))
 
   const getUsage = async (q: UsageQuery): Promise<unknown> => {
-    const customRange = parseDateRangeFlags(q.from, q.to)
-    const periodInfo = customRange
-      ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
-      : getDateRange(toPeriod(q.period ?? 'month'))
+    const periodInfo = periodInfoFromQuery(q, 'month')
     return sanitizeForSharing(await buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false }))
   }
 

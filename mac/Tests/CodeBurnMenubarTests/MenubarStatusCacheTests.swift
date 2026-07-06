@@ -24,7 +24,8 @@ struct MenubarStatusCacheTests {
                 tools: [], skills: [], subagents: [], mcpServers: []
             ),
             optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-            history: HistoryBlock(daily: [])
+            history: HistoryBlock(daily: []),
+            combined: nil
         )
         return try! JSONEncoder().encode(p)
     }

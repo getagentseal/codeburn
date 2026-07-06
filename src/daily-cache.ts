@@ -5,13 +5,17 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 9: providers added since the v8 rollup (Grok, Hermes, ZCode) parse
-// usage that older binaries skipped, so days cached at v8 omit them and report
-// $0 for those providers across history. Raising MIN_SUPPORTED_VERSION to 9 too
-// forces a one-time full re-hydration so newly supported providers backfill
-// without a manual cache clear.
+// Bumped to 11: cursor accounting changed (real composer context tokens on
+// conversation-anchored records, Cursor-published composer pricing), so days
+// finalized under older versions carry the old double-counted agentKv estimates
+// and sonnet-proxy composer costs. Raising MIN_SUPPORTED_VERSION forces the
+// one-time full re-hydration that backfills history under the new accounting.
 //
-// v9 also requires token counts to be non-negative safe integers. Older daily
+// Providers added since the v8 rollup (Grok, Hermes, ZCode) parse usage that
+// older binaries skipped, so re-hydration backfills those newly supported
+// providers without a manual cache clear.
+//
+// v11 also requires token counts to be non-negative safe integers. Older daily
 // rollups may contain unsafe Antigravity uint64-underflow values that can crash
 // the menubar Swift decoder, so the same re-hydration clears unsafe token data.
 //
@@ -19,8 +23,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // category / provider). The `savingsConfigHash` field is invalidated separately
 // when the user changes their `localModelSavings` mapping so historical "saved"
 // totals stay in sync with the active baseline.
-export const DAILY_CACHE_VERSION = 9
-const MIN_SUPPORTED_VERSION = 9
+export const DAILY_CACHE_VERSION = 11
+const MIN_SUPPORTED_VERSION = 11
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {

@@ -36,4 +36,25 @@ struct UpdateCheckerTests {
 
         #expect(UpdateChecker.resolveLatestMenubarRelease(in: releases) == nil)
     }
+
+    @Test("flags CLI older than the menubar-update fix as too old")
+    func flagsCliBelowMinimumAsTooOld() {
+        #expect(UpdateChecker.isCliTooOld(installed: "0.9.8"))
+        #expect(UpdateChecker.isCliTooOld(installed: "v0.9.8"))
+        #expect(UpdateChecker.isCliTooOld(installed: "0.8.12"))
+    }
+
+    @Test("accepts CLI at or above the menubar-update fix version")
+    func acceptsCliAtOrAboveMinimum() {
+        #expect(!UpdateChecker.isCliTooOld(installed: "0.9.9"))
+        #expect(!UpdateChecker.isCliTooOld(installed: "0.9.10"))
+        #expect(!UpdateChecker.isCliTooOld(installed: "0.9.14"))
+        #expect(!UpdateChecker.isCliTooOld(installed: "1.0.0"))
+    }
+
+    @Test("does not flag when the CLI version is unknown")
+    func ignoresUnknownCliVersion() {
+        #expect(!UpdateChecker.isCliTooOld(installed: nil))
+        #expect(!UpdateChecker.isCliTooOld(installed: ""))
+    }
 }

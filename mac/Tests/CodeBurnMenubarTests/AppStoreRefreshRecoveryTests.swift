@@ -2,7 +2,40 @@ import Foundation
 import Testing
 @testable import CodeBurnMenubar
 
-private func menubarPayload(cost: Double) -> MenubarPayload {
+private func combinedUsage(cost: Double = 12.5) -> CombinedUsage {
+    CombinedUsage(
+        perDevice: [
+            CombinedDeviceUsage(
+                id: "local",
+                name: "MacBook",
+                local: true,
+                error: nil,
+                cost: cost,
+                calls: 3,
+                sessions: 2,
+                inputTokens: 100,
+                outputTokens: 50,
+                cacheCreateTokens: 10,
+                cacheReadTokens: 20,
+                totalTokens: 180
+            )
+        ],
+        combined: CombinedUsageTotals(
+            cost: cost,
+            calls: 3,
+            sessions: 2,
+            inputTokens: 100,
+            outputTokens: 50,
+            cacheCreateTokens: 10,
+            cacheReadTokens: 20,
+            totalTokens: 180,
+            deviceCount: 1,
+            reachableCount: 1
+        )
+    )
+}
+
+private func menubarPayload(cost: Double, combined: CombinedUsage? = nil) -> MenubarPayload {
     MenubarPayload(
         generated: "test",
         current: CurrentBlock(
@@ -30,7 +63,8 @@ private func menubarPayload(cost: Double) -> MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: []),
+        combined: combined
     )
 }
 
@@ -72,6 +106,140 @@ struct AppStoreRefreshRecoveryTests {
         #expect(!store.needsStatusPayloadRefresh)
         #expect(!store.hasStaleInteractivePayload)
         #expect(!store.shouldResetInteractiveRefreshPipeline)
+    }
+
+    @Test("payload cache partitions local and combined scope")
+    func payloadCachePartitionsByScope() {
+        let store = AppStore()
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 10),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 99, combined: combinedUsage(cost: 42)),
+            scope: .combined,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+
+        #expect(store.cachedPayloadForTesting(scope: .local, period: .today, provider: .all)?.current.cost == 10)
+        #expect(store.cachedPayloadForTesting(scope: .combined, period: .today, provider: .all)?.current.cost == 99)
+
+        store.selectedScope = .combined
+
+        #expect(store.payload.current.cost == 10)
+        #expect(store.payload.combined?.combined.cost == 42)
+    }
+
+    @Test("multi-day combined selection uses local cache path")
+    func multiDayCombinedSelectionUsesLocalCachePath() {
+        let store = AppStore()
+        let days: Set<String> = ["2026-06-01", "2026-06-02"]
+        store.selectedScope = .combined
+        store.selectedDays = days
+
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 18),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            days: days,
+            fetchedAt: Date()
+        )
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 99, combined: combinedUsage(cost: 44)),
+            scope: .combined,
+            period: .today,
+            provider: .all,
+            days: days,
+            fetchedAt: Date()
+        )
+
+        #expect(store.activeScope == .local)
+        #expect(store.payload.current.cost == 18)
+        #expect(store.payload.combined == nil)
+    }
+
+    @Test("combined failure state does not invalidate local badge payload")
+    func combinedFailureDoesNotInvalidateLocalBadgePayload() {
+        let store = AppStore()
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 31),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+        store.selectedScope = .combined
+        store.setLastErrorForTesting(
+            "timeout",
+            scope: .combined,
+            period: .today,
+            provider: .all
+        )
+
+        #expect(store.lastError == "timeout")
+        #expect(store.menubarPayload?.current.cost == 31)
+        #expect(!store.needsStatusPayloadRefresh)
+        #expect(store.payload.current.cost == 31)
+        #expect(store.payload.combined == nil)
+    }
+
+    @Test("switching to combined resets selected provider to all")
+    func switchingToCombinedResetsSelectedProviderToAll() {
+        let store = AppStore()
+        store.suppressRefreshesForTesting()
+        store.selectedScope = .local
+        store.selectedProvider = .claude
+
+        store.switchTo(scope: .combined)
+
+        #expect(store.selectedScope == .combined)
+        #expect(store.selectedProvider == .all)
+    }
+
+    @Test("daily budget warning is suppressed for combined scope")
+    func dailyBudgetWarningIsSuppressedForCombinedScope() {
+        let defaults = UserDefaults.standard
+        let previousDisplayMetric = defaults.object(forKey: "CodeBurnDisplayMetric")
+        let previousDailyBudget = defaults.object(forKey: "CodeBurnDailyBudget")
+        defer {
+            if let previousDisplayMetric {
+                defaults.set(previousDisplayMetric, forKey: "CodeBurnDisplayMetric")
+            } else {
+                defaults.removeObject(forKey: "CodeBurnDisplayMetric")
+            }
+            if let previousDailyBudget {
+                defaults.set(previousDailyBudget, forKey: "CodeBurnDailyBudget")
+            } else {
+                defaults.removeObject(forKey: "CodeBurnDailyBudget")
+            }
+        }
+
+        let store = AppStore()
+        store.selectedScope = .local
+        store.selectedDays = []
+        store.displayMetric = .cost
+        store.dailyBudget = 10
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 12.5),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+
+        #expect(store.isOverDailyBudget)
+        #expect(store.shouldShowDailyBudgetWarning)
+
+        store.selectedScope = .combined
+
+        #expect(store.isOverDailyBudget)
+        #expect(!store.shouldShowDailyBudgetWarning)
     }
 
     @Test("missing today status payload needs status refresh")

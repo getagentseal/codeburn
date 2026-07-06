@@ -77,6 +77,37 @@ export type LocalModelSavings = {
   byProvider: Array<{ name: string; calls: number; savingsUSD: number }>
 }
 
+export type DeviceSummary = {
+  id: string
+  name: string
+  local: boolean
+  error?: string
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheCreateTokens: number
+  cacheReadTokens: number
+  totalTokens: number
+}
+
+export type CombinedUsage = {
+  perDevice: DeviceSummary[]
+  combined: {
+    cost: number
+    calls: number
+    sessions: number
+    inputTokens: number
+    outputTokens: number
+    cacheCreateTokens: number
+    cacheReadTokens: number
+    totalTokens: number
+    deviceCount: number
+    reachableCount: number
+  }
+}
+
 export type MenubarPayload = {
   generated: string
   current: {
@@ -87,6 +118,11 @@ export type MenubarPayload = {
     oneShotRate: number | null
     inputTokens: number
     outputTokens: number
+    /// Period-scoped cache token totals. Kept separate from `history.daily`
+    /// (which is a 365-day backfill for the trend chart) so the web cache
+    /// cards read the same range as Cost/Calls/Tokens (issue #583).
+    cacheReadTokens: number
+    cacheWriteTokens: number
     cacheHitPercent: number
     /// Codex credits consumed in the period; 0 when there is no Codex usage.
     codexCredits: number
@@ -180,6 +216,7 @@ export type MenubarPayload = {
   history: {
     daily: DailyHistoryEntry[]
   }
+  combined?: CombinedUsage
 }
 
 function oneShotRateFor(editTurns: number, oneShotTurns: number): number | null {
@@ -353,6 +390,7 @@ export function buildMenubarPayload(
   const inputTokens = safeMenubarToken(current.inputTokens)
   const outputTokens = safeMenubarToken(current.outputTokens)
   const cacheReadTokens = safeMenubarToken(current.cacheReadTokens)
+  const cacheWriteTokens = safeMenubarToken(current.cacheWriteTokens)
   return {
     generated: new Date().toISOString(),
     current: {
@@ -363,6 +401,8 @@ export function buildMenubarPayload(
       oneShotRate: aggregateOneShotRate(current.categories),
       inputTokens,
       outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
       cacheHitPercent: cacheHitPercent(inputTokens, cacheReadTokens),
       codexCredits: current.codexCredits ?? 0,
       topActivities: buildTopActivities(current.categories),

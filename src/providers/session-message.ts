@@ -28,7 +28,7 @@ export type PartData = {
   type: string
   text?: string
   tool?: string
-  state?: { input?: { command?: string } }
+  state?: { input?: { command?: string; name?: string; subagent_type?: string } }
 }
 
 const toolNameMap: Record<string, string> = {
@@ -117,6 +117,18 @@ export function buildAssistantCall(opts: {
     .filter((p) => p.tool === 'bash' && typeof p.state?.input?.command === 'string')
     .flatMap((p) => extractBashCommands(p.state!.input!.command!))
 
+  // The skill/subagent name lives in the tool-call input, not the tool name, so
+  // the Skills & Agents breakdown needs these extracted alongside the tool list.
+  const skills = toolParts
+    .filter((p) => p.tool === 'skill' && typeof p.state?.input?.name === 'string')
+    .map((p) => p.state!.input!.name!)
+    .filter(Boolean)
+
+  const subagentTypes = toolParts
+    .filter((p) => p.tool === 'task' && typeof p.state?.input?.subagent_type === 'string')
+    .map((p) => p.state!.input!.subagent_type!)
+    .filter(Boolean)
+
   const model = data.modelID ?? data.model ?? 'unknown'
   let costUSD = calculateCost(
     model,
@@ -144,6 +156,8 @@ export function buildAssistantCall(opts: {
     costUSD,
     tools,
     bashCommands,
+    skills,
+    subagentTypes,
     timestamp: parseTimestamp(opts.timeCreatedMs),
     speed: 'standard',
     deduplicationKey: opts.dedupKey,

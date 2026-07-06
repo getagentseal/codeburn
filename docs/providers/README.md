@@ -13,7 +13,7 @@ For the architectural picture, see `../architecture.md`.
 | [Claude](claude.md) | JSONL (no parser) | `src/providers/claude.ts` | none (covered indirectly) |
 | [Cline](cline.md) | JSON | `src/providers/cline.ts` | `tests/providers/cline.test.ts` |
 | [Codex](codex.md) | JSONL | `src/providers/codex.ts` | `tests/providers/codex.test.ts` |
-| [Copilot](copilot.md) | JSONL | `src/providers/copilot.ts` | `tests/providers/copilot.test.ts` |
+| [Copilot](copilot.md) | JSONL + SQLite (OTel) + Nitrite .db (JetBrains) | `src/providers/copilot.ts` | `tests/providers/copilot.test.ts` |
 | [Devin](devin.md) | JSON + SQLite enrichment | `src/providers/devin.ts` | `tests/providers/devin.test.ts` |
 | [Droid](droid.md) | JSONL | `src/providers/droid.ts` | `tests/providers/droid.test.ts` |
 | [Gemini](gemini.md) | JSON / JSONL | `src/providers/gemini.ts` | none |

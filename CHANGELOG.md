@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.9.15 - 2026-07-02
+
+### Added (CLI)
+- **`codeburn context`.** See what fills a session's context window, by role,
+  block type, and tool: an interactive terminal browser over Claude Code and
+  Codex sessions that separates the live window from compacted history and
+  anchors estimates to the exact API-reported context size. Also available as
+  a Context page in the browser dashboard and scriptable via
+  `codeburn context <id> --json`. (#592)
+- **Zed provider.** Zed's built-in agent is tracked: per-request token usage
+  with full cache fields, topped up to each thread's exact cumulative counter
+  and validated token-for-token against a real store. (#594, format documented
+  by @chatzinikolakisk in #480)
+- **`codeburn audit`.** Per provider-and-model table of where every number
+  comes from: calls, input, output, reasoning, cache read/write, cost. (#578)
+- **User price overrides** for any model via `codeburn price-override`.
+  (#390, #560, thanks @ozymandiashh)
+- **open-design provider** for per-model usage tracking. (#559, thanks @ozymandiashh)
+- **Browser dashboard**: fully mobile responsive (#582, thanks @ele-yufo; #589),
+  instant first paint with the local payload inlined, defaults to today, and
+  fast-fails offline paired devices. (#573)
+
+### Fixed (CLI)
+- **Cursor tokens are Cursor's own numbers.** Input comes from the
+  per-conversation context meter instead of text-length guesses, credited once
+  per conversation on a stable anchor so daily history stays consistent across
+  re-scans; tools and shell commands come from the agent stream; Composer house
+  models price at Cursor's published rates; figures are flagged estimated where
+  they are. (#574, #575; closes #326)
+- **Copilot Chat users no longer see $0.00**: VS Code core chatSessions
+  journals are read for token counts. (#555, #563, thanks @ozymandiashh)
+- **Codex** sessions up to 4GB are parsed (streaming cap raised). (#569)
+- **Devin** supports ATIF v1.7 (#570, thanks @tvcsantos) and reports friendly
+  GPT model names with effort tiers. (#585)
+- **OpenCode** skills and subagents breakdowns are populated. (#557, thanks @KevNev19)
+- **Pi** native skill loads classify as Skill, not Read. (#588, #590)
+- **Cache read/write** scoped to the selected period in web and devices CLI.
+  (#583, #586, thanks @ozymandiashh)
+- **Web** rejects invalid dashboard periods instead of exiting. (#554, thanks @ozymandiashh)
+- **Pricing**: LiteLLM snapshot refreshed; MiniMax-M3 follows MiniMax's tiered
+  pricing (standard tier $0.30/$1.20 per M). Daily cache bumped to v10 so
+  history re-hydrates under the new Cursor accounting and pricing.
+
+### macOS menubar
+- **Local/Combined usage toggle** backed by combined multi-device data in
+  menubar-json. (#566, #567, #568, thanks @ozymandiashh)
+- **Update dialog** detects a codeburn CLI too old to install menubar updates
+  (pre-0.9.9) and shows the exact CLI upgrade command first. (#593)
+
 ## 0.9.14 - 2026-06-22
 
 ### Added (CLI)

@@ -114,10 +114,12 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'cowork-space-grouping-v1',
   cline: 'worktree-project-grouping-v1',
+  cursor: 'composer-anchored-crediting-v1',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'otel-durable-v1',
   hermes: 'reasoning-output-accounting-v1',
   'ibm-bob': 'worktree-project-grouping-v1',
+  kiro: 'ide-parsing-v1',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',

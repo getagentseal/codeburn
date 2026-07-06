@@ -5,6 +5,7 @@ import { join } from 'path'
 
 import {
   MAX_SESSION_FILE_BYTES,
+  MAX_STREAM_SESSION_FILE_BYTES,
   readSessionFile,
   readSessionLines,
 } from '../src/fs-utils.js'
@@ -168,5 +169,27 @@ describe('readSessionLines', () => {
     }
     expect(lines).toEqual(['keep-me'])
     expect(tracker.lastCompleteLineOffset).toBe(Buffer.byteLength(content))
+  })
+
+  it('reads files at or under the stream cap', async () => {
+    const p = await tmpPath('a\nb\nc\n')
+    const lines: string[] = []
+    for await (const line of readSessionLines(p, undefined, { maxBytes: 1024 })) lines.push(line)
+    expect(lines).toEqual(['a', 'b', 'c'])
+  })
+
+  it('skips files over the stream cap and surfaces a notice without CODEBURN_VERBOSE', async () => {
+    const p = await tmpPath('a\nb\nc\n')
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const lines: string[] = []
+    for await (const line of readSessionLines(p, undefined, { maxBytes: 1 })) lines.push(line)
+    expect(lines).toEqual([])
+    expect(spy).toHaveBeenCalled()
+    expect(spy.mock.calls[0][0] as string).toContain('skipped oversize session')
+    spy.mockRestore()
+  })
+
+  it('stream cap is generous enough for multi-GB Codex sessions', () => {
+    expect(MAX_STREAM_SESSION_FILE_BYTES).toBe(4 * 1024 * 1024 * 1024)
   })
 })

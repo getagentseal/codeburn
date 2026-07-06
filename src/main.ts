@@ -2,7 +2,7 @@ import { isAbsolute } from 'path'
 import { Command } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { loadPricing, setModelAliases, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
+import { loadPricing, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
 import { allProviderNames } from './providers/index.js'
 import { convertCost } from './currency.js'
@@ -17,19 +17,23 @@ import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
 import { hostname } from 'os'
 import { runShareServer } from './sharing/share-run.js'
-import { addRemote, linkRemote, pullDevices, renderDevices } from './sharing/host.js'
+import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
 import { promptChoice } from './sharing/prompt.js'
 import { loadRemotes, saveRemotes } from './sharing/store.js'
+import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
+import { registerActCommands } from './act/cli.js'
+import { registerGuardCommands } from './guard/cli.js'
+import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
 import {
   installAntigravityStatusLineHook,
   runAgyStatusLineHook,
   uninstallAntigravityStatusLineHook,
 } from './antigravity-statusline.js'
-import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type Plan, type PlanId, type PlanProvider } from './config.js'
+import { clearPlan, readConfig, readPlan, readPlans, saveConfig, savePlan, getConfigFilePath, type CodeburnConfig, type Plan, type PlanId, type PlanProvider } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, PLAN_IDS, PLAN_PROVIDERS, planDisplayName } from './plans.js'
 import { createRequire } from 'node:module'
@@ -57,6 +61,30 @@ function parseNumber(value: string): number {
 
 function parseInteger(value: string): number {
   return parseInt(value, 10)
+}
+
+type PriceOverrideConfig = NonNullable<CodeburnConfig['priceOverrides']>[string]
+
+type PriceOverrideOptions = {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheCreation?: number
+  remove?: string
+  list?: boolean
+}
+
+function invalidUsdPerMillionRate(option: string, value: number | undefined): string | null {
+  if (value === undefined) return null
+  if (Number.isFinite(value) && value >= 0) return null
+  return `Invalid ${option}: expected a finite number >= 0 (USD per 1,000,000 tokens).`
+}
+
+function formatPriceOverrideParts(rates: PriceOverrideConfig): string {
+  const parts = [`input ${rates.input}`, `output ${rates.output}`]
+  if (typeof rates.cacheRead === 'number') parts.push(`cache read ${rates.cacheRead}`)
+  if (typeof rates.cacheCreation === 'number') parts.push(`cache creation ${rates.cacheCreation}`)
+  return parts.join(', ')
 }
 
 type JsonPlanSummary = {
@@ -148,6 +176,15 @@ function assertProvider(value: string, command: string): void {
   process.exit(1)
 }
 
+function assertScope(value: string, allowed: readonly string[], command: string): void {
+  if (!allowed.includes(value)) {
+    process.stderr.write(
+      `codeburn ${command}: unknown scope "${value}". Valid values: ${allowed.join(', ')}.\n`
+    )
+    process.exit(1)
+  }
+}
+
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
@@ -176,6 +213,7 @@ program.hook('preAction', async (thisCommand) => {
   }
   const config = await readConfig()
   setModelAliases(config.modelAliases ?? {})
+  setPriceOverrides(config.priceOverrides ?? {})
   setLocalModelSavings(config.localModelSavings ?? {})
   setProxyPaths(config.proxyPaths ?? [])
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
@@ -579,7 +617,7 @@ program
 program
   .command('web')
   .description('Open the local web dashboard in your browser')
-  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all', 'month')
+  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all', 'today')
   .option('--from <date>', 'Start date (YYYY-MM-DD)')
   .option('--to <date>', 'End date (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, copilot)', 'all')
@@ -605,6 +643,7 @@ program
   .command('status')
   .description('Compact status output (today + month)')
   .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
+  .option('--scope <scope>', 'Usage scope for menubar-json: local, combined', 'local')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
@@ -616,6 +655,7 @@ program
   .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
+    assertScope(opts.scope, ['local', 'combined'], 'status')
     assertProvider(opts.provider, 'status')
     if (opts.day && (opts.from || opts.to)) {
       process.stderr.write('error: --day cannot be combined with --from or --to\n')
@@ -623,6 +663,14 @@ program
     }
     if (opts.days && (opts.day || opts.from || opts.to)) {
       process.stderr.write('error: --days cannot be combined with --day, --from, or --to\n')
+      process.exit(1)
+    }
+    if (opts.format === 'menubar-json' && opts.scope === 'combined' && opts.days) {
+      process.stderr.write('error: --scope combined cannot be combined with --days\n')
+      process.exit(1)
+    }
+    if (opts.scope === 'combined' && (opts.provider !== 'all' || opts.project.length > 0 || opts.exclude.length > 0)) {
+      process.stderr.write('error: --scope combined cannot be combined with --provider, --project, or --exclude (paired devices report unfiltered usage)\n')
       process.exit(1)
     }
     await loadPricing()
@@ -644,6 +692,27 @@ program
         daysSelection,
         optimize: opts.optimize !== false,
       })
+      if (opts.scope === 'combined') {
+        // Combined multi-device usage is best-effort enrichment on the menubar's
+        // hot path. Never let pulling peers (or a corrupt remotes store) take
+        // down the base local payload: on any failure, emit local data with
+        // `combined` omitted so the menubar always gets a valid response.
+        try {
+          const query: UsageQuery = customRange
+            ? { from: opts.from, to: opts.to }
+            : daySelection
+            ? { from: daySelection.day, to: daySelection.day }
+            : { period: opts.period }
+          const localGetUsage = async (): Promise<typeof payload> => payload
+          const results = await pullDevices(localGetUsage, query, hostname(), {})
+          payload.combined = summarizeDeviceUsage(results, {
+            start: toDateString(periodInfo.range.start),
+            end: toDateString(periodInfo.range.end),
+          })
+        } catch {
+          // best-effort only: the local payload is still emitted below
+        }
+      }
       console.log(JSON.stringify(payload))
       return
     }
@@ -903,6 +972,85 @@ program
     config.modelAliases = aliases
     await saveConfig(config)
     console.log(`\n  Alias saved: ${from} -> ${to}`)
+    console.log(`  Config: ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('price-override [model]')
+  .description('Override or add local model pricing. Rates are USD per 1,000,000 tokens (e.g. --input 0.27).')
+  .option('--input <usd-per-1M>', 'Input token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--output <usd-per-1M>', 'Output token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--cache-read <usd-per-1M>', 'Cache-read token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--cache-creation <usd-per-1M>', 'Cache-creation token price in USD per 1,000,000 tokens', parseNumber)
+  .option('--remove <model>', 'Remove a price override')
+  .option('--list', 'List configured price overrides')
+  .action(async (model?: string, opts?: PriceOverrideOptions) => {
+    const config = await readConfig()
+    const overrides = new Map<string, PriceOverrideConfig>(Object.entries(config.priceOverrides ?? {}))
+
+    if (opts?.list || (!model && !opts?.remove)) {
+      const entries = [...overrides.entries()]
+      if (entries.length === 0) {
+        console.log('\n  No price overrides configured.')
+        console.log('  Rates use USD per 1,000,000 tokens.')
+        console.log(`  Config: ${getConfigFilePath()}`)
+        console.log('  Add one with: codeburn price-override <model> --input <usd-per-1M> --output <usd-per-1M>\n')
+      } else {
+        console.log('\n  Price overrides (USD per 1,000,000 tokens):')
+        for (const [name, rates] of entries) {
+          console.log(`    ${name}: ${formatPriceOverrideParts(rates)}`)
+        }
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+      }
+      return
+    }
+
+    if (opts?.remove) {
+      if (!overrides.has(opts.remove)) {
+        console.error(`\n  Price override not found: ${opts.remove}\n`)
+        process.exitCode = 1
+        return
+      }
+      overrides.delete(opts.remove)
+      config.priceOverrides = overrides.size > 0 ? Object.fromEntries(overrides) : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed price override: ${opts.remove}\n`)
+      return
+    }
+
+    const input = opts?.input
+    const output = opts?.output
+    const cacheRead = opts?.cacheRead
+    const cacheCreation = opts?.cacheCreation
+    if (!model || input === undefined || output === undefined) {
+      console.error('\n  Usage: codeburn price-override <model> --input <usd-per-1M> --output <usd-per-1M> [--cache-read <usd-per-1M>] [--cache-creation <usd-per-1M>]\n')
+      process.exitCode = 1
+      return
+    }
+
+    const invalidRate = [
+      invalidUsdPerMillionRate('--input', input),
+      invalidUsdPerMillionRate('--output', output),
+      invalidUsdPerMillionRate('--cache-read', cacheRead),
+      invalidUsdPerMillionRate('--cache-creation', cacheCreation),
+    ].find((message): message is string => message !== null)
+    if (invalidRate) {
+      console.error(`\n  ${invalidRate}\n`)
+      process.exitCode = 1
+      return
+    }
+
+    const override: PriceOverrideConfig = {
+      input,
+      output,
+      ...(cacheRead !== undefined ? { cacheRead } : {}),
+      ...(cacheCreation !== undefined ? { cacheCreation } : {}),
+    }
+    overrides.set(model, override)
+    config.priceOverrides = Object.fromEntries(overrides)
+    await saveConfig(config)
+    console.log(`\n  Price override saved: ${model}: ${formatPriceOverrideParts(override)}`)
+    console.log('  Unit: USD per 1,000,000 tokens')
     console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 
@@ -1181,13 +1329,66 @@ program
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--format <format>', 'Output format: text, json', 'text')
+  .option('--json', 'Output findings as JSON (alias for --format json)')
+  .option('--apply', 'Interactively apply config-class fixes (backed up, journaled, undoable)')
+  .option('--yes', 'With --apply: apply every appliable fix without prompting')
+  .option('--dry-run', 'With --apply: print the plan and exit without changing anything')
+  .option('--only <ids>', 'With --apply: restrict to a comma-separated list of finding ids')
   .action(async (opts) => {
-    assertFormat(opts.format, ['text', 'json'], 'optimize')
     assertProvider(opts.provider, 'optimize')
+    const format = opts.json ? 'json' : opts.format
+    if (opts.apply && format === 'json') {
+      process.stderr.write('codeburn optimize: --apply cannot be combined with --json\n')
+      process.exit(2)
+    }
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
     const projects = await parseAllSessions(range, opts.provider)
-    await runOptimize(projects, label, range, { format: opts.format })
+    if (opts.apply) {
+      const { runOptimizeApply } = await import('./act/optimize-apply.js')
+      await runOptimizeApply(projects, range, { yes: opts.yes, dryRun: opts.dryRun, only: opts.only })
+      return
+    }
+    assertFormat(format, ['text', 'json'], 'optimize')
+    if (format === 'text') {
+      // Surface realized savings from applied actions. Best effort: optimize
+      // must never fail because of journal contents, so any error just drops
+      // the header. computeActReport returns fast without scanning when the
+      // journal has no eligible applied actions, so users who never opted in
+      // see identical output.
+      let appliedHeader: string | undefined
+      let previouslyApplied: Record<string, string> | undefined
+      try {
+        const { computeActReport, buildOptimizeAppliedHeader } = await import('./act/report.js')
+        const applied = await computeActReport()
+        appliedHeader = buildOptimizeAppliedHeader(applied) ?? undefined
+        previouslyApplied = applied.appliedByFinding
+      } catch { /* the header is optional; never block the findings */ }
+      await runOptimize(projects, label, range, { format, appliedHeader, previouslyApplied })
+    } else {
+      await runOptimize(projects, label, range, { format })
+    }
+  })
+
+program
+  .command('context [session]')
+  .description('Context token breakdown per session: what fills the window, by role, block type, and tool (experimental). No session argument opens an interactive browser.')
+  .option('--list', 'List recent sessions to pick from')
+  .option('--full', 'Cover the whole session history instead of the live (post-compaction) window')
+  .option('--json', 'JSON output')
+  .option('--provider <provider>', 'Session source: claude or codex', 'claude')
+  .action(async (session: string | undefined, opts: { list?: boolean; full?: boolean; json?: boolean; provider?: string }) => {
+    if (opts.provider !== 'claude' && opts.provider !== 'codex') {
+      console.error('context: --provider must be claude or codex')
+      process.exitCode = 1
+      return
+    }
+    if (!session && !opts.list && !opts.json && process.stdout.isTTY && process.stdin.isTTY) {
+      const { runContextTui } = await import('./context-tui.js')
+      await runContextTui({ initialScope: opts.full ? 'full' : 'effective' })
+      return
+    }
+    await runContextCommand(session, opts)
   })
 
 program
@@ -1200,6 +1401,46 @@ program
     await loadPricing()
     const { range } = getDateRange(opts.period)
     await renderCompare(range, opts.provider)
+  })
+
+program
+  .command('audit')
+  .description("Token audit: raw provider token fields vs codeburn's displayed totals and cost derivation")
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
+  .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--format <format>', 'Output format: table, json', 'table')
+  .action(async (opts) => {
+    assertProvider(opts.provider, 'audit')
+    const { aggregateAudit, renderAuditTable, renderAuditJson } = await import('./audit-report.js')
+    await loadPricing()
+
+    let range
+    if (opts.from || opts.to) {
+      const customRange = parseDateRangeFlags(opts.from, opts.to)
+      if (!customRange) {
+        process.stderr.write('codeburn: --from and --to must be valid YYYY-MM-DD dates\n')
+        process.exit(1)
+      }
+      range = customRange
+    } else {
+      range = getDateRange(opts.period).range
+    }
+
+    const projects = await parseAllSessions(range, opts.provider)
+    const rows = await aggregateAudit(projects)
+
+    const fmt = (opts.format ?? 'table').toLowerCase()
+    if (fmt === 'json') {
+      process.stdout.write(renderAuditJson(rows) + '\n')
+    } else {
+      if (rows.length === 0) {
+        process.stdout.write('No model usage found for the selected period.\n')
+        return
+      }
+      process.stdout.write(renderAuditTable(rows) + '\n')
+    }
   })
 
 program
@@ -1330,5 +1571,8 @@ program
     const { startStdioServer } = await import('./mcp/server.js')
     await startStdioServer(version)
   })
+
+registerActCommands(program)
+registerGuardCommands(program)
 
 program.parse()

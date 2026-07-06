@@ -3,6 +3,8 @@ import {
   getDateRange,
   PERIODS,
   PERIOD_LABELS,
+  parsePeriodOrThrow,
+  periodInfoFromQuery,
   toPeriod,
   type Period,
 } from '../src/cli-date.js'
@@ -101,6 +103,42 @@ describe('PERIODS / PERIOD_LABELS', () => {
     // Short label used in the dashboard tab strip. The long-form label
     // ("Last 6 months") comes from getDateRange().label.
     expect(PERIOD_LABELS.all).toBe('6 Months')
+  })
+})
+
+describe('parsePeriodOrThrow', () => {
+  it('round-trips known periods', () => {
+    const known: Period[] = ['today', 'week', '30days', 'month', 'all']
+    for (const p of known) {
+      expect(parsePeriodOrThrow(p)).toBe(p)
+    }
+  })
+
+  it('throws on unknown input without calling process.exit', () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit') })
+    try {
+      expect(() => parsePeriodOrThrow('garbage')).toThrow(/Unknown period "garbage"/)
+      expect(exitSpy).not.toHaveBeenCalled()
+    } finally {
+      exitSpy.mockRestore()
+    }
+  })
+})
+
+describe('periodInfoFromQuery', () => {
+  it('resolves a named period', () => {
+    const info = periodInfoFromQuery({ period: 'week' }, 'month')
+    expect(info.label).toBe('Last 7 Days')
+  })
+
+  it('throws for an invalid period without calling process.exit', () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit') })
+    try {
+      expect(() => periodInfoFromQuery({ period: 'garbage' }, 'month')).toThrow(/Unknown period "garbage"/)
+      expect(exitSpy).not.toHaveBeenCalled()
+    } finally {
+      exitSpy.mockRestore()
+    }
   })
 })
 

@@ -1,4 +1,4 @@
-import { createServer } from 'http'
+import { createServer, type Server } from 'http'
 import { exec } from 'child_process'
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
@@ -10,7 +10,8 @@ import { hostname } from 'os'
 
 import { loadPricing } from './models.js'
 import { buildMenubarPayloadForRange } from './usage-aggregator.js'
-import { getDateRange, parseDateRangeFlags, formatDateRangeLabel, toPeriod } from './cli-date.js'
+import type { MenubarPayload } from './menubar-json.js'
+import { periodInfoFromQuery, UsageQueryError } from './cli-date.js'
 import { pullDevices, linkRemote } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
 import { loadOrCreateIdentity } from './sharing/identity.js'
@@ -18,6 +19,8 @@ import { pairingCode } from './sharing/pairing.js'
 import { getSharingDir, loadRemotes, loadShareAlways, saveShareAlways } from './sharing/store.js'
 import { ShareController } from './sharing/share-controller.js'
 import { sanitizeForSharing } from './sharing/sanitize.js'
+import { buildContextTree, findClaudeSession, listRecentTitledSessions, snapshotRows, type ContextTreeResult, type SessionRef } from './context-tree.js'
+import { buildCodexContextTree, findCodexSession, listRecentCodexSessions } from './context-tree-codex.js'
 
 function readBody(req: import('http').IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -30,6 +33,15 @@ function readBody(req: import('http').IncomingMessage): Promise<string> {
     req.on('error', reject)
   })
 }
+
+function writeJsonError(res: import('http').ServerResponse, status: number, error: string): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ error }))
+}
+
+// Cap on the cached local payload, matched to the parser's own session cache
+// (parser.ts) so the assembled payload is never staler than its source data.
+const LOCAL_PAYLOAD_TTL_MS = 180_000
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -87,21 +99,72 @@ export async function runWebDashboard(opts: {
   exclude: string[]
   port: number
   open: boolean
-}): Promise<void> {
+}): Promise<Server> {
   await loadPricing()
   const dashDir = resolveDashDir()
 
   // Sharing this device serves the SANITIZED aggregate (no project names/paths
   // or per-session detail), unlike the local /api/usage which shows everything.
   const shareGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
-    const customRange = parseDateRangeFlags(q.from, q.to)
-    const periodInfo = customRange
-      ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
-      : getDateRange(toPeriod(q.period ?? opts.period))
+    const periodInfo = periodInfoFromQuery(q, opts.period)
     return sanitizeForSharing(await buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false }))
   }
   const share = new ShareController(shareGetUsage)
   if (await loadShareAlways()) await share.start(true).catch(() => {})
+
+  // The server is long-lived, so cache this machine's parsed payload (the CLI
+  // process cannot). Store the promise before any await so concurrent identical
+  // requests collapse into one parse instead of racing.
+  const localPayloadCache = new Map<string, { at: number; payload: Promise<MenubarPayload> }>()
+  const getLocalPayload = (period: string, provider: string, from?: string, to?: string): Promise<MenubarPayload> => {
+    const key = `${period}|${provider}|${from ?? ''}|${to ?? ''}`
+    const hit = localPayloadCache.get(key)
+    if (hit && Date.now() - hit.at < LOCAL_PAYLOAD_TTL_MS) return hit.payload
+    const periodInfo = periodInfoFromQuery({ period, from, to }, opts.period)
+    const payload = buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
+    const now = Date.now()
+    localPayloadCache.set(key, { at: now, payload })
+    for (const [k, v] of localPayloadCache) if (now - v.at >= LOCAL_PAYLOAD_TTL_MS) localPayloadCache.delete(k)
+    void payload.catch(() => localPayloadCache.delete(key))
+    return payload
+  }
+
+  // Context trees re-read a whole transcript (up to 100MB), so cache each by
+  // file version. Keyed on mtime: an active session invalidates itself.
+  const contextTreeCache = new Map<string, Promise<ContextTreeResult>>()
+  const getContextTree = (provider: 'claude' | 'codex', ref: SessionRef): Promise<ContextTreeResult> => {
+    const key = `${provider}:${ref.sessionId}:${ref.mtimeMs}`
+    const hit = contextTreeCache.get(key)
+    if (hit) {
+      // Re-insert so eviction is LRU rather than insertion order.
+      contextTreeCache.delete(key)
+      contextTreeCache.set(key, hit)
+      return hit
+    }
+    const tree = provider === 'claude' ? buildContextTree(ref) : buildCodexContextTree(ref)
+    contextTreeCache.set(key, tree)
+    void tree.catch(() => contextTreeCache.delete(key))
+    while (contextTreeCache.size > 12) {
+      const oldest = contextTreeCache.keys().next().value
+      if (oldest === undefined) break
+      contextTreeCache.delete(oldest)
+    }
+    return tree
+  }
+
+  // Embed this machine's prewarmed payload in index.html for an instant first
+  // paint with no data round-trip. Only the local device is inlined: no remote
+  // network wait, and paired devices stream in via the live fetch right after.
+  const serveIndexHtml = async (res: import('http').ServerResponse, filePath: string): Promise<void> => {
+    const html = await readFile(filePath, 'utf8')
+    const payload = await getLocalPayload(opts.period, opts.provider, opts.from, opts.to)
+    const devices = [{ id: 'local', name: hostname(), local: true, payload }]
+    // Escape every '<' so a device/model/project name can't close the <script>.
+    const json = JSON.stringify({ devices }).replace(/</g, String.fromCharCode(92) + 'u003c')
+    const injected = html.replace('<script type="module"', `<script>window.__CODEBURN_BOOTSTRAP__=${json}</script>\n    <script type="module"`)
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(injected)
+  }
 
   const server = createServer(async (req, res) => {
     try {
@@ -126,16 +189,14 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
-        const customRange = parseDateRangeFlags(from, to)
-        const periodInfo = customRange
-          ? { range: customRange, label: formatDateRangeLabel(from, to) }
-          : getDateRange(toPeriod(period))
-        const payload = await buildMenubarPayloadForRange(periodInfo, {
-          provider,
-          project: opts.project,
-          exclude: opts.exclude,
-          optimize: false,
-        })
+        let payload
+        try {
+          payload = await getLocalPayload(period, provider, from, to)
+        } catch (err) {
+          if (!(err instanceof UsageQueryError)) throw err
+          writeJsonError(res, 400, err.message)
+          return
+        }
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify(payload))
         return
@@ -148,14 +209,14 @@ export async function runWebDashboard(opts: {
         const provider = url.searchParams.get('provider') ?? opts.provider
         const from = url.searchParams.get('from') ?? opts.from
         const to = url.searchParams.get('to') ?? opts.to
-        const localGetUsage = async (q: { period?: string; from?: string; to?: string }) => {
-          const customRange = parseDateRangeFlags(q.from, q.to)
-          const periodInfo = customRange
-            ? { range: customRange, label: formatDateRangeLabel(q.from, q.to) }
-            : getDateRange(toPeriod(q.period ?? period))
-          return buildMenubarPayloadForRange(periodInfo, { provider, project: opts.project, exclude: opts.exclude, optimize: false })
+        let results
+        try {
+          results = await pullDevices(() => getLocalPayload(period, provider, from, to), { period, from, to }, hostname(), {})
+        } catch (err) {
+          if (!(err instanceof UsageQueryError)) throw err
+          writeJsonError(res, 400, err.message)
+          return
         }
-        const results = await pullDevices(localGetUsage, { period, from, to }, hostname(), {})
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ devices: results }))
         return
@@ -239,6 +300,45 @@ export async function runWebDashboard(opts: {
         res.end(JSON.stringify(await share.status()))
         return
       }
+      // Session ids are resolved against the discovered session files only,
+      // never joined into a path from user input, and responses never carry
+      // local file paths.
+      if (url.pathname === '/api/context/sessions') {
+        const provider = url.searchParams.get('provider') ?? 'claude'
+        if (provider !== 'claude' && provider !== 'codex') {
+          writeJsonError(res, 400, 'provider must be claude or codex')
+          return
+        }
+        const refs = provider === 'claude' ? await listRecentTitledSessions(15) : await listRecentCodexSessions(15)
+        const sessions = refs.map((r) => ({ provider, sessionId: r.sessionId, project: r.project, title: r.title, mtimeMs: r.mtimeMs, sizeBytes: r.sizeBytes }))
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ sessions }))
+        return
+      }
+      if (url.pathname === '/api/context/tree') {
+        const provider = url.searchParams.get('provider') ?? 'claude'
+        const id = url.searchParams.get('id') ?? ''
+        if ((provider !== 'claude' && provider !== 'codex') || !id) {
+          writeJsonError(res, 400, 'provider (claude|codex) and id are required')
+          return
+        }
+        const ref = provider === 'claude' ? await findClaudeSession(id) : await findCodexSession(id)
+        if (!ref || ref.sessionId !== id) {
+          writeJsonError(res, 404, `no ${provider} session ${id}`)
+          return
+        }
+        const tree = await getContextTree(provider, ref)
+        const payload = {
+          ...tree,
+          session: { sessionId: tree.session.sessionId, project: tree.session.project, mtimeMs: tree.session.mtimeMs, sizeBytes: tree.session.sizeBytes },
+          effectiveRows: snapshotRows(tree.effective),
+          fullRows: snapshotRows(tree.full),
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(payload))
+        return
+      }
+
       if (url.pathname === '/api/share/approve' && req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}') as { id?: string; approve?: boolean }
         const ok = typeof body.id === 'string' && share.resolvePending(body.id, !!body.approve)
@@ -262,14 +362,16 @@ export async function runWebDashboard(opts: {
         return
       }
       try {
-        const buf = await readFile(filePath)
-        res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream' })
-        res.end(buf)
+        if (extname(filePath) === '.html') {
+          await serveIndexHtml(res, filePath)
+        } else {
+          const buf = await readFile(filePath)
+          res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream' })
+          res.end(buf)
+        }
       } catch {
         // Unknown path: serve index.html so the SPA can route it.
-        const buf = await readFile(join(dashDir, 'index.html'))
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-        res.end(buf)
+        await serveIndexHtml(res, join(dashDir, 'index.html'))
       }
     } catch (err) {
       res.writeHead(500, { 'content-type': 'application/json' })
@@ -290,6 +392,8 @@ export async function runWebDashboard(opts: {
   // Durable handler so a post-bind socket error never crashes the process.
   server.on('error', () => {})
 
+  void Promise.resolve().then(() => getLocalPayload(opts.period, opts.provider, opts.from, opts.to)).catch(() => {})
+
   const url = `http://127.0.0.1:${port}`
   if (!dashDir) {
     process.stdout.write(`\n  Dashboard UI is not built. Run: cd dash && npm install && npm run build\n`)
@@ -301,6 +405,8 @@ export async function runWebDashboard(opts: {
   process.on('SIGINT', () => {
     void share.stop().finally(() => process.exit(0))
   })
+
+  return server
 
   await new Promise<never>(() => {
     /* run until interrupted */

@@ -3,13 +3,28 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 
-import { getModelCosts, getShortModelName, calculateCost, loadPricing, setModelAliases } from '../src/models.js'
+import {
+  getModelCosts,
+  getShortModelName,
+  calculateCost,
+  loadPricing,
+  setModelAliases,
+  setPriceOverrides,
+  setLocalModelSavings,
+  getLocalModelSavingsConfigHash,
+  getPriceOverridesConfigHash,
+} from '../src/models.js'
+import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 
 beforeAll(async () => {
   await loadPricing()
 })
 
-afterEach(() => setModelAliases({}))
+afterEach(() => {
+  setModelAliases({})
+  setPriceOverrides({})
+  setLocalModelSavings({})
+})
 
 describe('getModelCosts', () => {
   it('does not match short canonical against longer pricing key', () => {
@@ -229,6 +244,101 @@ describe('user aliases via setModelAliases', () => {
   })
 })
 
+describe('user price overrides', () => {
+  it('prices a model missing from the pricing snapshot', () => {
+    const model = 'zz-price-override-missing-model-390'
+    expect(getModelCosts(model)).toBeNull()
+
+    setPriceOverrides({
+      [model]: { input: 1.25, output: 2.5 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.inputCostPerToken).toBe(1.25e-6)
+    expect(costs!.outputCostPerToken).toBe(2.5e-6)
+    expect(calculateCost(model, 1_000_000, 1_000_000, 0, 0, 0)).toBe(3.75)
+  })
+
+  it('wins over snapshot pricing and configured aliases', () => {
+    setModelAliases({
+      'price-override-aliased-model': 'claude-opus-4-6',
+      'price-override-canonical-source': 'price-override-canonical-target',
+    })
+    setPriceOverrides({
+      'gpt-4o': { input: 7, output: 8 },
+      'claude-opus-4-6': { input: 4, output: 5 },
+      'price-override-aliased-model': { input: 2, output: 3 },
+      'price-override-canonical-target': { input: 6, output: 7 },
+    })
+
+    expect(getModelCosts('gpt-4o')!.inputCostPerToken).toBe(7e-6)
+    expect(getModelCosts('price-override-aliased-model')!.inputCostPerToken).toBe(2e-6)
+    expect(getModelCosts('price-override-canonical-source')!.inputCostPerToken).toBe(6e-6)
+  })
+
+  it('converts USD per 1,000,000 tokens to per-token ModelCosts exactly', () => {
+    const model = 'price-override-unit-conversion'
+    setPriceOverrides({
+      [model]: { input: 1, output: 0 },
+    })
+
+    expect(getModelCosts(model)!.inputCostPerToken).toBe(1e-6)
+    expect(calculateCost(model, 1_000_000, 0, 0, 0, 0)).toBe(1)
+  })
+
+  it('defaults cache rates from input pricing when omitted', () => {
+    const model = 'price-override-cache-defaults'
+    setPriceOverrides({
+      [model]: { input: 10, output: 20 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.cacheWriteCostPerToken).toBeCloseTo(12.5e-6, 12)
+    expect(costs!.cacheReadCostPerToken).toBeCloseTo(1e-6, 12)
+  })
+
+  it('wins for case-insensitive and prefix matches without shadowing a more-specific exact snapshot entry', () => {
+    const miniSnapshot = getModelCosts('gpt-5-mini')
+    expect(miniSnapshot).not.toBeNull()
+
+    setPriceOverrides({
+      'gpt-5': { input: 91, output: 92 },
+    })
+
+    expect(getModelCosts('GPT-5')!.inputCostPerToken).toBe(91e-6)
+    expect(getModelCosts('gpt-5-foo')!.inputCostPerToken).toBe(91e-6)
+
+    const mini = getModelCosts('gpt-5-mini')
+    expect(mini).not.toBeNull()
+    expect(mini!.inputCostPerToken).toBe(miniSnapshot!.inputCostPerToken)
+    expect(mini!.outputCostPerToken).toBe(miniSnapshot!.outputCostPerToken)
+  })
+
+  it('includes builtin and user price overrides in the daily cache config hash', () => {
+    setLocalModelSavings({ local: 'gpt-4o' })
+    setPriceOverrides({})
+
+    // The builtin overrides always participate, so a release that edits them
+    // invalidates cached daily costs even with no user overrides configured.
+    const builtinOnly = getPriceOverridesConfigHash()
+    expect(builtinOnly).toContain('builtin:')
+    expect(getPriceOverridesConfigHash()).toBe(builtinOnly)
+    const baseline = getDailyCacheConfigHash()
+
+    setPriceOverrides({ 'price-hash-model': { input: 1, output: 2 } })
+    const firstCombined = getDailyCacheConfigHash()
+
+    setPriceOverrides({ 'price-hash-model': { input: 3, output: 2 } })
+    const secondCombined = getDailyCacheConfigHash()
+
+    expect(firstCombined).not.toBe(baseline)
+    expect(secondCombined).not.toBe(baseline)
+    expect(secondCombined).not.toBe(firstCombined)
+  })
+})
+
 describe('calculateCost - OMP names produce non-zero cost', () => {
   it('calculates cost for anthropic--claude-4.6-opus', () => {
     expect(calculateCost('anthropic--claude-4.6-opus', 1000, 200, 0, 0, 0)).toBeGreaterThan(0)
@@ -348,10 +458,7 @@ describe('Cursor model variants resolve to pricing', () => {
     // Haiku family
     ['claude-4.5-haiku', 'claude-haiku-4-5'],
     ['claude-4.6-haiku', 'claude-haiku-4-5'],
-    // Cursor house models
-    ['composer-1', 'claude-sonnet-4-5'],
-    ['composer-1.5', 'claude-sonnet-4-5'],
-    ['composer-2', 'claude-sonnet-4-6'],
+    // Cursor auto proxy
     ['cursor-auto', 'claude-sonnet-4-5'],
     // OpenAI variants Cursor emits
     ['gpt-5', 'gpt-5'],
@@ -376,6 +483,26 @@ describe('Cursor model variants resolve to pricing', () => {
       // where a future edit re-points an alias at a wrong-but-positive entry.
       expect(costs!.inputCostPerToken).toBe(expected!.inputCostPerToken)
       expect(costs!.outputCostPerToken).toBe(expected!.outputCostPerToken)
+    })
+  }
+})
+
+describe('Cursor house model pricing', () => {
+  const cases: Array<[string, { input: number; output: number; cacheWrite: number; cacheRead: number }]> = [
+    ['composer-2.5', { input: 0.5, output: 2.5, cacheWrite: 0.5, cacheRead: 0.2 }],
+    ['composer-2', { input: 0.5, output: 2.5, cacheWrite: 0.5, cacheRead: 0.2 }],
+    ['composer-1.5', { input: 3.5, output: 17.5, cacheWrite: 3.5, cacheRead: 0.35 }],
+    ['composer-1', { input: 1.25, output: 10, cacheWrite: 1.25, cacheRead: 0.125 }],
+  ]
+
+  for (const [model, rates] of cases) {
+    it(`${model} uses Cursor-published rates instead of Claude Sonnet proxy pricing`, () => {
+      const costs = getModelCosts(model)
+      expect(costs).not.toBeNull()
+      expect(costs!.inputCostPerToken).toBeCloseTo(rates.input * 1e-6, 12)
+      expect(costs!.outputCostPerToken).toBeCloseTo(rates.output * 1e-6, 12)
+      expect(costs!.cacheWriteCostPerToken).toBeCloseTo(rates.cacheWrite * 1e-6, 12)
+      expect(costs!.cacheReadCostPerToken).toBeCloseTo(rates.cacheRead * 1e-6, 12)
     })
   }
 })

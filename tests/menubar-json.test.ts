@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildMenubarPayload, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
+import { buildMenubarPayload, type CombinedUsage, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
 const EXACT_UNSAFE_TOKEN_COUNTS = [
@@ -46,6 +46,35 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.sessions).toBe(97)
     expect(payload.current.inputTokens).toBe(19100)
     expect(payload.current.outputTokens).toBe(675600)
+  })
+
+  it('exposes period-scoped cache tokens on current, decoupled from the 365-day history backfill (#583)', () => {
+    const period: PeriodData = {
+      label: '30 Days',
+      cost: 5, calls: 10, sessions: 2,
+      inputTokens: 1000, outputTokens: 2000,
+      // What `report -p 30days` shows in the terminal for the same window.
+      cacheReadTokens: 1_391_100_000,
+      cacheWriteTokens: 42_000_000,
+      categories: [], models: [],
+    }
+    // history.daily is the full BACKFILL_DAYS (365) trend, whose cache totals are
+    // far larger than the selected period. The web cards used to sum these, which
+    // is the bug in #583. current must mirror the period, not the backfill.
+    const dailyHistory = [
+      { date: '2025-07-15', cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 1_800_000_000, cacheWriteTokens: 60_000_000, topModels: [] },
+      { date: '2026-06-30', cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 270_000_000, cacheWriteTokens: 12_000_000, topModels: [] },
+    ]
+    const payload = buildMenubarPayload(period, [], null, dailyHistory)
+
+    // current carries the period totals verbatim ...
+    expect(payload.current.cacheReadTokens).toBe(1_391_100_000)
+    expect(payload.current.cacheWriteTokens).toBe(42_000_000)
+    // ... and is independent of the larger history-backfill sum the cards used before.
+    const historyReadSum = dailyHistory.reduce((s, d) => s + d.cacheReadTokens, 0)
+    const historyWriteSum = dailyHistory.reduce((s, d) => s + d.cacheWriteTokens, 0)
+    expect(historyReadSum).toBeGreaterThan(payload.current.cacheReadTokens)
+    expect(historyWriteSum).toBeGreaterThan(payload.current.cacheWriteTokens)
   })
 
   it('computes per-category oneShotRate from editTurns and skips categories without edits', () => {
@@ -245,6 +274,7 @@ describe('buildMenubarPayload', () => {
       inputTokens: unsafe,
       outputTokens: unsafeRuntimeString,
       cacheReadTokens: 100,
+      cacheWriteTokens: unsafeRuntimeString,
       projects: [{
         name: 'project',
         cost: 1,
@@ -292,6 +322,8 @@ describe('buildMenubarPayload', () => {
 
     expect(payload.current.inputTokens).toBe(0)
     expect(payload.current.outputTokens).toBe(0)
+    expect(payload.current.cacheReadTokens).toBe(100)
+    expect(payload.current.cacheWriteTokens).toBe(0)
     expect(payload.current.cacheHitPercent).toBe(100)
     expect(payload.current.topProjects[0]!.sessionDetails[0]!.inputTokens).toBe(0)
     expect(payload.current.topProjects[0]!.sessionDetails[0]!.outputTokens).toBe(0)
@@ -306,5 +338,43 @@ describe('buildMenubarPayload', () => {
     const json = JSON.stringify(payload)
     expect(json).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[0])
     expect(json).not.toContain(EXACT_UNSAFE_TOKEN_COUNTS[1])
+  })
+
+  it('omits combined usage by default and accepts the documented combined shape when attached', () => {
+    const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
+    expect(payload).not.toHaveProperty('combined')
+
+    const combined: CombinedUsage = {
+      perDevice: [
+        {
+          id: 'local',
+          name: 'Mac Studio',
+          local: true,
+          cost: 1,
+          calls: 2,
+          sessions: 1,
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheCreateTokens: 10,
+          cacheReadTokens: 20,
+          totalTokens: 180,
+        },
+      ],
+      combined: {
+        cost: 1,
+        calls: 2,
+        sessions: 1,
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheCreateTokens: 10,
+        cacheReadTokens: 20,
+        totalTokens: 180,
+        deviceCount: 1,
+        reachableCount: 1,
+      },
+    }
+    payload.combined = combined
+
+    expect(payload.combined).toEqual(combined)
   })
 })

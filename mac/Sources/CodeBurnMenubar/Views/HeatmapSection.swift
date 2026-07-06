@@ -1704,7 +1704,10 @@ private struct PlanInsight: View {
         Group {
             switch store.subscriptionLoadState {
             case .notBootstrapped, .dormant:
-                PlanConnectView { Task { await store.bootstrapSubscription() } }
+                PlanConnectView(
+                    title: "Connect Claude subscription",
+                    message: "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically."
+                ) { Task { await store.bootstrapSubscription() } }
             case .bootstrapping:
                 PlanLoadingView()
             case .loading:
@@ -1714,7 +1717,10 @@ private struct PlanInsight: View {
                     PlanLoadingView()
                 }
             case .noCredentials:
-                PlanNoCredentialsView()
+                PlanNoCredentialsView(
+                    title: "No Claude credentials found",
+                    message: "Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again."
+                ) { Task { await store.bootstrapSubscription() } }
             case .failed:
                 PlanFailedView(error: store.subscriptionError)
             case .transientFailure:
@@ -1724,7 +1730,11 @@ private struct PlanInsight: View {
                     PlanFailedView(error: store.subscriptionError ?? "Anthropic temporarily unreachable — retrying.")
                 }
             case let .terminalFailure(reason):
-                PlanReconnectView(reason: reason) { Task { await store.bootstrapSubscription() } }
+                PlanReconnectView(
+                    title: "Reconnect Claude",
+                    reason: reason,
+                    fallback: "Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect."
+                ) { Task { await store.bootstrapSubscription() } }
             case .loaded:
                 if let usage {
                     loadedBody(usage: usage)
@@ -1763,6 +1773,9 @@ private struct PlanInsight: View {
                 if let p = usage.sevenDaySonnetPercent {
                     UtilizationRow(label: "7-day Sonnet", percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projections["seven_day_sonnet"])
                 }
+                ForEach(usage.scopedWeekly, id: \.label) { scoped in
+                    UtilizationRow(label: "7-day \(scoped.label)", percent: scoped.percent, resetsAt: scoped.resetsAt, projection: projections["scoped_\(scoped.label)"])
+                }
             }
 
             OptimizeSavingsBadge(payload: store.payload)
@@ -1774,12 +1787,15 @@ private struct PlanInsight: View {
 
     private func recomputeProjections(usage: SubscriptionUsage) async {
         var result: [String: WindowProjection] = [:]
-        let inputs: [(String, Double?, Date?, TimeInterval)] = [
+        var inputs: [(String, Double?, Date?, TimeInterval)] = [
             ("five_hour", usage.fiveHourPercent, usage.fiveHourResetsAt, Self.fiveHourSeconds),
             ("seven_day", usage.sevenDayPercent, usage.sevenDayResetsAt, Self.sevenDaySeconds),
             ("seven_day_opus", usage.sevenDayOpusPercent, usage.sevenDayOpusResetsAt, Self.sevenDaySeconds),
             ("seven_day_sonnet", usage.sevenDaySonnetPercent, usage.sevenDaySonnetResetsAt, Self.sevenDaySeconds),
         ]
+        for scoped in usage.scopedWeekly {
+            inputs.append(("scoped_\(scoped.label)", scoped.percent, scoped.resetsAt, Self.sevenDaySeconds))
+        }
         for (key, percent, resetsAt, windowSeconds) in inputs {
             if let projection = await project(key: key, percent: percent, resetsAt: resetsAt, windowSeconds: windowSeconds) {
                 result[key] = projection
@@ -1844,24 +1860,24 @@ private struct PlanLoadingView: View {
 }
 
 private struct PlanNoCredentialsView: View {
-    @Environment(AppStore.self) private var store
+    let title: String
+    let message: String
+    let onRetry: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "key.slash")
                 .font(.system(size: 24))
                 .foregroundStyle(.tertiary)
-            Text("No Claude credentials found")
+            Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again.")
+            Text(.init(message))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 280)
-            Button("Try Again") {
-                Task { await store.bootstrapSubscription() }
-            }
+            Button("Try Again", action: onRetry)
             .controlSize(.small)
             .buttonStyle(.borderedProminent)
             .tint(Theme.brandAccent)
@@ -1904,9 +1920,12 @@ private struct PlanFailedView: View {
 }
 
 /// Shown the very first time a user opens the Plan tab. Clicking Connect is the
-/// only path to triggering the macOS keychain prompt for Claude Code credentials —
-/// the menubar app does not touch the keychain at startup.
+/// only path to triggering the provider's credential read (for Claude, the
+/// macOS keychain prompt) — the menubar app does not touch credentials at
+/// startup.
 private struct PlanConnectView: View {
+    let title: String
+    let message: String
     let onConnect: () -> Void
 
     var body: some View {
@@ -1914,10 +1933,10 @@ private struct PlanConnectView: View {
             Image(systemName: "link.circle")
                 .font(.system(size: 26))
                 .foregroundStyle(Theme.brandAccent)
-            Text("Connect Claude subscription")
+            Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically.")
+            Text(.init(message))
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1934,10 +1953,12 @@ private struct PlanConnectView: View {
 
 /// Shown when the refresh token has been invalidated (typically because the user
 /// re-authenticated on another device). Clicking the button re-runs bootstrap,
-/// which reads Claude's credentials source again and writes a fresh copy to our
-/// own keychain item.
+/// which reads the provider's credentials source again and writes a fresh copy
+/// to our own keychain item.
 private struct PlanReconnectView: View {
+    let title: String
     let reason: String?
+    let fallback: String
     let onReconnect: () -> Void
 
     var body: some View {
@@ -1945,10 +1966,10 @@ private struct PlanReconnectView: View {
             Image(systemName: "arrow.triangle.2.circlepath.circle")
                 .font(.system(size: 24))
                 .foregroundStyle(.red)
-            Text("Reconnect Claude")
+            Text(title)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text(reason ?? "Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect.")
+            Text(reason ?? fallback)
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -1978,7 +1999,10 @@ private struct CodexPlanInsight: View {
         Group {
             switch store.codexLoadState {
             case .notBootstrapped, .dormant:
-                PlanConnectView { Task { await store.bootstrapCodex() } }
+                PlanConnectView(
+                    title: "Connect ChatGPT subscription",
+                    message: "CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically."
+                ) { Task { await store.bootstrapCodex() } }
             case .bootstrapping:
                 PlanLoadingView()
             case .loading:
@@ -1988,7 +2012,10 @@ private struct CodexPlanInsight: View {
                     PlanLoadingView()
                 }
             case .noCredentials:
-                PlanNoCredentialsView()
+                PlanNoCredentialsView(
+                    title: "No Codex credentials found",
+                    message: "Sign in with Codex first: run `codex login` in your terminal. Then click Try Again."
+                ) { Task { await store.bootstrapCodex() } }
             case .failed:
                 PlanFailedView(error: store.codexError)
             case .transientFailure:
@@ -1998,7 +2025,11 @@ private struct CodexPlanInsight: View {
                     PlanFailedView(error: store.codexError ?? "ChatGPT temporarily unreachable — retrying.")
                 }
             case let .terminalFailure(reason):
-                PlanReconnectView(reason: reason) { Task { await store.bootstrapCodex() } }
+                PlanReconnectView(
+                    title: "Reconnect Codex",
+                    reason: reason,
+                    fallback: "Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect."
+                ) { Task { await store.bootstrapCodex() } }
             case .loaded:
                 if let usage = store.codexUsage {
                     loadedBody(usage: usage)

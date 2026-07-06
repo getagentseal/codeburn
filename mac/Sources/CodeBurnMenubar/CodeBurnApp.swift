@@ -971,7 +971,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 alert.alertStyle = .warning
             } else if updateChecker.updateAvailable, let latest = updateChecker.latestVersion {
                 alert.messageText = "Update Available"
-                alert.informativeText = "\(AppVersion.display(latest)) is available (you have \(AppVersion.display(updateChecker.currentVersion))). Run:\n\ncodeburn menubar --force"
+                let header = "\(AppVersion.display(latest)) is available (you have \(AppVersion.display(updateChecker.currentVersion)))."
+                if updateChecker.cliTooOldForUpdate {
+                    alert.informativeText = "\(header) Your codeburn CLI is too old to install it. First run:\n\n\(updateChecker.cliUpdateCommand)\n\nthen:\n\ncodeburn menubar --force"
+                } else {
+                    alert.informativeText = "\(header) Run:\n\ncodeburn menubar --force"
+                }
                 alert.alertStyle = .informational
             } else {
                 alert.messageText = "Up to Date"

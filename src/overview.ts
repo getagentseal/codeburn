@@ -14,7 +14,14 @@ function formatCost(usd: number): string {
   return baseCost(usd).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
 }
 function formatTokens(n: number): string {
-  return Math.round(n).toLocaleString()
+  // Pin the locale so grouping is deterministic regardless of the host's
+  // locale (e.g. en-IN groups as 2,00,20,00,000 instead of 2,002,000,000).
+  return Math.round(n).toLocaleString('en-US')
+}
+// Integer counts (calls, sessions, turns, tool uses) — same locale pin so the
+// overview output is byte-identical across machines.
+function formatCount(n: number): string {
+  return n.toLocaleString('en-US')
 }
 function isAbsoluteProjectPath(path: string): boolean {
   return path.startsWith('/') || path.startsWith('\\') || /^[a-zA-Z]:[/\\]/.test(path)
@@ -150,7 +157,7 @@ export function renderOverview(
   const kv = (k: string, v: string): string => '  ' + c.dim(k.padEnd(11)) + v
   out.push(kv('Cost', c.bold(formatCost(cost))))
   out.push(kv('Tokens', formatTokens(totalTokens) + c.dim('   (breakdown below)')))
-  out.push(kv('Calls', calls.toLocaleString() + c.dim('   sessions ') + sessions.toLocaleString()))
+  out.push(kv('Calls', formatCount(calls) + c.dim('   sessions ') + formatCount(sessions)))
   out.push(kv('Cache hit', `${cacheHit.toFixed(1)}%`))
   if (savings > 0) out.push(kv('Savings', formatCost(savings) + c.dim(' (local models)')))
   out.push('')
@@ -191,7 +198,7 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), formatCost(v.cost), v.calls.toLocaleString(), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [getShortModelName(m), formatCost(v.cost), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
     out.push('')
   }
@@ -213,7 +220,7 @@ export function renderOverview(
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([name, v]) => [name, formatCost(v.cost), v.sessions.toLocaleString()]),
+      projRows.map(([name, v]) => [name, formatCost(v.cost), formatCount(v.sessions)]),
     ))
     out.push('')
   }
@@ -235,7 +242,7 @@ export function renderOverview(
     out.push(heading('By activity'))
     out.push(renderTable(c,
       [{ header: 'Activity' }, { header: 'Cost', right: true }, { header: 'Turns', right: true }],
-      catRows.map(([cat, v]) => [CATEGORY_LABELS[cat as TaskCategory] ?? cat, formatCost(v.cost), v.turns.toLocaleString()]),
+      catRows.map(([cat, v]) => [CATEGORY_LABELS[cat as TaskCategory] ?? cat, formatCost(v.cost), formatCount(v.turns)]),
     ))
     out.push('')
   }
@@ -246,7 +253,7 @@ export function renderOverview(
     out.push(heading('Tools'))
     out.push(renderTable(c,
       [{ header: 'Tool' }, { header: 'Calls', right: true }],
-      toolRows.map(([t, n]) => [t, n.toLocaleString()]),
+      toolRows.map(([t, n]) => [t, formatCount(n)]),
     ))
     out.push('')
   }

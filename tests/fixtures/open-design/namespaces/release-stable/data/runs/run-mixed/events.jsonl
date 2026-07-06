@@ -1,0 +1,5 @@
+{"id":"evt-start","event":"start","timestamp":"2026-06-22T10:00:00.000Z","data":{"model":"openai-codex:gpt-5.5"}}
+{"id":"evt-codex-usage","event":"agent","timestamp":1782122405000,"data":{"type":"usage","usage":{"input_tokens":1000,"output_tokens":200,"cached_read_tokens":50,"thought_tokens":25,"total_tokens":1200},"costUsd":null}}
+{"id":"evt-status-glm","event":"agent","timestamp":"2026-06-22T10:00:10.000Z","data":{"type":"status","model":"glm-5.2"}}
+{"id":"evt-glm-usage","event":"agent","timestamp":"2026-06-22T10:00:15.000Z","data":{"type":"usage","usage":{"input_tokens":3000,"output_tokens":400,"cached_read_tokens":100,"thought_tokens":60,"total_tokens":3560},"costUsd":null}}
+{"id":"evt-glm-usage","event":"agent","timestamp":"2026-06-22T10:00:16.000Z","data":{"type":"usage","usage":{"input_tokens":9999,"output_tokens":9999,"cached_read_tokens":9999,"thought_tokens":9999,"total_tokens":39996},"costUsd":null}}
