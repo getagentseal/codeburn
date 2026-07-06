@@ -20,6 +20,33 @@ export type YieldSummary = {
   details: SessionYield[]
 }
 
+export type YieldJsonReport = {
+  period: {
+    label: string
+    start: string
+    end: string
+  }
+  summary: {
+    productive: YieldBucketJson
+    reverted: YieldBucketJson
+    abandoned: YieldBucketJson
+    total: { costUSD: number; sessions: number }
+    productiveToRevertedCostRatio: number | null
+  }
+  details: SessionYieldJson[]
+}
+
+type YieldBucketJson = {
+  costUSD: number
+  sessions: number
+  costPercent: number
+  sessionPercent: number
+}
+
+type SessionYieldJson = Omit<SessionYield, 'cost'> & {
+  costUSD: number
+}
+
 const SAFE_REF_PATTERN = /^[A-Za-z0-9._/\-]+$/
 
 function runGit(args: string[], cwd: string): string | null {
@@ -215,4 +242,48 @@ export function formatYieldSummary(summary: YieldSummary): string {
   ]
 
   return lines.join('\n')
+}
+
+export function buildYieldJsonReport(
+  summary: YieldSummary,
+  periodLabel: string,
+  range: DateRange,
+): YieldJsonReport {
+  const bucket = (value: { cost: number; sessions: number }): YieldBucketJson => ({
+    costUSD: value.cost,
+    sessions: value.sessions,
+    costPercent: summary.total.cost > 0
+      ? Math.round((value.cost / summary.total.cost) * 1000) / 10
+      : 0,
+    sessionPercent: summary.total.sessions > 0
+      ? Math.round((value.sessions / summary.total.sessions) * 1000) / 10
+      : 0,
+  })
+
+  return {
+    period: {
+      label: periodLabel,
+      start: range.start.toISOString(),
+      end: range.end.toISOString(),
+    },
+    summary: {
+      productive: bucket(summary.productive),
+      reverted: bucket(summary.reverted),
+      abandoned: bucket(summary.abandoned),
+      total: {
+        costUSD: summary.total.cost,
+        sessions: summary.total.sessions,
+      },
+      productiveToRevertedCostRatio: summary.reverted.cost > 0
+        ? Math.round((summary.productive.cost / summary.reverted.cost) * 100) / 100
+        : null,
+    },
+    details: summary.details.map(detail => ({
+      sessionId: detail.sessionId,
+      project: detail.project,
+      costUSD: detail.cost,
+      category: detail.category,
+      commitCount: detail.commitCount,
+    })),
+  }
 }

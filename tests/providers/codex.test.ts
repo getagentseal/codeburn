@@ -16,15 +16,16 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
 })
 
-function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string } = {}) {
+function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string; forked_from_id?: string; timestamp?: string } = {}) {
   return JSON.stringify({
     type: 'session_meta',
-    timestamp: '2026-04-14T10:00:00Z',
+    timestamp: opts.timestamp ?? '2026-04-14T10:00:00Z',
     payload: {
       cwd: opts.cwd ?? '/Users/test/myproject',
       originator: opts.originator ?? 'codex-cli',
       session_id: opts.session_id ?? 'sess-001',
       model: opts.model ?? 'gpt-5.3-codex',
+      ...(opts.forked_from_id ? { forked_from_id: opts.forked_from_id } : {}),
     },
   })
 }
@@ -69,6 +70,20 @@ function functionCall(name: string, timestamp?: string) {
   })
 }
 
+function mcpToolCallEnd(server: string, tool: string, timestamp?: string) {
+  return JSON.stringify({
+    type: 'event_msg',
+    timestamp: timestamp ?? '2026-04-14T10:00:30Z',
+    payload: {
+      type: 'mcp_tool_call_end',
+      call_id: 'call-1',
+      invocation: { server, tool, arguments: {} },
+      duration: '1.2s',
+      result: { Ok: { content: [] } },
+    },
+  })
+}
+
 function userMessage(text: string, timestamp?: string) {
   return JSON.stringify({
     type: 'response_item',
@@ -89,6 +104,21 @@ async function writeSession(dir: string, date: string, filename: string, lines: 
   await writeFile(filePath, lines.join('\n') + '\n')
   return filePath
 }
+
+describe('codex provider - model display names', () => {
+  it('maps gpt-5.3-codex-spark to its own label', () => {
+    const provider = createCodexProvider(tmpDir)
+    const name = provider.modelDisplayName('gpt-5.3-codex-spark')
+    expect(name).not.toBe('GPT-5.3 Codex')
+    expect(name).toBe('GPT-5.3 Codex Spark')
+  })
+
+  it('maps gpt-5.3-codex reasoning suffixes to the base label', () => {
+    const provider = createCodexProvider(tmpDir)
+    expect(provider.modelDisplayName('gpt-5.3-codex-high')).toBe('GPT-5.3 Codex')
+    expect(provider.modelDisplayName('gpt-5.3-codex-low')).toBe('GPT-5.3 Codex')
+  })
+})
 
 describe('codex provider - session discovery', () => {
   it('discovers sessions in YYYY/MM/DD structure', async () => {
@@ -278,6 +308,30 @@ describe('codex provider - JSONL parsing', () => {
     expect(call.deduplicationKey).toContain('codex:')
   })
 
+  it('attributes MCP calls emitted as event_msg/mcp_tool_call_end', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),
+      userMessage('look up the issue'),
+      mcpToolCallEnd('github', 'get_issue'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) {
+      calls.push(call)
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__github__get_issue'])
+  })
+
   it('normalizes Codex subagent tool calls to Agent', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-agent.jsonl', [
       sessionMeta({ session_id: 'sess-agent', model: 'gpt-5.5' }),
@@ -396,5 +450,99 @@ describe('codex provider - JSONL parsing', () => {
       calls.push(call)
     }
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe('codex provider - forked session dedupe', () => {
+  // Aggregate every discovered session through ONE shared seenKeys, exactly as
+  // the real provider report does, then sum the global token total.
+  async function aggregateTokens(dir: string): Promise<{ tokens: number; calls: number }> {
+    const provider = createCodexProvider(dir)
+    const sessions = (await provider.discoverSessions()).sort((a, b) => (a.path < b.path ? -1 : 1))
+    const seenKeys = new Set<string>()
+    let tokens = 0
+    let calls = 0
+    for (const s of sessions) {
+      for await (const c of provider.createSessionParser(s, seenKeys).parse()) {
+        calls++
+        tokens += c.inputTokens + c.outputTokens + c.cachedInputTokens + c.reasoningTokens
+      }
+    }
+    return { tokens, calls }
+  }
+
+  it('does not double-count a fork that replays the parent past the 5s cutoff', async () => {
+    // Parent does 1100 tokens of real work. The fork replays both events with
+    // timestamps well beyond the 5s fork cutoff, then adds one genuine event
+    // (+400). The replays must collide with the parent and drop, so the global
+    // total is 1500 -- not 2600 (which keying on the fork's own session id would
+    // produce by double-counting the replayed history).
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', last: { input: 400 }, total: { total: 1100 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:11Z', last: { input: 400 }, total: { total: 1100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:12Z', last: { input: 400 }, total: { total: 1500 } }),
+    ])
+
+    const { tokens } = await aggregateTokens(tmpDir)
+    expect(tokens).toBe(1500)
+  })
+
+  it('keeps a genuine divergent fork event that shares a cumulative total with the parent', async () => {
+    // Parent reaches cumulative 1600 via input (last input 500). The fork replays
+    // 700 and 1100, then does genuinely different work that also reaches
+    // cumulative 1600 but via OUTPUT (last output 500). Keying on cumulativeTotal
+    // alone would collide the fork's 1600 with the parent's 1600 and drop it
+    // (undercount, losing 500). The content-addressed key keeps both.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', last: { input: 400 }, total: { total: 1100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:03Z', last: { input: 500 }, total: { input: 1600, total: 1600 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:10Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:11Z', last: { input: 400 }, total: { total: 1100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:12Z', last: { output: 500 }, total: { input: 1100, output: 500, total: 1600 } }),
+    ])
+
+    const { tokens } = await aggregateTokens(tmpDir)
+    // parent 1600 + fork's genuine +500 = 2100; replays (700, 1100) dropped.
+    expect(tokens).toBe(2100)
+  })
+
+  it('does not overcount a total-only fork whose replay straddles the 5s cutoff', async () => {
+    // The dedupe key must be derived from the cumulative token breakdown, not
+    // per-event deltas. In the fallback branch (events with total_token_usage
+    // but no last_token_usage), the delta is computed against a running `prev`.
+    // A fork skips replays within 5s of the fork (prev NOT advanced), so a
+    // replay kept just past the cutoff would compute a different delta than the
+    // parent did and, with a delta-based key, fail to dedupe -> double-count.
+    // The cumulative totals are copied verbatim, so a cumulative-based key
+    // collides regardless of the cutoff. Parent does 300 tokens; the fork is a
+    // pure replay (no new work), so the global total must stay 300.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', total: { input: 100, total: 100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', total: { input: 200, total: 200 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:03Z', total: { input: 300, total: 300 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-fork.jsonl', [
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent' }),
+      // 10:00:01 is within the 5s cutoff -> skipped (prev not advanced).
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', total: { input: 100, total: 100 } }),
+      // These land past the cutoff and replay the parent's cumulative totals.
+      tokenCount({ timestamp: '2026-04-14T10:00:08Z', total: { input: 200, total: 200 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:09Z', total: { input: 300, total: 300 } }),
+    ])
+
+    const { tokens } = await aggregateTokens(tmpDir)
+    expect(tokens).toBe(300)
   })
 })

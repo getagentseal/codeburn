@@ -19,8 +19,6 @@ import {
   detectBloatedClaudeMd,
   detectUnusedMcp,
   detectBashBloat,
-  detectGhostAgents,
-  detectGhostSkills,
   detectGhostCommands,
   loadMcpConfigs,
   scanJsonlFile,
@@ -217,16 +215,6 @@ describe('detectUnusedMcp', () => {
 // ============================================================================
 
 describe('detectBashBloat', () => {
-  const originalEnv = process.env['BASH_MAX_OUTPUT_LENGTH']
-
-  beforeEach(() => {
-    delete process.env['BASH_MAX_OUTPUT_LENGTH']
-  })
-
-  afterAll(() => {
-    if (originalEnv !== undefined) process.env['BASH_MAX_OUTPUT_LENGTH'] = originalEnv
-  })
-
   it('flags when env var is unset (uses default 30K)', () => {
     const finding = detectBashBloat()
     expect(finding).not.toBeNull()

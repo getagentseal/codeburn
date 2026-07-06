@@ -185,7 +185,6 @@ describe('getPlanUsage', () => {
 
   it('keeps the provider-specific parser filter for one active plan', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-usage-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -217,18 +216,12 @@ describe('getPlanUsage', () => {
       expect(usages).toHaveLength(1)
       expect(usages[0]?.spentApiEquivalentUsd).toBe(80)
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('computes multiple active plan usages from one all-provider parse', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-usage-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -344,11 +337,6 @@ describe('getPlanUsage', () => {
       expect(usages.map(usage => usage.plan.provider)).toEqual(['claude', 'codex'])
       expect(usages.map(usage => usage.spentApiEquivalentUsd)).toEqual([100, 50])
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })

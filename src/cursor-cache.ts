@@ -11,12 +11,21 @@ import type { ParsedProviderCall } from './providers/types.js'
 // router relies on those composer ids to bucket calls per project.
 // Version 2 caches contain `sessionId: 'unknown'` for every call and would
 // route everything to the orphan project, so we invalidate them.
-const CURSOR_CACHE_VERSION = 3
+// Version 5: parseAgentKv was removed (it double-counted against bubbles);
+// real context tokens from composerData.promptTokenBreakdown now drive
+// input, and agentKv is used only for the tools/bash breakdown. Cached v4
+// results contain stale agentKv calls and lack the real token figures.
+// Version 6: conversation input moved to composer-anchored records
+// (cursor:composer-input:<id>) with per-conversation source selection, the
+// agent stream regained tool/system context and stream-only sessions, and
+// tool names are canonicalized. v5 results mix crediting regimes.
+const CURSOR_CACHE_VERSION = 6
 
 type ResultCache = {
   version?: number
   dbMtimeMs: number
   dbSizeBytes: number
+  lookbackFloor: string
   calls: ParsedProviderCall[]
 }
 
@@ -39,7 +48,10 @@ async function getDbFingerprint(dbPath: string): Promise<{ mtimeMs: number; size
   }
 }
 
-export async function readCachedResults(dbPath: string): Promise<ParsedProviderCall[] | null> {
+export async function readCachedResults(
+  dbPath: string,
+  requestedFloor: string,
+): Promise<ParsedProviderCall[] | null> {
   try {
     const fp = await getDbFingerprint(dbPath)
     if (!fp) return null
@@ -47,7 +59,13 @@ export async function readCachedResults(dbPath: string): Promise<ParsedProviderC
     const raw = await readFile(getCachePath(), 'utf-8')
     const cache = JSON.parse(raw) as ResultCache
 
-    if (cache.version === CURSOR_CACHE_VERSION && cache.dbMtimeMs === fp.mtimeMs && cache.dbSizeBytes === fp.size) {
+    if (
+      cache.version === CURSOR_CACHE_VERSION &&
+      cache.dbMtimeMs === fp.mtimeMs &&
+      cache.dbSizeBytes === fp.size &&
+      typeof cache.lookbackFloor === 'string' &&
+      cache.lookbackFloor <= requestedFloor
+    ) {
       return cache.calls
     }
     return null
@@ -56,7 +74,11 @@ export async function readCachedResults(dbPath: string): Promise<ParsedProviderC
   }
 }
 
-export async function writeCachedResults(dbPath: string, calls: ParsedProviderCall[]): Promise<void> {
+export async function writeCachedResults(
+  dbPath: string,
+  calls: ParsedProviderCall[],
+  lookbackFloor: string,
+): Promise<void> {
   const fp = await getDbFingerprint(dbPath)
   if (!fp) return
 
@@ -66,6 +88,7 @@ export async function writeCachedResults(dbPath: string, calls: ParsedProviderCa
     version: CURSOR_CACHE_VERSION,
     dbMtimeMs: fp.mtimeMs,
     dbSizeBytes: fp.size,
+    lookbackFloor,
     calls,
   }
 

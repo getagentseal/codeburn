@@ -7,13 +7,9 @@ import { parseAllSessions } from '../src/parser.js'
 import type { DateRange } from '../src/types.js'
 
 let tmpDir: string
-let originalConfigDir: string | undefined
-let originalDesktopSessionsDir: string | undefined
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'claude-cwd-test-'))
-  originalConfigDir = process.env['CLAUDE_CONFIG_DIR']
-  originalDesktopSessionsDir = process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
   process.env['CLAUDE_CONFIG_DIR'] = tmpDir
   // Point desktop sessions at an empty subdir by default so real sessions
   // on the developer's machine do not bleed into the unit tests.
@@ -21,16 +17,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (originalConfigDir === undefined) {
-    delete process.env['CLAUDE_CONFIG_DIR']
-  } else {
-    process.env['CLAUDE_CONFIG_DIR'] = originalConfigDir
-  }
-  if (originalDesktopSessionsDir === undefined) {
-    delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
-  } else {
-    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = originalDesktopSessionsDir
-  }
   await rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -169,7 +155,64 @@ describe('Claude cwd project paths', () => {
 
     expect(projects).toHaveLength(1)
     expect(projects[0]!.sessions).toHaveLength(4)
-    expect(projects[0]!.projectPath).toBe('fallback/slug')
+    expect(projects[0]!.projectPath).toBe('fallback-slug')
+  })
+
+  it('keeps a hyphenated slug intact when cwd is absent', async () => {
+    const slug = 'Projects-Content-OS'
+    const projectDir = join(tmpDir, 'projects', slug)
+    await mkdir(projectDir, { recursive: true })
+    const filePath = join(projectDir, 'no-cwd.jsonl')
+    await writeFile(filePath, JSON.stringify({
+      type: 'assistant',
+      sessionId: 'no-cwd',
+      timestamp: '2099-05-09T10:00:00.000Z',
+      message: {
+        id: 'msg-no-cwd',
+        type: 'message',
+        role: 'assistant',
+        model: 'claude-sonnet-4-5',
+        content: [],
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    }) + '\n')
+    await utimes(filePath, new Date('2099-05-09T10:00:00.000Z'), new Date('2099-05-09T10:00:00.000Z'))
+
+    const projects = await parseAllSessions(dayRange('2099-05-09'), 'claude')
+
+    expect(projects).toHaveLength(1)
+    expect(projects[0]!.project).toBe(slug)
+    expect(projects[0]!.projectPath).toBe(slug)
+    expect(projects[0]!.projectPath).not.toBe('Projects/Content/OS')
+  })
+
+  it('does not group sibling projects under a parent directory that merely contains .git', async () => {
+    const projectsRoot = join(tmpDir, 'Projects')
+    const swiftbar = join(projectsRoot, 'Swiftbar')
+    const contentOs = join(projectsRoot, 'Content-OS')
+    await mkdir(join(projectsRoot, '.git'), { recursive: true })
+    await mkdir(swiftbar, { recursive: true })
+    await mkdir(contentOs, { recursive: true })
+
+    await writeClaudeSession(
+      'tmp-Projects-Swiftbar',
+      'swiftbar-session',
+      swiftbar,
+      '2099-05-10T10:00:00.000Z',
+    )
+    await writeClaudeSession(
+      'tmp-Projects-Content-OS',
+      'content-os-session',
+      contentOs,
+      '2099-05-10T11:00:00.000Z',
+    )
+
+    const projects = await parseAllSessions(dayRange('2099-05-10'), 'claude')
+    const projectPaths = projects.map(project => project.projectPath).sort()
+
+    expect(projects).toHaveLength(2)
+    expect(projectPaths).toEqual([contentOs, swiftbar].sort())
+    expect(projectPaths).not.toContain(projectsRoot)
   })
 
   it('groups git worktrees under the main repository project', async () => {

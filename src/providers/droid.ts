@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
+import { normalizeContentBlocks } from '../content-utils.js'
 import type {
   Provider,
   SessionSource,
@@ -162,7 +163,7 @@ function createParser(
 
         if (msg.role === 'user') {
           // Extract user text from content
-          const texts = (msg.content ?? [])
+          const texts = normalizeContentBlocks(msg.content)
             .filter(c => c.type === 'text' && c.text)
             .map(c => c.text!)
             .filter(Boolean)
@@ -175,7 +176,7 @@ function createParser(
         }
 
         if (msg.role === 'assistant') {
-          const toolUses = (msg.content ?? []).filter(c => c.type === 'tool_use')
+          const toolUses = normalizeContentBlocks(msg.content).filter(c => c.type === 'tool_use')
 
           for (const tu of toolUses) {
             const toolName = tu.name ?? ''
@@ -187,7 +188,7 @@ function createParser(
           }
 
           // Check if this assistant message has any text content (non-thinking)
-          const hasText = (msg.content ?? []).some(c => c.type === 'text' && c.text)
+          const hasText = normalizeContentBlocks(msg.content).some(c => c.type === 'text' && c.text)
 
           // Only emit a call entry if there are tools or substantial text
           if (pendingTools.length > 0 || hasText) {

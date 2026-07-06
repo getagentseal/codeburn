@@ -21,6 +21,15 @@ struct SubscriptionUsage: Sendable, Equatable {
         }
     }
 
+    /// A model-scoped weekly limit from the `limits` array (e.g. the Fable
+    /// bucket). The label is the API's `scope.model.display_name`, so new
+    /// model buckets show up without a client update.
+    struct ScopedWindow: Sendable, Equatable {
+        let label: String
+        let percent: Double
+        let resetsAt: Date?
+    }
+
     let tier: Tier
     let rawTier: String?
     let fiveHourPercent: Double?
@@ -31,6 +40,7 @@ struct SubscriptionUsage: Sendable, Equatable {
     let sevenDayOpusResetsAt: Date?
     let sevenDaySonnetPercent: Double?
     let sevenDaySonnetResetsAt: Date?
+    let scopedWeekly: [ScopedWindow]
     let fetchedAt: Date
 
     static func tier(from raw: String?) -> Tier {

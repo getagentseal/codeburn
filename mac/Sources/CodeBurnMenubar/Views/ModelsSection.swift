@@ -4,6 +4,13 @@ struct ModelsSection: View {
     @Environment(AppStore.self) private var store
     @State private var isExpanded: Bool = true
 
+    // Only surface the Saved column when something was actually saved by a
+    // local-model mapping. With no mapping it would be an unlabeled column of
+    // dashes, so we drop it entirely and keep the plain Cost / Calls layout.
+    private var showSavings: Bool {
+        store.payload.current.topModels.contains { $0.savingsUSD > 0 }
+    }
+
     var body: some View {
         CollapsibleSection(
             caption: "Models",
@@ -11,6 +18,9 @@ struct ModelsSection: View {
             trailing: {
                 HStack(spacing: 8) {
                     Text("Cost").frame(minWidth: 54, alignment: .trailing)
+                    if showSavings {
+                        Text("Saved").frame(minWidth: 54, alignment: .trailing)
+                    }
                     Text("Calls").frame(minWidth: 52, alignment: .trailing)
                 }
                 .font(.system(size: 10, weight: .medium))
@@ -21,7 +31,7 @@ struct ModelsSection: View {
             VStack(alignment: .leading, spacing: 7) {
                 let maxCost = max(store.payload.current.topModels.map(\.cost).max() ?? 1, 0.01)
                 ForEach(store.payload.current.topModels, id: \.name) { model in
-                    ModelRow(model: model, maxCost: maxCost)
+                    ModelRow(model: model, maxCost: maxCost, showSavings: showSavings)
                 }
 
                 TokensLine()
@@ -34,9 +44,13 @@ struct ModelsSection: View {
 private struct ModelRow: View {
     let model: ModelEntry
     let maxCost: Double
+    let showSavings: Bool
 
     var body: some View {
         HStack(spacing: 8) {
+            // Bar tracks actual cost; for local models the cost is $0 and the
+            // bar will be empty. Saved counterfactual (if any) renders as
+            // green text in the saved column, never summed into the bar.
             FixedBar(fraction: model.cost / maxCost)
                 .frame(width: 56, height: 6)
 
@@ -48,6 +62,14 @@ private struct ModelRow: View {
                 .font(.codeMono(size: 12, weight: .medium))
                 .tracking(-0.2)
                 .frame(minWidth: 54, alignment: .trailing)
+
+            if showSavings {
+                Text(model.savingsUSD > 0 ? model.savingsUSD.asCompactCurrency() : "—")
+                    .font(.codeMono(size: 12))
+                    .tracking(-0.2)
+                    .foregroundStyle(model.savingsUSD > 0 ? Color.green : Color.secondary)
+                    .frame(minWidth: 54, alignment: .trailing)
+            }
 
             Text("\(model.calls)")
                 .font(.system(size: 11))

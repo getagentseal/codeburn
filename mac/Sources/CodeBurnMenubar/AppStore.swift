@@ -12,12 +12,14 @@ struct CachedPayload {
 }
 
 struct PayloadCacheKey: Hashable {
+    let scope: MenubarScope
     let period: Period
     let provider: ProviderFilter
     let day: String?
     let days: Set<String>
 
-    init(period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = []) {
+    init(scope: MenubarScope = .local, period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = []) {
+        self.scope = scope
         self.period = period
         self.provider = provider
         self.day = days.count <= 1 ? (day ?? days.first) : nil
@@ -37,7 +39,13 @@ struct PayloadCacheKey: Hashable {
 final class AppStore {
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
+    var selectedScope: MenubarScope = MenubarScope.savedMenubarScope()
     var selectedDays: Set<String> = []
+    var activeScope: MenubarScope { effectiveSelectedScope }
+
+    private var effectiveSelectedScope: MenubarScope {
+        selectedDays.count > 1 ? .local : selectedScope
+    }
 
     var selectedDay: String? {
         guard selectedDays.count == 1 else { return nil }
@@ -46,21 +54,68 @@ final class AppStore {
     private(set) var menubarPeriod: Period = Period.savedMenubarPeriod() {
         didSet { menubarPeriod.persistAsMenubarDefault() }
     }
+    private(set) var menubarScope: MenubarScope = MenubarScope.savedMenubarScope() {
+        didSet { menubarScope.persistAsMenubarDefault() }
+    }
     var selectedInsight: InsightMode = .trend
     var accentPreset: AccentPreset = ThemeState.shared.preset {
         didSet { ThemeState.shared.preset = accentPreset }
     }
     var showingAccentPicker: Bool = false
     var currency: String = "USD"
+    /// Which Settings tab to show; lets the menu's "About CodeBurn" item jump
+    /// straight to the About tab even when the Settings window is reused.
+    var settingsTab: String = "general"
     var displayMetric: DisplayMetric = DisplayMetric(rawValue: UserDefaults.standard.string(forKey: "CodeBurnDisplayMetric") ?? "") ?? .cost {
         didSet { UserDefaults.standard.set(displayMetric.rawValue, forKey: "CodeBurnDisplayMetric") }
     }
     var dailyBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyBudget") {
         didSet { UserDefaults.standard.set(dailyBudget, forKey: "CodeBurnDailyBudget") }
     }
+    // Token-denominated daily budget, used when the display metric is token-based.
+    // Stored separately from the cost budget so switching metric never reinterprets
+    // a dollar threshold as a token count (or vice versa).
+    var dailyTokenBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyTokenBudget") {
+        didSet { UserDefaults.standard.set(dailyTokenBudget, forKey: "CodeBurnDailyTokenBudget") }
+    }
+
+    /// True when the menubar metric counts tokens rather than cost.
+    var isTokenMetric: Bool { displayMetric == .tokens || displayMetric == .totalTokens }
+
+    /// Active daily-budget threshold for the current metric: a token count when
+    /// tracking tokens, otherwise USD cost. 0 means the alert is off.
+    var activeDailyBudget: Double { isTokenMetric ? dailyTokenBudget : dailyBudget }
+
+    /// Today's total in the active metric (USD cost, or input+output tokens),
+    /// or nil when today's payload has not loaded yet.
+    var todayMetricTotal: Double? {
+        guard let current = todayPayload?.current else { return nil }
+        return isTokenMetric ? Double(current.inputTokens + current.outputTokens) : current.cost
+    }
+
+    /// True when today's usage has reached or passed the active daily budget.
+    var isOverDailyBudget: Bool {
+        guard activeDailyBudget > 0, let total = todayMetricTotal else { return false }
+        return total >= activeDailyBudget
+    }
+
+    var shouldShowDailyBudgetWarning: Bool {
+        isOverDailyBudget && activeScope == .local
+    }
+
+    /// The active daily-budget threshold formatted for display (tokens, or USD).
+    /// The cost budget is defined in USD (matching the "$" presets and field), so
+    /// it is not run through the display-currency conversion here.
+    var dailyBudgetLabel: String {
+        isTokenMetric ? "\(activeDailyBudget.asCompactTokens()) tokens" : activeDailyBudget.asUSD()
+    }
+
     var isLoading: Bool { loadingCountsByKey.values.contains { $0 > 0 } }
     var isCurrentKeyLoading: Bool { loadingCountsByKey[currentKey, default: 0] > 0 }
-    var hasAttemptedCurrentKeyLoad: Bool { attemptedKeys.contains(currentKey) }
+    var hasAttemptedCurrentKeyLoad: Bool {
+        attemptedKeys.contains(currentKey) ||
+            (effectiveSelectedScope == .combined && attemptedKeys.contains(localCurrentKey))
+    }
     var lastError: String? { lastErrorByKey[currentKey] }
     private var loadingCountsByKey: [PayloadCacheKey: Int] = [:]
     private var loadingStartedAtByKey: [PayloadCacheKey: Date] = [:]
@@ -85,6 +140,9 @@ final class AppStore {
     private var cacheDate: String = ""
     private var switchTask: Task<Void, Never>?
     private var payloadRefreshGeneration: UInt64 = 0
+#if DEBUG
+    private var refreshSuppressedForTesting = false
+#endif
     /// Tracks the last successful fetch timestamp per key for stuck-loading
     /// diagnostics. NOT used for cache-freshness logic — `CachedPayload.fetchedAt`
     /// is authoritative there. This map persists across cache wipes (day
@@ -109,19 +167,45 @@ final class AppStore {
     }
 
     private var todayAllKey: PayloadCacheKey {
-        PayloadCacheKey(period: .today, provider: .all, day: nil)
+        PayloadCacheKey(scope: .local, period: .today, provider: .all, day: nil)
     }
 
     private var menubarStatusKey: PayloadCacheKey {
-        PayloadCacheKey(period: menubarPeriod, provider: .all, day: nil)
+        PayloadCacheKey(scope: .local, period: menubarPeriod, provider: .all, day: nil)
     }
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(scope: effectiveSelectedScope, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+    }
+
+    private var localCurrentKey: PayloadCacheKey {
+        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+    }
+
+    private var periodAllKey: PayloadCacheKey {
+        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)
     }
 
     var payload: MenubarPayload {
-        cache[currentKey]?.payload ?? .empty
+        if effectiveSelectedScope == .combined {
+            let combinedPayload = cache[currentKey]?.payload
+            if let localPayload = cache[localCurrentKey]?.payload {
+                if let combined = combinedPayload?.combined {
+                    return MenubarPayload(
+                        generated: combinedPayload?.generated ?? localPayload.generated,
+                        current: localPayload.current,
+                        optimize: localPayload.optimize,
+                        history: localPayload.history,
+                        combined: combined
+                    )
+                }
+                return localPayload
+            }
+            if let combinedPayload {
+                return combinedPayload
+            }
+        }
+        return cache[currentKey]?.payload ?? .empty
     }
 
     /// Today (across all providers) backs day-specific views in the popover.
@@ -150,7 +234,7 @@ final class AppStore {
     /// All-provider payload for the selected period. Used by the tab strip to show
     /// per-provider costs that match the active period, not just today.
     var periodAllPayload: MenubarPayload? {
-        cache[PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)]?.payload
+        cache[periodAllKey]?.payload
     }
 
     var isDayMode: Bool {
@@ -169,7 +253,7 @@ final class AppStore {
     }
 
     var hasCachedData: Bool {
-        cache[currentKey] != nil
+        cache[currentKey] != nil || (effectiveSelectedScope == .combined && cache[localCurrentKey] != nil)
     }
 
     var hasStaleLoading: Bool {
@@ -184,7 +268,7 @@ final class AppStore {
     }
 
     var hasMissingInteractivePayloadWithoutAttempt: Bool {
-        cache[currentKey] == nil && !isCurrentKeyLoading && !hasAttemptedCurrentKeyLoad
+        !hasCachedData && !isCurrentKeyLoading && !hasAttemptedCurrentKeyLoad
     }
 
     var shouldResetInteractiveRefreshPipeline: Bool {
@@ -194,8 +278,9 @@ final class AppStore {
     var staleInteractivePayloadAgeSeconds: Int? {
         let keys = Set([
             currentKey,
+            localCurrentKey,
             todayAllKey,
-            PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays),
+            periodAllKey,
         ])
         let staleAges = keys.compactMap { key -> TimeInterval? in
             guard let cached = cache[key] else { return nil }
@@ -206,11 +291,11 @@ final class AppStore {
     }
 
     var needsInteractivePayloadRefresh: Bool {
-        let periodAllKey = PayloadCacheKey(period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)
-        return cache[currentKey]?.isFresh != true ||
-            cache[todayAllKey]?.isFresh != true ||
-            cache[periodAllKey]?.isFresh != true ||
-            hasStaleLoading
+        var requiredKeys: Set<PayloadCacheKey> = [currentKey, todayAllKey, periodAllKey]
+        if effectiveSelectedScope == .combined {
+            requiredKeys.insert(localCurrentKey)
+        }
+        return requiredKeys.contains { cache[$0]?.isFresh != true } || hasStaleLoading
     }
 
     /// True if any cached payload reports at least one provider. Used to keep the
@@ -222,16 +307,47 @@ final class AppStore {
     }
 
 #if DEBUG
-    func setCachedPayloadForTesting(_ payload: MenubarPayload, period: Period, provider: ProviderFilter, day: String? = nil, fetchedAt: Date) {
-        cache[PayloadCacheKey(period: period, provider: provider, day: day)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+    func setCachedPayloadForTesting(_ payload: MenubarPayload,
+                                    scope: MenubarScope = .local,
+                                    period: Period,
+                                    provider: ProviderFilter,
+                                    day: String? = nil,
+                                    days: Set<String> = [],
+                                    fetchedAt: Date) {
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
     }
 
-    func seedInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil, insertedAt: Date) {
-        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] = insertedAt
+    func cachedPayloadForTesting(scope: MenubarScope = .local,
+                                 period: Period,
+                                 provider: ProviderFilter,
+                                 day: String? = nil,
+                                 days: Set<String> = []) -> MenubarPayload? {
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)]?.payload
     }
 
-    func isInFlightForTesting(period: Period, provider: ProviderFilter, day: String? = nil) -> Bool {
-        inFlightKeys[PayloadCacheKey(period: period, provider: provider, day: day)] != nil
+    func setLastErrorForTesting(_ error: String,
+                                scope: MenubarScope = .local,
+                                period: Period,
+                                provider: ProviderFilter,
+                                day: String? = nil,
+                                days: Set<String> = []) {
+        lastErrorByKey[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)] = error
+    }
+
+    func seedInFlightForTesting(scope: MenubarScope = .local,
+                                period: Period,
+                                provider: ProviderFilter,
+                                day: String? = nil,
+                                insertedAt: Date) {
+        inFlightKeys[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day)] = insertedAt
+    }
+
+    func isInFlightForTesting(scope: MenubarScope = .local, period: Period, provider: ProviderFilter, day: String? = nil) -> Bool {
+        inFlightKeys[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day)] != nil
+    }
+
+    func suppressRefreshesForTesting() {
+        refreshSuppressedForTesting = true
     }
 #endif
 
@@ -288,6 +404,23 @@ final class AppStore {
         }
     }
 
+    func setMenubarScope(_ scope: MenubarScope) {
+        let shouldResetProvider = scope == .combined && selectedProvider != .all
+        guard menubarScope != scope || selectedScope != scope || shouldResetProvider else { return }
+        menubarScope = scope
+        selectedScope = scope
+        if shouldResetProvider {
+            selectedProvider = .all
+        }
+#if DEBUG
+        if refreshSuppressedForTesting { return }
+#endif
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshSelectionQuietly(scope: self.effectiveSelectedScope, force: true)
+        }
+    }
+
     /// Switch to a provider filter. Cancels any in-flight switch so rapid tab tapping only
     /// runs the CLI for the final selection. Fetches provider-specific and all-provider data
     /// in parallel so the tab strip costs stay in sync with the hero.
@@ -296,21 +429,46 @@ final class AppStore {
         startInteractiveSelectionRefresh()
     }
 
+    func switchTo(scope: MenubarScope) {
+        let shouldResetProvider = scope == .combined && selectedProvider != .all
+        guard selectedScope != scope || shouldResetProvider else { return }
+        selectedScope = scope
+        if shouldResetProvider {
+            selectedProvider = .all
+        }
+        startInteractiveSelectionRefresh()
+    }
+
     private func startInteractiveSelectionRefresh() {
         switchTask?.cancel()
         resetLoadingState()
+#if DEBUG
+        if refreshSuppressedForTesting { return }
+#endif
         let period = selectedPeriod
         let provider = selectedProvider
+        let scope = effectiveSelectedScope
         let day = selectedDay
         let days = selectedDays
-        let key = PayloadCacheKey(period: period, provider: provider, day: day, days: days)
+        let key = PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)
+        let localKey = PayloadCacheKey(scope: .local, period: period, provider: provider, day: day, days: days)
+        let allKey = PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, days: days)
         lastErrorByKey[key] = nil
         switchTask = Task {
-            if provider == .all {
+            if scope == .combined {
+                async let local: Void = refresh(key: localKey, includeOptimize: false, force: false, showLoading: false)
+                async let combined: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                if provider == .all {
+                    _ = await (local, combined)
+                } else {
+                    async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
+                    _ = await (local, combined, all)
+                }
+            } else if provider == .all {
                 await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
             } else {
                 async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
-                async let all: Void = refreshQuietly(period: period, day: day)
+                async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
                 _ = await (main, all)
             }
         }
@@ -413,7 +571,7 @@ final class AppStore {
 
     func recoverFromStuckLoading() async {
         guard prepareStuckLoadingRecovery() else { return }
-        await refresh(key: currentKey, includeOptimize: false, force: true, showLoading: true)
+        await refresh(includeOptimize: false, force: true, showLoading: true)
     }
 
     /// Decides whether stuck-loading recovery should kick off a fresh fetch for
@@ -439,7 +597,30 @@ final class AppStore {
     }
 
     func refresh(includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
-        await refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+        if effectiveSelectedScope == .combined {
+            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: includeOptimize, force: force)
+            async let combined: Void = refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+            _ = await (local, combined)
+        } else {
+            await refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+        }
+    }
+
+    private func refreshSelectionQuietly(scope: MenubarScope, force: Bool = false) async {
+        let scopedKey = PayloadCacheKey(
+            scope: scope,
+            period: selectedPeriod,
+            provider: selectedProvider,
+            day: selectedDay,
+            days: selectedDays
+        )
+        if scope == .combined {
+            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
+            async let combined: Void = refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
+            _ = await (local, combined)
+        } else {
+            await refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
+        }
     }
 
     private func refresh(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
@@ -478,7 +659,7 @@ final class AppStore {
             }
         }
         do {
-            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize)
+            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize, scope: key.scope)
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
                 return
@@ -508,7 +689,7 @@ final class AppStore {
             NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
-                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false)
+                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false, scope: key.scope)
                     guard !Task.isCancelled else { return }
                     if generationAtStart != payloadRefreshGeneration { return }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
@@ -527,9 +708,9 @@ final class AppStore {
             lastErrorByKey[key] = String(describing: error)
         }
 
-        let allKey = PayloadCacheKey(period: key.period, provider: .all, day: key.day)
+        let allKey = PayloadCacheKey(scope: .local, period: key.period, provider: .all, day: key.day, days: key.days)
         if key != allKey, cache[allKey]?.isFresh != true {
-            await refreshQuietly(period: key.period, day: key.day)
+            await refreshQuietly(key: allKey, includeOptimize: false, force: false)
         }
     }
 
@@ -537,22 +718,32 @@ final class AppStore {
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
     func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
+        await refreshQuietly(key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day), includeOptimize: false, force: force)
+    }
+
+    private func refreshQuietly(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false) async {
         invalidateStaleDayCache()
-        let key = PayloadCacheKey(period: period, provider: .all, day: day)
         if !force, cache[key]?.isFresh == true { return }
         if inFlightKeys[key] != nil { return }
         inFlightKeys[key] = Date()
         attemptedKeys.insert(key)
         let cacheDateAtStart = cacheDate
         let generationAtStart = payloadRefreshGeneration
-        if day == nil && period == .today, let age = todayPayloadAgeSeconds, age > 120 {
+        if key.day == nil && key.period == .today, let age = todayPayloadAgeSeconds, age > 120 {
             NSLog("CodeBurn: refreshing stale today status payload after %ds", age)
         }
         defer {
             inFlightKeys[key] = nil
         }
         do {
-            let fresh = try await DataClient.fetch(period: period, day: day, provider: .all, includeOptimize: false)
+            let fresh = try await DataClient.fetch(
+                period: key.period,
+                day: key.day,
+                days: key.days,
+                provider: key.provider,
+                includeOptimize: includeOptimize,
+                scope: key.scope
+            )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
                 return
@@ -568,6 +759,9 @@ final class AppStore {
             lastErrorByKey[key] = nil
         } catch {
             NSLog("CodeBurn: quiet refresh failed for \(key.label): \(error)")
+            if key.scope == .combined {
+                lastErrorByKey[key] = String(describing: error)
+            }
         }
     }
 
@@ -865,6 +1059,9 @@ final class AppStore {
             if let pct = usage.sevenDaySonnetPercent {
                 details.append(.init(label: "Weekly · Sonnet", percent: pct / 100, resetsAt: usage.sevenDaySonnetResetsAt))
             }
+            for scoped in usage.scopedWeekly {
+                details.append(.init(label: "Weekly · \(scoped.label)", percent: scoped.percent / 100, resetsAt: scoped.resetsAt))
+            }
         }
         let plan = subscription?.tier.displayName
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: [])
@@ -991,7 +1188,7 @@ final class AppStore {
 }
 
 enum SupportedCurrency: String, CaseIterable, Identifiable {
-    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
+    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
     var id: String { rawValue }
     var displayName: String {
         switch self {
@@ -1002,6 +1199,7 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
         case .CAD: "Canadian Dollar"
         case .NZD: "New Zealand Dollar"
         case .JPY: "Japanese Yen"
+        case .CNY: "Chinese Yuan"
         case .CHF: "Swiss Franc"
         case .INR: "Indian Rupee"
         case .BRL: "Brazilian Real"
@@ -1024,6 +1222,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case cursor = "Cursor"
     case cursorAgent = "Cursor Agent"
     case copilot = "Copilot"
+    case devin = "Devin"
     case droid = "Droid"
     case gemini = "Gemini"
     case ibmBob = "IBM Bob"
@@ -1039,6 +1238,9 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case crush = "Crush"
     case antigravity = "Antigravity"
     case goose = "Goose"
+    case grok = "Grok"
+    case hermes = "Hermes"
+    case zcode = "ZCode"
 
     var id: String { rawValue }
 
@@ -1053,6 +1255,8 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .openclaw: ["openclaw"]
         case .antigravity: ["antigravity"]
         case .goose: ["goose"]
+        case .grok: ["grok", "grok build"]
+        case .hermes: ["hermes", "hermes agent"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1066,6 +1270,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursor: "cursor"
         case .cursorAgent: "cursor-agent"
         case .copilot: "copilot"
+        case .devin: "devin"
         case .droid: "droid"
         case .gemini: "gemini"
         case .ibmBob: "ibm-bob"
@@ -1081,6 +1286,9 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .crush: "crush"
         case .antigravity: "antigravity"
         case .goose: "goose"
+        case .grok: "grok"
+        case .hermes: "hermes"
+        case .zcode: "zcode"
         }
     }
 }
@@ -1102,13 +1310,14 @@ enum SubscriptionLoadState: Sendable, Equatable {
 }
 
 enum DisplayMetric: String {
-    case cost, tokens, totalTokens, iconOnly
+    case cost, tokens, totalTokens, credits, iconOnly
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {
     case plan = "Plan"
     case trend = "Trend"
     case forecast = "Forecast"
+    case calendar = "Calendar"
     case pulse = "Pulse"
     case stats = "Stats"
     case optimize = "Optimize"
@@ -1223,6 +1432,20 @@ private let thousandsFormatter: NumberFormatter = {
     func asCompactCurrencyWhole() -> String {
         let state = CurrencyState.shared
         return "\(state.symbol)\(Int((self * state.rate).rounded()))"
+    }
+
+    func asCompactTokens() -> String {
+        let n = self
+        if n >= 1_000_000_000 { return String(format: "%.1fB", n / 1_000_000_000) }
+        if n >= 1_000_000 { return String(format: "%.1fM", n / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.0fK", n / 1_000) }
+        return String(format: "%.0f", n)
+    }
+
+    /// Formats a raw USD amount with a "$" and grouping, without applying the
+    /// display-currency rate. Used for the USD-denominated daily budget.
+    func asUSD() -> String {
+        "$" + (groupedDecimalFormatter.string(from: NSNumber(value: self)) ?? "\(Int(self))")
     }
 }
 

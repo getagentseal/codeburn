@@ -7,6 +7,7 @@ import { homedir } from 'os'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
+import { normalizeContentBlocks } from '../content-utils.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -15,6 +16,7 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-5.5': 'GPT-5.5',
   'gpt-5.4-mini': 'GPT-5.4 Mini',
   'gpt-5.4': 'GPT-5.4',
+  'gpt-5.3-codex-spark': 'GPT-5.3 Codex Spark',
   'gpt-5.3-codex': 'GPT-5.3 Codex',
   'gpt-5.2-low': 'GPT-5.2 Low',
   'gpt-5.2': 'GPT-5.2',
@@ -22,6 +24,10 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-4o-mini': 'GPT-4o Mini',
   'gpt-4o': 'GPT-4o',
 }
+
+// Longest-first + version-boundary match so an unlisted future minor (gpt-5.6)
+// falls through to its raw id instead of collapsing into the base "GPT-5" entry.
+const modelDisplayEntries = Object.entries(modelDisplayNames).sort((a, b) => b[0].length - a[0].length)
 
 const toolNameMap: Record<string, string> = {
   exec_command: 'Bash',
@@ -400,8 +406,24 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
+        // Recent Codex emits MCP calls as `event_msg`/`mcp_tool_call_end`
+        // instead of a `function_call` response_item, so the call was never
+        // attributed. Rebuild the canonical `mcp__<server>__<tool>` name the
+        // classifier recognizes.
+        if (entry.type === 'event_msg' && entry.payload?.type === 'mcp_tool_call_end') {
+          const inv = (entry.payload as Record<string, unknown>)['invocation'] as Record<string, unknown> | undefined
+          const server = typeof inv?.['server'] === 'string' ? inv['server'] as string : ''
+          const tool = typeof inv?.['tool'] === 'string' ? inv['tool'] as string : ''
+          if (server && tool) {
+            const name = `mcp__${server}__${tool}`
+            pendingTools.push(name)
+            pendingToolSequence.push([{ tool: name }])
+          }
+          continue
+        }
+
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'user') {
-          const texts = (entry.payload.content ?? [])
+          const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'input_text')
             .map(c => c.text ?? '')
             .filter(Boolean)
@@ -413,7 +435,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
 
         if (entry.type === 'response_item' && entry.payload?.type === 'message' && entry.payload?.role === 'assistant') {
-          const texts = (entry.payload.content ?? [])
+          const texts = normalizeContentBlocks(entry.payload.content)
             .filter(c => c.type === 'output_text' || c.type === 'text')
             .map(c => c.text ?? '')
           pendingOutputChars += texts.join('').length
@@ -524,7 +546,21 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
           const model = resolveModel(entry.payload, sessionModel)
           const timestamp = entry.timestamp ?? ''
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}`
+          // Forked sessions copy the parent's entire token_count history
+          // (re-timestamped), so replays must collide with the parent's events
+          // and drop to avoid double-counting -- hence the parent namespace
+          // (forkedFromId) and the deliberate omission of the per-session id.
+          // But cumulativeTotal alone is too coarse a discriminator: a genuine
+          // post-divergence fork event whose running total coincidentally equals
+          // some parent total would also collide and be lost (undercount). So we
+          // also key on the cumulative token breakdown, which a fork replays
+          // verbatim from the parent -- a true replay collides exactly, while
+          // genuinely different work at the same total stays distinct. We use the
+          // CUMULATIVE figures (not the per-event deltas) on purpose: the deltas
+          // are computed against a running `prev` that the fork advances
+          // differently once the 5s cutoff skips some replays, so a delta-based
+          // key would spuriously diverge on a replay and double-count it.
+          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
 
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
@@ -589,8 +625,8 @@ export function createCodexProvider(codexDir?: string): Provider {
     displayName: 'Codex',
 
     modelDisplayName(model: string): string {
-      for (const [key, name] of Object.entries(modelDisplayNames)) {
-        if (model.startsWith(key)) return name
+      for (const [key, name] of modelDisplayEntries) {
+        if (model === key || model.startsWith(key + '-')) return name
       }
       return model
     },

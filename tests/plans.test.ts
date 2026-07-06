@@ -29,7 +29,6 @@ describe('plan presets', () => {
 describe('plan config persistence', () => {
   it('round-trips per-provider plans and clears one provider at a time', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -74,18 +73,12 @@ describe('plan config persistence', () => {
       expect(await readPlan()).toBeUndefined()
       expect(await readPlans()).toEqual({})
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('reads legacy single-plan config as a provider-keyed plan map', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -107,18 +100,12 @@ describe('plan config persistence', () => {
         resetDay: 3,
       })
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('drops a hand-edited all plan when provider-specific plans are present', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -144,18 +131,12 @@ describe('plan config persistence', () => {
       expect(plans.claude).toMatchObject({ id: 'claude-max', provider: 'claude' })
       expect(await readPlan()).toMatchObject({ id: 'claude-max', provider: 'claude' })
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })
 
   it('does not allow an all-provider plan to overlap provider-specific plans', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-test-'))
-    const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 
     try {
@@ -191,11 +172,6 @@ describe('plan config persistence', () => {
       })
       expect((await readPlans()).claude).toBeUndefined()
     } finally {
-      if (previousHome === undefined) {
-        delete process.env['HOME']
-      } else {
-        process.env['HOME'] = previousHome
-      }
       await rm(dir, { recursive: true, force: true })
     }
   })

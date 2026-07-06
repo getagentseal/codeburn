@@ -197,6 +197,82 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
   })
 })
 
+describe('claude provider — config.json claudeConfigDirs (menubar-driven)', () => {
+  async function writeConfigJson(value: unknown): Promise<void> {
+    const dir = join(process.env['HOME']!, '.config', 'codeburn')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'config.json'), JSON.stringify({ claudeConfigDirs: value }))
+  }
+
+  it('honors claudeConfigDirs from config.json when no env var is set', async () => {
+    const work = await makeConfigDir('claude-work', ['-Users-you-app'])
+    const personal = await makeConfigDir('claude-personal', ['-Users-you-app'])
+    await writeConfigJson([work, personal])
+
+    const sources = await claude.discoverSessions()
+    const paths = sources.map(s => s.path)
+    expect(paths).toContain(join(work, 'projects', '-Users-you-app'))
+    expect(paths).toContain(join(personal, 'projects', '-Users-you-app'))
+  })
+
+  it('lets env CLAUDE_CONFIG_DIRS override config.json', async () => {
+    const fromEnv = await makeConfigDir('claude-env', ['-Users-you-app'])
+    const fromFile = await makeConfigDir('claude-file', ['-Users-you-app'])
+    await writeConfigJson([fromFile])
+    process.env['CLAUDE_CONFIG_DIRS'] = fromEnv
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(fromEnv, 'projects', '-Users-you-app'))).toBe(true)
+    expect(sources.every(s => !s.path.startsWith(fromFile))).toBe(true)
+  })
+
+  it('lets env CLAUDE_CONFIG_DIR override config.json', async () => {
+    const fromEnv = await makeConfigDir('claude-env', ['-Users-you-app'])
+    const fromFile = await makeConfigDir('claude-file', ['-Users-you-app'])
+    await writeConfigJson([fromFile])
+    process.env['CLAUDE_CONFIG_DIR'] = fromEnv
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(fromEnv, 'projects', '-Users-you-app'))).toBe(true)
+    expect(sources.every(s => !s.path.startsWith(fromFile))).toBe(true)
+  })
+
+  it('falls back to ~/.claude when config.json claudeConfigDirs is empty', async () => {
+    const homeDir = process.env['HOME']!
+    await mkdir(join(homeDir, '.claude', 'projects', '-Users-you-app'), { recursive: true })
+    await writeConfigJson([])
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(homeDir, '.claude', 'projects', '-Users-you-app'))).toBe(true)
+  })
+
+  it('expands ~ in config.json entries', async () => {
+    const homeDir = process.env['HOME']!
+    await mkdir(join(homeDir, 'cfg-claude', 'projects', '-Users-you-app'), { recursive: true })
+    await writeConfigJson(['~/cfg-claude'])
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(homeDir, 'cfg-claude', 'projects', '-Users-you-app'))).toBe(true)
+  })
+
+  it('ignores non-string and blank entries in config.json', async () => {
+    const real = await makeConfigDir('claude-real', ['-Users-you-app'])
+    await writeConfigJson([real, 42, '', '   ', null])
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(real, 'projects', '-Users-you-app'))).toBe(true)
+  })
+
+  it('falls back to ~/.claude when claudeConfigDirs is not an array', async () => {
+    const homeDir = process.env['HOME']!
+    await mkdir(join(homeDir, '.claude', 'projects', '-Users-you-app'), { recursive: true })
+    await writeConfigJson('not-an-array')
+
+    const sources = await claude.discoverSessions()
+    expect(sources.some(s => s.path === join(homeDir, '.claude', 'projects', '-Users-you-app'))).toBe(true)
+  })
+})
+
 describe('claude parser — multi-dir aggregation (issue #208 option 1)', () => {
   it('merges sessions from two config dirs into a single ProjectSummary when the canonical cwd matches', async () => {
     const work = await makeConfigDir('claude-work', [])

@@ -127,6 +127,7 @@ describe('aggregateProjectsIntoDays', () => {
     expect(day.categories['coding']).toEqual({
       turns: 1,
       cost: 3,
+      savingsUSD: 0,
       editTurns: 1,
       oneShotTurns: 1,
     })
@@ -186,17 +187,17 @@ describe('aggregateProjectsIntoDays', () => {
     const days = aggregateProjectsIntoDays(projects)
     const day = days[0]!
     expect(day.models['Opus 4.7']).toEqual({
-      calls: 1, cost: 7,
+      calls: 1, cost: 7, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
     expect(day.models['gpt-5']).toEqual({
-      calls: 1, cost: 3,
+      calls: 1, cost: 3, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
-    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7 })
-    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3 })
+    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7, savingsUSD: 0 })
+    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3, savingsUSD: 0 })
   })
 })
 
@@ -214,11 +215,11 @@ describe('buildPeriodDataFromDays', () => {
       editTurns: 3,
       oneShotTurns: 2,
       models: {
-        'Opus 4.7': { calls: 8, cost: cost * 0.8, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
-        'Haiku 4.5': { calls: 2, cost: cost * 0.2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        'Opus 4.7': { calls: 8, cost: cost * 0.8, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        'Haiku 4.5': { calls: 2, cost: cost * 0.2, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
-      categories: { 'coding': { turns: 2, cost: cost * 0.5, editTurns: 2, oneShotTurns: 1 } },
-      providers: { 'claude': { calls: 10, cost } },
+      categories: { 'coding': { turns: 2, cost: cost * 0.5, savingsUSD: 0, editTurns: 2, oneShotTurns: 1 } },
+      providers: { 'claude': { calls: 10, cost, savingsUSD: 0 } },
     }
   }
 

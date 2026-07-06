@@ -6,6 +6,12 @@ import { homedir, platform, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
+
+import {
+  buildPersistentCodeburnLookupPath,
+  resolvePersistentCodeburnPathFromWhichOutput,
+} from './persistent-codeburn.js'
 
 /// Public GitHub repo that hosts macOS release builds. CLI and menubar releases share
 /// the repository, so we scan recent releases and choose the newest `mac-v*` release
@@ -20,13 +26,40 @@ const MIN_MACOS_MAJOR = 14
 const PERSISTED_CLI_PATH = join(homedir(), 'Library', 'Application Support', 'CodeBurn', 'codeburn-cli-path.v1')
 const PERSISTENT_CLI_REQUIRED_MESSAGE =
   'The menubar app needs a persistent codeburn command. Install CodeBurn globally first: npm install -g codeburn'
-const DEFAULT_CLI_LOOKUP_PATHS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 
 export type InstallResult = { installedPath: string; launched: boolean }
 
 export type ReleaseAsset = { name: string; browser_download_url: string }
 export type ReleaseResponse = { tag_name: string; assets: ReleaseAsset[] }
 export type ResolvedAssets = { release: ReleaseResponse; zip: ReleaseAsset; checksum: ReleaseAsset }
+type ProxyEnv = Partial<Record<'HTTPS_PROXY' | 'https_proxy' | 'HTTP_PROXY' | 'http_proxy' | 'NO_PROXY' | 'no_proxy', string>>
+type FetchOptions = Parameters<typeof undiciFetch>[1]
+
+export function resolveProxyUrlForUrl(url: string, env: ProxyEnv = process.env): string | undefined {
+  const target = new URL(url)
+  if (matchesNoProxy(target.hostname, env.NO_PROXY ?? env.no_proxy)) return undefined
+  if (target.protocol === 'https:') return env.HTTPS_PROXY ?? env.https_proxy ?? env.HTTP_PROXY ?? env.http_proxy
+  if (target.protocol === 'http:') return env.HTTP_PROXY ?? env.http_proxy
+  return undefined
+}
+
+function matchesNoProxy(hostname: string, noProxy?: string): boolean {
+  if (!noProxy) return false
+  const host = hostname.toLowerCase()
+  return noProxy.split(',').some(entry => {
+    const rule = entry.trim().toLowerCase().split(':')[0]
+    if (!rule) return false
+    if (rule === '*') return true
+    if (rule.startsWith('.')) return host === rule.slice(1) || host.endsWith(rule)
+    return host === rule || host.endsWith(`.${rule}`)
+  })
+}
+
+function fetchWithProxy(url: string, options: FetchOptions = {}) {
+  const proxyUrl = resolveProxyUrlForUrl(url)
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined
+  return undiciFetch(url, dispatcher ? { ...options, dispatcher } : options)
+}
 
 export function resolveMenubarReleaseAssets(release: ReleaseResponse): ResolvedAssets {
   const zip = release.assets.find(a => VERSIONED_ASSET_PATTERN.test(a.name))
@@ -55,29 +88,10 @@ export function resolveLatestMenubarReleaseAssets(releases: ReleaseResponse[]): 
   throw new Error('No mac-v* release with a CodeBurnMenubar-v*.zip and checksum was found.')
 }
 
-export function buildPersistentCodeburnLookupPath(existingPath = process.env.PATH ?? ''): string {
-  const parts = existingPath.split(':').filter(Boolean)
-  for (const fallback of DEFAULT_CLI_LOOKUP_PATHS) {
-    if (!parts.includes(fallback)) parts.push(fallback)
-  }
-  return parts.join(':')
-}
-
-function isTransientNpxPath(path: string): boolean {
-  return path.includes('/_npx/') || path.includes('/.npm/_npx/')
-}
-
-export function resolvePersistentCodeburnPathFromWhichOutput(output: string): string {
-  const paths = output
-    .split(/\r?\n/)
-    .map(path => path.trim())
-    .filter(Boolean)
-
-  const persistentPath = paths.find(path => path.startsWith('/') && !isTransientNpxPath(path))
-  if (persistentPath) return persistentPath
-
-  throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
-}
+export {
+  buildPersistentCodeburnLookupPath,
+  resolvePersistentCodeburnPathFromWhichOutput,
+} from './persistent-codeburn.js'
 
 function userApplicationsDir(): string {
   return join(homedir(), 'Applications')
@@ -117,7 +131,7 @@ async function sysProductVersion(): Promise<string> {
 }
 
 async function fetchLatestReleaseAssets(): Promise<ResolvedAssets> {
-  const response = await fetch(RELEASE_API, {
+  const response = await fetchWithProxy(RELEASE_API, {
     headers: {
       'User-Agent': 'codeburn-menubar-installer',
       Accept: 'application/vnd.github+json',
@@ -131,7 +145,7 @@ async function fetchLatestReleaseAssets(): Promise<ResolvedAssets> {
 }
 
 async function verifyChecksum(archivePath: string, checksumUrl: string): Promise<void> {
-  const response = await fetch(checksumUrl, {
+  const response = await fetchWithProxy(checksumUrl, {
     headers: { 'User-Agent': 'codeburn-menubar-installer' },
     redirect: 'follow',
   })
@@ -153,7 +167,7 @@ async function verifyChecksum(archivePath: string, checksumUrl: string): Promise
 }
 
 async function downloadToFile(url: string, destPath: string): Promise<void> {
-  const response = await fetch(url, {
+  const response = await fetchWithProxy(url, {
     headers: { 'User-Agent': 'codeburn-menubar-installer' },
     redirect: 'follow',
   })
@@ -216,7 +230,7 @@ async function resolvePersistentCodeburnPath(): Promise<string> {
     throw new Error(PERSISTENT_CLI_REQUIRED_MESSAGE)
   }
 
-  return resolvePersistentCodeburnPathFromWhichOutput(output)
+  return resolvePersistentCodeburnPathFromWhichOutput(output, PERSISTENT_CLI_REQUIRED_MESSAGE)
 }
 
 async function persistCodeburnPath(): Promise<void> {

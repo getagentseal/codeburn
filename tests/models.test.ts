@@ -3,13 +3,28 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 
-import { getModelCosts, getShortModelName, calculateCost, loadPricing, setModelAliases } from '../src/models.js'
+import {
+  getModelCosts,
+  getShortModelName,
+  calculateCost,
+  loadPricing,
+  setModelAliases,
+  setPriceOverrides,
+  setLocalModelSavings,
+  getLocalModelSavingsConfigHash,
+  getPriceOverridesConfigHash,
+} from '../src/models.js'
+import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 
 beforeAll(async () => {
   await loadPricing()
 })
 
-afterEach(() => setModelAliases({}))
+afterEach(() => {
+  setModelAliases({})
+  setPriceOverrides({})
+  setLocalModelSavings({})
+})
 
 describe('getModelCosts', () => {
   it('does not match short canonical against longer pricing key', () => {
@@ -32,6 +47,15 @@ describe('getModelCosts', () => {
     expect(costs).not.toBeNull()
     expect(costs!.inputCostPerToken).toBe(5e-6)
   })
+
+  it('prices lowercase glm-5.2 (Hermes spelling) the same as capitalized GLM-5.2', () => {
+    const lower = getModelCosts('glm-5.2')
+    const upper = getModelCosts('GLM-5.2')
+    expect(lower).not.toBeNull()
+    expect(upper).not.toBeNull()
+    expect(lower!.inputCostPerToken).toBe(upper!.inputCostPerToken)
+    expect(lower!.outputCostPerToken).toBe(upper!.outputCostPerToken)
+  })
 })
 
 describe('getShortModelName', () => {
@@ -51,8 +75,56 @@ describe('getShortModelName', () => {
     expect(getShortModelName('gpt-5.4-mini')).toBe('GPT-5.4 Mini')
   })
 
+  // Regression for #461: spark is a distinct variant, not a reasoning suffix.
+  it('maps gpt-5.3-codex-spark to its own label (not GPT-5.3 Codex)', () => {
+    const name = getShortModelName('gpt-5.3-codex-spark')
+    expect(name).not.toBe('GPT-5.3 Codex')
+    expect(name).toBe('GPT-5.3 Codex Spark')
+  })
+
+  it('maps gpt-5.3-codex reasoning suffixes to the base label', () => {
+    expect(getShortModelName('gpt-5.3-codex-high')).toBe('GPT-5.3 Codex')
+    expect(getShortModelName('gpt-5.3-codex-low')).toBe('GPT-5.3 Codex')
+  })
+
   it('maps claude-opus-4-6 with date suffix', () => {
     expect(getShortModelName('claude-opus-4-6-20260205')).toBe('Opus 4.6')
+  })
+
+  // Regression for #420: claude-opus-4-8 must get its own line, not collapse
+  // into the generic "Opus 4" bucket via the shorter claude-opus-4 prefix.
+  it('maps claude-opus-4-8 to its own line (not Opus 4)', () => {
+    expect(getShortModelName('claude-opus-4-8')).toBe('Opus 4.8')
+  })
+
+  // A future version is derived from the id with no hand-maintained entry.
+  it('derives an unreleased claude version with no SHORT_NAMES entry', () => {
+    expect(getShortModelName('claude-sonnet-5-2')).toBe('Sonnet 5.2')
+    expect(getShortModelName('claude-haiku-5')).toBe('Haiku 5')
+    expect(getShortModelName('claude-opus-9-9-20300101')).toBe('Opus 9.9')
+  })
+
+  it('shows the real model name for pricing-sibling aliases, not the internal key', () => {
+    // GLM-5.2 (and its lowercase Hermes spelling) price via the glm-5p1 sibling;
+    // reports must show GLM-5.2, not the pricing key.
+    expect(getShortModelName('GLM-5.2')).toBe('GLM-5.2')
+    expect(getShortModelName('glm-5.2')).toBe('GLM-5.2')
+    expect(getShortModelName('glm-5p1')).toBe('GLM-5.2')
+    // Grok Build prices via the grok-build-0.1 sibling.
+    expect(getShortModelName('grok-build')).toBe('Grok Build')
+    expect(getShortModelName('grok-build-0.1')).toBe('Grok Build')
+    // grok-composer has no alias, just a missing display entry.
+    expect(getShortModelName('grok-composer-2.5-fast')).toBe('Grok Composer 2.5 Fast')
+  })
+})
+
+describe('claude-fable-5 pricing + name', () => {
+  it('prices at $10/M input, $50/M output via models.dev/OpenRouter gap-fill', () => {
+    expect(calculateCost('claude-fable-5', 1_000_000, 0, 0, 0, 0)).toBeCloseTo(10, 6)
+    expect(calculateCost('claude-fable-5', 0, 1_000_000, 0, 0, 0)).toBeCloseTo(50, 6)
+  })
+  it('shows its own display name', () => {
+    expect(getShortModelName('claude-fable-5')).toBe('Fable 5')
   })
 })
 
@@ -172,6 +244,101 @@ describe('user aliases via setModelAliases', () => {
   })
 })
 
+describe('user price overrides', () => {
+  it('prices a model missing from the pricing snapshot', () => {
+    const model = 'zz-price-override-missing-model-390'
+    expect(getModelCosts(model)).toBeNull()
+
+    setPriceOverrides({
+      [model]: { input: 1.25, output: 2.5 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.inputCostPerToken).toBe(1.25e-6)
+    expect(costs!.outputCostPerToken).toBe(2.5e-6)
+    expect(calculateCost(model, 1_000_000, 1_000_000, 0, 0, 0)).toBe(3.75)
+  })
+
+  it('wins over snapshot pricing and configured aliases', () => {
+    setModelAliases({
+      'price-override-aliased-model': 'claude-opus-4-6',
+      'price-override-canonical-source': 'price-override-canonical-target',
+    })
+    setPriceOverrides({
+      'gpt-4o': { input: 7, output: 8 },
+      'claude-opus-4-6': { input: 4, output: 5 },
+      'price-override-aliased-model': { input: 2, output: 3 },
+      'price-override-canonical-target': { input: 6, output: 7 },
+    })
+
+    expect(getModelCosts('gpt-4o')!.inputCostPerToken).toBe(7e-6)
+    expect(getModelCosts('price-override-aliased-model')!.inputCostPerToken).toBe(2e-6)
+    expect(getModelCosts('price-override-canonical-source')!.inputCostPerToken).toBe(6e-6)
+  })
+
+  it('converts USD per 1,000,000 tokens to per-token ModelCosts exactly', () => {
+    const model = 'price-override-unit-conversion'
+    setPriceOverrides({
+      [model]: { input: 1, output: 0 },
+    })
+
+    expect(getModelCosts(model)!.inputCostPerToken).toBe(1e-6)
+    expect(calculateCost(model, 1_000_000, 0, 0, 0, 0)).toBe(1)
+  })
+
+  it('defaults cache rates from input pricing when omitted', () => {
+    const model = 'price-override-cache-defaults'
+    setPriceOverrides({
+      [model]: { input: 10, output: 20 },
+    })
+
+    const costs = getModelCosts(model)
+    expect(costs).not.toBeNull()
+    expect(costs!.cacheWriteCostPerToken).toBeCloseTo(12.5e-6, 12)
+    expect(costs!.cacheReadCostPerToken).toBeCloseTo(1e-6, 12)
+  })
+
+  it('wins for case-insensitive and prefix matches without shadowing a more-specific exact snapshot entry', () => {
+    const miniSnapshot = getModelCosts('gpt-5-mini')
+    expect(miniSnapshot).not.toBeNull()
+
+    setPriceOverrides({
+      'gpt-5': { input: 91, output: 92 },
+    })
+
+    expect(getModelCosts('GPT-5')!.inputCostPerToken).toBe(91e-6)
+    expect(getModelCosts('gpt-5-foo')!.inputCostPerToken).toBe(91e-6)
+
+    const mini = getModelCosts('gpt-5-mini')
+    expect(mini).not.toBeNull()
+    expect(mini!.inputCostPerToken).toBe(miniSnapshot!.inputCostPerToken)
+    expect(mini!.outputCostPerToken).toBe(miniSnapshot!.outputCostPerToken)
+  })
+
+  it('includes builtin and user price overrides in the daily cache config hash', () => {
+    setLocalModelSavings({ local: 'gpt-4o' })
+    setPriceOverrides({})
+
+    // The builtin overrides always participate, so a release that edits them
+    // invalidates cached daily costs even with no user overrides configured.
+    const builtinOnly = getPriceOverridesConfigHash()
+    expect(builtinOnly).toContain('builtin:')
+    expect(getPriceOverridesConfigHash()).toBe(builtinOnly)
+    const baseline = getDailyCacheConfigHash()
+
+    setPriceOverrides({ 'price-hash-model': { input: 1, output: 2 } })
+    const firstCombined = getDailyCacheConfigHash()
+
+    setPriceOverrides({ 'price-hash-model': { input: 3, output: 2 } })
+    const secondCombined = getDailyCacheConfigHash()
+
+    expect(firstCombined).not.toBe(baseline)
+    expect(secondCombined).not.toBe(baseline)
+    expect(secondCombined).not.toBe(firstCombined)
+  })
+})
+
 describe('calculateCost - OMP names produce non-zero cost', () => {
   it('calculates cost for anthropic--claude-4.6-opus', () => {
     expect(calculateCost('anthropic--claude-4.6-opus', 1000, 200, 0, 0, 0)).toBeGreaterThan(0)
@@ -241,6 +408,17 @@ describe('existing model names still resolve', () => {
   it('anthropic/-prefixed anthropic/claude-opus-4-6', () => {
     expect(getModelCosts('anthropic/claude-opus-4-6')).not.toBeNull()
   })
+
+  // #420: 4.8 has its own LiteLLM pricing tier ($5/$25), so it must not fall
+  // through the prefix match to the older, 3x-pricier claude-opus-4 ($15/$75).
+  it('claude-opus-4-8 prices at its own tier, not original claude-opus-4', () => {
+    const v48 = getModelCosts('claude-opus-4-8')
+    expect(v48).not.toBeNull()
+    // $5/$25 per M tokens — the 4.6/4.7 tier, not the original opus-4 $15/$75.
+    expect(v48!.inputCostPerToken).toBeCloseTo(0.000005, 12)
+    expect(v48!.outputCostPerToken).toBeCloseTo(0.000025, 12)
+    expect(v48!.inputCostPerToken).not.toEqual(getModelCosts('claude-opus-4')!.inputCostPerToken)
+  })
 })
 
 // Issue #159: every model name Cursor emits in its SQLite database must
@@ -280,10 +458,7 @@ describe('Cursor model variants resolve to pricing', () => {
     // Haiku family
     ['claude-4.5-haiku', 'claude-haiku-4-5'],
     ['claude-4.6-haiku', 'claude-haiku-4-5'],
-    // Cursor house models
-    ['composer-1', 'claude-sonnet-4-5'],
-    ['composer-1.5', 'claude-sonnet-4-5'],
-    ['composer-2', 'claude-sonnet-4-6'],
+    // Cursor auto proxy
     ['cursor-auto', 'claude-sonnet-4-5'],
     // OpenAI variants Cursor emits
     ['gpt-5', 'gpt-5'],
@@ -310,6 +485,71 @@ describe('Cursor model variants resolve to pricing', () => {
       expect(costs!.outputCostPerToken).toBe(expected!.outputCostPerToken)
     })
   }
+})
+
+describe('Cursor house model pricing', () => {
+  const cases: Array<[string, { input: number; output: number; cacheWrite: number; cacheRead: number }]> = [
+    ['composer-2.5', { input: 0.5, output: 2.5, cacheWrite: 0.5, cacheRead: 0.2 }],
+    ['composer-2', { input: 0.5, output: 2.5, cacheWrite: 0.5, cacheRead: 0.2 }],
+    ['composer-1.5', { input: 3.5, output: 17.5, cacheWrite: 3.5, cacheRead: 0.35 }],
+    ['composer-1', { input: 1.25, output: 10, cacheWrite: 1.25, cacheRead: 0.125 }],
+  ]
+
+  for (const [model, rates] of cases) {
+    it(`${model} uses Cursor-published rates instead of Claude Sonnet proxy pricing`, () => {
+      const costs = getModelCosts(model)
+      expect(costs).not.toBeNull()
+      expect(costs!.inputCostPerToken).toBeCloseTo(rates.input * 1e-6, 12)
+      expect(costs!.outputCostPerToken).toBeCloseTo(rates.output * 1e-6, 12)
+      expect(costs!.cacheWriteCostPerToken).toBeCloseTo(rates.cacheWrite * 1e-6, 12)
+      expect(costs!.cacheReadCostPerToken).toBeCloseTo(rates.cacheRead * 1e-6, 12)
+    })
+  }
+})
+
+// Regression: LiteLLM ships `snowflake/claude-4-opus` ($5/M, a gateway rate),
+// which the bundler strips to a bare `claude-4-opus` snapshot key. Without the
+// alias-precedence guard in getModelCosts, that bare reseller key shadows the
+// curated alias `claude-4-opus -> claude-opus-4` and mis-prices Opus 4 at a
+// third of its official list price. Pin the official number so a re-shadowing
+// fails loudly rather than silently under-reporting spend.
+describe('alias precedence over stripped reseller keys', () => {
+  it('claude-4-opus resolves to the official Opus 4 list price, not a gateway discount', () => {
+    const aliased = getModelCosts('claude-4-opus')
+    const canonical = getModelCosts('claude-opus-4')
+    expect(aliased).not.toBeNull()
+    expect(canonical).not.toBeNull()
+    expect(aliased!.inputCostPerToken).toBe(canonical!.inputCostPerToken)
+    expect(aliased!.outputCostPerToken).toBe(canonical!.outputCostPerToken)
+    expect(aliased!.inputCostPerToken).toBe(15e-6)
+    expect(aliased!.outputCostPerToken).toBe(75e-6)
+  })
+
+  it('the explicit provider prefix is still honored for the gateway rate', () => {
+    // The guard fires only for the bare name; a fully-qualified gateway id must
+    // still return that gateway's own price when LiteLLM publishes one.
+    const gateway = getModelCosts('snowflake/claude-4-opus')
+    const bare = getModelCosts('claude-4-opus')
+    expect(gateway).not.toBeNull()
+    expect(gateway!.inputCostPerToken).toBeLessThan(bare!.inputCostPerToken)
+  })
+})
+
+// The case-insensitive index that lets `MiniMax-M3` reach a lowercase
+// `minimax-m3` slug must NOT let a case-mismatched query resolve to one of
+// LiteLLM's [0,0] price stubs (e.g. `GigaChat-2-Max`). Doing so would flip an
+// honest null (which fires the "no pricing data, will show $0" warning) into a
+// silent $0 and hide real spend. A case-EXACT query still finds the stub.
+describe('zero-priced stubs do not satisfy case-insensitive lookup', () => {
+  it('a case-mismatched query to a [0,0] stub stays null', () => {
+    expect(getModelCosts('gigachat-2-max')).toBeNull()
+  })
+
+  it('the case-exact stub still resolves (just at zero cost)', () => {
+    const exact = getModelCosts('GigaChat-2-Max')
+    expect(exact).not.toBeNull()
+    expect(exact!.inputCostPerToken).toBe(0)
+  })
 })
 
 describe('DeepSeek v4 models resolve to pricing', () => {
@@ -350,7 +590,6 @@ describe('DeepSeek v4 models resolve to pricing', () => {
   })
 
   it('keeps bundled DeepSeek v4 fallback entries when runtime pricing cache is stale', async () => {
-    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
     const cacheRoot = await mkdtemp(join(tmpdir(), 'codeburn-pricing-cache-'))
 
     try {
@@ -376,11 +615,6 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       expect(getModelCosts('deepseek-v4-pro')!.inputCostPerToken).toBe(4.35e-7)
       expect(getModelCosts('deepseek-v4-flash')!.inputCostPerToken).toBe(1.4e-7)
     } finally {
-      if (previousCacheDir === undefined) {
-        delete process.env['CODEBURN_CACHE_DIR']
-      } else {
-        process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
-      }
       await rm(cacheRoot, { recursive: true, force: true })
       await loadPricing()
     }

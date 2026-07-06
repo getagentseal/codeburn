@@ -23,6 +23,7 @@ repo_root() {
 ROOT=$(repo_root)
 MAC_DIR="${ROOT}/mac"
 DIST_DIR="${MAC_DIR}/.build/dist"
+ICON_SOURCE="${ROOT}/assets/menubar-logo.png"
 
 cd "${MAC_DIR}"
 
@@ -45,6 +46,23 @@ BUNDLE="${DIST_DIR}/${BUNDLE_NAME}"
 mkdir -p "${BUNDLE}/Contents/MacOS"
 mkdir -p "${BUNDLE}/Contents/Resources"
 cp "${BUILT_BINARY}" "${BUNDLE}/Contents/MacOS/${EXECUTABLE_NAME}"
+cp "${ICON_SOURCE}" "${BUNDLE}/Contents/Resources/menubar-logo.png"
+
+ICONSET="${DIST_DIR}/AppIcon.iconset"
+rm -rf "${ICONSET}"
+mkdir -p "${ICONSET}"
+sips -z 16 16 "${ICON_SOURCE}" --out "${ICONSET}/icon_16x16.png" >/dev/null
+sips -z 32 32 "${ICON_SOURCE}" --out "${ICONSET}/icon_16x16@2x.png" >/dev/null
+sips -z 32 32 "${ICON_SOURCE}" --out "${ICONSET}/icon_32x32.png" >/dev/null
+sips -z 64 64 "${ICON_SOURCE}" --out "${ICONSET}/icon_32x32@2x.png" >/dev/null
+sips -z 128 128 "${ICON_SOURCE}" --out "${ICONSET}/icon_128x128.png" >/dev/null
+sips -z 256 256 "${ICON_SOURCE}" --out "${ICONSET}/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "${ICON_SOURCE}" --out "${ICONSET}/icon_256x256.png" >/dev/null
+sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET}/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET}/icon_512x512.png" >/dev/null
+cp "${ICON_SOURCE}" "${ICONSET}/icon_512x512@2x.png"
+iconutil -c icns "${ICONSET}" -o "${BUNDLE}/Contents/Resources/AppIcon.icns"
+rm -rf "${ICONSET}"
 
 cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -87,11 +105,19 @@ cat > "${BUNDLE}/Contents/PkgInfo" <<'PKG'
 APPL????
 PKG
 
-# Ad-hoc sign so macOS treats the bundle as internally consistent. Release
-# notarization can layer a Developer ID signature on top, but this local step
-# must still fail closed if signing or verification breaks.
-echo "▸ Ad-hoc signing..."
-codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
+# Sign so macOS treats the bundle as internally consistent. Set CODESIGN_IDENTITY
+# to a stable identity (Developer ID Application for distribution, or an Apple
+# Development cert for local testing) so the TCC "access data from other apps"
+# grant persists across rebuilds. Falls back to ad-hoc when unset (e.g. CI), which
+# re-prompts on every build because each ad-hoc build has a fresh code identity.
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -n "${CODESIGN_IDENTITY}" ]]; then
+  echo "▸ Signing with identity: ${CODESIGN_IDENTITY}"
+  codesign --force --sign "${CODESIGN_IDENTITY}" --options runtime --timestamp=none --deep "${BUNDLE}"
+else
+  echo "▸ Ad-hoc signing (set CODESIGN_IDENTITY for a persistent TCC grant)..."
+  codesign --force --sign - --timestamp=none --deep "${BUNDLE}"
+fi
 codesign --verify --deep --strict "${BUNDLE}"
 
 ZIP_NAME="CodeBurnMenubar-${ASSET_VERSION}.zip"

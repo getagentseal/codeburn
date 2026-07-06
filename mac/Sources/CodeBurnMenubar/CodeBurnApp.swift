@@ -32,6 +32,8 @@ struct CodeBurnApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private var rightClickMonitor: Any?
+    private var lastContextMenuPresentedAt: Date = .distantPast
     fileprivate let store = AppStore()
     let updateChecker = UpdateChecker()
     /// Held for the lifetime of the app to opt out of App Nap and Automatic Termination.
@@ -49,7 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var claudeQuotaRefreshTask: Task<Bool, Never>?
     private var codexQuotaRefreshTask: Task<Bool, Never>?
     private var refreshLoopHeartbeatAt: Date = .distantPast
-    private var lastLaunchAgentHeartbeatAt: Date = .distantPast
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let monitor = rightClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            rightClickMonitor = nil
+        }
+    }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Set accessory policy before the app's focus chain forms. On macOS Tahoe
@@ -84,8 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         observeStore()
         startRefreshLoop()
         setupWakeObservers()
-        setupDistributedNotificationListener()
-        installLaunchAgentIfNeeded()
+        removeLegacyRefreshAgent()
         registerLoginItemIfNeeded()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
@@ -131,36 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func setupDistributedNotificationListener() {
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.codeburn.refresh"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleLaunchAgentHeartbeat()
-            }
-        }
-    }
-
-    private func handleLaunchAgentHeartbeat() {
-        let now = Date()
-        guard now.timeIntervalSince(lastLaunchAgentHeartbeatAt) >= refreshRateLimitSeconds else { return }
-        lastLaunchAgentHeartbeatAt = now
-        let loopAge = now.timeIntervalSince(refreshLoopHeartbeatAt)
-        guard refreshTimer == nil || loopAge > refreshLoopWatchdogSeconds else {
-            _ = store.clearStaleLoadingIfNeeded()
-            _ = clearStaleForceRefreshIfNeeded(now: now)
-            _ = clearStaleStatusPayloadRefreshIfNeeded(now: now)
-            return
-        }
-        if refreshTimer != nil {
-            NSLog("CodeBurn: refresh loop stale for %ds after launch agent - restarting", Int(loopAge))
-        }
-        startRefreshLoop(forceQuotaOnStart: false)
-    }
-
     private func prepareRefreshPipelineForSleep() {
+        // Leave the timer running: the kernel pauses it during sleep, and tearing
+        // it down stranded the loop whenever a wake notification was missed.
         forceRefreshTask?.cancel()
         forceRefreshTask = nil
         forceRefreshStartedAt = nil
@@ -173,8 +153,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusPayloadRefreshStartedAt = nil
         statusPayloadRefreshGeneration &+= 1
         store.resetLoadingState()
-        stopRefreshTimer()
-        refreshLoopHeartbeatAt = .distantPast
         lastRefreshTime = .distantPast
     }
 
@@ -207,56 +185,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func installLaunchAgentIfNeeded() {
+    // Earlier builds installed a launchd job that re-fetched data out of process.
+    // macOS attributes a launchd-spawned binary differently from the LaunchServices
+    // app, so it triggered its own "access data from other apps" prompt on every
+    // run. Remove any such leftover job on upgrade; the in-app loop is the source of
+    // truth and writes the badge backstop file itself.
+    private func removeLegacyRefreshAgent() {
         let fm = FileManager.default
-        let agentName = "com.codeburn.refresh.plist"
         let home = fm.homeDirectoryForCurrentUser.path
-        let destPath = "\(home)/Library/LaunchAgents/\(agentName)"
+        let destPath = "\(home)/Library/LaunchAgents/com.codeburn.refresh.plist"
+        guard fm.fileExists(atPath: destPath) else { return }
 
-        let plist = """
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.codeburn.refresh</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/osascript</string>
-        <string>-l</string>
-        <string>JavaScript</string>
-        <string>-e</string>
-        <string>ObjC.import("Foundation"); $.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately("com.codeburn.refresh", $(), $(), true)</string>
-    </array>
-    <key>StartInterval</key>
-    <integer>30</integer>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-"""
-
-        do {
-            let existing = try? String(contentsOfFile: destPath, encoding: .utf8)
-            if existing == plist { return }
-
-            try fm.createDirectory(atPath: "\(home)/Library/LaunchAgents", withIntermediateDirectories: true)
-            try plist.write(toFile: destPath, atomically: true, encoding: .utf8)
-
-            let unload = Process()
-            unload.launchPath = "/bin/launchctl"
-            unload.arguments = ["unload", destPath]
-            try? unload.run()
-            unload.waitUntilExit()
-
-            let load = Process()
-            load.launchPath = "/bin/launchctl"
-            load.arguments = ["load", destPath]
-            try load.run()
-            load.waitUntilExit()
-        } catch {
-            NSLog("CodeBurn: LaunchAgent setup failed: \(error)")
-        }
+        let unload = Process()
+        unload.launchPath = "/bin/launchctl"
+        unload.arguments = ["unload", destPath]
+        try? unload.run()
+        unload.waitUntilExit()
+        try? fm.removeItem(atPath: destPath)
     }
 
     private func registerLoginItemIfNeeded() {
@@ -508,15 +453,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func refreshPayloadForPopoverOpen() {
-        guard store.needsInteractivePayloadRefresh else { return }
-        let shouldResetPipeline = store.shouldResetInteractiveRefreshPipeline
-        if shouldResetPipeline, let age = store.staleInteractivePayloadAgeSeconds {
-            NSLog("CodeBurn: popover opened with %ds stale payload cache - resetting refresh pipeline", age)
+        // A user viewing the popover is ground truth and must always recover.
+        // Unconditionally ensure the loop is alive, then clear the current
+        // key's stuck loading / in-flight / generation bookkeeping and force a
+        // fresh fetch — even if the cache looks "not stale yet". This is the
+        // guaranteed one-round-trip recovery path.
+        if refreshTimer == nil {
+            startRefreshLoop(forceQuotaOnStart: false)
         }
-        recoverRefreshPipelineAfterInterruption(
-            resetLoading: shouldResetPipeline,
-            reason: "popover open"
-        )
+        if store.shouldResetInteractiveRefreshPipeline,
+           let age = store.staleInteractivePayloadAgeSeconds {
+            NSLog("CodeBurn: popover opened with %ds stale payload cache - hard recovery", age)
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.store.recoverFromStuckLoading()
+            self.refreshStatusButton()
+        }
     }
 
     private func stopRefreshTimer() {
@@ -636,6 +589,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             _ = self.store.currency
             _ = self.store.displayMetric
             _ = self.store.dailyBudget
+            _ = self.store.dailyTokenBudget
+            // Read the derived flag so the flame re-tints when today's usage
+            // crosses the budget, not only when the budget value itself changes.
+            // This also makes the dependency on todayPayload explicit instead of
+            // relying on payload/menubarPayload happening to touch the same cache.
+            _ = self.store.isOverDailyBudget
             // Track the live-quota state too so the flame icon re-tints on
             // every subscription / codex usage update, not just every 30s.
             _ = self.store.subscription
@@ -678,7 +637,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         button.target = self
         button.action = #selector(handleButtonClick(_:))
+        // Left-click drives the popover. We keep .rightMouseUp in the mask so the
+        // legacy action path below still fires on macOS <= 26; on macOS 27 the
+        // system consumes the right button entirely and this never fires, so the
+        // global monitor (below) is what restores the right-click menu there.
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        // macOS 27 no longer routes any right-mouse event to the status-item
+        // button's target/action. A global monitor still observes right-mouse-down;
+        // we hit-test it against our own status-item window and present the menu
+        // ourselves. Harmless and stable on 15/26 too (the debounce in
+        // showContextMenu prevents a double-present if the legacy path also fires).
+        rightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] _ in
+            guard let self,
+                  let button = self.statusItem.button,
+                  let window = button.window,
+                  window.frame.contains(NSEvent.mouseLocation) else { return }
+            DispatchQueue.main.async { self.showContextMenu(from: button) }
+        }
 
         // Defer the full attributed title setup to ensure initial render completes
         DispatchQueue.main.async { [weak self] in
@@ -722,8 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // user gets a glanceable signal even when the menu bar is busy.
         let aggregate = store.aggregateQuotaStatus
         var tint = Self.flameTint(for: aggregate.severity)
-        if tint == nil, store.dailyBudget > 0,
-           let todayCost = store.todayPayload?.current.cost, todayCost >= store.dailyBudget {
+        if tint == nil, store.isOverDailyBudget {
             tint = NSColor.systemYellow
         }
         let flameConfig: NSImage.SymbolConfiguration
@@ -743,7 +718,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
 
         let menubarPeriod = store.menubarPeriod
-        let menubarPayload = store.menubarPayload
+        let menubarPayload = badgePayload()
         let hasPayload = menubarPayload != nil
         let compact = isCompact
 
@@ -759,7 +734,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 valueText = compact ? "↑\(out)↓\(inp)\(suffix)" : " ↑\(out) ↓\(inp)\(suffix)"
             } else if store.displayMetric == .totalTokens, let p = menubarPayload?.current {
                 let total = formatTokensMenubar(Double(p.inputTokens + p.outputTokens))
-                valueText = compact ? "\(total)\(suffix)" : " \(total) tok\(suffix)"
+                valueText = compact ? "\(total)\(suffix)" : " \(total)\(suffix)"
+            } else if store.displayMetric == .credits, let p = menubarPayload?.current {
+                let credits = formatTokensMenubar((p.codexCredits ?? 0).rounded())
+                valueText = compact ? "\(credits)cr\(suffix)" : " \(credits) credits\(suffix)"
             } else {
                 let fallback = compact ? "$-" : "$—"
                 let formatted = menubarPayload?.current.cost
@@ -777,6 +755,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         button.attributedTitle = composed
         button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
+
+        persistBadgeStatusFile()
+    }
+
+    private var lastWrittenBadgeGenerated: String?
+
+    // Mirror the freshest in-memory payload to disk so the badge survives an app
+    // restart. Skips redundant writes by tracking the last payload's `generated`
+    // stamp. This is the only writer now that the launchd fetcher is gone.
+    private func persistBadgeStatusFile() {
+        guard let payload = store.menubarPayload else { return }
+        guard payload.generated != lastWrittenBadgeGenerated else { return }
+        do {
+            try MenubarStatusCache.standard().writeStatus(payload)
+            lastWrittenBadgeGenerated = payload.generated
+        } catch {
+            NSLog("CodeBurn: failed to write badge status file: \(error)")
+        }
+    }
+
+    // Badge falls back to the on-disk status file (written by a prior app run)
+    // when the in-app loop has no payload yet; in-memory wins when it's fresher.
+    // The 10-min bound discards a file too stale to trust.
+    private func badgePayload() -> MenubarPayload? {
+        let inMemory = store.menubarPayload
+        let inMemoryAge = store.menubarPayloadAgeSeconds.map(TimeInterval.init)
+        guard let fileRead = MenubarStatusCache.standard().readBadgePayload(maxAgeSeconds: 600) else {
+            return inMemory
+        }
+        if inMemory == nil { return fileRead.payload }
+        if let age = inMemoryAge, fileRead.ageSeconds < age { return fileRead.payload }
+        return inMemory
     }
 
     private func formatTokensMenubar(_ n: Double) -> String {
@@ -807,6 +817,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard let button = statusItem.button,
               let event = NSApp.currentEvent else { return }
 
+        // Legacy right-click path for macOS <= 26 (no-op on 27, where the action
+        // never receives a right-mouse event — the global monitor handles it).
         if event.type == .rightMouseUp {
             showContextMenu(from: button)
             return
@@ -840,31 +852,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func showContextMenu(from button: NSStatusBarButton) {
+        // Debounce: on macOS <= 26 both the legacy action path and the global
+        // monitor can fire for a single right-click. Present at most once per click.
+        let now = Date()
+        guard now.timeIntervalSince(lastContextMenuPresentedAt) > 0.3 else { return }
+        lastContextMenuPresentedAt = now
+
         let menu = NSMenu()
 
-        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        // Glanceable "today" usage at the top as a single non-interactive (dimmed)
+        // row. A real .sectionHeader adds section padding (and pulls the actions
+        // into its group without a separator), so use a plain disabled item.
+        let usageItem = NSMenuItem(title: contextMenuUsageSummary(), action: nil, keyEquivalent: "")
+        usageItem.isEnabled = false
+        menu.addItem(usageItem)
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: "")
         settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
         menu.addItem(settingsItem)
 
-        let refreshNow = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "r")
+        let refreshNow = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "")
         refreshNow.target = self
         menu.addItem(refreshNow)
 
-        menu.addItem(.separator())
         let updateItem = NSMenuItem(title: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
-        menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit CodeBurn", action: #selector(quitApp), keyEquivalent: "q")
+
+        let aboutItem = NSMenuItem(title: "About CodeBurn", action: #selector(openAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
+        let quitItem = NSMenuItem(title: "Quit CodeBurn", action: #selector(quitApp), keyEquivalent: "")
         quitItem.target = self
         menu.addItem(quitItem)
 
-        statusItem.menu = menu
-        button.performClick(nil)
-        statusItem.menu = nil
+        // Present directly. The previous `statusItem.menu = menu; button.performClick`
+        // trick relies on the click -> action path that macOS 27 changed; popUp is
+        // version-stable. Open a few px below the status item so the menu clears the
+        // menu bar: anchoring flush clips the top edge and makes macOS engage menu
+        // scrolling (a scroll chevron appears and the first row slides up on hover).
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 6), in: button)
+    }
+
+    /// One-line "today" summary for the context menu's usage row.
+    private func contextMenuUsageSummary() -> String {
+        guard let current = store.todayPayload?.current else { return "Today · no usage yet" }
+        let calls = current.calls == 1 ? "1 call" : "\(current.calls) calls"
+        return "Today · \(current.cost.asCurrency()) · \(calls)"
     }
 
     private var settingsWindowController: NSWindowController?
+
+    @objc private func openAbout() {
+        store.settingsTab = "about"
+        openSettings()
+    }
 
     @objc private func openSettings() {
         // Accessory-policy apps (no Dock icon, no main menu) don't get the
@@ -927,7 +971,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 alert.alertStyle = .warning
             } else if updateChecker.updateAvailable, let latest = updateChecker.latestVersion {
                 alert.messageText = "Update Available"
-                alert.informativeText = "\(AppVersion.display(latest)) is available (you have \(AppVersion.display(updateChecker.currentVersion))). Run:\n\ncodeburn menubar --force"
+                let header = "\(AppVersion.display(latest)) is available (you have \(AppVersion.display(updateChecker.currentVersion)))."
+                if updateChecker.cliTooOldForUpdate {
+                    alert.informativeText = "\(header) Your codeburn CLI is too old to install it. First run:\n\n\(updateChecker.cliUpdateCommand)\n\nthen:\n\ncodeburn menubar --force"
+                } else {
+                    alert.informativeText = "\(header) Run:\n\ncodeburn menubar --force"
+                }
                 alert.alertStyle = .informational
             } else {
                 alert.messageText = "Up to Date"

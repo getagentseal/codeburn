@@ -12,9 +12,11 @@ import {
   detectSessionOutliers,
   computeHealth,
   computeTrend,
+  buildOptimizeJsonReport,
   type ToolCall,
   type ApiCallMeta,
   type WasteFinding,
+  type OptimizeResult,
 } from '../src/optimize.js'
 import type { ProjectSummary } from '../src/types.js'
 
@@ -1113,5 +1115,70 @@ describe('paste-fix destination tagging (issue #277)', () => {
     ]
     const finding = detectLowReadEditRatio(calls)
     if (finding) checkAllPasteFixesHaveDestination([finding])
+  })
+})
+
+describe('buildOptimizeJsonReport', () => {
+  it('serializes setup health, savings, and fix details for integrations', () => {
+    const result: OptimizeResult = {
+      costRate: 0.00002,
+      healthScore: 72,
+      healthGrade: 'C',
+      findings: [
+        {
+          title: 'Trim stale context',
+          explanation: 'Old instructions are loaded every turn.',
+          impact: 'medium',
+          tokensSaved: 50_000,
+          trend: 'active',
+          fix: {
+            type: 'paste',
+            label: 'Add guardrail',
+            text: 'Prefer short context.',
+            destination: 'claude-md',
+          },
+        },
+      ],
+    }
+    const range = {
+      start: new Date('2026-05-01T00:00:00.000Z'),
+      end: new Date('2026-05-08T00:00:00.000Z'),
+    }
+
+    const report = buildOptimizeJsonReport(
+      [projectWithSessions([3, 2])],
+      '7 Days',
+      result,
+      range,
+    )
+
+    expect(report.period).toEqual({
+      label: '7 Days',
+      start: '2026-05-01T00:00:00.000Z',
+      end: '2026-05-08T00:00:00.000Z',
+    })
+    expect(report.summary).toMatchObject({
+      healthScore: 72,
+      healthGrade: 'C',
+      findingCount: 1,
+      periodCostUSD: 5,
+      sessions: 2,
+      calls: 2,
+      potentialSavingsTokens: 50_000,
+      potentialSavingsCostUSD: 1,
+      potentialSavingsPercent: 20,
+      costRateUSD: 0.00002,
+    })
+    expect(report.findings[0]).toMatchObject({
+      title: 'Trim stale context',
+      severity: 'medium',
+      trend: 'active',
+      tokensSaved: 50_000,
+      estimatedSavingsUSD: 1,
+      fix: {
+        type: 'paste',
+        destination: 'claude-md',
+      },
+    })
   })
 })

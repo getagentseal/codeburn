@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// macOS-standard tabbed Settings window. New per-provider sections (Codex,
@@ -7,20 +8,28 @@ struct SettingsView: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        TabView {
+        TabView(selection: Binding(get: { store.settingsTab }, set: { store.settingsTab = $0 })) {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
 
             ClaudeSettingsTab()
                 .tabItem { Label("Claude", systemImage: "brain") }
+                .tag("claude")
 
             CodexSettingsTab()
                 .tabItem { Label("Codex", systemImage: "chevron.left.forwardslash.chevron.right") }
+                .tag("codex")
+
+            DevinSettingsTab()
+                .tabItem { Label("Devin", systemImage: "flame.fill") }
+                .tag("devin")
 
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
+                .tag("about")
         }
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 430)
     }
 }
 
@@ -29,6 +38,41 @@ struct SettingsView: View {
 private struct GeneralSettingsTab: View {
     @Environment(AppStore.self) private var store
 
+    // "Custom…" budget entry state, one per metric (cost in dollars, tokens in
+    // millions). When custom is active the picker shows "Custom…" and a field
+    // appears for an exact amount.
+    @State private var costCustom = false
+    @State private var tokenCustom = false
+    @State private var costText = ""
+    @State private var tokenText = ""
+
+    private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
+    private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
+
+    private func applyCostBudget() {
+        store.dailyBudget = max(0, Double(costText.trimmingCharacters(in: .whitespaces)) ?? 0)
+    }
+
+    private func applyTokenBudget() {
+        let millions = Double(tokenText.trimmingCharacters(in: .whitespaces)) ?? 0
+        store.dailyTokenBudget = max(0, millions * 1_000_000)
+    }
+
+    private func trimNumber(_ v: Double) -> String {
+        v == v.rounded() ? String(Int(v)) : String(v)
+    }
+
+    // Help text under the budget picker. When "Custom…" is selected but no amount
+    // has been entered, the budget is effectively 0 (off); call that out so the
+    // alert does not look armed when it isn't.
+    private var alertHelpText: String {
+        let customEmpty = store.isTokenMetric
+            ? (tokenCustom && store.dailyTokenBudget == 0)
+            : (costCustom && store.dailyBudget == 0)
+        if customEmpty { return "Enter an amount above, or the alert stays off." }
+        return "Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget."
+    }
+
     var body: some View {
         Form {
             Section("Display") {
@@ -36,8 +80,8 @@ private struct GeneralSettingsTab: View {
                     get: { store.currency },
                     set: { applyCurrency(code: $0) }
                 )) {
-                    ForEach(["USD", "EUR", "GBP", "INR", "JPY", "AUD", "CAD"], id: \.self) { code in
-                        Text(code).tag(code)
+                    ForEach(SupportedCurrency.allCases) { currency in
+                        Text("\(currency.rawValue) — \(currency.displayName)").tag(currency.rawValue)
                     }
                 }
                 Picker("Metric", selection: Binding(
@@ -47,6 +91,7 @@ private struct GeneralSettingsTab: View {
                     Text("Cost ($)").tag(DisplayMetric.cost)
                     Text("Tokens (↑↓)").tag(DisplayMetric.tokens)
                     Text("Total Tokens").tag(DisplayMetric.totalTokens)
+                    Text("Credits (Codex)").tag(DisplayMetric.credits)
                     Text("Icon Only").tag(DisplayMetric.iconOnly)
                 }
                 Picker("Period", selection: Binding(
@@ -55,6 +100,15 @@ private struct GeneralSettingsTab: View {
                 )) {
                     ForEach(Period.menubarMetricCases) { period in
                         Text(period.menubarMetricLabel).tag(period)
+                    }
+                }
+                .pickerStyle(.menu)
+                Picker("Scope", selection: Binding(
+                    get: { store.menubarScope },
+                    set: { store.setMenubarScope($0) }
+                )) {
+                    ForEach(MenubarScope.allCases) { scope in
+                        Text(scope.rawValue).tag(scope)
                     }
                 }
                 .pickerStyle(.menu)
@@ -69,20 +123,80 @@ private struct GeneralSettingsTab: View {
             }
 
             Section("Alerts") {
-                Picker("Daily budget", selection: Binding(
-                    get: { store.dailyBudget },
-                    set: { store.dailyBudget = $0 }
-                )) {
-                    Text("Off").tag(0.0)
-                    Text("$25").tag(25.0)
-                    Text("$50").tag(50.0)
-                    Text("$100").tag(100.0)
-                    Text("$200").tag(200.0)
-                    Text("$500").tag(500.0)
+                // The budget tracks whatever the menubar metric shows: dollars for
+                // the Cost metric, tokens for the Tokens / Total Tokens metrics.
+                // "Custom…" reveals a field for an exact amount.
+                if store.isTokenMetric {
+                    Picker("Daily budget", selection: Binding(
+                        get: { tokenCustom ? -1.0 : store.dailyTokenBudget },
+                        set: { sel in
+                            if sel < 0 {
+                                tokenCustom = true
+                                tokenText = store.dailyTokenBudget > 0 ? trimNumber(store.dailyTokenBudget / 1_000_000) : ""
+                            } else {
+                                tokenCustom = false
+                                store.dailyTokenBudget = sel
+                            }
+                        }
+                    )) {
+                        Text("Off").tag(0.0)
+                        Text("1M").tag(1_000_000.0)
+                        Text("5M").tag(5_000_000.0)
+                        Text("10M").tag(10_000_000.0)
+                        Text("25M").tag(25_000_000.0)
+                        Text("50M").tag(50_000_000.0)
+                        Text("100M").tag(100_000_000.0)
+                        Text("Custom…").tag(-1.0)
+                    }
+                    if tokenCustom {
+                        HStack {
+                            TextField("Amount", text: $tokenText)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit { applyTokenBudget() }
+                                .onChange(of: tokenText) { _, _ in applyTokenBudget() }
+                            Text("M tokens").foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Picker("Daily budget", selection: Binding(
+                        get: { costCustom ? -1.0 : store.dailyBudget },
+                        set: { sel in
+                            if sel < 0 {
+                                costCustom = true
+                                costText = store.dailyBudget > 0 ? trimNumber(store.dailyBudget) : ""
+                            } else {
+                                costCustom = false
+                                store.dailyBudget = sel
+                            }
+                        }
+                    )) {
+                        Text("Off").tag(0.0)
+                        Text("$25").tag(25.0)
+                        Text("$50").tag(50.0)
+                        Text("$100").tag(100.0)
+                        Text("$200").tag(200.0)
+                        Text("$500").tag(500.0)
+                        Text("Custom…").tag(-1.0)
+                    }
+                    if costCustom {
+                        HStack {
+                            Text("$").foregroundStyle(.secondary)
+                            TextField("Amount", text: $costText)
+                                .multilineTextAlignment(.trailing)
+                                .onSubmit { applyCostBudget() }
+                                .onChange(of: costText) { _, _ in applyCostBudget() }
+                        }
+                    }
                 }
-                Text("Flame icon turns yellow when you pass the daily budget.")
+                Text(alertHelpText)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+            }
+            .onAppear {
+                costCustom = store.dailyBudget > 0 && !costPresets.contains(store.dailyBudget)
+                if costCustom { costText = trimNumber(store.dailyBudget) }
+                tokenCustom = store.dailyTokenBudget > 0 && !tokenPresets.contains(store.dailyTokenBudget)
+                if tokenCustom { tokenText = trimNumber(store.dailyTokenBudget / 1_000_000) }
             }
         }
         .formStyle(.grouped)
@@ -114,6 +228,15 @@ private struct ClaudeSettingsTab: View {
         Form {
             Section("Connection") {
                 ClaudeConnectionRow()
+            }
+            Section {
+                ClaudeConfigDirsSection()
+            } header: {
+                Text("Config Directories")
+            } footer: {
+                Text("Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             Section("Quota Refresh") {
                 Picker("Update every", selection: Binding(
@@ -240,6 +363,85 @@ private struct ClaudeConnectionRow: View {
         case .bootstrapping:
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+// MARK: - Claude config directories
+
+private struct ClaudeConfigDirsSection: View {
+    @Environment(AppStore.self) private var store
+    @State private var dirs: [String] = CLIClaudeConfig.load()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if dirs.isEmpty {
+                Text("No extra directories — tracking the default `~/.claude`.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(dirs.enumerated()), id: \.offset) { index, dir in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text(dir)
+                            .font(.system(size: 12))
+                            .truncationMode(.middle)
+                            .lineLimit(1)
+                            .help(dir)
+                        Spacer()
+                        Button {
+                            remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove")
+                    }
+                }
+            }
+
+            Button {
+                addDirectory()
+            } label: {
+                Label("Add Directory…", systemImage: "plus")
+            }
+            .controlSize(.small)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func addDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose one or more Claude config directories (each containing a `projects` folder)."
+        guard panel.runModal() == .OK else { return }
+
+        let added = panel.urls.map { $0.path }
+        var next = dirs
+        for path in added where !next.contains(path) {
+            next.append(path)
+        }
+        apply(next)
+    }
+
+    private func remove(at index: Int) {
+        guard dirs.indices.contains(index) else { return }
+        var next = dirs
+        next.remove(at: index)
+        apply(next)
+    }
+
+    /// Persists the new list and kicks a forced refresh so the dashboard
+    /// reflects the changed aggregation immediately.
+    private func apply(_ next: [String]) {
+        dirs = next
+        CLIClaudeConfig.persist(dirs: next)
+        Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) }
     }
 }
 
@@ -379,6 +581,81 @@ private struct CodexConnectionRow: View {
     }
 }
 
+// MARK: - Devin
+
+private struct DevinSettingsTab: View {
+    @State private var rateText: String = ""
+    @State private var statusText: String = ""
+
+    private var parsedRate: Double? {
+        let trimmed = rateText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Double(trimmed), value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    var body: some View {
+        Form {
+            Section("ACU Conversion") {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("USD per ACU")
+                    Spacer()
+                    TextField("", text: $rateText)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 96)
+                        .accessibilityLabel("USD per ACU")
+                    Text("USD")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .leading)
+                }
+
+                Button("Save") {
+                    saveRate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(parsedRate == nil)
+
+                if !statusText.isEmpty {
+                    Text(statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Text("CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("How it works")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            if let rate = CLIDevinConfig.loadAcuUsdRate() {
+                rateText = Self.format(rate)
+            }
+        }
+    }
+
+    private func saveRate() {
+        guard let rate = parsedRate else { return }
+        CLIDevinConfig.persistAcuUsdRate(rate)
+        rateText = Self.format(rate)
+        statusText = "Saved. Refresh CodeBurn to recalculate Devin cost."
+    }
+
+    private static func format(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 6
+        return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+}
+
 // MARK: - About
 
 private struct AboutSettingsTab: View {
@@ -398,9 +675,16 @@ private struct AboutSettingsTab: View {
             Text("Version \(appVersion) (\(buildVersion))")
                 .font(.codeMono(size: 11))
                 .foregroundStyle(.secondary)
+            Link(destination: URL(string: "https://github.com/getagentseal/codeburn")!) {
+                Label("Star on GitHub", systemImage: "star.fill")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brandAccent)
             HStack(spacing: 10) {
                 Link("GitHub", destination: URL(string: "https://github.com/getagentseal/codeburn")!)
                 Link("Issues", destination: URL(string: "https://github.com/getagentseal/codeburn/issues")!)
+                Link("Sponsor", destination: URL(string: "https://github.com/sponsors/iamtoruk")!)
             }
             .font(.system(size: 12))
         }

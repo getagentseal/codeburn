@@ -7,6 +7,40 @@ struct MenubarPayload: Codable, Sendable {
     let current: CurrentBlock
     let optimize: OptimizeBlock
     let history: HistoryBlock
+    let combined: CombinedUsage?
+}
+
+struct CombinedUsage: Codable, Sendable {
+    let perDevice: [CombinedDeviceUsage]
+    let combined: CombinedUsageTotals
+}
+
+struct CombinedDeviceUsage: Codable, Sendable {
+    let id: String
+    let name: String
+    let local: Bool
+    let error: String?
+    let cost: Double
+    let calls: Int
+    let sessions: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheCreateTokens: Int
+    let cacheReadTokens: Int
+    let totalTokens: Int
+}
+
+struct CombinedUsageTotals: Codable, Sendable {
+    let cost: Double
+    let calls: Int
+    let sessions: Int
+    let inputTokens: Int
+    let outputTokens: Int
+    let cacheCreateTokens: Int
+    let cacheReadTokens: Int
+    let totalTokens: Int
+    let deviceCount: Int
+    let reachableCount: Int
 }
 
 struct HistoryBlock: Codable, Sendable {
@@ -16,16 +50,31 @@ struct HistoryBlock: Codable, Sendable {
 struct DailyModelBreakdown: Codable, Sendable {
     let name: String
     let cost: Double
+    let savingsUSD: Double
     let calls: Int
     let inputTokens: Int
     let outputTokens: Int
 
     var totalTokens: Int { inputTokens + outputTokens }
+
+    enum CodingKeys: String, CodingKey {
+        case name, cost, savingsUSD, calls, inputTokens, outputTokens
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+        calls = try c.decode(Int.self, forKey: .calls)
+        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
+        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+    }
 }
 
 struct DailyHistoryEntry: Codable, Sendable {
     let date: String
     let cost: Double
+    let savingsUSD: Double
     let calls: Int
     let inputTokens: Int
     let outputTokens: Int
@@ -43,12 +92,13 @@ struct DailyHistoryEntry: Codable, Sendable {
 extension DailyHistoryEntry {
     /// Required for legacy payloads (no topModels emitted yet).
     enum CodingKeys: String, CodingKey {
-        case date, cost, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, topModels
+        case date, cost, savingsUSD, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, topModels
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         date = try c.decode(String.self, forKey: .date)
         cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         calls = try c.decode(Int.self, forKey: .calls)
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
         outputTokens = try c.decode(Int.self, forKey: .outputTokens)
@@ -97,8 +147,11 @@ struct CurrentBlock: Codable, Sendable {
     let inputTokens: Int
     let outputTokens: Int
     let cacheHitPercent: Double
+    /// Codex credits consumed in the period (nil on payloads from older builds).
+    let codexCredits: Double?
     let topActivities: [ActivityEntry]
     let topModels: [ModelEntry]
+    let localModelSavings: LocalModelSavings
     let providers: [String: Double]
     let topProjects: [ProjectEntry]
     let modelEfficiency: [ModelEfficiencyEntry]
@@ -114,7 +167,7 @@ struct CurrentBlock: Codable, Sendable {
 extension CurrentBlock {
     enum CodingKeys: String, CodingKey {
         case label, cost, calls, sessions, oneShotRate, inputTokens, outputTokens,
-             cacheHitPercent, topActivities, topModels, providers, topProjects,
+             cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers
     }
@@ -128,8 +181,10 @@ extension CurrentBlock {
         inputTokens = try c.decode(Int.self, forKey: .inputTokens)
         outputTokens = try c.decode(Int.self, forKey: .outputTokens)
         cacheHitPercent = try c.decodeIfPresent(Double.self, forKey: .cacheHitPercent) ?? 0
+        codexCredits = try c.decodeIfPresent(Double.self, forKey: .codexCredits)
         topActivities = try c.decodeIfPresent([ActivityEntry].self, forKey: .topActivities) ?? []
         topModels = try c.decodeIfPresent([ModelEntry].self, forKey: .topModels) ?? []
+        localModelSavings = try c.decodeIfPresent(LocalModelSavings.self, forKey: .localModelSavings) ?? LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: [])
         providers = try c.decodeIfPresent([String: Double].self, forKey: .providers) ?? [:]
         topProjects = try c.decodeIfPresent([ProjectEntry].self, forKey: .topProjects) ?? []
         modelEfficiency = try c.decodeIfPresent([ModelEfficiencyEntry].self, forKey: .modelEfficiency) ?? []
@@ -143,36 +198,117 @@ extension CurrentBlock {
     }
 }
 
+struct LocalModelSavingsByModel: Codable, Sendable {
+    let name: String
+    let calls: Int
+    let actualUSD: Double
+    let savingsUSD: Double
+    let baselineModel: String
+    let inputTokens: Int
+    let outputTokens: Int
+}
+
+struct LocalModelSavingsByProvider: Codable, Sendable {
+    let name: String
+    let calls: Int
+    let savingsUSD: Double
+}
+
+struct LocalModelSavings: Codable, Sendable {
+    let totalUSD: Double
+    let calls: Int
+    let byModel: [LocalModelSavingsByModel]
+    let byProvider: [LocalModelSavingsByProvider]
+}
+
 struct ActivityEntry: Codable, Sendable {
     let name: String
     let cost: Double
+    let savingsUSD: Double
     let turns: Int
     let oneShotRate: Double?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+        turns = try c.decode(Int.self, forKey: .turns)
+        oneShotRate = try c.decodeIfPresent(Double.self, forKey: .oneShotRate)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, cost, savingsUSD, turns, oneShotRate
+    }
 }
 
 struct ModelEntry: Codable, Sendable {
     let name: String
     let cost: Double
+    let savingsUSD: Double
+    let savingsBaselineModel: String
     let calls: Int
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+        savingsBaselineModel = try c.decodeIfPresent(String.self, forKey: .savingsBaselineModel) ?? ""
+        calls = try c.decode(Int.self, forKey: .calls)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, cost, savingsUSD, savingsBaselineModel, calls
+    }
 }
 
 struct SessionModelEntry: Codable, Sendable {
     let name: String
     let cost: Double
+    let savingsUSD: Double
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, cost, savingsUSD
+    }
 }
 
 struct SessionDetailEntry: Codable, Sendable {
     let cost: Double
+    let savingsUSD: Double
     let calls: Int
     let inputTokens: Int
     let outputTokens: Int
     let date: String
     let models: [SessionModelEntry]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+        calls = try c.decode(Int.self, forKey: .calls)
+        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
+        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+        date = try c.decode(String.self, forKey: .date)
+        models = try c.decodeIfPresent([SessionModelEntry].self, forKey: .models) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cost, savingsUSD, calls, inputTokens, outputTokens, date, models
+    }
 }
 
 struct ProjectEntry: Codable, Sendable {
     let name: String
     let cost: Double
+    let savingsUSD: Double
     let sessions: Int
     let avgCostPerSession: Double
     let sessionDetails: [SessionDetailEntry]
@@ -181,13 +317,14 @@ struct ProjectEntry: Codable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
         cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         sessions = try c.decode(Int.self, forKey: .sessions)
         avgCostPerSession = try c.decode(Double.self, forKey: .avgCostPerSession)
         sessionDetails = try c.decodeIfPresent([SessionDetailEntry].self, forKey: .sessionDetails) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, cost, sessions, avgCostPerSession, sessionDetails
+        case name, cost, savingsUSD, sessions, avgCostPerSession, sessionDetails
     }
 }
 
@@ -200,8 +337,22 @@ struct ModelEfficiencyEntry: Codable, Sendable {
 struct TopSessionEntry: Codable, Sendable {
     let project: String
     let cost: Double
+    let savingsUSD: Double
     let calls: Int
     let date: String
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        project = try c.decode(String.self, forKey: .project)
+        cost = try c.decode(Double.self, forKey: .cost)
+        savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
+        calls = try c.decode(Int.self, forKey: .calls)
+        date = try c.decode(String.self, forKey: .date)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case project, cost, savingsUSD, calls, date
+    }
 }
 
 struct ToolEntry: Codable, Sendable {
@@ -254,8 +405,10 @@ extension MenubarPayload {
             inputTokens: 0,
             outputTokens: 0,
             cacheHitPercent: 0,
+            codexCredits: nil,
             topActivities: [],
             topModels: [],
+            localModelSavings: LocalModelSavings(totalUSD: 0, calls: 0, byModel: [], byProvider: []),
             providers: [:],
             topProjects: [],
             modelEfficiency: [],
@@ -268,6 +421,7 @@ extension MenubarPayload {
             mcpServers: []
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
-        history: HistoryBlock(daily: [])
+        history: HistoryBlock(daily: []),
+        combined: nil
     )
 }

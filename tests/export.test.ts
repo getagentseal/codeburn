@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-import { exportCsv, type PeriodExport } from '../src/export.js'
+import { exportCsv, exportJson, type PeriodExport } from '../src/export.js'
 import type { ProjectSummary } from '../src/types.js'
 
 let tmpDir: string
@@ -192,5 +192,35 @@ describe('exportCsv', () => {
 
     expect(readme).toContain('selected detail period')
     expect(readme).not.toContain('30-day window')
+  })
+
+  it('writes MCP server usage to mcp.csv', async () => {
+    const project = makeProject('app')
+    project.sessions[0]!.mcpBreakdown = { node_repl: { calls: 5 } }
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [project] }]
+
+    const folder = await exportCsv(periods, join(tmpDir, 'mcp.csv'))
+    const mcp = await readFile(join(folder, 'mcp.csv'), 'utf-8')
+
+    expect(mcp).toContain('Server,Calls,Share (%)')
+    expect(mcp).toContain('node_repl,5,100')
+  })
+})
+
+describe('exportJson', () => {
+  it('includes an mcp section with per-server usage', async () => {
+    const project = makeProject('app')
+    project.sessions[0]!.mcpBreakdown = { node_repl: { calls: 3 }, github: { calls: 1 } }
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [project] }]
+
+    const outputPath = join(tmpDir, 'export.json')
+    const saved = await exportJson(periods, outputPath)
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    expect(Array.isArray(data.mcp)).toBe(true)
+    expect(data.mcp).toEqual([
+      { Server: 'node_repl', Calls: 3, 'Share (%)': 75 },
+      { Server: 'github', Calls: 1, 'Share (%)': 25 },
+    ])
   })
 })

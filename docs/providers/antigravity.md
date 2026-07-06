@@ -1,6 +1,6 @@
 # Antigravity
 
-Google Antigravity. The only provider that does not read files off disk: it speaks to a local language-server RPC endpoint instead.
+Google Antigravity (CLI and IDE). CodeBurn discovers session files on disk and queries the local language-server RPC endpoint to parse them.
 
 - **Source:** `src/providers/antigravity.ts`
 - **Loading:** lazy via `src/providers/index.ts`. Lazy because the protobuf dependency is heavy.
@@ -8,28 +8,31 @@ Google Antigravity. The only provider that does not read files off disk: it spea
 
 ## Where it reads from
 
-A local HTTPS RPC endpoint exposed by Antigravity's language server. The parser:
+CodeBurn discovers Antigravity sessions from local directories on disk, then queries the live language-server process (if running) to fetch detailed trajectory generator metadata:
 
-1. Locates the running language-server process via `ps` on POSIX or
-   `Get-CimInstance Win32_Process` on Windows.
-2. Reads its port and CSRF token from process metadata.
-3. Calls `GetCascadeTrajectoryGeneratorMetadata` over HTTPS.
-4. Validates the response (capped at 16 MB).
+1. **Session Discovery:** It scans the following folders for `.pb` or `.db` files:
+   - **Antigravity CLI:** `%USERPROFILE%\.gemini\antigravity-cli\conversations` (and `implicit`)
+   - **Antigravity App/older path:** `%USERPROFILE%\.gemini\antigravity\conversations`
+   - **Antigravity IDE (VSCode-based):** `%USERPROFILE%\.gemini\antigravity-ide\conversations` (and `implicit`)
+2. **Language Server RPC Query:** It locates the active language-server process via `ps` on POSIX or `Get-CimInstance Win32_Process` on Windows. It extracts the port and CSRF token from the process arguments, and queries the local HTTPS RPC endpoint `GetCascadeTrajectoryGeneratorMetadata` to parse the session.
+3. **Cache Fallback:** If the language server is not running, it falls back to the local results cache.
 
 Antigravity exposes slightly different process flags across platforms:
 POSIX builds have used `--https_server_port` and `--csrf_token`; Windows
 builds can expose `--extension_server_port` and
 `--extension_server_csrf_token`. Both space-separated and `--flag=value`
-forms are supported.
+forms are supported. The parser identifies the target app type using the `--app-data-dir` flag (e.g., `antigravity`, `antigravity-cli`, or `antigravity-ide`).
 
-If the language server is not running, the parser falls back to the cached results file.
 For Antigravity CLI (`agy`), CodeBurn can also install an opt-in status line
 hook with `codeburn antigravity-hook install`. The hook records the CLI's
 sanitized `context_window.current_usage` payload while `agy` is still alive,
 without prompts or local working-directory paths. It also attempts a best-effort
-RPC snapshot for full response metadata. Remove it with
-`codeburn antigravity-hook uninstall`; if `--force` replaced an existing
-statusLine command, uninstall restores that previous command.
+RPC snapshot for full response metadata. The installed command points at a
+persistent `codeburn` binary from PATH rather than a local build artifact, and
+running `codeburn antigravity-hook install` again repairs older CodeBurn-owned
+statusLine commands that used stale absolute paths. Remove it with `codeburn
+antigravity-hook uninstall`; if `--force` replaced an existing statusLine
+command, uninstall restores that previous command.
 
 ## Storage format
 

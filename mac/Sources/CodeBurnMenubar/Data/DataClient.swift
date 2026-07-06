@@ -7,6 +7,7 @@ import Foundation
 private let maxPayloadBytes = 20 * 1024 * 1024
 private let maxStderrBytes = 256 * 1024
 private let spawnTimeoutSeconds: UInt64 = 45
+private let maxConcurrentSpawns = 6
 
 enum DataClientError: Error {
     case spawn(String)
@@ -16,15 +17,76 @@ enum DataClientError: Error {
     case outputTooLarge
 }
 
+/// Wraps a `MenubarPayload` decode failure with a bounded snippet of what the CLI
+/// actually wrote to stdout (plus stderr), so a malformed-output failure — for
+/// example a stray Node banner landing on stdout ahead of the JSON (see #515) —
+/// is self-diagnosing in logs and the UI instead of an opaque "not valid JSON".
+struct CLIDecodeFailure: Error, CustomStringConvertible {
+    let underlying: Error
+    let stdoutByteCount: Int
+    let stdoutSnippet: String
+    let stderr: String
+
+    var description: String {
+        var parts = [
+            "decode failed: \(underlying)",
+            "stdout (\(stdoutByteCount) bytes): \(stdoutSnippet.isEmpty ? "<empty>" : stdoutSnippet)",
+        ]
+        if !stderr.isEmpty { parts.append("stderr: \(stderr)") }
+        return parts.joined(separator: " | ")
+    }
+}
+
 /// Runs the CLI via argv (no shell interpretation). See `CodeburnCLI` for why we never route
 /// commands through `/bin/zsh -c` anymore.
 struct DataClient {
-    static func fetch(period: Period, day: String? = nil, days: Set<String> = [], provider: ProviderFilter, includeOptimize: Bool) async throws -> MenubarPayload {
+    static func fetch(period: Period,
+                      day: String? = nil,
+                      days: Set<String> = [],
+                      provider: ProviderFilter,
+                      includeOptimize: Bool,
+                      scope: MenubarScope = .local) async throws -> MenubarPayload {
+        let subcommand = statusSubcommand(
+            period: period,
+            day: day,
+            days: days,
+            provider: provider,
+            includeOptimize: includeOptimize,
+            scope: scope
+        )
+        let result = try await runCLI(subcommand: subcommand)
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        do {
+            return try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
+        } catch {
+            let snippet = String(decoding: result.stdout.prefix(2048), as: UTF8.self)
+            throw DataClientError.decode(CLIDecodeFailure(
+                underlying: error,
+                stdoutByteCount: result.stdout.count,
+                stdoutSnippet: snippet,
+                stderr: result.stderr
+            ))
+        }
+    }
+
+    static func statusSubcommand(period: Period,
+                                 day: String? = nil,
+                                 days: Set<String> = [],
+                                 provider: ProviderFilter,
+                                 includeOptimize: Bool,
+                                 scope: MenubarScope = .local) -> [String] {
+        let effectiveScope: MenubarScope = days.count > 1 ? .local : scope
+        let effectiveProvider: ProviderFilter = effectiveScope == .combined ? .all : provider
         var subcommand = [
             "status",
             "--format", "menubar-json",
-            "--provider", provider.cliArg,
+            "--provider", effectiveProvider.cliArg,
         ]
+        if effectiveScope == .combined {
+            subcommand.append(contentsOf: ["--scope", effectiveScope.cliArg])
+        }
         if days.count > 1 {
             subcommand.append(contentsOf: ["--days", days.sorted().joined(separator: ",")])
         } else if let day {
@@ -37,31 +99,52 @@ struct DataClient {
         if !includeOptimize {
             subcommand.append("--no-optimize")
         }
-
-        let result = try await runCLI(subcommand: subcommand)
-        guard result.exitCode == 0 else {
-            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
-        }
-        do {
-            return try JSONDecoder().decode(MenubarPayload.self, from: result.stdout)
-        } catch {
-            throw DataClientError.decode(error)
-        }
+        return subcommand
     }
 
-    private struct ProcessResult {
+    struct ProcessResult {
         let stdout: Data
         let stderr: String
         let exitCode: Int32
     }
 
-    private static func runCLI(subcommand: [String]) async throws -> ProcessResult {
-        let process = CodeburnCLI.makeProcess(subcommand: subcommand)
+    /// Caps concurrent CLI spawns so a wake-burst of refreshes can't fan out into
+    /// dozens of node processes at once.
+    private static let spawnLimiter = AsyncSemaphore(maxConcurrentSpawns)
 
+    private static func runCLI(subcommand: [String]) async throws -> ProcessResult {
+        await spawnLimiter.acquire()
+        defer { Task { await spawnLimiter.release() } }
+        let process = CodeburnCLI.makeProcess(subcommand: subcommand)
+        return try await runProcess(process,
+                                    timeoutSeconds: spawnTimeoutSeconds,
+                                    label: subcommand.joined(separator: " "))
+    }
+
+    /// Runs an already-configured process to completion, draining its output and
+    /// enforcing a hard timeout.
+    ///
+    /// CRITICAL: nothing here may block a worker thread waiting for the process.
+    /// `process.waitUntilExit()` is a blocking syscall. An earlier fix moved it
+    /// onto a global(qos:.utility) queue with the timeout on that SAME queue — but
+    /// under sustained load every utility worker ended up blocked in waitUntilExit,
+    /// so the timeout could never be scheduled to kill them and the menubar wedged
+    /// on "Loading…" forever (confirmed via sample: threads parked in
+    /// waitUntilExit, timeout never firing). Instead we await
+    /// `process.terminationHandler`, which fires on a Foundation-managed queue and
+    /// blocks nothing, so the timeout always has a free thread to fire on.
+    static func runProcess(_ process: Process,
+                           timeoutSeconds: UInt64,
+                           label: String) async throws -> ProcessResult {
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+
+        // Bridge the process exit to an async signal set up BEFORE run(), so the
+        // exit can never be missed and the wait never blocks a worker thread.
+        let exitSignal = ProcessExitSignal()
+        process.terminationHandler = { _ in exitSignal.fulfill() }
 
         do {
             try process.run()
@@ -69,15 +152,17 @@ struct DataClient {
             throw DataClientError.spawn(error.localizedDescription)
         }
 
-        let timeoutTask = Task.detached(priority: .utility) {
-            try? await Task.sleep(nanoseconds: spawnTimeoutSeconds * 1_000_000_000)
+        let timeoutTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timeoutTimer.schedule(deadline: .now() + .seconds(Int(timeoutSeconds)))
+        timeoutTimer.setEventHandler {
             if process.isRunning {
                 NSLog("CodeBurn: CLI subprocess timed out after %llus for %@ — terminating",
-                      spawnTimeoutSeconds, subcommand.joined(separator: " "))
+                      timeoutSeconds, label)
                 terminateWithEscalation(process)
             }
         }
-        defer { timeoutTask.cancel() }
+        timeoutTimer.resume()
+        defer { timeoutTimer.cancel() }
 
         let outHandle = outPipe.fileHandleForReading
         let errHandle = errPipe.fileHandleForReading
@@ -90,7 +175,9 @@ struct DataClient {
         }
         try? outHandle.close()
         try? errHandle.close()
-        process.waitUntilExit()
+        // Wait for exit via terminationHandler, never by parking a worker thread
+        // in waitUntilExit (see the doc comment above for why that wedged).
+        await exitSignal.wait()
 
         if out.count >= maxPayloadBytes {
             throw DataClientError.outputTooLarge
@@ -140,5 +227,62 @@ struct DataClient {
             }
         }
         return buffer
+    }
+}
+
+/// One-shot async signal that bridges `Process.terminationHandler` (invoked on a
+/// Foundation-internal queue) to an awaiting task without blocking a worker
+/// thread. Safe against fulfill-before-wait.
+final class ProcessExitSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fulfilled = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func fulfill() {
+        lock.lock()
+        if fulfilled { lock.unlock(); return }
+        fulfilled = true
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if fulfilled {
+                lock.unlock()
+                cont.resume()
+            } else {
+                continuation = cont
+                lock.unlock()
+            }
+        }
+    }
+}
+
+/// Minimal actor-based async semaphore. Caps concurrency without blocking a
+/// thread (unlike DispatchSemaphore.wait()).
+actor AsyncSemaphore {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(_ count: Int) { available = count }
+
+    func acquire() async {
+        if available > 0 {
+            available -= 1
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            available += 1
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }

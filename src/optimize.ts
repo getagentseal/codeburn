@@ -26,12 +26,12 @@ const RED = '#F55B5B'
 // Token estimation constants
 // ============================================================================
 
-const AVG_TOKENS_PER_READ = 600
-const TOKENS_PER_MCP_TOOL = 400
-const TOOLS_PER_MCP_SERVER = 5
-const TOKENS_PER_AGENT_DEF = 80
-const TOKENS_PER_SKILL_DEF = 80
-const TOKENS_PER_COMMAND_DEF = 60
+export const AVG_TOKENS_PER_READ = 600
+export const TOKENS_PER_MCP_TOOL = 400
+export const TOOLS_PER_MCP_SERVER = 5
+export const TOKENS_PER_AGENT_DEF = 80
+export const TOKENS_PER_SKILL_DEF = 80
+export const TOKENS_PER_COMMAND_DEF = 60
 const CLAUDEMD_TOKENS_PER_LINE = 13
 const BASH_TOKENS_PER_CHAR = 0.25
 
@@ -48,7 +48,7 @@ const MIN_DUPLICATE_READS_TO_FLAG = 5
 const DUPLICATE_READS_HIGH_THRESHOLD = 30
 const DUPLICATE_READS_MEDIUM_THRESHOLD = 10
 const MIN_EDITS_FOR_RATIO = 10
-const HEALTHY_READ_EDIT_RATIO = 4
+export const HEALTHY_READ_EDIT_RATIO = 4
 const LOW_RATIO_HIGH_THRESHOLD = 2
 const LOW_RATIO_MEDIUM_THRESHOLD = 3
 const MIN_API_CALLS_FOR_CACHE = 10
@@ -186,13 +186,46 @@ export type WasteAction =
 
 export type Trend = 'active' | 'improving'
 
+// Stable, kebab-case identifier per detector. Used to route findings to
+// appliable plans (src/act/plans.ts) and for the `--only` filter, so these
+// strings must not change once shipped.
+export type FindingId =
+  | 'read-edit-ratio'
+  | 'build-folder-reads'
+  | 'redundant-rereads'
+  | 'warmup-heavy'
+  | 'unused-mcp'
+  | 'mcp-low-coverage'
+  | 'mcp-project-scope'
+  | 'retry-heavy-capabilities'
+  | 'low-worth-sessions'
+  | 'context-heavy-sessions'
+  | 'cost-outliers'
+  | 'claude-md-too-long'
+  | 'bash-output-cap'
+  | 'unused-agents'
+  | 'unused-skills'
+  | 'unused-commands'
+
+// Machine-readable payload the apply layer needs but the human-facing `fix`
+// text can't carry losslessly (full lists, per-server keeper paths). Only set
+// on findings that have an appliable plan; absent otherwise.
+export type FindingApply =
+  | { kind: 'mcp-remove'; servers: string[] }
+  // keepProjects gain the entry; removeProjects (the cold projects) are the
+  // only per-project containers a scoped removal may touch.
+  | { kind: 'mcp-project-scope'; servers: Array<{ server: string; keepProjects: string[]; removeProjects: string[] }> }
+  | { kind: 'archive'; names: string[] }
+
 export type WasteFinding = {
+  id: FindingId
   title: string
   explanation: string
   impact: Impact
   tokensSaved: number
   fix: WasteAction
   trend?: Trend
+  apply?: FindingApply
 }
 
 export type OptimizeResult = {
@@ -200,6 +233,36 @@ export type OptimizeResult = {
   costRate: number
   healthScore: number
   healthGrade: HealthGrade
+}
+
+export type OptimizeJsonReport = {
+  period: {
+    label: string
+    start: string | null
+    end: string | null
+  }
+  summary: {
+    healthScore: number
+    healthGrade: HealthGrade
+    findingCount: number
+    periodCostUSD: number
+    sessions: number
+    calls: number
+    potentialSavingsTokens: number
+    potentialSavingsCostUSD: number
+    potentialSavingsPercent: number | null
+    costRateUSD: number
+  }
+  findings: Array<{
+    id: FindingId
+    title: string
+    explanation: string
+    severity: Impact
+    trend: Trend | null
+    tokensSaved: number
+    estimatedSavingsUSD: number
+    fix: WasteAction
+  }>
 }
 
 export type ToolCall = {
@@ -518,6 +581,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   const dirsToAvoid = [...detected, ...extras].join(', ')
 
   return {
+    id: 'build-folder-reads',
     title: 'Claude is reading build/dependency folders',
     explanation: `Claude read into ${dirList} (${totalJunkReads} reads). These are generated or dependency directories, not your code. Tell Claude in CLAUDE.md to avoid them.`,
     impact: totalJunkReads > JUNK_READS_HIGH_THRESHOLD ? 'high' : totalJunkReads > JUNK_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
@@ -578,6 +642,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
   const tokensSaved = totalDuplicates * AVG_TOKENS_PER_READ
 
   return {
+    id: 'redundant-rereads',
     title: 'Claude is re-reading the same files',
     explanation: `${totalDuplicates} redundant re-reads across sessions. Top repeats: ${worst}. Each re-read loads the same content into context again.`,
     impact: totalDuplicates > DUPLICATE_READS_HIGH_THRESHOLD ? 'high' : totalDuplicates > DUPLICATE_READS_MEDIUM_THRESHOLD ? 'medium' : 'low',
@@ -893,6 +958,7 @@ export function detectMcpToolCoverage(
       : 'medium'
 
   return {
+    id: 'mcp-low-coverage',
     title: `${flagged.length} MCP server${flagged.length === 1 ? '' : 's'} with low tool coverage`,
     explanation:
       `Schema for unused tools is loaded into the system prompt every session and ` +
@@ -907,6 +973,7 @@ export function detectMcpToolCoverage(
         : 'Remove underused servers, or trim their tools in your MCP config:',
       text: removeCommands.join('\n'),
     },
+    apply: { kind: 'mcp-remove', servers: flaggedServers },
   }
 }
 
@@ -1135,6 +1202,7 @@ export function detectMcpProfileAdvisor(
     : 'medium'
 
   return {
+    id: 'mcp-project-scope',
     title: `${candidates.length} MCP server${candidates.length === 1 ? '' : 's'} should be project-scoped`,
     explanation:
       `These MCP servers look useful in a small set of projects but are loaded into other projects where they are not invoked. ` +
@@ -1153,6 +1221,14 @@ export function detectMcpProfileAdvisor(
           return `- Keep ${candidate.server} available for ${hot}; remove or project-scope it away from ${cold}. Re-add it only in projects that actually need it.`
         }),
       ].join('\n'),
+    },
+    apply: {
+      kind: 'mcp-project-scope',
+      servers: candidates.map(c => ({
+        server: c.server,
+        keepProjects: c.hotProjects.map(p => p.projectPath),
+        removeProjects: c.coldProjects.map(p => p.projectPath),
+      })),
     },
   }
 }
@@ -1383,6 +1459,7 @@ export function detectCapabilityReliability(projects: ProjectSummary[]): WasteFi
   const verb = candidates.length === 1 ? 'correlates' : 'correlate'
 
   return {
+    id: 'retry-heavy-capabilities',
     title: `${candidates.length} ${candidates.length === 1 ? noun : pluralNoun} ${verb} with retry-heavy edits`,
     explanation: `Edit turns using these capabilities are retry-heavy: ${list}${extra}. This is a correlation report, not proof of causation; compare the retry-heavy turns with one-shot turns before changing MCP scope or skill instructions.`,
     impact,
@@ -1449,10 +1526,12 @@ export function detectUnusedMcp(
   const tokensSaved = schemaTokensPerSession * Math.max(totalSessions, 1)
 
   return {
+    id: 'unused-mcp',
     title: `${unused.length} MCP server${unused.length > 1 ? 's' : ''} configured but never used`,
     explanation: `Never called in this period: ${unused.join(', ')}. Each server loads ~${TOOLS_PER_MCP_SERVER * TOKENS_PER_MCP_TOOL} tokens of tool schema into every session.`,
     impact: unused.length >= UNUSED_MCP_HIGH_THRESHOLD ? 'high' : 'medium',
     tokensSaved,
+    apply: { kind: 'mcp-remove', servers: unused },
     fix: {
       type: 'command',
       label: `Remove unused server${unused.length > 1 ? 's' : ''}:`,
@@ -1512,6 +1591,7 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
   }).join(', ')
 
   return {
+    id: 'claude-md-too-long',
     title: `Your CLAUDE.md is too long`,
     explanation: `${list}. CLAUDE.md plus all @-imported files load into every API call. Trimming below ${CLAUDEMD_HEALTHY_LINES} lines saves ~${formatTokens(tokensSaved)} tokens per call.`,
     impact: worst.expandedLines > CLAUDEMD_HIGH_THRESHOLD_LINES ? 'high' : 'medium',
@@ -1525,8 +1605,8 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
   }
 }
 
-const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
-const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
+export const READ_TOOL_NAMES = new Set(['Read', 'Grep', 'Glob', 'FileReadTool', 'GrepTool', 'GlobTool'])
+export const EDIT_TOOL_NAMES = new Set(['Edit', 'Write', 'FileEditTool', 'FileWriteTool', 'NotebookEdit'])
 
 export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   let reads = 0
@@ -1560,6 +1640,7 @@ export function detectLowReadEditRatio(calls: ToolCall[]): WasteFinding | null {
   if (trend === 'resolved') return null
 
   return {
+    id: 'read-edit-ratio',
     title: 'Claude edits more than it reads',
     explanation: `Claude made ${reads} reads and ${edits} edits (ratio ${ratio.toFixed(1)}:1). A healthy ratio is ${HEALTHY_READ_EDIT_RATIO}+ reads per edit. Editing without reading leads to retries and wasted tokens.`,
     impact,
@@ -1631,6 +1712,7 @@ export function detectCacheBloat(apiCalls: ApiCallMeta[], projects: ProjectSumma
   }
 
   return {
+    id: 'warmup-heavy',
     title: 'Session warmup is unusually large',
     explanation: `Median cache_creation per call is ${formatTokens(median)} tokens, about ${formatTokens(excess)} above your baseline of ${formatTokens(baseline)}.${versionNote}`,
     impact: excess > CACHE_EXCESS_HIGH_THRESHOLD ? 'high' : 'medium',
@@ -1683,6 +1765,7 @@ export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding
   const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
+    id: 'unused-agents',
     title: `${ghosts.length} custom agent${ghosts.length > 1 ? 's' : ''} you never use`,
     explanation: `Defined in ~/.claude/agents/ but never invoked in this period: ${list}. Each adds ~${TOKENS_PER_AGENT_DEF} tokens to the Task tool schema on every session.`,
     impact: ghosts.length >= GHOST_AGENTS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_AGENTS_MEDIUM_THRESHOLD ? 'medium' : 'low',
@@ -1692,6 +1775,7 @@ export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding
       label: `Archive unused agent${ghosts.length > 1 ? 's' : ''}:`,
       text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/agents/${name}.md ~/.claude/agents/.archived/`).join('\n'),
     },
+    apply: { kind: 'archive', names: ghosts },
   }
 }
 
@@ -1713,6 +1797,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
   const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
+    id: 'unused-skills',
     title: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} you never use`,
     explanation: `In ~/.claude/skills/ but not invoked this period: ${list}. Each adds ~${TOKENS_PER_SKILL_DEF} tokens of metadata to every session.`,
     impact: ghosts.length >= GHOST_SKILLS_HIGH_THRESHOLD ? 'high' : ghosts.length >= GHOST_SKILLS_MEDIUM_THRESHOLD ? 'medium' : 'low',
@@ -1722,6 +1807,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
       label: `Archive unused skill${ghosts.length > 1 ? 's' : ''}:`,
       text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/skills/${name} ~/.claude/skills/.archived/`).join('\n'),
     },
+    apply: { kind: 'archive', names: ghosts },
   }
 }
 
@@ -1745,6 +1831,7 @@ export async function detectGhostCommands(userMessages: string[]): Promise<Waste
   const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
+    id: 'unused-commands',
     title: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} you never use`,
     explanation: `In ~/.claude/commands/ but not referenced this period: ${list}. Each adds ~${TOKENS_PER_COMMAND_DEF} tokens of definition per session.`,
     impact: ghosts.length >= GHOST_COMMANDS_MEDIUM_THRESHOLD ? 'medium' : 'low',
@@ -1754,6 +1841,7 @@ export async function detectGhostCommands(userMessages: string[]): Promise<Waste
       label: `Archive unused command${ghosts.length > 1 ? 's' : ''}:`,
       text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/commands/${name}.md ~/.claude/commands/.archived/`).join('\n'),
     },
+    apply: { kind: 'archive', names: ghosts },
   }
 }
 
@@ -1781,6 +1869,7 @@ export function detectBashBloat(): WasteFinding | null {
   const tokensSaved = Math.round(extraChars * BASH_TOKENS_PER_CHAR)
 
   return {
+    id: 'bash-output-cap',
     title: 'Shrink bash output limit',
     explanation: `Your bash output cap is ${(limit / 1000).toFixed(0)}K chars (${configured ? 'configured' : 'default'}). Most output fits in ${(BASH_RECOMMENDED_LIMIT / 1000).toFixed(0)}K. The extra ~${formatTokens(tokensSaved)} tokens per bash call is trailing noise.`,
     impact: 'medium',
@@ -1888,6 +1977,12 @@ function estimateLowWorthRecoverableTokens(
   return Math.round(tokens * fraction)
 }
 
+// Session-opener texts, the single source of truth shared by the optimize
+// findings below and by `codeburn guard` (SessionStart hook). Kept as
+// constants so the two surfaces can never drift.
+export const LOW_WORTH_OPENER = 'Before continuing, name the deliverable in one sentence (PR title, file changed, command output you expect). Stop and check with me if (a) you spend more than 10 minutes without an edit, or (b) the same approach fails twice. Do not retry past two attempts on any single fix.'
+export const CONTEXT_HEAVY_OPENER = 'Start fresh before continuing. Use only the current goal, the relevant files, the failing command/output, and the constraints below. Restate the working context in under 10 bullets before editing.'
+
 export type LowWorthCandidate = {
   project: string
   sessionId: string
@@ -1973,6 +2068,7 @@ export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding
   }
 
   return {
+    id: 'low-worth-sessions',
     title: `${candidates.length} possibly low-worth expensive session${candidates.length === 1 ? '' : 's'}`,
     explanation: `Sessions with meaningful spend but weak delivery signals: ${list}${extra}. This is a review candidate, not proof of waste: CodeBurn flags missing edit turns, repeated retries, and sessions without git delivery commands so you can decide whether the work was worth its cost before it becomes a habit.`,
     impact,
@@ -1981,7 +2077,7 @@ export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding
       type: 'paste',
       destination: 'session-opener',
       label: 'Paste at the start of your NEXT expensive thread (one-time, do not add to CLAUDE.md):',
-      text: 'Before continuing, name the deliverable in one sentence (PR title, file changed, command output you expect). Stop and check with me if (a) you spend more than 10 minutes without an edit, or (b) the same approach fails twice. Do not retry past two attempts on any single fix.',
+      text: LOW_WORTH_OPENER,
     },
   }
 }
@@ -2086,6 +2182,7 @@ export function detectContextBloat(projects: ProjectSummary[], excludedSessionId
   }
 
   return {
+    id: 'context-heavy-sessions',
     title: `${candidates.length} context-heavy session${candidates.length === 1 ? '' : 's'}`,
     explanation: `Effective input/cache tokens swamp output in these sessions: ${list}${extra}. This can come from stale context carryover, inherently context-heavy work, or abandoned runs that loaded too much context; starting fresh with only the current goal and relevant files can cut repeated prompt overhead.`,
     impact,
@@ -2094,7 +2191,7 @@ export function detectContextBloat(projects: ProjectSummary[], excludedSessionId
       type: 'paste',
       destination: 'session-opener',
       label: 'Paste at the start of your NEXT expensive thread (one-time, do not add to CLAUDE.md):',
-      text: 'Start fresh before continuing. Use only the current goal, the relevant files, the failing command/output, and the constraints below. Restate the working context in under 10 bullets before editing.',
+      text: CONTEXT_HEAVY_OPENER,
     },
   }
 }
@@ -2156,6 +2253,7 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
   const totalExcessCost = outliers.reduce((sum, o) => sum + Math.max(0, o.cost - o.avgCost), 0)
 
   return {
+    id: 'cost-outliers',
     title: `${outliers.length} high-cost session outlier${outliers.length === 1 ? '' : 's'}`,
     explanation: `Sessions costing more than ${SESSION_OUTLIER_MULTIPLIER}x their peer-session average in the same project: ${list}${extra}. These usually come from broad prompts, runaway loops, or context-heavy work that should be split into smaller sessions.`,
     impact: outliers.length >= 3 || totalExcessCost >= 10 ? 'high' : 'medium',
@@ -2245,7 +2343,7 @@ function sessionTrend(
 const INPUT_COST_RATIO = 0.7
 const DEFAULT_COST_PER_TOKEN = 0
 
-function computeInputCostRate(projects: ProjectSummary[]): number {
+export function computeInputCostRate(projects: ProjectSummary[]): number {
   const sessions = projects.flatMap(p => p.sessions)
   const totalCost = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
   const totalTokens = sessions.reduce((s, sess) =>
@@ -2428,6 +2526,8 @@ function renderOptimize(
   callCount: number,
   healthScore: number,
   healthGrade: HealthGrade,
+  appliedHeader?: string,
+  previouslyApplied?: Record<string, string>,
 ): string {
   const lines: string[] = []
   lines.push('')
@@ -2441,6 +2541,7 @@ function renderOptimize(
     chalk.hex(GOLD)(formatCost(periodCost)),
     `Health: ${chalk.bold.hex(GRADE_COLORS[healthGrade])(healthGrade)}${chalk.dim(` (${healthScore}/100${issueSuffix})`)}`,
   ].join(chalk.hex(DIM)('   ')))
+  if (appliedHeader) lines.push('  ' + chalk.hex(GREEN)(appliedHeader))
   lines.push('')
 
   if (findings.length === 0) {
@@ -2463,7 +2564,10 @@ function renderOptimize(
   lines.push('')
 
   for (let i = 0; i < findings.length; i++) {
-    lines.push(...renderFinding(i + 1, findings[i], costRate))
+    const f = findings[i]!
+    const appliedOn = previouslyApplied?.[f.id]
+    const shown = appliedOn ? { ...f, title: `${f.title} (previously applied ${appliedOn}, re-flagged)` } : f
+    lines.push(...renderFinding(i + 1, shown, costRate))
   }
 
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
@@ -2476,19 +2580,75 @@ export async function runOptimize(
   projects: ProjectSummary[],
   periodLabel: string,
   dateRange?: DateRange,
+  opts: { format?: 'text' | 'json'; appliedHeader?: string; previouslyApplied?: Record<string, string> } = {},
 ): Promise<void> {
-  if (projects.length === 0) {
+  const format = opts.format ?? 'text'
+  if (projects.length === 0 && format === 'text') {
     console.log(chalk.dim('\n  No usage data found for this period.\n'))
     return
   }
 
-  process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
+  if (format === 'text') {
+    process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
+  }
 
-  const { findings, costRate, healthScore, healthGrade } = await scanAndDetect(projects, dateRange)
+  const result = await scanAndDetect(projects, dateRange)
+  const { findings, costRate, healthScore, healthGrade } = result
   const sessions = projects.flatMap(p => p.sessions)
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const callCount = projects.reduce((s, p) => s + p.totalApiCalls, 0)
 
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade)
+  if (format === 'json') {
+    console.log(JSON.stringify(buildOptimizeJsonReport(projects, periodLabel, result, dateRange), null, 2))
+    return
+  }
+
+  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied)
   console.log(output)
+}
+
+export function buildOptimizeJsonReport(
+  projects: ProjectSummary[],
+  periodLabel: string,
+  result: OptimizeResult,
+  dateRange?: DateRange,
+): OptimizeJsonReport {
+  const sessions = projects.flatMap(p => p.sessions)
+  const periodCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const calls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  const potentialSavingsTokens = result.findings.reduce((s, f) => s + f.tokensSaved, 0)
+  const potentialSavingsCostUSD = potentialSavingsTokens * result.costRate
+  const potentialSavingsPercent = periodCostUSD > 0
+    ? Math.round((potentialSavingsCostUSD / periodCostUSD) * 1000) / 10
+    : null
+
+  return {
+    period: {
+      label: periodLabel,
+      start: dateRange?.start.toISOString() ?? null,
+      end: dateRange?.end.toISOString() ?? null,
+    },
+    summary: {
+      healthScore: result.healthScore,
+      healthGrade: result.healthGrade,
+      findingCount: result.findings.length,
+      periodCostUSD,
+      sessions: sessions.length,
+      calls,
+      potentialSavingsTokens,
+      potentialSavingsCostUSD,
+      potentialSavingsPercent,
+      costRateUSD: result.costRate,
+    },
+    findings: result.findings.map(f => ({
+      id: f.id,
+      title: f.title,
+      explanation: f.explanation,
+      severity: f.impact,
+      trend: f.trend ?? null,
+      tokensSaved: f.tokensSaved,
+      estimatedSavingsUSD: f.tokensSaved * result.costRate,
+      fix: f.fix,
+    })),
+  }
 }

@@ -1,7 +1,7 @@
 {
   "name": "codeburn",
-  "version": "0.9.11",
-  "description": "See where your AI coding tokens go - by task, tool, model, and project",
+  "version": "0.9.15",
+  "description": "See where your AI spend goes - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {
@@ -12,8 +12,9 @@
   ],
   "scripts": {
     "bundle-litellm": "node scripts/bundle-litellm.mjs",
-    "build": "node scripts/bundle-litellm.mjs && tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\"",
-    "dev": "tsx src/cli.ts",
+    "build": "node scripts/bundle-litellm.mjs && tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\" && npm run build:dash",
+    "build:dash": "cd dash && npm install --no-audit --no-fund --silent && npm run build",
+    "dev": "NODE_OPTIONS=--no-deprecation tsx src/cli.ts",
     "test": "vitest",
     "prepublishOnly": "npm run build"
   },
@@ -22,6 +23,7 @@
     "cursor",
     "codex",
     "kimi",
+    "devin",
     "ibm-bob",
     "opencode",
     "pi",
@@ -46,15 +48,21 @@
   },
   "homepage": "https://github.com/getagentseal/codeburn#readme",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "bonjour-service": "^1.4.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "ink": "^7.0.0",
     "react": "^19.2.5",
-    "strip-ansi": "^7.2.0"
+    "selfsigned": "^5.5.0",
+    "strip-ansi": "^7.2.0",
+    "undici": "^7.27.2",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
     "@types/react": "^19.2.14",
+    "@types/selfsigned": "^2.0.4",
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

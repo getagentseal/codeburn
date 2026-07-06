@@ -57,11 +57,22 @@ export type CachedFile = {
   canonicalProjectName?: string
   mcpInventory: string[]
   turns: CachedTurn[]
+  // Claude Code only: for a subagent transcript (`subagents/.../agent-*.jsonl`),
+  // the `agentType` from its sibling `.meta.json` (e.g. `workflow-subagent`,
+  // `Explore`, `general-purpose`). Drives the Claude-scoped agent-type breakdown.
+  agentType?: string
+  // Negative-result marker: this file threw while parsing at the recorded
+  // fingerprint. Cached so we don't re-read + re-throw it on every refresh; it
+  // is re-parsed only when the file changes (fingerprint differs). Carries no
+  // turns, so it contributes no usage. (issue #441 follow-up)
+  failed?: boolean
 }
 
 export type ProviderSection = {
   envFingerprint: string
   files: Record<string, CachedFile>
+  /** True when the provider's cache entries survive source-file eviction. */
+  durable?: boolean
 }
 
 export type SessionCache = {
@@ -71,7 +82,7 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 3
+export const CACHE_VERSION = 4
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -79,6 +90,7 @@ const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
   codex: ['CODEX_HOME'],
+  hermes: ['HERMES_HOME'],
   droid: ['FACTORY_DIR'],
   cursor: ['XDG_DATA_HOME'],
   'cursor-agent': ['XDG_DATA_HOME'],
@@ -91,14 +103,23 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
   'ibm-bob': ['XDG_CONFIG_HOME'],
 }
 
+// Names of providers whose cache entries are never evicted when source files
+// disappear — they are preserved so month-to-date totals never drop.
+export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
+
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'cowork-space-grouping-v1',
   cline: 'worktree-project-grouping-v1',
-  copilot: 'mcp-tool-normalization-v1',
+  cursor: 'composer-anchored-crediting-v1',
+  'cursor-agent': 'workspaceless-transcript-v1',
+  copilot: 'otel-durable-v1',
+  hermes: 'reasoning-output-accounting-v1',
   'ibm-bob': 'worktree-project-grouping-v1',
+  kiro: 'ide-parsing-v1',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',
+  antigravity: 'worktree-project-grouping-v3',
 }
 
 // ── Cache Dir ──────────────────────────────────────────────────────────
@@ -375,4 +396,3 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
     }
   } catch {}
 }
-

@@ -140,9 +140,8 @@ enum ClaudeSubscriptionService {
         case 200:
             clearUsageBlock()
             do {
-                let decoded = try JSONDecoder().decode(UsageResponse.self, from: data)
                 let tier = try ClaudeCredentialStore.subscriptionTier()
-                return mapResponse(decoded, rawTier: tier)
+                return try parseUsage(data, rawTier: tier)
             } catch {
                 throw FetchError.usageDecodeFailed
             }
@@ -191,17 +190,26 @@ enum ClaudeSubscriptionService {
 
     // MARK: - Response mapping
 
+    /// Decodes a usage endpoint response body. Internal so tests can feed the
+    /// captured JSON shape without a network round trip.
+    static func parseUsage(_ data: Data, rawTier: String?) throws -> SubscriptionUsage {
+        let decoded = try JSONDecoder().decode(UsageResponse.self, from: data)
+        return mapResponse(decoded, rawTier: rawTier)
+    }
+
     private struct UsageResponse: Decodable {
         let fiveHour: Window?
         let sevenDay: Window?
         let sevenDayOpus: Window?
         let sevenDaySonnet: Window?
+        let limits: [Limit]?
 
         enum CodingKeys: String, CodingKey {
             case fiveHour = "five_hour"
             case sevenDay = "seven_day"
             case sevenDayOpus = "seven_day_opus"
             case sevenDaySonnet = "seven_day_sonnet"
+            case limits
         }
     }
 
@@ -214,8 +222,43 @@ enum ClaudeSubscriptionService {
         }
     }
 
+    /// Entry in the `limits` array. Model-scoped weekly buckets (like Fable)
+    /// only appear here, not as named top-level windows.
+    private struct Limit: Decodable {
+        let kind: String?
+        let percent: Double?
+        let resetsAt: String?
+        let scope: Scope?
+
+        enum CodingKeys: String, CodingKey {
+            case kind, percent, scope
+            case resetsAt = "resets_at"
+        }
+
+        struct Scope: Decodable {
+            let model: Model?
+            struct Model: Decodable {
+                let displayName: String?
+                enum CodingKeys: String, CodingKey {
+                    case displayName = "display_name"
+                }
+            }
+        }
+    }
+
     private static func mapResponse(_ r: UsageResponse, rawTier: String?) -> SubscriptionUsage {
-        SubscriptionUsage(
+        let scopedWeekly = (r.limits ?? []).compactMap { limit -> SubscriptionUsage.ScopedWindow? in
+            guard limit.kind == "weekly_scoped",
+                  let name = limit.scope?.model?.displayName,
+                  let percent = limit.percent
+            else { return nil }
+            return SubscriptionUsage.ScopedWindow(
+                label: name,
+                percent: percent,
+                resetsAt: parseDate(limit.resetsAt)
+            )
+        }
+        return SubscriptionUsage(
             tier: SubscriptionUsage.tier(from: rawTier),
             rawTier: rawTier,
             fiveHourPercent: r.fiveHour?.utilization,
@@ -226,6 +269,7 @@ enum ClaudeSubscriptionService {
             sevenDayOpusResetsAt: parseDate(r.sevenDayOpus?.resetsAt),
             sevenDaySonnetPercent: r.sevenDaySonnet?.utilization,
             sevenDaySonnetResetsAt: parseDate(r.sevenDaySonnet?.resetsAt),
+            scopedWeekly: scopedWeekly,
             fetchedAt: Date()
         )
     }

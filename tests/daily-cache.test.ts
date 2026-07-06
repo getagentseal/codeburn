@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFile, rm } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+
+import type { ProjectSummary } from '../src/types.js'
 
 import {
   addNewDays,
@@ -10,6 +12,7 @@ import {
   type DailyCache,
   type DailyEntry,
   getDaysInRange,
+  ensureCacheHydrated,
   loadDailyCache,
   saveDailyCache,
   withDailyCacheLock,
@@ -19,6 +22,7 @@ function emptyDay(date: string, cost = 0, calls = 0): DailyEntry {
   return {
     date,
     cost,
+    savingsUSD: 0,
     calls,
     sessions: 0,
     inputTokens: 0,
@@ -40,7 +44,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  delete process.env['CODEBURN_CACHE_DIR']
+  vi.useRealTimers()
   if (existsSync(TMP_CACHE_ROOT)) {
     await rm(TMP_CACHE_ROOT, { recursive: true, force: true })
   }
@@ -137,6 +141,7 @@ describe('loadDailyCache', () => {
   it('round-trips a valid cache through save and load', async () => {
     const saved: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-hash-1',
       lastComputedDate: '2026-04-10',
       days: [emptyDay('2026-04-09', 12.5, 40), emptyDay('2026-04-10', 7.25, 28)],
     }
@@ -150,6 +155,7 @@ describe('saveDailyCache', () => {
   it('writes atomically so no temp file is left after a successful save', async () => {
     const saved: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-hash-1',
       lastComputedDate: '2026-04-10',
       days: [emptyDay('2026-04-10', 5)],
     }
@@ -167,6 +173,7 @@ describe('addNewDays', () => {
   it('returns a new cache with the added days sorted ascending by date', () => {
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
       lastComputedDate: '2026-04-08',
       days: [emptyDay('2026-04-07', 3), emptyDay('2026-04-08', 5)],
     }
@@ -178,6 +185,7 @@ describe('addNewDays', () => {
   it('replaces existing days with incoming data (last write wins)', () => {
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
       lastComputedDate: '2026-04-08',
       days: [emptyDay('2026-04-08', 5)],
     }
@@ -189,6 +197,7 @@ describe('addNewDays', () => {
   it('does not regress lastComputedDate if incoming newestDate is older', () => {
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
       lastComputedDate: '2026-04-10',
       days: [emptyDay('2026-04-10', 5)],
     }
@@ -203,6 +212,7 @@ describe('addNewDays', () => {
     // the entries untouched so the next valid run can prune normally.
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
       lastComputedDate: '2026-04-10',
       days: [emptyDay('2026-04-08', 1), emptyDay('2026-04-09', 2), emptyDay('2026-04-10', 3)],
     }
@@ -215,6 +225,7 @@ describe('addNewDays', () => {
     const recent = '2026-04-10'
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
       lastComputedDate: recent,
       days: [emptyDay(old, 1), emptyDay(recent, 2)],
     }
@@ -228,6 +239,7 @@ describe('addNewDays', () => {
 describe('getDaysInRange', () => {
   const cache: DailyCache = {
     version: DAILY_CACHE_VERSION,
+    savingsConfigHash: '',
     lastComputedDate: '2026-04-10',
     days: [
       emptyDay('2026-04-05', 1),
@@ -255,6 +267,61 @@ describe('getDaysInRange', () => {
   })
 })
 
+describe('ensureCacheHydrated', () => {
+  it('does not recompute yesterday after it has already been cached', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-12T12:00:00.000Z'))
+
+    const saved: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-06-11',
+      days: [emptyDay('2026-06-11', 5, 10)],
+    }
+    await saveDailyCache(saved)
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCalls += 1
+        return []
+      },
+      () => [],
+    )
+
+    expect(parseCalls).toBe(0)
+    expect(hydrated).toEqual(saved)
+  })
+
+  it('drops a cached today/future entry so it is recomputed live, keeping yesterday cached', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-12T12:00:00.000Z'))
+
+    // A "today" entry can only exist via a backward clock change or a stale
+    // cache; it must be purged so today is served live, not from a frozen entry.
+    const saved: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      lastComputedDate: '2026-06-12',
+      days: [emptyDay('2026-06-11', 5, 10), emptyDay('2026-06-12', 9, 20)],
+    }
+    await saveDailyCache(saved)
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCalls += 1
+        return []
+      },
+      () => [],
+    )
+
+    expect(parseCalls).toBe(0)
+    expect(hydrated.days.map(d => d.date)).toEqual(['2026-06-11'])
+    expect(hydrated.lastComputedDate).toBe('2026-06-11')
+  })
+})
+
 describe('withDailyCacheLock', () => {
   it('serializes concurrent operations', async () => {
     const sequence: string[] = []
@@ -271,5 +338,41 @@ describe('withDailyCacheLock', () => {
       expect(sequence[i + 1]?.startsWith('end-')).toBe(true)
       expect(sequence[i]!.slice(6)).toBe(sequence[i + 1]!.slice(4))
     }
+  })
+})
+
+describe('ensureCacheHydrated: savings config invalidation', () => {
+  it('discards cached days when the savingsConfigHash changes between calls', async () => {
+    // Seed a cache with a day OLDER than yesterday so the hydration window
+    // (which keeps `d.date < yesterdayStr`) actually retains it.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+    const twoDaysAgoStr = `${twoDaysAgo.getFullYear()}-${String(twoDaysAgo.getMonth() + 1).padStart(2, '0')}-${String(twoDaysAgo.getDate()).padStart(2, '0')}`
+    const seeded: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-A',
+      lastComputedDate: twoDaysAgoStr,
+      days: [emptyDay(twoDaysAgoStr, 1.5, 3)],
+    }
+    await saveDailyCache(seeded)
+
+    const parseSessions = async (): Promise<ProjectSummary[]> => []
+    const aggregateDays = (): DailyEntry[] => []
+
+    // Hash mismatch → ensureCacheHydrated must drop the stale day and start fresh.
+    const rehydrated = await ensureCacheHydrated(parseSessions, aggregateDays, 'cfg-B')
+    expect(rehydrated.savingsConfigHash).toBe('cfg-B')
+    expect(rehydrated.days).toEqual([])
+
+    // Same hash → cached days survive.
+    const seeded2: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-C',
+      lastComputedDate: twoDaysAgoStr,
+      days: [emptyDay(twoDaysAgoStr, 1.5, 3)],
+    }
+    await saveDailyCache(seeded2)
+    const preserved = await ensureCacheHydrated(parseSessions, aggregateDays, 'cfg-C')
+    expect(preserved.days).toHaveLength(1)
+    expect(preserved.days[0]!.date).toBe(twoDaysAgoStr)
   })
 })

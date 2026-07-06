@@ -10,24 +10,16 @@ import type { DateRange } from '../src/types.js'
 
 let home: string
 let cacheDir: string
-let previousHome: string | undefined
-let previousCacheDir: string | undefined
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'codeburn-gemini-home-'))
   cacheDir = await mkdtemp(join(tmpdir(), 'codeburn-gemini-cache-'))
-  previousHome = process.env['HOME']
-  previousCacheDir = process.env['CODEBURN_CACHE_DIR']
   process.env['HOME'] = home
   process.env['CODEBURN_CACHE_DIR'] = cacheDir
 })
 
 afterEach(async () => {
   clearSessionCache()
-  if (previousHome === undefined) delete process.env['HOME']
-  else process.env['HOME'] = previousHome
-  if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
-  else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
   await rm(home, { recursive: true, force: true })
   await rm(cacheDir, { recursive: true, force: true })
 })

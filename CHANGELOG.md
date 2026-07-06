@@ -1,5 +1,183 @@
 # Changelog
 
+## 0.9.15 - 2026-07-02
+
+### Added (CLI)
+- **`codeburn context`.** See what fills a session's context window, by role,
+  block type, and tool: an interactive terminal browser over Claude Code and
+  Codex sessions that separates the live window from compacted history and
+  anchors estimates to the exact API-reported context size. Also available as
+  a Context page in the browser dashboard and scriptable via
+  `codeburn context <id> --json`. (#592)
+- **Zed provider.** Zed's built-in agent is tracked: per-request token usage
+  with full cache fields, topped up to each thread's exact cumulative counter
+  and validated token-for-token against a real store. (#594, format documented
+  by @chatzinikolakisk in #480)
+- **`codeburn audit`.** Per provider-and-model table of where every number
+  comes from: calls, input, output, reasoning, cache read/write, cost. (#578)
+- **User price overrides** for any model via `codeburn price-override`.
+  (#390, #560, thanks @ozymandiashh)
+- **open-design provider** for per-model usage tracking. (#559, thanks @ozymandiashh)
+- **Browser dashboard**: fully mobile responsive (#582, thanks @ele-yufo; #589),
+  instant first paint with the local payload inlined, defaults to today, and
+  fast-fails offline paired devices. (#573)
+
+### Fixed (CLI)
+- **Cursor tokens are Cursor's own numbers.** Input comes from the
+  per-conversation context meter instead of text-length guesses, credited once
+  per conversation on a stable anchor so daily history stays consistent across
+  re-scans; tools and shell commands come from the agent stream; Composer house
+  models price at Cursor's published rates; figures are flagged estimated where
+  they are. (#574, #575; closes #326)
+- **Copilot Chat users no longer see $0.00**: VS Code core chatSessions
+  journals are read for token counts. (#555, #563, thanks @ozymandiashh)
+- **Codex** sessions up to 4GB are parsed (streaming cap raised). (#569)
+- **Devin** supports ATIF v1.7 (#570, thanks @tvcsantos) and reports friendly
+  GPT model names with effort tiers. (#585)
+- **OpenCode** skills and subagents breakdowns are populated. (#557, thanks @KevNev19)
+- **Pi** native skill loads classify as Skill, not Read. (#588, #590)
+- **Cache read/write** scoped to the selected period in web and devices CLI.
+  (#583, #586, thanks @ozymandiashh)
+- **Web** rejects invalid dashboard periods instead of exiting. (#554, thanks @ozymandiashh)
+- **Pricing**: LiteLLM snapshot refreshed; MiniMax-M3 follows MiniMax's tiered
+  pricing (standard tier $0.30/$1.20 per M). Daily cache bumped to v10 so
+  history re-hydrates under the new Cursor accounting and pricing.
+
+### macOS menubar
+- **Local/Combined usage toggle** backed by combined multi-device data in
+  menubar-json. (#566, #567, #568, thanks @ozymandiashh)
+- **Update dialog** detects a codeburn CLI too old to install menubar updates
+  (pre-0.9.9) and shows the exact CLI upgrade command first. (#593)
+
+## 0.9.14 - 2026-06-22
+
+### Added (CLI)
+- **Browser dashboard.** `codeburn web` serves a local React dashboard in your
+  browser with the same task, model, tool, and project breakdowns as the TUI,
+  plus charts. Data is read locally and the server binds to localhost. (#531, #533)
+- **Combine usage across your devices.** `codeburn share` exposes one device's
+  usage over your local network (PIN-paired), and `codeburn devices` shows
+  combined totals by machine. Devices can also be discovered and paired from the
+  browser dashboard. (#532, #534, #536)
+- **New providers:** Grok Build (#521), ZCode (z.ai GLM-5.2) (#537), Hermes Agent
+  (#544), Kiro CLI sessions (#502), and zerostack (#519, thanks @kevinpauer).
+- **`codeburn overview`.** Plain-text monthly usage summary that is
+  copy-pasteable, with `--no-color` and `--from`/`--to`. (#528, #535)
+- **Codex credit usage.** Compute and surface Codex credit consumption alongside
+  dollar cost. (#408, #495, #510)
+- **MCP server usage in exports.** `codeburn export` now includes per-MCP-server
+  usage in both JSON and CSV. (#496, #514)
+- **JSON output for `optimize` and `yield`.** (#492, #500)
+- **Claude-scoped agent-type breakdown** in the report.
+- **OpenCode 1.1+ file-based JSON sessions.** (#523)
+- **Copilot OTel cache-token parsing.** (#477, thanks @steelp02; #498)
+
+### Fixed (CLI)
+- **Model names in reports.** Models priced through a sibling alias no longer
+  show their internal pricing key: ZCode/Hermes GLM-5.2 and Grok Build display
+  their real names, gpt-5.5 labels as GPT-5.5, and gpt-5.3-codex-spark is
+  distinguished from base GPT-5.3 Codex. (#548, #550, #539 thanks @ozymandiashh)
+- **Hermes lowercase glm-5.2** prices the same as GLM-5.2. (#545, thanks @ozymandiashh)
+- **Daily cache** purges cached today/future entries on hydration and is bumped
+  to v9 so newly supported providers backfill across history without a manual
+  cache clear. (#550)
+- **Cursor** scans the requested window instead of a blind 250k ROWID cap. (#482, #512)
+- **cursor-agent** ingests the workspace-less CLI transcript layout. (#542, thanks @ozymandiashh)
+- **Claude Code project names** no longer collapse to a parent folder, and stray
+  `.git` directories no longer over-group projects. (#540, thanks @ozymandiashh)
+- **Copilot** shell commands and skills/agents display correctly. (#527, thanks @jonjozwiak)
+- **Codex** attributes MCP calls emitted as `event_msg`/`mcp_tool_call_end`. (#513)
+- **Antigravity** reads the current `agy` CLI on-disk layout. (#541, thanks @ozymandiashh)
+- Workflow/ultracode subagent usage is now counted. (#470)
+- `--provider` is validated and the non-TTY report is deterministic. (#501)
+- The dashboard plan banner is scoped to its own provider tab. (#524)
+- Test isolation and environment-collision fixes. (#530, thanks @tvcsantos)
+
+### Added (macOS menubar)
+- **Custom daily budget.** Set a custom daily budget amount; the alert respects
+  the display metric (Cost or Tokens). (#497, #505, #506)
+- **Agent tabs** show every active agent for the selected range, ordered by
+  usage. (#549)
+- Polished status-item menu and About tab (Star and Sponsor links). (#509)
+
+### Fixed (macOS menubar)
+- **Keychain prompts.** Stop repeated keychain prompts on token refresh; read the
+  Claude keychain via the `security` CLI on silent refresh. (#490, #491)
+- Restore the right-click status-item menu on macOS 27. (#472, thanks @theparlor)
+- Support installer HTTP proxies. (#475, thanks @sleicht)
+- Surface the CLI's stdout/stderr on a decode failure so a stray banner is
+  self-diagnosing. (#515, #547)
+- Reduce repeated status parsing and guard against clock skew. (#486, thanks @vaibhavarora14; #499)
+- The cost budget stays in USD and an empty custom budget is flagged. (#508)
+- Drop the ` tok` suffix from the Total Tokens metric. (#511)
+
+## 0.9.12 - 2026-06-09
+
+### Added (CLI)
+- **MCP server.** `codeburn mcp` runs a stdio Model Context Protocol server
+  exposing `get_usage` and `get_savings` to AI agents, with project names
+  pseudonymized by default (opt-in reveal). (#429)
+- **New providers:** Devin (#444), Antigravity IDE (#418), JetBrains —
+  IntelliJ/DataGrip via Copilot (#433), coder/mux (#438), and an opt-in
+  Vercel AI Gateway datasource via `AI_GATEWAY_API_KEY` (#432).
+- **Automatic pricing gap-fill** from models.dev and OpenRouter for models
+  LiteLLM has not indexed yet (e.g. Claude Fable 5). (#457)
+- **Proxy-aware cost attribution.** `codeburn proxy-path` marks a project as
+  routed through a subscription-backed proxy (e.g. Claude Code over GitHub
+  Copilot); the full API-rate cost is reported as subscription-covered so the
+  dashboard shows net out-of-pocket, leaving actual cost untouched. (#417, #459)
+- **Local-model cost savings reports.** New `codeburn model-savings` command
+  maps a local-model name (e.g. `llama3.1:8b`) to a paid baseline (e.g.
+  `gpt-4o`) so the dashboard can report the counterfactual spend the same
+  tokens would have incurred on the baseline. The local call still costs
+  $0; the new `savingsUSD` field tracks the avoided spend separately from
+  `costUSD` everywhere a number is shown (dashboard, JSON/CSV exports,
+  menubar payload, macOS menubar, GNOME extension, daily cache rollups).
+  Historical savings are recomputed automatically when the baseline
+  mapping changes (config-hash invalidation on the daily cache). Daily
+  cache schema bumped to v8. (#421)
+- CNY currency support. (#430)
+- Contribution heatmap insight. (#437)
+
+### Added (CLI)
+- **Hermes Agent provider.** Track token usage, cost, and tool breakdowns
+  for Hermes Agent sessions. Reads from `~/.hermes/state.db` and per-profile
+  databases. Supports session-level accounting with actual/estimated costs
+  from Hermes, falling back to CodeBurn's model pricing table. Supersedes
+  #386, closes #368.
+
+### Fixed (CLI)
+- **Per-file parse isolation.** A single malformed session file no longer
+  aborts the run or empties the daily-history trend; parse failures are cached
+  so broken files are not re-read every run. (#441, #450, #453)
+- **Codex fork dedupe** is content-addressed, fixing undercounting of
+  divergent events. (#458)
+- **Model-name matching on the version boundary** so e.g. `claude-opus-4-6`
+  and `claude-opus-4-8` no longer collapse to the same tier. (#417)
+- Vercel AI Gateway data now flows through aggregation instead of reporting $0;
+  Fable 5 and Mythos 5 price correctly ($10/$50). (#432, #466)
+- Cache-read tokens are no longer double-counted in the models report. (#447)
+- Critical-path fetches (pricing, currency) now time out so a stalled network
+  cannot wedge the CLI or menubar. (#445, #448)
+- Cursor lookback is period-aligned with a 6-month floor. (#432)
+- **Antigravity hook stale path repair.** `codeburn antigravity-hook install`
+  now installs the statusLine command through a persistent `codeburn` binary
+  from PATH and repairs older CodeBurn-owned hooks that pointed at stale local
+  build artifacts, preventing `agy` from auto-disabling capture after
+  `MODULE_NOT_FOUND` failures.
+
+### Added (macOS menubar)
+- App icon. (#455)
+- Configure `CLAUDE_CONFIG_DIRS` from Settings. (#434, #436)
+
+### Fixed (macOS menubar)
+- **Refresh reliability.** The app awaits the CLI's exit via its termination
+  handler instead of blocking a queue thread, and caps concurrent CLI spawns —
+  fixing the menubar wedging on "Loading…" after a long idle. (#462)
+- Recover from stuck loading when an in-flight refresh is orphaned across
+  sleep/wake. (#412)
+- Use the correct currency enum in the Settings picker. (#435)
+
 ## 0.9.11 - 2026-05-27
 
 ### Added (CLI)
