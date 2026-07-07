@@ -43,6 +43,7 @@ const toolNameMap: Record<string, string> = {
 
 type CodexEntry = {
   type: string
+  turn_id?: string
   timestamp?: string
   payload?: {
     type?: string
@@ -72,6 +73,14 @@ type CodexTokenUsage = {
   total_tokens?: number
 }
 
+type CodexTokenState = {
+  prevCumulativeTotal: number | null
+  prevInput: number
+  prevCached: number
+  prevOutput: number
+  prevReasoning: number
+}
+
 const CHARS_PER_TOKEN = 4
 const RAW_HEAD_BYTES = 64 * 1024
 const LARGE_TEXT_CAP = 2000
@@ -82,6 +91,49 @@ function getCodexDir(override?: string): string {
 
 function sanitizeProject(cwd: string): string {
   return cwd.replace(/^\//, '').replace(/\//g, '-')
+}
+
+function isJetBrainsOriginator(originator: string): boolean {
+  return originator.toLowerCase().startsWith('jetbrains.')
+}
+
+function isCodexOriginator(originator: string): boolean {
+  const lower = originator.toLowerCase()
+  return lower.startsWith('codex') || isJetBrainsOriginator(originator)
+}
+
+function isJetBrainsAcpWorkspace(cwd: string | undefined): boolean {
+  if (!cwd) return false
+  const normalized = cwd.replace(/\\/g, '/').toLowerCase()
+  return normalized.includes('/aia/agents/') || normalized.endsWith('/aia/agents')
+}
+
+function rememberJetBrainsAcpTurn(entry: CodexEntry, turnIds: Set<string>): void {
+  if (typeof entry.turn_id !== 'string') return
+  if (!isJetBrainsAcpWorkspace(entry.payload?.cwd)) return
+  turnIds.add(entry.turn_id)
+}
+
+function resolveCodexSessionId(baseSessionId: string, entry: CodexEntry, jetBrainsAcpTurnIds: Set<string>): string {
+  const turnId = entry.turn_id
+  if (typeof turnId === 'string' && jetBrainsAcpTurnIds.has(turnId)) {
+    return `${baseSessionId}:jetbrains:${turnId}`
+  }
+  return baseSessionId
+}
+
+function getTokenState(states: Map<string, CodexTokenState>, sessionId: string): CodexTokenState {
+  const existing = states.get(sessionId)
+  if (existing) return existing
+  const created: CodexTokenState = {
+    prevCumulativeTotal: null,
+    prevInput: 0,
+    prevCached: 0,
+    prevOutput: 0,
+    prevReasoning: 0,
+  }
+  states.set(sessionId, created)
+  return created
 }
 
 // Cap how many bytes we'll read while looking for the first newline. Real
@@ -132,7 +184,7 @@ async function isValidCodexSession(filePath: string): Promise<{ valid: boolean; 
   if (!entry) return { valid: false }
   const valid = entry.type === 'session_meta' &&
     typeof entry.payload?.originator === 'string' &&
-    entry.payload.originator.toLowerCase().startsWith('codex')
+    isCodexOriginator(entry.payload.originator)
   return { valid, meta: valid ? entry : undefined }
 }
 
@@ -224,6 +276,7 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
 
   const entry: CodexEntry = {
     type,
+    turn_id: getRawJsonStringField(head, 'turn_id'),
     timestamp: getRawJsonStringField(head, 'timestamp'),
     payload: {
       type: payloadType,
@@ -324,19 +377,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       let sessionModel: string | undefined
       let sessionId = ''
+      let jetBrainsRollout = false
+      const jetBrainsAcpTurnIds = new Set<string>()
       let forkedFromId = ''
       let forkCutoff = ''
-      // Null sentinel rather than `0` so the FIRST event is never confused
-      // with a duplicate. A session that only emits last_token_usage (no
-      // total_token_usage) reports cumulativeTotal=0 on every event; with a
-      // 0-initialized prev, the first event would have matched and been
-      // dropped. Once we've observed any event, we record its cumulative
-      // total and dedup on equality regardless of whether it is zero.
-      let prevCumulativeTotal: number | null = null
-      let prevInput = 0
-      let prevCached = 0
-      let prevOutput = 0
-      let prevReasoning = 0
+      const tokenStates = new Map<string, CodexTokenState>()
       let pendingTools: string[] = []
       let pendingToolSequence: ToolCall[][] = []
       let pendingUserMessage = ''
@@ -359,6 +404,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         if (entry.type === 'session_meta') {
           sessionId = entry.payload?.session_id ?? basename(source.path, '.jsonl')
+          currentTurnId = `${sessionId}:t0`
+          jetBrainsRollout = typeof entry.payload?.originator === 'string' && isJetBrainsOriginator(entry.payload.originator)
           forkedFromId = entry.payload?.forked_from_id ?? ''
           if (forkedFromId && entry.timestamp) {
             forkCutoff = new Date(new Date(entry.timestamp).getTime() + 5000).toISOString()
@@ -366,6 +413,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           sessionModel = entry.payload?.model ?? sessionModel
           continue
         }
+
+        if (jetBrainsRollout) rememberJetBrainsAcpTurn(entry, jetBrainsAcpTurnIds)
+        const entrySessionId = resolveCodexSessionId(sessionId, entry, jetBrainsAcpTurnIds)
 
         if (entry.type === 'turn_context' && entry.payload?.model) {
           sessionModel = entry.payload.model
@@ -429,7 +479,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             .filter(Boolean)
           if (texts.length > 0) {
             pendingUserMessage = texts.join(' ').slice(0, 500)
-            currentTurnId = `${sessionId}:t${++turnCounter}`
+            currentTurnId = `${entrySessionId}:t${++turnCounter}`
           }
           continue
         }
@@ -456,7 +506,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
             const model = sessionModel ?? 'gpt-5'
             const timestamp = entry.timestamp ?? ''
-            const dedupKey = `codex:${sessionId}:${timestamp}:est${estCounter++}`
+            const dedupKey = `codex:${entrySessionId}:${timestamp}:est${estCounter++}`
 
             if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingUserMessage = ''; pendingOutputChars = 0; continue }
             seenKeys.add(dedupKey)
@@ -483,7 +533,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
               turnId: currentTurnId,
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
               userMessage: pendingUserMessage,
-              sessionId,
+              sessionId: entrySessionId,
             })
 
             pendingTools = []
@@ -499,8 +549,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // the previous `> 0` clause. The null sentinel ensures the FIRST
           // event always passes (so a session that never reports cumulative
           // doesn't lose its opening turn).
-          if (prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
-          prevCumulativeTotal = cumulativeTotal
+          const tokenState = getTokenState(tokenStates, entrySessionId)
+          if (tokenState.prevCumulativeTotal !== null && cumulativeTotal === tokenState.prevCumulativeTotal) continue
+          tokenState.prevCumulativeTotal = cumulativeTotal
 
           const last = info.last_token_usage
           let inputTokens = 0
@@ -516,10 +567,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           } else if (cumulativeTotal > 0) {
             const total = info.total_token_usage
             if (!total) continue
-            inputTokens = (total.input_tokens ?? 0) - prevInput
-            cachedInputTokens = (total.cached_input_tokens ?? 0) - prevCached
-            outputTokens = (total.output_tokens ?? 0) - prevOutput
-            reasoningTokens = (total.reasoning_output_tokens ?? 0) - prevReasoning
+            inputTokens = (total.input_tokens ?? 0) - tokenState.prevInput
+            cachedInputTokens = (total.cached_input_tokens ?? 0) - tokenState.prevCached
+            outputTokens = (total.output_tokens ?? 0) - tokenState.prevOutput
+            reasoningTokens = (total.reasoning_output_tokens ?? 0) - tokenState.prevReasoning
           }
 
           // Always advance the prev counters to track the cumulative state.
@@ -531,10 +582,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // event used `last` or fell back to deltas.
           const total = info.total_token_usage
           if (total) {
-            prevInput = total.input_tokens ?? 0
-            prevCached = total.cached_input_tokens ?? 0
-            prevOutput = total.output_tokens ?? 0
-            prevReasoning = total.reasoning_output_tokens ?? 0
+            tokenState.prevInput = total.input_tokens ?? 0
+            tokenState.prevCached = total.cached_input_tokens ?? 0
+            tokenState.prevOutput = total.output_tokens ?? 0
+            tokenState.prevReasoning = total.reasoning_output_tokens ?? 0
           }
 
           const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
@@ -560,7 +611,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // are computed against a running `prev` that the fork advances
           // differently once the 5s cutoff skips some replays, so a delta-based
           // key would spuriously diverge on a replay and double-count it.
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+          const dedupKey = `codex:${forkedFromId || entrySessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
 
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
@@ -593,7 +644,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             turnId: currentTurnId,
             toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
             userMessage: pendingUserMessage,
-            sessionId,
+            sessionId: entrySessionId,
           })
 
           pendingTools = []

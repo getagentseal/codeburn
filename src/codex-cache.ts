@@ -6,9 +6,9 @@ import { homedir } from 'os'
 
 import type { ParsedProviderCall } from './providers/types.js'
 
-// v4: attribute MCP calls emitted as event_msg/mcp_tool_call_end (issue #478).
-// Recent Codex sessions cached under v3 dropped these, so force a re-parse.
-const CODEX_CACHE_VERSION = 4
+// v5: split JetBrains IntelliJ ACP tasks in Codex rollouts by turn id (#626).
+// Older cache entries grouped those calls under the parent rollout session.
+const CODEX_CACHE_VERSION = 5
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }

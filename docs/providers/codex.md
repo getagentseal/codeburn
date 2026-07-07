@@ -18,7 +18,7 @@ The discovery walk uses strict regex (`^\d{4}$`, `^\d{2}$`) on each path compone
 
 ## Storage format
 
-JSONL. The first line must be a `session_meta` entry with `payload.originator` starting with `codex` (case-insensitive). Files that fail this check are silently skipped.
+JSONL. The first line must be a `session_meta` entry with `payload.originator` starting with `codex` or `JetBrains.` (case-insensitive). JetBrains IntelliJ AI Assistant / ACP can create valid Codex rollouts under the Codex session directory. Files that fail this check are silently skipped.
 
 The first line read is capped at 1 MB (`FIRST_LINE_READ_CAP`). Codex CLI 0.128+ embeds the full system prompt in `session_meta`, which can run 20-27 KB; the cap leaves headroom while bounding memory if a corrupt file has no newline.
 
@@ -41,6 +41,7 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
 - `prevCumulativeTotal` is initialized to `null`, not `0`. A session whose first event reports `total = 0` would otherwise be dropped as a "duplicate" of the initial state.
 - `prev*` token counters are advanced on **every** event, including ones that used `last_token_usage`. Earlier code only updated them on the fallback branch, which double-counted any session that mixed modes.
 - OpenAI counts cached tokens **inside** `input_tokens`. The parser subtracts them so the rest of the codebase can assume Anthropic semantics (cached are separate).
+- JetBrains IntelliJ ACP rollouts can contain multiple ACP tasks in one Codex rollout. When a turn advertises a JetBrains `aia/agents` workspace root, CodeBurn derives the session id as `<codex-session-id>:jetbrains:<turn-id>` so each ACP task is reported separately. Normal Codex turns in the same rollout stay grouped under the original session id.
 
 ## When fixing a bug here
 
