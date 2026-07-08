@@ -125,34 +125,107 @@ private struct ScopeSegmentedControl: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        HStack(spacing: 1) {
-            ForEach(MenubarScope.allCases) { scope in
-                let isActive = store.activeScope == scope
-                Button {
-                    store.switchTo(scope: scope)
-                } label: {
-                    Text(scope.rawValue)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
+        HStack(spacing: 8) {
+            HStack(spacing: 1) {
+                ForEach(MenubarScope.allCases) { scope in
+                    let isActive = store.activeScope == scope
+                    Button {
+                        store.switchTo(scope: scope)
+                    } label: {
+                        Text(scope.rawValue)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(isActive ? Color(NSColor.windowBackgroundColor).opacity(0.85) : .clear)
+                            .shadow(color: .black.opacity(isActive ? 0.06 : 0), radius: 1, y: 0.5)
+                    )
                 }
-                .buttonStyle(.plain)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(isActive ? Color(NSColor.windowBackgroundColor).opacity(0.85) : .clear)
-                        .shadow(color: .black.opacity(isActive ? 0.06 : 0), radius: 1, y: 0.5)
-                )
+            }
+            .padding(2)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .frame(maxWidth: .infinity)
+
+            if store.shouldShowClaudeConfigSelector {
+                ClaudeConfigPicker()
             }
         }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color.secondary.opacity(0.08))
-        )
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+}
+
+private struct ClaudeConfigPicker: View {
+    @Environment(AppStore.self) private var store
+
+    private var selectedLabel: String {
+        guard let selected = store.selectedClaudeConfigSourceId,
+              let option = store.claudeConfigOptions.first(where: { $0.id == selected }) else {
+            return "All"
+        }
+        return option.label
+    }
+
+    var body: some View {
+        Menu {
+            Button {
+                store.switchTo(claudeConfigSourceId: nil)
+            } label: {
+                HStack {
+                    if store.selectedClaudeConfigSourceId == nil {
+                        Image(systemName: "checkmark")
+                    }
+                    Text("All")
+                }
+            }
+
+            Divider()
+
+            ForEach(store.claudeConfigOptions) { option in
+                Button {
+                    store.switchTo(claudeConfigSourceId: option.id)
+                } label: {
+                    HStack {
+                        if store.selectedClaudeConfigSourceId == option.id {
+                            Image(systemName: "checkmark")
+                        }
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(selectedLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 118, height: 26)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Claude config")
     }
 }
 

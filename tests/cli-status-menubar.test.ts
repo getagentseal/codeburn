@@ -1,11 +1,11 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter as pathDelimiter, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 import { describe, expect, it } from 'vitest'
 
-function runCli(args: string[], home: string) {
+function runCli(args: string[], home: string, extraEnv: Record<string, string | undefined> = {}) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
     env: {
@@ -13,6 +13,7 @@ function runCli(args: string[], home: string) {
       CLAUDE_CONFIG_DIR: join(home, '.claude'),
       HOME: home,
       TZ: 'UTC',
+      ...extraEnv,
     },
     encoding: 'utf-8',
     timeout: 30_000,
@@ -150,6 +151,158 @@ describe('codeburn status --format menubar-json', () => {
       expect(payload.current.topProjects).toHaveLength(1)
       expect(payload.current.topProjects[0]?.sessions).toBe(1)
       expect(payload.current.topProjects[0]?.sessionDetails.map(s => s.date)).toEqual(['2026-04-10'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('filters the whole menubar payload to a selected Claude config source', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-claude-config-'))
+
+    try {
+      const work = join(home, 'claude-work')
+      const personal = join(home, 'claude-personal')
+      const slug = 'shared-app'
+      await mkdir(join(work, 'projects', slug), { recursive: true })
+      await mkdir(join(personal, 'projects', slug), { recursive: true })
+
+      await writeFile(
+        join(work, 'projects', slug, 'work.jsonl'),
+        [
+          userLine('work', '2026-04-10T11:59:00Z'),
+          assistantLine('work', '2026-04-10T12:00:00Z', 'msg-work'),
+        ].join('\n'),
+      )
+      await writeFile(
+        join(personal, 'projects', slug, 'personal.jsonl'),
+        [
+          userLine('personal', '2026-04-10T12:59:00Z'),
+          assistantLine('personal', '2026-04-10T13:00:00Z', 'msg-personal'),
+        ].join('\n'),
+      )
+
+      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter) }
+      const allResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--period', 'all',
+        '--provider', 'all',
+        '--no-optimize',
+      ], home, env)
+
+      expect(allResult.status, `stderr: ${allResult.stderr}`).toBe(0)
+      const allPayload = JSON.parse(allResult.stdout) as {
+        current: { calls: number; sessions: number }
+        claudeConfigs?: { selectedId: string | null; options: Array<{ id: string; label: string; path: string }> }
+      }
+      expect(allPayload.current.calls).toBe(2)
+      expect(allPayload.current.sessions).toBe(2)
+      expect(allPayload.claudeConfigs?.selectedId).toBeNull()
+      expect(allPayload.claudeConfigs?.options.map(o => o.label).sort()).toEqual(['claude-personal', 'claude-work'])
+
+      const workSourceId = allPayload.claudeConfigs!.options.find(o => o.label === 'claude-work')!.id
+      const workResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--period', 'all',
+        '--provider', 'all',
+        '--claude-config-source', workSourceId,
+        '--no-optimize',
+      ], home, env)
+
+      expect(workResult.status, `stderr: ${workResult.stderr}`).toBe(0)
+      const workPayload = JSON.parse(workResult.stdout) as {
+        current: { calls: number; sessions: number; providers: Record<string, number> }
+        history: { daily: Array<{ calls: number }> }
+        claudeConfigs?: { selectedId: string | null }
+      }
+      expect(workPayload.claudeConfigs?.selectedId).toBe(workSourceId)
+      expect(workPayload.current.calls).toBe(1)
+      expect(workPayload.current.sessions).toBe(1)
+      expect(Object.keys(workPayload.current.providers)).toEqual(['claude'])
+      expect(workPayload.history.daily.reduce((sum, d) => sum + d.calls, 0)).toBe(1)
+
+      const invalidResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--period', 'all',
+        '--provider', 'all',
+        '--claude-config-source', 'claude-config:missing',
+        '--no-optimize',
+      ], home, env)
+
+      expect(invalidResult.status, `stderr: ${invalidResult.stderr}`).toBe(0)
+      const invalidPayload = JSON.parse(invalidResult.stdout) as {
+        current: { calls: number }
+        claudeConfigs?: { selectedId: string | null }
+      }
+      expect(invalidPayload.current.calls).toBe(2)
+      expect(invalidPayload.claudeConfigs?.selectedId).toBeNull()
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps idle Claude config options visible for the selected period', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-claude-config-idle-'))
+
+    try {
+      const work = join(home, 'claude-work')
+      const personal = join(home, 'claude-personal')
+      await mkdir(join(work, 'projects', 'app'), { recursive: true })
+      await mkdir(join(personal, 'projects', 'app'), { recursive: true })
+
+      await writeFile(
+        join(work, 'projects', 'app', 'work.jsonl'),
+        [
+          userLine('work', '2026-04-10T11:59:00Z'),
+          assistantLine('work', '2026-04-10T12:00:00Z', 'msg-work'),
+        ].join('\n'),
+      )
+      await writeFile(
+        join(personal, 'projects', 'app', 'personal.jsonl'),
+        [
+          userLine('personal', '2026-04-09T11:59:00Z'),
+          assistantLine('personal', '2026-04-09T12:00:00Z', 'msg-personal'),
+        ].join('\n'),
+      )
+
+      const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter) }
+      const allResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--day', '2026-04-10',
+        '--provider', 'all',
+        '--no-optimize',
+      ], home, env)
+
+      expect(allResult.status, `stderr: ${allResult.stderr}`).toBe(0)
+      const allPayload = JSON.parse(allResult.stdout) as {
+        current: { calls: number }
+        claudeConfigs?: { options: Array<{ id: string; label: string }> }
+      }
+      expect(allPayload.current.calls).toBe(1)
+      expect(allPayload.claudeConfigs?.options.map(o => o.label).sort()).toEqual(['claude-personal', 'claude-work'])
+
+      const personalSourceId = allPayload.claudeConfigs!.options.find(o => o.label === 'claude-personal')!.id
+      const personalResult = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--day', '2026-04-10',
+        '--provider', 'all',
+        '--claude-config-source', personalSourceId,
+        '--no-optimize',
+      ], home, env)
+
+      expect(personalResult.status, `stderr: ${personalResult.stderr}`).toBe(0)
+      const personalPayload = JSON.parse(personalResult.stdout) as {
+        current: { calls: number; sessions: number; providers: Record<string, number> }
+        claudeConfigs?: { selectedId: string | null }
+      }
+      expect(personalPayload.claudeConfigs?.selectedId).toBe(personalSourceId)
+      expect(personalPayload.current.calls).toBe(0)
+      expect(personalPayload.current.sessions).toBe(0)
+      expect(personalPayload.current.providers).toEqual({ claude: 0 })
     } finally {
       await rm(home, { recursive: true, force: true })
     }

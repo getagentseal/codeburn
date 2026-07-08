@@ -1,9 +1,10 @@
 import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory, type DateRange } from './types.js'
-import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, buildMenubarPayload } from './menubar-json.js'
-import { parseAllSessions, filterProjectsByName, filterProjectsByDays } from './parser.js'
+import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, buildMenubarPayload } from './menubar-json.js'
+import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource } from './parser.js'
 import { getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName } from './models.js'
 import { getAllProviders } from './providers/index.js'
+import { claude } from './providers/claude.js'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
@@ -87,6 +88,64 @@ export type AggregateOpts = {
   exclude?: string[]
   daysSelection?: { range: DateRange; label: string; days: Set<string> } | null
   optimize?: boolean
+  claudeConfigSourceId?: string | null
+}
+
+function claudeConfigSelectorFromProjects(projects: ProjectSummary[], selectedId?: string | null): ClaudeConfigSelector | undefined {
+  const byId = new Map<string, { id: string; label: string; path: string }>()
+  for (const session of projects.flatMap(project => project.sessions)) {
+    const source = session.source
+    if (source?.kind !== 'claude-config') continue
+    if (!byId.has(source.id)) byId.set(source.id, { id: source.id, label: source.label, path: source.path })
+  }
+
+  const options = [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
+  if (options.length <= 1) return undefined
+  const validSelectedId = selectedId && options.some(option => option.id === selectedId) ? selectedId : null
+  return { selectedId: validSelectedId, options }
+}
+
+async function claudeConfigSelectorFromDiscovery(selectedId?: string | null): Promise<ClaudeConfigSelector | undefined> {
+  const byId = new Map<string, { id: string; label: string; path: string }>()
+  for (const source of await claude.discoverSessions()) {
+    if (source.sourceKind !== 'claude-config' || !source.sourceId || !source.sourceLabel || !source.sourcePath) continue
+    if (!byId.has(source.sourceId)) {
+      byId.set(source.sourceId, { id: source.sourceId, label: source.sourceLabel, path: source.sourcePath })
+    }
+  }
+
+  const options = [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
+  if (options.length <= 1) return undefined
+  const validSelectedId = selectedId && options.some(option => option.id === selectedId) ? selectedId : null
+  return { selectedId: validSelectedId, options }
+}
+
+function dailyEntriesToHistory(days: ReturnType<typeof aggregateProjectsIntoDays>): MenubarPayload['history']['daily'] {
+  return days.map(d => {
+    const topModels = Object.entries(d.models)
+      .filter(([name]) => name !== '<synthetic>')
+      .sort(([, a], [, b]) => b.cost - a.cost)
+      .slice(0, 5)
+      .map(([name, m]) => ({
+        name,
+        cost: m.cost,
+        savingsUSD: m.savingsUSD,
+        calls: m.calls,
+        inputTokens: m.inputTokens,
+        outputTokens: m.outputTokens,
+      }))
+    return {
+      date: d.date,
+      cost: d.cost,
+      savingsUSD: d.savingsUSD,
+      calls: d.calls,
+      inputTokens: d.inputTokens,
+      outputTokens: d.outputTokens,
+      cacheReadTokens: d.cacheReadTokens,
+      cacheWriteTokens: d.cacheWriteTokens,
+      topModels,
+    }
+  })
 }
 
 /**
@@ -129,10 +188,28 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   let currentData: PeriodData
   let scanProjects: ProjectSummary[]
   let scanRange: DateRange
-  let cache: DailyCache
+  let cache: DailyCache = emptyCache()
   let todayProviderData: PeriodData | null = null
+  let claudeConfigs: ClaudeConfigSelector | undefined
+  const requestedClaudeConfigSourceId = opts.claudeConfigSourceId?.trim() || null
+  const isClaudeConfigScoped = requestedClaudeConfigSourceId !== null
 
-  if (isAllProviders) {
+  if (isClaudeConfigScoped) {
+    const rawProjects = fp(await parseAllSessions(periodInfo.range, 'all'))
+    const fullProjects = daysSelection ? filterProjectsByDays(rawProjects, daysSelection.days) : rawProjects
+    claudeConfigs =
+      await claudeConfigSelectorFromDiscovery(requestedClaudeConfigSourceId) ??
+      claudeConfigSelectorFromProjects(fullProjects, requestedClaudeConfigSourceId)
+    const selectedSourceId = claudeConfigs?.selectedId ?? null
+    scanProjects = selectedSourceId
+      ? filterProjectsByClaudeConfigSource(fullProjects, selectedSourceId)
+      : fullProjects
+    scanRange = periodInfo.range
+    currentData = buildPeriodData(periodInfo.label, scanProjects)
+    if (!selectedSourceId && isAllProviders) {
+      cache = await hydrateCache()
+    }
+  } else if (isAllProviders) {
     cache = await hydrateCache()
     const todayProjects = await getTodayAllProjects()
     const todayDays = await getTodayAllDays()
@@ -164,6 +241,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   if (isAllProviders) {
     currentData = buildPeriodData(periodInfo.label, scanProjects)
   }
+  claudeConfigs = claudeConfigs ?? await claudeConfigSelectorFromDiscovery(null) ?? claudeConfigSelectorFromProjects(scanProjects, null)
 
   // Codex credits for the period. Reuses the models aggregation (folds reasoning
   // into output, keeps non-cached input + cached-read separate) so the figure
@@ -180,7 +258,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const allProviders = await getAllProviders()
   const displayNameByName = new Map(allProviders.map(p => [p.name, p.displayName]))
   const providers: ProviderCost[] = []
-  if (isAllProviders) {
+  if (isClaudeConfigScoped) {
+    const providerTotals: Record<string, number> = {}
+    for (const d of aggregateProjectsIntoDays(scanProjects)) {
+      for (const [name, p] of Object.entries(d.providers)) {
+        providerTotals[name] = (providerTotals[name] ?? 0) + p.cost
+      }
+    }
+    for (const [name, cost] of Object.entries(providerTotals)) {
+      providers.push({ name: displayNameByName.get(name) ?? name, cost })
+    }
+    if (providers.length === 0 && claudeConfigs?.selectedId) {
+      providers.push({ name: displayNameByName.get('claude') ?? 'Claude', cost: 0 })
+    }
+  } else if (isAllProviders) {
     const unfilteredProviderDays = [
       ...(rangeStartStr <= historicalRangeEndStr ? getDaysInRange(cache, rangeStartStr, historicalRangeEndStr) : []),
       ...(await getTodayAllDays()).filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr),
@@ -213,34 +304,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
 
   let dailyHistory
-  if (isAllProviders) {
+  if (isClaudeConfigScoped && claudeConfigs?.selectedId) {
+    const historyRange: DateRange = {
+      start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS),
+      end: now,
+    }
+    const historyProjects = filterProjectsByClaudeConfigSource(
+      fp(await parseAllSessions(historyRange, 'all')),
+      claudeConfigs.selectedId,
+    )
+    dailyHistory = dailyEntriesToHistory(aggregateProjectsIntoDays(historyProjects))
+  } else if (isAllProviders) {
     const todayDays = (await getTodayAllDays()).filter(d => d.date === todayStr)
     const fullHistory = [...allCacheDays, ...todayDays]
-    dailyHistory = fullHistory.map(d => {
-      const topModels = Object.entries(d.models)
-        .filter(([name]) => name !== '<synthetic>')
-        .sort(([, a], [, b]) => b.cost - a.cost)
-        .slice(0, 5)
-        .map(([name, m]) => ({
-          name,
-          cost: m.cost,
-          savingsUSD: m.savingsUSD,
-          calls: m.calls,
-          inputTokens: m.inputTokens,
-          outputTokens: m.outputTokens,
-        }))
-      return {
-        date: d.date,
-        cost: d.cost,
-        savingsUSD: d.savingsUSD,
-        calls: d.calls,
-        inputTokens: d.inputTokens,
-        outputTokens: d.outputTokens,
-        cacheReadTokens: d.cacheReadTokens,
-        cacheWriteTokens: d.cacheWriteTokens,
-        topModels,
-      }
-    })
+    dailyHistory = dailyEntriesToHistory(fullHistory)
   } else {
     const emptyModels = [] as { name: string; cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number }[]
     const historyFromCache = allCacheDays.map(d => {
@@ -421,5 +498,5 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   })()
 
   const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
-  return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns)
+  return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs)
 }

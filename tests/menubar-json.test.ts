@@ -298,4 +298,28 @@ describe('buildMenubarPayload', () => {
 
     expect(payload.combined).toEqual(combined)
   })
+
+  it('emits Claude config selector metadata only when multiple configs are available', () => {
+    const oneConfig = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, undefined, undefined, undefined, {
+      selectedId: null,
+      options: [{ id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' }],
+    })
+    expect(oneConfig).not.toHaveProperty('claudeConfigs')
+
+    const twoConfigs = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, undefined, undefined, undefined, {
+      selectedId: 'claude-config:b',
+      options: [
+        { id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' },
+        { id: 'claude-config:b', label: 'claude-personal', path: '/tmp/claude-personal' },
+      ],
+    })
+
+    expect(twoConfigs.claudeConfigs).toEqual({
+      selectedId: 'claude-config:b',
+      options: [
+        { id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' },
+        { id: 'claude-config:b', label: 'claude-personal', path: '/tmp/claude-personal' },
+      ],
+    })
+  })
 })

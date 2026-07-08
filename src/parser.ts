@@ -33,6 +33,7 @@ import type {
   ParsedTurn,
   ProjectSummary,
   SessionSummary,
+  type SessionSourceMetadata,
   TokenUsage,
   ToolCall,
   ToolUseBlock,
@@ -1274,6 +1275,7 @@ function buildSessionSummary(
   project: string,
   turns: ClassifiedTurn[],
   mcpInventory?: string[],
+  source?: SessionSourceMetadata,
 ): SessionSummary {
   const modelBreakdown: SessionSummary['modelBreakdown'] = Object.create(null)
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
@@ -1399,6 +1401,7 @@ function buildSessionSummary(
     categoryBreakdown,
     skillBreakdown,
     subagentBreakdown,
+    ...(source ? { source } : {}),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
   }
 }
@@ -1518,7 +1521,7 @@ export async function readAgentType(filePath: string): Promise<string | undefine
 }
 
 async function scanProjectDirs(
-  dirs: Array<{ path: string; name: string }>,
+  dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
   seenMsgIds: Set<string>,
   diskCache: SessionCache,
   dateRange?: DateRange,
@@ -1526,11 +1529,11 @@ async function scanProjectDirs(
   const section = getOrCreateProviderSection(diskCache, 'claude')
   const allDiscoveredFiles = new Set<string>()
 
-  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>> }
-  const unchangedFiles: Array<{ filePath: string; dirName: string; cached: CachedFile }> = []
+  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>>; source?: SessionSourceMetadata }
+  const unchangedFiles: Array<{ filePath: string; dirName: string; source?: SessionSourceMetadata; cached: CachedFile }> = []
   const changedFiles: Array<{ filePath: string; info: FileInfo }> = []
 
-  for (const { path: dirPath, name: dirName } of dirs) {
+  for (const { path: dirPath, name: dirName, source } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
     for (const filePath of jsonlFiles) {
       allDiscoveredFiles.add(filePath)
@@ -1539,9 +1542,9 @@ async function scanProjectDirs(
 
       const action = reconcileFile(fp, section.files[filePath])
       if (action.action === 'unchanged') {
-        unchangedFiles.push({ filePath, dirName, cached: section.files[filePath]! })
+        unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
       } else {
-        changedFiles.push({ filePath, info: { dirName, fp } })
+        changedFiles.push({ filePath, info: { dirName, fp, source } })
       }
     }
   }
@@ -1600,11 +1603,11 @@ async function scanProjectDirs(
   const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
-    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName })),
-    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName })),
+    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
+    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName, source: f.info.source })),
   ]
 
-  for (const { filePath, dirName } of allFiles) {
+  for (const { filePath, dirName, source } of allFiles) {
     const cachedFile = section.files[filePath]
     if (!cachedFile || cachedFile.turns.length === 0) continue
 
@@ -1626,7 +1629,7 @@ async function scanProjectDirs(
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
-    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
+    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
 
     if (session.apiCalls > 0) {
@@ -2317,8 +2320,20 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
         return ds !== null && days.has(ds)
       })
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
+    if (sessions.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+  }
+  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+  for (const project of projects) {
+    const sessions = project.sessions.filter(session =>
+      session.source?.kind === 'claude-config' && session.source.id === sourceId
+    )
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
   }
@@ -2332,7 +2347,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
@@ -2355,7 +2370,13 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
-  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
+  const claudeDirs = claudeSources.map(s => ({
+    path: s.path,
+    name: s.project,
+    source: s.sourceId && s.sourceLabel && s.sourcePath && s.sourceKind
+      ? { id: s.sourceId, label: s.sourceLabel, path: s.sourcePath, kind: s.sourceKind }
+      : undefined,
+  }))
   const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange)
 
   const providerGroups = new Map<string, SessionSource[]>()

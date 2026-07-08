@@ -1,10 +1,17 @@
 import { readFile, readdir, stat } from 'fs/promises'
 import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
+import { createHash } from 'crypto'
 
 import type { Provider, SessionSource, SessionParser } from './types.js'
 import { getShortModelName } from '../models.js'
 import { readConfig } from '../config.js'
+
+export type ClaudeConfigSource = {
+  id: string
+  label: string
+  path: string
+}
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -22,6 +29,31 @@ function dedupeResolved(paths: string[]): string[] {
     }
   }
   return out
+}
+
+function claudeConfigSourceId(path: string): string {
+  return 'claude-config:' + createHash('sha256').update(path).digest('hex').slice(0, 16)
+}
+
+function baseClaudeConfigLabel(path: string): string {
+  const normalized = resolve(path)
+  if (normalized === resolve(join(homedir(), '.claude'))) return 'Default Claude'
+  const name = basename(normalized).replace(/^\./, '').trim()
+  return name || normalized
+}
+
+function makeUniqueLabels(sources: ClaudeConfigSource[]): ClaudeConfigSource[] {
+  const counts = new Map<string, number>()
+  for (const source of sources) counts.set(source.label, (counts.get(source.label) ?? 0) + 1)
+  if (![...counts.values()].some(count => count > 1)) return sources
+
+  const seen = new Map<string, number>()
+  return sources.map(source => {
+    if ((counts.get(source.label) ?? 0) <= 1) return source
+    const index = (seen.get(source.label) ?? 0) + 1
+    seen.set(source.label, index)
+    return { ...source, label: `${source.label} ${index}` }
+  })
 }
 
 /// Returns every Claude config dir to scan, in priority order with duplicates
@@ -58,6 +90,15 @@ async function getClaudeConfigDirs(): Promise<string[]> {
   }
 
   return [join(homedir(), '.claude')]
+}
+
+export async function discoverClaudeConfigSources(): Promise<ClaudeConfigSource[]> {
+  const dirs = await getClaudeConfigDirs()
+  return makeUniqueLabels(dirs.map(path => ({
+    id: claudeConfigSourceId(path),
+    label: baseClaudeConfigLabel(path),
+    path,
+  })))
 }
 
 export function getDesktopSessionsDir(): string {
@@ -174,10 +215,11 @@ export const claude: Provider = {
   async discoverSessions(): Promise<SessionSource[]> {
     const sources: SessionSource[] = []
     const seenProjectDirs = new Set<string>()
-    const configDirs = await getClaudeConfigDirs()
+    const configSources = await discoverClaudeConfigSources()
     let anyDirReadable = false
 
-    for (const claudeDir of configDirs) {
+    for (const configSource of configSources) {
+      const claudeDir = configSource.path
       const projectsDir = join(claudeDir, 'projects')
       let entries: string[]
       try {
@@ -201,7 +243,15 @@ export const claude: Provider = {
         // `project: dirName` is identical across config dirs for the same
         // sanitized slug, which is exactly what makes the parser merge
         // their sessions into a single ProjectSummary.
-        sources.push({ path: dirPath, project: dirName, provider: 'claude' })
+        sources.push({
+          path: dirPath,
+          project: dirName,
+          provider: 'claude',
+          sourceId: configSource.id,
+          sourceLabel: configSource.label,
+          sourcePath: configSource.path,
+          sourceKind: 'claude-config',
+        })
       }
     }
 
@@ -211,10 +261,10 @@ export const claude: Provider = {
     // the platform expects `;`, which produces a single bogus path that
     // silently resolves to nothing on disk.
     const explicitMulti = process.env['CLAUDE_CONFIG_DIRS']
-    if (!anyDirReadable && explicitMulti !== undefined && explicitMulti !== '' && configDirs.length > 0) {
+    if (!anyDirReadable && explicitMulti !== undefined && explicitMulti !== '' && configSources.length > 0) {
       process.stderr.write(
         `codeburn: CLAUDE_CONFIG_DIRS was set but no listed directory could be read. ` +
-        `Tried: ${configDirs.join(', ')}. ` +
+        `Tried: ${configSources.map(s => s.path).join(', ')}. ` +
         `Use "${pathDelimiter}" as the separator on this platform.\n`,
       )
     }

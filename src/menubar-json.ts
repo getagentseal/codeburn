@@ -108,6 +108,17 @@ export type CombinedUsage = {
   }
 }
 
+export type ClaudeConfigOption = {
+  id: string
+  label: string
+  path: string
+}
+
+export type ClaudeConfigSelector = {
+  selectedId: string | null
+  options: ClaudeConfigOption[]
+}
+
 export type MenubarPayload = {
   generated: string
   current: {
@@ -217,6 +228,7 @@ export type MenubarPayload = {
     daily: DailyHistoryEntry[]
   }
   combined?: CombinedUsage
+  claudeConfigs?: ClaudeConfigSelector
 }
 
 function oneShotRateFor(editTurns: number, oneShotTurns: number): number | null {
@@ -351,8 +363,9 @@ export function buildMenubarPayload(
   retryTax?: MenubarPayload['current']['retryTax'],
   routingWaste?: MenubarPayload['current']['routingWaste'],
   breakdowns?: BreakdownArrays,
+  claudeConfigs?: ClaudeConfigSelector,
 ): MenubarPayload {
-  return {
+  const payload: MenubarPayload = {
     generated: new Date().toISOString(),
     current: {
       label: current.label,
@@ -383,4 +396,8 @@ export function buildMenubarPayload(
     optimize: buildOptimize(optimize),
     history: buildHistory(dailyHistory),
   }
+  if (claudeConfigs && claudeConfigs.options.length > 1) {
+    payload.claudeConfigs = claudeConfigs
+  }
+  return payload
 }

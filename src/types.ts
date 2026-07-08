@@ -123,9 +123,17 @@ export type ClassifiedTurn = ParsedTurn & {
   hasEdits: boolean
 }
 
+export type SessionSourceMetadata = {
+  id: string
+  label: string
+  path: string
+  kind: 'claude-config' | 'claude-desktop'
+}
+
 export type SessionSummary = {
   sessionId: string
   project: string
+  source?: SessionSourceMetadata
   // Claude Code only: agent type of a subagent transcript session
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
