@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { parseAllSessions, filterProjectsByName } from './parser.js'
+import { parseAllSessions, filterProjectsByName, setInteractiveScanUI } from './parser.js'
 import { findUnpricedModels, loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
@@ -1086,6 +1086,11 @@ function StaticDashboard({ projects, period, activeProvider, planUsages, label, 
 }
 
 export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string, initialDay?: string): Promise<void> {
+  // Interactive Ink UI: it renders to the same terminal and has its own in-frame
+  // loading state, so the CLI scan-progress line must stay silent for its whole
+  // lifetime (initial scan and every 30s auto-refresh, including the
+  // getPlanUsages → parseAllSessions path). Plain CLI commands are unaffected.
+  setInteractiveScanUI()
   await loadPricing()
   const dayRange = initialDay ? getDayRange(initialDay) : null
   const range = dayRange ?? customRange ?? getPeriodRange(period)

@@ -1986,8 +1986,22 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
 }
 
-function createScanProgress(label: string, total: number) {
-  const show = total > 20 && process.stderr.isTTY === true
+// Suppress the scan-progress line while an interactive Ink UI is live. The
+// dashboard and compare render to stdout on the same terminal, and their scans
+// run (dashboard) or re-run every 30s (dashboard auto-refresh, including the
+// getPlanUsages → parseAllSessions path) AFTER render() has painted a frame, so
+// a `\r` progress line on stderr prints over it and garbles the screen. isTTY
+// alone can't tell them apart from a plain CLI command. The interactive
+// entrypoints call setInteractiveScanUI() right before render(); a pre-render
+// scan (e.g. compare's cold start) still shows progress and finish() clears the
+// line before Ink paints.
+let interactiveScanUI = false
+export function setInteractiveScanUI(active = true): void {
+  interactiveScanUI = active
+}
+
+export function createScanProgress(label: string, total: number) {
+  const show = !interactiveScanUI && total > 20 && process.stderr.isTTY === true
   let lastWrite = 0
   return {
     async tick(done: number): Promise<void> {
