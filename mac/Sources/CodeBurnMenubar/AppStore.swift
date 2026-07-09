@@ -1228,6 +1228,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
+    case lingtaiTui = "LingTai TUI"
     case kiloCode = "KiloCode"
     case openclaw = "OpenClaw"
     case opencode = "OpenCode"
@@ -1257,6 +1258,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .goose: ["goose"]
         case .grok: ["grok", "grok build"]
         case .hermes: ["hermes", "hermes agent"]
+        case .lingtaiTui: ["lingtai-tui", "lingtai tui"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1277,6 +1279,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kiloCode: "kilo-code"
         case .kiro: "kiro"
         case .kimi: "kimi"
+        case .lingtaiTui: "lingtai-tui"
         case .openclaw: "openclaw"
         case .opencode: "opencode"
         case .pi: "pi"

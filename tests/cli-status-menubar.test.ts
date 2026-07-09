@@ -5,14 +5,16 @@ import { spawnSync } from 'node:child_process'
 
 import { describe, expect, it } from 'vitest'
 
-function runCli(args: string[], home: string) {
+function runCli(args: string[], home: string, extraEnv: Record<string, string> = {}) {
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       CLAUDE_CONFIG_DIR: join(home, '.claude'),
+      CODEBURN_CACHE_DIR: join(home, '.cache', 'codeburn'),
       HOME: home,
       TZ: 'UTC',
+      ...extraEnv,
     },
     encoding: 'utf-8',
     timeout: 30_000,
@@ -150,6 +152,70 @@ describe('codeburn status --format menubar-json', () => {
       expect(payload.current.topProjects).toHaveLength(1)
       expect(payload.current.topProjects[0]?.sessions).toBe(1)
       expect(payload.current.topProjects[0]?.sessionDetails.map(s => s.date)).toEqual(['2026-04-10'])
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('includes LingTai TUI usage and activity categories in menubar payloads', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-lingtai-'))
+
+    try {
+      const lingtaiHome = join(home, '.lingtai')
+      const agentDir = join(lingtaiHome, 'agent')
+      await mkdir(join(agentDir, 'logs'), { recursive: true })
+      await writeFile(join(agentDir, '.agent.json'), JSON.stringify({
+        agent_id: 'agent-1',
+        agent_name: 'LingTai Agent',
+        llm: { model: 'gpt-4o' },
+      }))
+
+      const now = new Date()
+      const h = now.getUTCHours()
+      const base = h >= 2 ? new Date(now.getTime() - 2 * 3600_000) : new Date(now.getTime() - h * 3600_000 - 300_000)
+      const ts1 = base.toISOString().replace(/\.\d+Z$/, 'Z')
+      const ts2 = new Date(base.getTime() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z')
+      const ts3 = new Date(base.getTime() + 120_000).toISOString().replace(/\.\d+Z$/, 'Z')
+
+      await writeFile(
+        join(agentDir, 'logs', 'token_ledger.jsonl'),
+        [
+          JSON.stringify({ source: 'main', ts: ts1, input: 1000, cached: 100, output: 100, model: 'gpt-4o' }),
+          JSON.stringify({ source: 'tc_wake', ts: ts2, input: 2000, cached: 500, output: 200, model: 'gpt-4o' }),
+          JSON.stringify({ source: 'summarize_apriori', ts: ts3, input: 1500, cached: 300, output: 150, model: 'gpt-4o' }),
+        ].join('\n') + '\n',
+      )
+
+      const result = runCli([
+        'status',
+        '--format', 'menubar-json',
+        '--period', 'today',
+        '--provider', 'lingtai-tui',
+        '--no-optimize',
+      ], home, {
+        LINGTAI_HOME: lingtaiHome,
+        LINGTAI_TUI_GLOBAL_DIR: join(home, '.lingtai-tui'),
+      })
+
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+
+      const payload = JSON.parse(result.stdout) as {
+        current: {
+          cost: number
+          calls: number
+          providers: Record<string, number>
+          topActivities: Array<{ name: string; turns: number }>
+        }
+      }
+
+      expect(payload.current.cost).toBeGreaterThan(0)
+      expect(payload.current.calls).toBe(3)
+      expect(payload.current.providers['lingtai tui']).toBeGreaterThan(0)
+      expect(payload.current.topActivities.map(a => a.name).sort()).toEqual([
+        'Conversation',
+        'Delegation',
+        'Planning',
+      ])
     } finally {
       await rm(home, { recursive: true, force: true })
     }

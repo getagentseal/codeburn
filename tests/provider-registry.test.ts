@@ -3,7 +3,7 @@ import { providers, getAllProviders, getProvider } from '../src/providers/index.
 
 describe('provider registry', () => {
   it('has core providers registered synchronously', () => {
-    expect(providers.map(p => p.name)).toEqual(['claude', 'cline', 'codebuff', 'codex', 'copilot', 'devin', 'droid', 'gemini', 'hermes', 'ibm-bob', 'kilo-code', 'kiro', 'kimi', 'mistral-vibe', 'mux', 'openclaw', 'open-design', 'pi', 'omp', 'qwen', 'roo-code', 'zerostack', 'grok'])
+    expect(providers.map(p => p.name)).toEqual(['claude', 'cline', 'codebuff', 'codex', 'copilot', 'devin', 'droid', 'gemini', 'hermes', 'ibm-bob', 'kilo-code', 'kiro', 'kimi', 'lingtai-tui', 'mistral-vibe', 'mux', 'openclaw', 'open-design', 'pi', 'omp', 'qwen', 'roo-code', 'zerostack', 'grok'])
   })
 
   it('codebuff tool display names normalize codebuff-native names to canonical set', () => {
@@ -100,6 +100,13 @@ describe('provider registry', () => {
     expect(kimi.modelDisplayName('kimi-k2-thinking-turbo')).toBe('Kimi K2 Thinking Turbo')
     expect(kimi.toolDisplayName('Shell')).toBe('Bash')
     expect(kimi.toolDisplayName('WriteFile')).toBe('Write')
+  })
+
+  it('lingtai-tui model display names are normalized', () => {
+    const lingtai = providers.find(p => p.name === 'lingtai-tui')!
+    expect(lingtai.displayName).toBe('LingTai TUI')
+    expect(lingtai.modelDisplayName('claude-sonnet-4-6')).toBe('Sonnet 4.6')
+    expect(lingtai.toolDisplayName('custom_tool')).toBe('custom_tool')
   })
 
   it('cursor model display names handle auto mode', async () => {

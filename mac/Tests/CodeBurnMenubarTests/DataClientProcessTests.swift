@@ -47,6 +47,19 @@ struct DataClientProcessTests {
         #expect(value(after: "--days", in: args) == "2026-06-01,2026-06-02")
     }
 
+    @Test("status argv supports LingTai TUI provider")
+    func statusSubcommandSupportsLingTaiTUI() {
+        let args = DataClient.statusSubcommand(
+            period: .month,
+            provider: .lingtaiTui,
+            includeOptimize: false,
+            scope: .local
+        )
+
+        #expect(value(after: "--provider", in: args) == "lingtai-tui")
+        #expect(value(after: "--period", in: args) == "month")
+    }
+
     /// Concurrency + timeout smoke test: launch more hung subprocesses than
     /// there are cooperative threads, all at once, with a short timeout, and
     /// assert every call returns once the timeout kills its sleep.
