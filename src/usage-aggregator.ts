@@ -196,15 +196,18 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     return todayAllDays
   }
 
-  let currentData: PeriodData
-  let scanProjects: ProjectSummary[]
-  let scanRange: DateRange
+  // Assigned in every branch below (scoped-valid, or the !effectivelyScoped
+  // fallthrough); the `!` tells the compiler what the flag guarantees.
+  let currentData!: PeriodData
+  let scanProjects!: ProjectSummary[]
+  let scanRange!: DateRange
   let cache: DailyCache = emptyCache()
   let todayProviderData: PeriodData | null = null
   let claudeConfigs: ClaudeConfigSelector | undefined
   const requestedClaudeConfigSourceId = opts.claudeConfigSourceId?.trim() || null
   const isClaudeConfigScoped = requestedClaudeConfigSourceId !== null
 
+  let effectivelyScoped = false
   if (isClaudeConfigScoped) {
     // A config source scopes Claude usage only, so scan just Claude (main.ts
     // rejects a contradictory non-Claude --provider). This also avoids parsing
@@ -213,42 +216,47 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     const fullProjects = daysSelection ? filterProjectsByDays(rawProjects, daysSelection.days) : rawProjects
     claudeConfigs = await claudeConfigSelector(fullProjects, requestedClaudeConfigSourceId)
     const selectedSourceId = claudeConfigs?.selectedId ?? null
-    scanProjects = selectedSourceId
-      ? filterProjectsByClaudeConfigSource(fullProjects, selectedSourceId)
-      : fullProjects
-    scanRange = periodInfo.range
-    currentData = buildPeriodData(periodInfo.label, scanProjects)
-    if (!selectedSourceId && isAllProviders) {
-      cache = await hydrateCache()
+    if (selectedSourceId) {
+      effectivelyScoped = true
+      scanProjects = filterProjectsByClaudeConfigSource(fullProjects, selectedSourceId)
+      scanRange = periodInfo.range
+      currentData = buildPeriodData(periodInfo.label, scanProjects)
     }
-  } else if (isAllProviders) {
-    cache = await hydrateCache()
-    const todayProjects = await getTodayAllProjects()
-    const todayDays = await getTodayAllDays()
-    const historicalDays = rangeStartStr <= historicalRangeEndStr
-      ? getDaysInRange(cache, rangeStartStr, historicalRangeEndStr)
-      : []
-    const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
-    const unfilteredDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
-    const allDays = daysSelection ? unfilteredDays.filter(d => daysSelection.days.has(d.date)) : unfilteredDays
-    currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
-    const isTodayOnly = rangeStartStr === todayStr && rangeEndStr === todayStr
-    if (isTodayOnly) {
-      scanProjects = todayProjects
-      scanRange = todayRange
+    // A stale/invalid id does NOT validate: fall through to the normal path so
+    // an --provider all query returns real all-provider totals instead of the
+    // Claude-only scan. claudeConfigs (selectedId null) is kept so the selector
+    // still renders.
+  }
+  if (!effectivelyScoped) {
+    if (isAllProviders) {
+      cache = await hydrateCache()
+      const todayProjects = await getTodayAllProjects()
+      const todayDays = await getTodayAllDays()
+      const historicalDays = rangeStartStr <= historicalRangeEndStr
+        ? getDaysInRange(cache, rangeStartStr, historicalRangeEndStr)
+        : []
+      const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
+      const unfilteredDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
+      const allDays = daysSelection ? unfilteredDays.filter(d => daysSelection.days.has(d.date)) : unfilteredDays
+      currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
+      const isTodayOnly = rangeStartStr === todayStr && rangeEndStr === todayStr
+      if (isTodayOnly) {
+        scanProjects = todayProjects
+        scanRange = todayRange
+      } else {
+        const rawProjects = fp(await parseAllSessions(periodInfo.range, 'all'))
+        scanProjects = daysSelection ? filterProjectsByDays(rawProjects, daysSelection.days) : rawProjects
+        scanRange = periodInfo.range
+      }
     } else {
-      const rawProjects = fp(await parseAllSessions(periodInfo.range, 'all'))
-      scanProjects = daysSelection ? filterProjectsByDays(rawProjects, daysSelection.days) : rawProjects
+      cache = await loadDailyCache()
+      const rawProviderProjects = fp(await parseAllSessions(periodInfo.range, pf))
+      const fullProjects = daysSelection ? filterProjectsByDays(rawProviderProjects, daysSelection.days) : rawProviderProjects
+      todayProviderData = buildPeriodData(periodInfo.label, fullProjects)
+      currentData = todayProviderData
+      scanProjects = fullProjects
       scanRange = periodInfo.range
     }
-  } else {
-    cache = await loadDailyCache()
-    const rawProviderProjects = fp(await parseAllSessions(periodInfo.range, pf))
-    const fullProjects = daysSelection ? filterProjectsByDays(rawProviderProjects, daysSelection.days) : rawProviderProjects
-    todayProviderData = buildPeriodData(periodInfo.label, fullProjects)
-    currentData = todayProviderData
-    scanProjects = fullProjects
-    scanRange = periodInfo.range
   }
   if (isAllProviders) {
     currentData = buildPeriodData(periodInfo.label, scanProjects)
