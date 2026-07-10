@@ -35,6 +35,29 @@ export type ApiUsage = {
     web_fetch_requests?: number
   }
   speed?: 'standard' | 'fast'
+  // Claude Code advisor tool (/advisor): per-turn sub-usage records. A record
+  // with type 'advisor_message' carries the advisor model's own tokens and is
+  // NOT included in the top-level totals above; type 'message' records mirror
+  // the main model and are already covered by the top-level totals.
+  iterations?: ApiUsageIteration[]
+}
+
+export type ApiUsageIteration = {
+  type?: string
+  model?: string
+  input_tokens?: number
+  output_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+  }
+  cache_read_input_tokens?: number
+  server_tool_use?: {
+    web_search_requests?: number
+    web_fetch_requests?: number
+  }
+  speed?: 'standard' | 'fast'
 }
 
 export type AssistantMessageContent = {

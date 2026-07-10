@@ -24,6 +24,7 @@ import {
 } from './session-cache.js'
 import type { ParsedProviderCall, SessionSource } from './providers/types.js'
 import type {
+  ApiUsageIteration,
   AssistantMessageContent,
   ClassifiedTurn,
   ContentBlock,
@@ -276,6 +277,26 @@ function readJsonNumberField(source: string, objectBounds: JsonValueBounds | nul
   return Number.isFinite(value) ? value : undefined
 }
 
+// The large-line parsers avoid JSON.parse on the whole (multi-KB) line, but the
+// usage object itself is tiny; parse just that slice to recover advisor
+// (/advisor) iterations, which the byte-scanner cannot cheaply extract. Without
+// this, an advisor escalation on a large assistant turn would be dropped.
+function extractAdvisorIterations(usageObjectJson: string): ApiUsageIteration[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(usageObjectJson)
+  } catch {
+    return undefined
+  }
+  const iterations = (parsed as { iterations?: unknown }).iterations
+  if (!Array.isArray(iterations)) return undefined
+  const advisor = iterations.filter(
+    (it): it is ApiUsageIteration =>
+      !!it && typeof it === 'object' && (it as { type?: unknown }).type === 'advisor_message',
+  )
+  return advisor.length > 0 ? advisor : undefined
+}
+
 function parseLargeUsage(source: string, usageBounds: JsonValueBounds | null) {
   const usage: AssistantMessageContent['usage'] = {
     input_tokens: readJsonNumberField(source, usageBounds, 'input_tokens') ?? 0,
@@ -307,6 +328,9 @@ function parseLargeUsage(source: string, usageBounds: JsonValueBounds | null) {
 
     const speed = readJsonString(source, findObjectFieldValue(source, usageBounds.start, usageBounds.end, 'speed'))
     if (speed === 'standard' || speed === 'fast') usage.speed = speed
+
+    const advisor = extractAdvisorIterations(source.slice(usageBounds.start, usageBounds.end))
+    if (advisor) usage.iterations = advisor
   }
 
   return usage
@@ -652,6 +676,9 @@ function parseLargeUsageBuffer(source: Buffer, usageBounds: BufferJsonValueBound
 
     const speed = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, usageBounds.start, usageBounds.end, 'speed'))
     if (speed === 'standard' || speed === 'fast') usage.speed = speed
+
+    const advisor = extractAdvisorIterations(source.subarray(usageBounds.start, usageBounds.end).toString('utf8'))
+    if (advisor) usage.iterations = advisor
   }
 
   return usage
@@ -952,6 +979,33 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
     }
   }
   if (u.speed) compactUsage.speed = u.speed
+  // Preserve only advisor_message iterations (/advisor sub-usage) so
+  // parseAdvisorCalls can attribute the advisor model's spend; drop the rest to
+  // keep the cache small. Other iteration types (plain `message`, and the
+  // `fallback_message` written when a turn retries on another model) are not
+  // accounted here, a separate pre-existing gap, so they are not preserved.
+  if (Array.isArray(u.iterations)) {
+    const advisorIterations = u.iterations
+      .filter((it): it is ApiUsageIteration => !!it && it.type === 'advisor_message')
+      .map(it => {
+        const compact: ApiUsageIteration = { type: 'advisor_message' }
+        if (typeof it.model === 'string') compact.model = it.model
+        if (it.input_tokens) compact.input_tokens = it.input_tokens
+        if (it.output_tokens) compact.output_tokens = it.output_tokens
+        if (it.cache_creation_input_tokens) compact.cache_creation_input_tokens = it.cache_creation_input_tokens
+        if (it.cache_read_input_tokens) compact.cache_read_input_tokens = it.cache_read_input_tokens
+        if (it.cache_creation) {
+          compact.cache_creation = {
+            ...(it.cache_creation.ephemeral_5m_input_tokens ? { ephemeral_5m_input_tokens: it.cache_creation.ephemeral_5m_input_tokens } : {}),
+            ...(it.cache_creation.ephemeral_1h_input_tokens ? { ephemeral_1h_input_tokens: it.cache_creation.ephemeral_1h_input_tokens } : {}),
+          }
+        }
+        if (it.server_tool_use?.web_search_requests) compact.server_tool_use = { web_search_requests: it.server_tool_use.web_search_requests }
+        if (it.speed) compact.speed = it.speed
+        return compact
+      })
+    if (advisorIterations.length > 0) compactUsage.iterations = advisorIterations
+  }
 
   entry.message = {
     type: 'message',
@@ -1037,7 +1091,10 @@ export function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
-function extractClaudeCacheCreation(usage: AssistantMessageContent['usage']): { totalTokens: number; oneHourTokens: number } {
+function extractClaudeCacheCreation(usage: {
+  cache_creation_input_tokens?: number
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number }
+}): { totalTokens: number; oneHourTokens: number } {
   const legacyTotal = safeNumber(usage.cache_creation_input_tokens)
   const cacheCreation = usage.cache_creation
   const fiveMinuteTokens = safeNumber(cacheCreation?.ephemeral_5m_input_tokens)
@@ -1149,6 +1206,73 @@ export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   })
 }
 
+/// Claude Code's advisor tool (/advisor) escalates hard decisions to a stronger
+/// advisor model mid-turn. Those tokens are recorded as `advisor_message`
+/// records inside `message.usage.iterations` under the advisor's own model, and
+/// are excluded from the top-level `message.usage` totals that `parseApiCall`
+/// reads. Emit them as separate calls so the advisor's spend is counted and
+/// attributed to the advisor model rather than silently dropped.
+export function parseAdvisorCalls(entry: JournalEntry): ParsedApiCall[] {
+  if (entry.type !== 'assistant') return []
+  const msg = entry.message as AssistantMessageContent | undefined
+  const iterations = msg?.usage?.iterations
+  if (!msg?.usage || !Array.isArray(iterations)) return []
+
+  const calls: ParsedApiCall[] = []
+  const baseKey = msg.id ?? `claude:${entry.timestamp}`
+  // Ordinal among advisor entries (not the raw array index) so the dedup key is
+  // identical whether it is computed from the raw record (guard path) or the
+  // compacted record whose non-advisor iterations were dropped (report path).
+  let advisorOrdinal = 0
+  for (const it of iterations) {
+    if (!it || it.type !== 'advisor_message') continue
+    const model = typeof it.model === 'string' && it.model ? it.model : msg.model
+    if (!model) continue
+    const index = advisorOrdinal++
+
+    const cacheCreation = extractClaudeCacheCreation(it)
+    const tokens: TokenUsage = {
+      inputTokens: it.input_tokens ?? 0,
+      outputTokens: it.output_tokens ?? 0,
+      cacheCreationInputTokens: cacheCreation.totalTokens,
+      cacheReadInputTokens: it.cache_read_input_tokens ?? 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: it.server_tool_use?.web_search_requests ?? 0,
+    }
+    const speed = it.speed ?? msg.usage.speed ?? 'standard'
+    const costUSD = calculateCost(
+      model,
+      tokens.inputTokens,
+      tokens.outputTokens,
+      tokens.cacheCreationInputTokens,
+      tokens.cacheReadInputTokens,
+      tokens.webSearchRequests,
+      speed,
+      cacheCreation.oneHourTokens,
+    )
+
+    calls.push(applyLocalModelSavings({
+      provider: 'claude',
+      model,
+      usage: tokens,
+      costUSD,
+      tools: [],
+      mcpTools: [],
+      skills: [],
+      subagentTypes: [],
+      hasAgentSpawn: false,
+      hasPlanMode: false,
+      speed,
+      timestamp: entry.timestamp ?? '',
+      bashCommands: [],
+      deduplicationKey: `${baseKey}:advisor:${index}`,
+      cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
+    }))
+  }
+  return calls
+}
+
 export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
   const firstIdxById = new Map<string, number>()
   const lastIdxById = new Map<string, number>()
@@ -1203,6 +1327,7 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
       if (msgId) seenMsgIds.add(msgId)
       const call = parseApiCall(entry)
       if (call) currentCalls.push(call)
+      for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
     }
   }
 

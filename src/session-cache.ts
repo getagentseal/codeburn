@@ -109,7 +109,7 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
 export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
-  claude: 'cowork-space-grouping-v1',
+  claude: 'advisor-usage-v1',
   cline: 'worktree-project-grouping-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the

@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from 'fs/promises'
 import { readSessionLines } from '../fs-utils.js'
-import { parseApiCall, parseJsonlLine } from '../parser.js'
+import { parseApiCall, parseAdvisorCalls, parseJsonlLine } from '../parser.js'
 import { EDIT_TOOLS } from '../classifier.js'
 import { allowPath, sessionCachePath, sessionsDir } from './store.js'
 
@@ -33,7 +33,9 @@ export type GuardCache = {
 
 // v2: per-message-id replace fold (perMessage map, sawEdit boolean) and the
 // guard/sessions/ cache location. v1 caches are ignored and cold-reparse once.
-export const GUARD_CACHE_VERSION = 2
+// v3: fold advisor (/advisor) cost into each message; v2 caches computed the
+// per-message cost without it, so they must cold-reparse.
+export const GUARD_CACHE_VERSION = 3
 
 // `commit` must be the git subcommand: `git`, optionally flag tokens (long
 // flags, or a short flag with an optional separate value like `-c k=v`), then
@@ -121,14 +123,18 @@ export async function computeSessionUsage(
     if (!entry) continue
     const call = parseApiCall(entry)
     if (!call) continue
+    // Advisor (/advisor) escalations are billed under a separate model and live
+    // outside the top-level usage, so add their cost to the message total.
+    const advisorCost = parseAdvisorCalls(entry).reduce((sum, a) => sum + a.costUSD, 0)
+    const lineCost = call.costUSD + advisorCost
     // Last-wins per message id, matching the shipped dedupeStreamingMessageIds.
     // Lines without an id (rare, and never streamed in copies) just add.
     const msgId = (entry.message as { id?: string } | undefined)?.id
     if (msgId) {
-      cache.costUSD += call.costUSD - (cache.perMessage[msgId] ?? 0)
-      cache.perMessage[msgId] = call.costUSD
+      cache.costUSD += lineCost - (cache.perMessage[msgId] ?? 0)
+      cache.perMessage[msgId] = lineCost
     } else {
-      cache.costUSD += call.costUSD
+      cache.costUSD += lineCost
     }
     for (const tc of call.toolSequence?.flat() ?? []) {
       if (!cache.sawEdit && EDIT_TOOLS.has(tc.tool)) cache.sawEdit = true
