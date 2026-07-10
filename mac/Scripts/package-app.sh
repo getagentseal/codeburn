@@ -120,6 +120,25 @@ else
 fi
 codesign --verify --deep --strict "${BUNDLE}"
 
+echo "▸ Verifying deployment target and libswift_errno absence..."
+BUILT_EXE="${BUNDLE}/Contents/MacOS/${EXECUTABLE_NAME}"
+MINOS_LINES=$(vtool -show-build "${BUILT_EXE}" 2>/dev/null | awk '/minos/{print $2}')
+if [[ -z "${MINOS_LINES}" ]]; then
+  echo "Could not read a minos deployment target from ${BUILT_EXE} (vtool returned nothing)." >&2
+  exit 1
+fi
+BAD_MINOS=$(printf '%s\n' "${MINOS_LINES}" | grep -v '^14\.0$' || true)
+if [[ -n "${BAD_MINOS}" ]]; then
+  echo "✗ Expected minos 14.0 for every arch slice, found: ${BAD_MINOS}" >&2
+  echo "  Did Package.swift's platforms: [.macOS(...)] regress past .v14?" >&2
+  exit 1
+fi
+if otool -L "${BUILT_EXE}" | grep libswift_errno | grep -qv 'weak'; then
+  echo "✗ ${BUILT_EXE} links libswift_errno.dylib (macOS 15+ only), would fail on Sonoma with -10825." >&2
+  exit 1
+fi
+echo "  minos 14.0 confirmed, no libswift_errno dependency."
+
 ZIP_NAME="CodeBurnMenubar-${ASSET_VERSION}.zip"
 ZIP_PATH="${DIST_DIR}/${ZIP_NAME}"
 echo "▸ Packaging ${ZIP_NAME}..."
