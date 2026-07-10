@@ -20,7 +20,10 @@ import { runShareServer } from './sharing/share-run.js'
 import { addRemote, linkRemote, pullDevices, renderDevices, summarizeDeviceUsage } from './sharing/host.js'
 import { browse } from './sharing/discovery.js'
 import { promptChoice } from './sharing/prompt.js'
-import { loadRemotes, saveRemotes } from './sharing/store.js'
+import { loadOrCreateIdentity } from './sharing/identity.js'
+import { pairingCode } from './sharing/pairing.js'
+import { ShareController } from './sharing/share-controller.js'
+import { getSharingDir, loadRemotes, saveRemotes } from './sharing/store.js'
 import type { UsageQuery } from './sharing/share-server.js'
 import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
@@ -533,12 +536,32 @@ program
   })
 
 program
-  .command('share')
+  .command('share [action]')
   .description("Securely share this device's usage with your other devices on the same network")
   .option('--port <number>', 'Port to listen on', parseInteger, 7777)
   .option('--pair', 'Open a pairing window and print a PIN to add a new device')
   .option('--always', 'Keep sharing until stopped (default stops after 10 min idle)')
-  .action(async (opts) => {
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (action: string | undefined, opts) => {
+    assertFormat(opts.format, ['text', 'json'], 'share')
+    if (action === 'status') {
+      const share = new ShareController(async () => ({}), opts.port)
+      const status = await share.status()
+      if (opts.format === 'json') {
+        console.log(JSON.stringify(status))
+        return
+      }
+      console.log(`\n  Sharing: ${status.sharing ? 'on' : 'off'}\n  Name: ${status.name}\n  Port: ${status.port}\n  Paired peers: ${status.peers}\n`)
+      return
+    }
+    if (action !== undefined) {
+      process.stderr.write('codeburn share: unknown action. Valid values: status.\n')
+      process.exit(1)
+    }
+    if (opts.format === 'json') {
+      process.stderr.write('codeburn share: --format json is only supported for `share status`.\n')
+      process.exit(1)
+    }
     await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always })
   })
 
@@ -548,8 +571,43 @@ program
   .option('--pin <pin>', 'Pairing PIN shown on the device you are adding')
   .option('-p, --period <period>', 'Period: today, week, 30days, month, all', 'month')
   .option('--port <number>', 'Default port when adding a device', parseInteger, 7777)
+  .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (action: string | undefined, target: string | undefined, opts) => {
+    assertFormat(opts.format, ['text', 'json'], 'devices')
     await loadPricing()
+    if (action === 'scan') {
+      const dir = getSharingDir()
+      const id = await loadOrCreateIdentity(dir)
+      const pairedFps = new Set((await loadRemotes(dir)).map((r) => r.fingerprint))
+      const found = (await browse(2500))
+        .filter((d) => d.fingerprint !== id.fingerprint)
+        .map((d) => ({
+          name: d.name,
+          host: d.host,
+          port: d.port,
+          fingerprint: d.fingerprint,
+          code: pairingCode(id.fingerprint, d.fingerprint),
+          paired: pairedFps.has(d.fingerprint),
+        }))
+      if (opts.format === 'json') {
+        console.log(JSON.stringify({ found }))
+        return
+      }
+      if (found.length === 0) {
+        console.log('\n  No devices found. On the other Mac run `codeburn share`, and make sure both are on the same Wi-Fi.\n')
+        return
+      }
+      process.stdout.write('\n  Found devices:\n')
+      for (const d of found) {
+        process.stdout.write(`    ${d.name} (${d.host}:${d.port}) ${d.paired ? '[paired]' : `[code ${d.code}]`}\n`)
+      }
+      process.stdout.write('\n')
+      return
+    }
+    if (opts.format === 'json' && action !== undefined) {
+      process.stderr.write('codeburn devices: --format json is only supported for read-only devices output and scan.\n')
+      process.exit(1)
+    }
     if (action === 'add') {
       if (target && opts.pin) {
         const device = await addRemote(target, opts.pin, { defaultPort: opts.port })
@@ -594,7 +652,26 @@ program
       return buildMenubarPayloadForRange(periodInfo, { provider: 'all', optimize: false })
     }
     const results = await pullDevices(localGetUsage, { period: opts.period }, hostname(), {})
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(summarizeDeviceUsage(results)))
+      return
+    }
     process.stdout.write('\n' + renderDevices(results))
+  })
+
+program
+  .command('identity')
+  .description('Show this device identity for sharing')
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (opts) => {
+    assertFormat(opts.format, ['text', 'json'], 'identity')
+    const id = await loadOrCreateIdentity(getSharingDir())
+    const publicIdentity = { name: id.name, fingerprint: id.fingerprint }
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(publicIdentity))
+      return
+    }
+    console.log(`\n  Name: ${publicIdentity.name}\n  Fingerprint: ${publicIdentity.fingerprint}\n`)
   })
 
 program
@@ -1542,6 +1619,35 @@ program
       return
     }
     console.log(formatYieldSummary(summary))
+  })
+
+program
+  .command('spend')
+  .description('Emit model x project spend flow data')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
+  .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--format <format>', 'Output format: flow-json', 'flow-json')
+  .action(async (opts) => {
+    assertFormat(opts.format, ['flow-json'], 'spend')
+    assertProvider(opts.provider, 'spend')
+    const { computeSpendFlow } = await import('./spend-flow.js')
+    await loadPricing()
+
+    let range: DateRange
+    if (opts.from || opts.to) {
+      const customRange = parseDateRangeFlags(opts.from, opts.to)
+      if (!customRange) {
+        process.stderr.write('codeburn: --from and --to must be valid YYYY-MM-DD dates\n')
+        process.exit(1)
+      }
+      range = customRange
+    } else {
+      range = getDateRange(opts.period).range
+    }
+
+    console.log(JSON.stringify(await computeSpendFlow(range, opts.provider)))
   })
 
 program
