@@ -10,6 +10,7 @@ import { codeburn } from './lib/ipc'
 import { Overview } from './sections/Overview'
 import { Optimize } from './sections/Optimize'
 import { Models } from './sections/Models'
+import { Plans } from './sections/Plans'
 import { Spend } from './sections/Spend'
 import type { MenubarPayload, Period } from './lib/types'
 
@@ -61,26 +62,32 @@ export function App() {
     <Window>
       <Sidebar active={section} onNavigate={setSection} status={<StatusLine polled={overview} />} />
       <div className="ct">
-        <TopBar
-          title={SECTION_TITLES[section]}
-          scope={section === 'settings' ? undefined : scope}
-          period={period}
-          onPeriodChange={onPeriodChange}
-          providerLabel="All providers"
-        />
-        <div className="body">
-          {section === 'overview' ? (
-            <Overview period={period} provider={provider} />
-          ) : section === 'spend' ? (
-            <Spend period={period} provider={provider} />
-          ) : section === 'optimize' ? (
-            <Optimize period={period} provider={provider} />
-          ) : section === 'models' ? (
-            <Models period={period} provider={provider} />
-          ) : (
-            <SectionPlaceholder title={SECTION_TITLES[section]} />
-          )}
-        </div>
+        {section === 'plans' ? (
+          <Plans period={period} />
+        ) : (
+          <>
+            <TopBar
+              title={SECTION_TITLES[section]}
+              scope={section === 'settings' ? undefined : scope}
+              period={period}
+              onPeriodChange={onPeriodChange}
+              providerLabel="All providers"
+            />
+            <div className="body">
+              {section === 'overview' ? (
+                <Overview period={period} provider={provider} />
+              ) : section === 'spend' ? (
+                <Spend period={period} provider={provider} />
+              ) : section === 'optimize' ? (
+                <Optimize period={period} provider={provider} />
+              ) : section === 'models' ? (
+                <Models period={period} provider={provider} />
+              ) : (
+                <SectionPlaceholder title={SECTION_TITLES[section]} />
+              )}
+            </div>
+          </>
+        )}
         <Hint
           items={[
             { k: '⌘K', label: 'Command' },
