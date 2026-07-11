@@ -579,18 +579,17 @@ export function OverviewContent({
           <div className="ov-hero-top"><span className="ov-label">{data.current.label}</span><span className="ov-streak"><b>{streakDays(data.history.daily, now)}</b>-day streak</span></div>
           <CountUp value={data.current.cost} />
           <div className="ov-hero-sub">{data.current.calls.toLocaleString('en-US')} calls · {data.current.sessions.toLocaleString('en-US')} sessions</div>
-          <div className="ov-hero-kpis" aria-label="Key performance indicators">
-            <div className="ov-hero-kpi ov-hero-kpi-accent"><span>One-shot</span><strong>{formatRate(data.current.oneShotRate)}</strong></div>
-            <div className="ov-hero-kpi"><span>Cache hit</span><strong>{Math.round(data.current.cacheHitPercent)}%</strong></div>
-            <div className="ov-hero-kpi ov-hero-kpi-saved"><span>Saved</span><strong>{formatUsd(saved)}</strong><small>from {applied} applied fixes</small></div>
-          </div>
         </div>
         <ActivityHeatmap daily={data.history.daily} bare />
+        <div className="ov-hero-ratings" aria-label="Key performance indicators">
+          <div className="ov-hero-kpi ov-hero-kpi-accent"><span>One-shot</span><strong>{formatRate(data.current.oneShotRate)}</strong></div>
+          <div className="ov-hero-kpi"><span>Cache hit</span><strong>{Math.round(data.current.cacheHitPercent)}%</strong></div>
+          <div className="ov-hero-kpi ov-hero-kpi-saved"><span>Saved</span><strong>{formatUsd(saved)}</strong><small>from {applied} applied fixes</small></div>
+        </div>
       </div>
 
       <div className="ov-hero-secondary">
         <EfficiencyScorecard current={data.current} />
-        <FuelRing status={plans.data} onNavigate={onNavigate} />
       </div>
 
       <div className="ov-coach">
@@ -606,6 +605,7 @@ export function OverviewContent({
       <div className="ov-stats3">
         <div className="ov-card ov-stat"><div className="ov-label">Month to date</div><div className="v">{formatUsd(stats.mtd)}</div><div className="d">{stats.pacePct === null ? `No ${stats.prevMonthName} pace yet` : `${stats.pacePct >= 0 ? '+' : ''}${Math.round(stats.pacePct)}% vs ${stats.prevMonthName} pace`}</div></div>
         <div className="ov-card ov-stat"><div className="ov-label">Projected month</div><div className="v">{formatUsd(stats.projected)} <small>est</small></div><div className="d warn">{formatUsd(Math.max(0, stats.projected - stats.mtd))} to go</div></div>
+        <FuelRing status={plans.data} onNavigate={onNavigate} />
       </div>
 
       <div className="ov-body-grid">

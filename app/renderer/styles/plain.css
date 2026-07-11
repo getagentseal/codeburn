@@ -224,14 +224,16 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .ov-hero-kpi-accent > strong { color: var(--accent); }
 .ov-hero-kpi-saved > strong { color: var(--ok); }
 /* Hero + daily-activity heatmap share one split card. */
-.ov-hero-split { display: grid; grid-template-columns: minmax(270px, 330px) minmax(0, 1fr); gap: 22px; padding: 16px 18px; align-items: stretch; }
+.ov-hero-split { display: grid; grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(150px, 188px); gap: 20px; padding: 16px 18px; align-items: center; }
 .ov-hero-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.ov-hero-split .ov-heatmap-bare { display: flex; flex-direction: column; justify-content: center; gap: 9px; min-width: 0; border-left: 1px solid var(--line2); padding-left: 22px; }
+.ov-hero-split .ov-heatmap-bare { display: flex; flex-direction: column; justify-content: center; gap: 9px; min-width: 0; border-left: 1px solid var(--line2); padding-left: 20px; }
+.ov-hero-ratings { display: flex; flex-direction: column; justify-content: center; gap: 12px; border-left: 1px solid var(--line2); padding-left: 20px; }
 .ov-activity-head { display: flex; align-items: center; justify-content: space-between; }
-.ov-hero-secondary { display: grid; grid-template-columns: minmax(0, 1fr) 196px; gap: 12px; }
+.ov-hero-secondary { display: block; }
+.ov-hero-secondary .ov-efficiency { width: 100%; }
 @media (max-width: 900px) {
   .ov-hero-split { grid-template-columns: 1fr; }
-  .ov-hero-split .ov-heatmap-bare { border-left: 0; padding-left: 0; border-top: 1px solid var(--line2); padding-top: 12px; }
+  .ov-hero-split .ov-heatmap-bare, .ov-hero-ratings { border-left: 0; padding-left: 0; border-top: 1px solid var(--line2); padding-top: 12px; }
   .ov-hero-secondary { grid-template-columns: 1fr; }
 }
 .ov-hero-sub .neutral { color: var(--mut); font-weight: 560; }
