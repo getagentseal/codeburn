@@ -223,6 +223,17 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .ov-hero-kpi small { color: var(--mut2); font-size: 10px; margin-top: 1px; }
 .ov-hero-kpi-accent > strong { color: var(--accent); }
 .ov-hero-kpi-saved > strong { color: var(--ok); }
+/* Hero + daily-activity heatmap share one split card. */
+.ov-hero-split { display: grid; grid-template-columns: minmax(270px, 330px) minmax(0, 1fr); gap: 22px; padding: 16px 18px; align-items: stretch; }
+.ov-hero-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ov-hero-split .ov-heatmap-bare { display: flex; flex-direction: column; justify-content: center; gap: 9px; min-width: 0; border-left: 1px solid var(--line2); padding-left: 22px; }
+.ov-activity-head { display: flex; align-items: center; justify-content: space-between; }
+.ov-hero-secondary { display: grid; grid-template-columns: minmax(0, 1fr) 196px; gap: 12px; }
+@media (max-width: 900px) {
+  .ov-hero-split { grid-template-columns: 1fr; }
+  .ov-hero-split .ov-heatmap-bare { border-left: 0; padding-left: 0; border-top: 1px solid var(--line2); padding-top: 12px; }
+  .ov-hero-secondary { grid-template-columns: 1fr; }
+}
 .ov-hero-sub .neutral { color: var(--mut); font-weight: 560; }
 .ov-efficiency { display: flex; min-width: 0; flex-direction: column; padding: 14px 16px; }
 .ov-efficiency-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -70,7 +70,7 @@ function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date): HeatmapDay[] {
   })
 }
 
-export function ActivityHeatmap({ daily }: { daily: DailyHistoryEntry[] }) {
+export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEntry[]; bare?: boolean }) {
   const days = useMemo(() => buildHeatmapDays(daily, new Date()), [daily])
   const activeDays = days.filter(day => !day.isFuture && day.cost > 0).length
   const [tip, setTip] = useState<{ day: HeatmapDay; x: number; y: number } | null>(null)
@@ -95,41 +95,42 @@ export function ActivityHeatmap({ daily }: { daily: DailyHistoryEntry[] }) {
     setTipPosition({ left, top })
   }, [tip])
 
-  return (
-    <div className="ov-card ov-panel ov-heatmap-panel">
-      <div className="ov-panel-head">
-        <h3>Daily activity</h3>
-        <span className="r ov-active-days">{activeDays} active days</span>
-      </div>
-      <div className="ov-panel-body">
-        <div className="ov-heatmap-scroll">
-          <div className="ov-heatmap" role="grid" aria-label="Daily activity contribution heatmap">
-            <div className="ov-heatmap-labels" aria-hidden="true">
-              {WEEKDAYS.map((weekday, index) => (
-                <span key={weekday}>{index === 1 || index === 3 || index === 5 ? weekday : ''}</span>
-              ))}
-            </div>
-            <div className="ov-heatmap-cells">
-              {days.map(day => (
-                <button
-                  type="button"
-                  role="gridcell"
-                  key={day.date}
-                  className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}`}
-                  aria-label={`${formatDate(day.date)}: ${day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${day.calls} calls`}`}
-                  data-date={day.date}
-                  data-cost={day.cost}
-                  data-active={!day.isFuture && day.cost > 0 ? 'true' : 'false'}
-                  onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
-                  onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
-                  onMouseLeave={() => setTip(null)}
-                />
-              ))}
-            </div>
-          </div>
+  const head = (
+    <div className={bare ? 'ov-activity-head' : 'ov-panel-head'}>
+      {bare ? <span className="ov-label">Daily activity</span> : <h3>Daily activity</h3>}
+      <span className="r ov-active-days">{activeDays} active days</span>
+    </div>
+  )
+  const grid = (
+    <div className="ov-heatmap-scroll">
+      <div className="ov-heatmap" role="grid" aria-label="Daily activity contribution heatmap">
+        <div className="ov-heatmap-labels" aria-hidden="true">
+          {WEEKDAYS.map((weekday, index) => (
+            <span key={weekday}>{index === 1 || index === 3 || index === 5 ? weekday : ''}</span>
+          ))}
+        </div>
+        <div className="ov-heatmap-cells">
+          {days.map(day => (
+            <button
+              type="button"
+              role="gridcell"
+              key={day.date}
+              className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}`}
+              aria-label={`${formatDate(day.date)}: ${day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${day.calls} calls`}`}
+              data-date={day.date}
+              data-cost={day.cost}
+              data-active={!day.isFuture && day.cost > 0 ? 'true' : 'false'}
+              onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseLeave={() => setTip(null)}
+            />
+          ))}
         </div>
       </div>
-      {tip && createPortal(
+    </div>
+  )
+  const tooltip = tip
+    ? createPortal(
         <div
           ref={tipRef}
           className={`chart-tip${tipPosition ? ' on' : ''}`}
@@ -141,7 +142,17 @@ export function ActivityHeatmap({ daily }: { daily: DailyHistoryEntry[] }) {
           <div className="chart-tip-s">{tip.day.isFuture ? 'No activity yet' : `${tip.day.calls} calls`}</div>
         </div>,
         document.body,
-      )}
+      )
+    : null
+
+  if (bare) {
+    return <div className="ov-heatmap-bare">{head}{grid}{tooltip}</div>
+  }
+  return (
+    <div className="ov-card ov-panel ov-heatmap-panel">
+      {head}
+      <div className="ov-panel-body">{grid}</div>
+      {tooltip}
     </div>
   )
 }

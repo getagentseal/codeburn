@@ -574,8 +574,8 @@ export function OverviewContent({
   const anomalies = deriveAnomalies(data, now)
   return (
     <div className="ov-dashboard">
-      <div className="ov-hero-row">
-        <div className="ov-card ov-hero">
+      <div className="ov-card ov-hero-split">
+        <div className="ov-hero-main">
           <div className="ov-hero-top"><span className="ov-label">{data.current.label}</span><span className="ov-streak"><b>{streakDays(data.history.daily, now)}</b>-day streak</span></div>
           <CountUp value={data.current.cost} />
           <div className="ov-hero-sub">{data.current.calls.toLocaleString('en-US')} calls · {data.current.sessions.toLocaleString('en-US')} sessions</div>
@@ -585,11 +585,13 @@ export function OverviewContent({
             <div className="ov-hero-kpi ov-hero-kpi-saved"><span>Saved</span><strong>{formatUsd(saved)}</strong><small>from {applied} applied fixes</small></div>
           </div>
         </div>
+        <ActivityHeatmap daily={data.history.daily} bare />
+      </div>
+
+      <div className="ov-hero-secondary">
         <EfficiencyScorecard current={data.current} />
         <FuelRing status={plans.data} onNavigate={onNavigate} />
       </div>
-
-      <ActivityHeatmap daily={data.history.daily} />
 
       <div className="ov-coach">
         <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
