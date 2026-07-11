@@ -2,21 +2,41 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ActReportJson, MenubarPayload, StatusJson } from '../lib/types'
+import type { ActReportJson, MenubarPayload, StatusJson, YieldJsonReport } from '../lib/types'
 import { Overview, localDateKey } from './Overview'
 
 // Mock the typed bridge so the section fetches our payload instead of spawning
 // the CLI. `normalizeCliError` (used by usePolled) is kept from the real module.
 // `vi.hoisted` lets the hoisted `vi.mock` factory reference the spy safely.
-const { getOverview, getPlans, getActReport } = vi.hoisted(() => ({
+const { getOverview, getPlans, getActReport, getYield } = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getPlans: vi.fn<(period: string) => Promise<StatusJson>>(),
   getActReport: vi.fn<() => Promise<ActReportJson>>(),
+  getYield: vi.fn<(period: string) => Promise<YieldJsonReport>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getOverview, getPlans, getActReport } }
+  return { ...actual, codeburn: { getOverview, getPlans, getActReport, getYield } }
 })
+
+function makeYieldReport(): YieldJsonReport {
+  return {
+    period: { label: 'Last 30 days', start: '2026-06-12', end: '2026-07-11' },
+    summary: {
+      productive: { costUSD: 120, sessions: 3, costPercent: 80, sessionPercent: 60 },
+      reverted: { costUSD: 20, sessions: 1, costPercent: 13, sessionPercent: 20 },
+      abandoned: { costUSD: 10, sessions: 1, costPercent: 7, sessionPercent: 20 },
+      total: { costUSD: 150, sessions: 5 },
+      productiveToRevertedCostRatio: 6,
+    },
+    details: [
+      { sessionId: 's1', project: 'parser-service', category: 'productive', commitCount: 4, costUSD: 80 },
+      { sessionId: 's2', project: 'pairing-svc', category: 'productive', commitCount: 2, costUSD: 40 },
+      { sessionId: 's3', project: 'parser-service', category: 'reverted', commitCount: 0, costUSD: 20 },
+      { sessionId: 's4', project: 'scratch', category: 'abandoned', commitCount: 0, costUSD: 10 },
+    ],
+  }
+}
 
 /**
  * A fully-typed payload anchored to `now` so today/MTD/projected are stable.
@@ -127,6 +147,7 @@ describe('Overview', () => {
     getOverview.mockReset()
     getPlans.mockReset()
     getActReport.mockReset()
+    getYield.mockReset()
     getPlans.mockResolvedValue({
       currency: 'USD',
       today: { cost: 0, savings: 0, calls: 0 },
@@ -138,6 +159,7 @@ describe('Overview', () => {
       },
     })
     getActReport.mockResolvedValue({ totals: { realizedCostUSD: 84.2, measuredActions: 11 } })
+    getYield.mockResolvedValue(makeYieldReport())
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -222,6 +244,25 @@ describe('Overview', () => {
     expect(screen.getByText('82%')).toBeInTheDocument()
     expect(screen.getByText('$84.20')).toBeInTheDocument()
     expect(screen.getByText('from 11 applied fixes')).toBeInTheDocument()
+  })
+
+  it('renders efficiency, cost-per-outcome, and real anomaly widgets', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    const today = payload.history.daily.at(-1)
+    if (!today) throw new Error('fixture must contain today')
+    today.cost = 50 // Prior same weekdays are $5, so the real detector reports 10×.
+    getOverview.mockResolvedValue(payload)
+
+    render(<Overview period="30days" provider="all" />)
+
+    expect(await screen.findByLabelText('Efficiency grade B')).toHaveTextContent('B')
+    const outcome = screen.getByText('Cost per outcome').closest('.ov-panel')
+    expect(outcome).not.toBeNull()
+    expect(within(outcome as HTMLElement).getByText('$25.00')).toBeInTheDocument()
+    expect(within(outcome as HTMLElement).getByText('$40.00')).toBeInTheDocument()
+    const anomalies = screen.getByLabelText('Spend anomalies')
+    expect(anomalies).toHaveTextContent(/Today's spend is 10× your typical/)
   })
 
   it('uses honest empty states when no budget or realized savings exist', async () => {

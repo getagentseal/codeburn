@@ -17,6 +17,7 @@ import type {
   Period,
   PlanId,
   StatusJson,
+  YieldJsonReport,
 } from '../lib/types'
 
 export { localDateKey } from '../lib/period'
@@ -41,6 +42,157 @@ function median(values: number[]): number {
 
 function mean(values: number[]): number {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+type EfficiencyGrade = 'A+' | 'A' | 'B' | 'C' | 'D' | 'F'
+
+function efficiencyGrade(score: number): EfficiencyGrade {
+  if (score >= 93) return 'A+'
+  if (score >= 85) return 'A'
+  if (score >= 75) return 'B'
+  if (score >= 65) return 'C'
+  if (score >= 55) return 'D'
+  return 'F'
+}
+
+function EfficiencyScorecard({ current }: { current: MenubarPayload['current'] }) {
+  const oneShot = current.oneShotRate ?? 0.6
+  const cacheFrac = clamp(current.cacheHitPercent / 100, 0, 1)
+  const retrySpendFraction = current.retryTax.totalUSD / Math.max(current.cost, 1e-9)
+  const retryPenalty = clamp(retrySpendFraction * 4, 0, 1)
+  // score = 100 * (0.45*oneShot + 0.30*cacheFrac + 0.25*(1-retryPenalty))
+  // Missing one-shot data uses the specified neutral 0.6 and is disclosed below.
+  const score = 100 * (0.45 * oneShot + 0.30 * cacheFrac + 0.25 * (1 - retryPenalty))
+  const grade = efficiencyGrade(score)
+  const gradeTone = grade === 'A+' || grade === 'A' ? 'ok' : grade === 'F' ? 'bad' : ''
+
+  return (
+    <div className="ov-card ov-efficiency">
+      <div className="ov-efficiency-head">
+        <div><div className="ov-label">Efficiency</div><div className="ov-efficiency-score">{Math.round(score)} / 100</div></div>
+        <div className={`ov-grade ${gradeTone}`} aria-label={`Efficiency grade ${grade}`}>{grade}</div>
+      </div>
+      <div className="ov-component-list">
+        <div className="ov-component-row">
+          <div><span>One-shot</span><strong>{formatRate(current.oneShotRate)}</strong></div>
+          <div className="ov-component-track"><span style={{ width: `${oneShot * 100}%` }} /></div>
+        </div>
+        <div className="ov-component-row">
+          <div><span>Cache hit</span><strong>{Math.round(current.cacheHitPercent)}%</strong></div>
+          <div className="ov-component-track"><span style={{ width: `${cacheFrac * 100}%` }} /></div>
+        </div>
+        <div className="ov-component-row">
+          <div><span>Retry tax</span><strong>{formatUsd(current.retryTax.totalUSD)} · {(retrySpendFraction * 100).toFixed(1)}% of spend</strong></div>
+          <div className="ov-component-track adverse"><span style={{ width: `${retryPenalty * 100}%` }} /></div>
+        </div>
+      </div>
+      <p className="ov-widget-caption">Composite of one-shot, cache hit, and retry tax.{current.oneShotRate === null ? ' Partial grade: one-shot is unavailable.' : ''}</p>
+    </div>
+  )
+}
+
+function CostPerOutcome({ outcome }: { outcome: Polled<YieldJsonReport> }) {
+  const report = outcome.data
+  let body: React.ReactNode
+
+  if (!report) {
+    body = <EmptyNote>{outcome.error ? 'Yield data is unavailable for this period.' : 'Correlating sessions with git…'}</EmptyNote>
+  } else if (report.summary.total.sessions === 0 && report.details.length === 0) {
+    body = <EmptyNote>No git-correlated outcomes in this period.</EmptyNote>
+  } else {
+    const commits = report.details.reduce((sum, detail) => sum + detail.commitCount, 0)
+    const costPerCommit = commits > 0 ? report.summary.total.costUSD / commits : null
+    const productive = report.summary.productive
+    const costPerProductiveSession = productive.sessions > 0 ? productive.costUSD / productive.sessions : null
+    body = (
+      <>
+        <div className="ov-outcome-metrics">
+          <div><span>$ / commit</span><strong>{costPerCommit === null ? '—' : formatUsd(costPerCommit)}</strong></div>
+          <div><span>$ / productive session</span><strong>{costPerProductiveSession === null ? '—' : formatUsd(costPerProductiveSession)}</strong></div>
+        </div>
+        <div className="ov-outcome-split">
+          productive {Math.round(productive.costPercent)}% · reverted {Math.round(report.summary.reverted.costPercent)}% · abandoned {Math.round(report.summary.abandoned.costPercent)}%
+        </div>
+      </>
+    )
+  }
+
+  return (
+    <div className="ov-card ov-panel">
+      <div className="ov-panel-head"><h3>Cost per outcome</h3><span className="r">Yield</span></div>
+      <div className="ov-panel-body">
+        {body}
+        <p className="ov-widget-caption">Git-correlated. Reverted/abandoned = spend that didn't ship.</p>
+      </div>
+    </div>
+  )
+}
+
+type Anomaly = { lead: string; value: string; tail: string }
+
+function deriveAnomalies(data: MenubarPayload, now: Date): Anomaly[] {
+  const anomalies: Anomaly[] = []
+  const todayKey = localDateKey(now)
+  const today = data.history.daily.find(day => day.date === todayKey)
+  const sameWeekdayCosts = data.history.daily
+    .filter(day => {
+      if (day.date === todayKey) return false
+      const [year, month, date] = day.date.split('-').map(Number)
+      return new Date(year, month - 1, date).getDay() === now.getDay()
+    })
+    .map(day => day.cost)
+  const typicalWeekday = mean(sameWeekdayCosts)
+  if (today && typicalWeekday > 0 && today.cost > typicalWeekday * 1.8) {
+    const ratio = today.cost / typicalWeekday
+    const weekday = now.toLocaleString('en-US', { weekday: 'long' })
+    anomalies.push({ lead: "Today's spend is ", value: `${ratio.toFixed(1).replace(/\.0$/, '')}×`, tail: ` your typical ${weekday}.` })
+  }
+
+  if (data.history.daily.length >= 14) {
+    const recent14 = data.history.daily.slice(-14)
+    const currentWeek = mean(recent14.slice(-7).map(day => day.cost))
+    const priorWeek = mean(recent14.slice(0, 7).map(day => day.cost))
+    if (priorWeek > 0) {
+      const change = (currentWeek - priorWeek) / priorWeek * 100
+      if (Math.abs(change) >= 25) {
+        anomalies.push({ lead: 'Spend is ', value: `${Math.round(Math.abs(change))}%`, tail: ` ${change >= 0 ? 'higher' : 'lower'} than last week.` })
+      }
+    }
+  }
+
+  if (data.current.cacheHitPercent < 50) {
+    anomalies.push({ lead: 'Cache hit is low (', value: `${Math.round(data.current.cacheHitPercent)}%`, tail: ') — more of your context is uncached.' })
+  }
+  return anomalies.slice(0, 3)
+}
+
+function AnomalyCallouts({ anomalies }: { anomalies: Anomaly[] }) {
+  if (!anomalies.length) return null
+  return (
+    <div className="ov-card ov-anomalies" aria-label="Spend anomalies">
+      <span className="ov-anomaly-label">Anomalies</span>
+      <div className="ov-anomaly-list">
+        {anomalies.map((anomaly, index) => <div key={`${anomaly.value}-${index}`}>{anomaly.lead}<strong>{anomaly.value}</strong>{anomaly.tail}</div>)}
+      </div>
+    </div>
+  )
+}
+
+function RoutingWhatIf({ routing, onNavigate }: {
+  routing: MenubarPayload['current']['routingWaste']
+  onNavigate?: (section: 'optimize') => void
+}) {
+  if (routing.totalSavingsUSD <= 0 || !routing.baselineModel) return null
+  return (
+    <div className="ov-card ov-routing">
+      <div><span className="ov-label">Routing what-if</span><p>Routing to <strong>{routing.baselineModel}</strong> could save ~<strong>{formatUsd(routing.totalSavingsUSD)}</strong> this period.</p></div>
+      <button className="ov-link" type="button" onClick={() => onNavigate?.('optimize')}>Optimize →</button>
+    </div>
+  )
 }
 
 function deriveStats(data: MenubarPayload, now: Date) {
@@ -397,6 +549,7 @@ export function OverviewContent({
 }) {
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period])
   const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [])
+  const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period), [period])
   const { data, error } = overview
   const modelIndex = useMemo(() => data ? buildModelIndex(data) : new Map<string, string>(), [data])
 
@@ -418,6 +571,7 @@ export function OverviewContent({
   const topModel = data.current.topModels[0]
   const saved = actReport.data?.totals.realizedCostUSD ?? 0
   const applied = saved > 0 ? (actReport.data?.totals.measuredActions ?? 0) : 0
+  const anomalies = deriveAnomalies(data, now)
   return (
     <div className="ov-dashboard">
       <div className="ov-hero-row">
@@ -431,6 +585,7 @@ export function OverviewContent({
             <div className="ov-hero-kpi ov-hero-kpi-saved"><span>Saved</span><strong>{formatUsd(saved)}</strong><small>from {applied} applied fixes</small></div>
           </div>
         </div>
+        <EfficiencyScorecard current={data.current} />
         <FuelRing status={plans.data} onNavigate={onNavigate} />
       </div>
 
@@ -441,6 +596,8 @@ export function OverviewContent({
         </div>
         <button className="ov-coach-cta" type="button" onClick={() => onNavigate?.('optimize')}>Review →</button>
       </div>
+
+      <AnomalyCallouts anomalies={anomalies} />
 
       <div className="ov-stats3">
         <div className="ov-card ov-stat"><div className="ov-label">Month to date</div><div className="v">{formatUsd(stats.mtd)}</div><div className="d">{stats.pacePct === null ? `No ${stats.prevMonthName} pace yet` : `${stats.pacePct >= 0 ? '+' : ''}${Math.round(stats.pacePct)}% vs ${stats.prevMonthName} pace`}</div></div>
@@ -461,6 +618,9 @@ export function OverviewContent({
         </div>
 
         <div className="ov-side-column">
+          <CostPerOutcome outcome={yieldReport} />
+          <RoutingWhatIf routing={data.current.routingWaste} onNavigate={onNavigate} />
+
           <div className="ov-card ov-panel">
             <div className="ov-panel-head"><h3>Top activities</h3><span className="r">Sorted by cost</span></div>
             <div className="ov-panel-body"><TopActivities activities={data.current.topActivities} /></div>
