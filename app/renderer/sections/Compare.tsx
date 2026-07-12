@@ -81,7 +81,7 @@ export function Compare({
             if (next === modelB) setModelB(nudgeDistinct(next))
           }}
         >
-          {modelRows.map(model => <option key={model.model} value={model.model}>{model.model} — {model.calls.toLocaleString()} calls</option>)}
+          {modelRows.map(model => <option key={model.model} value={model.model}>{model.model} · {model.calls.toLocaleString()} calls</option>)}
         </select>
         <span className="cmp-vs">vs</span>
         <select
@@ -94,7 +94,7 @@ export function Compare({
             if (next === modelA) setModelA(nudgeDistinct(next))
           }}
         >
-          {modelRows.map(model => <option key={model.model} value={model.model}>{model.model} — {model.calls.toLocaleString()} calls</option>)}
+          {modelRows.map(model => <option key={model.model} value={model.model}>{model.model} · {model.calls.toLocaleString()} calls</option>)}
         </select>
       </div>
       {modelA && modelB && modelA !== modelB && (

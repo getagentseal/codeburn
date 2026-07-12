@@ -171,7 +171,7 @@ function deriveAnomalies(data: MenubarPayload, now: Date): Anomaly[] {
   }
 
   if (data.current.cacheHitPercent < 50) {
-    anomalies.push({ lead: 'Cache hit is low (', value: `${Math.round(data.current.cacheHitPercent)}%`, tail: ') — more of your context is uncached.' })
+    anomalies.push({ lead: 'Cache hit is low (', value: `${Math.round(data.current.cacheHitPercent)}%`, tail: '). More of your context is uncached.' })
   }
   return anomalies.slice(0, 3)
 }

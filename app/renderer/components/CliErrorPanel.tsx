@@ -16,7 +16,7 @@ export function cliErrorDisplay(error: CliError): { title: string; message: stri
   if (isPermissionCliError(error)) {
     return {
       title: 'Permission denied',
-      message: 'permission denied — grant Full Disk Access',
+      message: 'permission denied; grant Full Disk Access',
       tone: 'amber',
     }
   }

@@ -154,14 +154,14 @@ function PaceLine({ plan }: { plan: JsonPlanSummary }) {
   if (plan.status === 'over' || plan.projectedMonthEnd > plan.budget) {
     return (
       <div className="pace hot">
-        On pace to exceed — projected {formatUsd(plan.projectedMonthEnd)} by {endLabel}
+        On pace to exceed; projected {formatUsd(plan.projectedMonthEnd)} by {endLabel}
       </div>
     )
   }
   if (plan.status === 'near') {
     return (
       <div className="pace hot">
-        {fmtPct(plan.percentUsed)} of budget used — projected {formatUsd(plan.projectedMonthEnd)} by {endLabel}
+        {fmtPct(plan.percentUsed)} of budget used; projected {formatUsd(plan.projectedMonthEnd)} by {endLabel}
       </div>
     )
   }

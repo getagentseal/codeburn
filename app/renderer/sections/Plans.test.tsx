@@ -95,7 +95,7 @@ describe('Plans', () => {
     expect(claudeFill).toHaveStyle({ width: '100%' })
     expect(claudeFill).toHaveClass('over')
 
-    const hotPace = screen.getByText('On pace to exceed — projected $254.00 by Jul 14')
+    const hotPace = screen.getByText('On pace to exceed; projected $254.00 by Jul 14')
     expect(hotPace).toHaveClass('pace', 'hot')
 
     expect(screen.getByText('Cursor Pro')).toBeInTheDocument()
@@ -135,7 +135,7 @@ describe('Plans', () => {
 
     render(<Plans period="30days" />)
 
-    const pace = await screen.findByText('85% of budget used — projected $280.00 by Jul 14')
+    const pace = await screen.findByText('85% of budget used; projected $280.00 by Jul 14')
     expect(pace).toHaveClass('pace', 'hot')
     expect(screen.queryByText(/On pace to exceed/)).not.toBeInTheDocument()
   })
@@ -179,6 +179,6 @@ describe('Plans', () => {
     render(<Plans period="week" />)
 
     expect(await screen.findByText('Permission denied')).toBeInTheDocument()
-    expect(screen.getByText('permission denied — grant Full Disk Access')).toHaveStyle({ color: 'var(--amber)' })
+    expect(screen.getByText('permission denied; grant Full Disk Access')).toHaveStyle({ color: 'var(--amber)' })
   })
 })
