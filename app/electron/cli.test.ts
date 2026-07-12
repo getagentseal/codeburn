@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { spawnCli, CliError, nodeManagerDirs, resolveCodeburnPath } from './cli'
+import { spawnCli, spawnCliAction, CliError, nodeManagerDirs, resolveCodeburnPath } from './cli'
 
 let dir: string
 const originalBin = process.env.CODEBURN_BIN
@@ -107,6 +107,18 @@ describe('spawnCli', () => {
       delete process.env.CODEBURN_PATH_DIRS
       delete process.env.CODEBURN_CLI_PATH_FILE
     }
+  })
+})
+
+describe('spawnCliAction', () => {
+  it('returns stdout and ok:true on success', async () => {
+    fakeBin('action-ok.js', 'process.stdout.write("currency updated")')
+    await expect(spawnCliAction(['currency', 'EUR'])).resolves.toEqual({ ok: true, stdout: 'currency updated', stderr: '', code: 0 })
+  })
+
+  it('returns stderr and ok:false on a non-zero exit', async () => {
+    fakeBin('action-fail.js', 'process.stderr.write("invalid alias"); process.exit(3)')
+    await expect(spawnCliAction(['model-alias', 'a', 'b'])).resolves.toEqual({ ok: false, stdout: '', stderr: 'invalid alias', code: 3 })
   })
 })
 

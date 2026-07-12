@@ -7,6 +7,7 @@ import { delimiter, join } from 'node:path'
 // `electron` so it stays unit-testable in a plain node environment.
 
 export type CliErrorKind = 'not-found' | 'nonzero' | 'bad-json' | 'timeout'
+export type ActionResult = { ok: boolean; stdout: string; stderr: string; code: number | null }
 
 /** Structured failure so the renderer can pick the right empty/permission state. */
 export class CliError extends Error {
@@ -188,5 +189,39 @@ export function spawnCli(args: string[], opts: { timeoutMs?: number } = {}): Pro
         }
       })
     })
+  })
+}
+
+/** Spawn a config-mutating CLI command and return its text output verbatim. */
+export function spawnCliAction(args: string[], opts: { timeoutMs?: number } = {}): Promise<ActionResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  return new Promise<ActionResult>(resolve => {
+    const bin = resolveCodeburnPath()
+    if (!bin) {
+      resolve({ ok: false, stdout: '', stderr: 'codeburn CLI not found', code: null })
+      return
+    }
+
+    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const finish = (result: ActionResult) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish({ ok: false, stdout, stderr: `codeburn ${args[0] ?? ''} timed out after ${timeoutMs}ms`, code: null })
+    }, timeoutMs)
+
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.on('error', err => finish({ ok: false, stdout, stderr: err.message, code: null }))
+    child.on('close', code => finish({ ok: code === 0, stdout, stderr, code }))
   })
 }

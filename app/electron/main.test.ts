@@ -18,7 +18,11 @@ function fakeSpawn(result: unknown = { current: { cost: 12.34 } }) {
     calls.push(args)
     return result
   })
-  return { spawnCli, calls }
+  const spawnCliAction = vi.fn(async (args: string[]) => {
+    calls.push(args)
+    return { ok: true, stdout: 'updated', stderr: '', code: 0 }
+  })
+  return { spawnCli, spawnCliAction, calls }
 }
 
 // Every codeburn:* channel with a representative arg tuple → the exact argv it
@@ -37,6 +41,12 @@ const CHANNELS = [
   'codeburn:getDevicesScan',
   'codeburn:getShareStatus',
   'codeburn:getIdentity',
+  'codeburn:getAliases',
+  'codeburn:getProxyPaths',
+  'codeburn:setCurrency',
+  'codeburn:resetCurrency',
+  'codeburn:addAlias',
+  'codeburn:removeAlias',
   'codeburn:cliStatus',
 ] as const
 
@@ -61,6 +71,12 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getDevicesScan', args: [], argv: ['devices', 'scan', '--format', 'json'] },
   { channel: 'codeburn:getShareStatus', args: [], argv: ['share', 'status', '--format', 'json'] },
   { channel: 'codeburn:getIdentity', args: [], argv: ['identity', '--format', 'json'] },
+  { channel: 'codeburn:getAliases', args: [], argv: ['model-alias', '--list', '--format', 'json'] },
+  { channel: 'codeburn:getProxyPaths', args: [], argv: ['proxy-path', '--list', '--format', 'json'] },
+  { channel: 'codeburn:setCurrency', args: ['EUR'], argv: ['currency', 'EUR'] },
+  { channel: 'codeburn:resetCurrency', args: [], argv: ['currency', '--reset'] },
+  { channel: 'codeburn:addAlias', args: ['unknown-model', 'priced-model'], argv: ['model-alias', 'unknown-model', 'priced-model'] },
+  { channel: 'codeburn:removeAlias', args: ['unknown-model'], argv: ['model-alias', '--remove', 'unknown-model'] },
 ]
 
 function flattenMenuItems(items: any[]): any[] {
@@ -71,14 +87,14 @@ function flattenMenuItems(items: any[]): any[] {
 }
 
 describe('createBridgeHandlers (channel → argv for all channels)', () => {
-  it('exposes exactly the fourteen codeburn:* channels', () => {
-    const handlers = createBridgeHandlers({ spawnCli: vi.fn(), resolveCodeburnPath: () => null })
+  it('exposes exactly the bridge channels', () => {
+    const handlers = createBridgeHandlers({ spawnCli: vi.fn(), spawnCliAction: vi.fn(), resolveCodeburnPath: () => null })
     expect(Object.keys(handlers).sort()).toEqual([...CHANNELS].sort())
   })
 
   it.each(ARGV_CASES)('$channel with $args spawns the expected argv', async ({ channel, args, argv }) => {
-    const { spawnCli, calls } = fakeSpawn()
-    const handlers = createBridgeHandlers({ spawnCli, resolveCodeburnPath: () => '/bin/codeburn' })
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' })
     const res = await handlers[channel]!(...args)
     expect(calls[0]).toEqual(argv)
     expect(res).toMatchObject({ ok: true })
@@ -86,7 +102,7 @@ describe('createBridgeHandlers (channel → argv for all channels)', () => {
 
   it('codeburn:cliStatus resolves from resolveCodeburnPath without spawning', async () => {
     const spawnCli = vi.fn()
-    const handlers = createBridgeHandlers({ spawnCli, resolveCodeburnPath: () => '/opt/homebrew/bin/codeburn' })
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction: vi.fn(), resolveCodeburnPath: () => '/opt/homebrew/bin/codeburn' })
     const res = await handlers['codeburn:cliStatus']!()
     expect(spawnCli).not.toHaveBeenCalled()
     expect(res).toEqual({ ok: true, value: { found: true, path: '/opt/homebrew/bin/codeburn' } })
@@ -95,16 +111,16 @@ describe('createBridgeHandlers (channel → argv for all channels)', () => {
 
 describe('createBridgeHandlers (IPC wiring)', () => {
   it('getOverview spawns menubar-json for the period, omitting --provider for "all"', async () => {
-    const { spawnCli, calls } = fakeSpawn()
-    const handlers = createBridgeHandlers({ spawnCli, resolveCodeburnPath: () => '/bin/codeburn' })
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' })
     const res = await handlers['codeburn:getOverview']!('30days', 'all')
     expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days'])
     expect(res).toEqual({ ok: true, value: { current: { cost: 12.34 } } })
   })
 
   it('adds --provider and --by-task when requested', async () => {
-    const { spawnCli, calls } = fakeSpawn([])
-    const handlers = createBridgeHandlers({ spawnCli, resolveCodeburnPath: () => null })
+    const { spawnCli, spawnCliAction, calls } = fakeSpawn([])
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction, resolveCodeburnPath: () => null })
     await handlers['codeburn:getModels']!('week', 'claude', true)
     expect(calls[0]).toEqual(['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task'])
   })
@@ -113,7 +129,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
     const spawnCli = vi.fn(async () => {
       throw new CliError('nonzero', 'boom')
     })
-    const handlers = createBridgeHandlers({ spawnCli, resolveCodeburnPath: () => '/bin/codeburn' })
+    const handlers = createBridgeHandlers({ spawnCli, spawnCliAction: vi.fn(), resolveCodeburnPath: () => '/bin/codeburn' })
     const res = await handlers['codeburn:getYield']!('today')
     expect(res).toEqual({ ok: false, error: { kind: 'nonzero', message: 'boom' } })
   })
@@ -121,6 +137,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
   it('cliStatus reports the resolved binary path', async () => {
     const handlers = createBridgeHandlers({
       spawnCli: vi.fn(),
+      spawnCliAction: vi.fn(),
       resolveCodeburnPath: () => '/opt/homebrew/bin/codeburn',
     })
     const res = await handlers['codeburn:cliStatus']!()

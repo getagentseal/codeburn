@@ -31,6 +31,12 @@ const bridge = {
   getDevicesScan: () => invoke('codeburn:getDevicesScan'),
   getShareStatus: () => invoke('codeburn:getShareStatus'),
   getIdentity: () => invoke('codeburn:getIdentity'),
+  getAliases: () => invoke('codeburn:getAliases'),
+  getProxyPaths: () => invoke('codeburn:getProxyPaths'),
+  setCurrency: (code: string) => invoke('codeburn:setCurrency', code),
+  resetCurrency: () => invoke('codeburn:resetCurrency'),
+  addAlias: (from: string, to: string) => invoke('codeburn:addAlias', from, to),
+  removeAlias: (from: string) => invoke('codeburn:removeAlias', from),
   cliStatus: () => invoke('codeburn:cliStatus'),
   platform: process.platform,
 }

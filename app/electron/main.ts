@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, type MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 
-import { CliError, resolveCodeburnPath, spawnCli } from './cli'
+import { CliError, resolveCodeburnPath, spawnCli, spawnCliAction, type ActionResult } from './cli'
 
 // Result envelope: handlers never throw across IPC so the structured error
 // `kind` survives contextBridge serialization. preload.ts unwraps it.
@@ -24,6 +24,7 @@ function toEnvelopeError(err: unknown): { kind: string; message: string } {
 
 type Deps = {
   spawnCli: (args: string[], opts?: { timeoutMs?: number }) => Promise<unknown>
+  spawnCliAction: (args: string[], opts?: { timeoutMs?: number }) => Promise<ActionResult>
   resolveCodeburnPath: () => string | null
 }
 
@@ -34,10 +35,17 @@ type Handler = (...args: any[]) => Promise<Envelope>
  * shell) and returns a result envelope. Pure + injectable so the wiring is
  * unit-testable without launching Electron.
  */
-export function createBridgeHandlers(deps: Deps = { spawnCli, resolveCodeburnPath }): Record<string, Handler> {
+export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath }): Record<string, Handler> {
   const run = (build: (...args: any[]) => string[]): Handler => async (...args: any[]) => {
     try {
       return { ok: true, value: await deps.spawnCli(build(...args)) }
+    } catch (err) {
+      return { ok: false, error: toEnvelopeError(err) }
+    }
+  }
+  const runAction = (build: (...args: any[]) => string[]): Handler => async (...args: any[]) => {
+    try {
+      return { ok: true, value: await deps.spawnCliAction(build(...args)) }
     } catch (err) {
       return { ok: false, error: toEnvelopeError(err) }
     }
@@ -71,6 +79,12 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, resolveCodeburnPat
     'codeburn:getDevicesScan': run(() => ['devices', 'scan', '--format', 'json']),
     'codeburn:getShareStatus': run(() => ['share', 'status', '--format', 'json']),
     'codeburn:getIdentity': run(() => ['identity', '--format', 'json']),
+    'codeburn:getAliases': run(() => ['model-alias', '--list', '--format', 'json']),
+    'codeburn:getProxyPaths': run(() => ['proxy-path', '--list', '--format', 'json']),
+    'codeburn:setCurrency': runAction((code: string) => ['currency', code]),
+    'codeburn:resetCurrency': runAction(() => ['currency', '--reset']),
+    'codeburn:addAlias': runAction((from: string, to: string) => ['model-alias', from, to]),
+    'codeburn:removeAlias': runAction((from: string) => ['model-alias', '--remove', from]),
     'codeburn:cliStatus': async () => {
       const p = deps.resolveCodeburnPath()
       return { ok: true, value: { found: p !== null, path: p } }

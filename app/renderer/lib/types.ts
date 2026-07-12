@@ -16,6 +16,9 @@ export interface CliError {
   message: string
 }
 
+export type AliasRow = { from: string; to: string }
+export type ActionResult = { ok: boolean; stdout: string; stderr: string; code: number | null }
+
 // ————— src/menubar-json.ts —————
 
 export type DailyModelBreakdown = {
@@ -446,5 +449,11 @@ export interface CodeburnBridge {
   getDevicesScan(): Promise<DeviceScanResult>
   getShareStatus(): Promise<ShareStatus>
   getIdentity(): Promise<Identity>
+  getAliases(): Promise<AliasRow[]>
+  getProxyPaths(): Promise<string[]>
+  setCurrency(code: string): Promise<ActionResult>
+  resetCurrency(): Promise<ActionResult>
+  addAlias(from: string, to: string): Promise<ActionResult>
+  removeAlias(from: string): Promise<ActionResult>
   cliStatus(): Promise<{ found: boolean; path: string | null; error?: string }>
 }
