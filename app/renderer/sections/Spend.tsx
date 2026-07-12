@@ -93,7 +93,7 @@ function ProjectsLens({
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <Panel title="Daily spend by model">
+        <Panel title="Daily spend by model" className="spend-chart-panel">
           {daily.length ? <StackedBars daily={daily} /> : <EmptyNote>No model spend in this range yet.</EmptyNote>}
         </Panel>
         <Panel title="By project" right={projects.length ? `top ${projects.length}` : undefined}>

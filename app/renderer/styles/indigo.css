@@ -114,9 +114,15 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 .days span { font-size: 9.5px; color: var(--t3); font-family: var(--mono); }
 
 /* stacked multi-series bars */
-.sbars { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 0 4px; }
+.spend-chart-panel { display: flex; flex-direction: column; }
+.spend-chart-panel .pbody { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.sbars-wrap { display: flex; flex: 1; min-height: 0; flex-direction: column; height: 100%; }
+.sbars { display: flex; flex: 1; align-items: flex-end; gap: 3px; min-height: 120px; padding: 0 4px; }
 .sbars .c { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; justify-content: flex-start; align-items: center; gap: 1.5px; }
-.sbars .s { width: 100%; max-width: 11px; border-radius: 2px; }
+.sbars .s { width: 100%; max-width: 11px; border-radius: 0; }
+.sbars .s:first-child { border-radius: 0 0 2px 2px; }
+.sbars .s:last-child { border-radius: 2px 2px 0 0; }
+.sbars .s:only-child { border-radius: 2px; }
 .s-opus { background: var(--blue); }
 .s-son { background: var(--purple); }
 .s-hai { background: var(--lav); }

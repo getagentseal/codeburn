@@ -16,12 +16,12 @@ export function StackedBars({ daily }: { daily: DailyHistoryEntry[] }) {
   const legendSeries = (['opus', 'sonnet', 'haiku', 'gpt', 'other'] as const).filter(series => presentSeries.has(series))
 
   return (
-    <>
+    <div className="sbars-wrap">
       <div className="sbars" aria-label="Daily spend by model">
         {daily.map(day => (
           <div className="c" key={day.date} data-date={day.date} title={`${day.date} · ${formatUsd(day.cost)}`}>
             {day.topModels.map(model => {
-              const pct = Math.max(2, (Math.max(0, model.cost) / maxTotal) * 100)
+              const pct = Math.max(1, (Math.max(0, model.cost) / maxTotal) * 100)
               return (
                 <span
                   key={`${day.date}-${model.name}`}
@@ -42,6 +42,6 @@ export function StackedBars({ daily }: { daily: DailyHistoryEntry[] }) {
           </span>
         ))}
       </div>
-    </>
+    </div>
   )
 }
