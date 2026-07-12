@@ -653,11 +653,7 @@ describe('antigravity provider helpers', () => {
     })
   })
 
-  it('classifies APPDATA Antigravity IDE paths as antigravity-ide', () => {
-    expect(antigravityAppDataDirFromSourcePath(
-      'C:\\Users\\User\\AppData\\Roaming\\Antigravity IDE\\User\\globalStorage\\state.vscdb',
-    )).toBe('antigravity-ide')
-
+  it('classifies paths by their .gemini root, not by the profile directory name', () => {
     expect(antigravityAppDataDirFromSourcePath(
       '/Users/User/.gemini/antigravity-ide/conversations/abc.db',
     )).toBe('antigravity-ide')
@@ -666,13 +662,18 @@ describe('antigravity provider helpers', () => {
       '/Users/User/.gemini/antigravity-cli/conversations/abc.db',
     )).toBe('antigravity-cli')
 
-    // .gemini roots take precedence over the broad "Antigravity IDE" match.
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity/conversations/abc.db',
+    )).toBe('antigravity')
+
+    // A profile directory literally named "Antigravity IDE" must not override
+    // the .gemini root: these are CLI and base-app paths, not IDE paths.
     expect(antigravityAppDataDirFromSourcePath(
       'C:\\Users\\Antigravity IDE\\.gemini\\antigravity-cli\\conversations\\abc.db',
     )).toBe('antigravity-cli')
 
     expect(antigravityAppDataDirFromSourcePath(
-      '/Users/User/.gemini/antigravity/conversations/abc.db',
+      'C:\\Users\\Antigravity IDE\\.gemini\\antigravity\\conversations\\abc.db',
     )).toBe('antigravity')
   })
 })

@@ -43,7 +43,7 @@ const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
     extensions: ['.pb'],
   },
 ] as const
-const CACHE_VERSION = 4
+const CACHE_VERSION = 5
 
 const RPC_TIMEOUT_MS = 5000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -468,10 +468,6 @@ export function antigravityAppDataDirFromSourcePath(path: string): 'antigravity'
   const lower = path.replace(/\\/g, '/').toLowerCase()
   if (lower.includes('/.gemini/antigravity-ide/')) return 'antigravity-ide'
   if (lower.includes('/.gemini/antigravity-cli/')) return 'antigravity-cli'
-  // APPDATA-style install dirs (e.g. `%APPDATA%\Antigravity IDE\...`) — checked
-  // after the .gemini roots so a profile directory containing "Antigravity IDE"
-  // cannot misclassify CLI conversation paths.
-  if (lower.includes('/antigravity ide/')) return 'antigravity-ide'
   return 'antigravity'
 }
 
@@ -1203,20 +1199,13 @@ function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource
 
 // gen_metadata rows and some RPC entries (missing chatStartMetadata.createdAt)
 // carry no per-call timestamp. Left empty, those calls are silently dropped by
-// the date-range filters in parser.ts (`if (!callTs) continue`). Every emission
-// path stamps the conversation file's mtime as a fallback: all calls in the
-// session then share the file's last-write time — best available, since the
-// source data has no per-call times. Returns true when a call was repaired so
-// cache-hit paths can persist the fix.
-function stampFallbackTimestamp(calls: ParsedProviderCall[], fallbackTimestamp: string): boolean {
-  let repaired = false
-  for (const call of calls) {
-    if (!call.timestamp) {
-      call.timestamp = fallbackTimestamp
-      repaired = true
-    }
-  }
-  return repaired
+// the date-range filters in parser.ts (`if (!callTs) continue`). We fill the gap
+// at emission time with the conversation file's mtime — best available, since
+// the source data has no per-call times. The fallback is applied to a copy and
+// never written back to the cache: persisting a synthesized mtime would let a
+// later file rewrite retro-date the whole session's history to the new mtime.
+function withFallbackTimestamp(call: ParsedProviderCall, fallbackTimestamp: string): ParsedProviderCall {
+  return call.timestamp ? call : { ...call, timestamp: fallbackTimestamp }
 }
 
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
@@ -1241,19 +1230,17 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const cached = cache.cascades[cascadeId]
       if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size && cached.calls.length > 0) {
-        if (stampFallbackTimestamp(cached.calls, fallbackTimestamp)) cacheDirty = true
         for (const call of cached.calls) {
           applyAntigravityProject(call, source, projectPath)
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
-          yield call
+          yield withFallbackTimestamp(call, fallbackTimestamp)
         }
         return
       }
 
       const sqliteResults = await parseSqliteGenMetadataCalls(source.path, cascadeId)
       if (sqliteResults.length > 0) {
-        stampFallbackTimestamp(sqliteResults, fallbackTimestamp)
         for (const call of sqliteResults) {
           applyAntigravityProject(call, source, projectPath)
         }
@@ -1268,7 +1255,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         for (const call of sqliteResults) {
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
-          yield call
+          yield withFallbackTimestamp(call, fallbackTimestamp)
         }
         return
       }
@@ -1276,12 +1263,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       const server = await detectServer(antigravityAppDataDirFromSourcePath(source.path))
       if (!server) {
         if (cached) {
-          if (stampFallbackTimestamp(cached.calls, fallbackTimestamp)) cacheDirty = true
           for (const call of cached.calls) {
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
-            yield call
+            yield withFallbackTimestamp(call, fallbackTimestamp)
           }
         }
         return
@@ -1296,19 +1282,17 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         )
       } catch {
         if (cached) {
-          if (stampFallbackTimestamp(cached.calls, fallbackTimestamp)) cacheDirty = true
           for (const call of cached.calls) {
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
-            yield call
+            yield withFallbackTimestamp(call, fallbackTimestamp)
           }
         }
         return
       }
 
       const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
-      stampFallbackTimestamp(results, fallbackTimestamp)
       for (const call of results) {
         applyAntigravityProject(call, source, projectPath)
       }
@@ -1323,7 +1307,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       for (const call of results) {
         if (seenKeys.has(call.deduplicationKey)) continue
         seenKeys.add(call.deduplicationKey)
-        yield call
+        yield withFallbackTimestamp(call, fallbackTimestamp)
       }
     },
   }
