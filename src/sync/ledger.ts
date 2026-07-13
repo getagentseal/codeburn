@@ -5,7 +5,7 @@
  * Push logic: window minus ledger = what to send.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -16,8 +16,15 @@ export interface LedgerEntry {
 
 const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000
 
+function cacheDir(): string {
+  // Honor XDG_CACHE_HOME — the ledger is reconstructible state, not config
+  const xdg = process.env.XDG_CACHE_HOME
+  const base = xdg && xdg.trim() ? xdg : join(homedir(), '.cache')
+  return join(base, 'codeburn')
+}
+
 function ledgerPath(): string {
-  return join(homedir(), '.cache', 'codeburn', 'sync-ledger.json')
+  return join(cacheDir(), 'sync-ledger.json')
 }
 
 export function readLedger(): LedgerEntry[] {
@@ -36,9 +43,14 @@ export function readLedger(): LedgerEntry[] {
 }
 
 export function writeLedger(entries: LedgerEntry[]): void {
-  const dir = join(homedir(), '.cache', 'codeburn')
+  const dir = cacheDir()
   mkdirSync(dir, { recursive: true })
-  writeFileSync(ledgerPath(), JSON.stringify(entries))
+  // Atomic write: a crash mid-write must not corrupt the ledger — a corrupt
+  // ledger reads as empty and the next push re-sends the whole window.
+  const path = ledgerPath()
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, JSON.stringify(entries))
+  renameSync(tmp, path)
 }
 
 /** Append new entries after a successful push. Also prunes entries older than 6 months. */

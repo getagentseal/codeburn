@@ -66,10 +66,8 @@ describe.skipIf(SKIP)('sync setup — headless browser PKCE flow', () => {
     const state = randomBytes(16).toString('hex')
 
     // 3. Start callback server
-    const { promise: callbackPromise, server } = startCallbackServer(state, 30000)
-    await new Promise(r => setTimeout(r, 200))
-    const addr = server.address()
-    const port = typeof addr === 'object' && addr ? addr.port : 19876
+    const { promise: callbackPromise, ready } = startCallbackServer(state, 30000)
+    const port = await ready
     const redirectUri = `http://127.0.0.1:${port}/callback`
 
     // 4. Build auth URL

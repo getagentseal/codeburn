@@ -29,13 +29,20 @@ import { writeSyncConfig, readSyncConfig, deleteSyncConfig } from '../src/sync/c
 let idp: MockIdp
 let tmpHome: string
 const originalHome = process.env.HOME
+const originalStore = process.env.CODEBURN_SYNC_TOKEN_STORE
 
 beforeAll(async () => {
   idp = await startMockIdp({ rotateTokens: false })
+  // Force the file store so this suite never touches the real OS keychain
+  // (on darwin, createCredentialStore() would otherwise ignore HOME and
+  // read/write the login keychain under the real service/account names).
+  process.env.CODEBURN_SYNC_TOKEN_STORE = 'file'
 })
 
 afterAll(async () => {
   await idp.close()
+  if (originalStore === undefined) delete process.env.CODEBURN_SYNC_TOKEN_STORE
+  else process.env.CODEBURN_SYNC_TOKEN_STORE = originalStore
 })
 
 beforeEach(async () => {
@@ -73,10 +80,8 @@ describe('sync e2e (mock IdP)', () => {
     const state = 'e2e-test-state'
 
     // 5. Start callback server
-    const { promise: callbackPromise, server } = startCallbackServer(state, 5000)
-    await new Promise(resolve => setTimeout(resolve, 100))
-    const addr = server.address()
-    const port = typeof addr === 'object' && addr ? addr.port : 19876
+    const { promise: callbackPromise, ready } = startCallbackServer(state, 5000, [0])
+    const port = await ready
     const redirectUri = `http://127.0.0.1:${port}/callback`
 
     // 6. Build auth URL (verify it's well-formed)
@@ -92,12 +97,17 @@ describe('sync e2e (mock IdP)', () => {
     expect(parsedUrl.searchParams.get('code_challenge_method')).toBe('S256')
     expect(parsedUrl.searchParams.get('client_id')).toBe('mock-client-id')
 
-    // 7. Simulate browser callback (as if user logged in and IdP redirected)
-    const authCode = 'e2e-auth-code-12345'
-    await fetch(`http://127.0.0.1:${port}/callback?code=${authCode}&state=${state}`)
+    // 7. Drive the real authorize flow: hit the IdP's authorize endpoint
+    // (registers the PKCE challenge, issues a code), then follow its
+    // redirect to our local callback server — like a browser would.
+    const authResp = await fetch(authUrl, { redirect: 'manual' })
+    expect(authResp.status).toBe(302)
+    const location = authResp.headers.get('location')!
+    expect(location).toContain(`http://127.0.0.1:${port}/callback`)
+    await fetch(location)
 
     const callbackResult = await callbackPromise
-    expect(callbackResult.code).toBe(authCode)
+    expect(callbackResult.code).toMatch(/^mock-code-/)
 
     // 8. Exchange code for tokens
     const tokens = await exchangeCode(
@@ -112,7 +122,18 @@ describe('sync e2e (mock IdP)', () => {
     expect(tokens.expires_in).toBe(3600)
 
     // Verify the mock IdP received the code
-    expect(idp.exchangedCodes).toContain(authCode)
+    expect(idp.exchangedCodes).toContain(callbackResult.code)
+
+    // 8b. PKCE negative checks: wrong verifier rejected; code is single-use
+    const authResp2 = await fetch(authUrl.replace(`state=${state}`, 'state=neg-test'), { redirect: 'manual' })
+    const loc2 = new URL(authResp2.headers.get('location')!)
+    const code2 = loc2.searchParams.get('code')!
+    await expect(
+      exchangeCode(oidc.token_endpoint, code2, 'wrong-verifier-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', redirectUri, discovery.client_id)
+    ).rejects.toThrow(/PKCE verification failed|Token exchange failed/)
+    await expect(
+      exchangeCode(oidc.token_endpoint, callbackResult.code, pkce.code_verifier, redirectUri, discovery.client_id)
+    ).rejects.toThrow(/unknown or reused code|Token exchange failed/)
 
     // 9. Store refresh token
     const store = createCredentialStore()

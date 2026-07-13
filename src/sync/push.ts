@@ -6,6 +6,7 @@
  */
 
 import type { ProjectSummary } from '../types.js'
+import { assertHttps } from './discovery.js'
 import { ledgerKeySet, appendToLedger, type LedgerEntry } from './ledger.js'
 import { buildOtlpPayload, batchCalls, type CallWithSession } from './otlp.js'
 
@@ -90,6 +91,7 @@ export function parseRetryAfterMs(value: string | null): number | null {
  * retry on the next push.
  */
 export async function sendBatches(opts: SendBatchesOptions): Promise<PushResult> {
+  assertHttps(opts.endpoint, 'Traces endpoint')
   const log = opts.log ?? (() => {})
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
   const maxWaitMs = opts.maxWaitMs ?? 120_000
@@ -143,8 +145,11 @@ export async function sendBatches(opts: SendBatchesOptions): Promise<PushResult>
       // Check for partial success
       let rejected = 0
       try {
-        const body = await response.json() as { partialSuccess?: { rejectedSpans?: number } }
-        rejected = body?.partialSuccess?.rejectedSpans ?? 0
+        const body = await response.json() as { partialSuccess?: { rejectedSpans?: number | string } }
+        // proto3 int64 JSON mapping: strict protojson servers send int64 as a
+        // string — Number() both so `totalRejected +=` never concatenates.
+        rejected = Number(body?.partialSuccess?.rejectedSpans ?? 0)
+        if (!Number.isFinite(rejected) || rejected < 0) rejected = 0
       } catch { /* empty response = full success */ }
 
       if (rejected > 0) {

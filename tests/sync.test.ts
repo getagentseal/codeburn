@@ -34,7 +34,7 @@ describe('parseDiscoveryDoc', () => {
   })
 
   it('rejects version > 1', () => {
-    expect(() => parseDiscoveryDoc({ version: 2, issuer: 'x', client_id: 'y' }))
+    expect(() => parseDiscoveryDoc({ version: 2, issuer: 'https://idp.example', client_id: 'y' }))
       .toThrow('Please update codeburn')
   })
 
@@ -44,28 +44,33 @@ describe('parseDiscoveryDoc', () => {
   })
 
   it('rejects missing client_id', () => {
-    expect(() => parseDiscoveryDoc({ version: 1, issuer: 'x' }))
+    expect(() => parseDiscoveryDoc({ version: 1, issuer: 'https://idp.example' }))
       .toThrow('missing required field: client_id')
   })
 
   it('defaults traces_path to /v1/traces when absent', () => {
-    const doc = parseDiscoveryDoc({ issuer: 'x', client_id: 'y' })
+    const doc = parseDiscoveryDoc({ issuer: 'https://idp.example', client_id: 'y' })
     expect(doc.traces_path).toBe('/v1/traces')
   })
 
   it('defaults max_batch_size to 1000 when absent', () => {
-    const doc = parseDiscoveryDoc({ issuer: 'x', client_id: 'y' })
+    const doc = parseDiscoveryDoc({ issuer: 'https://idp.example', client_id: 'y' })
     expect(doc.max_batch_size).toBe(1000)
   })
 
   it('defaults scopes to ["openid"] when absent', () => {
-    const doc = parseDiscoveryDoc({ issuer: 'x', client_id: 'y' })
+    const doc = parseDiscoveryDoc({ issuer: 'https://idp.example', client_id: 'y' })
     expect(doc.scopes).toEqual(['openid'])
   })
 
   it('treats absent version as v1', () => {
-    const doc = parseDiscoveryDoc({ issuer: 'x', client_id: 'y' })
+    const doc = parseDiscoveryDoc({ issuer: 'https://idp.example', client_id: 'y' })
     expect(doc.version).toBe(1)
+  })
+
+  it('rejects non-https issuer (RFC 8252 §8.3)', () => {
+    expect(() => parseDiscoveryDoc({ version: 1, issuer: 'http://idp.example', client_id: 'y' }))
+      .toThrow(/must use https/)
   })
 
   it('rejects non-object input', () => {
@@ -164,12 +169,10 @@ describe('resolveScopes', () => {
 describe('startCallbackServer', () => {
   it('accepts valid callback with matching state', async () => {
     const state = 'test-state-123'
-    const { promise, server } = startCallbackServer(state, 5000)
+    const { promise, ready } = startCallbackServer(state, 5000, [0])
 
     // Wait for server to bind
-    await new Promise(resolve => setTimeout(resolve, 200))
-    const addr = server.address()
-    const port = typeof addr === 'object' && addr ? addr.port : CALLBACK_PORTS[0]
+    const port = await ready
 
     // Simulate IdP callback
     await fetch(`http://127.0.0.1:${port}/callback?code=auth-code-xyz&state=${state}`)
@@ -180,11 +183,8 @@ describe('startCallbackServer', () => {
 
   it('rejects callback with wrong state', async () => {
     const state = 'correct-state'
-    const { promise, server } = startCallbackServer(state, 5000)
-
-    await new Promise(resolve => setTimeout(resolve, 200))
-    const addr = server.address()
-    const port = typeof addr === 'object' && addr ? addr.port : CALLBACK_PORTS[0]
+    const { promise, ready } = startCallbackServer(state, 5000, [0])
+    const port = await ready
 
     // Send with wrong state — server stays running
     const resp = await fetch(`http://127.0.0.1:${port}/callback?code=xxx&state=wrong-state`)
@@ -197,7 +197,7 @@ describe('startCallbackServer', () => {
   }, 10000)
 
   it('times out after configured duration', async () => {
-    const { promise } = startCallbackServer('state', 300) // 300ms timeout
+    const { promise } = startCallbackServer('state', 300, [0]) // 300ms timeout
 
     await expect(promise).rejects.toThrow('timed out')
   }, 5000)

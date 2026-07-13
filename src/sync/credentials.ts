@@ -185,6 +185,13 @@ function isCommandAvailable(cmd: string): boolean {
 }
 
 export function createCredentialStore(): CredentialStore {
+  // Test/CI escape hatch: force the file store (respects $HOME, so tests
+  // can fully isolate with a temp HOME). Without this, darwin machines
+  // would hit the real login keychain during the offline test suite.
+  if (process.env.CODEBURN_SYNC_TOKEN_STORE === 'file') {
+    return new FileStore()
+  }
+
   if (process.platform === 'darwin') {
     return new KeychainStore()
   }

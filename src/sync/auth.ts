@@ -7,6 +7,7 @@
 import { createHash, randomBytes } from 'crypto'
 import { createServer, type Server } from 'http'
 import { URL } from 'url'
+import { assertHttps } from './discovery.js'
 
 export interface OidcConfig {
   authorization_endpoint: string
@@ -32,6 +33,7 @@ export class AuthError extends Error {
 // --- OIDC Discovery ---
 
 export async function fetchOidcConfig(issuer: string): Promise<OidcConfig> {
+  assertHttps(issuer, 'OIDC issuer')
   const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`
 
   let response: Response
@@ -52,10 +54,25 @@ export async function fetchOidcConfig(issuer: string): Promise<OidcConfig> {
     throw new AuthError(`OIDC discovery returned invalid JSON: ${url}`)
   }
 
+  // Issuer mix-up defense (OIDC Discovery §4.3): the issuer claim in the
+  // metadata must match the issuer we fetched it from.
+  const issuerClaim = typeof body.issuer === 'string' ? body.issuer.replace(/\/$/, '') : ''
+  if (issuerClaim !== issuer.replace(/\/$/, '')) {
+    throw new AuthError(
+      `OIDC issuer mismatch: metadata claims "${body.issuer}" but was fetched from "${issuer}"`
+    )
+  }
+
   const authorization_endpoint = body.authorization_endpoint
   const token_endpoint = body.token_endpoint
   if (typeof authorization_endpoint !== 'string' || typeof token_endpoint !== 'string') {
     throw new AuthError('OIDC discovery missing authorization_endpoint or token_endpoint')
+  }
+  // Tokens travel on these endpoints — enforce https (loopback exempt)
+  assertHttps(authorization_endpoint, 'authorization_endpoint')
+  assertHttps(token_endpoint, 'token_endpoint')
+  if (typeof body.revocation_endpoint === 'string') {
+    assertHttps(body.revocation_endpoint, 'revocation_endpoint')
   }
 
   return {
@@ -127,13 +144,29 @@ export interface CallbackResult {
 export function startCallbackServer(
   expectedState: string,
   timeoutMs: number = 300_000, // 5 minutes
-): { promise: Promise<CallbackResult>; port: number; server: Server } {
+  ports: readonly number[] = CALLBACK_PORTS, // tests pass [0] for an ephemeral port
+): { promise: Promise<CallbackResult>; ready: Promise<number>; server: Server } {
   let resolvedPort = 0
   let server: Server
+  let readyResolve!: (port: number) => void
+  let readyReject!: (err: Error) => void
+  const ready = new Promise<number>((resolve, reject) => {
+    readyResolve = resolve
+    readyReject = reject
+  })
 
   const promise = new Promise<CallbackResult>((resolve, reject) => {
+    // Fully shut down: stop listening AND destroy lingering keep-alive
+    // sockets. Without this, an HTTP client's pooled connection keeps the
+    // dead server alive and can swallow requests meant for a later server
+    // on the same port.
+    const shutdown = () => {
+      try { server.close() } catch { /* already closed */ }
+      try { server.closeAllConnections() } catch { /* Node < 18.2 */ }
+    }
+
     const timer = setTimeout(() => {
-      server?.close()
+      shutdown()
       reject(new AuthError('Login timed out after 5 minutes. Please try again.'))
     }, timeoutMs)
 
@@ -143,60 +176,74 @@ export function startCallbackServer(
       const state = url.searchParams.get('state')
       const error = url.searchParams.get('error')
 
+      // Connection: close on every response — the callback server is
+      // single-purpose and must never leave pooled keep-alive sockets behind.
       if (error) {
-        res.writeHead(400, { 'Content-Type': 'text/html' })
+        res.writeHead(400, { 'Content-Type': 'text/html', 'Connection': 'close' })
         res.end('<html><body><h1>Login failed</h1><p>You can close this tab.</p></body></html>')
         clearTimeout(timer)
-        server.close()
+        shutdown()
         reject(new AuthError(`IdP returned error: ${error}`))
         return
       }
 
       if (state !== expectedState) {
-        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.writeHead(400, { 'Content-Type': 'text/plain', 'Connection': 'close' })
         res.end('Invalid state parameter')
         return // don't close — might be a stale request
       }
 
       if (!code) {
-        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.writeHead(400, { 'Content-Type': 'text/plain', 'Connection': 'close' })
         res.end('Missing authorization code')
         return
       }
 
-      res.writeHead(200, { 'Content-Type': 'text/html' })
+      res.writeHead(200, { 'Content-Type': 'text/html', 'Connection': 'close' })
       res.end('<html><body><h1>✓ Login successful</h1><p>You can close this tab.</p></body></html>')
       clearTimeout(timer)
-      server.close()
+      shutdown()
       resolve({ code, port: resolvedPort })
     })
 
-    // Try ports in order
+    // Try ports in order. The error handler is guarded on `resolvedPort` so a
+    // late error event can never trigger a second listen() after a successful
+    // bind (which would silently move the server off the advertised port).
     const tryListen = (ports: readonly number[], idx: number) => {
       if (idx >= ports.length) {
         clearTimeout(timer)
-        reject(new AuthError(`All callback ports (${ports.join(', ')}) are in use. Close other codeburn instances and retry.`))
+        const err = new AuthError(`All callback ports (${ports.join(', ')}) are in use. Close other codeburn instances and retry.`)
+        readyReject(err)
+        reject(err)
         return
       }
       const port = ports[idx]!
       server.once('error', (err: NodeJS.ErrnoException) => {
+        if (resolvedPort !== 0) return // already bound — never rebind
         if (err.code === 'EADDRINUSE') {
           tryListen(ports, idx + 1)
         } else {
           clearTimeout(timer)
-          reject(new AuthError(`Callback server error: ${err.message}`))
+          const authErr = new AuthError(`Callback server error: ${err.message}`)
+          readyReject(authErr)
+          reject(authErr)
         }
       })
       server.listen(port, '127.0.0.1', () => {
-        resolvedPort = port
+        // port 0 = OS-assigned ephemeral port — read the real one back
+        const addr = server.address()
+        resolvedPort = typeof addr === 'object' && addr ? addr.port : port
+        readyResolve(resolvedPort)
       })
     }
 
-    tryListen(CALLBACK_PORTS, 0)
+    tryListen(ports, 0)
   })
 
-  // Return immediately so caller can read the port
-  return { promise, port: resolvedPort, server: server! }
+  // `ready` resolves with the actually-bound port once listening — callers
+  // must await it before building the redirect URI (port fallback means the
+  // first port in CALLBACK_PORTS is not guaranteed).
+  return { promise, ready, server: server! }
 }
 
 // --- Token Exchange ---
@@ -208,6 +255,7 @@ export async function exchangeCode(
   redirectUri: string,
   clientId: string,
 ): Promise<TokenResponse> {
+  assertHttps(tokenEndpoint, 'token_endpoint')
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
@@ -246,6 +294,7 @@ export async function refreshToken(
   refreshTokenValue: string,
   clientId: string,
 ): Promise<TokenResponse> {
+  assertHttps(tokenEndpoint, 'token_endpoint')
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshTokenValue,

@@ -9,6 +9,7 @@
  * - /oauth2/revoke (token revocation)
  */
 
+import { createHash } from 'crypto'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http'
 
 export interface MockIdpOptions {
@@ -40,6 +41,9 @@ export async function startMockIdp(opts: MockIdpOptions = {}): Promise<MockIdp> 
   const accessToken = opts.accessToken ?? 'mock-access-token-xyz'
   let currentRefreshToken = refreshToken
   let rotationCounter = 0
+  let codeCounter = 0
+  // code -> S256 code_challenge registered at /oauth2/authorize
+  const pendingCodes = new Map<string, string>()
 
   const state: MockIdp = {
     port: 0,
@@ -84,6 +88,27 @@ export async function startMockIdp(opts: MockIdpOptions = {}): Promise<MockIdp> 
       return
     }
 
+    // --- Authorize endpoint (records the PKCE challenge, issues a code,
+    //     redirects to the client's redirect_uri like a real IdP) ---
+    if (path === '/oauth2/authorize' && req.method === 'GET') {
+      const challenge = url.searchParams.get('code_challenge')
+      const method = url.searchParams.get('code_challenge_method')
+      const redirectUri = url.searchParams.get('redirect_uri')
+      const reqState = url.searchParams.get('state')
+      if (!challenge || method !== 'S256' || !redirectUri) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'invalid_request', error_description: 'missing code_challenge/S256/redirect_uri' }))
+        return
+      }
+      codeCounter++
+      const code = `mock-code-${codeCounter}`
+      pendingCodes.set(code, challenge)
+      const location = `${redirectUri}?code=${encodeURIComponent(code)}&state=${encodeURIComponent(reqState ?? '')}`
+      res.writeHead(302, { Location: location })
+      res.end()
+      return
+    }
+
     // --- Token endpoint ---
     if (path === '/oauth2/token' && req.method === 'POST') {
       let body = ''
@@ -99,6 +124,26 @@ export async function startMockIdp(opts: MockIdpOptions = {}): Promise<MockIdp> 
             res.end(JSON.stringify({ error: 'invalid_request', error_description: 'missing code' }))
             return
           }
+
+          // PKCE S256 verification (RFC 7636 §4.6): the code must have been
+          // issued by /oauth2/authorize, and BASE64URL(SHA256(code_verifier))
+          // must equal the challenge registered with it.
+          const expectedChallenge = pendingCodes.get(code)
+          if (!expectedChallenge) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'invalid_grant', error_description: 'unknown or reused code' }))
+            return
+          }
+          const verifier = params.get('code_verifier')
+          const computed = verifier
+            ? createHash('sha256').update(verifier).digest('base64url')
+            : ''
+          if (computed !== expectedChallenge) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'invalid_grant', error_description: 'PKCE verification failed' }))
+            return
+          }
+          pendingCodes.delete(code) // single-use
 
           state.exchangedCodes.push(code)
           state.issuedTokens.access.push(accessToken)

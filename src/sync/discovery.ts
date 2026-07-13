@@ -20,6 +20,28 @@ export class DiscoveryError extends Error {
   }
 }
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])
+
+/**
+ * Enforce https on remote endpoints (RFC 8252 §8.3). Refresh tokens and
+ * bearer tokens travel on these URLs — plaintext http is only permitted
+ * for loopback addresses (local development and offline tests).
+ */
+export function assertHttps(url: string, label: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new DiscoveryError(`${label} is not a valid URL: ${url}`)
+  }
+  if (parsed.protocol === 'https:') return
+  if (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname)) return
+  throw new DiscoveryError(
+    `${label} must use https (got ${parsed.protocol}//${parsed.host}). ` +
+    `Plain http is only allowed for loopback (127.0.0.1).`
+  )
+}
+
 const SUPPORTED_VERSION = 1
 
 export function parseDiscoveryDoc(raw: unknown): CodeburnDiscoveryDoc {
@@ -48,6 +70,9 @@ export function parseDiscoveryDoc(raw: unknown): CodeburnDiscoveryDoc {
     throw new DiscoveryError('Discovery doc missing required field: client_id')
   }
 
+  // Format validation after presence checks (clearer errors)
+  assertHttps(issuer, 'Issuer')
+
   // Optional with defaults
   const scopes = Array.isArray(doc.scopes)
     ? doc.scopes.filter((s): s is string => typeof s === 'string')
@@ -63,6 +88,7 @@ export function parseDiscoveryDoc(raw: unknown): CodeburnDiscoveryDoc {
 }
 
 export async function fetchDiscoveryDoc(baseUrl: string): Promise<CodeburnDiscoveryDoc> {
+  assertHttps(baseUrl, 'Base URL')
   const url = `${baseUrl.replace(/\/$/, '')}/.well-known/codeburn-export.json`
 
   let response: Response

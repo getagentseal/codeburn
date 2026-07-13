@@ -1,5 +1,5 @@
 export { registerSyncCommands } from './cli.js'
-export { fetchDiscoveryDoc, parseDiscoveryDoc, type CodeburnDiscoveryDoc } from './discovery.js'
+export { fetchDiscoveryDoc, parseDiscoveryDoc, assertHttps, type CodeburnDiscoveryDoc } from './discovery.js'
 export { fetchOidcConfig, generatePkce, buildAuthUrl, resolveScopes, exchangeCode, refreshToken } from './auth.js'
 export { createCredentialStore, type CredentialStore, type StorageMethod } from './credentials.js'
 export { readSyncConfig, writeSyncConfig, deleteSyncConfig, type SyncConfig } from './config.js'

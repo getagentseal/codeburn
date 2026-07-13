@@ -52,13 +52,10 @@ export function registerSyncCommands(program: Command): void {
       const pkce = generatePkce()
       const state = randomBytes(16).toString('hex')
 
-      // 5. Start callback server
-      const { promise: callbackPromise, server } = startCallbackServer(state)
-
-      // Wait briefly for server to bind, then get the port
-      await new Promise(resolve => setTimeout(resolve, 100))
-      const addr = server.address()
-      const port = typeof addr === 'object' && addr ? addr.port : CALLBACK_PORTS[0]
+      // 5. Start callback server — await the actually-bound port (port
+      // fallback means it may not be the first in CALLBACK_PORTS)
+      const { promise: callbackPromise, ready } = startCallbackServer(state)
+      const port = await ready
       const redirectUri = `http://127.0.0.1:${port}/callback`
 
       // 6. Build auth URL and open browser
@@ -193,16 +190,12 @@ export function registerSyncCommands(program: Command): void {
         process.exit(1)
       }
 
-      const { join } = await import('path')
-      const { homedir } = await import('os')
-      const { unlinkSync, existsSync } = await import('fs')
-
-      const ledgerPath = join(homedir(), '.cache', 'codeburn', 'sync-ledger.json')
-      if (existsSync(ledgerPath)) {
-        unlinkSync(ledgerPath)
-        process.stderr.write('Ledger cleared. Next push will re-send all calls in window.\n')
+      const { clearLedger } = await import('./ledger.js')
+      const removed = clearLedger()
+      if (removed > 0) {
+        process.stderr.write(`Ledger cleared (${removed} entries). Next push will re-send all calls in window.\n`)
       } else {
-        process.stderr.write('No ledger file found (nothing to reset).\n')
+        process.stderr.write('No ledger entries found (nothing to reset).\n')
       }
     })
 
@@ -319,6 +312,12 @@ export function registerSyncCommands(program: Command): void {
         }
         if (unsent.length > MAX_PER_PUSH) {
           process.stderr.write(`  ${unsent.length - MAX_PER_PUSH} calls remaining (safety limit). Run \`codeburn sync push\` again.\n`)
+        }
+
+        // Non-zero exit when the push did not complete, so cron/scripts can
+        // detect it. Ledgered progress is kept; next push resumes.
+        if (result.outcome !== 'complete') {
+          process.exitCode = 1
         }
       } catch (err) {
         process.stderr.write(`${(err as Error).message}\n`)

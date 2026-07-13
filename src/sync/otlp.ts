@@ -43,10 +43,14 @@ export interface OtlpPayload {
 
 let cachedDeviceId: string | null = null
 
+/** Pure derivation — exposed so the encoding can be golden-pinned in tests. */
+export function deriveDeviceId(host: string, username: string): string {
+  return createHash('sha256').update(`${host}:${username}`).digest('hex').slice(0, 16)
+}
+
 export function getDeviceId(): string {
   if (cachedDeviceId) return cachedDeviceId
-  const raw = `${hostname()}:${userInfo().username}`
-  cachedDeviceId = createHash('sha256').update(raw).digest('hex').slice(0, 16)
+  cachedDeviceId = deriveDeviceId(hostname(), userInfo().username)
   return cachedDeviceId
 }
 

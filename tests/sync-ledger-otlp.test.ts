@@ -13,6 +13,7 @@ import {
   buildOtlpPayload,
   batchCalls,
   getDeviceId,
+  deriveDeviceId,
   type CallWithSession,
 } from '../src/sync/otlp.js'
 
@@ -76,6 +77,15 @@ describe('deriveSpanId', () => {
     const b = deriveSpanId('key-2')
     expect(a).not.toBe(b)
   })
+
+  // GOLDEN PIN — do not update this value. The idempotency contract depends
+  // on span IDs being stable across releases: if the hash input or encoding
+  // ever changes, every re-sent span gets a new identity and backends that
+  // key on span ID double-count history. If this test fails, revert the
+  // encoding change (or design an explicit migration).
+  it('golden: SHA-256(deduplicationKey) first 8 bytes as hex', () => {
+    expect(deriveSpanId('golden-dedup-key')).toBe('ec3ca28cceacf381')
+  })
 })
 
 describe('deriveTraceId', () => {
@@ -89,6 +99,11 @@ describe('deriveTraceId', () => {
     const b = deriveTraceId('session-1')
     expect(a).toBe(b)
   })
+
+  // GOLDEN PIN — see deriveSpanId golden test for why this must not change.
+  it('golden: SHA-256(sessionId) first 16 bytes as hex', () => {
+    expect(deriveTraceId('golden-session-id')).toBe('ff1b1358ef64c52f80e50e7ae47ca176')
+  })
 })
 
 describe('getDeviceId', () => {
@@ -99,6 +114,12 @@ describe('getDeviceId', () => {
 
   it('is stable across calls', () => {
     expect(getDeviceId()).toBe(getDeviceId())
+  })
+
+  // GOLDEN PIN — device ID must be stable across releases so a developer's
+  // machine keeps one identity in the backend.
+  it('golden: SHA-256(hostname:username) first 8 bytes as hex', () => {
+    expect(deriveDeviceId('host.example', 'alice')).toBe('004d1a2fc048f575')
   })
 })
 
@@ -216,6 +237,9 @@ describe('ledger', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'codeburn-ledger-'))
     process.env.HOME = tmpDir
+    // env-isolation.ts redirects XDG_CACHE_HOME to a per-worker sandbox shared
+    // across tests — the ledger honors XDG, so point it at the per-test dir.
+    process.env.XDG_CACHE_HOME = join(tmpDir, '.cache')
   })
 
   afterEach(async () => {
@@ -282,5 +306,70 @@ describe('ledger', () => {
   it('clearLedger returns 0 when no file', async () => {
     const { clearLedger } = await import('../src/sync/ledger.js')
     expect(clearLedger()).toBe(0)
+  })
+
+  it('corrupt ledger file reads as empty (crash-safe recovery)', async () => {
+    const { readLedger } = await import('../src/sync/ledger.js')
+    const { mkdirSync, writeFileSync } = await import('fs')
+    const { join } = await import('path')
+    const dir = join(process.env.HOME!, '.cache', 'codeburn')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'sync-ledger.json'), '{"truncated mid-wri')
+    expect(readLedger()).toEqual([])
+  })
+
+  it('writes are atomic — no .tmp file left behind', async () => {
+    const { writeLedger } = await import('../src/sync/ledger.js')
+    const { existsSync } = await import('fs')
+    const { join } = await import('path')
+    writeLedger([{ key: 'a', ts: '2026-07-01T00:00:00Z' }])
+    const dir = join(process.env.HOME!, '.cache', 'codeburn')
+    expect(existsSync(join(dir, 'sync-ledger.json'))).toBe(true)
+    expect(existsSync(join(dir, 'sync-ledger.json.tmp'))).toBe(false)
+  })
+
+  it('honors XDG_CACHE_HOME when set', async () => {
+    const { writeLedger, readLedger } = await import('../src/sync/ledger.js')
+    const { existsSync } = await import('fs')
+    const { join } = await import('path')
+    const xdgDir = join(process.env.HOME!, 'xdg-cache')
+    const original = process.env.XDG_CACHE_HOME
+    process.env.XDG_CACHE_HOME = xdgDir
+    try {
+      writeLedger([{ key: 'xdg-entry', ts: '2026-07-01T00:00:00Z' }])
+      expect(existsSync(join(xdgDir, 'codeburn', 'sync-ledger.json'))).toBe(true)
+      expect(readLedger().map(e => e.key)).toEqual(['xdg-entry'])
+    } finally {
+      if (original === undefined) delete process.env.XDG_CACHE_HOME
+      else process.env.XDG_CACHE_HOME = original
+    }
+  })
+})
+
+// ── assertHttps (RFC 8252 §8.3) ───────────────────────────────────────
+
+describe('assertHttps', () => {
+  it('accepts https URLs', async () => {
+    const { assertHttps } = await import('../src/sync/discovery.js')
+    expect(() => assertHttps('https://telemetry.example.com', 'Base URL')).not.toThrow()
+  })
+
+  it('accepts http on loopback (offline tests, local dev)', async () => {
+    const { assertHttps } = await import('../src/sync/discovery.js')
+    expect(() => assertHttps('http://127.0.0.1:8080/x', 'Base URL')).not.toThrow()
+    expect(() => assertHttps('http://localhost:3000', 'Base URL')).not.toThrow()
+    expect(() => assertHttps('http://[::1]:9999', 'Base URL')).not.toThrow()
+  })
+
+  it('rejects plain http on non-loopback hosts', async () => {
+    const { assertHttps } = await import('../src/sync/discovery.js')
+    expect(() => assertHttps('http://telemetry.example.com', 'Base URL')).toThrow(/must use https/)
+    expect(() => assertHttps('http://192.168.1.10', 'Issuer')).toThrow(/must use https/)
+  })
+
+  it('rejects non-http(s) schemes and garbage', async () => {
+    const { assertHttps } = await import('../src/sync/discovery.js')
+    expect(() => assertHttps('ftp://example.com', 'Base URL')).toThrow(/must use https/)
+    expect(() => assertHttps('not a url', 'Base URL')).toThrow(/not a valid URL/)
   })
 })

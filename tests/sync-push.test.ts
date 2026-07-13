@@ -89,6 +89,9 @@ const originalHome = process.env.HOME
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'codeburn-push-'))
   process.env.HOME = tmpDir
+  // env-isolation.ts redirects XDG_CACHE_HOME to a per-worker sandbox shared
+  // across tests — the ledger honors XDG, so point it at the per-test dir.
+  process.env.XDG_CACHE_HOME = join(tmpDir, '.cache')
 })
 
 afterEach(async () => {
