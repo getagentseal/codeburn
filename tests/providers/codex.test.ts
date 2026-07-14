@@ -105,6 +105,14 @@ async function writeSession(dir: string, date: string, filename: string, lines: 
   return filePath
 }
 
+async function writeArchivedSession(dir: string, filename: string, lines: string[]) {
+  const archivedDir = join(dir, 'archived_sessions')
+  await mkdir(archivedDir, { recursive: true })
+  const filePath = join(archivedDir, filename)
+  await writeFile(filePath, lines.join('\n') + '\n')
+  return filePath
+}
+
 describe('codex provider - model display names', () => {
   it('maps gpt-5.3-codex-spark to its own label', () => {
     const provider = createCodexProvider(tmpDir)
@@ -134,6 +142,22 @@ describe('codex provider - session discovery', () => {
     expect(sessions[0]!.provider).toBe('codex')
     expect(sessions[0]!.project).toBe('Users-test-myproject')
     expect(sessions[0]!.path).toContain('rollout-abc123.jsonl')
+  })
+
+  it('discovers sessions moved to the flat archived_sessions directory', async () => {
+    const filePath = await writeArchivedSession(tmpDir, 'rollout-archived.jsonl', [
+      sessionMeta({ cwd: '/Users/test/archived' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toEqual([{
+      path: filePath,
+      project: 'Users-test-archived',
+      provider: 'codex',
+    }])
   })
 
   it('returns empty for non-existent directory', async () => {
