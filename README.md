@@ -447,7 +447,7 @@ Sync sends token counts, costs, models, and projects — never prompts or code. 
 | `codeburn models --task feature` | Filter to feature-development work |
 | `codeburn models --provider claude` | Filter to a single provider |
 
-Arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). Press `h` to toggle the main Daily Activity panel between the selected period and full history. In full-history mode, use Page Up/Page Down (or Shift+Space/Space) to page, `j`/`k` or the up/down arrows to move one row, and `g`/`G` to jump to either end. Press `q` to quit, `1` `2` `3` `4` `5` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). The main Daily Activity panel always shows scrollable full history: use up/down to move one day, Page Up/Page Down (or Shift+Space/Space) to page, and `g`/`G` to jump to either end. These keys update the panel in place instead of moving terminal scrollback. Press `q` to quit, `1` `2` `3` `4` `5` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
 </details>
 

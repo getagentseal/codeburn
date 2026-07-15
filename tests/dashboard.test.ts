@@ -2,7 +2,7 @@ import { homedir } from 'os'
 
 import { describe, it, expect } from 'vitest'
 
-import { getDailyActivityRows, pageHistoryCursor, shortProject } from '../src/dashboard.js'
+import { getDailyActivityRows, pageHistoryCursor, scrollHistoryCursor, shortProject } from '../src/dashboard.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
@@ -190,5 +190,12 @@ describe('Daily Activity history', () => {
     expect(pageHistoryCursor(0, 1, 35, 69)).toBe(34)
     expect(pageHistoryCursor(34, -1, 35, 69)).toBe(0)
     expect(pageHistoryCursor(0, -1, 35, 69)).toBe(0)
+  })
+
+  it('scrolls one row without moving past either end', () => {
+    expect(scrollHistoryCursor(0, 1, 14, 21)).toBe(1)
+    expect(scrollHistoryCursor(1, -1, 14, 21)).toBe(0)
+    expect(scrollHistoryCursor(0, -1, 14, 21)).toBe(0)
+    expect(scrollHistoryCursor(7, 1, 14, 21)).toBe(7)
   })
 })
