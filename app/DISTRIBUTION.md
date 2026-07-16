@@ -1,9 +1,12 @@
 # Distributing CodeBurn Desktop
 
-This document describes how to produce a distributable macOS build of the
-Electron desktop app **without a paid Apple Developer account**. There is no
-CI automation for this yet (unlike the CLI and menubar release processes in
-`../RELEASING.md`) — packaging is run by hand on a maintainer's machine.
+This document describes how to produce distributable macOS, Windows, and Linux
+builds of the Electron desktop app. The macOS build is ad-hoc-signed and
+**not notarized** (no paid Apple Developer account); the Windows and Linux
+builds are **unsigned**. There is no CI automation for any of this yet (unlike
+the CLI and menubar release processes in `../RELEASING.md`) — packaging is run
+by hand on a maintainer's machine. All three targets are produced by
+`electron-builder` and can be cross-built from a single macOS host.
 
 ## Prerequisite on the target machine: the codeburn CLI
 
@@ -32,13 +35,19 @@ About dialog, and the artifact filenames all read it from there.
 
 ```sh
 npm --prefix app install
-npm --prefix app run package          # both arm64 and x64
-npm --prefix app run package:arm64    # arm64 only (faster on Apple Silicon)
-npm --prefix app run package:x64      # x64 only
+npm --prefix app run package          # macOS, both arm64 and x64
+npm --prefix app run package:arm64    # macOS arm64 only (faster on Apple Silicon)
+npm --prefix app run package:x64      # macOS x64 only
+npm --prefix app run package:win      # Windows NSIS installer, x64
+npm --prefix app run package:linux    # Linux AppImage, x64
 ```
 
 `package` runs `npm run build` (compiles `electron/` with `tsc`, builds the
-renderer with `vite`) and then `electron-builder --mac`.
+renderer with `vite`) and then `electron-builder --mac`. `package:win` and
+`package:linux` mirror it exactly, swapping the final flag for
+`electron-builder --win` and `electron-builder --linux`. All three can run on
+the same macOS host — electron-builder downloads the NSIS and AppImage tooling
+on first use.
 
 ### Artifacts
 
@@ -91,6 +100,85 @@ separate `electron-builder.yml`):
   `dist`, which collides with this app's existing `tsc`/`vite` build output
   (`app/dist/electron`, `app/dist/renderer`) that `files` reads from. Using
   a separate `release/` directory keeps build inputs and packaging outputs apart.
+
+## Windows and Linux builds
+
+Both are cross-built from the same macOS host used for the mac build — no
+Windows or Linux machine, and no `wine`, is required. electron-builder 26
+embeds the Windows executable's icon/version resources natively and downloads
+the NSIS and AppImage tooling on first run.
+
+### Windows (`package:win`)
+
+`electron-builder --win` produces a single artifact in `app/release/`:
+
+- **`CodeBurn Setup 0.9.15.exe`** — the NSIS installer (the version number
+  tracks `package.json`; note the spaces in the filename). A `.exe.blockmap`
+  is written alongside it (differential-update metadata, unused — no
+  auto-updater yet).
+
+Config (`build.win` + `build.nsis`):
+
+- `win.target: nsis`, `arch: x64`.
+- `win.icon: build/icon.png` — electron-builder converts the 1024x1024 PNG to
+  a multi-resolution `.ico` at build time (same source PNG as the mac icon).
+- `nsis.oneClick: false` — an assisted installer with a wizard, so users get
+  an **install-directory choice** instead of a silent one-click install.
+- `nsis.perMachine: false` — installs per-user (into the user's `AppData`),
+  so **no administrator/UAC elevation** is needed.
+
+**The build is UNSIGNED** (no Authenticode certificate). electron-builder logs
+`signing with signtool.exe`, but with no certificate configured that step is a
+no-op — the `.exe` ships without a signature. On first run, Windows SmartScreen
+shows **"Windows protected your PC"**. Users click **"More info" → "Run
+anyway"** to launch it. This is expected for an unsigned build; the only fix is
+a purchased code-signing (Authenticode/EV) certificate.
+
+### Linux (`package:linux`)
+
+`electron-builder --linux` produces a single artifact in `app/release/`:
+
+- **`CodeBurn-0.9.15.AppImage`** — a self-contained AppImage (no install step,
+  no package manager).
+
+Config (`build.linux`):
+
+- `linux.target: AppImage`, `arch: x64`.
+- `linux.category: "Development"` — the freedesktop menu category.
+- `linux.icon: build/icon.png` — reuses the same source PNG.
+- `linux.maintainer: "AgentSeal <hello@agentseal.org>"` — matches the root
+  `package.json` author.
+- `linux.executableName: "codeburn"` — the binary name inside the AppImage
+  (lowercase, no spaces), distinct from the `CodeBurn` product name.
+
+After downloading, the AppImage must be made executable before it will run:
+
+```sh
+chmod +x CodeBurn-0.9.15.AppImage
+./CodeBurn-0.9.15.AppImage
+```
+
+The build logs one benign warning — `desktopName is not set` — which only
+affects how some desktop environments group the app's windows in the
+taskbar/dock; it does not affect packaging or launch.
+
+## Releases
+
+There is no release CI for the desktop app yet (see the note at the top). When
+a maintainer cuts a desktop release by hand, the GitHub tag convention is:
+
+```
+desktop-v<version>      # e.g. desktop-v0.9.15
+```
+
+This mirrors the menubar's `mac-v<version>` convention (see `../RELEASING.md`)
+and keeps the desktop app's tags in their own namespace, separate from the CLI
+(`v<version>`) and the menubar (`mac-v<version>`). Upload all of the artifacts
+above — the four macOS `.dmg`/`.zip` files, `CodeBurn Setup 0.9.15.exe`, and
+`CodeBurn-0.9.15.AppImage` — to the GitHub Release created at that tag. The
+website's download links **pin that tag** in their URLs, so the release name
+and the artifact filenames must match exactly (in particular the Windows
+installer's `CodeBurn Setup <version>.exe`, spaces included).
 
 ## Verifying a build
 

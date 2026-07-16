@@ -2,7 +2,7 @@
   "name": "codeburn-desktop",
   "private": true,
   "version": "0.9.15",
-  "description": "CodeBurn Desktop — Electron app fed by the codeburn CLI",
+  "description": "CodeBurn Desktop \u2014 Electron app fed by the codeburn CLI",
   "main": "dist/electron/main.js",
   "scripts": {
     "build:electron": "tsc -p tsconfig.electron.json",
@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "package": "npm run build && electron-builder --mac",
     "package:arm64": "npm run build && electron-builder --mac --arm64",
-    "package:x64": "npm run build && electron-builder --mac --x64"
+    "package:x64": "npm run build && electron-builder --mac --x64",
+    "package:win": "npm run build && electron-builder --win",
+    "package:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -53,8 +55,20 @@
     ],
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
@@ -62,6 +76,36 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
-    "dmg": {}
+    "dmg": {},
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "artifactName": "CodeBurn-Setup-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "icon": "build/icon.png",
+      "maintainer": "AgentSeal <hello@agentseal.org>",
+      "executableName": "codeburn"
+    }
   }
 }
