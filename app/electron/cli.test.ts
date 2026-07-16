@@ -12,6 +12,7 @@ const originalPathDirs = process.env.CODEBURN_PATH_DIRS
 const originalPathFile = process.env.CODEBURN_CLI_PATH_FILE
 const originalViteUrl = process.env.VITE_DEV_SERVER_URL
 const originalBundled = process.env.CODEBURN_BUNDLED_CLI
+const originalDevRepoRoot = process.env.CODEBURN_DEV_REPO_ROOT
 
 /** Writes an executable node script and points CODEBURN_BIN at it. */
 function fakeBin(name: string, body: string): string {
@@ -19,6 +20,17 @@ function fakeBin(name: string, body: string): string {
   writeFileSync(p, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 })
   chmodSync(p, 0o755)
   process.env.CODEBURN_BIN = p
+  return p
+}
+
+/** Writes the repo CLI under this test's isolated dev-root override. */
+function fakeDevRepoCli(): string {
+  const repoRoot = join(dir, 'dev-repo')
+  const p = join(repoRoot, 'dist', 'cli.js')
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, '#!/usr/bin/env node\n', { mode: 0o755 })
+  chmodSync(p, 0o755)
+  process.env.CODEBURN_DEV_REPO_ROOT = repoRoot
   return p
 }
 
@@ -37,6 +49,8 @@ afterEach(() => {
   else process.env.VITE_DEV_SERVER_URL = originalViteUrl
   if (originalBundled === undefined) delete process.env.CODEBURN_BUNDLED_CLI
   else process.env.CODEBURN_BUNDLED_CLI = originalBundled
+  if (originalDevRepoRoot === undefined) delete process.env.CODEBURN_DEV_REPO_ROOT
+  else process.env.CODEBURN_DEV_REPO_ROOT = originalDevRepoRoot
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -46,8 +60,9 @@ describe('resolveCodeburnPath (Vite development)', () => {
     process.env.CODEBURN_PATH_DIRS = ''
     process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
     process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
+    const devBin = fakeDevRepoCli()
 
-    expect(resolveCodeburnPath()).toMatch(/dist\/cli\.js$/)
+    expect(resolveCodeburnPath()).toBe(devBin)
   })
 
   it('prefers the repo dev CLI over a persisted-path file (stale global) in dev', () => {
@@ -63,10 +78,21 @@ describe('resolveCodeburnPath (Vite development)', () => {
     writeFileSync(persistedFile, persistedTarget)
     process.env.CODEBURN_CLI_PATH_FILE = persistedFile
     process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
+    const devBin = fakeDevRepoCli()
 
     const resolved = resolveCodeburnPath()
-    expect(resolved).toMatch(/dist\/cli\.js$/)
+    expect(resolved).toBe(devBin)
     expect(resolved).not.toBe(persistedTarget)
+  })
+
+  it('keeps the existing Vite-dev resolution when the dev-root override is unset', () => {
+    delete process.env.CODEBURN_BIN
+    delete process.env.CODEBURN_DEV_REPO_ROOT
+    process.env.CODEBURN_PATH_DIRS = ''
+    process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
+    process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
+
+    expect(resolveCodeburnPath()).toBeNull()
   })
 
   it('does not return the repo dev CLI outside the Vite dev server', () => {
@@ -120,10 +146,10 @@ describe('resolveTarget (bundled CLI in the packaged app)', () => {
     process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
     process.env.CODEBURN_BUNDLED_CLI = bundledEntry('bundled.js')
     process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
+    const devBin = fakeDevRepoCli()
 
     const target = resolveTarget()
-    expect(target?.kind).toBe('external')
-    expect(target && target.kind === 'external' ? target.bin : '').toMatch(/dist\/cli\.js$/)
+    expect(target).toEqual({ kind: 'external', bin: devBin })
   })
 
   it('falls through when CODEBURN_BUNDLED_CLI points at a missing file', () => {
