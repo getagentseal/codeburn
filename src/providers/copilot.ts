@@ -96,6 +96,7 @@ const modelDisplayNames: Record<string, string> = {
 const toolNameMap: Record<string, string> = {
   // JSONL session-state tool names
   bash: 'Bash',
+  skill: 'Skill',
   read_file: 'Read',
   write_file: 'Edit',
   edit_file: 'Edit',
@@ -873,6 +874,14 @@ function createJsonlParser(
             })
             .filter((t): t is string => t !== null)
 
+          const skills = toolRequests.flatMap((t) => {
+            if (typeof t !== 'object' || t === null) return []
+            const name = (t.name ?? t.toolName) ?? ''
+            if (name !== 'skill') return []
+            const skill = t.arguments?.['skill']
+            return typeof skill === 'string' && skill.trim().length > 0 ? [skill.trim()] : []
+          })
+
           // Extract base command names from bash-type tool requests, routing the
           // raw command through the shared extractBashCommands helper so chained
           // commands are normalised the same way as every other provider
@@ -904,6 +913,7 @@ function createJsonlParser(
             costUSD,
             tools,
             bashCommands,
+            skills: skills.length > 0 ? skills : undefined,
             subagentTypes: currentSubagentType ? [currentSubagentType] : undefined,
             timestamp: event.timestamp ?? '',
             speed: 'standard' as const,
