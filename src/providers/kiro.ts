@@ -6,10 +6,10 @@ import { homedir } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
+import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
-const CHARS_PER_TOKEN = 4
 // Kiro bills in credits: individual plans are $20/mo for 1,000 credits and
 // overage is billed at $0.04 per additional credit. We price credits at the
 // public overage rate (the marginal price), mirroring the Codebuff provider's
@@ -225,8 +225,8 @@ function parseChatFile(data: KiroChatFile, sessionId: string, project: string, s
   const dedupKey = `kiro:${sessionId}:${data.executionId}`
   if (seenKeys.has(dedupKey)) return results
 
-  const outputTokens = Math.ceil(totalOutputChars / CHARS_PER_TOKEN)
-  const inputTokens = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
+  const outputTokens = estimateTokensFromChars(totalOutputChars)
+  const inputTokens = estimateTokensFromChars(pendingUserMessage.length)
   const costUSD = calculateCost(modelId, inputTokens, outputTokens, 0, 0, 0)
   const tsDate = parseKiroTimestamp(metadata.startTime)
   if (!tsDate) return results
@@ -372,8 +372,8 @@ function parseModernExecution(data: KiroModernExecution, sourcePath: string, see
   const tsDate = parseKiroTimestamp(rawStartTime)
   if (!tsDate) return results
 
-  const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
-  const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+  const inputTokens = estimateTokensFromChars(inputChars)
+  const outputTokens = estimateTokensFromChars(outputChars)
   // Prefer real metered credits at the public overage rate; fall back to
   // token-estimated pricing when the execution has no usage data — same
   // contract as the CLI and v2 parsers.
@@ -462,8 +462,8 @@ function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seen
     const tsDate = parseKiroTimestamp(timestamp)
     if (!tsDate) { turnIndex++; return }
 
-    const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
-    const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+    const inputTokens = estimateTokensFromChars(inputChars)
+    const outputTokens = estimateTokensFromChars(outputChars)
     // metering_usage values are credits (unit: "credit"), not dollars —
     // convert at the public overage rate. Gate on credits > 0, not array
     // presence: real sessions carry empty metering_usage arrays (turn still
@@ -631,8 +631,8 @@ async function parseWorkspaceSession(record: Record<string, unknown>, source: Se
   if (seenKeys.has(dedupKey)) return results
   seenKeys.add(dedupKey)
 
-  const inputTokens = Math.ceil(inputChars / CHARS_PER_TOKEN)
-  const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+  const inputTokens = estimateTokensFromChars(inputChars)
+  const outputTokens = estimateTokensFromChars(outputChars)
   const costUSD = calculateCost(modelId, inputTokens, outputTokens, 0, 0, 0)
 
   results.push({
@@ -732,12 +732,12 @@ async function parseV2Session(source: SessionSource, seenKeys: Set<string>): Pro
         seenKeys.add(dedupKey)
         // Tool results are fed back to the model as input context, so count them
         // toward input tokens — same treatment as the CLI parser's ToolResults.
-        const inputTokens = Math.ceil((turnUserChars + toolResultChars) / CHARS_PER_TOKEN)
+        const inputTokens = estimateTokensFromChars(turnUserChars + toolResultChars)
         // outputTokens and reasoningTokens are kept disjoint — downstream
         // aggregation (models-report, audit-report, parser) sums the two
         // fields, so folding reasoning into outputTokens would double-count.
-        const reasoningTokens = Math.ceil(reasoningChars / CHARS_PER_TOKEN)
-        const outputTokens = Math.ceil(outputChars / CHARS_PER_TOKEN)
+        const reasoningTokens = estimateTokensFromChars(reasoningChars)
+        const outputTokens = estimateTokensFromChars(outputChars)
         // Prefer real metered credits (converted at the public overage rate)
         // over token estimation; fall back to token pricing when the turn has
         // no usage_summary (e.g. still in progress or null usage). Reasoning

@@ -8,6 +8,7 @@ import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
 import { normalizeContentBlocks } from '../content-utils.js'
+import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -106,7 +107,6 @@ type CodexTokenUsage = {
   total_tokens?: number
 }
 
-const CHARS_PER_TOKEN = 4
 const RAW_HEAD_BYTES = 64 * 1024
 const LARGE_TEXT_CAP = 2000
 
@@ -500,8 +500,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const info = entry.payload.info
           if (!info) {
             if (pendingOutputChars === 0 && pendingUserMessage.length === 0) continue
-            const estInput = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
-            const estOutput = Math.ceil(pendingOutputChars / CHARS_PER_TOKEN)
+            const estInput = estimateTokensFromChars(pendingUserMessage.length)
+            const estOutput = estimateTokensFromChars(pendingOutputChars)
             if (estInput === 0 && estOutput === 0) continue
 
             const model = sessionModel ?? 'gpt-5'

@@ -6,13 +6,13 @@ import chalk from 'chalk'
 
 import { readSessionLines, type SessionLine } from './fs-utils.js'
 import { formatTokens } from './format.js'
+import { estimateTokensFromChars } from './token-estimate.js'
 
 // Block token counts are chars/4 estimates; the "context (exact)" line comes
 // from the last assistant message's API usage. Transcripts store thinking
 // blocks with their text stripped, so reasoning is derived per message as
 // output_tokens minus the estimated visible output.
 
-const CHARS_PER_TOKEN = 4
 export const IMAGE_TOKEN_FALLBACK = 1600
 
 export type BlockStat = { count: number; tokens: number }
@@ -146,7 +146,7 @@ export function newAcc(): Acc {
 }
 
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN)
+  return estimateTokensFromChars(text.length)
 }
 
 export function add(stat: BlockStat, tokens: number): void {

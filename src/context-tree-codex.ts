@@ -4,6 +4,7 @@ import { basename, join } from 'path'
 import { homedir } from 'os'
 
 import { readSessionLines } from './fs-utils.js'
+import { estimateTokensFromChars } from './token-estimate.js'
 import {
   add,
   estimateTokens,
@@ -115,7 +116,7 @@ function addCodexItem(accs: Acc[], item: CodexItem): void {
     // so estimate from the decoded size.
     const encrypted = (item as { encrypted_content?: unknown }).encrypted_content
     const chars = typeof encrypted === 'string' ? encrypted.length * 0.75 : 0
-    for (const acc of accs) add(acc.userCompactSummary, Math.ceil(chars / 4))
+    for (const acc of accs) add(acc.userCompactSummary, estimateTokensFromChars(chars))
   } else if (item.type === 'reasoning') {
     // Tokens are patched from cumulative usage after the walk.
     for (const acc of accs) acc.assistantReasoning.count += 1

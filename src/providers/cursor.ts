@@ -6,6 +6,7 @@ import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
 import { isSqliteAvailable, isSqliteBusyError, getSqliteLoadError, openDatabase, blobToText, type SqliteDatabase } from '../sqlite.js'
+import { estimateTokensFromChars } from '../token-estimate.js'
 import type { DateRange } from '../types.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -73,8 +74,6 @@ type AgentKvRow = {
 function rethrowBusy(err: unknown): void {
   if (isSqliteBusyError(err)) throw err
 }
-
-const CHARS_PER_TOKEN = 4
 
 function getCursorDbPath(): string {
   if (process.platform === 'darwin') {
@@ -801,10 +800,10 @@ function parseBubbles(
           // this loop; per-bubble text only counts when it is the
           // conversation's best available signal.
           if (inputSource(conversationId) === 'text' && textLen > 0) {
-            inputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
+            inputTokens = estimateTokensFromChars(textLen)
           }
         } else {
-          outputTokens = Math.ceil(textLen / CHARS_PER_TOKEN)
+          outputTokens = estimateTokensFromChars(textLen)
         }
         if (inputTokens === 0 && outputTokens === 0) continue
       }
@@ -875,10 +874,10 @@ function parseBubbles(
     const meta = composerMeta.get(cid)
     const inputTokens = source === 'meter'
       ? meta?.tokens ?? 0
-      : Math.ceil(((stream?.userChars ?? 0) + (stream?.contextChars ?? 0)) / CHARS_PER_TOKEN)
+      : estimateTokensFromChars((stream?.userChars ?? 0) + (stream?.contextChars ?? 0))
     // Reply text normally lives on assistant bubbles; count the stream's
     // reply deltas only when the bubbles carried none.
-    const outputTokens = scan.assistantTextChars > 0 ? 0 : Math.ceil((stream?.assistantChars ?? 0) / CHARS_PER_TOKEN)
+    const outputTokens = scan.assistantTextChars > 0 ? 0 : estimateTokensFromChars(stream?.assistantChars ?? 0)
     if (inputTokens === 0 && outputTokens === 0) continue
 
     const dedupKey = `cursor:composer-input:${cid}`
@@ -908,8 +907,8 @@ function parseBubbles(
   // requestId). agentKv stores no timestamps, so these reuse the DB file's
   // mtime as a bounded "last write" time, like the pre-composer parser did.
   for (const [requestId, stream] of unjoined) {
-    const inputTokens = Math.ceil((stream.userChars + stream.contextChars) / CHARS_PER_TOKEN)
-    const outputTokens = Math.ceil(stream.assistantChars / CHARS_PER_TOKEN)
+    const inputTokens = estimateTokensFromChars(stream.userChars + stream.contextChars)
+    const outputTokens = estimateTokensFromChars(stream.assistantChars)
     if (inputTokens === 0 && outputTokens === 0) continue
 
     const dedupKey = `cursor:agentKv:${requestId}`
