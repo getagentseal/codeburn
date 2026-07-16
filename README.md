@@ -447,7 +447,7 @@ Sync sends token counts, costs, models, and projects — never prompts or code. 
 |---------|--------------|
 | `codeburn models` | Per-model token + cost table (last 30 days) |
 | `codeburn models --by-task` | Break each model into per-task-type rows |
-| `codeburn models --by-agent` | Break each model into per-agent rows (which agent drove which model's spend); Claude subagent transcripts only, other providers and main sessions bucket under "main" |
+| `codeburn models --by-agent` | Break each model into per-agent rows (which agent drove which model's spend); Claude subagent transcripts only, other providers and main sessions bucket under `(main)`. The default `--min-cost 0.01` hides sub-cent agent buckets; use `--min-cost 0` for a complete inventory. |
 | `codeburn models --top 10` | Only the 10 most expensive models |
 | `codeburn models --format markdown` | Emit a paste-friendly markdown table |
 | `codeburn models --task feature` | Filter to feature-development work |

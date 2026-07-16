@@ -13,7 +13,7 @@ export type ModelReportRow = {
   modelDisplayName: string
   category: TaskCategory | null
   /// Set only in `byAgent` mode: the Claude subagent type this row's spend ran
-  /// under (`general-purpose`, `Explore`, a workflow agent, …), or `'main'` for
+  /// under (`general-purpose`, `Explore`, a workflow agent, …), or `'(main)'` for
   /// ordinary non-agent sessions and every non-Claude provider. `null` in the
   /// default and `byTask` views.
   agentType?: string | null
@@ -38,7 +38,7 @@ export type AggregateOptions = {
   byTask?: boolean
   /// One row per (provider, model, agent). Mutually exclusive with `byTask`;
   /// the caller enforces that. Non-Claude providers and ordinary sessions bucket
-  /// under `'main'`.
+  /// under `'(main)'`.
   byAgent?: boolean
   taskFilter?: TaskCategory
   topN?: number
@@ -81,7 +81,7 @@ function bucketKey(provider: string, model: string, category: TaskCategory | nul
 /// blank repeated provider/model cells. Group order follows total cost across
 /// that model; within each group, rows go by cost descending. The agent label
 /// comes from the subagent transcript's own `session.agentType`; ordinary
-/// sessions and every non-Claude provider bucket under `'main'`.
+/// sessions and every non-Claude provider bucket under `'(main)'`.
 export async function aggregateModels(projects: ProjectSummary[], opts: AggregateOptions = {}): Promise<ModelReportRow[]> {
   const buckets = new Map<string, Bucket>()
   const perModelCategoryCost = new Map<ModelKey, Map<CategoryKey, number>>()
@@ -96,9 +96,9 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           const model = call.model || 'unknown'
           const category: TaskCategory | null = opts.byTask ? turn.category : null
           // Non-Claude sessions and ordinary main sessions have no agentType, so
-          // their spend all lands under 'main'. That is correct: the report never
+          // their spend all lands under '(main)'. That is correct: the report never
           // fabricates an agent for calls that were not driven by one.
-          const agentType: string | null = opts.byAgent ? (session.agentType ?? 'main') : null
+          const agentType: string | null = opts.byAgent ? (session.agentType ?? '(main)') : null
           const key = bucketKey(provider, model, category, agentType)
           let bucket = buckets.get(key)
           if (!bucket) {

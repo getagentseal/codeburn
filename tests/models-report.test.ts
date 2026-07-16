@@ -260,9 +260,9 @@ describe('aggregateModels', () => {
 })
 
 describe('aggregateModels byAgent', () => {
-  // One project, four sessions: a planner agent on two models, a reviewer agent
-  // sharing one of those models, an ordinary main session, and a non-Claude
-  // provider session (no agentType).
+  // One project: a planner agent on two models, a reviewer agent sharing one of
+  // those models, a real agent named main, an ordinary main session, and a
+  // non-Claude provider session (no agentType).
   function crossProject(): ProjectSummary {
     return projectFromSessions([
       makeAgentSession({ sessionId: 'a', agentType: 'planner', turns: [
@@ -272,18 +272,21 @@ describe('aggregateModels byAgent', () => {
       makeAgentSession({ sessionId: 'b', agentType: 'reviewer', turns: [
         makeTurn('exploration', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 3.0, input: 40, output: 8 })]),
       ] }),
+      makeAgentSession({ sessionId: 'real-main', agentType: 'main', turns: [
+        makeTurn('exploration', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 0.75, input: 25, output: 4 })]),
+      ] }),
       // no agentType -> ordinary main session
       makeAgentSession({ sessionId: 'c', turns: [
         makeTurn('feature', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 1.0, input: 30, output: 5 })]),
       ] }),
-      // non-Claude provider, no agentType -> also 'main'
+      // non-Claude provider, no agentType -> also '(main)'
       makeAgentSession({ sessionId: 'd', turns: [
         makeTurn('feature', [makeCall({ provider: 'codex', model: 'gpt-5', costUSD: 0.5, input: 20, output: 4 })]),
       ] }),
     ])
   }
 
-  it('crosses model x agent, labelling main/undefined and non-Claude sessions "main"', async () => {
+  it('keeps a real agent named main distinct from the (main) sentinel across all formats', async () => {
     const rows = await aggregateModels([crossProject()], { byAgent: true })
     const byKey = Object.fromEntries(rows.map(r => [`${r.provider}:${r.model}:${r.agentType}`, r]))
     // one agent (planner) split across two models
@@ -291,13 +294,31 @@ describe('aggregateModels byAgent', () => {
     expect(byKey['claude:claude-sonnet-4-6:planner']!.costUSD).toBeCloseTo(2.0, 6)
     // two agents (planner + reviewer) on the same model
     expect(byKey['claude:claude-opus-4-8:reviewer']!.costUSD).toBeCloseTo(3.0, 6)
-    // ordinary main session buckets under 'main'
-    expect(byKey['claude:claude-opus-4-8:main']!.costUSD).toBeCloseTo(1.0, 6)
-    // non-Claude provider (no agentType) also buckets under 'main'
-    expect(byKey['codex:gpt-5:main']!.agentType).toBe('main')
-    expect(byKey['codex:gpt-5:main']!.costUSD).toBeCloseTo(0.5, 6)
-    // three distinct agent rows share claude-opus-4-8
-    expect(rows.filter(r => r.model === 'claude-opus-4-8')).toHaveLength(3)
+    // real agent named main and the ordinary-session sentinel remain separate
+    expect(byKey['claude:claude-opus-4-8:main']!.costUSD).toBeCloseTo(0.75, 6)
+    expect(byKey['claude:claude-opus-4-8:(main)']!.costUSD).toBeCloseTo(1.0, 6)
+    // non-Claude provider (no agentType) also buckets under '(main)'
+    expect(byKey['codex:gpt-5:(main)']!.agentType).toBe('(main)')
+    expect(byKey['codex:gpt-5:(main)']!.costUSD).toBeCloseTo(0.5, 6)
+    // four distinct agent rows share claude-opus-4-8
+    const collisionRows = rows.filter(r => r.model === 'claude-opus-4-8')
+    expect(collisionRows).toHaveLength(4)
+
+    const table = stripAnsi(renderTable(collisionRows, { byAgent: true, showTotals: false, terminalWidth: 200 }))
+    expect(table.split('\n').some(line => /│\s*\(main\)\s*│/.test(line))).toBe(true)
+    expect(table.split('\n').some(line => /│\s*main\s*│/.test(line))).toBe(true)
+
+    const markdown = renderMarkdown(collisionRows, { byAgent: true, showTotals: false })
+    expect(markdown).toContain('| (main) |')
+    expect(markdown).toContain('| main |')
+
+    const jsonAgents = (JSON.parse(renderJson(collisionRows)) as Array<{ agentType: string }>).map(row => row.agentType)
+    expect(jsonAgents).toContain('(main)')
+    expect(jsonAgents).toContain('main')
+
+    const csvAgents = renderCsv(collisionRows, { byAgent: true }).trimEnd().split('\n').slice(1).map(line => line.split(',')[2])
+    expect(csvAgents).toContain('(main)')
+    expect(csvAgents).toContain('main')
   })
 
   it('groups rows by (provider, model) ordered by total model cost, agents by cost desc within a group', async () => {

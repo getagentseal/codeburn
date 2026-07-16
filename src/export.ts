@@ -14,7 +14,7 @@ function escCsv(s: string): string {
   return sanitized
 }
 
-type Row = Record<string, string | number>
+type Row = Record<string, string | number | undefined>
 
 function rowsToCsv(rows: Row[]): string {
   if (rows.length === 0) return ''
@@ -81,6 +81,35 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
     'Cache Read Tokens': d.cacheRead,
     'Cache Write Tokens': d.cacheWrite,
   }))
+}
+
+function buildRecordRows(projects: ProjectSummary[]): Row[] {
+  const rows: Row[] = []
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          rows.push({
+            project: project.projectPath,
+            sessionId: session.sessionId,
+            timestamp: call.timestamp || turn.timestamp || undefined,
+            category: turn.category,
+            provider: call.provider,
+            subagentType: session.agentType?.trim() || undefined,
+            model: call.model || undefined,
+            inputTokens: call.usage.inputTokens,
+            outputTokens: call.usage.outputTokens,
+            reasoningTokens: call.usage.reasoningTokens,
+            cacheWriteTokens: call.usage.cacheCreationInputTokens,
+            cacheReadTokens: Math.max(call.usage.cacheReadInputTokens, call.usage.cachedInputTokens),
+            cost: roundForActiveCurrency(convertCost(call.costUSD)),
+            savings: roundForActiveCurrency(convertCost(call.savingsUSD ?? 0)),
+          })
+        }
+      }
+    }
+  }
+  return rows
 }
 
 function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
@@ -231,6 +260,9 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
   const rows: Row[] = []
   for (const p of projects) {
     for (const s of p.sessions) {
+      const models = new Set(
+        s.turns.flatMap(turn => turn.assistantCalls.map(call => call.model).filter(Boolean)),
+      )
       rows.push({
         Project: p.projectPath,
         'Session ID': s.sessionId,
@@ -239,6 +271,8 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
         [`Saved (${code})`]: roundForActiveCurrency(convertCost(s.totalSavingsUSD)),
         'API Calls': s.apiCalls,
         Turns: s.turns.length,
+        subagentType: s.agentType?.trim() || undefined,
+        model: models.size === 1 ? [...models][0] : undefined,
       })
     }
   }
@@ -286,6 +320,7 @@ function buildReadme(periods: PeriodExport[]): string {
     '  daily.csv             Day-by-day breakdown, Period column distinguishes the window.',
     '  activity.csv          Time spent per task category (Coding, Debugging, Exploration, etc.).',
     '  models.csv            Spend per model with token totals and cache usage.',
+    '  records.csv           One row per API call, including optional subagentType and model.',
     '  projects.csv          Spend per project folder for the selected detail period.',
     '  sessions.csv          One row per session for the selected detail period.',
     '  tools.csv             Tool invocations and share for the selected detail period.',
@@ -355,6 +390,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
   await writeFile(join(folder, 'daily.csv'), rowsToCsv(dailyRows), 'utf-8')
   await writeFile(join(folder, 'activity.csv'), rowsToCsv(activityRows), 'utf-8')
   await writeFile(join(folder, 'models.csv'), rowsToCsv(modelRows), 'utf-8')
+  await writeFile(join(folder, 'records.csv'), rowsToCsv(buildRecordRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'projects.csv'), rowsToCsv(buildProjectRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'sessions.csv'), rowsToCsv(buildSessionRows(thirtyDayProjects)), 'utf-8')
   await writeFile(join(folder, 'tools.csv'), rowsToCsv(buildToolRows(thirtyDayProjects)), 'utf-8')
@@ -382,6 +418,7 @@ export async function exportJson(periods: PeriodExport[], outputPath: string): P
     })),
     projects: buildProjectRows(thirtyDayProjects),
     sessions: buildSessionRows(thirtyDayProjects),
+    records: buildRecordRows(thirtyDayProjects),
     tools: buildToolRows(thirtyDayProjects),
     mcp: buildMcpRows(thirtyDayProjects),
     shellCommands: buildBashRows(thirtyDayProjects),
