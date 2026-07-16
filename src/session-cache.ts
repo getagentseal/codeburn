@@ -82,20 +82,25 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 4
+// v5: kiro joined the costUSD pass-through allowlist (credit-based pricing).
+// Cached kiro entries from v4 carry costUSD: undefined and would keep being
+// re-priced from estimated tokens forever, since historical session files
+// never change. Bump forces a one-time re-parse so metered credit costs land.
+export const CACHE_VERSION = 5
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
 const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
+  codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
   hermes: ['HERMES_HOME'],
   'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
   droid: ['FACTORY_DIR'],
   cursor: ['XDG_DATA_HOME'],
   'cursor-agent': ['XDG_DATA_HOME'],
-  opencode: ['XDG_DATA_HOME'],
+  opencode: ['XDG_DATA_HOME', 'OPENCODE_DATA_DIR', 'OPENCODE_DB_PREFIX'],
   goose: ['XDG_DATA_HOME'],
   crush: ['XDG_DATA_HOME'],
   warp: ['WARP_DB_PATH'],
@@ -111,6 +116,7 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'advisor-usage-v1',
   cline: 'worktree-project-grouping-v1',
+  codewhale: 'aggregate-session-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
   // provider parser otherwise). Covers native mcp_tool_call_end (#513) and
@@ -292,6 +298,15 @@ export async function saveCache(cache: SessionCache): Promise<void> {
 }
 
 // ── File Fingerprinting ────────────────────────────────────────────────
+//
+// Fingerprints cover the source's transcript file only. Providers that keep
+// metadata in a companion file (kiro CLI: credits in `<id>.json` next to the
+// `.jsonl`; kiro v2: modelId in `session.json` next to `messages.jsonl`) have
+// a blind spot: a parse that races the companion write caches the turn with
+// fallback values, and if the transcript never changes again (a session's
+// final turn) the entry never invalidates. Mid-session turns self-heal since
+// append-only transcripts keep changing. Fixing this properly means
+// multi-file fingerprints per source.
 
 export async function fingerprintFile(filePath: string): Promise<FileFingerprint | null> {
   try {

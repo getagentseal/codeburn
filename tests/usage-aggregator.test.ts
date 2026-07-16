@@ -15,6 +15,8 @@ describe('buildMenubarPayloadForRange', () => {
     expect(Array.isArray(payload.current.topProjects)).toBe(true)
     expect(Array.isArray(payload.current.topModels)).toBe(true)
     expect(Array.isArray(payload.history.daily)).toBe(true)
+    expect(payload.history.timeline?.bucketMinutes).toBe(15)
+    expect(Array.isArray(payload.history.timeline?.points)).toBe(true)
     expect(payload.current.retryTax.totalUSD).toBeGreaterThanOrEqual(0)
     // Codex credits are always present in the payload (display gates them); 0 with no data.
     expect(typeof payload.current.codexCredits).toBe('number')

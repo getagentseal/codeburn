@@ -19,6 +19,31 @@ import { patchStdoutForWindows } from './ink-win.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
+export type DailyActivityRow = {
+  day: string
+  cost: number
+  calls: number
+}
+
+export function pageHistoryCursor(cursor: number, direction: -1 | 1, pageSize: number, rowCount: number): number {
+  const maxCursor = Math.max(0, rowCount - pageSize)
+  return Math.max(0, Math.min(cursor + direction * pageSize, maxCursor))
+}
+
+export function scrollHistoryCursor(cursor: number, direction: -1 | 1, pageSize: number, rowCount: number): number {
+  const maxCursor = Math.max(0, rowCount - pageSize)
+  return Math.max(0, Math.min(cursor + direction, maxCursor))
+}
+
+// Scrollable mode keeps the dashboard up when only the selected period is
+// empty (full history still renders), but a truly-new user with no history at
+// all should still get the clean empty state instead of a zeroed shell.
+export function showEmptyState(projectCount: number, scrollableHistory: boolean, historyProjectCount: number, historyLoading: boolean): boolean {
+  if (projectCount > 0) return false
+  if (!scrollableHistory) return true
+  return historyProjectCount === 0 && !historyLoading
+}
+
 const MIN_WIDE = 90
 const ORANGE = '#FF8C42'
 const DIM = '#555555'
@@ -253,7 +278,7 @@ function Overview({ projects, label, width, planUsages }: { projects: ProjectSum
   )
 }
 
-function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number }) {
+export function getDailyActivityRows(projects: ProjectSummary[]): DailyActivityRow[] {
   const dailyCosts: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
   for (const project of projects) {
@@ -266,20 +291,37 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
       }
     }
   }
-  const sortedDays = days !== undefined ? Object.keys(dailyCosts).sort().slice(-days) : Object.keys(dailyCosts).sort()
-  const maxCost = Math.max(...sortedDays.map(d => dailyCosts[d] ?? 0))
+  return Object.keys(dailyCosts).sort().map(day => ({
+    day,
+    cost: dailyCosts[day] ?? 0,
+    calls: dailyCalls[day] ?? 0,
+  }))
+}
+
+function DailyActivity({ projects, days = 14, pw, bw, scrollable = false, cursor = 0, loading = false }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number; scrollable?: boolean; cursor?: number; loading?: boolean }) {
+  const allRows = getDailyActivityRows(projects)
+  const orderedRows = scrollable ? [...allRows].reverse() : allRows
+  const rows = scrollable ? orderedRows.slice(cursor, cursor + days) : orderedRows.slice(-days)
+  const maxCost = Math.max(0, ...(scrollable ? orderedRows : rows).map(row => row.cost))
 
   return (
     <Panel title="Daily Activity" color={PANEL_COLORS.daily} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
-      {sortedDays.map(day => (
-        <Text key={day} wrap="truncate-end">
-          <Text dimColor>{day.slice(5)} </Text>
-          <HBar value={dailyCosts[day] ?? 0} max={maxCost} width={bw} />
-          <Text color={GOLD}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
-          <Text>{String(dailyCalls[day] ?? 0).padStart(6)}</Text>
-        </Text>
-      ))}
+      {loading
+        ? <Text dimColor>Loading daily history...</Text>
+        : <>
+            <Text dimColor wrap="truncate-end">{''.padEnd((scrollable ? 11 : 6) + bw)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
+            {rows.map(row => (
+              <Text key={row.day} wrap="truncate-end">
+                <Text dimColor>{scrollable ? row.day : row.day.slice(5)} </Text>
+                <HBar value={row.cost} max={maxCost} width={bw} />
+                <Text color={GOLD}>{formatCost(row.cost).padStart(8)}</Text>
+                <Text>{String(row.calls).padStart(6)}</Text>
+              </Text>
+            ))}
+            {scrollable && orderedRows.length > 0 && (
+              <Text dimColor wrap="truncate-end">Showing {cursor + 1}–{Math.min(cursor + days, orderedRows.length)} of {orderedRows.length} · newest first</Text>
+            )}
+          </>}
     </Panel>
   )
 }
@@ -727,6 +769,12 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
         {!isOptimize && compareAvailable && (
           <><Text dimColor>   </Text><Text color={ORANGE} bold>c</Text><Text dimColor> compare</Text></>
         )}
+        {!isOptimize && !customRange && !dayMode && view === 'dashboard' && (
+          <>
+            <Text dimColor>   </Text><Text color={PANEL_COLORS.daily} bold>↑</Text><Text dimColor>/</Text><Text color={PANEL_COLORS.daily} bold>↓</Text><Text dimColor> daily   </Text>
+            <Text color={PANEL_COLORS.daily} bold>PgUp</Text><Text dimColor>/</Text><Text color={PANEL_COLORS.daily} bold>PgDn</Text><Text dimColor> page</Text>
+          </>
+        )}
         {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
       </Text>
     </Box>
@@ -738,13 +786,13 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages, label, dayMode }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean }) {
+function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages, label, dayMode, dailyHistoryProjects, scrollableDailyHistory = false, dailyHistoryCursor = 0, dailyHistoryLoading = false }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; dailyHistoryProjects?: ProjectSummary[]; scrollableDailyHistory?: boolean; dailyHistoryCursor?: number; dailyHistoryLoading?: boolean }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
   const activeLabel = label ?? PERIOD_LABELS[period]
-  if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
+  if (showEmptyState(projects.length, scrollableDailyHistory, (dailyHistoryProjects ?? []).length, dailyHistoryLoading)) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
-  const days = dayMode ? 1 : period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
+  const days = dayMode ? 1 : (period === 'month' || period === '30days' ? 31 : 14)
   // A provider-scoped plan (e.g. SuperGrok) only makes sense on its own
   // provider tab, where the shown cost matches the plan's spend. Hide it on
   // every other tab, including All, so its budget isn't compared to spend it
@@ -753,7 +801,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={pw} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
@@ -788,14 +836,21 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const [planUsages, setPlanUsages] = useState<PlanUsage[]>(initialPlanUsages ?? [])
   const [dayDate, setDayDate] = useState<string | null>(initialDay ?? null)
+  const [dailyHistoryProjects, setDailyHistoryProjects] = useState<ProjectSummary[]>(initialProjects)
+  const [dailyHistoryLoading, setDailyHistoryLoading] = useState(initialDay == null && customRange == null)
+  const [dailyHistoryCursor, setDailyHistoryCursor] = useState(0)
   // Cursor for the OptimizeView's findings window. Reset whenever the user
   // leaves the optimize view OR the underlying findings change so a long
   // findings list never strands the user past the new array length.
   const [findingsCursor, setFindingsCursor] = useState(0)
   const isDayMode = dayDate != null
   const isCustomRange = customRange != null && !isDayMode
+  const scrollableDailyHistory = !isCustomRange && !isDayMode
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
+  const dailyHistoryPageSize = isDayMode ? 1 : (period === 'month' || period === '30days' ? 31 : 14)
+  const dailyHistoryRowCount = getDailyActivityRows(dailyHistoryProjects).length
+  const dailyHistoryMaxCursor = Math.max(0, dailyHistoryRowCount - dailyHistoryPageSize)
   const multipleProviders = detectedProviders.length > 1
   const optimizeAvailable = !isCustomRange && (activeProvider === 'all' || activeProvider === 'claude')
   const modelCount = new Set(
@@ -807,6 +862,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const reloadInFlightRef = useRef(false)
   const currentReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
   const pendingReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
+  const dailyHistoryGenerationRef = useRef(0)
   const findingCount = optimizeResult?.findings.length ?? 0
 
   useEffect(() => {
@@ -908,12 +964,37 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
   }, [optimizeAvailable, projects, currentRange, optimizeLoading, optimizeResult])
 
+  const loadDailyHistory = useCallback(async (provider: string) => {
+    const generation = ++dailyHistoryGenerationRef.current
+    setDailyHistoryLoading(true)
+    try {
+      const data = await parseAllSessions(undefined, provider)
+      if (dailyHistoryGenerationRef.current !== generation) return
+      setDailyHistoryProjects(filterProjectsByName(data, projectFilter, excludeFilter))
+    } catch (error) {
+      if (dailyHistoryGenerationRef.current !== generation) return
+      console.error(error)
+      setDailyHistoryProjects([])
+    } finally {
+      if (dailyHistoryGenerationRef.current === generation) setDailyHistoryLoading(false)
+    }
+  }, [projectFilter, excludeFilter])
+
+  useEffect(() => {
+    if (!scrollableDailyHistory) return
+    setDailyHistoryCursor(0)
+    void loadDailyHistory(activeProvider)
+  }, [activeProvider, loadDailyHistory, scrollableDailyHistory])
+
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
     if (!dayDate && isHeavyPeriod(period)) return
-    const id = setInterval(() => { reloadData(period, activeProvider, dayDate) }, refreshSeconds * 1000)
+    const id = setInterval(() => {
+      void reloadData(period, activeProvider, dayDate)
+      if (scrollableDailyHistory) void loadDailyHistory(activeProvider)
+    }, refreshSeconds * 1000)
     return () => clearInterval(id)
-  }, [refreshSeconds, period, activeProvider, dayDate, reloadData])
+  }, [refreshSeconds, period, activeProvider, dayDate, reloadData, scrollableDailyHistory, loadDailyHistory])
 
   const switchPeriod = useCallback((np: Period) => {
     if (np === period && !dayDate) return
@@ -923,6 +1004,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     // there's a frame-to-hundreds-of-ms window where users saw wrong
     // figures captioned with the new period.
     setPeriod(np)
+    setDailyHistoryCursor(0)
     setDayDate(null)
     setProjects([])
     setLoading(true)
@@ -933,6 +1015,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const switchPeriodImmediate = useCallback(async (np: Period) => {
     if (np === period && !dayDate) return
     setPeriod(np)
+    setDailyHistoryCursor(0)
     setDayDate(null)
     setProjects([])
     setLoading(true)
@@ -945,6 +1028,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     const clampedDay = nextDay > today ? today : nextDay
     if (clampedDay === dayDate) return
     setDayDate(clampedDay)
+    setDailyHistoryCursor(0)
     setProjects([])
     setLoading(true)
     setView('dashboard')
@@ -970,9 +1054,18 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
     if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
     if ((input === 'b' || key.escape) && view === 'compare') { setView('dashboard'); return }
+    if (view === 'dashboard' && scrollableDailyHistory) {
+      if (key.pageDown || (input === ' ' && !key.shift)) { setDailyHistoryCursor(c => pageHistoryCursor(c, 1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (key.pageUp || (input === ' ' && key.shift)) { setDailyHistoryCursor(c => pageHistoryCursor(c, -1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (input === 'j' || key.downArrow) { setDailyHistoryCursor(c => scrollHistoryCursor(c, 1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (input === 'k' || key.upArrow) { setDailyHistoryCursor(c => scrollHistoryCursor(c, -1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (input === 'g') { setDailyHistoryCursor(0); return }
+      if (input === 'G') { setDailyHistoryCursor(dailyHistoryMaxCursor); return }
+    }
     if (input === 'p' && multipleProviders && view !== 'compare') {
       const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
       setActiveProvider(next); setView('dashboard')
+      setDailyHistoryCursor(0)
       if (debounceRef.current) clearTimeout(debounceRef.current)
       reloadData(period, next, dayDate); return
     }
@@ -984,6 +1077,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     if (!customRange && input === 'd') {
       if (dayDate) {
         setDayDate(null)
+        setDailyHistoryCursor(0)
         setProjects([])
         setLoading(true)
         void reloadData(period, activeProvider, null)
@@ -1051,7 +1145,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} />}
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} dailyHistoryLoading={dailyHistoryLoading} />}
       {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
     </Box>
   )
