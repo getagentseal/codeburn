@@ -59,6 +59,35 @@ function providerLabel(id: string): string {
 }
 
 /**
+ * Compact first-run indexing status: one line of copy (with a live counter when
+ * Claude is parsing), a small horizontal strip of provider logos (dim = pending,
+ * lit = active, settled = done), and one muted note. Deliberately no per-provider
+ * text rows -- a machine with 12 providers must not turn the splash into a list.
+ */
+function SplashStatus({ progress }: { progress: Progress }) {
+  const active = progress.order.find(id => progress.status[id] === 'active') ?? null
+  const counter = active === 'claude' && progress.claudeTotal > 0
+    ? ` · ${progress.claudeDone.toLocaleString('en-US')}/${progress.claudeTotal.toLocaleString('en-US')}`
+    : ''
+  const line = active ? `Indexing ${providerLabel(active)}${counter}` : 'Indexing your usage history…'
+  return (
+    <div className="splash-status">
+      <div className="splash-status-line">{line}</div>
+      {progress.order.length > 0 && (
+        <div className="splash-prov-strip">
+          {progress.order.map(id => (
+            <span key={id} className={`splash-prov ${progress.status[id] ?? 'pending'}`} title={providerLabel(id)}>
+              <ProviderLogo provider={id} size={15} />
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="splash-status-note">One-time scan · future launches are instant</div>
+    </div>
+  )
+}
+
+/**
  * Full-window branded startup loader -- the same scanning moment as the menubar
  * app's ignite-while-loading flame. Mounts once with the app and stays up while
  * the FIRST overview fetch has neither data nor error. On first data it holds a
@@ -70,9 +99,9 @@ function providerLabel(id: string): string {
  *
  * On a genuinely cold first run the overview warmup streams per-provider scan
  * progress (main.ts forwards the CLI's stderr). Once real parse work is detected
- * (or the scan simply outlasts REVEAL_FALLBACK_MS), the splash reveals a "first
- * run: indexing" line and a per-provider ingest list. A warm launch resolves
- * before that threshold and never shows it.
+ * (or the scan simply outlasts REVEAL_FALLBACK_MS), the splash reveals a compact
+ * status block (see SplashStatus). A warm launch resolves before that threshold
+ * and never shows it.
  */
 export function Splash({ hasData, hasError }: { hasData: boolean; hasError: boolean }) {
   const [phase, setPhase] = useState<Phase>('lit')
@@ -140,31 +169,7 @@ export function Splash({ hasData, hasError }: { hasData: boolean; hasError: bool
       )}
       <div className="splash-word">CodeBurn</div>
       <div className="splash-version">v{version}</div>
-      {showDetail && (
-        <div className="splash-status">
-          <div className="splash-status-line">
-            First run: indexing your usage history. This one-time scan can take a few minutes; future launches are instant.
-          </div>
-          {progress.order.length > 0 && (
-            <ul className="splash-providers">
-              {progress.order.map(id => {
-                const status = progress.status[id] ?? 'pending'
-                const count = id === 'claude' && status === 'active' && progress.claudeTotal > 0
-                  ? ` ${progress.claudeDone.toLocaleString('en-US')}/${progress.claudeTotal.toLocaleString('en-US')}`
-                  : ''
-                const text = status === 'active' ? `Ingesting ${providerLabel(id)}…${count}` : providerLabel(id)
-                return (
-                  <li key={id} className={`splash-prov ${status}`}>
-                    <ProviderLogo provider={id} size={16} />
-                    <span className="splash-prov-name">{text}</span>
-                    {status === 'done' && <span className="splash-prov-check">✓</span>}
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
-      )}
+      {showDetail && <SplashStatus progress={progress} />}
     </div>,
     document.body,
   )

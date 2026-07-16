@@ -80,7 +80,7 @@ describe('Splash', () => {
     expect(splashEl()).not.toBeInTheDocument()
   })
 
-  it('reveals the per-provider indexing list on real cold-scan progress', () => {
+  it('reveals the compact indexing status on real cold-scan progress', () => {
     render(<Splash hasData={false} hasError={false} />)
     expect(splashEl()).toBeInTheDocument()
     // No detail before any progress arrives.
@@ -95,15 +95,17 @@ describe('Splash', () => {
 
     const status = document.querySelector('.splash-status')
     expect(status).toBeInTheDocument()
-    expect(status?.textContent).toContain('First run: indexing your usage history')
-    expect(status?.textContent).toContain('Ingesting Claude…')
-    expect(status?.textContent).toContain('120/480')
-    // Both detected providers render a row; claude is active, codex pending.
+    // One compact line: active provider + live counter. No per-provider text rows.
+    expect(status?.querySelector('.splash-status-line')?.textContent).toBe('Indexing Claude · 120/480')
+    expect(status?.textContent).toContain('One-time scan')
+    // Both detected providers render as small logos in the strip; claude active.
     expect(document.querySelectorAll('.splash-prov').length).toBe(2)
-    expect(document.querySelector('.splash-prov.active')?.textContent).toContain('Claude')
+    expect(document.querySelector('.splash-prov.active')?.getAttribute('title')).toBe('Claude')
 
     act(() => { progressCb?.({ kind: 'provider', provider: 'claude', state: 'done' }) })
-    expect(document.querySelector('.splash-prov.done')?.textContent).toContain('Claude')
+    expect(document.querySelector('.splash-prov.done')?.getAttribute('title')).toBe('Claude')
+    // No active provider left: the line falls back to the generic copy.
+    expect(document.querySelector('.splash-status-line')?.textContent).toBe('Indexing your usage history…')
   })
 
   it('swaps instantly under reduced motion (no fade, no min-time)', () => {

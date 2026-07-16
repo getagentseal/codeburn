@@ -900,35 +900,30 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
   to { opacity: 1; transform: none; }
 }
 
-/* First-run indexing detail: framing line + per-provider ingest list. Colors are
-   fixed to the dark splash canvas (like .splash-word/.splash-version), not the theme. */
+/* First-run indexing status: one line + a small provider-logo strip + one note.
+   Colors are fixed to the dark splash canvas (like .splash-word/.splash-version),
+   not the theme. Tabular numerals keep the live counter from jittering. */
 .splash-status {
-  margin-top: 8px; display: flex; flex-direction: column; align-items: center; gap: 16px;
-  max-width: 420px; text-align: center;
+  margin-top: 4px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  max-width: 340px; text-align: center;
   animation: splash-word-in 400ms ease-out both;
 }
-.splash-status-line { font-size: var(--fs-label); line-height: 1.5; color: #b3a595; }
-.splash-providers {
-  list-style: none; margin: 0; padding: 0; width: 100%;
-  display: flex; flex-direction: column; gap: 7px;
+.splash-status-line {
+  font-size: var(--fs-label); color: #f4f1ec; font-variant-numeric: tabular-nums;
 }
-.splash-prov {
-  display: flex; align-items: center; gap: 9px;
-  font-size: var(--fs-label); color: #6f665c; padding: 0 6px;
+.splash-prov-strip {
+  display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 9px;
 }
-.splash-prov .provider-logo { opacity: 0.4; flex: none; }
-.splash-prov-name { flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.splash-prov.active { color: #f4f1ec; }
-.splash-prov.active .provider-logo { opacity: 1; animation: splash-prov-pulse 1.4s ease-in-out infinite; }
-.splash-prov.done { color: #b3a595; }
-.splash-prov.done .provider-logo { opacity: 0.85; }
-.splash-prov-check { color: #7ec98f; font-size: 0.85em; flex: none; }
-@keyframes splash-prov-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.splash-prov { display: inline-flex; opacity: 0.28; transition: opacity 200ms ease; }
+.splash-prov.done { opacity: 0.8; }
+.splash-prov.active { opacity: 1; animation: splash-prov-pulse 1.4s ease-in-out infinite; }
+.splash-status-note { font-size: var(--fs-label); color: #6f665c; }
+@keyframes splash-prov-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 @media (prefers-reduced-motion: reduce) {
   .fm-flicker,
   .splash-lit .splash-mark, .splash-lit .splash-mark::before, .splash-lit .splash-word { animation: none; }
   .splash { transition: none; }
   .splash-status { animation: none; }
-  .splash-prov.active .provider-logo { animation: none; }
+  .splash-prov.active { animation: none; }
 }
