@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -650,6 +650,51 @@ describe('antigravity provider helpers', () => {
         const callTime = new Date(call.timestamp).getTime()
         expect(Math.abs(callTime - beforeStat.mtimeMs)).toBeLessThan(5000)
       }
+    })
+  })
+
+  it('decodes ChatStartMetadata.created_at and prefers it over the file mtime', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-createdat-', async (tempHome) => {
+      // Encode a gen_metadata blob matching the real on-disk shape:
+      //   GeneratorMetadata.chatModel(#1) {
+      //     usage(#4) { input(#2), totalOutput(#3) }
+      //     chatStartMetadata(#9) { created_at(#4): Timestamp { seconds(#1), nanos(#2) } }
+      //   }
+      const varint = (n: number): number[] => {
+        const out: number[] = []
+        let v = n
+        while (v > 0x7f) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128) }
+        out.push(v)
+        return out
+      }
+      const tag = (field: number, wire: number): number[] => varint(field * 8 + wire)
+      const varintField = (field: number, n: number): number[] => [...tag(field, 0), ...varint(n)]
+      const lenField = (field: number, bytes: number[]): number[] => [...tag(field, 2), ...varint(bytes.length), ...bytes]
+
+      const seconds = 1783326234
+      const nanos = 724675400
+      const timestamp = [...varintField(1, seconds), ...varintField(2, nanos)]
+      const chatStartMetadata = lenField(4, timestamp)
+      const usage = lenField(4, [...varintField(2, 100), ...varintField(3, 50)])
+      const chatModel = [...usage, ...lenField(9, chatStartMetadata)]
+      const hex = Buffer.from(lenField(1, chatModel)).toString('hex')
+
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-ide', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, 'created-at-session.db')
+      createCurrentAntigravityCliDb(dbPath, { conversationId: 'created-at-session', rows: [{ idx: 0, hex }] })
+
+      // Pin the file mtime to a different day so a wrong fallback is obvious.
+      const mtime = new Date('2026-01-01T00:00:00.000Z')
+      await utimes(dbPath, mtime, mtime)
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity-ide', provider: 'antigravity' })
+
+      expect(calls.length).toBe(1)
+      // The real created_at (July), not the January file mtime.
+      expect(calls[0]!.timestamp).toBe('2026-07-06T08:23:54.724Z')
     })
   })
 
