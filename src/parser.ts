@@ -255,12 +255,6 @@ function findJsonContainerEnd(source: JsonSource, start: number, open: number, c
     : findJsonContainerEndBuffer(source.raw, start, open, close, limit)
 }
 
-function findJsonValueBounds(source: JsonSource, start: number, limit = source.length): JsonValueBounds | null {
-  return typeof source.raw === 'string'
-    ? findJsonValueBoundsString(source.raw, start, limit)
-    : findJsonValueBoundsBuffer(source.raw, start, limit)
-}
-
 function findObjectFieldValue(source: JsonSource, objectStart: number, objectEnd: number, field: string): JsonValueBounds | null {
   return typeof source.raw === 'string'
     ? findObjectFieldValueString(source.raw, objectStart, objectEnd, field)
