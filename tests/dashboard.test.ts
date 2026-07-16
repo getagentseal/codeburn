@@ -2,7 +2,7 @@ import { homedir } from 'os'
 
 import { describe, it, expect } from 'vitest'
 
-import { getDailyActivityRows, pageHistoryCursor, scrollHistoryCursor, shortProject } from '../src/dashboard.js'
+import { getDailyActivityRows, pageHistoryCursor, scrollHistoryCursor, shortProject, showEmptyState } from '../src/dashboard.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
@@ -197,5 +197,24 @@ describe('Daily Activity history', () => {
     expect(scrollHistoryCursor(1, -1, 14, 21)).toBe(0)
     expect(scrollHistoryCursor(0, -1, 14, 21)).toBe(0)
     expect(scrollHistoryCursor(7, 1, 14, 21)).toBe(7)
+  })
+})
+
+describe('showEmptyState', () => {
+  it('keeps the clean empty state for a truly-new user in scrollable mode', () => {
+    expect(showEmptyState(0, true, 0, false)).toBe(true)
+  })
+
+  it('renders the dashboard while full history is still loading', () => {
+    expect(showEmptyState(0, true, 0, true)).toBe(false)
+  })
+
+  it('renders the dashboard when the period is empty but history exists', () => {
+    expect(showEmptyState(0, true, 3, false)).toBe(false)
+  })
+
+  it('non-scrollable mode (custom range, day view) keeps the original behavior', () => {
+    expect(showEmptyState(0, false, 0, false)).toBe(true)
+    expect(showEmptyState(2, false, 0, false)).toBe(false)
   })
 })

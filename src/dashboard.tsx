@@ -35,6 +35,15 @@ export function scrollHistoryCursor(cursor: number, direction: -1 | 1, pageSize:
   return Math.max(0, Math.min(cursor + direction, maxCursor))
 }
 
+// Scrollable mode keeps the dashboard up when only the selected period is
+// empty (full history still renders), but a truly-new user with no history at
+// all should still get the clean empty state instead of a zeroed shell.
+export function showEmptyState(projectCount: number, scrollableHistory: boolean, historyProjectCount: number, historyLoading: boolean): boolean {
+  if (projectCount > 0) return false
+  if (!scrollableHistory) return true
+  return historyProjectCount === 0 && !historyLoading
+}
+
 const MIN_WIDE = 90
 const ORANGE = '#FF8C42'
 const DIM = '#555555'
@@ -781,7 +790,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
   const activeLabel = label ?? PERIOD_LABELS[period]
-  if (projects.length === 0 && !scrollableDailyHistory) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
+  if (showEmptyState(projects.length, scrollableDailyHistory, (dailyHistoryProjects ?? []).length, dailyHistoryLoading)) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = dayMode ? 1 : (period === 'month' || period === '30days' ? 31 : 14)
   // A provider-scoped plan (e.g. SuperGrok) only makes sense on its own
