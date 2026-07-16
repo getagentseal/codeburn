@@ -9,10 +9,10 @@ final class RefreshCadenceTests: XCTestCase {
         )
     }
 
-    func testAutoIdleOnACStaysActive() {
+    func testAutoIdleOnACUsesTwoMinuteMinimum() {
         XCTAssertEqual(
             RefreshCadence.interval(mode: .auto, popoverOpen: false, onBattery: false, lowPowerMode: false),
-            RefreshCadence.activeSeconds
+            120
         )
     }
 

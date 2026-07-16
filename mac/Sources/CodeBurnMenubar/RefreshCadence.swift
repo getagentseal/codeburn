@@ -4,12 +4,13 @@ import IOKit.ps
 /// Decides how often the background refresh loop may spawn CLI fetches. The
 /// 30s timer keeps firing (cheap); this throttles the expensive part - each
 /// fetch is a full Node process at 100%+ CPU for seconds (#647). With the
-/// popover closed nobody is looking at anything but the status figure, so on
-/// battery or in Low Power Mode the spawn cadence backs off. Opening the
+/// popover closed nobody is looking at anything but the status figure, so AC
+/// uses a 120s minimum and battery or Low Power Mode backs off further. Opening the
 /// popover always refreshes immediately via refreshPayloadForPopoverOpen, so
 /// the backoff never shows a user stale data they are actually looking at.
 enum RefreshCadence {
     static let activeSeconds: TimeInterval = 30
+    static let acIdleSeconds: TimeInterval = 120
     static let batteryIdleSeconds: TimeInterval = 150
     static let lowPowerIdleSeconds: TimeInterval = 300
 
@@ -28,7 +29,7 @@ enum RefreshCadence {
             if popoverOpen { return activeSeconds }
             if lowPowerMode { return lowPowerIdleSeconds }
             if onBattery { return batteryIdleSeconds }
-            return activeSeconds
+            return acIdleSeconds
         case .oneMinute, .fiveMinutes, .fifteenMinutes:
             // A fixed user-chosen cadence, except an open popover always gets
             // the active cadence: the user is looking at the numbers.

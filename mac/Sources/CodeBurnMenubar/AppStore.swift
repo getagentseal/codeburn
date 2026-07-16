@@ -523,19 +523,19 @@ final class AppStore {
         lastErrorByKey[key] = nil
         switchTask = Task {
             if scope == .combined {
-                async let local: Void = refresh(key: localKey, includeOptimize: false, force: false, showLoading: false)
-                async let combined: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let local = refresh(key: localKey, includeOptimize: false, force: false, showLoading: false)
+                async let combined = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
                 if provider == .all {
                     _ = await (local, combined)
                 } else {
-                    async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
+                    async let all = refreshQuietly(key: allKey, includeOptimize: false, force: false)
                     _ = await (local, combined, all)
                 }
             } else if provider == .all {
                 await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
-                async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
+                async let main = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let all = refreshQuietly(key: allKey, includeOptimize: false, force: false)
                 _ = await (main, all)
             }
         }
@@ -645,9 +645,10 @@ final class AppStore {
         }
     }
 
-    func recoverFromStuckLoading() async {
-        guard prepareStuckLoadingRecovery() else { return }
-        await refresh(includeOptimize: false, force: true, showLoading: true)
+    @discardableResult
+    func recoverFromStuckLoading() async -> Bool {
+        guard prepareStuckLoadingRecovery() else { return false }
+        return await refresh(includeOptimize: false, force: true, showLoading: true)
     }
 
     /// Decides whether stuck-loading recovery should kick off a fresh fetch for
@@ -672,13 +673,37 @@ final class AppStore {
         lastErrorByKey[currentKey] = "Could not load \(label). Check that the codeburn CLI is installed and working."
     }
 
-    func refresh(includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+    @discardableResult
+    func refresh(
+        includeOptimize: Bool,
+        force: Bool = false,
+        showLoading: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         if effectiveSelectedScope == .combined {
-            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: includeOptimize, force: force)
-            async let combined: Void = refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
-            _ = await (local, combined)
+            async let local = refreshQuietly(
+                key: localCurrentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                qualityOfService: qualityOfService
+            )
+            async let combined = refresh(
+                key: currentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                showLoading: showLoading,
+                qualityOfService: qualityOfService
+            )
+            let (localSucceeded, combinedSucceeded) = await (local, combined)
+            return localSucceeded && combinedSucceeded
         } else {
-            await refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+            return await refresh(
+                key: currentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                showLoading: showLoading,
+                qualityOfService: qualityOfService
+            )
         }
     }
 
@@ -692,21 +717,28 @@ final class AppStore {
             claudeConfigSourceId: selectedClaudeConfigSourceId
         )
         if scope == .combined {
-            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
-            async let combined: Void = refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
+            async let local = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
+            async let combined = refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
             _ = await (local, combined)
         } else {
             await refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
         }
     }
 
-    private func refresh(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+    @discardableResult
+    private func refresh(
+        key: PayloadCacheKey,
+        includeOptimize: Bool,
+        force: Bool = false,
+        showLoading: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         invalidateStaleDayCache()
         let cacheDateAtStart = cacheDate
         let generationAtStart = payloadRefreshGeneration
-        if Task.isCancelled { return }
-        if !force, cache[key]?.isFresh == true { return }
-        if inFlightKeys[key] != nil { return }
+        if Task.isCancelled { return false }
+        if !force, cache[key]?.isFresh == true { return true }
+        if inFlightKeys[key] != nil { return false }
         inFlightKeys[key] = Date()
         attemptedKeys.insert(key)
         lastErrorByKey[key] = nil
@@ -735,6 +767,7 @@ final class AppStore {
                 attemptedKeys.remove(key)
             }
         }
+        var succeeded = false
         do {
             let fresh = try await DataClient.fetch(
                 period: key.period,
@@ -743,11 +776,12 @@ final class AppStore {
                 provider: key.provider,
                 includeOptimize: includeOptimize,
                 scope: key.scope,
-                claudeConfigSourceId: key.claudeConfigSourceId
+                claudeConfigSourceId: key.claudeConfigSourceId,
+                qualityOfService: qualityOfService
             )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
-                return
+                return false
             }
             if Task.isCancelled {
                 // Distinguish cancellation (user switched tabs mid-fetch) from
@@ -755,7 +789,7 @@ final class AppStore {
                 // fetch leaves cache empty + lastError nil and the user sees
                 // perpetual loading with nothing in the diagnostics.
                 NSLog("CodeBurn: fetch for \(key.label)/\(key.provider.rawValue) cancelled before result was applied")
-                return
+                return false
             }
             // Day-rollover race guard: if the calendar date changed during the
             // fetch, this payload was computed against yesterday's date and
@@ -764,14 +798,15 @@ final class AppStore {
             if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                 invalidateStaleDayCache()
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — calendar rolled mid-fetch")
-                return
+                return false
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
             reconcileClaudeConfigSelection(from: fresh, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
+            succeeded = true
         } catch {
-            if Task.isCancelled { return }
+            if Task.isCancelled { return false }
             NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
@@ -782,26 +817,29 @@ final class AppStore {
                         provider: key.provider,
                         includeOptimize: false,
                         scope: key.scope,
-                        claudeConfigSourceId: key.claudeConfigSourceId
+                        claudeConfigSourceId: key.claudeConfigSourceId,
+                        qualityOfService: qualityOfService
                     )
-                    guard !Task.isCancelled else { return }
-                    if generationAtStart != payloadRefreshGeneration { return }
+                    guard !Task.isCancelled else { return false }
+                    if generationAtStart != payloadRefreshGeneration { return false }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                         invalidateStaleDayCache()
-                        return
+                        return false
                     }
                     cache[key] = CachedPayload(payload: fallback, fetchedAt: Date())
                     reconcileClaudeConfigSelection(from: fallback, for: key)
                     lastSuccessByKey[key] = Date()
                     lastErrorByKey[key] = nil
-                    return
+                    return true
                 } catch {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled { return false }
                     NSLog("CodeBurn: fallback fetch also failed: \(error)")
                 }
             }
             lastErrorByKey[key] = String(describing: error)
         }
+
+        guard succeeded else { return false }
 
         let allKey = PayloadCacheKey(
             scope: .local,
@@ -812,23 +850,46 @@ final class AppStore {
             claudeConfigSourceId: key.claudeConfigSourceId
         )
         if key != allKey, cache[allKey]?.isFresh != true {
-            await refreshQuietly(key: allKey, includeOptimize: false, force: false)
+            await refreshQuietly(
+                key: allKey,
+                includeOptimize: false,
+                force: false,
+                qualityOfService: qualityOfService
+            )
         }
+        return true
     }
 
     /// Background refresh for a period other than the visible one (e.g. keeping today fresh for the menubar badge).
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
-    func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
+    @discardableResult
+    func refreshQuietly(
+        period: Period,
+        day: String? = nil,
+        force: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         // Scope the status-payload fetch to the selected config so the menu-bar
         // figure matches the popover (see menubarStatusKey).
-        await refreshQuietly(key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, claudeConfigSourceId: selectedClaudeConfigSourceId), includeOptimize: false, force: force)
+        return await refreshQuietly(
+            key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, claudeConfigSourceId: selectedClaudeConfigSourceId),
+            includeOptimize: false,
+            force: force,
+            qualityOfService: qualityOfService
+        )
     }
 
-    private func refreshQuietly(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false) async {
+    @discardableResult
+    private func refreshQuietly(
+        key: PayloadCacheKey,
+        includeOptimize: Bool,
+        force: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         invalidateStaleDayCache()
-        if !force, cache[key]?.isFresh == true { return }
-        if inFlightKeys[key] != nil { return }
+        if !force, cache[key]?.isFresh == true { return true }
+        if inFlightKeys[key] != nil { return false }
         inFlightKeys[key] = Date()
         attemptedKeys.insert(key)
         let cacheDateAtStart = cacheDate
@@ -847,17 +908,18 @@ final class AppStore {
                 provider: key.provider,
                 includeOptimize: includeOptimize,
                 scope: key.scope,
-                claudeConfigSourceId: key.claudeConfigSourceId
+                claudeConfigSourceId: key.claudeConfigSourceId,
+                qualityOfService: qualityOfService
             )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
-                return
+                return false
             }
             // Same day-rollover guard as refresh(): drop yesterday's payload if
             // the calendar rolled over during the fetch.
             if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                 invalidateStaleDayCache()
-                return
+                return false
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
             reconcileClaudeConfigSelection(from: fresh, for: key)
@@ -868,7 +930,9 @@ final class AppStore {
             if key.scope == .combined {
                 lastErrorByKey[key] = String(describing: error)
             }
+            return false
         }
+        return true
     }
 
     /// User-initiated. Reads Claude's source (this is what triggers the macOS keychain

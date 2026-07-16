@@ -46,7 +46,8 @@ struct DataClient {
                       provider: ProviderFilter,
                       includeOptimize: Bool,
                       scope: MenubarScope = .local,
-                      claudeConfigSourceId: String? = nil) async throws -> MenubarPayload {
+                      claudeConfigSourceId: String? = nil,
+                      qualityOfService: QualityOfService = .userInitiated) async throws -> MenubarPayload {
         let subcommand = statusSubcommand(
             period: period,
             day: day,
@@ -56,7 +57,7 @@ struct DataClient {
             scope: scope,
             claudeConfigSourceId: claudeConfigSourceId
         )
-        let result = try await runCLI(subcommand: subcommand)
+        let result = try await runCLI(subcommand: subcommand, qualityOfService: qualityOfService)
         guard result.exitCode == 0 else {
             throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
         }
@@ -118,10 +119,13 @@ struct DataClient {
     /// dozens of node processes at once.
     private static let spawnLimiter = AsyncSemaphore(maxConcurrentSpawns)
 
-    private static func runCLI(subcommand: [String]) async throws -> ProcessResult {
+    private static func runCLI(
+        subcommand: [String],
+        qualityOfService: QualityOfService = .userInitiated
+    ) async throws -> ProcessResult {
         await spawnLimiter.acquire()
         defer { Task { await spawnLimiter.release() } }
-        let process = CodeburnCLI.makeProcess(subcommand: subcommand)
+        let process = CodeburnCLI.makeProcess(subcommand: subcommand, qualityOfService: qualityOfService)
         return try await runProcess(process,
                                     timeoutSeconds: spawnTimeoutSeconds,
                                     label: subcommand.joined(separator: " "))

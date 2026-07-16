@@ -82,7 +82,10 @@ enum CodeburnCLI {
     /// Builds a `Process` that runs the CLI with the given subcommand args. Uses `/usr/bin/env`
     /// so PATH lookup happens without involving a shell, and augments PATH with Homebrew
     /// defaults. Caller sets stdout/stderr pipes and calls `run()`.
-    static func makeProcess(subcommand: [String]) -> Process {
+    static func makeProcess(
+        subcommand: [String],
+        qualityOfService: QualityOfService = .userInitiated
+    ) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var environment = ProcessInfo.processInfo.environment
@@ -95,7 +98,7 @@ enum CodeburnCLI {
         // background-throttles accessory apps and their children. Without this lift the
         // codeburn subprocess parses 5-10x slower than the same command run from a
         // user-interactive terminal, which starves the 30s refresh cadence on large corpora.
-        process.qualityOfService = .userInitiated
+        process.qualityOfService = qualityOfService
         return process
     }
 
