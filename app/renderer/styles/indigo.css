@@ -96,10 +96,6 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 .stat .v { font-size: 24px; font-weight: 640; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
 .stat .v small { font-size: 11px; color: var(--t3); font-weight: 500; letter-spacing: 0; }
 .stat .d { font-size: 10.5px; margin-top: 4px; color: var(--t3); font-variant-numeric: tabular-nums; }
-.stat .d.info { color: var(--blue); }
-.stat .d.bad { color: var(--red); }
-.stat .d.hot { color: var(--amber); }
-.stat .d.ok { color: var(--mint); }
 
 /* capsule chart (ref: gradient pill bars) */
 .plot { position: relative; height: 108px; }
@@ -160,11 +156,6 @@ td.pos, td .pos { color: var(--mint); }
 .est { font-size: 9.5px; color: var(--t3); font-family: var(--mono); }
 .alias { color: var(--lav); font-family: var(--sans); font-size: 11px; font-weight: 530; }
 
-.ev { font-size: 10.5px; color: var(--t3); margin-top: 3px; font-family: var(--mono); }
-.ev a { color: var(--lav); text-decoration: none; }
-.fixrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.codechip { font-family: var(--mono); font-size: 10.5px; background: rgba(160,175,255,.06); border: 1px solid var(--hair); border-radius: 6px; padding: 3px 9px; white-space: nowrap; }
-
 .track { height: 5px; border-radius: 3px; background: rgba(160,175,255,.08); position: relative; margin-top: 8px; }
 .track i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--grad); }
 .track i.over { background: linear-gradient(90deg, #F26D6D, #E8484F); }
@@ -177,16 +168,7 @@ td.pos, td .pos { color: var(--mint); }
 .pace.hot { color: var(--amber); }
 .pace.ok { color: var(--mint); }
 
-.rail { flex: 0 0 146px; padding: 2px 12px 0 0; }
-.rail .ni { padding: 4.5px 8px 4.5px 12px; }
 .tglon { width: 28px; height: 17px; border-radius: 9px; background: var(--grad); position: relative; flex: 0 0 auto; box-shadow: 0 1px 8px rgba(107,124,246,.4); }
 .tglon::after { content: ""; position: absolute; top: 2px; right: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
 
-.minirow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.mini { background: #0E1017; border: 1px solid var(--pg-line); border-radius: 10px; padding: 15px 16px; font-size: 12px; min-height: 150px; }
-.mini h5 { font-size: 11px; color: var(--pg-mut); margin: 0 0 12px; font-weight: 550; }
-.skel { height: 8px; border-radius: 4px; background: rgba(160,175,255,.08); margin: 8px 0; }
-
-.footer { margin-top: 80px; border-top: 1px solid var(--pg-line); padding-top: 18px; font-size: 12px; color: var(--pg-mut); line-height: 1.8; }
-
-@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } .minirow { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }

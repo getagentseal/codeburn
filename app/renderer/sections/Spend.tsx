@@ -1,4 +1,5 @@
 import { CliErrorPanel, CliErrorText } from '../components/CliErrorPanel'
+import { EmptyNote } from '../components/EmptyState'
 import { ListRow } from '../components/ListRow'
 import { Panel } from '../components/Panel'
 import { Sankey } from '../components/Sankey'
@@ -19,10 +20,6 @@ function providerLabel(provider: string): string {
     .filter(Boolean)
     .map(part => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>{children}</p>
 }
 
 export function Spend({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
@@ -160,7 +157,7 @@ function SpendPage({
         </Panel>
       </div>
 
-      <Panel title="Cost flow · model → project" right="click a ribbon to filter" bodyStyle={{ overflowX: 'auto' }}>
+      <Panel title="Cost flow · model → project" right="model → project flow for this range" bodyStyle={{ overflowX: 'auto' }}>
         {flow.data && flow.data.links.length ? (
           <Sankey flow={flow.data} />
         ) : flow.error ? (

@@ -150,6 +150,12 @@ describe('App shortcuts', () => {
     expect(screen.queryByRole('heading', { name: 'General' })).not.toBeInTheDocument()
   })
 
+  it('boots with the persisted default period from Settings', async () => {
+    localStorage.setItem('codeburn.defaultPeriod', 'today')
+    render(<App />)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all'))
+  })
+
   it('switches sections with command-number shortcuts', async () => {
     render(<App />)
 
@@ -185,7 +191,7 @@ describe('App shortcuts', () => {
     expect(await screen.findByText('Need at least two models with usage in this range to compare.')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '7', metaKey: true })
-    expect(await screen.findByText('Connect Claude — log in with the Claude CLI')).toBeInTheDocument()
+    expect(await screen.findByText('Connect Claude: log in with the Claude CLI')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: ',', metaKey: true })
     expect((await screen.findAllByText('Settings')).length).toBeGreaterThan(0)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { Dropdown } from '../components/Dropdown'
+import { EmptyNote } from '../components/EmptyState'
 import { Panel } from '../components/Panel'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
@@ -14,10 +15,6 @@ function fmtMetric(v: number | null, fn: 'cost' | 'number' | 'percent' | 'decima
   if (fn === 'percent') return `${v.toFixed(0)}%`
   if (fn === 'decimal') return v.toFixed(2)
   return Math.round(v).toLocaleString('en-US')
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>{children}</p>
 }
 
 // The CLI `compare` command has no --from/--to, so a custom range falls back to

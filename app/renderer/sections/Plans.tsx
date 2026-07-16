@@ -155,7 +155,7 @@ function ConnectionIndicator({ connection }: { connection: QuotaProvider['connec
 
 function QuotaContent({ quota, providerName }: { quota: QuotaProvider; providerName: string }) {
   if (quota.connection === 'disconnected') {
-    return <p className="quota-connection-note">Connect {providerName} — log in with the {providerName} CLI</p>
+    return <p className="quota-connection-note">Connect {providerName}: log in with the {providerName} CLI</p>
   }
   if (quota.connection === 'loading') return <p className="quota-connection-note">Loading quota…</p>
   if (quota.connection === 'stale' || quota.connection === 'transientFailure') {

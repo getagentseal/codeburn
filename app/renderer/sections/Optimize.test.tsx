@@ -131,10 +131,10 @@ describe('Optimize', () => {
     expect(screen.getByText('Low')).toHaveClass('opt-impact-low')
     expect(screen.getByText('$9.10')).toHaveClass('opt-finding-savings')
     expect(screen.getByText('18.2K tokens')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Waste $94.40' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reverts $107.00' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Abandoned $65.40' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Fixes 3' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Waste $94.40' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Reverts $107.00' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Abandoned $65.40' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Fixes 3' })).toBeInTheDocument()
 
     const row = screen.getByRole('button', { name: /Opus is doing your small talk/ })
     expect(row).toHaveAttribute('aria-expanded', 'false')
@@ -164,12 +164,12 @@ describe('Optimize', () => {
     render(<Optimize period="30days" provider="all" />)
     await screen.findByText('Opus is doing your small talk')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reverts $107.00' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Reverts $107.00' }))
     expect(screen.getByText('codeburn')).toBeInTheDocument()
     expect(screen.getByText('2 commits · rev-1')).toBeInTheDocument()
     expect(screen.queryByText('sandbox-spike')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Abandoned $65.40' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Abandoned $65.40' }))
     expect(screen.getByText('sandbox-spike')).toBeInTheDocument()
     expect(screen.getByText('0 commits · abn-1')).toBeInTheDocument()
     expect(screen.getByText('$65.40')).toHaveClass('val')
@@ -181,16 +181,16 @@ describe('Optimize', () => {
     getYield.mockReset().mockRejectedValue(new Error('yield failed'))
     render(<Optimize period="30days" provider="all" />)
 
-    expect(await screen.findByRole('button', { name: 'Reverts —' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Abandoned —' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Reverts —' }))
-    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Reverts —' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Abandoned —' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Reverts —' }))
+    expect(screen.getByText('Yield data is unavailable right now.')).toBeInTheDocument()
   })
 
   it('keeps the Fixes tab populated and preserves all four empty tab states', async () => {
     const { rerender } = render(<Optimize period="30days" provider="all" />)
     await screen.findByText('Opus is doing your small talk')
-    fireEvent.click(screen.getByRole('button', { name: 'Fixes 3' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Fixes 3' }))
     expect(screen.getByText('Opus is doing your small talk')).toBeInTheDocument()
 
     getOverview.mockResolvedValue(emptyPayload())
@@ -199,12 +199,12 @@ describe('Optimize', () => {
     rerender(<Optimize period="week" provider="all" />)
 
     expect(await screen.findByText('No fixes in this range yet.')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Fixes 0' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Waste $0.00' }))
+    expect(screen.getByRole('tab', { name: 'Fixes 0' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Waste $0.00' }))
     expect(screen.getByText('No waste findings in this range yet.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Reverts $0.00' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Reverts $0.00' }))
     expect(screen.getByText('No reverted sessions in this range yet.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Abandoned $0.00' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Abandoned $0.00' }))
     expect(screen.getByText('No abandoned sessions in this range yet.')).toBeInTheDocument()
   })
 
@@ -223,8 +223,8 @@ describe('Optimize', () => {
 
     render(<Optimize period="30days" provider="all" />)
 
-    expect(await screen.findByRole('button', { name: 'Fixes 2' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Fixes 25' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Fixes 2' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: 'Fixes 25' })).not.toBeInTheDocument()
   })
 
   it('passes provider and custom range to the optimize report and yield bridges', async () => {
@@ -239,12 +239,12 @@ describe('Optimize', () => {
     const overview = { data: makePayload(), error: null, loading: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
     const { rerender } = render(<OptimizeContent period="30days" overview={overview} refreshToken={0} />)
 
-    expect(await screen.findByRole('button', { name: 'Reverts $107.00' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Reverts $107.00' }))
+    expect(await screen.findByRole('tab', { name: 'Reverts $107.00' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Reverts $107.00' }))
     expect(screen.getByText('codeburn')).toBeInTheDocument()
     rerender(<OptimizeContent period="30days" overview={overview} refreshToken={1} />)
     await waitFor(() => expect(getYield).toHaveBeenCalledTimes(2))
-    expect(screen.getByRole('button', { name: 'Reverts $107.00' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Reverts $107.00' })).toBeInTheDocument()
     expect(screen.getByText('codeburn')).toBeInTheDocument()
   })
 })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { EmptyNote } from './components/EmptyState'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Hint } from './components/Hint'
 import { Panel } from './components/Panel'
@@ -44,6 +45,13 @@ function isPeriod(value: string): value is Period {
   return (STANDARD_PERIODS as string[]).includes(value)
 }
 
+/** Boot period = the persisted "Default period" Settings writes, else 30 days. */
+function initialPeriod(): Period {
+  let saved: string | null = null
+  try { saved = globalThis.localStorage?.getItem('codeburn.defaultPeriod') ?? null } catch { /* storage can be unavailable */ }
+  return saved && isPeriod(saved) ? saved : '30days'
+}
+
 function providerName(provider: string): string {
   if (provider === 'all') return 'All providers'
   return provider
@@ -66,7 +74,7 @@ function refreshedLabel(lastSuccessAt: number | null, loading: boolean, now: num
 export function App() {
   const [section, setSection] = useState<Section>('overview')
   const [settingsPane, setSettingsPane] = useState<SettingsPane>('general')
-  const [period, setPeriod] = useState<Period>('30days')
+  const [period, setPeriod] = useState<Period>(initialPeriod)
   const [provider, setProvider] = useState<string>('all')
   const [detectedProviders, setDetectedProviders] = useState<Array<{ id: string; label: string }>>([])
   const [customRange, setCustomRange] = useState<DateRange | null>(null)
@@ -235,9 +243,7 @@ function StatusLine({ polled }: { polled: ReturnType<typeof usePolled<MenubarPay
 function SectionPlaceholder({ title }: { title: string }) {
   return (
     <Panel title={title}>
-      <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>
-        {title} lands in a later task. The shell, data bridge, and design system are in place.
-      </p>
+      <EmptyNote>{title} lands in a later task. The shell, data bridge, and design system are in place.</EmptyNote>
     </Panel>
   )
 }

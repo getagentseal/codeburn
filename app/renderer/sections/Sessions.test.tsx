@@ -155,7 +155,7 @@ describe('Sessions', () => {
     await screen.findByText('6 sessions · $21.93 · 4.2M tokens')
 
     expect(container.querySelector('.session-row .session-title')).toHaveTextContent('zeta/search')
-    await user.click(screen.getByRole('button', { name: 'Turns' }))
+    await user.click(screen.getByRole('tab', { name: 'Turns' }))
     expect(container.querySelector('.session-row .session-title')).toHaveTextContent('alpha/worker')
   })
 

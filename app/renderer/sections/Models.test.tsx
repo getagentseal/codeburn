@@ -182,7 +182,7 @@ describe('Models', () => {
     expect(await screen.findByText('Claude Opus 4.8')).toBeInTheDocument()
     expect(getModels).toHaveBeenCalledWith('week', 'anthropic', false)
 
-    fireEvent.click(screen.getByRole('button', { name: 'By task' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'By task' }))
 
     await waitFor(() => expect(getModels).toHaveBeenCalledWith('week', 'anthropic', true))
     expect(await screen.findByText('coding')).toBeInTheDocument()

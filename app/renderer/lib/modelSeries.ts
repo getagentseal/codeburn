@@ -1,13 +1,4 @@
-export const SERIES_HEX = {
-  opus: '#5B8CFF',
-  fable: '#1baf7a',
-  sonnet: '#8B7CF6',
-  haiku: '#B5A8FF',
-  gpt: '#4DD8E6',
-  other: '#5F6780',
-} as const
-
-export type SeriesKey = keyof typeof SERIES_HEX
+export type SeriesKey = 'opus' | 'fable' | 'sonnet' | 'haiku' | 'gpt' | 'other'
 
 export const SERIES_LABELS: Record<SeriesKey, string> = {
   opus: 'Opus',
@@ -56,10 +47,6 @@ export function seriesClassForModel(model?: string): string {
 
 export function seriesClassForKey(series: SeriesKey): string {
   return SERIES_CLASS[series]
-}
-
-export function seriesHexForModel(model?: string): string {
-  return SERIES_HEX[seriesKeyForModel(model)]
 }
 
 export function isOtherNode(idOrLabel?: string): boolean {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 export type DropdownOption = { value: string; label: string }
 
@@ -9,6 +9,7 @@ export function Dropdown({
   ariaLabel,
   id,
   width,
+  renderIcon,
 }: {
   value: string
   options: DropdownOption[]
@@ -16,6 +17,8 @@ export function Dropdown({
   ariaLabel: string
   id: string
   width?: React.CSSProperties['width']
+  /** Optional leading glyph (e.g. a provider logo) shown in the trigger and each option. */
+  renderIcon?: (value: string) => ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const selectedIndex = Math.max(0, options.findIndex(option => option.value === value))
@@ -84,6 +87,7 @@ export function Dropdown({
           }
         }}
       >
+        {renderIcon?.(value)}
         <span className="dropdown-label">{selected?.label ?? value}</span>
         <span className="dropdown-chevron" aria-hidden="true">⌄</span>
       </button>
@@ -118,6 +122,7 @@ export function Dropdown({
                 }
               }}
             >
+              {renderIcon?.(option.value)}
               {option.label}
             </button>
           ))}

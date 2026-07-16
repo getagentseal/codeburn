@@ -60,10 +60,14 @@ export function Sidebar({
             key={item.id}
             className={item.id === active ? 'ni on' : 'ni'}
             role="button"
+            aria-current={item.id === active ? 'page' : undefined}
             tabIndex={0}
             onClick={() => onNavigate(item.id)}
             onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ' ') onNavigate(item.id)
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onNavigate(item.id)
+              }
             }}
           >
             {item.icon}

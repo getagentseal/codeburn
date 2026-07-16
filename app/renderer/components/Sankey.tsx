@@ -98,12 +98,12 @@ export function Sankey({ flow }: { flow: SpendFlow }) {
       ))}
 
       {models.map(node => (
-        <text key={node.id} x="118" y={round(node.y + node.h / 2 + 3)} textAnchor="end" fontSize="10" fill="var(--t2)">
+        <text key={node.id} x="118" y={round(node.y + node.h / 2 + 3)} textAnchor="end" fontSize="10" fill="var(--mut)">
           {node.displayLabel} · {formatUsd(node.cost)}
         </text>
       ))}
       {projects.map(node => (
-        <text key={node.id} x="534" y={round(node.y + node.h / 2 + 3)} fontSize="10" fill="var(--t2)">
+        <text key={node.id} x="534" y={round(node.y + node.h / 2 + 3)} fontSize="10" fill="var(--mut)">
           {node.displayLabel} · {formatUsd(node.cost)}
         </text>
       ))}

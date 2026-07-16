@@ -115,7 +115,7 @@ describe('Plans', () => {
     expect(screen.getByText('92% used · resets in 3d 14h')).toBeInTheDocument()
     expect(container.querySelector('[data-testid="quota-track-5-hour"] i')).toHaveClass('accent')
     expect(container.querySelector('[data-testid="quota-track-Weekly"] i')).toHaveClass('bad')
-    expect(screen.getByText('Connect Codex — log in with the Codex CLI')).toBeInTheDocument()
+    expect(screen.getByText('Connect Codex: log in with the Codex CLI')).toBeInTheDocument()
 
     expect(screen.getByRole('heading', { name: 'Budget plans' })).toBeInTheDocument()
     expect(screen.getByText('Cursor Pro')).toBeInTheDocument()
@@ -193,7 +193,7 @@ describe('Plans', () => {
 
     render(<Plans period="month" />)
 
-    expect(await screen.findByText('Connect Codex — log in with the Codex CLI')).toBeInTheDocument()
+    expect(await screen.findByText('Connect Codex: log in with the Codex CLI')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Budget plans' })).not.toBeInTheDocument()
   })
 
@@ -240,6 +240,6 @@ describe('Plans', () => {
     render(<Plans period="week" />)
 
     expect(await screen.findByText('Permission denied')).toBeInTheDocument()
-    expect(screen.getByText('permission denied; grant Full Disk Access')).toHaveStyle({ color: 'var(--amber)' })
+    expect(screen.getByText('permission denied; grant Full Disk Access')).toHaveStyle({ color: 'var(--warn)' })
   })
 })

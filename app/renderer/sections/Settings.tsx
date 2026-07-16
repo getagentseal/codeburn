@@ -63,6 +63,26 @@ function shortFingerprint(fingerprint: string): string {
   return `${parts[0]}:${parts[1]}:…:${parts[parts.length - 1]}`
 }
 
+/** Inline destructive confirm: the button swaps to a prompt + Confirm/Cancel in
+ * place (no OS dialog). Auto-cancels on Escape or when focus leaves the group. */
+function ConfirmButton({ label, prompt, onConfirm }: { label: string; prompt: string; onConfirm: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+  if (!confirming) {
+    return <button className="btnp" onClick={() => setConfirming(true)}>{label}</button>
+  }
+  return (
+    <span
+      className="set-confirm"
+      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setConfirming(false) }}
+      onKeyDown={event => { if (event.key === 'Escape') setConfirming(false) }}
+    >
+      <span className="set-confirm-q">{prompt}</span>
+      <button className="set-text-button" autoFocus onClick={() => { setConfirming(false); onConfirm() }}>Confirm</button>
+      <button className="set-text-button" onClick={() => setConfirming(false)}>Cancel</button>
+    </span>
+  )
+}
+
 export function Settings({ period, refreshToken = 0, onNavigate, initialPane }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane }) {
   const [pane, setPane] = useState<Pane>(initialPane ?? 'general')
 
@@ -72,7 +92,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane }: 
       <div className="body set-body">
         <nav className="set-rail" aria-label="Settings sections">
           {RAIL_ITEMS.map(item => (
-            <button key={item.id} className={pane === item.id ? 'set-rail-item on' : 'set-rail-item'} onClick={() => setPane(item.id)}>
+            <button key={item.id} className={pane === item.id ? 'set-rail-item on' : 'set-rail-item'} aria-current={pane === item.id ? 'page' : undefined} onClick={() => setPane(item.id)}>
               <svg viewBox="0 0 24 24" aria-hidden="true">{item.icon}</svg>{item.label}
             </button>
           ))}
@@ -125,7 +145,7 @@ function GeneralPane({ period, refreshToken }: { period: Period; refreshToken: n
         <div className="about-sec">
           <div className="about-sec-h">Appearance</div>
           <div className="about-row"><span className="tx">Theme<small>Match your system or force a mode</small></span><span className="r"><span className="seg">
-            {(['system', 'light', 'dark'] as Theme[]).map(value => <button key={value} className={theme === value ? 'on' : undefined} onClick={() => chooseTheme(value)}>{value[0]!.toUpperCase() + value.slice(1)}</button>)}
+            {(['system', 'light', 'dark'] as Theme[]).map(value => <button key={value} className={theme === value ? 'on' : undefined} aria-pressed={theme === value} onClick={() => chooseTheme(value)}>{value[0]!.toUpperCase() + value.slice(1)}</button>)}
           </span></span></div>
         </div>
         <div className="about-sec set-last-sec">
@@ -191,7 +211,6 @@ function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refre
     if (result.ok) setNonce(value => value + 1)
   }
   const remove = (plan: JsonPlanSummary) => {
-    if (!window.confirm(`Remove the ${plan.provider} plan?`)) return
     void codeburn.resetPlan(plan.provider).then(finish)
   }
   const add = () => {
@@ -203,7 +222,7 @@ function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refre
     <div><h3 className="set-h">Plans</h3><p className="set-sub">Set a monthly budget plan per provider. codeburn compares it to your API-equivalent spend.</p></div>
     <div className="card">
       <div className="about-sec">
-        {plans.error ? <SettingsErrorText error={plans.error} /> : !plans.data ? <p className="set-cap">Loading plans…</p> : configured.length === 0 ? <p className="set-cap">No plans configured.</p> : configured.map(plan => <div className="about-row" key={plan.provider}><span className="tx">{PLAN_PRESETS.find(item => item.id === plan.id)?.label ?? plan.id}<small>{formatConverted(plan.budget)}/month · {plan.provider} · {plan.percentUsed}% used</small></span><span className="r"><button className="btnp" onClick={() => remove(plan)}>Remove</button></span></div>)}
+        {plans.error ? <SettingsErrorText error={plans.error} /> : !plans.data ? <p className="set-cap">Loading plans…</p> : configured.length === 0 ? <p className="set-cap">No plans configured.</p> : configured.map(plan => <div className="about-row" key={plan.provider}><span className="tx">{PLAN_PRESETS.find(item => item.id === plan.id)?.label ?? plan.id}<small>{formatConverted(plan.budget)}/month · {plan.provider} · {plan.percentUsed}% used</small></span><span className="r"><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(plan)} /></span></div>)}
       </div>
       <div className="about-sec set-last-sec">
         <div className="about-row"><label className="tx" htmlFor="settings-plan-preset">Add a plan</label><span className="r"><Dropdown id="settings-plan-preset" ariaLabel="Add a plan" value={presetId} options={PLAN_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} onChange={value => setPresetId(value as PlanPreset['id'])} width={160} /><button className="btnp btnp-primary" onClick={add}>Add</button></span></div>
@@ -243,7 +262,7 @@ function ExportPane({ period, refreshToken }: { period: Period; refreshToken: nu
     <div><h3 className="set-h">Export</h3><p className="set-sub">Save your usage as CSV or JSON. Everything stays on your machine.</p></div>
     <div className="card">
       <div className="about-sec">
-        <div className="about-row"><span className="tx">Format</span><span className="r"><span className="seg"><button className={format === 'csv' ? 'on' : undefined} onClick={() => setFormat('csv')}>CSV</button><button className={format === 'json' ? 'on' : undefined} onClick={() => setFormat('json')}>JSON</button></span></span></div>
+        <div className="about-row"><span className="tx">Format</span><span className="r"><span className="seg"><button className={format === 'csv' ? 'on' : undefined} aria-pressed={format === 'csv'} onClick={() => setFormat('csv')}>CSV</button><button className={format === 'json' ? 'on' : undefined} aria-pressed={format === 'json'} onClick={() => setFormat('json')}>JSON</button></span></span></div>
         <div className="about-row"><label className="tx" htmlFor="settings-export-provider">Provider</label><span className="r"><Dropdown id="settings-export-provider" ariaLabel="Provider" value={provider} options={[{ value: 'all', label: 'All providers' }, ...providers.map(value => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }))]} onChange={setProvider} width={150} /></span></div>
         <div className="about-row"><span className="tx">Destination</span><span className="r set-export-destination"><span className="set-mono">{destination ?? 'Choose a folder…'}</span><button className="btnp" onClick={() => void chooseDirectory()}>Choose folder…</button></span></div>
       </div>
@@ -289,14 +308,13 @@ function PairedPanel({ devices, period, onRefresh }: { devices: ReturnType<typeo
   const [error, setError] = useState('')
   const paired = devices.data?.perDevice.filter(device => !device.local) ?? []
   const remove = (name: string) => {
-    if (!window.confirm(`Remove paired device ${name}?`)) return
     void codeburn.removeDevice(name).then(result => {
       if (!result.ok) { setError(result.stderr || 'Unable to remove device'); return }
       setError('')
       onRefresh()
     })
   }
-  return <Panel title="Paired devices" right={<button className="set-text-button" onClick={onRefresh}>Refresh</button>}>{!devices.data && devices.error ? <SettingsErrorText error={devices.error} /> : !devices.data ? <p className="set-cap">Loading paired devices…</p> : paired.length === 0 ? <p className="set-cap">No paired devices yet.</p> : paired.map(device => <div className="li" key={device.id}><div className="lx"><b>{device.name}</b><span>{device.sessions.toLocaleString('en-US')} sessions · {formatUsd(device.cost)} {periodLabel(period)}</span></div><button className="btnp" onClick={() => remove(device.name)}>Remove</button></div>)}{devices.data && devices.data.combined.deviceCount > 1 && <div className="li"><div className="lx"><b>Combined view active · {devices.data.combined.deviceCount} devices</b></div></div>}{error && <p className="set-action-msg error">{error}</p>}</Panel>
+  return <Panel title="Paired devices" right={<button className="set-text-button" onClick={onRefresh}>Refresh</button>}>{!devices.data && devices.error ? <SettingsErrorText error={devices.error} /> : !devices.data ? <p className="set-cap">Loading paired devices…</p> : paired.length === 0 ? <p className="set-cap">No paired devices yet.</p> : paired.map(device => <div className="li" key={device.id}><div className="lx"><b>{device.name}</b><span>{device.sessions.toLocaleString('en-US')} sessions · {formatUsd(device.cost)} {periodLabel(period)}</span></div><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(device.name)} /></div>)}{devices.data && devices.data.combined.deviceCount > 1 && <div className="li"><div className="lx"><b>Combined view active · {devices.data.combined.deviceCount} devices</b></div></div>}{error && <p className="set-action-msg error">{error}</p>}</Panel>
 }
 
 function SettingsErrorText({ error }: { error: CliError }) {

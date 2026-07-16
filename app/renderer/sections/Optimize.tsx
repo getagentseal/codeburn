@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
+import { EmptyNote } from '../components/EmptyState'
 import { Panel } from '../components/Panel'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
@@ -10,10 +11,6 @@ import { codeburn } from '../lib/ipc'
 import type { DateRange, MenubarPayload, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
 
 type OptimizeTab = 'waste' | 'reverts' | 'abandoned' | 'fixes'
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>{children}</p>
-}
 
 export function Optimize({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
   const overview = usePolled<MenubarPayload>(
@@ -146,7 +143,12 @@ function ActionableFindingRows({ findings }: { findings: OptimizeFinding[] }) {
                 <span aria-hidden="true">{IMPACT_ICON[finding.severity]}</span>
                 {finding.severity.charAt(0).toUpperCase() + finding.severity.slice(1)}
               </span>
-              <b className="opt-finding-title">{finding.title}</b>
+              <span className="opt-finding-titlewrap">
+                <b className="opt-finding-title">{finding.title}</b>
+                {finding.trend === 'improving' && (
+                  <span className="opt-trend opt-trend-improving">improving<span aria-hidden="true"> ↓</span></span>
+                )}
+              </span>
               <span className="opt-finding-savings">{formatUsd(finding.estimatedSavingsUSD)}</span>
               <span className="opt-finding-tokens">{formatCompact(finding.tokensSaved)} tokens</span>
               <span className="opt-finding-chevron" aria-hidden="true">›</span>
@@ -206,7 +208,7 @@ function YieldRows({
   category: SessionYieldJson['category']
   empty: string
 }) {
-  if (report.error || !report.data) return <EmptyNote>—</EmptyNote>
+  if (report.error || !report.data) return <EmptyNote>Yield data is unavailable right now.</EmptyNote>
 
   const rows = report.data.details.filter(row => row.category === category)
   if (!rows.length) return <EmptyNote>{empty}</EmptyNote>

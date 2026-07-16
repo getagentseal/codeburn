@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
+import { EmptyNote } from '../components/EmptyState'
 import { seriesColorForModel } from '../components/ListRow'
 import { Panel } from '../components/Panel'
 import { SegTabs } from '../components/SegTabs'
@@ -10,6 +11,7 @@ import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import type { DateRange, ModelReportRow, Period } from '../lib/types'
+import type { SettingsPane } from './Settings'
 
 type ModelsLens = 'model' | 'task'
 
@@ -20,10 +22,6 @@ const LENSES = [
 
 function fmtInt(n: number): string {
   return n.toLocaleString('en-US')
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>{children}</p>
 }
 
 export function Models({
@@ -37,9 +35,10 @@ export function Models({
   provider: string
   range?: DateRange | null
   refreshToken?: number
-  onNavigate?: (section: Section) => void
+  onNavigate?: (section: Section, pane?: SettingsPane) => void
 }) {
   const [lens, setLens] = useState<ModelsLens>('model')
+  const onAddAlias = () => onNavigate?.('settings', 'aliases')
   const byTask = lens === 'task'
   const report = usePolled<ModelReportRow[]>(
     () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
@@ -66,7 +65,7 @@ export function Models({
       </div>
       <Panel bodyStyle={{ overflowX: 'auto' }}>
         {report.data.length ? (
-          <ModelsTable rows={report.data} byTask={byTask} />
+          <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} />
         ) : (
           <EmptyNote>No model usage in this range yet.</EmptyNote>
         )}
@@ -75,8 +74,8 @@ export function Models({
   )
 }
 
-function ModelsTable({ rows, byTask }: { rows: ModelReportRow[]; byTask: boolean }) {
-  if (byTask) return <ModelsByTaskTable rows={rows} />
+function ModelsTable({ rows, byTask, onAddAlias }: { rows: ModelReportRow[]; byTask: boolean; onAddAlias: () => void }) {
+  if (byTask) return <ModelsByTaskTable rows={rows} onAddAlias={onAddAlias} />
 
   return (
     <table>
@@ -93,14 +92,14 @@ function ModelsTable({ rows, byTask }: { rows: ModelReportRow[]; byTask: boolean
       </thead>
       <tbody>
         {rows.map((row, i) => (
-          <ModelTableRow key={`${row.provider}-${row.model}-${i}`} row={row} />
+          <ModelTableRow key={`${row.provider}-${row.model}-${i}`} row={row} onAddAlias={onAddAlias} />
         ))}
       </tbody>
     </table>
   )
 }
 
-function ModelsByTaskTable({ rows }: { rows: ModelReportRow[] }) {
+function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
   const groups = groupTaskRows(rows)
 
   return (
@@ -118,7 +117,7 @@ function ModelsByTaskTable({ rows }: { rows: ModelReportRow[] }) {
       </thead>
       {groups.map(group => (
         <tbody className="model-task-group" key={`${group.provider}-${group.model}`}>
-          <ModelGroupRow rows={group.rows} />
+          <ModelGroupRow rows={group.rows} onAddAlias={onAddAlias} />
           {group.rows.map((row, i) => (
             <ModelTaskRow key={`${row.category ?? 'all'}-${i}`} row={row} />
           ))}
@@ -128,7 +127,7 @@ function ModelsByTaskTable({ rows }: { rows: ModelReportRow[] }) {
   )
 }
 
-function ModelTableRow({ row }: { row: ModelReportRow }) {
+function ModelTableRow({ row, onAddAlias }: { row: ModelReportRow; onAddAlias: () => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
   const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
@@ -146,7 +145,7 @@ function ModelTableRow({ row }: { row: ModelReportRow }) {
         {unpriced ? (
           <>
             {' '}
-            <span className="alias">add alias ›</span>
+            <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button>
           </>
         ) : null}
       </td>
@@ -160,7 +159,7 @@ function ModelTableRow({ row }: { row: ModelReportRow }) {
   )
 }
 
-function ModelGroupRow({ rows }: { rows: ModelReportRow[] }) {
+function ModelGroupRow({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
   const model = rows[0]
   const calls = rows.reduce((sum, row) => sum + row.calls, 0)
   const costUSD = rows.reduce((sum, row) => sum + row.costUSD, 0)
@@ -176,7 +175,7 @@ function ModelGroupRow({ rows }: { rows: ModelReportRow[] }) {
             style={{ background: seriesColorForModel(model.modelDisplayName || model.model) }}
           />
           <span className="model-group-name">{model.modelDisplayName}</span>
-          {unpriced ? <span className="alias">add alias ›</span> : null}
+          {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
         </span>
       </td>
       <td className={unpriced ? 'dim' : undefined}>{fmtInt(calls)}</td>

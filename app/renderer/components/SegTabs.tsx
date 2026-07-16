@@ -13,16 +13,20 @@ export function SegTabs({
   style?: React.CSSProperties
 }) {
   return (
-    <div className="seg" style={style}>
+    <div className="seg" role="tablist" style={style}>
       {options.map(opt => (
         <span
           key={opt.value}
           className={opt.value === value ? 'on' : undefined}
-          role="button"
+          role="tab"
+          aria-selected={opt.value === value}
           tabIndex={0}
           onClick={() => onChange(opt.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') onChange(opt.value)
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onChange(opt.value)
+            }
           }}
         >
           {opt.label}

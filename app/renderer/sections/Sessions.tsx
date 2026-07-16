@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
+import { EmptyNote } from '../components/EmptyState'
 import { Panel } from '../components/Panel'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
@@ -54,10 +55,6 @@ function groupSortValue(sort: SessionSort, rows: SessionRow[]): number {
     return rows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0)
   }
   return rows.reduce((latest, row) => Math.max(latest, endedAtTime(row)), 0)
-}
-
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--mut)', margin: 0, fontSize: 12 }}>{children}</p>
 }
 
 export function Sessions({

@@ -127,12 +127,12 @@ describe('Settings', () => {
 
   it('lists, removes, and adds plans through the action bridge', async () => {
     const user = userEvent.setup()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<Settings period="month" />)
     await user.click(screen.getByRole('button', { name: 'Plans' }))
     expect((await screen.findAllByText('Claude Max 20x')).length).toBeGreaterThan(0)
     expect(screen.getByText('$200.00/month · claude · 24% used')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(mocks.resetPlan).toHaveBeenCalledWith('claude')
     await user.click(screen.getByLabelText('Add a plan'))
     await user.click(screen.getByRole('option', { name: 'Cursor Pro' }))
@@ -157,7 +157,6 @@ describe('Settings', () => {
 
   it('renders real device status and removes paired devices without fake pairing controls', async () => {
     const user = userEvent.setup()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<Settings period="month" />)
     await user.click(screen.getByRole('button', { name: 'Devices' }))
     expect(await screen.findByText('Toruk MacBook Pro')).toBeInTheDocument()
@@ -171,6 +170,7 @@ describe('Settings', () => {
     expect(screen.queryByText('Approve')).not.toBeInTheDocument()
     expect(screen.queryByText('Pull now')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(mocks.removeDevice).toHaveBeenCalledWith('toruk-mini')
     expect(screen.getByText('Combined view active · 2 devices')).toBeInTheDocument()
   })
@@ -194,6 +194,6 @@ describe('Settings', () => {
     render(<Settings period="week" />)
     await user.click(screen.getByRole('button', { name: 'Devices' }))
     await waitFor(() => expect(screen.getAllByText('Locate the codeburn CLI')).toHaveLength(2))
-    expect(screen.getByText('permission denied; grant Full Disk Access')).toHaveStyle({ color: 'var(--amber)' })
+    expect(screen.getByText('permission denied; grant Full Disk Access')).toHaveStyle({ color: 'var(--warn)' })
   })
 })

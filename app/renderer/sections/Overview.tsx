@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { ActivityHeatmap } from '../components/ActivityHeatmap'
+import { EmptyNote } from '../components/EmptyState'
 import { ListRow } from '../components/ListRow'
 import { Panel } from '../components/Panel'
 import { StaleBanner } from '../components/StaleBanner'
@@ -415,10 +416,6 @@ function DailyChart({ daily }: { daily: DailyHistoryEntry[] }) {
   )
 }
 
-function EmptyNote({ children }: { children: React.ReactNode }) {
-  return <p style={{ color: 'var(--t3)', margin: 0, fontSize: 12 }}>{children}</p>
-}
-
 function formatRate(rate: number | null): string {
   return rate === null ? '—' : `${Math.round(rate * 100)}%`
 }
@@ -465,7 +462,7 @@ export function OverviewContent({
   provider?: string
   range?: DateRange | null
   overview: Polled<MenubarPayload>
-  onNavigate?: (section: 'optimize') => void
+  onNavigate?: (section: 'optimize' | 'sessions') => void
 }) {
   const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [])
   const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period, provider), [period, provider])
@@ -564,12 +561,12 @@ export function OverviewContent({
           </div>
 
           <div className="ov-card ov-panel ov-sessions-widget">
-            <div className="ov-panel-head"><h3>Most expensive sessions</h3><span className="r"><button className="ov-link" type="button">See all →</button></span></div>
+            <div className="ov-panel-head"><h3>Most expensive sessions</h3><span className="r"><button className="ov-link" type="button" onClick={() => onNavigate?.('sessions')}>See all →</button></span></div>
             <div className="ov-panel-body">
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
                 const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
                 const sub = [formatChartDate(session.date), model, `${session.calls} calls`].filter(Boolean).join(' · ')
-                return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} />
+                return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => onNavigate?.('sessions')} />
               }) : <EmptyNote>No sessions in this range.</EmptyNote>}
             </div>
           </div>
