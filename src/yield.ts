@@ -178,8 +178,8 @@ function categorizeSession(
   return { category: 'abandoned', commitCount: relevantCommits.length }
 }
 
-export async function computeYield(range: DateRange, cwd: string): Promise<YieldSummary> {
-  const projects = await parseAllSessions(range, 'all')
+export async function computeYield(range: DateRange, cwd: string, provider: string = 'all'): Promise<YieldSummary> {
+  const projects = await parseAllSessions(range, provider)
 
   const summary: YieldSummary = {
     productive: { cost: 0, sessions: 0 },

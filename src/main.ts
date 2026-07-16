@@ -1713,16 +1713,18 @@ program
   .command('yield')
   .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'week')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (opts) => {
     assertFormat(opts.format, ['text', 'json'], 'yield')
+    assertProvider(opts.provider, 'yield')
     const { computeYield, formatYieldSummary, buildYieldJsonReport } = await import('./yield.js')
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
     if (opts.format !== 'json') {
       console.log(`\n  Analyzing yield for ${label}...\n`)
     }
-    const summary = await computeYield(range, process.cwd())
+    const summary = await computeYield(range, process.cwd(), opts.provider)
     if (opts.format === 'json') {
       console.log(JSON.stringify(buildYieldJsonReport(summary, label, range), null, 2))
       return
