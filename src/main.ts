@@ -5,7 +5,7 @@ import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { findUnpricedModels, loadPricing, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
-import { convertCost } from './currency.js'
+import { convertCost, formatCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
 import { dateKey } from './day-aggregator.js'
@@ -32,6 +32,7 @@ import { registerGuardCommands } from './guard/cli.js'
 import { registerSyncCommands } from './sync/cli.js'
 import { runContextCommand } from './context-tree.js'
 import { renderCompare } from './compare.js'
+import { computeBudgetStatus, daysInMonth, diffCalendarDays, type BudgetStatus, type BudgetTier } from './budget.js'
 import {
   installAntigravityStatusLineHook,
   runAgyStatusLineHook,
@@ -142,6 +143,29 @@ function toJsonPlanSummary(planUsage: PlanUsage): JsonPlanSummary {
 
 type JsonPlanSummaryMap = Partial<Record<PlanProvider, JsonPlanSummary>>
 
+type BudgetCommandOpts = {
+  daily?: number
+  weekly?: number
+  monthly?: number
+  list?: boolean
+  remove?: string
+  check?: boolean
+}
+
+type OverviewBudget = {
+  tier: BudgetTier
+  status: BudgetStatus
+  inProgress: boolean
+}
+
+type BudgetPeriodInfo = {
+  tier: BudgetTier
+  range: DateRange
+  elapsedDays: number
+  totalDays: number
+  inProgress: boolean
+}
+
 function toJsonPlanSummaryMap(planUsages: PlanUsage[]): JsonPlanSummaryMap {
   const summaries: JsonPlanSummaryMap = {}
   for (const usage of planUsages) {
@@ -165,6 +189,174 @@ async function attachPlanSummaries<T extends object>(payload: T): Promise<T & { 
 function planLabel(plan: Plan): string {
   const name = planDisplayName(plan.id)
   return plan.id === 'custom' ? `${name} (${plan.provider})` : name
+}
+
+function formatDisplayCurrencyAmount(amount: number): string {
+  const { rate } = getCurrency()
+  return formatCost(rate > 0 ? amount / rate : amount)
+}
+
+function isValidBudgetAmount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function configuredBudgetEntries(budget: CodeburnConfig['budget']): Array<{ tier: BudgetTier; amount: number }> {
+  const entries: Array<{ tier: BudgetTier; amount: number }> = []
+  const daily = budget?.daily
+  const weekly = budget?.weekly
+  const monthly = budget?.monthly
+  if (isValidBudgetAmount(daily)) entries.push({ tier: 'daily', amount: daily })
+  if (isValidBudgetAmount(weekly)) entries.push({ tier: 'weekly', amount: weekly })
+  if (isValidBudgetAmount(monthly)) entries.push({ tier: 'monthly', amount: monthly })
+  return entries
+}
+
+function budgetTierForOverview(period: Period | undefined, customRange: DateRange | null): BudgetTier | undefined {
+  if (customRange) return undefined
+  if (period === 'today') return 'daily'
+  if (period === 'week') return 'weekly'
+  if (period === 'month') return 'monthly'
+  return undefined
+}
+
+function budgetAmountForTier(budget: CodeburnConfig['budget'], tier: BudgetTier): number | undefined {
+  const amount = tier === 'daily'
+    ? budget?.daily
+    : tier === 'weekly'
+      ? budget?.weekly
+      : budget?.monthly
+  return isValidBudgetAmount(amount) ? amount : undefined
+}
+
+function periodForBudgetTier(tier: BudgetTier): Extract<Period, 'today' | 'week' | 'month'> {
+  if (tier === 'daily') return 'today'
+  if (tier === 'weekly') return 'week'
+  return 'month'
+}
+
+function getBudgetPeriodInfo(tier: BudgetTier): BudgetPeriodInfo {
+  const { range } = getDateRange(periodForBudgetTier(tier))
+  const progress = getOverviewBudgetProgress(tier, range)
+  return { tier, range, ...progress }
+}
+
+function getOverviewBudgetProgress(tier: BudgetTier, range: DateRange, today = new Date()): Pick<BudgetPeriodInfo, 'elapsedDays' | 'totalDays' | 'inProgress'> {
+  if (tier === 'daily') return { elapsedDays: 1, totalDays: 1, inProgress: false }
+  if (tier === 'weekly') return { elapsedDays: 7, totalDays: 7, inProgress: false }
+
+  const totalDays = daysInMonth(today)
+  const elapsedDays = Math.max(1, Math.min(totalDays, diffCalendarDays(range.start, today) + 1))
+  return { elapsedDays, totalDays, inProgress: elapsedDays < totalDays }
+}
+
+function totalProjectCostUSD(projects: ProjectSummary[]): number {
+  return projects.reduce((sum, project) => sum + project.totalCostUSD, 0)
+}
+
+function buildOverviewBudget(projects: ProjectSummary[], budget: CodeburnConfig['budget'], tier: BudgetTier | undefined, range: DateRange): OverviewBudget | undefined {
+  if (!tier) return undefined
+  const amount = budgetAmountForTier(budget, tier)
+  if (amount === undefined) return undefined
+  const progress = getOverviewBudgetProgress(tier, range)
+  return {
+    tier,
+    status: computeBudgetStatus({
+      spent: convertCost(totalProjectCostUSD(projects)),
+      budget: amount,
+      elapsedDays: progress.elapsedDays,
+      totalDays: progress.totalDays,
+    }),
+    inProgress: progress.inProgress,
+  }
+}
+
+function isOverviewBudgetFilterActive(opts: { provider: string; project: string[]; exclude: string[] }): boolean {
+  return opts.provider !== 'all' || opts.project.length > 0 || opts.exclude.length > 0
+}
+
+function printBudgetList(budget: CodeburnConfig['budget']): void {
+  const entries = configuredBudgetEntries(budget)
+  if (entries.length === 0) {
+    console.log('\n  No budgets configured.')
+    console.log(`  Config: ${getConfigFilePath()}`)
+    console.log('  Add one with: codeburn budget --monthly <amount>\n')
+    return
+  }
+
+  console.log('\n  Budgets:')
+  for (const entry of entries) {
+    console.log(`    ${entry.tier}: ${formatDisplayCurrencyAmount(entry.amount)}`)
+  }
+  console.log(`  Config: ${getConfigFilePath()}\n`)
+}
+
+function validateBudgetSetters(opts: BudgetCommandOpts): boolean {
+  const invalid: Array<{ flag: string; value: number | undefined }> = []
+  if (opts.daily !== undefined && !isValidBudgetAmount(opts.daily)) invalid.push({ flag: '--daily', value: opts.daily })
+  if (opts.weekly !== undefined && !isValidBudgetAmount(opts.weekly)) invalid.push({ flag: '--weekly', value: opts.weekly })
+  if (opts.monthly !== undefined && !isValidBudgetAmount(opts.monthly)) invalid.push({ flag: '--monthly', value: opts.monthly })
+
+  if (invalid.length === 0) return true
+
+  for (const item of invalid) {
+    console.error(`\n  ${item.flag} must be a finite number greater than 0 (got: ${String(item.value)}).\n`)
+  }
+  process.exitCode = 1
+  return false
+}
+
+function assignBudgetSetters(config: CodeburnConfig, opts: BudgetCommandOpts): void {
+  const budget = { ...(config.budget ?? {}) }
+  if (opts.daily !== undefined) budget.daily = opts.daily
+  if (opts.weekly !== undefined) budget.weekly = opts.weekly
+  if (opts.monthly !== undefined) budget.monthly = opts.monthly
+  config.budget = budget
+}
+
+function removeBudget(config: CodeburnConfig, tier: string): boolean {
+  if (tier !== 'daily' && tier !== 'weekly' && tier !== 'monthly') {
+    console.error(`\n  Unknown budget period: ${tier}. Use daily, weekly, or monthly.\n`)
+    process.exitCode = 1
+    return false
+  }
+
+  const budget = { ...(config.budget ?? {}) }
+  if (tier === 'daily') delete budget.daily
+  if (tier === 'weekly') delete budget.weekly
+  if (tier === 'monthly') delete budget.monthly
+  config.budget = configuredBudgetEntries(budget).length > 0 ? budget : undefined
+  return true
+}
+
+async function runBudgetCheck(budget: CodeburnConfig['budget']): Promise<void> {
+  const entries = configuredBudgetEntries(budget)
+  if (entries.length === 0) {
+    console.log('\n  No budgets configured.')
+    console.log('  Add one with: codeburn budget --monthly <amount>\n')
+    return
+  }
+
+  await loadPricing()
+
+  let over = false
+  console.log('')
+  for (const entry of entries) {
+    const period = getBudgetPeriodInfo(entry.tier)
+    const projects = await parseAllSessions(period.range, 'all')
+    const status = computeBudgetStatus({
+      spent: convertCost(totalProjectCostUSD(projects)),
+      budget: entry.amount,
+      elapsedDays: period.elapsedDays,
+      totalDays: period.totalDays,
+    })
+    const label = status.state === 'over' ? 'OVER' : status.state === 'warn' ? 'WARN' : 'OK'
+    if (status.state === 'over') over = true
+    console.log(`  ${entry.tier}: ${formatDisplayCurrencyAmount(status.spent)} of ${formatDisplayCurrencyAmount(status.budget)} (${Math.floor(status.pct)}%) [${label}]`)
+    clearSessionCache()
+  }
+  console.log('')
+
+  if (over) process.exitCode = 1
 }
 
 function toPlanDisplay(plan: Plan) {
@@ -724,11 +916,54 @@ program
       console.error(`\n  Error: ${err instanceof Error ? err.message : String(err)}\n`)
       process.exit(1)
     }
+    const period = customRange ? undefined : toPeriod(opts.period)
     const { range, label } = customRange
       ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
-      : getDateRange(toPeriod(opts.period))
+      : getDateRange(period!)
     const projects = filterProjectsByName(await parseAllSessions(range, opts.provider), opts.project, opts.exclude)
-    process.stdout.write(renderOverview(projects, { label, color: opts.color }))
+    const config = await readConfig()
+    const budget = isOverviewBudgetFilterActive(opts)
+      ? undefined
+      : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange), range)
+    process.stdout.write(renderOverview(projects, { label, color: opts.color, budget }))
+  })
+
+program
+  .command('budget')
+  .description('Set spend budgets and check current spend against them')
+  .option('--daily <amt>', 'Set daily spend budget in the active display currency', parseNumber)
+  .option('--weekly <amt>', 'Set weekly spend budget in the active display currency', parseNumber)
+  .option('--monthly <amt>', 'Set monthly spend budget in the active display currency', parseNumber)
+  .option('--list', 'List configured spend budgets')
+  .option('--remove <period>', 'Remove one budget: daily, weekly, or monthly')
+  .option('--check', 'Check current spend and exit 1 if any configured budget is over')
+  .action(async (opts: BudgetCommandOpts) => {
+    const config = await readConfig()
+    const hasSetter = opts.daily !== undefined || opts.weekly !== undefined || opts.monthly !== undefined
+
+    if (opts.list || (!hasSetter && !opts.remove && !opts.check)) {
+      printBudgetList(config.budget)
+      return
+    }
+
+    if (opts.remove) {
+      if (!removeBudget(config, opts.remove)) return
+      await saveConfig(config)
+      console.log(`\n  Removed ${opts.remove} budget.`)
+      console.log(`  Config: ${getConfigFilePath()}\n`)
+      return
+    }
+
+    if (opts.check) {
+      await runBudgetCheck(config.budget)
+      return
+    }
+
+    if (!validateBudgetSetters(opts)) return
+    assignBudgetSetters(config, opts)
+    await saveConfig(config)
+    console.log('\n  Budget saved.')
+    printBudgetList(config.budget)
   })
 
 program

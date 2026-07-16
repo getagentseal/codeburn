@@ -3,15 +3,20 @@ import { Chalk, type ChalkInstance } from 'chalk'
 import { homedir } from 'os'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost as baseCost } from './currency.js'
+import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, getShortModelName } from './models.js'
 import { dateKey } from './day-aggregator.js'
+import type { BudgetStatus, BudgetTier } from './budget.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
 // a precise statement. Aggregation uses raw numbers; these only affect render.
 function formatCost(usd: number): string {
   return baseCost(usd).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
+}
+function formatDisplayCost(amount: number): string {
+  const { rate } = getCurrency()
+  return formatCost(rate > 0 ? amount / rate : amount)
 }
 function formatTokens(n: number): string {
   // Pin the locale so grouping is deterministic regardless of the host's
@@ -38,6 +43,11 @@ function projectName(p: ProjectSummary): string {
 }
 
 type Col = { header: string; right?: boolean }
+type OverviewBudget = {
+  tier: BudgetTier
+  status: BudgetStatus
+  inProgress: boolean
+}
 
 // Visible width, ignoring ANSI color codes, so padding stays aligned.
 function vlen(s: string): number {
@@ -74,7 +84,7 @@ function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
 
 export function renderOverview(
   projects: ProjectSummary[],
-  opts: { label: string; color: boolean },
+  opts: { label: string; color: boolean; budget?: OverviewBudget },
 ): string {
   const c = new Chalk(opts.color ? {} : { level: 0 })
   const heading = (text: string): string => c.cyan.bold(text)
@@ -170,6 +180,20 @@ export function renderOverview(
     const more = unpriced.length > 3 ? ` +${unpriced.length - 3} more` : ''
     out.push(kv('Unpriced', c.yellow(`${unpriced.length} model${unpriced.length === 1 ? '' : 's'} at $0: `) + shown + more))
     out.push(kv('', c.dim('Fix: codeburn model-alias "<model>" <known-model>')))
+  }
+  if (opts.budget) {
+    const label = opts.budget.tier === 'daily'
+      ? 'Daily'
+      : opts.budget.tier === 'weekly'
+        ? 'Weekly'
+        : 'Monthly'
+    const status = opts.budget.status
+    const pct = `${Math.floor(status.pct)}%`
+    const statusColor = status.state === 'over' ? c.red : status.state === 'warn' ? c.yellow : c.green
+    const projected = opts.budget.inProgress
+      ? c.dim(`  projected ${formatDisplayCost(status.projected)} by ${opts.budget.tier === 'monthly' ? 'month' : opts.budget.tier === 'weekly' ? 'week' : 'day'} end`)
+      : ''
+    out.push('  ' + statusColor(`${label} budget: ${formatDisplayCost(status.spent)} of ${formatDisplayCost(status.budget)} (${pct})`) + projected)
   }
   out.push('')
 

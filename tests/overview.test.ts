@@ -101,6 +101,78 @@ describe('renderOverview', () => {
     expect(out).toContain('No usage found for June 2026')
   })
 
+  it('does not render a budget line when no budget is provided', () => {
+    const out = renderOverview([makeProject({
+      project: 'myproject',
+      projectPath: '/Users/test/myproject',
+      cost: 12.5,
+      calls: 3,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 5000, cacheW: 100 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).not.toContain('budget:')
+  })
+
+  it('renders a configured monthly budget line with percent and projection', () => {
+    const out = renderOverview([makeProject({
+      project: 'myproject',
+      projectPath: '/Users/test/myproject',
+      cost: 80,
+      calls: 3,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 5000, cacheW: 100 },
+    })], {
+      label: 'June 2026',
+      color: false,
+      budget: {
+        tier: 'monthly',
+        inProgress: true,
+        status: {
+          spent: 80,
+          budget: 120,
+          pct: 66.6666666667,
+          projected: 160,
+          state: 'under',
+        },
+      },
+    })
+
+    expect(out).toContain('Monthly budget: $80.00 of $120.00 (66%)')
+    expect(out).toContain('projected $160.00 by month end')
+  })
+
+  it('does not display 100 percent while the raw state is warn at 99.6 percent', () => {
+    const out = renderOverview([makeProject({
+      project: 'myproject',
+      projectPath: '/Users/test/myproject',
+      cost: 99.6,
+      calls: 3,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 5000, cacheW: 100 },
+    })], {
+      label: 'June 2026',
+      color: false,
+      budget: {
+        tier: 'monthly',
+        inProgress: false,
+        status: {
+          spent: 99.6,
+          budget: 100,
+          pct: 99.6,
+          projected: 99.6,
+          state: 'warn',
+        },
+      },
+    })
+
+    expect(out).toContain('Monthly budget: $99.60 of $100.00 (99%)')
+    expect(out).not.toContain('(100%)')
+  })
+
   it('does not split a slug-only Claude project path into fake path segments', () => {
     const out = renderOverview([makeProject({
       project: 'Projects-Content-OS',
