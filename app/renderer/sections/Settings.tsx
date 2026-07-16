@@ -13,7 +13,7 @@ import { codeburn } from '../lib/ipc'
 import { motionClass } from '../lib/motion'
 import { showToast } from '../lib/toast'
 import { ToastHost } from '../components/ToastHost'
-import type { ActionResult, AliasRow, ClaudeConfigSelector, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ShareStatus, StatusJson } from '../lib/types'
+import type { ActionResult, AliasRow, ClaudeConfigSelector, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, QuotaProvider, ShareStatus, StatusJson } from '../lib/types'
 
 export type SettingsPane = 'general' | 'providers' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy'
 type Pane = SettingsPane
@@ -29,6 +29,10 @@ const PLAN_PRESETS: PlanPreset[] = [
   { id: 'supergrok', label: 'SuperGrok', provider: 'grok' },
   { id: 'supergrok-heavy', label: 'SuperGrok Heavy', provider: 'grok' },
 ]
+
+// Claude and Codex subscriptions are detected from the CLI login (see the
+// detected-subscriptions list), so only non-OAuth providers get a manual preset.
+const MANUAL_PLAN_PRESETS = PLAN_PRESETS.filter(preset => preset.provider !== 'claude')
 
 const CURRENCIES = [
   'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CAD', 'AUD', 'CHF', 'HKD', 'SGD', 'INR', 'NZD', 'SEK', 'NOK', 'DKK',
@@ -295,10 +299,24 @@ function planSummaries(status: StatusJson): JsonPlanSummary[] {
   return status.plan ? [status.plan] : []
 }
 
+function DetectedRow({ quota }: { quota: QuotaProvider }) {
+  const name = quota.provider === 'claude' ? 'Claude' : 'Codex'
+  return <div className="about-row">
+    <ProviderLogo provider={quota.provider} />
+    <span className="tx">{name}</span>
+    {quota.connection === 'disconnected'
+      ? <span className="r set-status">Not connected: log in with the {quota.provider} CLI</span>
+      : <span className="r set-status"><span className="set-dot ok" />{quota.planLabel ?? 'Connected'}</span>}
+  </div>
+}
+
 function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refreshToken: number; onNavigate?: (section: Section) => void }) {
   const [nonce, setNonce] = useState(0)
+  // Match Plans.tsx: steady poll serves cached quota (force=false). The detected
+  // list is read-only, so no manual force is needed here.
+  const quota = usePolled<QuotaProvider[]>(() => codeburn.getQuota(false), [refreshToken])
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, nonce])
-  const [presetId, setPresetId] = useState(PLAN_PRESETS[0]!.id)
+  const [presetId, setPresetId] = useState(MANUAL_PLAN_PRESETS[0]!.id)
   const configured = plans.data ? planSummaries(plans.data) : []
 
   const finish = (result: ActionResult) => {
@@ -309,21 +327,28 @@ function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refre
     void codeburn.resetPlan(plan.provider).then(finish)
   }
   const add = () => {
-    const preset = PLAN_PRESETS.find(item => item.id === presetId)!
+    const preset = MANUAL_PLAN_PRESETS.find(item => item.id === presetId)!
     void codeburn.setPlan(preset.id, preset.provider).then(finish)
   }
 
   return <section className="set-p on">
-    <div><h3 className="set-h">Plans</h3><p className="set-sub">Set a monthly budget plan per provider. codeburn compares it to your API-equivalent spend.</p></div>
+    <div><h3 className="set-h">Plans</h3><p className="set-sub">Claude and Codex subscriptions connect and auto-detect your tier. Set a manual budget plan for any other provider.</p></div>
     <div className="card">
-      <div className="about-sec">
-        {plans.error ? <SettingsErrorText error={plans.error} /> : !plans.data ? <p className="set-cap">Loading plans…</p> : configured.length === 0 ? <p className="set-cap">No plans configured.</p> : configured.map(plan => <div className="about-row" key={plan.provider}><span className="tx">{PLAN_PRESETS.find(item => item.id === plan.id)?.label ?? plan.id}<small>{formatConverted(plan.budget)}/month · {plan.provider} · {plan.percentUsed}% used</small></span><span className="r"><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(plan)} /></span></div>)}
-      </div>
       <div className="about-sec set-last-sec">
-        <div className="about-row"><label className="tx" htmlFor="settings-plan-preset">Add a plan</label><span className="r"><Dropdown id="settings-plan-preset" ariaLabel="Add a plan" value={presetId} options={PLAN_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} onChange={value => setPresetId(value as PlanPreset['id'])} width={160} /><button className="btnp btnp-primary" onClick={add}>Add</button></span></div>
+        <div className="about-sec-h">Detected subscriptions</div>
+        {quota.error && !quota.data ? <SettingsErrorText error={quota.error} /> : !quota.data ? <p className="set-cap">Detecting subscriptions…</p> : quota.data.length === 0 ? <p className="set-cap">No detectable subscriptions.</p> : quota.data.map(provider => <DetectedRow key={provider.provider} quota={provider} />)}
       </div>
     </div>
-    <p className="set-cap">Presets: Claude Pro, Claude Max 20x, Claude Max 5x, Cursor Pro, SuperGrok, and SuperGrok Heavy. <button className="set-text-button" onClick={() => onNavigate?.('plans')}>Open Plans →</button></p>
+    <div className="card">
+      <div className="about-sec">
+        <div className="about-sec-h">Budget plans (manual)</div>
+        {plans.error ? <SettingsErrorText error={plans.error} /> : !plans.data ? <p className="set-cap">Loading plans…</p> : configured.length === 0 ? <p className="set-cap">No manual plans configured.</p> : configured.map(plan => <div className="about-row" key={plan.provider}><span className="tx">{PLAN_PRESETS.find(item => item.id === plan.id)?.label ?? plan.id}<small>{formatConverted(plan.budget)}/month · {plan.provider} · {plan.percentUsed}% used</small>{(plan.provider === 'claude' || plan.provider === 'codex') && <small>superseded by the detected subscription</small>}</span><span className="r"><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(plan)} /></span></div>)}
+      </div>
+      <div className="about-sec set-last-sec">
+        <div className="about-row"><label className="tx" htmlFor="settings-plan-preset">Add a plan</label><span className="r"><Dropdown id="settings-plan-preset" ariaLabel="Add a plan" value={presetId} options={MANUAL_PLAN_PRESETS.map(preset => ({ value: preset.id, label: preset.label }))} onChange={value => setPresetId(value as PlanPreset['id'])} width={160} /><button className="btnp btnp-primary" onClick={add}>Add</button></span></div>
+      </div>
+    </div>
+    <p className="set-cap">Claude and Codex plans are detected automatically from your login. <button className="set-text-button" onClick={() => onNavigate?.('plans')}>Open Plans →</button></p>
   </section>
 }
 

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ActionResult, AliasRow, CombinedUsage, DeviceScanResult, Identity, MenubarPayload, PriceOverrideList, PriceRates, ShareStatus, StatusJson } from '../lib/types'
+import type { ActionResult, AliasRow, CombinedUsage, DeviceScanResult, Identity, MenubarPayload, PriceOverrideList, PriceRates, QuotaProvider, ShareStatus, StatusJson } from '../lib/types'
 import { Settings } from './Settings'
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getDevices: vi.fn<(period: string) => Promise<CombinedUsage>>(),
   getDevicesScan: vi.fn<() => Promise<DeviceScanResult>>(),
   getShareStatus: vi.fn<() => Promise<ShareStatus>>(),
+  getQuota: vi.fn<(force?: boolean) => Promise<QuotaProvider[]>>(),
   getPlans: vi.fn<(period: string) => Promise<StatusJson>>(),
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getAliases: vi.fn<() => Promise<AliasRow[]>>(),
@@ -43,6 +44,10 @@ const devices: CombinedUsage = {
 }
 const scan: DeviceScanResult = { found: [{ name: 'Mac Studio', host: 'mac-studio.local', port: 9732, fingerprint: '7F:2A:19:88:55:44:33:C4', code: 'pair-1', paired: false }] }
 const overview = { current: { providers: { claude: 12.34, codex: 4.5 } } } as unknown as MenubarPayload
+const quotaProviders: QuotaProvider[] = [
+  { provider: 'claude', connection: 'connected', primary: null, details: [], planLabel: 'Max 20x', footerLines: [] },
+  { provider: 'codex', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] },
+]
 const stored = new Map<string, string>()
 vi.stubGlobal('localStorage', {
   getItem: (key: string) => stored.get(key) ?? null,
@@ -57,6 +62,7 @@ describe('Settings', () => {
     mocks.getDevices.mockResolvedValue(devices)
     mocks.getDevicesScan.mockResolvedValue(scan)
     mocks.getShareStatus.mockResolvedValue({ sharing: true, name: 'Toruk MacBook Pro', port: 9732, always: false, peers: 1, pending: [] })
+    mocks.getQuota.mockResolvedValue(quotaProviders)
     mocks.getPlans.mockResolvedValue({ currency: 'EUR', today: { cost: 0, savings: 0, calls: 0 }, month: { cost: 0, savings: 0, calls: 0 }, plans: { claude: { id: 'claude-max', provider: 'claude', budget: 200, spent: 48, percentUsed: 24, status: 'under', projectedMonthEnd: 120, daysUntilReset: 19, periodStart: '2026-07-01', periodEnd: '2026-08-01' } } })
     mocks.getOverview.mockResolvedValue(overview)
     mocks.getAliases.mockResolvedValue([{ from: 'proxy-opus', to: 'claude-opus-4-6' }])
@@ -205,6 +211,37 @@ describe('Settings', () => {
     await user.click(screen.getByRole('option', { name: 'Cursor Pro' }))
     await user.click(screen.getByRole('button', { name: 'Add' }))
     expect(mocks.setPlan).toHaveBeenCalledWith('cursor-pro', 'cursor')
+  })
+
+  it('shows detected subscriptions with an auto-detected tier and a disconnected hint', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    expect(await screen.findByText('Detected subscriptions')).toBeInTheDocument()
+    expect(screen.getByText('Max 20x')).toBeInTheDocument()
+    expect(screen.getByText('Not connected: log in with the codex CLI')).toBeInTheDocument()
+    expect(mocks.getQuota).toHaveBeenCalledWith(false)
+  })
+
+  it('offers only non-OAuth budget presets; Claude and Codex are excluded', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    await user.click(await screen.findByLabelText('Add a plan'))
+    expect(screen.getByRole('option', { name: 'Cursor Pro' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'SuperGrok' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Claude Pro' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Claude Max 20x' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Claude Max 5x' })).not.toBeInTheDocument()
+  })
+
+  it('still lists a configured Claude manual plan with Remove and a superseded note', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Plans' }))
+    expect((await screen.findAllByText('Claude Max 20x')).length).toBeGreaterThan(0)
+    expect(screen.getByText('superseded by the detected subscription')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
 
   it('chooses an export folder and exports the selected format and provider', async () => {
