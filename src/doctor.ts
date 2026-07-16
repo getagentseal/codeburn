@@ -70,11 +70,23 @@ export type CollectDoctorOptions = {
   sampleLimit?: number
 }
 
-// Bound the parse sample so doctor never does a full expensive parse of a huge
-// history: sample at most this many discovered sources per provider, and read
-// at most this many calls out of each before moving on.
+// Bound the parse sample: at most this many discovered sources per provider,
+// truncating each source's yields at PARSE_CALL_CAP. Note the cap bounds the
+// yield loop only; eager parsers (codex, cursor) do their full per-file work
+// before the first yield, so a very large single source is still parsed whole.
 const DEFAULT_SAMPLE_LIMIT = 8
 const PARSE_CALL_CAP = 500
+
+// Providers whose parse() has side effects beyond reading: antigravity probes
+// for a live language server (spawns ps/lsof and RPCs it when found). A
+// diagnostic that promises to be inert must not sample-parse those; discovery
+// (readdir/stat only) still runs, so session counts stay meaningful.
+const PARSE_SPAWNS = new Set(['antigravity'])
+
+// CodeBurn's own cache location: listed in PROVIDER_ENV_VARS for cache
+// fingerprinting, but it is not a discovery path, so it must never be blamed
+// in a NOTHING FOUND hint.
+const NON_DISCOVERY_ENV_VARS = new Set(['CODEBURN_CACHE_DIR'])
 
 // ── Collect (pure, testable) ─────────────────────────────────────────────
 
@@ -124,8 +136,9 @@ function emptyVerdict(
   probePaths: DoctorProbePath[],
   envOverrides: DoctorEnvOverride[],
 ): string {
-  const overrideNames = envOverrides.map(o => o.name).join(', ')
-  const hasOverride = envOverrides.length > 0
+  const discoveryOverrides = envOverrides.filter(o => !NON_DISCOVERY_ENV_VARS.has(o.name))
+  const overrideNames = discoveryOverrides.map(o => o.name).join(', ')
+  const hasOverride = discoveryOverrides.length > 0
   const known = probePaths.filter(p => p.label !== 'discovered')
   const missing = known.filter(p => !p.exists)
   const present = known.filter(p => p.exists)
@@ -201,6 +214,12 @@ async function collectOneProvider(
       return base
     }
 
+    if (sources.length > 0 && PARSE_SPAWNS.has(provider.name)) {
+      base.status = 'ok'
+      base.verdict = `OK (${pluralSessions(sources.length)}; parse sample skipped, provider probes live processes)`
+      return base
+    }
+
     if (sources.length > 0) {
       const sample = sources.slice(0, sampleLimit)
       base.bounded = sample.length < sources.length
@@ -250,13 +269,25 @@ export async function collectDoctorReport(
   const cache = opts.cache ?? await loadCache()
   const sampleLimit = opts.sampleLimit ?? DEFAULT_SAMPLE_LIMIT
 
-  const providers: DoctorProviderReport[] = []
-  for (const provider of filtered) {
-    providers.push(await collectOneProvider(provider, cache, sampleLimit))
-  }
-  providers.sort((a, b) => (a.displayName < b.displayName ? -1 : a.displayName > b.displayName ? 1 : 0))
+  // Doctor promises to be strictly read-only, but sample-parsing drives real
+  // provider parsers, and cursor's writes its results cache to disk before its
+  // first yield. The flag tells cache writers to stand down for this process
+  // while doctor collects; restored afterwards so long-lived embedders (tests,
+  // MCP) keep normal behavior.
+  const prevSuppress = process.env['CODEBURN_SUPPRESS_CACHE_WRITES']
+  process.env['CODEBURN_SUPPRESS_CACHE_WRITES'] = '1'
+  try {
+    const providers: DoctorProviderReport[] = []
+    for (const provider of filtered) {
+      providers.push(await collectOneProvider(provider, cache, sampleLimit))
+    }
+    providers.sort((a, b) => (a.displayName < b.displayName ? -1 : a.displayName > b.displayName ? 1 : 0))
 
-  return { generatedAt: new Date().toISOString(), providers }
+    return { generatedAt: new Date().toISOString(), providers }
+  } finally {
+    if (prevSuppress === undefined) delete process.env['CODEBURN_SUPPRESS_CACHE_WRITES']
+    else process.env['CODEBURN_SUPPRESS_CACHE_WRITES'] = prevSuppress
+  }
 }
 
 // ── Render ────────────────────────────────────────────────────────────────

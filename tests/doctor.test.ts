@@ -274,3 +274,57 @@ describe('doctor rendering', () => {
     expect(typeof parsed.generatedAt).toBe('string')
   })
 })
+
+// ── Re-review hardening (#685): inert-diagnostic guarantees ────────────────
+
+describe('doctor is inert', () => {
+  it('sets the cache-write suppression flag while collecting and restores it after', async () => {
+    let flagDuringParse: string | undefined
+    const spy = fakeProvider({
+      name: 'spy',
+      discoverSessions: async () => [{ path: '/tmp/x', project: 'p', provider: 'spy' }],
+      createSessionParser: () => ({
+        async *parse() {
+          flagDuringParse = process.env['CODEBURN_SUPPRESS_CACHE_WRITES']
+        },
+      }),
+    })
+    delete process.env['CODEBURN_SUPPRESS_CACHE_WRITES']
+    await collectDoctorReport('spy', { providers: [spy], cache: emptyCache() })
+    expect(flagDuringParse).toBe('1')
+    expect(process.env['CODEBURN_SUPPRESS_CACHE_WRITES']).toBeUndefined()
+  })
+
+  it('never sample-parses a provider whose parse spawns processes (antigravity)', async () => {
+    let parsed = false
+    const ag = fakeProvider({
+      name: 'antigravity',
+      discoverSessions: async () => [{ path: '/tmp/cascade-x.pb', project: 'p', provider: 'antigravity' }],
+      createSessionParser: () => ({
+        async *parse() {
+          parsed = true
+        },
+      }),
+    })
+    const report = await collectDoctorReport('antigravity', { providers: [ag], cache: emptyCache() })
+    expect(parsed).toBe(false)
+    const row = only(report, 'antigravity')
+    expect(row.status).toBe('ok')
+    expect(row.verdict).toContain('parse sample skipped')
+    expect(row.candidatesFound).toBe(1)
+  })
+
+  it('does not blame CODEBURN_CACHE_DIR for an empty provider', async () => {
+    const prev = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = '/tmp/some-cache'
+    try {
+      const empty = fakeProvider({ name: 'antigravity' })
+      const report = await collectDoctorReport('antigravity', { providers: [empty], cache: emptyCache() })
+      const row = only(report, 'antigravity')
+      expect(row.verdict).not.toContain('CODEBURN_CACHE_DIR')
+    } finally {
+      if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = prev
+    }
+  })
+})
