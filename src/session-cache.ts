@@ -124,7 +124,7 @@ const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   codex: 'mcp-attribution-v2',
   cursor: 'composer-anchored-crediting-v1',
   'cursor-agent': 'workspaceless-transcript-v1',
-  copilot: 'otel-durable-v1',
+  copilot: 'cli-shutdown-cost-v1',
   hermes: 'reasoning-output-accounting-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',

@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 
 import { copilot, createCopilotProvider, getVSCodeGlobalStorageDirs, getVSCodeWorkspaceStorageDirs } from '../../src/providers/copilot.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
@@ -36,6 +37,38 @@ function assistantMessage(opts: { messageId: string; outputTokens: number; tools
       interactionId: 'int-1',
       toolRequests: (opts.tools ?? []).map(name => ({ name, toolCallId: `call-${name}`, type: 'function' })),
     },
+  })
+}
+
+// A CLI session.shutdown rollup. `usage.inputTokens` is written cache-inclusive
+// by the real CLI (input + cache_read + cache_write), matching the issue sample.
+function shutdownEvent(opts: {
+  modelMetrics: Record<string, {
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    reasoningTokens?: number
+  }>
+  timestamp?: string
+}) {
+  const modelMetrics: Record<string, unknown> = {}
+  for (const [model, u] of Object.entries(opts.modelMetrics)) {
+    modelMetrics[model] = {
+      requests: { count: 1, cost: 1 },
+      usage: {
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheReadTokens: u.cacheReadTokens,
+        cacheWriteTokens: u.cacheWriteTokens,
+        reasoningTokens: u.reasoningTokens ?? 0,
+      },
+    }
+  }
+  return JSON.stringify({
+    type: 'session.shutdown',
+    timestamp: opts.timestamp ?? '2026-04-15T10:05:00Z',
+    data: { shutdownType: 'routine', sessionStartTime: 1784102040274, modelMetrics },
   })
 }
 
@@ -387,6 +420,170 @@ describe('copilot provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['mcp__github_mcp_server__list_issues', 'Read'])
+  })
+})
+
+describe('copilot provider - session.shutdown token/cost rollup', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-shutdown-test-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('reads input/cache tokens and measured cost from session.shutdown', async () => {
+    const eventsPath = await createSessionDir('sess-shutdown', [
+      modelChange('claude-sonnet-4-5'),
+      userMessage('do the thing'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 345 }),
+      shutdownEvent({
+        modelMetrics: {
+          // Real sample from issue #676: inputTokens is cache-inclusive
+          // (4 + 35495 + 35783 = 71282), so pure input is 4.
+          'claude-sonnet-4-5': {
+            inputTokens: 71282,
+            outputTokens: 345,
+            cacheReadTokens: 35495,
+            cacheWriteTokens: 35783,
+            reasoningTokens: 31,
+          },
+        },
+      }),
+    ])
+
+    const source = { path: eventsPath, project: 'myproject', provider: 'copilot' }
+    const calls = await collectCalls(source)
+
+    // One per-turn assistant.message call + one supplementary shutdown call.
+    expect(calls).toHaveLength(2)
+
+    const shutdown = calls.find(c => c.deduplicationKey === 'copilot:sess-shutdown:shutdown:claude-sonnet-4-5')
+    expect(shutdown).toBeDefined()
+    expect(shutdown!.model).toBe('claude-sonnet-4-5')
+    expect(shutdown!.inputTokens).toBe(4)              // 71282 - 35495 - 35783
+    expect(shutdown!.cacheReadInputTokens).toBe(35495)
+    expect(shutdown!.cacheCreationInputTokens).toBe(35783)
+    expect(shutdown!.reasoningTokens).toBe(31)
+    expect(shutdown!.outputTokens).toBe(0)             // owned by the per-turn event
+    expect(shutdown!.costIsEstimated).toBe(false)       // measured, not char-estimated
+
+    const expectedShutdownCost = calculateCost('claude-sonnet-4-5', 4, 0, 35783, 35495, 0)
+    expect(shutdown!.costUSD).toBeCloseTo(expectedShutdownCost, 12)
+    expect(shutdown!.costUSD).toBeGreaterThan(0)
+
+    // No dimension double-counts: output stays with the per-turn event only,
+    // input/cache come only from the shutdown rollup.
+    const total = (k: keyof ParsedProviderCall) =>
+      calls.reduce((s, c) => s + (c[k] as number), 0)
+    expect(total('outputTokens')).toBe(345)
+    expect(total('inputTokens')).toBe(4)
+    expect(total('cacheReadInputTokens')).toBe(35495)
+    expect(total('cacheCreationInputTokens')).toBe(35783)
+
+    // Session cost = per-turn output cost + shutdown input/cache cost = full cost.
+    const perTurn = calls.find(c => c.deduplicationKey === 'copilot:sess-shutdown:msg-1')
+    expect(perTurn!.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-5', 0, 345, 0, 0, 0), 12)
+    const sessionCost = calls.reduce((s, c) => s + c.costUSD, 0)
+    const fullCost = calculateCost('claude-sonnet-4-5', 4, 345, 35783, 35495, 0)
+    expect(sessionCost).toBeCloseTo(fullCost, 12)
+  })
+
+  it('keeps output-only behavior when session.shutdown is absent', async () => {
+    const eventsPath = await createSessionDir('sess-no-shutdown', [
+      modelChange('claude-sonnet-4-5'),
+      userMessage('no shutdown here'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 150 }),
+    ])
+
+    const source = { path: eventsPath, project: 'myproject', provider: 'copilot' }
+    const calls = await collectCalls(source)
+
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.outputTokens).toBe(150)
+    expect(call.inputTokens).toBe(0)
+    expect(call.cacheReadInputTokens).toBe(0)
+    expect(call.cacheCreationInputTokens).toBe(0)
+    expect(call.costIsEstimated).toBeUndefined()
+    expect(call.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-5', 0, 150, 0, 0, 0), 12)
+  })
+
+  it('attributes shutdown tokens and cost per model', async () => {
+    const eventsPath = await createSessionDir('sess-multi', [
+      modelChange('claude-sonnet-4-5'),
+      userMessage('first'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 100 }),
+      modelChange('gpt-5', 'claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-2', outputTokens: 200 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 10100, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 2000, reasoningTokens: 0 },
+          'gpt-5': { inputTokens: 5050, outputTokens: 200, cacheReadTokens: 5000, cacheWriteTokens: 0, reasoningTokens: 12 },
+        },
+      }),
+    ])
+
+    const source = { path: eventsPath, project: 'myproject', provider: 'copilot' }
+    const calls = await collectCalls(source)
+
+    const shutdownCalls = calls.filter(c => c.deduplicationKey.includes(':shutdown:'))
+    expect(shutdownCalls).toHaveLength(2)
+
+    const sonnet = shutdownCalls.find(c => c.model === 'claude-sonnet-4-5')!
+    expect(sonnet.inputTokens).toBe(100)             // 10100 - 8000 - 2000
+    expect(sonnet.cacheReadInputTokens).toBe(8000)
+    expect(sonnet.cacheCreationInputTokens).toBe(2000)
+    expect(sonnet.outputTokens).toBe(0)
+    expect(sonnet.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-5', 100, 0, 2000, 8000, 0), 12)
+    expect(sonnet.costUSD).toBeGreaterThan(0)
+
+    const gpt = shutdownCalls.find(c => c.model === 'gpt-5')!
+    expect(gpt.inputTokens).toBe(50)                 // 5050 - 5000 - 0
+    expect(gpt.cacheReadInputTokens).toBe(5000)
+    expect(gpt.cacheCreationInputTokens).toBe(0)
+    expect(gpt.reasoningTokens).toBe(12)
+    expect(gpt.costUSD).toBeCloseTo(calculateCost('gpt-5', 50, 0, 0, 5000, 0), 12)
+  })
+
+  it('keeps shutdown dedup keys stable across re-parses', async () => {
+    const eventsPath = await createSessionDir('sess-reparse', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 345 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 71282, outputTokens: 345, cacheReadTokens: 35495, cacheWriteTokens: 35783, reasoningTokens: 31 },
+        },
+      }),
+    ])
+    const source = { path: eventsPath, project: 'myproject', provider: 'copilot' }
+
+    const seen = new Set<string>()
+    const first = await collectCalls(source, seen)
+    expect(first).toHaveLength(2)
+    // Durable provider: re-parsing with the same seenKeys re-emits nothing.
+    const second = await collectCalls(source, seen)
+    expect(second).toHaveLength(0)
+  })
+
+  it('ignores session.shutdown for VS Code transcript sessions', async () => {
+    const eventsPath = await createSessionDir('sess-tr-shutdown', [
+      transcriptSessionStart('sess-tr-shutdown'),
+      transcriptUserMessage('hi'),
+      transcriptAssistantMessage({ messageId: 'msg-1', content: 'done', toolCallIds: ['call_abc'] }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 71282, outputTokens: 345, cacheReadTokens: 35495, cacheWriteTokens: 35783 },
+        },
+      }),
+    ])
+    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const calls = await collectCalls(source)
+
+    // Only the transcript assistant call; the shutdown rollup is CLI-only.
+    expect(calls).toHaveLength(1)
+    expect(calls.every(c => !c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+    expect(calls[0]!.model).toBe('copilot-openai-auto')
   })
 })
 
