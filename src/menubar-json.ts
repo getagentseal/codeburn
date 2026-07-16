@@ -35,6 +35,7 @@ export type ProviderCost = {
   cost: number
 }
 import type { OptimizeResult } from './optimize.js'
+import type { GranularHistory } from './granular-history.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_MODELS_LIMIT = 20
@@ -234,6 +235,9 @@ export type MenubarPayload = {
   }
   history: {
     daily: DailyHistoryEntry[]
+    /// Selected-period timeline for the local browser dashboard. Optional for
+    /// compatibility with older peers and non-dashboard payload producers.
+    timeline?: GranularHistory
   }
   combined?: CombinedUsage
   claudeConfigs?: ClaudeConfigSelector
@@ -305,11 +309,11 @@ function buildProviders(providers: ProviderCost[]): Record<string, number> {
   return map
 }
 
-function buildHistory(daily: DailyHistoryEntry[] | undefined): MenubarPayload['history'] {
-  if (!daily || daily.length === 0) return { daily: [] }
+function buildHistory(daily: DailyHistoryEntry[] | undefined, timeline?: GranularHistory): MenubarPayload['history'] {
+  if (!daily || daily.length === 0) return { daily: [], ...(timeline ? { timeline } : {}) }
   const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date))
   const trimmed = sorted.slice(-HISTORY_DAYS_LIMIT)
-  return { daily: trimmed }
+  return { daily: trimmed, ...(timeline ? { timeline } : {}) }
 }
 
 function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['current']['topProjects'] {
@@ -372,6 +376,7 @@ export function buildMenubarPayload(
   routingWaste?: MenubarPayload['current']['routingWaste'],
   breakdowns?: BreakdownArrays,
   claudeConfigs?: ClaudeConfigSelector,
+  granularHistory?: GranularHistory,
 ): MenubarPayload {
   const payload: MenubarPayload = {
     generated: new Date().toISOString(),
@@ -403,7 +408,7 @@ export function buildMenubarPayload(
       mcpServers: breakdowns?.mcpServers ?? [],
     },
     optimize: buildOptimize(optimize),
-    history: buildHistory(dailyHistory),
+    history: buildHistory(dailyHistory, granularHistory),
   }
   if (claudeConfigs && claudeConfigs.options.length > 1) {
     payload.claudeConfigs = claudeConfigs

@@ -225,7 +225,7 @@ codeburn web --port 8080        # pick a port (falls back to a free one if taken
 codeburn web --no-open          # start the server without opening a browser
 ```
 
-A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
+A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. The usage graph follows the selected period with 15-minute, hourly, or daily buckets and can switch between per-session and per-model lines. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
 
 ### Combine usage across your devices
 

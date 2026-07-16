@@ -11,6 +11,7 @@ import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanAndDetect } from './optimize.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
+import { buildGranularHistory } from './granular-history.js'
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
@@ -518,5 +519,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   })()
 
   const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
-  return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs)
+  const granularRange = opts.daysSelection?.range ?? scanRange
+  const granularHistory = buildGranularHistory(scanProjects, granularRange)
+  return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory)
 }
