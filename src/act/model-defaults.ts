@@ -161,6 +161,7 @@ export async function buildApplyModelDefaultPlan(recommendation: ModelDefaultRec
       capturedAt: new Date().toISOString(),
       estimatedTokens: 0,
       sessions: recommendation.currentEditTurns + recommendation.candidateEditTurns,
+      candidateModel: recommendation.candidateModel,
       metrics: {
         [recommendation.candidateModel]: recommendation.candidateOneShotRate,
         [recommendation.currentModel]: recommendation.currentOneShotRate,

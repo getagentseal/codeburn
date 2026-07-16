@@ -33,6 +33,8 @@ export type ActionBaseline = {
   estimatedTokens: number
   sessions: number
   metrics: Record<string, number>
+  // model-default only: identifies the candidate independently of metrics key order.
+  candidateModel?: string
 }
 
 export type ActionRecord = {

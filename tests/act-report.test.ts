@@ -11,7 +11,7 @@ import {
   renderActReport,
 } from '../src/act/report.js'
 import type { ActionRecord } from '../src/act/types.js'
-import type { ProjectSummary } from '../src/types.js'
+import type { ClassifiedTurn, ProjectSummary } from '../src/types.js'
 
 type Session = ProjectSummary['sessions'][number]
 
@@ -58,10 +58,13 @@ function makeSession(id: string, firstTimestamp: string, over: Partial<Session> 
   }
 }
 
-function projectOf(sessions: Session[]): ProjectSummary {
+function projectOf(
+  sessions: Session[],
+  over: { project?: string; projectPath?: string } = {},
+): ProjectSummary {
   return {
-    project: 'app',
-    projectPath: '/tmp/app',
+    project: over.project ?? 'app',
+    projectPath: over.projectPath ?? '/tmp/app',
     sessions,
     totalCostUSD: sessions.reduce((s, x) => s + x.totalCostUSD, 0),
     totalSavingsUSD: 0,
@@ -85,6 +88,79 @@ function mcpRecord(over: Partial<ActionRecord> = {}): ActionRecord {
     changes: [],
     status: 'applied',
     baseline: { windowDays: 14, capturedAt: at, estimatedTokens: 56_000, sessions: 28, metrics: { 'brave-search': 2000 } },
+    ...over,
+  }
+}
+
+function modelEditTurns(model: string, editTurns: number, oneShotTurns: number): ClassifiedTurn[] {
+  return Array.from({ length: editTurns }, (_, i) => ({
+    userMessage: 'edit the code',
+    timestamp: daysAgo(5),
+    sessionId: `model-${model}-${i}`,
+    category: 'coding',
+    retries: i < oneShotTurns ? 0 : 1,
+    hasEdits: true,
+    assistantCalls: [{
+      provider: 'claude',
+      model,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+      },
+      costUSD: 1,
+      tools: ['Edit'],
+      mcpTools: [],
+      skills: [],
+      subagentTypes: [],
+      hasAgentSpawn: false,
+      hasPlanMode: false,
+      speed: 'standard',
+      timestamp: daysAgo(5),
+      bashCommands: [],
+      deduplicationKey: `model-${model}-${i}`,
+    }],
+  }))
+}
+
+function modelProject(
+  project: string, projectPath: string, model: string, editTurns: number, oneShotTurns: number,
+): ProjectSummary {
+  const turns = modelEditTurns(model, editTurns, oneShotTurns)
+  const session = makeSession(`model-${project}`, daysAgo(5), {
+    project,
+    apiCalls: turns.length,
+    turns,
+  })
+  return projectOf([session], { project, projectPath })
+}
+
+function modelDefaultRecord(over: Partial<ActionRecord> = {}): ActionRecord {
+  const at = daysAgo(10)
+  return {
+    id: 'md1',
+    at,
+    kind: 'model-default',
+    findingId: 'model-default:app',
+    description: 'Set Claude Code default model to candidate-model for app',
+    changes: [{
+      path: '/tmp/app/.claude/settings.json',
+      backup: null,
+      op: 'edit',
+      afterHash: '',
+    }],
+    status: 'applied',
+    baseline: {
+      windowDays: 30,
+      capturedAt: at,
+      estimatedTokens: 0,
+      sessions: 60,
+      metrics: { 'candidate-model': 0.9, 'current-model': 0.95 },
+    },
     ...over,
   }
 }
@@ -129,6 +205,81 @@ describe('mcp realized delta', () => {
     expect(row.realizedTokens).toBe(0)
     expect(row.note).toMatch(/reverted by user/)
     expect(report.totalRealizedTokens).toBe(0)
+  })
+})
+
+describe('model-default quality tripwire', () => {
+  it('fires for a >5pp same-project regression even when another project would mask it globally', async () => {
+    const actionsDir = await writeJournal([modelDefaultRecord()])
+    const target = modelProject('app', '/tmp/app', 'candidate-model', 20, 10)
+    const masking = modelProject('other', '/tmp/other', 'candidate-model', 80, 80)
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([target, masking]) })
+
+    const row = report.rows[0]!
+    expect(row.status).toBe('measured')
+    // Scope-fix pin: pre-fix global aggregation reports 90.0% instead of 50.0%.
+    expect(row.note).toBe('quality regression, consider undo: one-shot rate 90.0% -> 50.0%')
+    expect(row.confidence).toBe('low')
+  })
+
+  it('reports correlation without a regression and uses the labeled candidate model', async () => {
+    const rec = modelDefaultRecord({
+      baseline: {
+        windowDays: 30,
+        capturedAt: daysAgo(10),
+        estimatedTokens: 0,
+        sessions: 60,
+        candidateModel: 'candidate-model',
+        metrics: { 'current-model': 0.95, 'candidate-model': 0.75 },
+      },
+    })
+    const actionsDir = await writeJournal([rec])
+    const target = modelProject('app', '/tmp/app', 'candidate-model', 20, 16)
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([target]) })
+
+    const row = report.rows[0]!
+    expect(row.status).toBe('measured')
+    expect(row.confidence).toBe('low')
+    expect(row.note).toBe('correlation, not attribution: one-shot rate 75.0% -> 80.0%')
+    expect(renderActReport(report)).toMatch(/Set Claude Code default model to candidate-model for app\s+│\s+-\s+│\s+correlation\s+│/)
+  })
+
+  it('is not measurable with fewer than 20 candidate edit turns in the target project', async () => {
+    const actionsDir = await writeJournal([modelDefaultRecord()])
+    const target = modelProject('app', '/tmp/app', 'candidate-model', 19, 19)
+    const unrelated = modelProject('other', '/tmp/other', 'candidate-model', 50, 50)
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([target, unrelated]) })
+
+    const row = report.rows[0]!
+    expect(row.status).toBe('not-measurable')
+    expect(row.note).toBe('not measurable: < 20 edit turns for candidate-model since apply')
+  })
+
+  it('reports a missing scoped project separately from insufficient edit turns', async () => {
+    const actionsDir = await writeJournal([modelDefaultRecord()])
+    const unrelated = modelProject('other', '/tmp/other', 'candidate-model', 50, 50)
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([unrelated]) })
+
+    const row = report.rows[0]!
+    expect(row.status).toBe('not-measurable')
+    expect(row.note).toBe('not measurable: project not found in current data (path may have changed)')
+  })
+
+  it('matches a backslash-separated journal path to a forward-slash project path', async () => {
+    const rec = modelDefaultRecord({
+      changes: [{
+        path: 'C:\\work\\app\\.claude\\settings.json',
+        backup: null,
+        op: 'edit',
+        afterHash: '',
+      }],
+    })
+    const actionsDir = await writeJournal([rec])
+    const target = modelProject('app', 'C:/work/app', 'candidate-model', 20, 10)
+    const masking = modelProject('other', 'C:/work/other', 'candidate-model', 80, 80)
+    const report = await computeActReport({ actionsDir, now: NOW, loadProjects: load([target, masking]) })
+
+    expect(report.rows[0]!.note).toBe('quality regression, consider undo: one-shot rate 90.0% -> 50.0%')
   })
 })
 
