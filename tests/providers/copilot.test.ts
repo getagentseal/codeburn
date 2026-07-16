@@ -566,6 +566,33 @@ describe('copilot provider - session.shutdown token/cost rollup', () => {
     expect(second).toHaveLength(0)
   })
 
+  it('falls back to the last stamped event when shutdown carries no timestamp at all', async () => {
+    // A shutdown with neither its own timestamp nor sessionStartTime must not
+    // yield an empty-timestamp call: the date-range filters in parser.ts drop
+    // those silently, which would erase exactly the tokens this fix bills.
+    const bareShutdown = JSON.stringify({
+      type: 'session.shutdown',
+      data: {
+        shutdownType: 'routine',
+        modelMetrics: {
+          'claude-sonnet-4-5': {
+            requests: { count: 1, cost: 1 },
+            usage: { inputTokens: 9000, outputTokens: 300, cacheReadTokens: 4000, cacheWriteTokens: 1000, reasoningTokens: 0 },
+          },
+        },
+      },
+    })
+    const eventsPath = await createSessionDir('sess-no-ts', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 300, timestamp: '2026-04-15T10:00:15Z' }),
+      bareShutdown,
+    ])
+    const calls = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot' })
+    const shutdown = calls.find(c => c.deduplicationKey.includes(':shutdown:'))
+    expect(shutdown).toBeDefined()
+    expect(shutdown!.timestamp).toBe('2026-04-15T10:00:15Z')
+  })
+
   it('ignores session.shutdown for VS Code transcript sessions', async () => {
     const eventsPath = await createSessionDir('sess-tr-shutdown', [
       transcriptSessionStart('sess-tr-shutdown'),

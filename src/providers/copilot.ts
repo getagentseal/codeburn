@@ -738,6 +738,11 @@ function createJsonlParser(
         if (!currentModel) return // no toolCallIds to infer model from
       }
 
+      // Shutdown rollups may lack their own timestamp; remember the last
+      // stamped event so the supplementary call is never left with an empty
+      // timestamp, which the date-range filters silently drop.
+      let lastEventTimestamp = ''
+
       for (const line of lines) {
         let event: CopilotEvent
         try {
@@ -745,6 +750,7 @@ function createJsonlParser(
         } catch {
           continue
         }
+        if (typeof event.timestamp === 'string' && event.timestamp) lastEventTimestamp = event.timestamp
 
         if (event.type === 'session.start') {
           if (!isTranscript) {
@@ -787,7 +793,7 @@ function createJsonlParser(
           if (!isRecord(modelMetrics)) continue
 
           const shutdownTimestamp =
-            event.timestamp ?? timestampToISO(shutdownData.sessionStartTime)
+            (event.timestamp ?? '') || timestampToISO(shutdownData.sessionStartTime) || lastEventTimestamp
 
           for (const [model, metrics] of Object.entries(modelMetrics)) {
             if (!model || !isRecord(metrics)) continue
