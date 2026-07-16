@@ -286,10 +286,10 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       }
     }
     for (const [name, cost] of Object.entries(providerTotals)) {
-      providers.push({ name: displayNameByName.get(name) ?? name, cost })
+      providers.push({ name, displayName: displayNameByName.get(name) ?? name, cost })
     }
     if (providers.length === 0 && claudeConfigs?.selectedId) {
-      providers.push({ name: displayNameByName.get('claude') ?? 'Claude', cost: 0 })
+      providers.push({ name: 'claude', displayName: displayNameByName.get('claude') ?? 'Claude', cost: 0 })
     }
   } else if (isAllProviders) {
     const unfilteredProviderDays = [
@@ -304,16 +304,15 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       }
     }
     for (const [name, cost] of Object.entries(providerTotals)) {
-      providers.push({ name: displayNameByName.get(name) ?? name, cost })
+      providers.push({ name, displayName: displayNameByName.get(name) ?? name, cost })
     }
     for (const p of allProviders) {
-      if (providers.some(pc => pc.name === p.displayName)) continue
+      if (providers.some(pc => pc.name === p.name)) continue
       const sources = await safeDiscoverSessions(p)
-      if (sources.length > 0) providers.push({ name: p.displayName, cost: 0 })
+      if (sources.length > 0) providers.push({ name: p.name, displayName: p.displayName, cost: 0 })
     }
   } else {
-    const display = displayNameByName.get(pf) ?? pf
-    providers.push({ name: display, cost: currentData.cost })
+    providers.push({ name: pf, displayName: displayNameByName.get(pf) ?? pf, cost: currentData.cost })
   }
 
   // DAILY HISTORY (last 365 days)
