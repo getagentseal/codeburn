@@ -91,7 +91,7 @@ export const CACHE_VERSION = 5
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
-const PROVIDER_ENV_VARS: Record<string, string[]> = {
+export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
   codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
@@ -113,7 +113,7 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
 // disappear — they are preserved so month-to-date totals never drop.
 export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
-const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
+export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'advisor-usage-v1',
   cline: 'worktree-project-grouping-v1',
   codewhale: 'aggregate-session-v1',

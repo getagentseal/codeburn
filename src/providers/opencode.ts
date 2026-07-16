@@ -4,7 +4,7 @@ import { homedir } from 'os'
 import { getShortModelName } from '../models.js'
 import { discoverSqliteSessions, createSqliteSessionParser, type SqliteProviderConfig } from './sqlite-session-parser.js'
 import { discoverOpenCodeFileSessions, createOpenCodeFileSessionParser } from './opencode-file-parser.js'
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -78,6 +78,13 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
     // sources so migrated installs keep reporting legacy sessions AND pick up
     // current SQLite data. Dedup is handled per-message in createSessionParser
     // via seenKeys (keyed by `${provider}:${sessionId}:${messageId}`).
+    // Both the legacy JSON store (storage/session/*.json) and the SQLite DB
+    // (opencode*.db) live under this one data dir, resolved via OPENCODE_DATA_DIR
+    // or XDG_DATA_HOME the same way discoverSessions does.
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: resolvedDataDir, label: 'data' }]
+    },
+
     async discoverSessions(): Promise<SessionSource[]> {
       const fileSessions = await discoverOpenCodeFileSessions(resolvedDataDir, 'opencode')
       const sqliteSessions = await discoverSqliteSessions(sqliteConfig)

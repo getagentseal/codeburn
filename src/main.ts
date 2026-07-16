@@ -1843,6 +1843,23 @@ program
     await startStdioServer(version)
   })
 
+program
+  .command('doctor')
+  .description('Per-provider detection status: paths probed, sessions found, parse health (diagnose empty or wrong numbers)')
+  .option('--provider <provider>', 'Diagnose a single provider (e.g. claude, codex, opencode)', 'all')
+  .option('--json', 'Output machine-readable JSON')
+  .option('--no-color', 'Disable ANSI colors')
+  .action(async (opts) => {
+    assertProvider(opts.provider, 'doctor')
+    const { collectDoctorReport, renderDoctorTable, renderDoctorJson } = await import('./doctor.js')
+    const report = await collectDoctorReport(opts.provider)
+    if (opts.json) {
+      process.stdout.write(renderDoctorJson(report) + '\n')
+      return
+    }
+    process.stdout.write(renderDoctorTable(report, { color: opts.color }))
+  })
+
 registerActCommands(program)
 registerGuardCommands(program)
 registerSyncCommands(program)
