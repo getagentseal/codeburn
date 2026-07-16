@@ -10,6 +10,10 @@ export type PeriodData = {
   /// separately from `cost` so the two never get summed into a "real
   /// spend" number by accident.
   savingsUSD: number
+  /// Portion of `cost` priced from estimated tokens (see ParsedApiCall.isEstimated).
+  /// Display/metadata only; never summed into `cost`. Optional so PeriodData
+  /// producers predating the field keep compiling.
+  estimatedCostUSD?: number
   calls: number
   sessions: number
   inputTokens: number
@@ -20,7 +24,7 @@ export type PeriodData = {
   /// non-menubar PeriodData producers don't have to compute it.
   codexCredits?: number
   categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
-  models: Array<{ name: string; cost: number; savingsUSD: number; calls: number }>
+  models: Array<{ name: string; cost: number; savingsUSD: number; calls: number; estimatedCostUSD?: number }>
   /// Models with usage in the period whose pricing lookup fails against the
   /// current tables (#638): their calls contribute $0 to `cost`. Optional so
   /// PeriodData producers that predate the field keep compiling.
@@ -146,6 +150,11 @@ export type MenubarPayload = {
     cacheHitPercent: number
     /// Codex credits consumed in the period; 0 when there is no Codex usage.
     codexCredits: number
+    /// Portion of `cost` priced from estimated tokens (see ParsedApiCall.isEstimated).
+    /// Machine-readable signal that distinguishes guessed spend from metered spend;
+    /// display/metadata only, never summed into `cost`. Optional for compatibility
+    /// with payloads produced before the field existed.
+    estimatedCostUSD?: number
     topActivities: Array<{
       name: string
       cost: number
@@ -159,6 +168,9 @@ export type MenubarPayload = {
       savingsUSD: number
       savingsBaselineModel: string
       calls: number
+      /// Estimated portion of this model's `cost`; > 0 marks the row as priced
+      /// from estimated tokens. Optional for payload back-compat.
+      estimatedCostUSD?: number
     }>
     /// See PeriodData.unpricedModels: usage priced at $0 for lack of pricing
     /// data. Empty when every model in the period resolved a price. Optional
@@ -291,7 +303,7 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   return models
     .filter(m => m.name !== SYNTHETIC_MODEL_NAME)
     .slice(0, TOP_MODELS_LIMIT)
-    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '' }))
+    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '', estimatedCostUSD: m.estimatedCostUSD ?? 0 }))
 }
 
 function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
@@ -410,6 +422,7 @@ export function buildMenubarPayload(
       cacheWriteTokens: current.cacheWriteTokens,
       cacheHitPercent: cacheHitPercent(current.inputTokens, current.cacheReadTokens),
       codexCredits: current.codexCredits ?? 0,
+      estimatedCostUSD: current.estimatedCostUSD ?? 0,
       topActivities: buildTopActivities(current.categories),
       topModels: buildTopModels(current.models),
       unpricedModels: current.unpricedModels ?? [],

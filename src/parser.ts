@@ -1413,6 +1413,7 @@ function buildSessionSummary(
 
   let totalCost = 0
   let totalSavings = 0
+  let totalEstimated = 0
   let totalInput = 0
   let totalOutput = 0
   let totalReasoning = 0
@@ -1454,8 +1455,10 @@ function buildSessionSummary(
 
     for (const call of turn.assistantCalls) {
       const callSavings = call.savingsUSD ?? 0
+      const callEstimated = call.isEstimated ? call.costUSD : 0
       totalCost += call.costUSD
       totalSavings += callSavings
+      totalEstimated += callEstimated
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
       totalReasoning += call.usage.reasoningTokens
@@ -1469,12 +1472,14 @@ function buildSessionSummary(
           calls: 0,
           costUSD: 0,
           savingsUSD: 0,
+          estimatedCostUSD: 0,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
       modelBreakdown[modelKey].savingsUSD += callSavings
+      modelBreakdown[modelKey].estimatedCostUSD = (modelBreakdown[modelKey].estimatedCostUSD ?? 0) + callEstimated
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
@@ -1513,6 +1518,7 @@ function buildSessionSummary(
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
     totalSavingsUSD: totalSavings,
+    totalEstimatedCostUSD: totalEstimated,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
     totalReasoningTokens: totalReasoning,
@@ -1822,6 +1828,7 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
     sessions,
     totalCostUSD,
     totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
+    totalEstimatedCostUSD: sessions.reduce((s, sess) => s + (sess.totalEstimatedCostUSD ?? 0), 0),
     totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
   }
@@ -1854,6 +1861,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     timestamp: call.timestamp,
     bashCommands: call.bashCommands,
     deduplicationKey: call.deduplicationKey,
+    isEstimated: call.costIsEstimated,
   })
 
   return {
@@ -1881,6 +1889,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       cacheCreationOneHourTokens: 0,
     },
     costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes' || call.provider === 'kiro' || call.provider === 'codewhale') ? call.costUSD : undefined,
+    isEstimated: call.costIsEstimated || undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1912,6 +1921,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     provider: call.provider,
     model: call.model,
     usage: { ...call.usage, cacheCreationOneHourTokens: call.cacheCreationOneHourTokens ?? 0 },
+    isEstimated: call.isEstimated || undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1992,6 +2002,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       webSearchRequests: u.webSearchRequests,
     },
     costUSD: call.costUSD ?? costUSD,
+    isEstimated: call.isEstimated,
     tools: call.tools,
     mcpTools: extractMcpTools(call.tools),
     skills: call.skills,
@@ -2528,6 +2539,34 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
 
+// Merge projects that resolve to the same repository across providers (the
+// same repo used with Claude Code + Codex, say). An additive total summed at
+// the session level but forgotten here silently under-reports for exactly the
+// multi-provider users (this bit totalEstimatedCostUSD once, caught in #639
+// verification). Known gaps, deliberate: totalSavingsUSD is still not summed
+// (pre-existing, tracked separately) and totalProxiedCostUSD is re-derived
+// after the merge rather than summed here.
+export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
+  const crossProviderKey = (p: ProjectSummary): string => {
+    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
+    return path.includes('/') ? path : p.project.toLowerCase()
+  }
+  const mergedMap = new Map<string, ProjectSummary>()
+  for (const p of projects) {
+    const key = crossProviderKey(p)
+    const existing = mergedMap.get(key)
+    if (existing) {
+      existing.sessions.push(...p.sessions)
+      existing.totalCostUSD += p.totalCostUSD
+      existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
+      existing.totalApiCalls += p.totalApiCalls
+    } else {
+      mergedMap.set(key, { ...p })
+    }
+  }
+  return mergedMap
+}
+
 export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
@@ -2641,22 +2680,7 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     return { ...p, project: projectNameFromPath(canonical.path, p.project), projectPath: canonical.path }
   }))
 
-  const crossProviderKey = (p: ProjectSummary): string => {
-    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
-    return path.includes('/') ? path : p.project.toLowerCase()
-  }
-  const mergedMap = new Map<string, ProjectSummary>()
-  for (const p of [...claudeProjects, ...resolvedOtherProjects]) {
-    const key = crossProviderKey(p)
-    const existing = mergedMap.get(key)
-    if (existing) {
-      existing.sessions.push(...p.sessions)
-      existing.totalCostUSD += p.totalCostUSD
-      existing.totalApiCalls += p.totalApiCalls
-    } else {
-      mergedMap.set(key, { ...p })
-    }
-  }
+  const mergedMap = mergeProjectsByCrossProviderKey([...claudeProjects, ...resolvedOtherProjects])
 
   // Re-derive proxy attribution on the merged total: the merge above sums
   // totalCostUSD across providers that share a canonical path but never

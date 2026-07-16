@@ -132,6 +132,32 @@ describe('loadCache / saveCache', () => {
     expect(loaded.providers['pi']?.files['/path/to/bad.jsonl']?.turns).toEqual([])
   })
 
+  it('preserves the estimated-cost flag through save/load; a measured call stays unflagged', async () => {
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        warp: {
+          envFingerprint: 'abc123',
+          files: {
+            '/path/to/warp.sqlite': makeCachedFile({
+              turns: [makeTurn({ calls: [
+                makeCall({ deduplicationKey: 'est', costUSD: 0.5, isEstimated: true }),
+                makeCall({ deduplicationKey: 'measured', costUSD: 0.5 }),
+              ] })],
+            }),
+          },
+        },
+      },
+    }
+
+    await saveCache(cache)
+    const loaded = await loadCache()
+    const calls = loaded.providers['warp']?.files['/path/to/warp.sqlite']?.turns[0]?.calls
+    expect(calls?.[0]?.isEstimated).toBe(true)
+    // A call with no flag round-trips as undefined, not silently coerced to true.
+    expect(calls?.[1]?.isEstimated).toBeUndefined()
+  })
+
   it('returns empty cache on version mismatch', async () => {
     const bad: SessionCache = { version: 999, providers: { claude: { envFingerprint: 'x', files: {} } } }
     await mkdir(TMP_DIR, { recursive: true })

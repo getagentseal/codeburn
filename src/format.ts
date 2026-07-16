@@ -7,6 +7,14 @@ import type { ProjectSummary } from './types.js'
 import { formatCost } from './currency.js'
 export { formatCost }
 
+/// Prefix a formatted cost with the estimated marker (`~`) when the figure is
+/// priced from estimated tokens rather than metered. Keeps the marker identical
+/// across the report, overview, and MCP surfaces so a legend line can explain it
+/// once. `isEstimated` is typically `entry.estimatedCostUSD > 0`.
+export function markEstimated(costStr: string, isEstimated: boolean): string {
+  return isEstimated ? `~${costStr}` : costStr
+}
+
 export function formatTokens(n: number): string {
   // Guard against Infinity / NaN / negatives that would otherwise leak into
   // the UI as "Infinity" or "NaN" strings when an upstream calculation glitches.

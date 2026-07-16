@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost as baseCost } from './currency.js'
 import { findUnpricedModels, getShortModelName } from './models.js'
+import { markEstimated } from './format.js'
 import { dateKey } from './day-aggregator.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
@@ -91,7 +92,7 @@ export function renderOverview(
   let cost = 0, savings = 0, calls = 0, sessions = 0
   let inTok = 0, outTok = 0, cacheR = 0, cacheW = 0
   const byProvider = new Map<string, { cost: number; tokens: number }>()
-  const byModel = new Map<string, { cost: number; calls: number; tokens: number }>()
+  const byModel = new Map<string, { cost: number; calls: number; tokens: number; estimatedCost: number }>()
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
@@ -113,9 +114,10 @@ export function renderOverview(
       cacheR += s.totalCacheReadTokens
       cacheW += s.totalCacheWriteTokens
       for (const [m, d] of Object.entries(s.modelBreakdown)) {
-        const e = byModel.get(m) ?? { cost: 0, calls: 0, tokens: 0 }
+        const e = byModel.get(m) ?? { cost: 0, calls: 0, tokens: 0, estimatedCost: 0 }
         e.cost += d.costUSD
         e.calls += d.calls
+        e.estimatedCost += d.estimatedCostUSD ?? 0
         e.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
         byModel.set(m, e)
       }
@@ -209,8 +211,11 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), formatCost(v.cost), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [getShortModelName(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
+    if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
+      out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
+    }
     out.push('')
   }
 

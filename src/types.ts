@@ -116,6 +116,12 @@ export type ParsedApiCall = {
   savingsUSD?: number
   savingsBaselineModel?: string
   isLocalSavings?: boolean
+  /// True when this call's `costUSD` is priced from estimated token counts or
+  /// otherwise synthesized by the provider (e.g. Warp/Kiro/Cursor derive tokens
+  /// from content length). Carried from `ParsedProviderCall.costIsEstimated`
+  /// across the parser/cache boundary. Aggregates roll the estimated portion up
+  /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
+  isEstimated?: boolean
 }
 
 export type ToolCall = {
@@ -165,6 +171,10 @@ export type SessionSummary = {
   lastTimestamp: string
   totalCostUSD: number
   totalSavingsUSD: number
+  /// Portion of `totalCostUSD` contributed by calls whose price is estimated
+  /// (see `ParsedApiCall.isEstimated`). Optional so SessionSummary fixtures and
+  /// producers predating the field keep compiling; the parser always sets it.
+  totalEstimatedCostUSD?: number
   totalInputTokens: number
   totalOutputTokens: number
   totalReasoningTokens: number
@@ -172,7 +182,7 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   apiCalls: number
   turns: ClassifiedTurn[]
-  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number }>
+  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number; estimatedCostUSD?: number }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>
   bashBreakdown: Record<string, { calls: number }>
@@ -193,6 +203,9 @@ export type ProjectSummary = {
   sessions: SessionSummary[]
   totalCostUSD: number
   totalSavingsUSD: number
+  /// Portion of `totalCostUSD` priced from estimated tokens (see
+  /// `SessionSummary.totalEstimatedCostUSD`). Optional for the same reason.
+  totalEstimatedCostUSD?: number
   totalApiCalls: number
   // Portion of `totalCostUSD` served through a subscription-backed proxy
   // (config `proxyPaths`). `totalCostUSD` is left at the full API rate (the
