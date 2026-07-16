@@ -36,6 +36,7 @@ function pct(n: number, total: number): number {
 
 type DailyAgg = {
   cost: number
+  estimatedCostUSD: number
   savings: number
   calls: number
   input: number
@@ -53,11 +54,12 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
         if (!turn.timestamp) continue
         const day = dateKey(turn.timestamp)
         if (!daily[day]) {
-          daily[day] = { cost: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
+          daily[day] = { cost: 0, estimatedCostUSD: 0, savings: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
         }
         daily[day].sessions.add(session.sessionId)
         for (const call of turn.assistantCalls) {
           daily[day].cost += call.costUSD
+          daily[day].estimatedCostUSD += call.estimatedCostUSD ?? 0
           daily[day].savings += call.savingsUSD ?? 0
           daily[day].calls++
           daily[day].input += call.usage.inputTokens
@@ -73,6 +75,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
     Period: period,
     Date: date,
     [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
+    [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(d.estimatedCostUSD)),
     [`Saved (${code})`]: roundForActiveCurrency(convertCost(d.savings)),
     'API Calls': d.calls,
     Sessions: d.sessions.size,
@@ -84,13 +87,14 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
 }
 
 function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
-  const catTotals: Record<string, { turns: number; cost: number }> = {}
+  const catTotals: Record<string, { turns: number; cost: number; estimatedCostUSD: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [cat, d] of Object.entries(session.categoryBreakdown)) {
-        if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0 }
+        if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, estimatedCostUSD: 0 }
         catTotals[cat].turns += d.turns
         catTotals[cat].cost += d.costUSD
+        catTotals[cat].estimatedCostUSD += d.estimatedCostUSD ?? 0
       }
     }
   }
@@ -102,20 +106,22 @@ function buildActivityRows(projects: ProjectSummary[], period: string): Row[] {
       Period: period,
       Activity: CATEGORY_LABELS[cat as TaskCategory] ?? cat,
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
+      [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(d.estimatedCostUSD)),
       'Share (%)': pct(d.cost, totalCost),
       Turns: d.turns,
     }))
 }
 
 function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
-  const modelTotals: Record<string, { calls: number; cost: number; savings: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; cost: number; estimatedCostUSD: number; savings: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, d] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savings: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, estimatedCostUSD: 0, savings: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += d.calls
         modelTotals[model].cost += d.costUSD
+        modelTotals[model].estimatedCostUSD += d.estimatedCostUSD ?? 0
         modelTotals[model].savings += d.savingsUSD
         modelTotals[model].input += d.tokens.inputTokens
         modelTotals[model].output += d.tokens.outputTokens
@@ -135,6 +141,7 @@ function buildModelRows(projects: ProjectSummary[], period: string): Row[] {
         Period: period,
         Model: model,
         [`Cost (${code})`]: roundForActiveCurrency(convertCost(d.cost)),
+        [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(d.estimatedCostUSD)),
         [`Saved (${code})`]: roundForActiveCurrency(convertCost(d.savings)),
         'Share (%)': pct(d.cost, totalCost),
         'API Calls': d.calls,
@@ -218,6 +225,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .map(p => ({
       Project: p.projectPath,
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(p.totalCostUSD)),
+      [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(p.estimatedCostUSD ?? 0)),
       [`Saved (${code})`]: roundForActiveCurrency(convertCost(p.totalSavingsUSD)),
       [`Avg/Session (${code})`]: p.sessions.length > 0 ? roundForActiveCurrency(convertCost(p.totalCostUSD / p.sessions.length)) : '',
       'Share (%)': pct(p.totalCostUSD, total),
@@ -236,6 +244,7 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
         [`Cost (${code})`]: roundForActiveCurrency(convertCost(s.totalCostUSD)),
+        [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(s.estimatedCostUSD ?? 0)),
         [`Saved (${code})`]: roundForActiveCurrency(convertCost(s.totalSavingsUSD)),
         'API Calls': s.apiCalls,
         Turns: s.turns.length,
@@ -254,6 +263,7 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
   const { code } = getCurrency()
   return periods.map(p => {
     const cost = p.projects.reduce((s, proj) => s + proj.totalCostUSD, 0)
+    const estimatedCostUSD = p.projects.reduce((s, proj) => s + (proj.estimatedCostUSD ?? 0), 0)
     const savings = p.projects.reduce((s, proj) => s + proj.totalSavingsUSD, 0)
     const calls = p.projects.reduce((s, proj) => s + proj.totalApiCalls, 0)
     const sessions = p.projects.reduce((s, proj) => s + proj.sessions.length, 0)
@@ -261,6 +271,7 @@ function buildSummaryRows(periods: PeriodExport[]): Row[] {
     return {
       Period: p.label,
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(cost)),
+      [`Estimated Cost (${code})`]: roundForActiveCurrency(convertCost(estimatedCostUSD)),
       [`Saved (${code})`]: roundForActiveCurrency(convertCost(savings)),
       'API Calls': calls,
       Sessions: sessions,

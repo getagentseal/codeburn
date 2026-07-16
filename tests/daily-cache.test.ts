@@ -22,6 +22,7 @@ function emptyDay(date: string, cost = 0, calls = 0): DailyEntry {
   return {
     date,
     cost,
+    estimatedCostUSD: 0,
     savingsUSD: 0,
     calls,
     sessions: 0,

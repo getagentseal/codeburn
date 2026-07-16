@@ -24,6 +24,7 @@ export type CachedCall = {
   model: string
   usage: CachedUsage
   costUSD?: number
+  estimatedCostUSD?: number
   speed: 'standard' | 'fast'
   timestamp: string
   tools: string[]
@@ -82,11 +83,16 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
+// v6: estimated-cost propagation (#639) added estimatedCostUSD to cached
+// calls. v5 entries from estimating providers (cursor, warp, grok, copilot,
+// kiro fallback paths) carry no estimated marker and would silently reload
+// as fully measured. Bump forces a one-time re-parse from source.
+//
 // v5: kiro joined the costUSD pass-through allowlist (credit-based pricing).
 // Cached kiro entries from v4 carry costUSD: undefined and would keep being
 // re-priced from estimated tokens forever, since historical session files
 // never change. Bump forces a one-time re-parse so metered credit costs land.
-export const CACHE_VERSION = 5
+export const CACHE_VERSION = 6
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -211,6 +217,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['timestamp'] === 'string'
     && (o['speed'] === 'standard' || o['speed'] === 'fast')
     && isOptionalNum(o['costUSD'])
+    && isOptionalNum(o['estimatedCostUSD'])
     && isStringArray(o['tools'])
     && isStringArray(o['bashCommands'])
     && isStringArray(o['skills'])

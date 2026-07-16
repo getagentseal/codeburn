@@ -344,4 +344,24 @@ describe('buildMenubarPayload', () => {
       ],
     })
   })
+
+  it('carries estimated cost fields through the menubar JSON contract', () => {
+    const payload = buildMenubarPayload({
+      ...emptyPeriod('Today'),
+      cost: 12.5,
+      estimatedCostUSD: 0.5,
+      categories: [{ name: 'Coding', cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0, turns: 1, editTurns: 0, oneShotTurns: 0 }],
+      models: [{ name: 'Opus 4.8', cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0, calls: 1 }],
+      projects: [{ name: 'repo', cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0, sessions: 1, sessionDetails: [{ cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0, calls: 1, inputTokens: 0, outputTokens: 0, date: '2026-07-16', models: [{ name: 'Opus 4.8', cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0 }] }] }],
+      topSessions: [{ project: 'repo', cost: 12.5, estimatedCostUSD: 0.5, savingsUSD: 0, calls: 1, date: '2026-07-16' }],
+    }, [{ name: 'Claude', cost: 12.5, estimatedCostUSD: 0.5 }], null)
+
+    const model = payload.current.topModels[0]
+    const project = payload.current.topProjects[0]
+    if (!model || !project) throw new Error('expected estimated payload rows')
+    expect(payload.current.estimatedCostUSD).toBe(0.5)
+    expect(model.estimatedCostUSD).toBe(0.5)
+    expect(project.estimatedCostUSD).toBe(0.5)
+    expect(payload.current.estimatedProviders).toEqual({ claude: 0.5 })
+  })
 })

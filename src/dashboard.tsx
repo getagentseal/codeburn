@@ -126,6 +126,10 @@ function getLayout(columns?: number): Layout {
   return { dashWidth, wide, halfWidth, barWidth }
 }
 
+function formatEstimatedCost(cost: number, estimatedCostUSD: number): string {
+  return estimatedCostUSD > 0 ? `~${formatCost(cost)}` : formatCost(cost)
+}
+
 function HBar({ value, max, width }: { value: number; max: number; width: number }) {
   if (max === 0) return <Text color={DIM}>{'░'.repeat(width)}</Text>
   const filled = Math.round((value / max) * width)
@@ -192,6 +196,7 @@ function planStatusText(planUsage: PlanUsage): string {
 
 function Overview({ projects, label, width, planUsages }: { projects: ProjectSummary[]; label: string; width: number; planUsages?: PlanUsage[] }) {
   const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalEstimatedCost = projects.reduce((s, p) => s + (p.estimatedCostUSD ?? 0), 0)
   const totalSavings = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
   const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
   const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
@@ -212,7 +217,7 @@ function Overview({ projects, label, width, planUsages }: { projects: ProjectSum
         <Text dimColor>  {label}</Text>
       </Text>
       <Text wrap="truncate-end">
-        <Text bold color={GOLD}>{formatCost(totalCost)}</Text>
+        <Text bold color={GOLD}>{formatEstimatedCost(totalCost, totalEstimatedCost)}</Text>
         <Text dimColor> cost   </Text>
         <Text bold>{totalCalls.toLocaleString()}</Text>
         <Text dimColor> calls   </Text>
@@ -255,6 +260,7 @@ function Overview({ projects, label, width, planUsages }: { projects: ProjectSum
 
 function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number }) {
   const dailyCosts: Record<string, number> = {}
+  const dailyEstimatedCosts: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -262,6 +268,7 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
         if (!turn.timestamp) continue
         const day = dateKey(turn.timestamp)
         dailyCosts[day] = (dailyCosts[day] ?? 0) + turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+        dailyEstimatedCosts[day] = (dailyEstimatedCosts[day] ?? 0) + turn.assistantCalls.reduce((s, c) => s + (c.estimatedCostUSD ?? 0), 0)
         dailyCalls[day] = (dailyCalls[day] ?? 0) + turn.assistantCalls.length
       }
     }
@@ -276,7 +283,7 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
         <Text key={day} wrap="truncate-end">
           <Text dimColor>{day.slice(5)} </Text>
           <HBar value={dailyCosts[day] ?? 0} max={maxCost} width={bw} />
-          <Text color={GOLD}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
+          <Text color={GOLD}>{formatEstimatedCost(dailyCosts[day] ?? 0, dailyEstimatedCosts[day] ?? 0).padStart(8)}</Text>
           <Text>{String(dailyCalls[day] ?? 0).padStart(6)}</Text>
         </Text>
       ))}
@@ -317,13 +324,13 @@ function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: 
       {projects.slice(0, rows).map((project, i) => {
         const budget = budgets?.get(project.project)
         const avgCost = project.sessions.length > 0
-          ? formatCost(project.totalCostUSD / project.sessions.length)
+          ? formatEstimatedCost(project.totalCostUSD / project.sessions.length, project.estimatedCostUSD ?? 0)
           : '-'
         return (
           <Text key={`${project.project}-${i}`} wrap="truncate-end">
             <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
             <Text dimColor> {fit(shortProject(project.projectPath), nw)}</Text>
-            <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
+            <Text color={GOLD}>{formatEstimatedCost(project.totalCostUSD, project.estimatedCostUSD ?? 0).padStart(8)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
             {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
@@ -342,14 +349,15 @@ const MODEL_NAME_WIDTH = 14
 const MIN_EDIT_TURNS_FOR_RATE = 5
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; costUSD: number; estimatedCostUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, estimatedCostUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
+        modelTotals[model].estimatedCostUSD += data.estimatedCostUSD ?? 0
         modelTotals[model].freshInput += data.tokens.inputTokens
         modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens
         modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens
@@ -380,7 +388,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
+            <Text color={GOLD}>{formatEstimatedCost(data.costUSD, data.estimatedCostUSD).padStart(MODEL_COL_COST)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
             <Text>{oneShotLabel.padStart(MODEL_COL_ONESHOT)}</Text>
@@ -399,21 +407,23 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 const SKILL_SUB_ROWS_LIMIT = 5
 
 function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const categoryTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const skillTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
+  const categoryTotals: Record<string, { turns: number; costUSD: number; estimatedCostUSD: number; editTurns: number; oneShotTurns: number }> = {}
+  const skillTotals: Record<string, { turns: number; costUSD: number; estimatedCostUSD: number; editTurns: number; oneShotTurns: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [cat, data] of Object.entries(session.categoryBreakdown)) {
-        if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        if (!categoryTotals[cat]) categoryTotals[cat] = { turns: 0, costUSD: 0, estimatedCostUSD: 0, editTurns: 0, oneShotTurns: 0 }
         categoryTotals[cat].turns += data.turns
         categoryTotals[cat].costUSD += data.costUSD
+        categoryTotals[cat].estimatedCostUSD += data.estimatedCostUSD ?? 0
         categoryTotals[cat].editTurns += data.editTurns
         categoryTotals[cat].oneShotTurns += data.oneShotTurns
       }
       for (const [skill, data] of Object.entries(session.skillBreakdown ?? {})) {
-        if (!skillTotals[skill]) skillTotals[skill] = { turns: 0, costUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        if (!skillTotals[skill]) skillTotals[skill] = { turns: 0, costUSD: 0, estimatedCostUSD: 0, editTurns: 0, oneShotTurns: 0 }
         skillTotals[skill].turns += data.turns
         skillTotals[skill].costUSD += data.costUSD
+        skillTotals[skill].estimatedCostUSD += data.estimatedCostUSD ?? 0
         skillTotals[skill].editTurns += data.editTurns
         skillTotals[skill].oneShotTurns += data.oneShotTurns
       }
@@ -431,7 +441,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
           <Text key={cat} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text color={CATEGORY_COLORS[cat as TaskCategory] ?? '#666666'}> {fit(CATEGORY_LABELS[cat as TaskCategory] ?? cat, 13)}</Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(8)}</Text>
+            <Text color={GOLD}>{formatEstimatedCost(data.costUSD, data.estimatedCostUSD).padStart(8)}</Text>
             <Text>{String(data.turns).padStart(6)}</Text>
             <Text color={data.editTurns === 0 ? DIM : oneShotPct === '100%' ? '#5BF58C' : ORANGE}>{String(oneShotPct).padStart(7)}</Text>
           </Text>,
@@ -443,7 +453,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
               <Text key={`${cat}:${skill}`} wrap="truncate-end" dimColor>
                 <HBar value={sd.costUSD} max={maxCost} width={bw} />
                 <Text> {fit(`  /${skill}`, 13)}</Text>
-                <Text>{formatCost(sd.costUSD).padStart(8)}</Text>
+                <Text>{formatEstimatedCost(sd.costUSD, sd.estimatedCostUSD).padStart(8)}</Text>
                 <Text>{String(sd.turns).padStart(6)}</Text>
                 <Text>{String(subPct).padStart(7)}</Text>
               </Text>,
@@ -523,10 +533,10 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
 }
 
 function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const merged: Record<string, { uses: number; cost: number }> = {}
+  const merged: Record<string, { uses: number; cost: number; estimatedCostUSD: number }> = {}
   for (const project of projects) { for (const session of project.sessions) {
-    for (const [skill, d] of Object.entries(session.skillBreakdown)) { const e = merged[skill] ?? { uses: 0, cost: 0 }; e.uses += d.turns; e.cost += d.costUSD; merged[skill] = e }
-    for (const [agent, d] of Object.entries(session.subagentBreakdown)) { const e = merged[agent] ?? { uses: 0, cost: 0 }; e.uses += d.calls; e.cost += d.costUSD; merged[agent] = e }
+    for (const [skill, d] of Object.entries(session.skillBreakdown)) { const e = merged[skill] ?? { uses: 0, cost: 0, estimatedCostUSD: 0 }; e.uses += d.turns; e.cost += d.costUSD; e.estimatedCostUSD += d.estimatedCostUSD ?? 0; merged[skill] = e }
+    for (const [agent, d] of Object.entries(session.subagentBreakdown)) { const e = merged[agent] ?? { uses: 0, cost: 0, estimatedCostUSD: 0 }; e.uses += d.calls; e.cost += d.costUSD; e.estimatedCostUSD += d.estimatedCostUSD ?? 0; merged[agent] = e }
   } }
   const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
   if (sorted.length === 0) return <Panel title="Skills & Agents" color={PANEL_COLORS.skills} width={pw}><Text dimColor>No skill/agent usage</Text></Panel>
@@ -536,7 +546,7 @@ function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw:
     <Panel title="Skills & Agents" color={PANEL_COLORS.skills} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'uses'.padStart(6)}{'cost'.padStart(8)}</Text>
       {sorted.slice(0, 10).map(([name, d]) => (
-        <Text key={name} wrap="truncate-end"><HBar value={d.cost} max={maxCost} width={bw} /><Text> {fit(name, nw)}</Text><Text>{String(d.uses).padStart(6)}</Text><Text color={GOLD}>{formatCost(d.cost).padStart(8)}</Text></Text>
+        <Text key={name} wrap="truncate-end"><HBar value={d.cost} max={maxCost} width={bw} /><Text> {fit(name, nw)}</Text><Text>{String(d.uses).padStart(6)}</Text><Text color={GOLD}>{formatEstimatedCost(d.cost, d.estimatedCostUSD).padStart(8)}</Text></Text>
       ))}
     </Panel>
   )
@@ -546,11 +556,11 @@ function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw:
 // (workflow-subagent / Explore / general-purpose / …). Returns null when there
 // are no agent transcripts, so it never shows for other providers.
 function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const merged: Record<string, { uses: number; cost: number }> = {}
+  const merged: Record<string, { uses: number; cost: number; estimatedCostUSD: number }> = {}
   for (const project of projects) { for (const session of project.sessions) {
     if (!session.agentType) continue
-    const e = merged[session.agentType] ?? { uses: 0, cost: 0 }
-    e.uses += session.apiCalls; e.cost += session.totalCostUSD; merged[session.agentType] = e
+    const e = merged[session.agentType] ?? { uses: 0, cost: 0, estimatedCostUSD: 0 }
+    e.uses += session.apiCalls; e.cost += session.totalCostUSD; e.estimatedCostUSD += session.estimatedCostUSD ?? 0; merged[session.agentType] = e
   } }
   const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
   if (sorted.length === 0) return null
@@ -560,7 +570,7 @@ function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw
     <Panel title="Claude Agent Types" color={PANEL_COLORS.skills} width={pw}>
       <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'calls'.padStart(6)}{'cost'.padStart(8)}</Text>
       {sorted.slice(0, 10).map(([name, d]) => (
-        <Text key={name} wrap="truncate-end"><HBar value={d.cost} max={maxCost} width={bw} /><Text> {fit(name, nw)}</Text><Text>{String(d.uses).padStart(6)}</Text><Text color={GOLD}>{formatCost(d.cost).padStart(8)}</Text></Text>
+        <Text key={name} wrap="truncate-end"><HBar value={d.cost} max={maxCost} width={bw} /><Text> {fit(name, nw)}</Text><Text>{String(d.uses).padStart(6)}</Text><Text color={GOLD}>{formatEstimatedCost(d.cost, d.estimatedCostUSD).padStart(8)}</Text></Text>
       ))}
     </Panel>
   )

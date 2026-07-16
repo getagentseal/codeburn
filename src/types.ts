@@ -74,6 +74,7 @@ export type ParsedApiCall = {
   model: string
   usage: TokenUsage
   costUSD: number
+  estimatedCostUSD: number
   tools: string[]
   mcpTools: string[]
   skills: string[]
@@ -141,6 +142,7 @@ export type SessionSummary = {
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number
+  estimatedCostUSD: number
   totalSavingsUSD: number
   totalInputTokens: number
   totalOutputTokens: number
@@ -149,13 +151,13 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   apiCalls: number
   turns: ClassifiedTurn[]
-  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number }>
+  modelBreakdown: Record<string, { calls: number; costUSD: number; estimatedCostUSD?: number; tokens: TokenUsage; savingsUSD: number }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>
   bashBreakdown: Record<string, { calls: number }>
-  categoryBreakdown: Record<TaskCategory, { turns: number; costUSD: number; savingsUSD: number; retries: number; editTurns: number; oneShotTurns: number }>
-  skillBreakdown: Record<string, { turns: number; costUSD: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
-  subagentBreakdown: Record<string, { calls: number; costUSD: number; savingsUSD: number }>
+  categoryBreakdown: Record<TaskCategory, { turns: number; costUSD: number; estimatedCostUSD?: number; savingsUSD: number; retries: number; editTurns: number; oneShotTurns: number }>
+  skillBreakdown: Record<string, { turns: number; costUSD: number; estimatedCostUSD?: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
+  subagentBreakdown: Record<string, { calls: number; costUSD: number; estimatedCostUSD?: number; savingsUSD: number }>
   // Observed MCP tools available in this session, captured from
   // `attachment.deferred_tools_delta.addedNames` entries. Union across all
   // turns. Each name is a fully-qualified `mcp__<server>__<tool>` identifier.
@@ -169,6 +171,7 @@ export type ProjectSummary = {
   projectPath: string
   sessions: SessionSummary[]
   totalCostUSD: number
+  estimatedCostUSD: number
   totalSavingsUSD: number
   totalApiCalls: number
   // Portion of `totalCostUSD` served through a subscription-backed proxy

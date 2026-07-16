@@ -4,6 +4,7 @@
 export type PeriodData = {
   label: string
   cost: number
+  estimatedCostUSD?: number
   /// Counterfactual USD the same tokens would have cost on the paid
   /// baseline configured for each local model. Stays `0` when no
   /// `codeburn model-savings` mappings are active. Always shown
@@ -19,20 +20,21 @@ export type PeriodData = {
   /// Total Codex credits consumed in the period (issues #408/#495). Optional so
   /// non-menubar PeriodData producers don't have to compute it.
   codexCredits?: number
-  categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
-  models: Array<{ name: string; cost: number; savingsUSD: number; calls: number }>
+  categories: Array<{ name: string; cost: number; estimatedCostUSD?: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
+  models: Array<{ name: string; cost: number; estimatedCostUSD?: number; savingsUSD: number; calls: number }>
   /// Models with usage in the period whose pricing lookup fails against the
   /// current tables (#638): their calls contribute $0 to `cost`. Optional so
   /// PeriodData producers that predate the field keep compiling.
   unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
-  projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
+  projects?: Array<{ name: string; cost: number; estimatedCostUSD?: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; estimatedCostUSD?: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; estimatedCostUSD?: number; savingsUSD: number }> }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
-  topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string }>
+  topSessions?: Array<{ project: string; cost: number; estimatedCostUSD?: number; savingsUSD: number; calls: number; date: string }>
 }
 
 export type ProviderCost = {
   name: string
   cost: number
+  estimatedCostUSD?: number
 }
 import type { OptimizeResult } from './optimize.js'
 import type { GranularHistory } from './granular-history.js'
@@ -49,6 +51,7 @@ const MODEL_EFFICIENCY_LIMIT = 5
 export type DailyModelBreakdown = {
   name: string
   cost: number
+  estimatedCostUSD?: number
   savingsUSD: number
   calls: number
   inputTokens: number
@@ -58,6 +61,7 @@ export type DailyModelBreakdown = {
 export type DailyHistoryEntry = {
   date: string
   cost: number
+  estimatedCostUSD?: number
   savingsUSD: number
   calls: number
   inputTokens: number
@@ -129,6 +133,7 @@ export type MenubarPayload = {
   current: {
     label: string
     cost: number
+    estimatedCostUSD?: number
     calls: number
     sessions: number
     oneShotRate: number | null
@@ -145,6 +150,7 @@ export type MenubarPayload = {
     topActivities: Array<{
       name: string
       cost: number
+      estimatedCostUSD?: number
       savingsUSD: number
       turns: number
       oneShotRate: number | null
@@ -152,6 +158,7 @@ export type MenubarPayload = {
     topModels: Array<{
       name: string
       cost: number
+      estimatedCostUSD?: number
       savingsUSD: number
       savingsBaselineModel: string
       calls: number
@@ -167,20 +174,23 @@ export type MenubarPayload = {
     /// `codeburn model-savings`.
     localModelSavings: LocalModelSavings
     providers: Record<string, number>
+    estimatedProviders?: Record<string, number>
     topProjects: Array<{
       name: string
       cost: number
+      estimatedCostUSD?: number
       savingsUSD: number
       sessions: number
       avgCostPerSession: number
       sessionDetails: Array<{
         cost: number
+        estimatedCostUSD?: number
         savingsUSD: number
         calls: number
         inputTokens: number
         outputTokens: number
         date: string
-        models: Array<{ name: string; cost: number; savingsUSD: number }>
+        models: Array<{ name: string; cost: number; estimatedCostUSD?: number; savingsUSD: number }>
       }>
     }>
     modelEfficiency: Array<{
@@ -191,6 +201,7 @@ export type MenubarPayload = {
     topSessions: Array<{
       project: string
       cost: number
+      estimatedCostUSD?: number
       savingsUSD: number
       calls: number
       date: string
@@ -269,6 +280,7 @@ function buildTopActivities(categories: PeriodData['categories']): MenubarPayloa
   return categories.slice(0, TOP_ACTIVITIES_LIMIT).map(cat => ({
     name: cat.name,
     cost: cat.cost,
+    estimatedCostUSD: cat.estimatedCostUSD ?? 0,
     savingsUSD: cat.savingsUSD,
     turns: cat.turns,
     oneShotRate: oneShotRateFor(cat.editTurns, cat.oneShotTurns),
@@ -279,7 +291,7 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   return models
     .filter(m => m.name !== SYNTHETIC_MODEL_NAME)
     .slice(0, TOP_MODELS_LIMIT)
-    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '' }))
+    .map(m => ({ name: m.name, cost: m.cost, estimatedCostUSD: m.estimatedCostUSD ?? 0, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '' }))
 }
 
 function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
@@ -309,6 +321,15 @@ function buildProviders(providers: ProviderCost[]): Record<string, number> {
   return map
 }
 
+function buildEstimatedProviders(providers: ProviderCost[]): Record<string, number> {
+  const map: Record<string, number> = {}
+  for (const p of providers) {
+    if ((p.estimatedCostUSD ?? 0) <= 0) continue
+    map[p.name.toLowerCase()] = p.estimatedCostUSD ?? 0
+  }
+  return map
+}
+
 function buildHistory(daily: DailyHistoryEntry[] | undefined, timeline?: GranularHistory): MenubarPayload['history'] {
   if (!daily || daily.length === 0) return { daily: [], ...(timeline ? { timeline } : {}) }
   const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date))
@@ -324,17 +345,19 @@ function buildTopProjects(projects: PeriodData['projects']): MenubarPayload['cur
     .map(p => ({
       name: p.name,
       cost: p.cost,
+      estimatedCostUSD: p.estimatedCostUSD ?? 0,
       savingsUSD: p.savingsUSD,
       sessions: p.sessions,
       avgCostPerSession: p.sessions > 0 ? p.cost / p.sessions : 0,
       sessionDetails: (p.sessionDetails ?? []).map(s => ({
         cost: s.cost,
+        estimatedCostUSD: s.estimatedCostUSD ?? 0,
         savingsUSD: s.savingsUSD,
         calls: s.calls,
         inputTokens: s.inputTokens,
         outputTokens: s.outputTokens,
         date: s.date,
-        models: s.models,
+        models: s.models.map(m => ({ ...m, estimatedCostUSD: m.estimatedCostUSD ?? 0 })),
       })),
     }))
 }
@@ -351,7 +374,7 @@ function buildTopSessions(sessions: PeriodData['topSessions']): MenubarPayload['
   return (sessions ?? [])
     .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
     .slice(0, TOP_SESSIONS_LIMIT)
-    .map(s => ({ project: s.project, cost: s.cost, savingsUSD: s.savingsUSD, calls: s.calls, date: s.date }))
+    .map(s => ({ project: s.project, cost: s.cost, estimatedCostUSD: s.estimatedCostUSD ?? 0, savingsUSD: s.savingsUSD, calls: s.calls, date: s.date }))
 }
 
 export type BreakdownArrays = {
@@ -383,6 +406,7 @@ export function buildMenubarPayload(
     current: {
       label: current.label,
       cost: current.cost,
+      estimatedCostUSD: current.estimatedCostUSD ?? 0,
       calls: current.calls,
       sessions: current.sessions,
       oneShotRate: aggregateOneShotRate(current.categories),
@@ -397,6 +421,7 @@ export function buildMenubarPayload(
       unpricedModels: current.unpricedModels ?? [],
       localModelSavings: breakdowns?.localModelSavings ?? { totalUSD: 0, calls: 0, byModel: [], byProvider: [] },
       providers: buildProviders(providers),
+      estimatedProviders: buildEstimatedProviders(providers),
       topProjects: buildTopProjects(current.projects ?? []),
       modelEfficiency: buildModelEfficiency(current.modelEfficiency ?? []),
       topSessions: buildTopSessions(current.topSessions ?? []),

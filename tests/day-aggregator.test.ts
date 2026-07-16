@@ -127,6 +127,7 @@ describe('aggregateProjectsIntoDays', () => {
     expect(day.categories['coding']).toEqual({
       turns: 1,
       cost: 3,
+      estimatedCostUSD: 0,
       savingsUSD: 0,
       editTurns: 1,
       oneShotTurns: 1,
@@ -187,17 +188,17 @@ describe('aggregateProjectsIntoDays', () => {
     const days = aggregateProjectsIntoDays(projects)
     const day = days[0]!
     expect(day.models['Opus 4.7']).toEqual({
-      calls: 1, cost: 7, savingsUSD: 0,
+      calls: 1, cost: 7, estimatedCostUSD: 0, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
     expect(day.models['gpt-5']).toEqual({
-      calls: 1, cost: 3, savingsUSD: 0,
+      calls: 1, cost: 3, estimatedCostUSD: 0, savingsUSD: 0,
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
-    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7, savingsUSD: 0 })
-    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3, savingsUSD: 0 })
+    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7, estimatedCostUSD: 0, savingsUSD: 0 })
+    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3, estimatedCostUSD: 0, savingsUSD: 0 })
   })
 })
 

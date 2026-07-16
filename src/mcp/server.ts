@@ -20,12 +20,13 @@ const INSTRUCTIONS =
   'unless include_project_names is true. All data is read locally from this machine; last_6_months is the widest ' +
   'window. Numbers reflect the most recent scan and may lag the current session by up to a few minutes.'
 
-function breakdownRows(p: MenubarPayload, by: BreakdownBy, limit: number): Array<{ name: string; costUSD: number }> {
+function breakdownRows(p: MenubarPayload, by: BreakdownBy, limit: number): Array<{ name: string; costUSD: number; estimatedCostUSD: number }> {
   const c = p.current
-  if (by === 'model') return c.topModels.slice(0, limit).map(m => ({ name: m.name, costUSD: m.cost }))
-  if (by === 'project') return c.topProjects.slice(0, limit).map(x => ({ name: x.name, costUSD: x.cost }))
-  if (by === 'task') return c.topActivities.slice(0, limit).map(a => ({ name: a.name, costUSD: a.cost }))
-  return Object.entries(c.providers).sort(([, a], [, b]) => b - a).slice(0, limit).map(([name, cost]) => ({ name, costUSD: cost }))
+  if (by === 'model') return c.topModels.slice(0, limit).map(m => ({ name: m.name, costUSD: m.cost, estimatedCostUSD: m.estimatedCostUSD ?? 0 }))
+  if (by === 'project') return c.topProjects.slice(0, limit).map(x => ({ name: x.name, costUSD: x.cost, estimatedCostUSD: x.estimatedCostUSD ?? 0 }))
+  if (by === 'task') return c.topActivities.slice(0, limit).map(a => ({ name: a.name, costUSD: a.cost, estimatedCostUSD: a.estimatedCostUSD ?? 0 }))
+  const estimatedProviders = c.estimatedProviders ?? {}
+  return Object.entries(c.providers).sort(([, a], [, b]) => b - a).slice(0, limit).map(([name, cost]) => ({ name, costUSD: cost, estimatedCostUSD: estimatedProviders[name] ?? 0 }))
 }
 
 export function createServer(deps: { version: string; aggregate?: Aggregate }): McpServer {
@@ -60,8 +61,8 @@ export function createServer(deps: { version: string; aggregate?: Aggregate }): 
       outputSchema: {
         period: z.string(),
         empty: z.boolean(),
-        totals: z.object({ costUSD: z.number(), calls: z.number(), sessions: z.number(), cacheHitPercent: z.number(), oneShotRate: z.number().nullable() }),
-        breakdown: z.array(z.object({ name: z.string(), costUSD: z.number() })).nullable(),
+        totals: z.object({ costUSD: z.number(), estimatedCostUSD: z.number(), calls: z.number(), sessions: z.number(), cacheHitPercent: z.number(), oneShotRate: z.number().nullable() }),
+        breakdown: z.array(z.object({ name: z.string(), costUSD: z.number(), estimatedCostUSD: z.number() })).nullable(),
       },
       annotations: { title: 'CodeBurn — usage & cost', readOnlyHint: true, openWorldHint: false, idempotentHint: true },
     },
@@ -69,7 +70,7 @@ export function createServer(deps: { version: string; aggregate?: Aggregate }): 
       try {
         const payload = redactProjectNames(await getPayload(period, false), include_project_names)
         const c = payload.current
-        const totals = { costUSD: c.cost, calls: c.calls, sessions: c.sessions, cacheHitPercent: c.cacheHitPercent, oneShotRate: c.oneShotRate }
+        const totals = { costUSD: c.cost, estimatedCostUSD: c.estimatedCostUSD ?? 0, calls: c.calls, sessions: c.sessions, cacheHitPercent: c.cacheHitPercent, oneShotRate: c.oneShotRate }
         if (c.calls === 0) {
           return {
             content: [{ type: 'text' as const, text: `No usage recorded for ${c.label} yet — run some coding sessions and try again.` }],
@@ -85,7 +86,7 @@ export function createServer(deps: { version: string; aggregate?: Aggregate }): 
       } catch (err) {
         return {
           content: [{ type: 'text' as const, text: `codeburn: failed to read usage — ${err instanceof Error ? err.message : String(err)}` }],
-          structuredContent: { period: 'unknown', empty: true, totals: { costUSD: 0, calls: 0, sessions: 0, cacheHitPercent: 0, oneShotRate: null }, breakdown: null },
+          structuredContent: { period: 'unknown', empty: true, totals: { costUSD: 0, estimatedCostUSD: 0, calls: 0, sessions: 0, cacheHitPercent: 0, oneShotRate: null }, breakdown: null },
           isError: true,
         }
       }

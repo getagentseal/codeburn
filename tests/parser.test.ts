@@ -15,6 +15,7 @@ import { createRequire } from 'node:module'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { loadCache, saveCache } from '../src/session-cache.js'
+import { renderOverview } from '../src/overview.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
 
 // ── Synthetic provider state ───────────────────────────────────────────────
@@ -410,5 +411,60 @@ describe('(e) 90-day age-out for durable providers', () => {
     // Second parse: orphan with 89d timestamp → retained + counted via orphan pass
     const proj2 = await parseAllSessions(undefined, 'test-synthetic')
     expect(totalOutput(proj2)).toBe(7)
+  })
+})
+
+describe('estimated provider cost propagation', () => {
+  it('marks a session built from an estimated provider call downstream', async () => {
+    const synthFile = join(tmpHome, 'synth-estimated.txt')
+    await writeFile(synthFile, 'placeholder')
+
+    _synthSources = [{ path: synthFile, project: 'test', provider: 'test-synthetic' }]
+    _synthYields = [{
+      provider: 'test-synthetic', model: 'gpt-4o',
+      inputTokens: 100, outputTokens: 50,
+      cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+      cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0,
+      costUSD: 0.12, costIsEstimated: true, tools: [], bashCommands: [],
+      timestamp: '2026-07-16T10:00:00.000Z',
+      speed: 'standard', deduplicationKey: 'synth-estimated-cost',
+      userMessage: 'estimated cost', sessionId: 'synth-estimated-session',
+    }]
+
+    const projects = await parseAllSessions(undefined, 'test-synthetic')
+    const session = projects[0]?.sessions[0]
+
+    const overview = renderOverview(projects, { label: 'Today', color: false })
+    expect(overview.split('\n').find(line => line.includes('Cost'))).toContain('~')
+    expect(session?.estimatedCostUSD).toBe(0.12)
+  })
+
+  it('survives a session-cache round-trip', async () => {
+    const synthFile = join(tmpHome, 'synth-estimated-cached.txt')
+    await writeFile(synthFile, 'placeholder')
+
+    _synthDurable = false
+    _synthSources = [{ path: synthFile, project: 'test', provider: 'test-synthetic' }]
+    _synthYields = [{
+      provider: 'test-synthetic', model: 'gpt-4o',
+      inputTokens: 100, outputTokens: 50,
+      cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+      cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0,
+      costUSD: 0.12, costIsEstimated: true, tools: [], bashCommands: [],
+      timestamp: '2026-07-16T10:00:00.000Z',
+      speed: 'standard', deduplicationKey: 'synth-estimated-roundtrip',
+      userMessage: 'estimated cost', sessionId: 'synth-estimated-cached-session',
+    }]
+
+    // First parse populates the persistent cache from the provider.
+    const proj1 = await parseAllSessions(undefined, 'test-synthetic')
+    expect(proj1[0]?.sessions[0]?.estimatedCostUSD).toBe(0.12)
+
+    // Second parse must serve the same session from the cache (the provider
+    // yields nothing), and the estimated portion must survive the round-trip.
+    clearSessionCache()
+    _synthYields = []
+    const proj2 = await parseAllSessions(undefined, 'test-synthetic')
+    expect(proj2[0]?.sessions[0]?.estimatedCostUSD).toBe(0.12)
   })
 })

@@ -38,4 +38,20 @@ describe('tables', () => {
     expect(t).toContain('Routing waste')
     expect(t).toContain('Trim system prompt')
   })
+  it('marks estimated totals and breakdown rows', () => {
+    const p = payload()
+    p.current.estimatedCostUSD = 0.5
+    p.current.estimatedProviders = { 'claude code': 0.5 }
+    const model = p.current.topModels[0]
+    const project = p.current.topProjects[0]
+    const activity = p.current.topActivities[0]
+    if (!model || !project || !activity) throw new Error('expected table fixture rows')
+    model.estimatedCostUSD = 0.5
+    project.estimatedCostUSD = 0.5
+    activity.estimatedCostUSD = 0.5
+
+    expect(renderSummaryTable(p)).toContain('~$12.50')
+    expect(renderBreakdownTable(p, 'provider', 20)).toContain('~$12.50')
+    expect(renderBreakdownTable(p, 'task', 20)).toContain('~$8.00')
+  })
 })

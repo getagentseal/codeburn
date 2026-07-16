@@ -8,6 +8,7 @@ function makeProject(opts: {
   projectPath: string
   cost: number
   calls: number
+  estimatedCost?: number
   model: string
   provider: string
   tokens: { input: number; output: number; cacheR: number; cacheW: number }
@@ -22,6 +23,7 @@ function makeProject(opts: {
     project: opts.project,
     projectPath: opts.projectPath,
     totalCostUSD: opts.cost,
+    estimatedCostUSD: opts.estimatedCost ?? 0,
     totalSavingsUSD: 0,
     totalProxiedCostUSD: 0,
     totalApiCalls: opts.calls,
@@ -33,8 +35,9 @@ function makeProject(opts: {
       totalCacheReadTokens: opts.tokens.cacheR,
       totalCacheWriteTokens: opts.tokens.cacheW,
       apiCalls: opts.calls,
-      modelBreakdown: { [opts.model]: { calls: opts.calls, costUSD: opts.cost, savingsUSD: 0, tokens: usage } },
-      categoryBreakdown: { coding: { turns: 1, costUSD: opts.cost, savingsUSD: 0, retries: 0, editTurns: 1, oneShotTurns: 1 } },
+      estimatedCostUSD: opts.estimatedCost ?? 0,
+      modelBreakdown: { [opts.model]: { calls: opts.calls, costUSD: opts.cost, estimatedCostUSD: opts.estimatedCost ?? 0, savingsUSD: 0, tokens: usage } },
+      categoryBreakdown: { coding: { turns: 1, costUSD: opts.cost, estimatedCostUSD: opts.estimatedCost ?? 0, savingsUSD: 0, retries: 0, editTurns: 1, oneShotTurns: 1 } },
       toolBreakdown: { Bash: { calls: 5 }, Read: { calls: 2 } },
       mcpBreakdown: {},
       bashBreakdown: {},
@@ -47,7 +50,7 @@ function makeProject(opts: {
         category: 'coding',
         retries: 0,
         hasEdits: true,
-        assistantCalls: [{ provider: opts.provider, model: opts.model, costUSD: opts.cost, usage }],
+        assistantCalls: [{ provider: opts.provider, model: opts.model, costUSD: opts.cost, estimatedCostUSD: opts.estimatedCost ?? 0, usage }],
       }],
     }],
   } as unknown as ProjectSummary
@@ -94,6 +97,22 @@ describe('renderOverview', () => {
     // no-color mode must not emit ANSI escape codes
     // eslint-disable-next-line no-control-regex
     expect(out).not.toMatch(/\[/)
+  })
+
+  it('marks estimated costs without changing the measured total', () => {
+    const out = renderOverview([makeProject({
+      project: 'estimated',
+      projectPath: '/Users/test/estimated',
+      cost: 12.5,
+      estimatedCost: 0.5,
+      calls: 1,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 100, output: 50, cacheR: 0, cacheW: 0 },
+    })], { label: 'Today', color: false })
+
+    expect(out).toContain('~$12.50')
+    expect(out).toContain('Today totals ~$12.50')
   })
 
   it('reports no usage for an empty range', () => {

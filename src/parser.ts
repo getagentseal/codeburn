@@ -1134,6 +1134,7 @@ export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     model: msg.model,
     usage: tokens,
     costUSD,
+    estimatedCostUSD: 0,
     tools,
     mcpTools: extractMcpTools(tools),
     skills,
@@ -1286,6 +1287,7 @@ function buildSessionSummary(
   const subagentBreakdown: SessionSummary['subagentBreakdown'] = Object.create(null)
 
   let totalCost = 0
+  let totalEstimatedCost = 0
   let totalSavings = 0
   let totalInput = 0
   let totalOutput = 0
@@ -1298,13 +1300,15 @@ function buildSessionSummary(
 
   for (const turn of turns) {
     const turnCost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+    const turnEstimatedCost = turn.assistantCalls.reduce((s, c) => s + (c.estimatedCostUSD ?? 0), 0)
     const turnSavings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
 
     if (!categoryBreakdown[turn.category]) {
-      categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
+      categoryBreakdown[turn.category] = { turns: 0, costUSD: 0, estimatedCostUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
     }
     categoryBreakdown[turn.category].turns++
     categoryBreakdown[turn.category].costUSD += turnCost
+    categoryBreakdown[turn.category].estimatedCostUSD = (categoryBreakdown[turn.category].estimatedCostUSD ?? 0) + turnEstimatedCost
     categoryBreakdown[turn.category].savingsUSD += turnSavings
     if (turn.hasEdits) {
       categoryBreakdown[turn.category].editTurns++
@@ -1315,10 +1319,11 @@ function buildSessionSummary(
     if (turn.subCategory) {
       const skillKey = turn.subCategory
       if (!skillBreakdown[skillKey]) {
-        skillBreakdown[skillKey] = { turns: 0, costUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+        skillBreakdown[skillKey] = { turns: 0, costUSD: 0, estimatedCostUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
       }
       skillBreakdown[skillKey].turns++
       skillBreakdown[skillKey].costUSD += turnCost
+      skillBreakdown[skillKey].estimatedCostUSD = (skillBreakdown[skillKey].estimatedCostUSD ?? 0) + turnEstimatedCost
       skillBreakdown[skillKey].savingsUSD += turnSavings
       if (turn.hasEdits) {
         skillBreakdown[skillKey].editTurns++
@@ -1329,6 +1334,7 @@ function buildSessionSummary(
     for (const call of turn.assistantCalls) {
       const callSavings = call.savingsUSD ?? 0
       totalCost += call.costUSD
+      totalEstimatedCost += call.estimatedCostUSD ?? 0
       totalSavings += callSavings
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
@@ -1343,11 +1349,13 @@ function buildSessionSummary(
           calls: 0,
           costUSD: 0,
           savingsUSD: 0,
+          estimatedCostUSD: 0,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
+      modelBreakdown[modelKey].estimatedCostUSD = (modelBreakdown[modelKey].estimatedCostUSD ?? 0) + (call.estimatedCostUSD ?? 0)
       modelBreakdown[modelKey].savingsUSD += callSavings
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
@@ -1369,9 +1377,10 @@ function buildSessionSummary(
         bashBreakdown[cmd].calls++
       }
       for (const sat of call.subagentTypes) {
-        subagentBreakdown[sat] = subagentBreakdown[sat] ?? { calls: 0, costUSD: 0, savingsUSD: 0 }
+        subagentBreakdown[sat] = subagentBreakdown[sat] ?? { calls: 0, costUSD: 0, estimatedCostUSD: 0, savingsUSD: 0 }
         subagentBreakdown[sat].calls++
         subagentBreakdown[sat].costUSD += call.costUSD
+        subagentBreakdown[sat].estimatedCostUSD = (subagentBreakdown[sat].estimatedCostUSD ?? 0) + (call.estimatedCostUSD ?? 0)
         subagentBreakdown[sat].savingsUSD += callSavings
       }
 
@@ -1386,6 +1395,7 @@ function buildSessionSummary(
     firstTimestamp: firstTs || turns[0]?.timestamp || '',
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
+    estimatedCostUSD: totalEstimatedCost,
     totalSavingsUSD: totalSavings,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
@@ -1695,6 +1705,7 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
     projectPath,
     sessions,
     totalCostUSD,
+    estimatedCostUSD: sessions.reduce((s, sess) => s + (sess.estimatedCostUSD ?? 0), 0),
     totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
     totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
@@ -1718,6 +1729,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     model: call.model,
     usage,
     costUSD: call.costUSD,
+    estimatedCostUSD: call.costIsEstimated ? call.costUSD : 0,
     tools,
     mcpTools: extractMcpTools(tools),
     skills: call.skills ?? [],
@@ -1755,6 +1767,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       cacheCreationOneHourTokens: 0,
     },
     costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes' || call.provider === 'kiro') ? call.costUSD : undefined,
+    estimatedCostUSD: call.costIsEstimated ? call.costUSD : 0,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1793,6 +1806,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     skills: call.skills,
     subagentTypes: call.subagentTypes,
     deduplicationKey: call.deduplicationKey,
+    estimatedCostUSD: call.estimatedCostUSD,
     toolSequence: call.toolSequence,
   }
 }
@@ -1866,6 +1880,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       webSearchRequests: u.webSearchRequests,
     },
     costUSD: call.costUSD ?? costUSD,
+    estimatedCostUSD: call.estimatedCostUSD ?? 0,
     tools: call.tools,
     mcpTools: extractMcpTools(call.tools),
     skills: call.skills,

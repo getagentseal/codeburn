@@ -23,6 +23,9 @@ function formatTokens(n: number): string {
 function formatCount(n: number): string {
   return n.toLocaleString('en-US')
 }
+function formatEstimatedCost(cost: number, estimatedCostUSD: number): string {
+  return estimatedCostUSD > 0 ? `~${formatCost(cost)}` : formatCost(cost)
+}
 function isAbsoluteProjectPath(path: string): boolean {
   return path.startsWith('/') || path.startsWith('\\') || /^[a-zA-Z]:[/\\]/.test(path)
 }
@@ -88,23 +91,25 @@ export function renderOverview(
     return out.join('\n') + '\n'
   }
 
-  let cost = 0, savings = 0, calls = 0, sessions = 0
+  let cost = 0, estimatedCost = 0, savings = 0, calls = 0, sessions = 0
   let inTok = 0, outTok = 0, cacheR = 0, cacheW = 0
-  const byProvider = new Map<string, { cost: number; tokens: number }>()
-  const byModel = new Map<string, { cost: number; calls: number; tokens: number }>()
-  const byCat = new Map<string, { cost: number; turns: number }>()
+  const byProvider = new Map<string, { cost: number; estimatedCostUSD: number; tokens: number }>()
+  const byModel = new Map<string, { cost: number; estimatedCostUSD: number; calls: number; tokens: number }>()
+  const byCat = new Map<string, { cost: number; estimatedCostUSD: number; turns: number }>()
   const byTool = new Map<string, number>()
-  const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
-  const byProject = new Map<string, { cost: number; sessions: number }>()
+  const byDay = new Map<string, { cost: number; estimatedCostUSD: number; tokens: number; providers: Set<string> }>()
+  const byProject = new Map<string, { cost: number; estimatedCostUSD: number; sessions: number }>()
 
   for (const p of projects) {
     cost += p.totalCostUSD
+    estimatedCost += p.estimatedCostUSD ?? 0
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
     sessions += p.sessions.length
     const pname = projectName(p)
-    const pe = byProject.get(pname) ?? { cost: 0, sessions: 0 }
+    const pe = byProject.get(pname) ?? { cost: 0, estimatedCostUSD: 0, sessions: 0 }
     pe.cost += p.totalCostUSD
+    pe.estimatedCostUSD += p.estimatedCostUSD ?? 0
     pe.sessions += p.sessions.length
     byProject.set(pname, pe)
     for (const s of p.sessions) {
@@ -113,15 +118,17 @@ export function renderOverview(
       cacheR += s.totalCacheReadTokens
       cacheW += s.totalCacheWriteTokens
       for (const [m, d] of Object.entries(s.modelBreakdown)) {
-        const e = byModel.get(m) ?? { cost: 0, calls: 0, tokens: 0 }
+        const e = byModel.get(m) ?? { cost: 0, estimatedCostUSD: 0, calls: 0, tokens: 0 }
         e.cost += d.costUSD
+        e.estimatedCostUSD += d.estimatedCostUSD ?? 0
         e.calls += d.calls
         e.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
         byModel.set(m, e)
       }
       for (const [cat, d] of Object.entries(s.categoryBreakdown)) {
-        const e = byCat.get(cat) ?? { cost: 0, turns: 0 }
+        const e = byCat.get(cat) ?? { cost: 0, estimatedCostUSD: 0, turns: 0 }
         e.cost += d.costUSD
+        e.estimatedCostUSD += d.estimatedCostUSD ?? 0
         e.turns += d.turns
         byCat.set(cat, e)
       }
@@ -132,13 +139,15 @@ export function renderOverview(
         const day = dateKey(t.timestamp || t.assistantCalls[0]?.timestamp || '')
         for (const call of t.assistantCalls) {
           const tk = call.usage.inputTokens + call.usage.outputTokens + call.usage.cacheReadInputTokens + call.usage.cacheCreationInputTokens
-          const pv = byProvider.get(call.provider) ?? { cost: 0, tokens: 0 }
+          const pv = byProvider.get(call.provider) ?? { cost: 0, estimatedCostUSD: 0, tokens: 0 }
           pv.cost += call.costUSD
+          pv.estimatedCostUSD += call.estimatedCostUSD ?? 0
           pv.tokens += tk
           byProvider.set(call.provider, pv)
           if (day) {
-            const dd = byDay.get(day) ?? { cost: 0, tokens: 0, providers: new Set<string>() }
+            const dd = byDay.get(day) ?? { cost: 0, estimatedCostUSD: 0, tokens: 0, providers: new Set<string>() }
             dd.cost += call.costUSD
+            dd.estimatedCostUSD += call.estimatedCostUSD ?? 0
             dd.tokens += tk
             dd.providers.add(call.provider)
             byDay.set(day, dd)
@@ -155,7 +164,7 @@ export function renderOverview(
   // Totals
   out.push(heading('Totals'))
   const kv = (k: string, v: string): string => '  ' + c.dim(k.padEnd(11)) + v
-  out.push(kv('Cost', c.bold(formatCost(cost))))
+  out.push(kv('Cost', c.bold(formatEstimatedCost(cost, estimatedCost))))
   out.push(kv('Tokens', formatTokens(totalTokens) + c.dim('   (breakdown below)')))
   out.push(kv('Calls', formatCount(calls) + c.dim('   sessions ') + formatCount(sessions)))
   out.push(kv('Cache hit', `${cacheHit.toFixed(1)}%`))
@@ -198,7 +207,7 @@ export function renderOverview(
     out.push(heading('By tool'))
     out.push(renderTable(c,
       [{ header: 'Tool' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }, { header: 'Share', right: true }],
-      providerRows.map(([name, v]) => [name, formatCost(v.cost), formatTokens(v.tokens), cost > 0 ? `${Math.round((v.cost / cost) * 100)}%` : '0%']),
+      providerRows.map(([name, v]) => [name, formatEstimatedCost(v.cost, v.estimatedCostUSD), formatTokens(v.tokens), cost > 0 ? `${Math.round((v.cost / cost) * 100)}%` : '0%']),
     ))
     out.push('')
   }
@@ -209,7 +218,7 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), formatCost(v.cost), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [getShortModelName(m), formatEstimatedCost(v.cost, v.estimatedCostUSD), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
     out.push('')
   }
@@ -220,7 +229,7 @@ export function renderOverview(
     out.push(heading('Highest-value days'))
     out.push(renderTable(c,
       [{ header: '#' }, { header: 'Date' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }],
-      topDays.map(([d, v], i) => [String(i + 1), d, formatCost(v.cost), formatTokens(v.tokens)]),
+      topDays.map(([d, v], i) => [String(i + 1), d, formatEstimatedCost(v.cost, v.estimatedCostUSD), formatTokens(v.tokens)]),
     ))
     out.push('')
   }
@@ -231,7 +240,7 @@ export function renderOverview(
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([name, v]) => [name, formatCost(v.cost), formatCount(v.sessions)]),
+      projRows.map(([name, v]) => [name, formatEstimatedCost(v.cost, v.estimatedCostUSD), formatCount(v.sessions)]),
     ))
     out.push('')
   }
@@ -242,7 +251,7 @@ export function renderOverview(
     out.push(heading('Daily'))
     out.push(renderTable(c,
       [{ header: 'Date' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }, { header: 'Providers' }],
-      dailyRows.map(([d, v]) => [d, formatCost(v.cost), formatTokens(v.tokens), [...v.providers].sort().join(', ')]),
+      dailyRows.map(([d, v]) => [d, formatEstimatedCost(v.cost, v.estimatedCostUSD), formatTokens(v.tokens), [...v.providers].sort().join(', ')]),
     ))
     out.push('')
   }
@@ -253,7 +262,7 @@ export function renderOverview(
     out.push(heading('By activity'))
     out.push(renderTable(c,
       [{ header: 'Activity' }, { header: 'Cost', right: true }, { header: 'Turns', right: true }],
-      catRows.map(([cat, v]) => [CATEGORY_LABELS[cat as TaskCategory] ?? cat, formatCost(v.cost), formatCount(v.turns)]),
+      catRows.map(([cat, v]) => [CATEGORY_LABELS[cat as TaskCategory] ?? cat, formatEstimatedCost(v.cost, v.estimatedCostUSD), formatCount(v.turns)]),
     ))
     out.push('')
   }
@@ -272,7 +281,7 @@ export function renderOverview(
   const topTool = providerRows[0]?.[0]
   const topModel = modelRows[0] ? getShortModelName(modelRows[0][0]) : ''
   const mostly = topTool ? `, mostly ${topTool}${topModel ? ` / ${topModel}` : ''}` : ''
-  out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatCost(cost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
+  out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatEstimatedCost(cost, estimatedCost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
 
   return out.join('\n') + '\n'
 }

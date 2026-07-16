@@ -15,8 +15,8 @@ import { buildGranularHistory } from './granular-history.js'
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
-  const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number; tokens: number }> = {}
+  const catTotals: Record<string, { turns: number; cost: number; estimatedCostUSD: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
+  const modelTotals: Record<string, { calls: number; cost: number; estimatedCostUSD: number; savingsUSD: number; tokens: number }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
@@ -25,17 +25,19 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
     cacheReadTokens += sess.totalCacheReadTokens
     cacheWriteTokens += sess.totalCacheWriteTokens
     for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
-      if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+      if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, estimatedCostUSD: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
       catTotals[cat].turns += d.turns
       catTotals[cat].cost += d.costUSD
+      catTotals[cat].estimatedCostUSD += d.estimatedCostUSD ?? 0
       catTotals[cat].savingsUSD += d.savingsUSD
       catTotals[cat].editTurns += d.editTurns
       catTotals[cat].oneShotTurns += d.oneShotTurns
     }
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, tokens: 0 }
+      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, estimatedCostUSD: 0, savingsUSD: 0, tokens: 0 }
       modelTotals[model].calls += d.calls
       modelTotals[model].cost += d.costUSD
+      modelTotals[model].estimatedCostUSD += d.estimatedCostUSD ?? 0
       modelTotals[model].savingsUSD += d.savingsUSD
       modelTotals[model].tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
     }
@@ -44,6 +46,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
   return {
     label,
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
+    estimatedCostUSD: projects.reduce((s, p) => s + (p.estimatedCostUSD ?? 0), 0),
     savingsUSD: projects.reduce((s, p) => s + p.totalSavingsUSD, 0),
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
     sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
@@ -53,7 +56,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, savingsUSD: d.savingsUSD })),
+      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, estimatedCostUSD: d.estimatedCostUSD, savingsUSD: d.savingsUSD })),
     unpricedModels: findUnpricedModels(Object.entries(modelTotals)
       .map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens }))),
   }
@@ -141,6 +144,7 @@ function dailyEntriesToHistory(days: ReturnType<typeof aggregateProjectsIntoDays
       .map(([name, m]) => ({
         name,
         cost: m.cost,
+        estimatedCostUSD: m.estimatedCostUSD ?? 0,
         savingsUSD: m.savingsUSD,
         calls: m.calls,
         inputTokens: m.inputTokens,
@@ -149,6 +153,7 @@ function dailyEntriesToHistory(days: ReturnType<typeof aggregateProjectsIntoDays
     return {
       date: d.date,
       cost: d.cost,
+      estimatedCostUSD: d.estimatedCostUSD ?? 0,
       savingsUSD: d.savingsUSD,
       calls: d.calls,
       inputTokens: d.inputTokens,
@@ -280,17 +285,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const displayNameByName = new Map(allProviders.map(p => [p.name, p.displayName]))
   const providers: ProviderCost[] = []
   if (isClaudeConfigScoped) {
-    const providerTotals: Record<string, number> = {}
+    const providerTotals: Record<string, { cost: number; estimatedCostUSD: number }> = {}
     for (const d of aggregateProjectsIntoDays(scanProjects)) {
       for (const [name, p] of Object.entries(d.providers)) {
-        providerTotals[name] = (providerTotals[name] ?? 0) + p.cost
+        const total = providerTotals[name] ?? { cost: 0, estimatedCostUSD: 0 }
+        total.cost += p.cost
+        total.estimatedCostUSD += p.estimatedCostUSD ?? 0
+        providerTotals[name] = total
       }
     }
-    for (const [name, cost] of Object.entries(providerTotals)) {
-      providers.push({ name: displayNameByName.get(name) ?? name, cost })
+    for (const [name, total] of Object.entries(providerTotals)) {
+      providers.push({ name: displayNameByName.get(name) ?? name, cost: total.cost, estimatedCostUSD: total.estimatedCostUSD })
     }
     if (providers.length === 0 && claudeConfigs?.selectedId) {
-      providers.push({ name: displayNameByName.get('claude') ?? 'Claude', cost: 0 })
+      providers.push({ name: displayNameByName.get('claude') ?? 'Claude', cost: 0, estimatedCostUSD: 0 })
     }
   } else if (isAllProviders) {
     const unfilteredProviderDays = [
@@ -298,14 +306,17 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       ...(await getTodayAllDays()).filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr),
     ]
     const allDaysForProviders = daysSelection ? unfilteredProviderDays.filter(d => daysSelection.days.has(d.date)) : unfilteredProviderDays
-    const providerTotals: Record<string, number> = {}
+    const providerTotals: Record<string, { cost: number; estimatedCostUSD: number }> = {}
     for (const d of allDaysForProviders) {
       for (const [name, p] of Object.entries(d.providers)) {
-        providerTotals[name] = (providerTotals[name] ?? 0) + p.cost
+        const total = providerTotals[name] ?? { cost: 0, estimatedCostUSD: 0 }
+        total.cost += p.cost
+        total.estimatedCostUSD += p.estimatedCostUSD ?? 0
+        providerTotals[name] = total
       }
     }
-    for (const [name, cost] of Object.entries(providerTotals)) {
-      providers.push({ name: displayNameByName.get(name) ?? name, cost })
+    for (const [name, total] of Object.entries(providerTotals)) {
+      providers.push({ name: displayNameByName.get(name) ?? name, cost: total.cost, estimatedCostUSD: total.estimatedCostUSD })
     }
     for (const p of allProviders) {
       if (providers.some(pc => pc.name === p.displayName)) continue
@@ -314,7 +325,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
   } else {
     const display = displayNameByName.get(pf) ?? pf
-    providers.push({ name: display, cost: currentData.cost })
+    providers.push({ name: display, cost: currentData.cost, estimatedCostUSD: currentData.estimatedCostUSD ?? 0 })
   }
 
   // DAILY HISTORY (last 365 days)
@@ -342,10 +353,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   } else {
     const emptyModels = [] as { name: string; cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number }[]
     const historyFromCache = allCacheDays.map(d => {
-      const prov = d.providers[pf] ?? { calls: 0, cost: 0, savingsUSD: 0 }
+      const prov = d.providers[pf] ?? { calls: 0, cost: 0, estimatedCostUSD: 0, savingsUSD: 0 }
       return {
         date: d.date,
         cost: prov.cost,
+        estimatedCostUSD: prov.estimatedCostUSD ?? 0,
         savingsUSD: prov.savingsUSD,
         calls: prov.calls,
         inputTokens: 0,
@@ -358,10 +370,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     const todayFromParse = aggregateProjectsIntoDays(scanProjects)
       .filter(d => d.date === todayStr)
       .map(d => {
-        const prov = d.providers[pf] ?? { calls: 0, cost: 0, savingsUSD: 0 }
+        const prov = d.providers[pf] ?? { calls: 0, cost: 0, estimatedCostUSD: 0, savingsUSD: 0 }
         return {
           date: d.date,
           cost: prov.cost,
+          estimatedCostUSD: prov.estimatedCostUSD ?? 0,
           savingsUSD: prov.savingsUSD,
           calls: prov.calls,
           inputTokens: 0,
@@ -384,6 +397,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   currentData.projects = scanProjects.map(p => ({
     name: friendlyProject(p),
     cost: p.totalCostUSD,
+    estimatedCostUSD: p.estimatedCostUSD ?? 0,
     savingsUSD: p.totalSavingsUSD,
     sessions: p.sessions.length,
     sessionDetails: [...p.sessions]
@@ -391,13 +405,14 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       .slice(0, 10)
       .map(s => ({
         cost: s.totalCostUSD,
+        estimatedCostUSD: s.estimatedCostUSD ?? 0,
         savingsUSD: s.totalSavingsUSD,
         calls: s.apiCalls,
         inputTokens: s.totalInputTokens,
         outputTokens: s.totalOutputTokens,
         date: s.firstTimestamp?.split('T')[0] ?? '',
         models: Object.entries(s.modelBreakdown)
-          .map(([name, m]) => ({ name, cost: m.costUSD, savingsUSD: m.savingsUSD }))
+          .map(([name, m]) => ({ name, cost: m.costUSD, estimatedCostUSD: m.estimatedCostUSD ?? 0, savingsUSD: m.savingsUSD }))
           .sort((a, b) => b.cost - a.cost)
           .slice(0, 3),
       })),
@@ -430,6 +445,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     p.sessions.map(s => ({
       project: friendlyProject(p),
       cost: s.totalCostUSD,
+      estimatedCostUSD: s.estimatedCostUSD ?? 0,
       savingsUSD: s.totalSavingsUSD,
       calls: s.apiCalls,
       date: s.firstTimestamp?.split('T')[0] ?? '',

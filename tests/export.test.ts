@@ -113,6 +113,40 @@ function makeProject(projectPath: string): ProjectSummary {
 }
 
 describe('exportCsv', () => {
+  it('exports estimated costs in explicit columns', async () => {
+    const project = makeProject('estimated')
+    project.estimatedCostUSD = 0.23
+    const session = project.sessions[0]
+    if (!session) throw new Error('expected fixture session')
+    session.estimatedCostUSD = 0.23
+    const turn = session.turns[0]
+    if (!turn) throw new Error('expected fixture turn')
+    const call = turn.assistantCalls[0]
+    if (!call) throw new Error('expected fixture call')
+    call.estimatedCostUSD = 0.23
+    const model = session.modelBreakdown['+danger-model']
+    if (!model) throw new Error('expected fixture model')
+    model.estimatedCostUSD = 0.23
+    const category = session.categoryBreakdown.coding
+    if (!category) throw new Error('expected fixture category')
+    category.estimatedCostUSD = 0.23
+
+    const folder = await exportCsv([{ label: '30 Days', projects: [project] }], join(tmpDir, 'estimated.csv'))
+    const [summary, daily, models, projects, sessions] = await Promise.all([
+      readFile(join(folder, 'summary.csv'), 'utf-8'),
+      readFile(join(folder, 'daily.csv'), 'utf-8'),
+      readFile(join(folder, 'models.csv'), 'utf-8'),
+      readFile(join(folder, 'projects.csv'), 'utf-8'),
+      readFile(join(folder, 'sessions.csv'), 'utf-8'),
+    ])
+
+    for (const csv of [summary, daily, models, projects, sessions]) {
+      expect(csv).toContain('Estimated Cost')
+    }
+    expect(projects).toContain(',0.23,')
+    expect(sessions).toContain(',0.23,')
+  })
+
   it('prefixes formula-like cells to prevent CSV injection', async () => {
     const periods: PeriodExport[] = [
       {
@@ -208,6 +242,18 @@ describe('exportCsv', () => {
 })
 
 describe('exportJson', () => {
+  it('includes estimated cost as a numeric JSON field', async () => {
+    const project = makeProject('estimated-json')
+    project.estimatedCostUSD = 0.23
+    const saved = await exportJson([{ label: '30 Days', projects: [project] }], join(tmpDir, 'estimated.json'))
+    const data: { summary: Array<Record<string, unknown>> } = JSON.parse(await readFile(saved, 'utf-8'))
+    const summary = data.summary[0]
+    if (!summary) throw new Error('expected JSON summary row')
+    const estimatedField = Object.entries(summary).find(([key]) => key.startsWith('Estimated Cost'))?.[1]
+
+    expect(estimatedField).toBe(0.23)
+  })
+
   it('includes an mcp section with per-server usage', async () => {
     const project = makeProject('app')
     project.sessions[0]!.mcpBreakdown = { node_repl: { calls: 3 }, github: { calls: 1 } }

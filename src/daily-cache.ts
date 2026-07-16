@@ -5,7 +5,14 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 11: kiro cost accounting changed (metered credits pass through
+// Bumped to 12: estimated-cost propagation (#639) added estimatedCostUSD to
+// day/model/category rollups. Days finalized at v11 were built before the
+// field existed, so estimated provider spend (cursor, warp, grok, copilot,
+// kiro fallback paths) would silently read as fully measured. Raising
+// MIN_SUPPORTED_VERSION forces the one-time re-hydration that backfills the
+// estimated portion.
+//
+// v11: kiro cost accounting changed (metered credits pass through
 // the session cache instead of being re-priced from estimated tokens), so
 // days finalized at v10 carry token-estimated kiro costs that were off by up
 // to 16× per model. Raising MIN_SUPPORTED_VERSION forces the one-time full
@@ -20,13 +27,14 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 11
-const MIN_SUPPORTED_VERSION = 11
+export const DAILY_CACHE_VERSION = 12
+const MIN_SUPPORTED_VERSION = 12
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
   date: string
   cost: number
+  estimatedCostUSD?: number
   savingsUSD: number
   calls: number
   sessions: number
@@ -39,14 +47,15 @@ export type DailyEntry = {
   models: Record<string, {
     calls: number
     cost: number
+    estimatedCostUSD?: number
     savingsUSD: number
     inputTokens: number
     outputTokens: number
     cacheReadTokens: number
     cacheWriteTokens: number
   }>
-  categories: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
-  providers: Record<string, { calls: number; cost: number; savingsUSD: number }>
+  categories: Record<string, { turns: number; cost: number; estimatedCostUSD?: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
+  providers: Record<string, { calls: number; cost: number; estimatedCostUSD?: number; savingsUSD: number }>
 }
 
 export type DailyCache = {
@@ -84,6 +93,7 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
   return days.map(d => ({
     date: d.date as string,
     cost: (d.cost as number) ?? 0,
+    estimatedCostUSD: (d.estimatedCostUSD as number) ?? 0,
     savingsUSD: (d.savingsUSD as number) ?? 0,
     calls: (d.calls as number) ?? 0,
     sessions: (d.sessions as number) ?? 0,

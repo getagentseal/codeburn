@@ -12,31 +12,33 @@ function mdTable(headers: string[], rows: string[][]): string {
 
 const pct = (n: number) => `${Math.round(n)}%`
 const oneShot = (r: number | null) => (r === null ? 'n/a' : pct(r * 100))
+const estimatedCost = (cost: number, estimatedCostUSD = 0) => estimatedCostUSD > 0 ? `~${formatCost(cost)}` : formatCost(cost)
 
 export function renderSummaryTable(p: MenubarPayload): string {
   const c = p.current
   const unpriced = c.unpricedModels ?? []
   return [
-    `**${c.label}** — ${formatCost(c.cost)} · ${c.calls} calls · ${c.sessions} sessions`,
+    `**${c.label}** — ${estimatedCost(c.cost, c.estimatedCostUSD)} · ${c.calls} calls · ${c.sessions} sessions`,
     `cache hit ${pct(c.cacheHitPercent)} · one-shot ${oneShot(c.oneShotRate)} · in ${formatTokens(c.inputTokens)} / out ${formatTokens(c.outputTokens)}`,
     ...(unpriced.length > 0
       ? [`⚠ ${unpriced.length} model${unpriced.length === 1 ? '' : 's'} unpriced, counted at $0: ${unpriced.map(u => `${u.model} (${u.calls} calls)`).join(', ')}. Cost above understates real spend; fix with \`codeburn model-alias\` or \`codeburn price-override\`.`]
       : []),
     '',
     '_Top models_',
-    mdTable(['Model', 'Cost', 'Calls'], c.topModels.slice(0, 5).map(m => [m.name, formatCost(m.cost), String(m.calls)])),
+    mdTable(['Model', 'Cost', 'Calls'], c.topModels.slice(0, 5).map(m => [m.name, estimatedCost(m.cost, m.estimatedCostUSD), String(m.calls)])),
     '',
     '_Top projects_',
-    mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, 5).map(x => [x.name, formatCost(x.cost), String(x.sessions)])),
+    mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, 5).map(x => [x.name, estimatedCost(x.cost, x.estimatedCostUSD), String(x.sessions)])),
   ].join('\n')
 }
 
 export function renderBreakdownTable(p: MenubarPayload, by: BreakdownBy, limit: number): string {
   const c = p.current
-  if (by === 'model') return mdTable(['Model', 'Cost', 'Calls'], c.topModels.slice(0, limit).map(m => [m.name, formatCost(m.cost), String(m.calls)]))
-  if (by === 'project') return mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, limit).map(x => [x.name, formatCost(x.cost), String(x.sessions)]))
-  if (by === 'task') return mdTable(['Task', 'Cost', 'Turns', 'One-shot'], c.topActivities.slice(0, limit).map(a => [a.name, formatCost(a.cost), String(a.turns), oneShot(a.oneShotRate)]))
-  return mdTable(['Provider', 'Cost'], Object.entries(c.providers).sort(([, a], [, b]) => b - a).slice(0, limit).map(([name, cost]) => [name, formatCost(cost)]))
+  if (by === 'model') return mdTable(['Model', 'Cost', 'Calls'], c.topModels.slice(0, limit).map(m => [m.name, estimatedCost(m.cost, m.estimatedCostUSD), String(m.calls)]))
+  if (by === 'project') return mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, limit).map(x => [x.name, estimatedCost(x.cost, x.estimatedCostUSD), String(x.sessions)]))
+  if (by === 'task') return mdTable(['Task', 'Cost', 'Turns', 'One-shot'], c.topActivities.slice(0, limit).map(a => [a.name, estimatedCost(a.cost, a.estimatedCostUSD), String(a.turns), oneShot(a.oneShotRate)]))
+  const estimatedProviders = c.estimatedProviders ?? {}
+  return mdTable(['Provider', 'Cost'], Object.entries(c.providers).sort(([, a], [, b]) => b - a).slice(0, limit).map(([name, cost]) => [name, estimatedCost(cost, estimatedProviders[name])]))
 }
 
 export function renderSavingsTable(p: MenubarPayload): string {
