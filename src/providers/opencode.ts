@@ -22,10 +22,20 @@ const toolNameMap: Record<string, string> = {
 }
 
 function getDataDir(dataDir?: string): string {
-  const base =
-    dataDir ??
-    process.env['XDG_DATA_HOME'] ??
-    join(homedir(), '.local', 'share')
+  // Test seam: createOpenCodeProvider(tmpDir) points at a base dir that still
+  // gets the 'opencode' subdirectory appended, preserving existing fixtures
+  // (tmpDir/opencode/opencode*.db and tmpDir/opencode/storage/...).
+  if (dataDir) return join(dataDir, 'opencode')
+
+  // Production override for OpenCode-compatible forks/renames (e.g. MiMoCode at
+  // ~/.local/share/mimocode). This is the EXACT data directory — no 'opencode'
+  // suffix — so a fork writing <dir>/<prefix>*.db or <dir>/storage/... is found
+  // instead of silently yielding zero sessions. (issue #617)
+  const override = process.env['OPENCODE_DATA_DIR']
+  if (override) return override
+
+  // Default: $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
+  const base = process.env['XDG_DATA_HOME'] ?? join(homedir(), '.local', 'share')
   return join(base, 'opencode')
 }
 
@@ -34,7 +44,14 @@ function getSqliteConfig(dataDir?: string): SqliteProviderConfig {
     providerName: 'opencode',
     displayName: 'OpenCode',
     dbDir: getDataDir(dataDir),
-    dbFilePrefix: 'opencode',
+    // Truthy check (not `??`): an empty-string `OPENCODE_DB_PREFIX` must fall
+    // back to 'opencode'. With `??`, '' survives as the prefix and
+    // `discoverSqliteSessions` matches every '*.db' file (filename.startsWith('')
+    // is always true), sweeping unrelated DBs into discovery. Aligns with
+    // `OPENCODE_DATA_DIR`'s truthy handling above, and makes behavior identical
+    // for unset vs empty — which matches the env fingerprint, since
+    // `computeEnvFingerprint` collapses both to 'OPENCODE_DB_PREFIX='. (issue #617)
+    dbFilePrefix: process.env['OPENCODE_DB_PREFIX'] || 'opencode',
   }
 }
 

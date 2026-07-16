@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { MetricCard } from '@/components/MetricCard'
 import { BarList, type BarItem } from '@/components/BarList'
 import { DataTable } from '@/components/DataTable'
-import { UsageChart, DeviceUsageChart, type Unit } from '@/components/UsageChart'
+import { GranularUsageChart, DeviceUsageChart, type Unit } from '@/components/UsageChart'
 import { DeviceSearchModal } from '@/components/DeviceSearchModal'
 import { ContextExplorer } from '@/components/ContextExplorer'
 
@@ -104,7 +104,9 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
           </div>
         </div>
         <div className="mt-3 h-64 px-2 pb-2">
-          {!payload ? <Skeleton className="mx-3 mb-3 h-[228px]" /> : <UsageChart daily={payload.history.daily} unit={unit} />}
+          {!payload ? <Skeleton className="mx-3 mb-3 h-[228px]" /> : (
+            <GranularUsageChart daily={payload.history.daily} timeline={payload.history.timeline} unit={unit} />
+          )}
         </div>
       </Card>
 

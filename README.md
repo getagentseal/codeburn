@@ -18,11 +18,11 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
-**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 32 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
+**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 36 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
 
 You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
 
-CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **32 AI tools**.
+CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **36 AI tools**.
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily.
 
@@ -225,7 +225,7 @@ codeburn web --port 8080        # pick a port (falls back to a free one if taken
 codeburn web --no-open          # start the server without opening a browser
 ```
 
-A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
+A local web dashboard with the same task, model, tool, and project breakdowns as the TUI, rendered with charts. The usage graph follows the selected period with 15-minute, hourly, or daily buckets and can switch between per-session and per-model lines. Everything is read from disk on your machine and the server binds to localhost; nothing is uploaded.
 
 ### Combine usage across your devices
 
@@ -317,6 +317,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
 <p align="center">
   <a href="docs/providers/claude.md" title="Claude Code &amp; Claude Desktop"><img src="assets/providers/claude.jpg" alt="Claude Code &amp; Claude Desktop" height="34" /></a>
   <a href="docs/providers/cline.md" title="Cline"><img src="assets/providers/cline.svg" alt="Cline" height="34" /></a>
+  <a href="docs/providers/codewhale.md" title="CodeWhale"><img src="assets/providers/codewhale.svg" alt="CodeWhale" height="34" /></a>
   <a href="docs/providers/codex.md" title="Codex (OpenAI)"><img src="assets/providers/codex.png" alt="Codex (OpenAI)" height="34" /></a>
   <a href="docs/providers/cursor.md" title="Cursor"><img src="assets/providers/cursor.jpg" alt="Cursor" height="34" /></a>
   <a href="docs/providers/cursor-agent.md" title="cursor-agent"><img src="assets/providers/cursor-agent.jpg" alt="cursor-agent" height="34" /></a>
@@ -612,9 +613,9 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 |----------|---------------|-------|
 | **Claude Code** | `~/.claude/projects/<sanitized-path>/<session-id>.jsonl` | Each assistant entry carries model name, token usage (input, output, cache read, cache write), `tool_use` blocks, and timestamps. |
 | **Claude (multiple config dirs)** | Set via `CLAUDE_CONFIG_DIRS` (e.g. `~/.claude-work:~/.claude-personal`) | Scans every listed directory and merges sessions into one row per project so totals reflect all your Claude usage. Use `:` on POSIX, `;` on Windows; overrides `CLAUDE_CONFIG_DIR`. Missing or unreadable directories are skipped. |
-| **Codex (OpenAI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Reads `token_count` events (per-call and cumulative usage) and `function_call` entries for tool tracking; attributes cost by project working directory. `codeburn report --provider codex` views Codex alone. |
+| **Codex (OpenAI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/archived_sessions/rollout-*.jsonl` | Reads `token_count` events (per-call and cumulative usage) and `function_call` entries for tool tracking; attributes cost by project working directory. `codeburn report --provider codex` views Codex alone. |
 | **Cursor** | SQLite `state.vscdb` under `globalStorage`: macOS `~/Library/Application Support/Cursor/User/globalStorage/`, Linux `~/.config/Cursor/User/globalStorage/`, Windows `%APPDATA%/Cursor/User/globalStorage/`; results cached at `~/.cache/codeburn/cursor-results.json` | Input tokens come from Cursor's own per-conversation context meter (`composerData.promptTokenBreakdown`), credited once per conversation on a stable anchor; tool calls and shell commands are read from the agent stream (`agentKv`), and Composer house models are priced from Cursor's published rates. Output is a reply-text estimate and cache tokens are server-side only, so figures are marked estimated and undercount the Cursor admin console for long conversations. The cache auto-invalidates when the database changes; the first run on a large database can take a minute. |
-| **OpenCode** | SQLite `~/.local/share/opencode/opencode*.db` (respects `XDG_DATA_HOME`) | Queries `session`, `message`, and `part` read-only and recalculates cost via LiteLLM (falling back to OpenCode's own cost field for unpriced models). Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double counting; multiple channel databases are supported. |
+| **OpenCode** | SQLite `~/.local/share/opencode/opencode*.db` or file-based `~/.local/share/opencode/storage/` (respects `XDG_DATA_HOME`; `OPENCODE_DATA_DIR`/`OPENCODE_DB_PREFIX` for renamed/forked builds) | Queries `session`, `message`, and `part` read-only and recalculates cost via LiteLLM (falling back to OpenCode's own cost field for unpriced models). Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double counting; multiple channel databases are supported. |
 | **Gemini CLI** | `~/.gemini/tmp/<project>/chats/session-*.json` | One JSON file per session with real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Input is reported inclusive of cached, so CodeBurn subtracts cached before pricing to avoid double charging. |
 | **Antigravity (CLI & IDE)** | Session files under `.gemini/` folders, plus the running language server | Pulls granular trajectory and pricing from the language server process. For the short-lived CLI, optionally install a status-line hook with `codeburn antigravity-hook install` so usage is captured between menubar refreshes. The IDE is detected via the `--app-data-dir antigravity-ide` flag on Windows. |
 | **GitHub Copilot** | `~/.copilot/session-state/` (legacy CLI); VS Code/VSCodium `workspaceStorage/*` chat sessions, `GitHub.copilot-chat/transcripts/`, and the `agent-traces.db` OpenTelemetry store; JetBrains IDEs (IntelliJ, PyCharm, …) under `~/.config/github-copilot/<ide>/<kind>/<storeId>/copilot-*-nitrite.db` | The OTel SQLite store is preferred when present (it carries real input/output/cache token counts). Other sources carry no explicit counts, so tokens are estimated from content length and the model is inferred from tool call ID prefixes. JetBrains sessions read from a Nitrite (H2 MVStore) `.db`; project comes from the plugin's `projectName` field (else the `.git` root of a referenced file). See [docs/providers/copilot.md](docs/providers/copilot.md). |
@@ -627,6 +628,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 | **Pi / OMP** | `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl` (Pi), `~/.omp/agent/sessions/<sanitized-cwd>/*.jsonl` (OMP) | Each assistant message carries usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` blocks. Tool names normalize to the standard set (`bash` → `Bash`, `dispatch_agent` → `Agent`); bash commands come from `toolCall.arguments.command`. |
 | **Codebuff** (formerly Manicode) | `~/.config/manicode/projects/<project>/chats/<chatId>/chat-messages.json` (honors `CODEBUFF_DATA_DIR`; walks `manicode-dev` / `manicode-staging`) | Bills in credits, so each completed assistant message is costed at the public rate of $0.01/credit via `msg.credits`. When an upstream provider's stashed RunState records token-level usage (`message.metadata.runState.sessionState.mainAgentState.messageHistory[*].providerOptions`), the real tokens and LiteLLM cost take precedence. Native tool names (`read_files`, `str_replace`, `run_terminal_command`, `spawn_agents`) normalize to `Read`, `Edit`, `Bash`, `Agent`. |
 | **Cline / Roo Code / KiloCode** | VS Code `globalStorage`: Cline at `saoudrizwan.claude-dev` and `~/.cline/data`; Roo Code and KiloCode across VS Code, VS Code Insiders, and VSCodium | Cline-family agents. CodeBurn reads `ui_messages.json` from each task directory, extracting token counts from `type: "say"` entries with `say: "api_req_started"`. |
+| **CodeWhale** | `~/.codewhale/sessions/*.json` plus unmigrated legacy `~/.deepseek/sessions/*.json`; `$CODEWHALE_HOME/sessions` is an exact override | Emits one cumulative record per saved session. CodeWhale exposes only `total_tokens`, so CodeBurn preserves that aggregate in the input column rather than inventing an input/output split. Cost is the exact stored parent-session plus subagent USD total; model pricing is used only when the cost snapshot is absent. Tool blocks, shell commands, skills, and subagent types are retained. |
 | **IBM Bob** | `User/globalStorage/ibm.bob-code/tasks/<task-id>/` (GA `IBM Bob` and preview `Bob-IDE` app folders) | Reads `ui_messages.json` for API request token/cost records and `api_conversation_history.json` for the selected model. |
 | **Kimi Code CLI** | `$KIMI_SHARE_DIR/sessions/<workdir-hash>/<session-id>/` or `~/.kimi/sessions/<workdir-hash>/<session-id>/` | Reads `wire.jsonl` `StatusUpdate.token_usage` records, mapping `input_other`, `input_cache_read`, `input_cache_creation`, and `output` into the standard token columns; includes subagents under each session's `subagents/` folder. |
 | **LingTai TUI** | `~/.lingtai/<agent>/logs/token_ledger.jsonl` plus project homes from `~/.lingtai-tui/registry.jsonl` (`<project>/.lingtai/<agent>/logs/token_ledger.jsonl`); honors `LINGTAI_HOME` / `LINGTAI_TUI_HOME` | Reads LingTai's append-only token ledger, mapping `input - cached` to fresh input, `cached` to cache reads, `output` to output, and `thinking` to reasoning. Nested daemon ledgers are skipped because parent ledgers already mirror daemon usage with `source`/`run_id` tags. |
@@ -647,12 +649,15 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 | `CLAUDE_CONFIG_DIRS` | OS-delimited list of Claude data directories to scan together (e.g. `~/.claude-work:~/.claude-personal`). Sessions merge into one row per project. Overrides `CLAUDE_CONFIG_DIR` when set. |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
 | `CODEBUFF_DATA_DIR` | Override Codebuff data directory (default: `~/.config/manicode`) |
+| `CODEWHALE_HOME` | Override the exact CodeWhale home directory; sessions are read from `<CODEWHALE_HOME>/sessions` |
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
 | `KIMI_SHARE_DIR` | Override Kimi Code CLI share directory (default: `~/.kimi`) |
 | `KIMI_MODEL_NAME` | Override Kimi model name when Kimi sessions do not record the model |
 | `LINGTAI_HOME` | Override LingTai data directory (default: `~/.lingtai`) |
 | `LINGTAI_TUI_HOME` | Alternate override for LingTai data directory; `LINGTAI_HOME` takes precedence |
 | `LINGTAI_TUI_GLOBAL_DIR` | Override LingTai TUI global directory used for project registry discovery (default: `~/.lingtai-tui`) |
+| `OPENCODE_DATA_DIR` | Override the OpenCode-compatible data directory (default: `$XDG_DATA_HOME/opencode` or `~/.local/share/opencode`). Point at a renamed/forked build, e.g. `~/.local/share/mimicode`. Exact directory; no `opencode` suffix is appended. |
+| `OPENCODE_DB_PREFIX` | Override the SQLite DB filename prefix for OpenCode discovery (default: `opencode`, matching `opencode*.db`); e.g. `mimicode` discovers `mimicode*.db`. SQLite storage only. |
 | `QWEN_DATA_DIR` | Override Qwen data directory (default: `~/.qwen/projects`) |
 | `VIBE_HOME` | Override Mistral Vibe home directory (default: `~/.vibe`) |
 | `WARP_DB_PATH` | Override Warp database path (default: Warp Stable, then Warp Preview) |
@@ -668,7 +673,7 @@ Keeping 30 integrations accurate is constant work. The tools underneath change e
 Where your sponsorship goes:
 
 - **Honest numbers.** New models and price changes are mapped quickly, so your cost is the real cost, not a guess.
-- **More tools.** Every one of the 30 providers started as a single file. Sponsorship funds the next one.
+- **More tools.** Every one of the 36 providers started as a single file. Sponsorship funds the next one.
 - **Fast fixes.** When a vendor breaks something, paid time is what gets it patched now instead of someday.
 
 Sponsoring as a team or company? Your logo lands right here, in front of every developer who opens the repo. The first sponsor gets it to themselves until the next one shows up.
