@@ -899,3 +899,90 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(calls[0]!.tools).toEqual([])
   })
 })
+
+skipUnlessSqlite('opencode provider - env override discovery', () => {
+  // Builds a renamed/forked OpenCode-compatible DB at <root>/<subdir>/<prefix>.db
+  // (NOT under an 'opencode' subdir), mirroring a real fork like MiMoCode writing
+  // ~/.local/share/mimicode/mimicode.db with the same Drizzle schema.
+  function createForkDb(dbPath: string, sessionId: string): void {
+    const { DatabaseSync: Database } = require('node:sqlite')
+    const db = new Database(dbPath)
+    db.exec(`
+      CREATE TABLE session (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+        slug TEXT NOT NULL, directory TEXT NOT NULL, title TEXT NOT NULL,
+        version TEXT NOT NULL, time_created INTEGER, time_updated INTEGER,
+        time_archived INTEGER
+      )
+    `)
+    db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER, time_updated INTEGER, data TEXT NOT NULL)`)
+    db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER, time_updated INTEGER, data TEXT NOT NULL)`)
+    db.prepare(`INSERT INTO session (id, project_id, slug, directory, title, version, time_created) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(sessionId, 'proj-1', 'slug-1', '/home/user/mimoproject', 'MiMo Project', '1.0', 1700000000000)
+    db.close()
+  }
+
+  it('discovers a renamed fork DB via OPENCODE_DATA_DIR + OPENCODE_DB_PREFIX', async () => {
+    const forkDir = join(tmpDir, 'mimocode')
+    await mkdir(forkDir, { recursive: true })
+    const dbPath = join(forkDir, 'mimicode.db')
+    createForkDb(dbPath, 'sess-mimo')
+
+    process.env.OPENCODE_DATA_DIR = forkDir
+    process.env.OPENCODE_DB_PREFIX = 'mimicode'
+
+    const provider = createOpenCodeProvider() // no arg — must read env
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.provider).toBe('opencode')
+    expect(sessions[0]!.path).toBe(`${dbPath}:sess-mimo`)
+  })
+
+  it('default discovery still finds opencode/opencode*.db via XDG_DATA_HOME when override is unset', async () => {
+    const dbPath = createTestDb(tmpDir) // creates tmpDir/opencode/opencode.db
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-open')
+    })
+
+    delete process.env.OPENCODE_DATA_DIR
+    delete process.env.OPENCODE_DB_PREFIX
+    process.env.XDG_DATA_HOME = tmpDir
+
+    const provider = createOpenCodeProvider() // no arg
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(`${dbPath}:sess-open`)
+  })
+
+  it('treats an empty OPENCODE_DB_PREFIX as unset, discovering opencode.db but not arbitrary other DBs', async () => {
+    // Regression for issue #617 follow-up: `OPENCODE_DB_PREFIX=''` (empty
+    // string, not undefined) must fall back to the default 'opencode' prefix.
+    // The default DB (matches 'opencode') carries a real session.
+    const dbPath = createTestDb(tmpDir) // tmpDir/opencode/opencode.db
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-open')
+    })
+
+    // Discriminating fixture: a sibling DB whose name does NOT start with
+    // 'opencode' but which has a VALID opencode schema + session row. Schema
+    // validation cannot exclude it (the schema is valid), so only the prefix
+    // filter can. With the empty-prefix bug, ''.startsWith('') is true for
+    // every filename, so random.db would be swept into discovery alongside
+    // opencode.db (length 2). The default 'opencode' prefix must filter it
+    // out (length 1).
+    createForkDb(join(tmpDir, 'opencode', 'random.db'), 'sess-random')
+
+    process.env.OPENCODE_DB_PREFIX = '' // empty string, NOT undefined
+    delete process.env.OPENCODE_DATA_DIR
+    process.env.XDG_DATA_HOME = tmpDir
+
+    const provider = createOpenCodeProvider() // no arg — reads env
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(`${dbPath}:sess-open`)
+  })
+
+})

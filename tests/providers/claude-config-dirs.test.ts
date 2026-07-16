@@ -1,17 +1,30 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { delimiter as pathDelimiter, join } from 'path'
-import { tmpdir, homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
-import { claude } from '../../src/providers/claude.js'
+import { claude, getDesktopSessionsDir } from '../../src/providers/claude.js'
 import { clearSessionCache, filterProjectsByClaudeConfigSource, parseAllSessions } from '../../src/parser.js'
 
 let tmpRoot: string
 const savedEnv = {
   CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
   CLAUDE_CONFIG_DIRS: process.env['CLAUDE_CONFIG_DIRS'],
+  CODEBURN_DESKTOP_SESSIONS_DIR: process.env['CODEBURN_DESKTOP_SESSIONS_DIR'],
+  APPDATA: process.env['APPDATA'],
   HOME: process.env['HOME'],
+}
+
+function withPlatform<T>(platform: typeof process.platform, run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: platform, enumerable: true, configurable: true })
+  try {
+    return run()
+  } finally {
+    if (descriptor) Object.defineProperty(process, 'platform', descriptor)
+    else delete (process as { platform?: NodeJS.Platform }).platform
+  }
 }
 
 beforeEach(async () => {
@@ -24,6 +37,8 @@ beforeEach(async () => {
   await mkdir(process.env['HOME'], { recursive: true })
   delete process.env['CLAUDE_CONFIG_DIR']
   delete process.env['CLAUDE_CONFIG_DIRS']
+  delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
+  delete process.env['APPDATA']
 })
 
 afterEach(async () => {
@@ -199,6 +214,35 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
     const sources = await claude.discoverSessions()
     expect(sources.some(s => s.path === join(real, 'projects', '-Users-you-app'))).toBe(true)
     expect(sources.every(s => !s.path.startsWith(filePath))).toBe(true)
+  })
+})
+
+describe('claude provider — Desktop sessions dir', () => {
+  it('uses APPDATA as the Windows Claude Desktop sessions root', () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    process.env['APPDATA'] = appData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(join(appData, 'Claude', 'local-agent-mode-sessions'))
+    })
+  })
+
+  it('falls back to the legacy Windows roaming profile path when APPDATA is unset', () => {
+    delete process.env['APPDATA']
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions'))
+    })
+  })
+
+  it('keeps CODEBURN_DESKTOP_SESSIONS_DIR ahead of Windows APPDATA discovery', () => {
+    const override = join(tmpRoot, 'desktop-override')
+    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = override
+    process.env['APPDATA'] = join(tmpRoot, 'roaming-profile')
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(override)
+    })
   })
 })
 

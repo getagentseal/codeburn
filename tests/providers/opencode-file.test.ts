@@ -19,15 +19,18 @@ afterEach(async () => {
 
 type Msg = { id: string; data: Record<string, unknown>; parts?: Array<Record<string, unknown>> }
 
-// Mirrors the OpenCode 1.1+ on-disk layout under <dataDir>/storage/.
+// Mirrors the OpenCode 1.1+ on-disk layout under <dataDir>/storage/. `root`
+// overrides the store root (default `tmpDir/opencode`) so a fork layout that
+// lives outside an `opencode` subdir can be exercised via OPENCODE_DATA_DIR.
 async function writeSession(opts: {
   sessionId?: string
   projectId?: string
   directory?: string
   title?: string
+  root?: string
   messages: Msg[]
 }) {
-  const storage = join(tmpDir, 'opencode', 'storage')
+  const storage = join(opts.root ?? join(tmpDir, 'opencode'), 'storage')
   const sessionId = opts.sessionId ?? 'ses_test1'
   const projectId = opts.projectId ?? 'global'
 
@@ -239,5 +242,43 @@ describe('opencode file-based provider - parsing', () => {
     const calls = await parseAll()
     expect(calls).toHaveLength(2)
     expect(calls.map((c) => c.sessionId).sort()).toEqual(['ses_one', 'ses_two'])
+  })
+})
+
+describe('opencode file-based provider - env override discovery', () => {
+  it('honors OPENCODE_DATA_DIR for a store under storage/session/ and parses its messages', async () => {
+    // A renamed/forked OpenCode-compatible build writes file-based storage
+    // directly under <forkDir>/storage (NOT under an 'opencode' subdir).
+    const forkDir = join(tmpDir, 'mimocode')
+    await writeSession({
+      root: forkDir,
+      sessionId: 'ses_mimo',
+      directory: '/Users/test/mimoproject',
+      messages: [{
+        id: 'msg_a',
+        data: {
+          role: 'assistant', modelID: 'gpt-5.3-codex-spark', cost: 0,
+          tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1 },
+        },
+        parts: [{ type: 'text', text: 'mimo output' }],
+      }],
+    })
+
+    process.env.OPENCODE_DATA_DIR = forkDir
+    const provider = createOpenCodeProvider() // no arg — must read env
+    const sources = await provider.discoverSessions()
+
+    expect(sources).toHaveLength(1)
+    expect(sources[0]!.provider).toBe('opencode')
+    expect(sources[0]!.path).toBe(join(forkDir, 'storage', 'session', 'global', 'ses_mimo.json'))
+
+    const calls: ParsedProviderCall[] = []
+    for (const source of sources) {
+      for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.sessionId).toBe('ses_mimo')
+    expect(calls[0]!.deduplicationKey).toBe('opencode:ses_mimo:msg_a')
   })
 })
