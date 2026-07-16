@@ -129,6 +129,15 @@ describe('claude-fable-5 pricing + name', () => {
   })
 })
 
+describe('kimi-k3 pricing', () => {
+  it.each([
+    ['kimi-k3', 18, 0.30],
+  ])('pins official fallback rates for %s', (model, inputAndOutputCost, cacheReadCost) => {
+    expect(calculateCost(model, 1_000_000, 1_000_000, 0, 0, 0)).toBeCloseTo(inputAndOutputCost, 6)
+    expect(calculateCost(model, 0, 0, 0, 1_000_000, 0)).toBeCloseTo(cacheReadCost, 6)
+  })
+})
+
 describe('builtin aliases - getModelCosts', () => {
   it('resolves anthropic--claude-4.6-opus', () => {
     expect(getModelCosts('anthropic--claude-4.6-opus')).not.toBeNull()
