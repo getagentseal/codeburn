@@ -50,6 +50,10 @@ const bridge = {
   exportData: (format: string, provider: string, outPath: string) => invoke('codeburn:exportData', format, provider, outPath),
   chooseDirectory: () => invoke('codeburn:chooseDirectory'),
   cliStatus: () => invoke('codeburn:cliStatus'),
+  telemetryStatus: () => invoke('codeburn:telemetryStatus'),
+  setTelemetryEnabled: (enabled: boolean) => invoke('codeburn:telemetrySetEnabled', enabled),
+  completeOnboarding: (enabled: boolean) => invoke('codeburn:telemetryOnboarded', enabled),
+  telemetryTrack: (name: string, props?: Record<string, unknown>) => invoke('codeburn:telemetryTrack', name, props),
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   // Cold-start scan progress (main → renderer). Returns an unsubscribe fn.
   onProgress: (cb: (event: unknown) => void) => {

@@ -15,6 +15,7 @@ import {
   type CachedTurn,
   type ProviderSection,
   type SessionCache,
+  beginColdHydration,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
   DURABLE_PROVIDER_NAMES,
@@ -2635,9 +2636,25 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
 
-  const diskCache = await loadCache()
+  let diskCache = await loadCache()
   await cleanupOrphanedTempFiles()
 
+  // Cold-hydration coordination (advisory, cross-process). Engages only when the
+  // on-disk cache is empty — a genuine full parse. If another live process is
+  // already hydrating, wait for it, then reload the now-warm cache instead of
+  // double-parsing (kills the menubar-vs-desktop cache clobber). Never a
+  // correctness gate: on any doubt it proceeds unlocked.
+  const hydration = await beginColdHydration(Object.keys(diskCache.providers).length === 0)
+  if (hydration.waited) diskCache = await loadCache()
+
+  try {
+    return await runParse(key, diskCache, dateRange, providerFilter)
+  } finally {
+    await hydration.release()
+  }
+}
+
+async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(providerFilter)

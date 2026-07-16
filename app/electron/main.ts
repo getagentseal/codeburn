@@ -3,6 +3,13 @@ import path from 'node:path'
 
 import { CliError, killAll, resolveCodeburnPath, spawnCli, spawnCliAction, type ActionResult } from './cli'
 import { getQuota, sanitizeError } from './quota'
+import { Telemetry } from './telemetry'
+
+// Initialized in bootstrap() once Electron paths exist; stays null under tests.
+let telemetryInstance: Telemetry | null = null
+
+/** The slice of Telemetry the bridge handlers use — injectable for tests. */
+export type TelemetryBridge = Pick<Telemetry, 'status' | 'setEnabled' | 'completeOnboarding' | 'track'>
 
 // Result envelope: handlers never throw across IPC so the structured error
 // `kind` survives contextBridge serialization. preload.ts unwraps it.
@@ -127,6 +134,8 @@ type Deps = {
   getQuota: typeof getQuota
   /** Forward cold-start scan-progress events to the renderer splash. */
   emitProgress?: (event: unknown) => void
+  /** Consent-gated anonymous telemetry; absent under tests unless injected. */
+  telemetry?: TelemetryBridge | null
 }
 
 type Handler = (...args: any[]) => Promise<Envelope>
@@ -136,8 +145,9 @@ type Handler = (...args: any[]) => Promise<Envelope>
  * shell) and returns a result envelope. Pure + injectable so the wiring is
  * unit-testable without launching Electron.
  */
-export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress }): Record<string, Handler> {
+export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance }): Record<string, Handler> {
   const emitProgress = deps.emitProgress ?? (() => {})
+  const telemetry = deps.telemetry ?? null
   // Flips true after the first overview fetch succeeds. Until then, every
   // overview fetch runs cold (long timeout + progress streaming); the shared
   // spawnCli coalescing means concurrent same-arg re-polls join one child.
@@ -147,7 +157,9 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     try {
       return { ok: true, value: await deps.spawnCli(build(...args)) }
     } catch (err) {
-      return { ok: false, error: toEnvelopeError(err) }
+      const error = toEnvelopeError(err)
+      telemetry?.track('cli_error', { kind: error.kind })
+      return { ok: false, error }
     }
   }
 
@@ -160,6 +172,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   ]
 
   const getOverview: Handler = async (period: string, provider: string, range?: DateRange, configSource?: string | null) => {
+    const startedAt = Date.now()
     try {
       const args = buildOverviewArgs(period, provider, range, configSource)
       if (overviewWarmed) return { ok: true, value: await deps.spawnCli(args) }
@@ -170,9 +183,13 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       })
       overviewWarmed = true
       emitProgress({ kind: 'done' })
+      telemetry?.track('cold_start', { ms: Date.now() - startedAt, timedOut: false })
       return { ok: true, value }
     } catch (err) {
-      return { ok: false, error: toEnvelopeError(err) }
+      const error = toEnvelopeError(err)
+      if (!overviewWarmed) telemetry?.track('cold_start', { ms: Date.now() - startedAt, timedOut: error.kind === 'timeout' })
+      telemetry?.track('cli_error', { kind: error.kind })
+      return { ok: false, error }
     }
   }
   const runAction = (build: (...args: any[]) => string[]): Handler => async (...args: any[]) => {
@@ -238,6 +255,15 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:cliStatus': async () => {
       const p = deps.resolveCodeburnPath()
       return { ok: true, value: { found: p !== null, path: p } }
+    },
+    // Telemetry consent + events. Value is null when telemetry is unavailable
+    // (tests, or init failure) — the renderer treats null as "no onboarding".
+    'codeburn:telemetryStatus': async () => ({ ok: true, value: telemetry ? telemetry.status() : null }),
+    'codeburn:telemetrySetEnabled': async (enabled?: boolean) => ({ ok: true, value: telemetry ? telemetry.setEnabled(Boolean(enabled)) : null }),
+    'codeburn:telemetryOnboarded': async (enabled?: boolean) => ({ ok: true, value: telemetry ? telemetry.completeOnboarding(Boolean(enabled)) : null }),
+    'codeburn:telemetryTrack': async (name?: string, props?: unknown) => {
+      telemetry?.track(String(name ?? ''), props)
+      return { ok: true, value: true }
     },
   }
 }
@@ -400,9 +426,31 @@ function bootstrap(): void {
     win.focus()
   })
 
-  app.on('before-quit', () => killAll())
+  app.on('before-quit', () => {
+    killAll()
+    // Best-effort final beat: session duration + whatever is still queued.
+    telemetryInstance?.trackClose()
+    void telemetryInstance?.flush()
+  })
 
   void app.whenReady().then(() => {
+    // Consent-gated anonymous telemetry (desktop only). Nothing transmits until
+    // the onboarding consent screen is completed and the toggle is on; EU/EEA/
+    // UK/CH installs default the toggle off. Dev builds never send.
+    try {
+      telemetryInstance = new Telemetry({
+        stateDir: app.getPath('userData'),
+        country: app.getLocaleCountryCode() || null,
+        isPackaged: app.isPackaged,
+        appVersion: app.getVersion(),
+      })
+      // completeOnboarding tracks the first app_open itself; only already-
+      // onboarded installs record subsequent opens here.
+      if (telemetryInstance.status().onboarded) telemetryInstance.track('app_open', {})
+      setInterval(() => { void telemetryInstance?.flush() }, 5 * 60_000)
+    } catch (err) {
+      console.error('telemetry init failed (continuing without):', err)
+    }
     registerHandlers()
     installApplicationMenu()
     createWindow()

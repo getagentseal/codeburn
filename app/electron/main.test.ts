@@ -60,6 +60,10 @@ const CHANNELS = [
   'codeburn:resetPlan',
   'codeburn:exportData',
   'codeburn:cliStatus',
+  'codeburn:telemetryStatus',
+  'codeburn:telemetrySetEnabled',
+  'codeburn:telemetryOnboarded',
+  'codeburn:telemetryTrack',
 ] as const
 
 const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = [
@@ -318,5 +322,63 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
 
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'providers', providers: ['claude', 'codex'] })
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'tick', provider: 'claude', done: 5, total: 10 })
+  })
+})
+
+describe('createBridgeHandlers (telemetry wiring)', () => {
+  const fakeTelemetry = () => ({
+    status: vi.fn(() => ({ installId: 'id-1', country: 'US', enabled: true, defaultEnabled: true, onboarded: false })),
+    setEnabled: vi.fn((enabled: boolean) => ({ installId: 'id-2', country: 'US', enabled, defaultEnabled: true, onboarded: false })),
+    completeOnboarding: vi.fn((enabled: boolean) => ({ installId: 'id-1', country: 'US', enabled, defaultEnabled: true, onboarded: true })),
+    track: vi.fn(),
+  })
+  const deps = (telemetry: ReturnType<typeof fakeTelemetry> | null) => ({
+    spawnCli: vi.fn(async () => ({ current: { cost: 1 } })),
+    spawnCliAction: vi.fn(),
+    resolveCodeburnPath: () => '/bin/codeburn',
+    getQuota: vi.fn(async () => []),
+    emitProgress: vi.fn(),
+    telemetry,
+  })
+
+  it('exposes status/consent/track channels and forwards to the telemetry service', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers(deps(telemetry))
+
+    expect(await handlers['codeburn:telemetryStatus']!()).toMatchObject({ ok: true, value: { installId: 'id-1', onboarded: false } })
+    expect(await handlers['codeburn:telemetrySetEnabled']!(false)).toMatchObject({ ok: true, value: { enabled: false } })
+    expect(telemetry.setEnabled).toHaveBeenCalledWith(false)
+    expect(await handlers['codeburn:telemetryOnboarded']!(true)).toMatchObject({ ok: true, value: { onboarded: true } })
+    expect(telemetry.completeOnboarding).toHaveBeenCalledWith(true)
+    await handlers['codeburn:telemetryTrack']!('section_view', { section: 'spend' })
+    expect(telemetry.track).toHaveBeenCalledWith('section_view', { section: 'spend' })
+  })
+
+  it('returns null (not an error) when telemetry is unavailable', async () => {
+    const handlers = createBridgeHandlers(deps(null))
+    expect(await handlers['codeburn:telemetryStatus']!()).toEqual({ ok: true, value: null })
+    expect(await handlers['codeburn:telemetryTrack']!('section_view', {})).toEqual({ ok: true, value: true })
+  })
+
+  it('tracks cold_start once on the first overview success, with duration', async () => {
+    const telemetry = fakeTelemetry()
+    const handlers = createBridgeHandlers(deps(telemetry))
+    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!('30days', 'all')
+    const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
+    expect(coldStarts.length).toBe(1)
+    expect(coldStarts[0]![1]).toMatchObject({ timedOut: false })
+    expect(typeof (coldStarts[0]![1] as { ms: number }).ms).toBe('number')
+  })
+
+  it('tracks cli_error kinds from failing handlers', async () => {
+    const telemetry = fakeTelemetry()
+    const failing = {
+      ...deps(telemetry),
+      spawnCli: vi.fn(async () => { throw new CliError('timeout', 'timed out') }),
+    }
+    const handlers = createBridgeHandlers(failing)
+    await handlers['codeburn:getSessions']!('week', 'all')
+    expect(telemetry.track).toHaveBeenCalledWith('cli_error', { kind: 'timeout' })
   })
 })

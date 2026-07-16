@@ -61,7 +61,7 @@ export function SpendContent({
   const flow = usePolled<SpendFlow>(
     () => range ? codeburn.getSpendFlow(period, provider, range) : codeburn.getSpendFlow(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `spendflow|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
 
   if (!overview.data) {

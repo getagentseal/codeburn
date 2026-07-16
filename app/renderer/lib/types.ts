@@ -32,6 +32,8 @@ export type QuotaProvider = {
   details: QuotaWindow[]
   planLabel: string | null
   footerLines: string[]
+  /** True when the provider is in a 429 backoff window (upstream rate limit). */
+  rateLimited?: boolean
 }
 
 // ————— src/menubar-json.ts —————
@@ -549,6 +551,16 @@ export type PriceRates = { input?: number; output?: number; cacheRead?: number; 
 
 // ————— IPC surface (preload contextBridge → window.codeburn) —————
 
+/** Anonymous-telemetry consent state (app/electron/telemetry.ts). Null when
+ * telemetry is unavailable in the main process. */
+export type TelemetryStatus = {
+  installId: string
+  country: string | null
+  enabled: boolean
+  defaultEnabled: boolean
+  onboarded: boolean
+}
+
 /** Cold-start scan progress streamed from the CLI warmup (src/parser.ts). */
 export type ScanProgressEvent =
   | { kind: 'providers'; providers: string[] }
@@ -591,5 +603,9 @@ export interface CodeburnBridge {
   exportData(format: string, provider: string, outPath: string): Promise<ActionResult>
   chooseDirectory(): Promise<string | null>
   cliStatus(): Promise<{ found: boolean; path: string | null; error?: string }>
+  telemetryStatus(): Promise<TelemetryStatus | null>
+  setTelemetryEnabled(enabled: boolean): Promise<TelemetryStatus | null>
+  completeOnboarding(enabled: boolean): Promise<TelemetryStatus | null>
+  telemetryTrack(name: string, props?: Record<string, unknown>): Promise<boolean>
   openExternal(url: string): Promise<void>
 }

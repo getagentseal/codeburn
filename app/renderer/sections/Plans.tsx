@@ -30,6 +30,13 @@ function fmtPct(n: number): string {
   return Number.isInteger(n) ? `${n}%` : `${n.toFixed(1)}%`
 }
 
+/** Honest copy for a 429 backoff window (the upstream quota endpoint rate
+ *  limited us), replacing the generic "waiting" note. */
+export function rateLimitedNote(provider: QuotaProvider['provider']): string {
+  const owner = provider === 'claude' ? 'Anthropic' : 'OpenAI'
+  return `${owner} rate limited the quota endpoint, retrying in a few minutes`
+}
+
 function cycleEndDate(plan: JsonPlanSummary): Date | null {
   const date = new Date(plan.periodEnd)
   if (Number.isNaN(date.getTime())) return null
@@ -63,7 +70,7 @@ function manualPlanSummaries(status: StatusJson): JsonPlanSummary[] {
 }
 
 export function Plans({ period, refreshToken = 0, onNavigate, ready = true }: { period: Period; refreshToken?: number; onNavigate?: (section: Section, pane?: SettingsPane) => void; ready?: boolean }) {
-  // Force a fresh fetch (bypassing QuotaService's 2-min cache, and its keychain
+  // Force a fresh fetch (bypassing QuotaService's 5-min cache, and its keychain
   // guard) when the user hits ⌘R or clicks Refresh in the Connect affordance;
   // the steady 30s poll keeps serving cached quota.
   const [reconnectNonce, setReconnectNonce] = useState(0)
@@ -165,6 +172,7 @@ function QuotaContent({ quota, onReconnect }: { quota: QuotaProvider; onReconnec
   }
   if (quota.connection === 'loading') return <p className="quota-connection-note">Loading quota…</p>
   if (quota.connection === 'stale' || quota.connection === 'transientFailure') {
+    if (quota.rateLimited) return <p className="quota-connection-note">{rateLimitedNote(quota.provider)}</p>
     return <p className="quota-connection-note">waiting on the CLI…</p>
   }
   if (quota.connection === 'terminalFailure') {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { getDateRange } from '../src/cli-date.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
+import { sessionCachePath } from '../src/session-cache.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import type { DateRange } from '../src/types.js'
 
@@ -39,7 +40,7 @@ function createGenMetadataDb(dbPath: string, fixture: Fixture): void {
 }
 
 async function cachedAntigravityTurns(cacheDir: string, dbPath: string): Promise<Array<{ timestamp: string }>> {
-  const saved = JSON.parse(await readFile(join(cacheDir, 'session-cache.json'), 'utf-8')) as {
+  const saved = JSON.parse(await readFile(sessionCachePath(), 'utf-8')) as {
     providers: Record<string, { files: Record<string, { turns: Array<{ timestamp: string }> }> }>
   }
   return saved.providers['antigravity']?.files[dbPath]?.turns ?? []

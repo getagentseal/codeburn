@@ -91,7 +91,16 @@ export type SessionCache = {
 // never change. Bump forces a one-time re-parse so metered credit costs land.
 export const CACHE_VERSION = 5
 
-const CACHE_FILE = 'session-cache.json'
+// The cache filename is version-suffixed so different binaries (e.g. an old
+// launchd menubar on a prior release and a newer desktop app) each own a
+// distinct file and can never clobber each other's incompatible schema. Bumping
+// CACHE_VERSION automatically mints a fresh filename, superseding the migration
+// dance the legacy unversioned file used to need.
+const CACHE_FILE = `session-cache.v${CACHE_VERSION}.json`
+// The pre-versioning filename. Never written or deleted anymore — old binaries
+// still own it. On first load we adopt-copy it once (see loadCache) when the
+// versioned file is absent and the legacy file's version matches ours.
+const LEGACY_CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
@@ -153,6 +162,15 @@ function getCacheDir(): string {
 
 function getCachePath(): string {
   return join(getCacheDir(), CACHE_FILE)
+}
+
+function getLegacyCachePath(): string {
+  return join(getCacheDir(), LEGACY_CACHE_FILE)
+}
+
+/** Absolute path of the active (version-suffixed) session cache file. */
+export function sessionCachePath(): string {
+  return getCachePath()
 }
 
 // ── Env Fingerprint ────────────────────────────────────────────────────
@@ -281,6 +299,22 @@ export async function loadCache(): Promise<SessionCache> {
     const raw = await readFile(getCachePath(), 'utf-8')
     const parsed = JSON.parse(raw)
     if (!validateCache(parsed)) return emptyCache()
+    return parsed
+  } catch {
+    // Versioned file absent/unreadable: try a one-time adoption of the legacy
+    // unversioned file. validateCache requires version === CACHE_VERSION, so a
+    // different-version legacy file is ignored (left intact). We copy it into the
+    // versioned file once via saveCache; the legacy file is never modified.
+    return adoptLegacyCache()
+  }
+}
+
+async function adoptLegacyCache(): Promise<SessionCache> {
+  try {
+    const raw = await readFile(getLegacyCachePath(), 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (!validateCache(parsed)) return emptyCache()
+    await saveCache(parsed).catch(() => {})
     return parsed
   } catch {
     return emptyCache()
@@ -420,7 +454,9 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
     const entries = await readdir(dir)
     const now = Date.now()
 
-    const prefix = 'session-cache.json.'
+    // Only our own (versioned) temp files. Legacy `session-cache.json.*.tmp`
+    // temps belong to old binaries mid-write and must not be touched.
+    const prefix = `${CACHE_FILE}.`
     for (const entry of entries) {
       if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue
       try {
@@ -432,4 +468,110 @@ export async function cleanupOrphanedTempFiles(): Promise<void> {
       } catch {}
     }
   } catch {}
+}
+
+// ── Hydration Lock ─────────────────────────────────────────────────────
+//
+// Advisory, cross-process coordination for the expensive cold hydration. When
+// two live processes (e.g. an old launchd menubar and the desktop app) both
+// cold-start against the same cache dir, without this they each parse full
+// history and race their writes. The first to arrive creates the lock and
+// hydrates; a second live process waits for release, then reads the now-warm
+// cache instead of re-parsing. It is strictly an optimization: on any
+// uncertainty we proceed with the parse, so it can never wedge a cold start.
+
+const HYDRATION_LOCK_FILE = 'hydrating.lock'
+const LOCK_FRESH_MS = 15 * 60_000
+const LOCK_WAIT_MAX_MS = 10 * 60_000
+const LOCK_POLL_MS = 250
+
+type LockRecord = { pid: number; at: number }
+export type HydrationHandle = { waited: boolean; release: () => Promise<void> }
+
+const NOOP_HANDLE: HydrationHandle = { waited: false, release: async () => {} }
+
+function lockPath(): string {
+  return join(getCacheDir(), HYDRATION_LOCK_FILE)
+}
+
+// Our own pid never counts as a foreign holder: a same-process lock is either
+// re-entrant or leaked, and waiting on ourselves risks a self-hang. Cross-process
+// coordination is the only thing this lock is for. EPERM means the pid exists but
+// belongs to another user — still alive.
+function pidLooksAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false
+  try { process.kill(pid, 0); return true }
+  catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+async function readLockRecord(): Promise<LockRecord | null> {
+  try {
+    const parsed = JSON.parse(await readFile(lockPath(), 'utf-8')) as Partial<LockRecord>
+    if (typeof parsed?.pid === 'number' && typeof parsed?.at === 'number') return { pid: parsed.pid, at: parsed.at }
+    return null
+  } catch { return null }
+}
+
+async function writeOurLock(): Promise<boolean> {
+  try {
+    const dir = getCacheDir()
+    if (!existsSync(dir)) await mkdir(dir, { recursive: true })
+    const handle = await open(lockPath(), 'wx', 0o600)
+    try { await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }), { encoding: 'utf-8' }) }
+    finally { await handle.close() }
+    return true
+  } catch { return false }
+}
+
+async function removeOurLock(): Promise<void> {
+  try {
+    const cur = await readLockRecord()
+    if (cur && cur.pid === process.pid) await unlink(lockPath())
+  } catch { /* best-effort; a leaked lock is reclaimed as stale next cold start */ }
+}
+
+const releaseHandle: HydrationHandle = { waited: false, release: removeOurLock }
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => { setTimeout(resolve, ms) })
+}
+
+/**
+ * Coordinate a cold hydration. Pass `isCold = true` only when the on-disk cache
+ * is empty (a genuine full parse is imminent). Returns a handle:
+ *  - `waited: true`  → another live process was hydrating; we waited for it to
+ *    finish (or timed out). The caller should RELOAD the cache and let its normal
+ *    reconcile serve the now-warm entries instead of re-parsing. `release` is a
+ *    no-op (we never held the lock).
+ *  - `waited: false` with a real `release` → we hold the lock; hydrate, then call
+ *    `release()` in a finally.
+ *  - `waited: false` with a no-op `release` → proceed with the parse unlocked
+ *    (not cold, or the lock state was uncertain).
+ */
+export async function beginColdHydration(isCold: boolean): Promise<HydrationHandle> {
+  if (!isCold) return NOOP_HANDLE
+  try {
+    if (await writeOurLock()) return releaseHandle
+    const existing = await readLockRecord()
+    const fresh = existing !== null && Date.now() - existing.at < LOCK_FRESH_MS
+    if (existing && fresh && pidLooksAlive(existing.pid)) {
+      // Another live process owns a fresh lock: wait for it to release, go stale,
+      // or die, then let the caller reload the warm cache.
+      const deadline = Date.now() + LOCK_WAIT_MAX_MS
+      while (Date.now() < deadline) {
+        await sleep(LOCK_POLL_MS)
+        const cur = await readLockRecord()
+        if (!cur) break
+        if (Date.now() - cur.at >= LOCK_FRESH_MS) break
+        if (!pidLooksAlive(cur.pid)) break
+      }
+      return { waited: true, release: async () => {} }
+    }
+    // Stale, dead-pid, or unreadable lock: replace it and take over.
+    try { await unlink(lockPath()) } catch { /* another process may have; fine */ }
+    if (await writeOurLock()) return releaseHandle
+    return NOOP_HANDLE
+  } catch {
+    return NOOP_HANDLE
+  }
 }

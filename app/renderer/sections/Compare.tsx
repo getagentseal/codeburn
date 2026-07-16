@@ -44,7 +44,7 @@ export function Compare({
   const models = usePolled<ModelStats[]>(
     () => codeburn.getCompareModels(period, provider),
     [period, provider, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `comparemodels|${period}|${provider}` },
   )
   const [modelA, setModelA] = useState<string | null>(null)
   const [modelB, setModelB] = useState<string | null>(null)
@@ -136,6 +136,7 @@ function CompareReport({
   const report = usePolled<CompareJsonReport>(
     () => codeburn.getCompare(period, provider, modelA, modelB),
     [period, provider, modelA, modelB, refreshToken],
+    { memoKey: `compare|${period}|${provider}|${modelA}|${modelB}` },
   )
 
   useEffect(() => {

@@ -84,7 +84,7 @@ export function Sessions({
   const report = usePolled<SessionRow[]>(
     () => range ? codeburn.getSessions(period, provider, range) : codeburn.getSessions(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `sessions|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
   const rows = report.data ?? []
   const q = query.trim().toLowerCase()

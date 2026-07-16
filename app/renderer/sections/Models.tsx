@@ -95,7 +95,7 @@ function ModelsUsage({
   const report = usePolled<ModelReportRow[]>(
     () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
     [period, provider, byTask, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `models|${period}|${provider}|${byTask}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
 
   if (!report.data) {
@@ -141,7 +141,7 @@ function AuditLens({
   const report = usePolled<AuditRow[]>(
     () => range ? codeburn.getAudit(period, provider, range) : codeburn.getAudit(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `audit|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
 
   if (!report.data) {

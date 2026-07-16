@@ -28,7 +28,9 @@ const defaultDeps: QuotaDeps = {
   readFile: readSecureFile,
   writeFile: atomicWriteSecureFile,
   now: Date.now,
-  refreshMs: 2 * 60_000,
+  // Politeness floor: quota stays gentle regardless of the app refresh cadence.
+  // A user-initiated force refresh still bypasses this (invalidate()).
+  refreshMs: 5 * 60_000,
 }
 
 function unavailable(provider: ProviderName, connection: QuotaProvider['connection']): QuotaProvider {
@@ -89,11 +91,11 @@ export class QuotaService {
         // poll; keep showing the live connection rather than flapping to
         // disconnected. A forced refresh re-reads the keychain and reveals truth.
         if (!allowKeychain && (next.connection === 'disconnected' || next.connection === 'accessDenied')) return previous
-        if (next.connection === 'transientFailure') return { ...previous, connection: 'transientFailure' }
+        if (next.connection === 'transientFailure') return { ...previous, connection: 'transientFailure', rateLimited: next.rateLimited }
         return next
       }
       const until = blocked[provider] ? Date.parse(blocked[provider]!) : NaN
-      if (Number.isFinite(until) && until > this.deps.now()) return retainOnFailure(unavailable(provider, 'transientFailure'))
+      if (Number.isFinite(until) && until > this.deps.now()) return retainOnFailure({ ...unavailable(provider, 'transientFailure'), rateLimited: true })
       const generation = this.generations[provider]
       const controller = new AbortController()
       this.controllers[provider] = controller
@@ -104,6 +106,8 @@ export class QuotaService {
       if (result.retryAfterSeconds !== undefined) {
         blocked[provider] = new Date(this.deps.now() + result.retryAfterSeconds * 1000).toISOString()
         await this.writeBlocked(blocked)
+        if (this.controllers[provider] === controller) this.controllers[provider] = undefined
+        return retainOnFailure({ ...result.quota, rateLimited: true })
       } else if (blocked[provider]) {
         delete blocked[provider]
         await this.writeBlocked(blocked)

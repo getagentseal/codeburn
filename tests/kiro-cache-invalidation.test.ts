@@ -25,6 +25,7 @@ import {
   CACHE_VERSION,
   computeEnvFingerprint,
   fingerprintFile,
+  sessionCachePath,
   type SessionCache,
 } from '../src/session-cache.js'
 
@@ -98,7 +99,7 @@ async function seedCache(execPath: string, envFingerprint: string): Promise<void
     },
   }
   await mkdir(CACHE_DIR, { recursive: true })
-  await writeFile(join(CACHE_DIR, 'session-cache.json'), JSON.stringify(cache))
+  await writeFile(sessionCachePath(), JSON.stringify(cache))
 }
 
 async function parseKiroCalls() {

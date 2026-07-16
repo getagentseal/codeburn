@@ -41,12 +41,12 @@ export function OptimizeContent({
   const optimizeReport = usePolled<OptimizeJsonReport>(
     () => range ? codeburn.getOptimizeReport(period, provider, range) : codeburn.getOptimizeReport(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `optimize|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
   const yieldReport = usePolled<YieldJsonReport>(
     () => range ? codeburn.getYield(period, provider, range) : codeburn.getYield(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready },
+    { enabled: ready, memoKey: `optyield|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
   )
   const [tab, setTab] = useState<OptimizeTab>('waste')
 

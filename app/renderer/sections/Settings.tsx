@@ -12,9 +12,11 @@ import { readDailyBudget } from '../lib/budget'
 import { formatConverted, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { motionClass } from '../lib/motion'
+import { REFRESH_OPTIONS, useRefreshCadence } from '../lib/refreshCadence'
 import { showToast } from '../lib/toast'
 import { ToastHost } from '../components/ToastHost'
-import type { ActionResult, AliasRow, ClaudeConfigSelector, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, QuotaProvider, ShareStatus, StatusJson } from '../lib/types'
+import { rateLimitedNote } from './Plans'
+import type { ActionResult, AliasRow, ClaudeConfigSelector, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, QuotaProvider, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
 
 export type SettingsPane = 'general' | 'providers' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy'
 type Pane = SettingsPane
@@ -132,6 +134,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource }
     return saved === 'light' || saved === 'dark' ? saved : 'system'
   })
   const [defaultPeriod, setDefaultPeriod] = useState(() => readSetting('codeburn.defaultPeriod') ?? 'today')
+  const cadence = useRefreshCadence()
   const [budgetKind, setBudgetKind] = useState<'off' | 'usd' | 'tokens'>(() => readDailyBudget()?.kind ?? 'off')
   const [budgetInput, setBudgetInput] = useState(() => { const budget = readDailyBudget(); return budget ? String(budget.value) : '' })
   const [budgetError, setBudgetError] = useState('')
@@ -190,6 +193,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource }
             <button className="set-text-button" onClick={() => void codeburn.resetCurrency().then(finishCurrency)}>Reset to USD</button>
           </span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-period">Default period<small>Applied on next launch.</small></label><span className="r"><Dropdown id="settings-period" ariaLabel="Default period" value={defaultPeriod} options={[{ value: 'today', label: 'Today' }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: 'Month' }, { value: 'all', label: 'All' }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value) }} width={92} /></span></div>
+          <div className="about-row"><label className="tx" htmlFor="settings-refresh">Refresh every<small>How often data auto-refreshes. Manual updates only on ⌘R.</small></label><span className="r"><Dropdown id="settings-refresh" ariaLabel="Refresh every" value={cadence.value} options={REFRESH_OPTIONS.map(option => ({ value: option.value, label: option.label }))} onChange={cadence.setValue} width={124} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-budget">Daily budget<small>Warns at 80%, alerts at 100%.</small></label><span className="r"><Dropdown id="settings-budget" ariaLabel="Daily budget" value={budgetKind} options={[{ value: 'off', label: 'Off' }, { value: 'usd', label: 'USD amount' }, { value: 'tokens', label: 'Tokens' }]} onChange={value => { const kind = value as 'off' | 'usd' | 'tokens'; setBudgetKind(kind); persistBudget(kind, budgetInput) }} width={120} />{budgetKind !== 'off' && <input className="set-input" type="text" inputMode="decimal" aria-label="Daily budget amount" placeholder={budgetKind === 'usd' ? 'USD' : 'tokens'} value={budgetInput} onChange={event => { setBudgetInput(event.target.value); persistBudget(budgetKind, event.target.value) }} style={{ width: 90 }} />}</span></div>
           {budgetError && <p className="set-action-msg error">{budgetError}</p>}
         </div>
@@ -313,6 +317,8 @@ function DetectedRow({ quota, onReconnect }: { quota: QuotaProvider; onReconnect
     <span className="tx">{name}</span>
     {quota.connection === 'disconnected' || quota.connection === 'accessDenied'
       ? <div className="r set-status"><ConnectAffordance provider={quota.provider} connection={quota.connection} onRefresh={onReconnect} /></div>
+      : quota.rateLimited
+      ? <span className="r set-status"><span className="set-dot" />{rateLimitedNote(quota.provider)}</span>
       : <span className="r set-status"><span className="set-dot ok" />{quota.planLabel ?? 'Connected'}</span>}
   </div>
 }
@@ -416,9 +422,26 @@ function DevicesPane({ period, refreshToken }: { period: Period; refreshToken: n
 function PrivacyPane() {
   return <section className="set-p on"><div><h3 className="set-h">Privacy &amp; data</h3><p className="set-sub">What codeburn does, and does not do, with your data.</p></div><div className="card">
     <PrivacyClaim title="Local-only" detail="Everything runs on your machine. Data is read from local session files." icon={<><rect x="4.5" y="10" width="15" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>} />
-    <PrivacyClaim title="No telemetry" detail="codeburn does not collect or send telemetry." icon={<><path d="M2 12s3.5-7 10-7 10 7 10 7" /><line x1="3" y1="3" x2="21" y2="21" /></>} />
     <PrivacyClaim title="No API keys" detail="Usage is detected from local files; no provider API keys are required." icon={<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />} />
+    <TelemetryClaim />
   </div></section>
+}
+
+/** The anonymous-telemetry consent toggle, mirroring the onboarding decision. */
+function TelemetryClaim() {
+  const [status, setStatus] = useState<TelemetryStatus | null>(null)
+  useEffect(() => {
+    if (typeof codeburn.telemetryStatus !== 'function') return
+    codeburn.telemetryStatus().then(value => setStatus(value)).catch(() => {})
+  }, [])
+  if (!status) return null
+  const toggle = () => {
+    if (typeof codeburn.setTelemetryEnabled !== 'function') return
+    codeburn.setTelemetryEnabled(!status.enabled).then(value => setStatus(value)).catch(() => {})
+  }
+  return <div className="set-claim"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19v-5M9 19V9M14 19v-8M19 19V5" /></svg><div style={{ flex: 1 }}><div className="set-claim-t">Anonymous telemetry</div><div className="set-claim-d">Optional usage statistics: model mix, task success, performance and errors. Never prompts, code or anything identifying.</div></div>
+    <button type="button" role="switch" aria-checked={status.enabled} aria-label="Anonymous telemetry" className={status.enabled ? 'switch on' : 'switch'} onClick={toggle}><span className="switch-knob" /></button>
+  </div>
 }
 
 function PrivacyClaim({ title, detail, icon }: { title: string; detail: string; icon: React.ReactNode }) {

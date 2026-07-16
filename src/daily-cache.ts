@@ -28,7 +28,13 @@ import type { DateRange, ProjectSummary } from './types.js'
 // user changes their `localModelSavings` mapping.
 export const DAILY_CACHE_VERSION = 12
 const MIN_SUPPORTED_VERSION = 12
-const DAILY_CACHE_FILENAME = 'daily-cache.json'
+// Version-suffixed so different binaries each own a distinct file and never
+// clobber an incompatible schema. Bumping the version mints a fresh filename.
+const DAILY_CACHE_FILENAME = `daily-cache.v${DAILY_CACHE_VERSION}.json`
+// The pre-versioning filename. Never written or deleted anymore (old binaries
+// own it). Adopt-copied once on first load when the versioned file is absent and
+// the legacy file's version matches ours; a different version is ignored.
+const LEGACY_DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
   date: string
@@ -74,6 +80,15 @@ function getCachePath(): string {
   return join(getCacheDir(), DAILY_CACHE_FILENAME)
 }
 
+function getLegacyCachePath(): string {
+  return join(getCacheDir(), LEGACY_DAILY_CACHE_FILENAME)
+}
+
+/** Absolute path of the active (version-suffixed) daily cache file. */
+export function dailyCachePath(): string {
+  return getCachePath()
+}
+
 export function emptyCache(savingsConfigHash = ''): DailyCache {
   return { version: DAILY_CACHE_VERSION, savingsConfigHash, lastComputedDate: null, days: [] }
 }
@@ -105,31 +120,46 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
   }))
 }
 
-async function backupOldCache(path: string, version: number): Promise<void> {
-  const backupPath = `${path}.v${version}.bak`
-  try { await rename(path, backupPath) } catch { /* best-effort */ }
+function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; days: Record<string, unknown>[] }): DailyCache {
+  return {
+    version: DAILY_CACHE_VERSION,
+    savingsConfigHash: parsed.savingsConfigHash ?? '',
+    lastComputedDate: parsed.lastComputedDate,
+    days: migrateDays(parsed.days),
+  }
 }
 
 export async function loadDailyCache(): Promise<DailyCache> {
   const path = getCachePath()
-  if (!existsSync(path)) return emptyCache()
-  try {
-    const raw = await readFile(path, 'utf-8')
-    const parsed: unknown = JSON.parse(raw)
-    if (isMigratableCache(parsed)) {
-      const migrated: DailyCache = {
-        version: DAILY_CACHE_VERSION,
-        savingsConfigHash: parsed.savingsConfigHash ?? '',
-        lastComputedDate: parsed.lastComputedDate,
-        days: migrateDays(parsed.days),
+  if (existsSync(path)) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+      if (isMigratableCache(parsed)) {
+        const migrated = migratedFrom(parsed)
+        if (parsed.version < DAILY_CACHE_VERSION) await saveDailyCache(migrated).catch(() => {})
+        return migrated
       }
-      if (parsed.version < DAILY_CACHE_VERSION) {
-        await saveDailyCache(migrated).catch(() => {})
-      }
-      return migrated
+      return emptyCache()
+    } catch {
+      return emptyCache()
     }
-    const oldVersion = (parsed as { version?: number })?.version
-    if (typeof oldVersion === 'number') await backupOldCache(path, oldVersion)
+  }
+  // Versioned file absent: adopt the legacy unversioned file once, only when its
+  // version matches ours. A different-version legacy file is ignored and left
+  // intact — old binaries still own it, so we never write or delete it.
+  return adoptLegacyDailyCache()
+}
+
+async function adoptLegacyDailyCache(): Promise<DailyCache> {
+  const legacy = getLegacyCachePath()
+  if (!existsSync(legacy)) return emptyCache()
+  try {
+    const parsed: unknown = JSON.parse(await readFile(legacy, 'utf-8'))
+    if (isMigratableCache(parsed) && parsed.version === DAILY_CACHE_VERSION) {
+      const adopted = migratedFrom(parsed)
+      await saveDailyCache(adopted).catch(() => {})
+      return adopted
+    }
     return emptyCache()
   } catch {
     return emptyCache()

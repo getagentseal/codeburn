@@ -14,7 +14,7 @@ import { createRequire } from 'node:module'
 
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
-import { loadCache, saveCache } from '../src/session-cache.js'
+import { loadCache, saveCache, sessionCachePath } from '../src/session-cache.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
 
 // ── Synthetic provider state ───────────────────────────────────────────────
@@ -439,7 +439,7 @@ describe('(f) durable orphans survive a parse-version bump', () => {
     // Simulate the fingerprint a PREVIOUS release computed (any mismatching
     // value takes the same code path as a real parse-version bump).
     const { readFile, writeFile: writeFileFs } = await import('fs/promises')
-    const cachePath = join(tmpCache, 'session-cache.json')
+    const cachePath = sessionCachePath()
     const disk = JSON.parse(await readFile(cachePath, 'utf-8')) as { providers: Record<string, { envFingerprint: string }> }
     expect(disk.providers['copilot']).toBeDefined()
     disk.providers['copilot']!.envFingerprint = '0000000000000000'

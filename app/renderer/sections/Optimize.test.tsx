@@ -236,7 +236,7 @@ describe('Optimize', () => {
 
   it('keeps last-good yield totals and rows visible during revalidation', async () => {
     getYield.mockReset().mockResolvedValueOnce(makeYield()).mockImplementation(() => new Promise<YieldJsonReport>(() => {}))
-    const overview = { data: makePayload(), error: null, loading: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
+    const overview = { data: makePayload(), error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
     const { rerender } = render(<OptimizeContent period="30days" overview={overview} refreshToken={0} />)
 
     expect(await screen.findByRole('tab', { name: 'Reverts $107.00' })).toBeInTheDocument()

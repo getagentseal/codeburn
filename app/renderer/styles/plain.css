@@ -109,6 +109,11 @@ html, body, #root { height: 100%; margin: 0; }
 body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .win { height: 100%; min-height: 0; border-radius: 0; background: var(--canvas); box-shadow: none; }
 .ct { min-height: 0; }
+/* Subtle in-flight hairline at the top of the section body: shown while a
+   provider/period switch refreshes behind instantly-served memoized data. */
+.switch-line { flex: 0 0 auto; height: 2px; background: transparent; }
+.switch-line.on { background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 200% 100%; animation: switch-line-shimmer 1.1s linear infinite; }
+@keyframes switch-line-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .body { overflow-y: auto; min-height: 0; align-items: center; padding: 18px 20px; gap: 16px; }
 /* Children keep their natural height (don't flex-shrink to fit) so the pane
    scrolls instead of squishing; capped width keeps content from stretching. */
@@ -831,6 +836,7 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 
 @media (prefers-reduced-motion: reduce) {
   .skel::after, .section-fade, .toast-in { animation: none; }
+  .switch-line.on { animation: none; background: var(--accent); }
   .panel, .ov-card, .btnp, .btn, .ov-coach-cta { transition: none; }
   .panel:hover, .ov-card:hover, .btnp:active, .btn:active, .ov-coach-cta:active { transform: none; }
 }
@@ -926,4 +932,74 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
   .splash { transition: none; }
   .splash-status { animation: none; }
   .splash-prov.active { animation: none; }
+}
+
+/* ————— First-launch onboarding (fixed dark canvas, like the splash) ————— */
+.onboard {
+  position: fixed; inset: 0; z-index: 3100;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 80% at 50% 42%, color-mix(in srgb, #f2701c 8%, #171310), #171310 70%);
+}
+.onboard-card {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  width: min(420px, calc(100vw - 64px)); padding: 36px 36px 24px;
+  text-align: center; border-radius: 14px;
+  background: color-mix(in srgb, #fff 4%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 9%, transparent);
+}
+.onboard-glyph { color: #f2701c; display: flex; margin-bottom: 2px; }
+.onboard-title { margin: 0; font-size: var(--fs-kpi); font-weight: var(--fw-strong); letter-spacing: -0.01em; color: #f4f1ec; }
+.onboard-body { margin: 0; max-width: 320px; font-size: var(--fs-body); line-height: 1.55; color: #b3a595; }
+.onboard-consent {
+  margin-top: 6px; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; padding: 10px 14px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, #fff 10%, transparent);
+  font-size: var(--fs-body); color: #f4f1ec;
+}
+.onboard-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: var(--fs-label); color: #b3a595; text-decoration: underline; text-underline-offset: 3px;
+}
+.onboard-link:hover, .onboard-link:focus-visible { color: #f4f1ec; outline: none; }
+.onboard-controls {
+  margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+}
+.onboard-btn {
+  min-width: 96px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+  font: inherit; font-size: var(--fs-meta); font-weight: var(--fw-medium);
+  color: #f4f1ec; background: transparent; border: 1px solid color-mix(in srgb, #fff 16%, transparent);
+}
+.onboard-btn:hover { background: color-mix(in srgb, #fff 6%, transparent); }
+.onboard-btn.primary { background: #f2701c; border-color: #f2701c; color: #fff; }
+.onboard-btn.primary:hover { background: color-mix(in srgb, #f2701c 88%, #fff); }
+.onboard-btn:focus-visible { outline: 1px solid #f2701c; outline-offset: 1px; }
+.onboard-btn-ghost { min-width: 96px; }
+.onboard-dots { display: flex; gap: 6px; }
+.onboard-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, #fff 18%, transparent); transition: background 150ms ease; }
+.onboard-dot.on { background: #f2701c; }
+.onboard-in { animation: splash-word-in 320ms ease-out both; }
+
+/* Toggle switch (shared shape; used by onboarding consent + Settings privacy). */
+.switch {
+  position: relative; width: 38px; height: 22px; flex: none;
+  border-radius: 999px; border: 1px solid color-mix(in srgb, #fff 18%, transparent);
+  background: color-mix(in srgb, #fff 8%, transparent); cursor: pointer; padding: 0;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.switch .switch-knob {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #f4f1ec; transition: transform 150ms ease;
+}
+.switch.on { background: #f2701c; border-color: #f2701c; }
+.switch.on .switch-knob { transform: translateX(16px); background: #fff; }
+.switch:focus-visible { outline: 1px solid #f2701c; outline-offset: 1px; }
+/* On themed (Settings) surfaces the same switch keys off theme tokens. */
+.set-p .switch { border-color: var(--line2); background: var(--hover); }
+.set-p .switch .switch-knob { background: var(--mut); }
+.set-p .switch.on { background: var(--accent); border-color: var(--accent); }
+.set-p .switch.on .switch-knob { background: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  .onboard-in { animation: none; }
+  .switch, .switch .switch-knob, .onboard-dot { transition: none; }
 }

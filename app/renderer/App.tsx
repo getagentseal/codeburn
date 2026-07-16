@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { EmptyNote } from './components/EmptyState'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Hint } from './components/Hint'
+import { Onboarding } from './components/Onboarding'
 import { Panel } from './components/Panel'
 import { Sidebar, type Section } from './components/Sidebar'
 import { Splash } from './components/Splash'
@@ -15,6 +16,7 @@ import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import { motionClass } from './lib/motion'
 import { codeburn } from './lib/ipc'
 import { localDateKey } from './lib/period'
+import { persistRefreshValue, readRefreshValue, refreshValueToMs, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent } from './sections/Overview'
 import { OptimizeContent } from './sections/Optimize'
 import { Models } from './sections/Models'
@@ -23,7 +25,36 @@ import { Compare } from './sections/Compare'
 import { Plans } from './sections/Plans'
 import { Settings, type SettingsPane } from './sections/Settings'
 import { SpendContent } from './sections/Spend'
-import type { DateRange, MenubarPayload, Period } from './lib/types'
+import type { DateRange, MenubarPayload, Period, TelemetryStatus } from './lib/types'
+
+// Bucket raw dollar amounts before they leave the machine: telemetry carries
+// coarse ranges, never exact spend.
+function costBucket(usd: number): string {
+  if (usd < 1) return '<1'
+  if (usd < 10) return '1-10'
+  if (usd < 50) return '10-50'
+  if (usd < 200) return '50-200'
+  if (usd < 1000) return '200-1k'
+  return '1k+'
+}
+
+/** The once-per-day anonymous aggregate (main process dedups by calendar day). */
+function usageSnapshotProps(payload: MenubarPayload): Record<string, unknown> {
+  return {
+    period: payload.current.label,
+    providerCount: Object.keys(payload.current.providers).length,
+    costBucket: costBucket(payload.current.cost),
+    models: (payload.current.topModels ?? []).slice(0, 8).map(model => ({
+      name: model.name,
+      costBucket: costBucket(model.cost),
+    })),
+    categories: (payload.current.topActivities ?? []).slice(0, 12).map(activity => ({
+      name: activity.name,
+      // Task-completion signal: share of turns resolved in one shot, 2dp.
+      oneShotRate: activity.oneShotRate == null ? -1 : Math.round(activity.oneShotRate * 100) / 100,
+    })),
+  }
+}
 
 const SECTION_TITLES: Record<Section, string> = {
   overview: 'Overview',
@@ -88,7 +119,26 @@ function refreshedLabel(lastSuccessAt: number | null, loading: boolean, now: num
   return `refreshed ${minutes}m ago`
 }
 
+/** Provides the app-wide refresh cadence (read persisted at boot, applied live)
+ *  so every usePolled below reads it as its default interval. */
 export function App() {
+  const [refreshValue, setRefreshValue] = useState(readRefreshValue)
+  const setValue = useCallback((value: string) => {
+    setRefreshValue(value)
+    persistRefreshValue(value)
+  }, [])
+  const cadence = useMemo<RefreshCadence>(
+    () => ({ value: refreshValue, intervalMs: refreshValueToMs(refreshValue), setValue }),
+    [refreshValue, setValue],
+  )
+  return (
+    <RefreshCadenceContext.Provider value={cadence}>
+      <AppMain />
+    </RefreshCadenceContext.Provider>
+  )
+}
+
+function AppMain() {
   const [section, setSection] = useState<Section>('overview')
   const [settingsPane, setSettingsPane] = useState<SettingsPane>('general')
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -109,6 +159,7 @@ export function App() {
       ? codeburn.getOverview(period, provider, customRange)
       : codeburn.getOverview(period, provider),
     [period, provider, customRange?.from, customRange?.to, claudeConfigSource],
+    { memoKey: `overview|${provider}|${period}|${customRange?.from ?? ''}-${customRange?.to ?? ''}|${claudeConfigSource ?? ''}` },
   )
   const refreshOverview = overview.refresh
 
@@ -118,6 +169,32 @@ export function App() {
   // full-history parse per section. Flips true the moment overview has data OR a
   // (resolved) error; after that everything polls normally.
   const ready = overview.data != null || overview.error != null
+
+  // First-launch onboarding: shown until the telemetry consent screen has been
+  // completed once. All telemetry bridge calls are typeof-guarded so an older
+  // preload (or the test bridge mock) degrades to "no onboarding, no tracking".
+  const [onboardingStatus, setOnboardingStatus] = useState<TelemetryStatus | null>(null)
+  useEffect(() => {
+    if (typeof codeburn.telemetryStatus !== 'function') return
+    codeburn.telemetryStatus()
+      .then(status => { if (status && !status.onboarded) setOnboardingStatus(status) })
+      .catch(() => { /* telemetry unavailable — skip onboarding */ })
+  }, [])
+  const finishOnboarding = useCallback((enabled: boolean) => {
+    setOnboardingStatus(null)
+    if (typeof codeburn.completeOnboarding === 'function') void codeburn.completeOnboarding(enabled).catch(() => {})
+  }, [])
+
+  const trackEvent = useCallback((name: string, props?: Record<string, unknown>) => {
+    if (typeof codeburn.telemetryTrack === 'function') void codeburn.telemetryTrack(name, props).catch(() => {})
+  }, [])
+
+  // Once-per-day anonymous usage aggregate, only from the canonical view
+  // (all providers, standard period, no config scope) so buckets are stable.
+  useEffect(() => {
+    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource) return
+    trackEvent('usage_snapshot', usageSnapshotProps(overview.data))
+  }, [overview.data, provider, customRange, claudeConfigSource, trackEvent])
 
   useEffect(() => {
     let saved: string | null = null
@@ -172,7 +249,8 @@ export function App() {
   const navigate = useCallback((next: Section, pane: SettingsPane = 'general') => {
     setSettingsPane(pane)
     setSection(next)
-  }, [])
+    trackEvent('section_view', { section: next })
+  }, [trackEvent])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -238,7 +316,9 @@ export function App() {
       <Sidebar active={section} onNavigate={navigate} status={<StatusLine polled={overview} />} />
       <ToastHost />
       <Splash hasData={overview.data != null} hasError={overview.error != null} />
+      {onboardingStatus && <Onboarding defaultEnabled={onboardingStatus.defaultEnabled} onDone={finishOnboarding} />}
       <div className="ct">
+        <div className={overview.switching ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
         <DailyBudgetBanner payload={overview.data ?? null} provider={provider} />
         <ErrorBoundary key={section}>
         {section === 'plans' ? (

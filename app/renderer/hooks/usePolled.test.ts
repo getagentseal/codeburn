@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
+import { createElement, type ReactNode } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
+import { RefreshCadenceContext, type RefreshCadence } from '../lib/refreshCadence'
 import { usePolled } from './usePolled'
+
+function cadenceWrapper(intervalMs: number | null) {
+  const value: RefreshCadence = { value: 'x', intervalMs, setValue: () => {} }
+  return ({ children }: { children: ReactNode }) => createElement(RefreshCadenceContext.Provider, { value }, children)
+}
 
 describe('usePolled', () => {
   it('discards a stale in-flight fetch that resolves after a newer one (epoch guard)', async () => {
@@ -75,5 +82,70 @@ describe('usePolled', () => {
     await act(async () => { calls[1]!.reject({ kind: 'nonzero', message: 'boom' }) })
     expect(result.current.data).toBe('good')
     expect(result.current.error).toMatchObject({ kind: 'nonzero', message: 'boom' })
+  })
+
+  it('serves last-good data instantly on switch-back and flags `switching` while it refreshes', async () => {
+    const resolvers: Array<(v: string) => void> = []
+    const fetcher = vi.fn(() => new Promise<string>(resolve => { resolvers.push(resolve) }))
+
+    // Mount on key kA, resolve to A0 → memoized under kA.
+    const { result, rerender } = renderHook(
+      ({ k }: { k: string }) => usePolled(fetcher, [k], { memoKey: k }),
+      { initialProps: { k: 'kA' } },
+    )
+    await act(async () => { resolvers[0]!('A0') })
+    expect(result.current.data).toBe('A0')
+    expect(result.current.switching).toBe(false)
+
+    // Switch to a fresh key kB, resolve to B0 → memoized under kB.
+    rerender({ k: 'kB' })
+    await act(async () => { resolvers[1]!('B0') })
+    expect(result.current.data).toBe('B0')
+
+    // Switch BACK to kA: the memoized A0 paints in the same commit (no blank, no
+    // B0 freeze) and `switching` is true while the fresh fetch runs behind it.
+    rerender({ k: 'kA' })
+    expect(result.current.data).toBe('A0')
+    expect(result.current.switching).toBe(true)
+    expect(result.current.loading).toBe(true)
+
+    // The fresh fetch resolves → new data, switching clears.
+    await act(async () => { resolvers[2]!('A1') })
+    expect(result.current.data).toBe('A1')
+    expect(result.current.switching).toBe(false)
+  })
+
+  it('manual cadence (null interval) polls only on mount + refresh, never on a timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetcher = vi.fn().mockResolvedValue('x')
+      const { result } = renderHook(() => usePolled(fetcher, [], { intervalMs: null }))
+      expect(fetcher).toHaveBeenCalledTimes(1) // mount
+      await act(async () => { await vi.advanceTimersByTimeAsync(600_000) })
+      expect(fetcher).toHaveBeenCalledTimes(1) // no interval fired
+      act(() => { result.current.refresh() })
+      expect(fetcher).toHaveBeenCalledTimes(2) // manual refresh still works
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('defaults the interval to the RefreshCadence context, and Manual disables the timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const timed = vi.fn().mockResolvedValue('x')
+      renderHook(() => usePolled(timed, []), { wrapper: cadenceWrapper(60_000) })
+      expect(timed).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+      expect(timed).toHaveBeenCalledTimes(2) // context interval fired
+
+      const manual = vi.fn().mockResolvedValue('x')
+      renderHook(() => usePolled(manual, []), { wrapper: cadenceWrapper(null) })
+      expect(manual).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(600_000) })
+      expect(manual).toHaveBeenCalledTimes(1) // Manual context → no timer
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

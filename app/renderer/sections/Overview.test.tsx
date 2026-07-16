@@ -8,7 +8,7 @@ import type { ActReportJson, DailyHistoryEntry, MenubarPayload, YieldJsonReport 
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
 function polled(data: MenubarPayload): Polled<MenubarPayload> {
-  return { data, error: null, loading: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
+  return { data, error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
 }
 
 // Mock the typed bridge so the section fetches our payload instead of spawning
@@ -505,6 +505,7 @@ describe('Overview', () => {
       data: makePayload(now),
       error: { kind: 'nonzero', message: 'codeburn exited 1' },
       loading: false,
+      switching: false,
       lastSuccessAt: Date.now(),
       refresh: vi.fn(),
     }

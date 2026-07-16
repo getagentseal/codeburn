@@ -11,6 +11,10 @@ export type QuotaProvider = {
   details: QuotaWindow[]
   planLabel: string | null
   footerLines: string[]
+  /** Set when the provider is in a 429 backoff window (rate limited by the
+   *  upstream quota endpoint), so the UI can say so honestly instead of the
+   *  generic "waiting" copy. */
+  rateLimited?: boolean
 }
 
 export type ProviderName = QuotaProvider['provider']

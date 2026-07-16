@@ -4,7 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { parseAllSessions, clearSessionCache } from '../src/parser.js'
-import { CACHE_VERSION } from '../src/session-cache.js'
+import { CACHE_VERSION, sessionCachePath } from '../src/session-cache.js'
 
 let tmpDir: string
 let cacheDir: string
@@ -48,7 +48,7 @@ describe('cold-start cache persistence', () => {
     const projects = await parseAllSessions()
     expect(projects.length).toBeGreaterThan(0)
 
-    const raw = JSON.parse(await readFile(join(cacheDir, 'session-cache.json'), 'utf-8'))
+    const raw = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
     expect(raw.version).toBe(CACHE_VERSION)
     const claudeFiles = Object.keys(raw.providers?.claude?.files ?? {})
     expect(claudeFiles.length).toBeGreaterThan(0)

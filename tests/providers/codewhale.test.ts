@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { clearSessionCache, parseAllSessions } from '../../src/parser.js'
+import { sessionCachePath } from '../../src/session-cache.js'
 import { MAX_SESSION_FILE_BYTES } from '../../src/fs-utils.js'
 import { codewhale, createCodeWhaleProvider } from '../../src/providers/codewhale.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
@@ -274,7 +275,7 @@ describe('codewhale provider', () => {
     expect(first[0]!.totalCostUSD).toBeCloseTo(0.75)
     expect(second[0]!.totalCostUSD).toBeCloseTo(0.75)
 
-    const cache = JSON.parse(await readFile(join(cacheDir, 'session-cache.json'), 'utf-8')) as {
+    const cache = JSON.parse(await readFile(sessionCachePath(), 'utf-8')) as {
       providers: { codewhale: { envFingerprint: string } }
     }
     expect(cache.providers.codewhale.envFingerprint).toMatch(/^[a-f0-9]{16}$/)

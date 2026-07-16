@@ -8,6 +8,7 @@ import type { ProjectSummary } from '../src/types.js'
 
 import {
   addNewDays,
+  dailyCachePath,
   DAILY_CACHE_VERSION,
   type DailyCache,
   type DailyEntry,
@@ -66,7 +67,11 @@ describe('loadDailyCache', () => {
     expect(cache.days).toEqual([])
   })
 
-  it('returns an empty cache and backs up when version is too old to migrate', async () => {
+  // With version-suffixed filenames, a legacy unversioned file whose version is
+  // not the current one is simply IGNORED — never migrated, never backed up,
+  // never touched (old binaries still own it). Load returns an empty cache and
+  // the legacy file is left intact on disk.
+  it('ignores (and never rewrites) a legacy file too old to migrate', async () => {
     const saved = {
       version: 1,
       lastComputedDate: '2026-04-10',
@@ -74,20 +79,18 @@ describe('loadDailyCache', () => {
     }
     const { writeFile, mkdir } = await import('fs/promises')
     await mkdir(TMP_CACHE_ROOT, { recursive: true })
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+    const legacy = join(TMP_CACHE_ROOT, 'daily-cache.json')
+    await writeFile(legacy, JSON.stringify(saved), 'utf-8')
     const cache = await loadDailyCache()
     expect(cache.days).toEqual([])
     expect(cache.lastComputedDate).toBeNull()
-    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v1.bak'))).toBe(true)
+    // Legacy file untouched (no .bak, contents intact); no versioned file written.
+    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v1.bak'))).toBe(false)
+    expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(saved)
+    expect(existsSync(dailyCachePath())).toBe(false)
   })
 
-  it('discards a v2 cache and starts fresh (provider rollups would be stale)', async () => {
-    // MIN_SUPPORTED_VERSION was raised to DAILY_CACHE_VERSION because the
-    // migration path cannot recompute the providers / categories / models
-    // rollups from session data (the cache does not retain raw sessions),
-    // so a migrated old cache would carry forward stale provider totals
-    // for the full retention window. Older caches now get discarded and
-    // recomputed from scratch on next run.
+  it('ignores a legacy v2 cache (provider rollups would be stale) and leaves it intact', async () => {
     const saved = {
       version: 2,
       lastComputedDate: '2026-04-10',
@@ -99,16 +102,17 @@ describe('loadDailyCache', () => {
     }
     const { writeFile, mkdir } = await import('fs/promises')
     await mkdir(TMP_CACHE_ROOT, { recursive: true })
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+    const legacy = join(TMP_CACHE_ROOT, 'daily-cache.json')
+    await writeFile(legacy, JSON.stringify(saved), 'utf-8')
     const cache = await loadDailyCache()
     expect(cache.version).toBe(DAILY_CACHE_VERSION)
     expect(cache.days).toEqual([])
     expect(cache.lastComputedDate).toBeNull()
-    // Old cache is renamed to .v2.bak rather than deleted.
-    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v2.bak'))).toBe(true)
+    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v2.bak'))).toBe(false)
+    expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(saved)
   })
 
-  it('discards a v5 cache because cached Claude costs predate 1-hour cache pricing', async () => {
+  it('ignores a legacy v5 cache (predates 1-hour cache pricing) and leaves it intact', async () => {
     const saved = {
       version: 5,
       lastComputedDate: '2026-05-01',
@@ -130,12 +134,41 @@ describe('loadDailyCache', () => {
     }
     const { writeFile, mkdir } = await import('fs/promises')
     await mkdir(TMP_CACHE_ROOT, { recursive: true })
-    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+    const legacy = join(TMP_CACHE_ROOT, 'daily-cache.json')
+    await writeFile(legacy, JSON.stringify(saved), 'utf-8')
     const cache = await loadDailyCache()
     expect(cache.version).toBe(DAILY_CACHE_VERSION)
     expect(cache.days).toEqual([])
     expect(cache.lastComputedDate).toBeNull()
-    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v5.bak'))).toBe(true)
+    expect(existsSync(join(TMP_CACHE_ROOT, 'daily-cache.json.v5.bak'))).toBe(false)
+    expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(saved)
+  })
+
+  it('adopts a legacy file whose version matches the current one, once, without deleting it', async () => {
+    const saved = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'legacy-hash',
+      lastComputedDate: '2026-05-01',
+      days: [emptyDay('2026-05-01', 3.5, 9)],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    const legacy = join(TMP_CACHE_ROOT, 'daily-cache.json')
+    await writeFile(legacy, JSON.stringify(saved), 'utf-8')
+
+    // First load: versioned file absent → adopt-copy from legacy.
+    const first = await loadDailyCache()
+    expect(first.days).toEqual(saved.days)
+    expect(first.savingsConfigHash).toBe('legacy-hash')
+    expect(existsSync(dailyCachePath())).toBe(true)
+    // Legacy file is NOT deleted.
+    expect(existsSync(legacy)).toBe(true)
+
+    // Adoption is one-time: mutate the legacy file, load again — the versioned
+    // file now wins and the stale legacy edit is never re-adopted.
+    await writeFile(legacy, JSON.stringify({ ...saved, days: [emptyDay('2000-01-01', 999)] }), 'utf-8')
+    const second = await loadDailyCache()
+    expect(second.days).toEqual(saved.days)
   })
 
   it('round-trips a valid cache through save and load', async () => {
@@ -164,7 +197,7 @@ describe('saveDailyCache', () => {
     const files = await readdir(TMP_CACHE_ROOT)
     const tempLeftovers = files.filter(f => f.endsWith('.tmp'))
     expect(tempLeftovers).toEqual([])
-    const finalFile = await readFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), 'utf-8')
+    const finalFile = await readFile(dailyCachePath(), 'utf-8')
     expect(JSON.parse(finalFile)).toEqual(saved)
   })
 })
