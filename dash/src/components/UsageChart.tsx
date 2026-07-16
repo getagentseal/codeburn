@@ -108,8 +108,12 @@ function GranularLines({
       }
     }
 
+    // The backend already folds its beyond-cap remainder into a "*_other"
+    // series; never give it a top slot or it renders as a second "Other"
+    // line next to our own display_other fold.
+    const isBackendOther = (id: string) => id === 'session_other' || id === 'model_other'
     const top = [...totals.entries()]
-      .filter(([, total]) => total > 0)
+      .filter(([id, total]) => total > 0 && !isBackendOther(id))
       .sort((a, b) => b[1] - a[1])
       .slice(0, TOP_N)
       .map(([id]) => id)

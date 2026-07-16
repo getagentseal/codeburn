@@ -48,7 +48,9 @@ function nonNegative(value: number): number {
 export function granularBucketMinutes(range: DateRange): number {
   const durationMs = Math.max(0, range.end.getTime() - range.start.getTime())
   if (durationMs <= 48 * ONE_HOUR * MINUTE_MS) return FIFTEEN_MINUTES
-  if (durationMs <= 45 * ONE_DAY * MINUTE_MS) return ONE_HOUR
+  // Hourly beyond ~8 days means 200+ points of overlapping spikes; daily
+  // buckets keep month-scale charts readable.
+  if (durationMs <= 8 * ONE_DAY * MINUTE_MS) return ONE_HOUR
   return ONE_DAY
 }
 
@@ -95,6 +97,15 @@ function topSeriesKeys(totals: Map<string, Totals>): Set<string> {
 function shortSessionId(sessionId: string): string {
   const trimmed = sessionId.trim()
   return trimmed.length > 12 ? `${trimmed.slice(0, 6)}…${trimmed.slice(-4)}` : trimmed || 'unknown'
+}
+
+// Legend labels: the sanitized project dir ("-Users-name-Projects-app") is
+// unreadable, so prefer the real projectPath's last two segments ("app/web").
+// Fall back to the sanitized name when no usable path exists.
+function shortProjectLabel(projectPath: string, fallback: string): string {
+  const segments = projectPath.trim().replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean)
+  if (segments.length === 0) return fallback
+  return segments.slice(-2).join('/')
 }
 
 function projectSeries(
@@ -203,7 +214,7 @@ export function buildGranularHistory(
           add(modelTotals, modelKey, cost, tokens)
           add(sessionTotals, sessionKey, cost, tokens)
           modelLabels.set(modelKey, modelKey === '<synthetic>' ? 'Other model' : modelKey)
-          sessionLabels.set(sessionKey, `${projectName} · ${shortSessionId(session.sessionId)} (${call.provider})`)
+          sessionLabels.set(sessionKey, `${shortProjectLabel(project.projectPath, projectName)} · ${shortSessionId(session.sessionId)} (${call.provider})`)
           callCount++
         }
       }

@@ -102,8 +102,9 @@ describe('granular history', () => {
     expect(granularBucketMinutes(range(24))).toBe(15)
     expect(granularBucketMinutes(range(48))).toBe(15)
     expect(granularBucketMinutes(range(48.01))).toBe(60)
-    expect(granularBucketMinutes(range(24 * 30))).toBe(60)
-    expect(granularBucketMinutes(range(24 * 46))).toBe(1440)
+    expect(granularBucketMinutes(range(24 * 8))).toBe(60)
+    expect(granularBucketMinutes(range(24 * 8 + 1))).toBe(1440)
+    expect(granularBucketMinutes(range(24 * 30))).toBe(1440)
   })
 
   it('fills idle buckets and keeps separate model and session lines from real call timestamps', () => {
@@ -140,8 +141,10 @@ describe('granular history', () => {
     expect(secondActive).toMatchObject({ cost: 0.25, tokens: 15 })
     expect(idle).toMatchObject({ cost: 0, tokens: 0, models: [], sessions: [] })
 
-    const alpha = history.sessionSeries.find(series => series.label.startsWith('alpha ·'))!
-    const beta = history.sessionSeries.find(series => series.label.startsWith('beta ·'))!
+    // Labels use the real projectPath's last two segments, not the sanitized
+    // project name.
+    const alpha = history.sessionSeries.find(series => series.label === 'repos/demo · sessio…3456 (claude)')!
+    const beta = history.sessionSeries.find(series => series.label === 'repos/demo · sessio…4321 (codex)')!
     expect(sumSeries(history, 'sessions', alpha.id, 'cost')).toBe(1.75)
     expect(sumSeries(history, 'sessions', beta.id, 'tokens')).toBe(300)
     // Cache reads are intentionally not folded into the browser's Tokens line.
