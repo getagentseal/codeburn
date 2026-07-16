@@ -8,7 +8,20 @@ function payload(): MenubarPayload {
     sessionDetails: [{ cost: 3, calls: 5, inputTokens: 100, outputTokens: 50, date: '2026-06-01', models: [{ name: 'Opus', cost: 3 }] }],
   }
   return {
-    generated: '', optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] }, history: { daily: [] },
+    generated: '', optimize: { findingCount: 0, savingsUSD: 0, topFindings: [] },
+    history: {
+      daily: [],
+      timeline: {
+        bucketMinutes: 15,
+        modelSeries: [{ id: 'model_0', label: 'Opus' }],
+        sessionSeries: [{ id: 'session_0', label: 'secret-client-repo · abc123 (claude)' }],
+        points: [{
+          timestamp: '2026-06-01T10:00:00.000Z', cost: 5, tokens: 150,
+          models: [{ seriesId: 'model_0', cost: 5, tokens: 150 }],
+          sessions: [{ seriesId: 'session_0', cost: 5, tokens: 150 }],
+        }],
+      },
+    },
     current: {
       label: 'Today', cost: 5, calls: 10, sessions: 2, oneShotRate: null, inputTokens: 0, outputTokens: 0,
       cacheHitPercent: 0, topActivities: [], topModels: [], providers: {},
@@ -45,9 +58,18 @@ describe('redact', () => {
     const out = redactProjectNames(payload(), false)
     expect(out.current.topProjects[0]!.name).toBe(out.current.topSessions[0]!.project)
   })
+  it('removes session timeline detail by default but keeps model aggregates', () => {
+    const out = redactProjectNames(payload(), false)
+    expect(out.history.timeline?.sessionSeries).toEqual([])
+    expect(out.history.timeline?.points[0]!.sessions).toEqual([])
+    expect(out.history.timeline?.modelSeries).toHaveLength(1)
+    expect(out.history.timeline?.points[0]!.models).toHaveLength(1)
+    expect(JSON.stringify(out)).not.toContain('secret-client-repo ·')
+  })
   it('keeps real names and session details when include=true', () => {
     const out = redactProjectNames(payload(), true)
     expect(out.current.topProjects[0]!.name).toBe('secret-client-repo')
     expect(out.current.topProjects[0]!.sessionDetails![0]!.date).toBe('2026-06-01')
+    expect(out.history.timeline?.sessionSeries[0]!.label).toContain('secret-client-repo')
   })
 })
