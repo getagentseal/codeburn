@@ -16,7 +16,7 @@ import { buildGranularHistory } from './granular-history.js'
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number; tokens: number }> = {}
+  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number; estimatedCostUSD: number; tokens: number }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
@@ -33,10 +33,11 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       catTotals[cat].oneShotTurns += d.oneShotTurns
     }
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, tokens: 0 }
+      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0 }
       modelTotals[model].calls += d.calls
       modelTotals[model].cost += d.costUSD
       modelTotals[model].savingsUSD += d.savingsUSD
+      modelTotals[model].estimatedCostUSD += d.estimatedCostUSD ?? 0
       modelTotals[model].tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
     }
   }
@@ -45,6 +46,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
     label,
     cost: projects.reduce((s, p) => s + p.totalCostUSD, 0),
     savingsUSD: projects.reduce((s, p) => s + p.totalSavingsUSD, 0),
+    estimatedCostUSD: projects.reduce((s, p) => s + (p.totalEstimatedCostUSD ?? 0), 0),
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
     sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
     inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
@@ -53,7 +55,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, savingsUSD: d.savingsUSD })),
+      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, savingsUSD: d.savingsUSD, estimatedCostUSD: d.estimatedCostUSD })),
     unpricedModels: findUnpricedModels(Object.entries(modelTotals)
       .map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens }))),
   }

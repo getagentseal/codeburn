@@ -3,7 +3,7 @@ import { homedir } from 'os'
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost, formatTokens } from './format.js'
+import { formatCost, formatTokens, markEstimated } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByName, setInteractiveScanUI } from './parser.js'
 import { findUnpricedModels, loadPricing } from './models.js'
@@ -384,20 +384,22 @@ const MODEL_NAME_WIDTH = 14
 const MIN_EDIT_TURNS_FOR_RATE = 5
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; costUSD: number; estimatedCostUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, estimatedCostUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
+        modelTotals[model].estimatedCostUSD += data.estimatedCostUSD ?? 0
         modelTotals[model].freshInput += data.tokens.inputTokens
         modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens
         modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens
       }
     }
   }
+  const anyEstimated = Object.values(modelTotals).some(d => d.estimatedCostUSD > 0)
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
   const unpriced = findUnpricedModels(Object.entries(modelTotals).map(([model, d]) => ({
@@ -422,7 +424,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
-            <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
+            <Text color={GOLD}>{markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0).padStart(MODEL_COL_COST)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
             <Text>{oneShotLabel.padStart(MODEL_COL_ONESHOT)}</Text>
@@ -433,6 +435,9 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         <Text color="yellow" wrap="truncate-end">
           {`! ${unpriced.length} model${unpriced.length === 1 ? '' : 's'} unpriced at $0, fix: codeburn model-alias (${unpriced.slice(0, 2).map(u => u.model).join(', ')}${unpriced.length > 2 ? ', ...' : ''})`}
         </Text>
+      )}
+      {anyEstimated && (
+        <Text dimColor wrap="truncate-end">~ estimated cost (priced from estimated tokens)</Text>
       )}
     </Panel>
   )

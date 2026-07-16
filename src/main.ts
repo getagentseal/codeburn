@@ -261,6 +261,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
 
   const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
   const totalSavingsUSD = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
+  const totalEstimatedUSD = projects.reduce((s, p) => s + (p.totalEstimatedCostUSD ?? 0), 0)
   // Subscription-covered (proxied) portion of totalCostUSD, and the resulting
   // out-of-pocket figure. `cost` stays the full billable/would-be amount.
   const totalProxiedUSD = projects.reduce((s, p) => s + p.totalProxiedCostUSD, 0)
@@ -334,14 +335,15 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     sessions: p.sessions.length,
   }))
 
-  const modelMap: Record<string, { calls: number; cost: number; savings: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
+  const modelMap: Record<string, { calls: number; cost: number; savings: number; estimatedCost: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; baselineModel: string }> = {}
   const modelEfficiency = aggregateModelEfficiency(projects)
   for (const sess of sessions) {
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, savings: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' } }
+      if (!modelMap[model]) { modelMap[model] = { calls: 0, cost: 0, savings: 0, estimatedCost: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, baselineModel: '' } }
       modelMap[model].calls += d.calls
       modelMap[model].cost += d.costUSD
       modelMap[model].savings += d.savingsUSD
+      modelMap[model].estimatedCost += d.estimatedCostUSD ?? 0
       modelMap[model].inputTokens += d.tokens.inputTokens
       modelMap[model].outputTokens += d.tokens.outputTokens
       modelMap[model].cacheReadTokens += d.tokens.cacheReadInputTokens
@@ -371,13 +373,14 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   }
   const models = Object.entries(modelMap)
     .sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings))
-    .map(([name, { cost, savings, baselineModel, ...rest }]) => {
+    .map(([name, { cost, savings, estimatedCost, baselineModel, ...rest }]) => {
       const efficiency = modelEfficiency.get(name)
       return {
         name,
         ...rest,
         cost: convertCost(cost),
         savings: convertCost(savings),
+        estimatedCost: convertCost(estimatedCost),
         savingsBaselineModel: baselineModel,
         editTurns: efficiency?.editTurns ?? 0,
         oneShotTurns: efficiency?.oneShotTurns ?? 0,
@@ -480,6 +483,9 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       proxiedCost: convertCost(totalProxiedUSD),
       netCost: convertCost(netCostUSD),
       savings: convertCost(totalSavingsUSD),
+      // Portion of `cost` priced from estimated tokens (issue #639). Display/
+      // metadata only; never subtracted from `cost`. 0 when nothing is estimated.
+      estimatedCost: convertCost(totalEstimatedUSD),
       calls: totalCalls,
       sessions: totalSessions,
       cacheHitPercent,

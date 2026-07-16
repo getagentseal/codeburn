@@ -24,6 +24,9 @@ export type CachedCall = {
   model: string
   usage: CachedUsage
   costUSD?: number
+  /// True when `costUSD` (or the tokens it is priced from) is estimated rather
+  /// than metered. Persisted so the estimated-cost marker survives the cache.
+  isEstimated?: boolean
   speed: 'standard' | 'fast'
   timestamp: string
   tools: string[]
@@ -113,25 +116,32 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
 // disappear — they are preserved so month-to-date totals never drop.
 export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
+// Estimated-cost surfacing (#639): providers that set `costIsEstimated` carry a
+// `-est-cost` suffix (or a new entry) so their already-cached sessions reparse
+// once and the flag lands, instead of silently reading as measured. Copilot is
+// intentionally excluded: it is a durable provider, so changing its env
+// fingerprint would discard OTel cache entries whose source rows may already be
+// pruned (permanent data loss); its flag surfaces naturally as new data arrives.
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'advisor-usage-v1',
   cline: 'worktree-project-grouping-v1',
-  codewhale: 'aggregate-session-v1',
+  codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
   // provider parser otherwise). Covers native mcp_tool_call_end (#513) and
   // CLI-wrapped `mcp-cli call` (#478) MCP attribution.
-  codex: 'mcp-attribution-v2',
-  cursor: 'composer-anchored-crediting-v1',
+  codex: 'mcp-attribution-v2-est-cost',
+  cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'otel-durable-v1',
-  hermes: 'reasoning-output-accounting-v1',
+  grok: 'estimated-cost-v1',
+  hermes: 'reasoning-output-accounting-v1-est-cost',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
-  kiro: 'ide-parsing-v1',
+  kiro: 'ide-parsing-v1-est-cost',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
-  warp: 'worktree-project-grouping-v1',
+  warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v5',
 }
 
@@ -177,6 +187,10 @@ function isOptionalNum(v: unknown): boolean {
   return v === undefined || isNum(v)
 }
 
+function isOptionalBool(v: unknown): boolean {
+  return v === undefined || typeof v === 'boolean'
+}
+
 function isToolCall(v: unknown): boolean {
   if (!v || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
@@ -213,6 +227,7 @@ function validateCall(c: unknown): c is CachedCall {
     && typeof o['timestamp'] === 'string'
     && (o['speed'] === 'standard' || o['speed'] === 'fast')
     && isOptionalNum(o['costUSD'])
+    && isOptionalBool(o['isEstimated'])
     && isStringArray(o['tools'])
     && isStringArray(o['bashCommands'])
     && isStringArray(o['skills'])

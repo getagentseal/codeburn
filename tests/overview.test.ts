@@ -11,6 +11,7 @@ function makeProject(opts: {
   model: string
   provider: string
   tokens: { input: number; output: number; cacheR: number; cacheW: number }
+  estimated?: boolean
 }): ProjectSummary {
   const usage = {
     inputTokens: opts.tokens.input,
@@ -33,7 +34,7 @@ function makeProject(opts: {
       totalCacheReadTokens: opts.tokens.cacheR,
       totalCacheWriteTokens: opts.tokens.cacheW,
       apiCalls: opts.calls,
-      modelBreakdown: { [opts.model]: { calls: opts.calls, costUSD: opts.cost, savingsUSD: 0, tokens: usage } },
+      modelBreakdown: { [opts.model]: { calls: opts.calls, costUSD: opts.cost, savingsUSD: 0, estimatedCostUSD: opts.estimated ? opts.cost : 0, tokens: usage } },
       categoryBreakdown: { coding: { turns: 1, costUSD: opts.cost, savingsUSD: 0, retries: 0, editTurns: 1, oneShotTurns: 1 } },
       toolBreakdown: { Bash: { calls: 5 }, Read: { calls: 2 } },
       mcpBreakdown: {},
@@ -94,6 +95,40 @@ describe('renderOverview', () => {
     // no-color mode must not emit ANSI escape codes
     // eslint-disable-next-line no-control-regex
     expect(out).not.toMatch(/\[/)
+  })
+
+  it('marks an estimated model row with a tilde and prints the legend once', () => {
+    const out = renderOverview([makeProject({
+      project: 'warpish',
+      projectPath: '/Users/test/warpish',
+      cost: 4.2,
+      calls: 2,
+      model: 'kiro-auto',
+      provider: 'kiro',
+      tokens: { input: 1000, output: 200, cacheR: 0, cacheW: 0 },
+      estimated: true,
+    })], { label: 'June 2026', color: false })
+
+    // The estimated cost carries the tilde marker in the Top models table...
+    expect(out).toContain('~$4.20')
+    // ...and the legend explains it exactly once.
+    expect(out).toContain('~ estimated cost (priced from estimated tokens)')
+  })
+
+  it('does not mark a measured model row', () => {
+    const out = renderOverview([makeProject({
+      project: 'metered',
+      projectPath: '/Users/test/metered',
+      cost: 4.2,
+      calls: 2,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).toContain('$4.20')
+    expect(out).not.toContain('~$4.20')
+    expect(out).not.toContain('estimated cost (priced from estimated tokens)')
   })
 
   it('reports no usage for an empty range', () => {
