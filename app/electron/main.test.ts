@@ -371,6 +371,62 @@ describe('createBridgeHandlers (telemetry wiring)', () => {
     expect(typeof (coldStarts[0]![1] as { ms: number }).ms).toBe('number')
   })
 
+  it('records cold_start exactly once across coalesced re-polls, with the first-attempt duration (no cumulative ladder)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    try {
+      const telemetry = fakeTelemetry()
+      // Coalescing: every same-arg cold re-poll joins the ONE in-flight child.
+      let release!: (v: unknown) => void
+      const shared = new Promise(res => { release = res })
+      const spawnCli = vi.fn(() => shared)
+      const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
+
+      const p1 = handlers['codeburn:getOverview']!('30days', 'all') // anchors cold clock at t=0
+      vi.setSystemTime(30_000)
+      const p2 = handlers['codeburn:getOverview']!('30days', 'all')
+      vi.setSystemTime(60_000)
+      const p3 = handlers['codeburn:getOverview']!('30days', 'all')
+
+      // The stuck child finally settles ~102.8s after launch.
+      vi.setSystemTime(102_801)
+      release({ current: { cost: 1 } })
+      await Promise.all([p1, p2, p3])
+
+      const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
+      expect(coldStarts.length).toBe(1)
+      // One row, first-attempt duration — not the old 42801→72800→102801 ladder.
+      expect(coldStarts[0]![1]).toMatchObject({ ms: 102_801, timedOut: false })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('records cold_start with timedOut:true when the first (cold) overview attempt times out', async () => {
+    const telemetry = fakeTelemetry()
+    const spawnCli = vi.fn(async () => { throw new CliError('timeout', 'timed out') })
+    const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
+    await handlers['codeburn:getOverview']!('30days', 'all')
+    const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
+    expect(coldStarts.length).toBe(1)
+    expect(coldStarts[0]![1]).toMatchObject({ timedOut: true })
+  })
+
+  it('does not re-emit cold_start on a warmup re-arm, keeping the first attempt timedOut:true', async () => {
+    const telemetry = fakeTelemetry()
+    let n = 0
+    const spawnCli = vi.fn(async () => {
+      if (++n === 1) throw new CliError('timeout', 'timed out') // first cold attempt: final timeout
+      return { current: { cost: 1 } } // re-armed cold attempt succeeds
+    })
+    const handlers = createBridgeHandlers({ ...deps(telemetry), spawnCli })
+    await handlers['codeburn:getOverview']!('30days', 'all')
+    await handlers['codeburn:getOverview']!('30days', 'all')
+    const coldStarts = telemetry.track.mock.calls.filter(([name]) => name === 'cold_start')
+    expect(coldStarts.length).toBe(1)
+    expect(coldStarts[0]![1]).toMatchObject({ timedOut: true })
+  })
+
   it('tracks cli_error kinds from failing handlers', async () => {
     const telemetry = fakeTelemetry()
     const failing = {

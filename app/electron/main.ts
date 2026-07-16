@@ -152,6 +152,18 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // overview fetch runs cold (long timeout + progress streaming); the shared
   // spawnCli coalescing means concurrent same-arg re-polls join one child.
   let overviewWarmed = false
+  // cold_start is a once-per-launch metric. Because coalesced re-polls each
+  // re-enter the cold branch (and overviewWarmed only flips on success, so it
+  // never guards a still-failing warmup), emitting inline would record one row
+  // per poll — each with a launch-relative, cumulative elapsed time. Latch the
+  // emit and anchor the duration to the FIRST cold attempt instead.
+  let coldStartEmitted = false
+  let coldStartBegan: number | null = null
+  const emitColdStart = (timedOut: boolean): void => {
+    if (coldStartEmitted) return
+    coldStartEmitted = true
+    telemetry?.track('cold_start', { ms: Date.now() - (coldStartBegan ?? Date.now()), timedOut })
+  }
 
   const run = (build: (...args: any[]) => string[]): Handler => async (...args: any[]) => {
     try {
@@ -172,7 +184,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   ]
 
   const getOverview: Handler = async (period: string, provider: string, range?: DateRange, configSource?: string | null) => {
-    const startedAt = Date.now()
+    coldStartBegan ??= Date.now()
     try {
       const args = buildOverviewArgs(period, provider, range, configSource)
       if (overviewWarmed) return { ok: true, value: await deps.spawnCli(args) }
@@ -183,11 +195,11 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       })
       overviewWarmed = true
       emitProgress({ kind: 'done' })
-      telemetry?.track('cold_start', { ms: Date.now() - startedAt, timedOut: false })
+      emitColdStart(false)
       return { ok: true, value }
     } catch (err) {
       const error = toEnvelopeError(err)
-      if (!overviewWarmed) telemetry?.track('cold_start', { ms: Date.now() - startedAt, timedOut: error.kind === 'timeout' })
+      if (!overviewWarmed) emitColdStart(error.kind === 'timeout')
       telemetry?.track('cli_error', { kind: error.kind })
       return { ok: false, error }
     }

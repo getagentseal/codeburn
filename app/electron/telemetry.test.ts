@@ -128,6 +128,24 @@ describe('events', () => {
     expect(body.events[0]!.day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
+  it('stamps events with the LOCAL calendar day, not the UTC day', async () => {
+    const savedTZ = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles' // UTC-07/08
+    try {
+      // 05:00Z is still the previous local day in LA (22:00). UTC-bucketing would
+      // stamp 2026-07-17; the local calendar day is 2026-07-16.
+      const instant = new Date('2026-07-17T05:00:00Z')
+      const { telemetry, posts } = make({ now: () => instant })
+      telemetry.completeOnboarding(true) // queues app_open at `instant`
+      await telemetry.flush()
+      const body = posts[0]!.body as { events: Array<{ day: string }> }
+      expect(body.events[0]!.day).toBe('2026-07-16')
+    } finally {
+      if (savedTZ === undefined) delete process.env.TZ
+      else process.env.TZ = savedTZ
+    }
+  })
+
   it('caps usage_snapshot at one per calendar day', () => {
     const { telemetry } = make()
     telemetry.completeOnboarding(true)
