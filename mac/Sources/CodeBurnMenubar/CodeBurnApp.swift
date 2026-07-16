@@ -473,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let threshold = TimeInterval(cadence.rawValue)
         let claudeDue = autoRefreshAllowed && (
             nextClaudeQuotaRefreshAt.map { now >= $0 } ??
-            now.timeIntervalSince(lastSubscriptionRefreshAt ?? .distantPast) >= threshold
+            (now.timeIntervalSince(lastSubscriptionRefreshAt ?? .distantPast) >= threshold)
         )
         let shouldRefreshClaude = force || forceClaude || claudeDue
         let shouldRefreshCodex = force || forceCodex || (
