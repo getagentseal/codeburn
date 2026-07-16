@@ -2526,6 +2526,32 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
 
+// Merge projects that resolve to the same repository across providers (the
+// same repo used with Claude Code + Codex, say). Additive totals must ALL be
+// summed here; a field summed at the session level but forgotten in this merge
+// silently under-reports for exactly the multi-provider users (this bit
+// totalEstimatedCostUSD once, caught in #639 verification).
+export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
+  const crossProviderKey = (p: ProjectSummary): string => {
+    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
+    return path.includes('/') ? path : p.project.toLowerCase()
+  }
+  const mergedMap = new Map<string, ProjectSummary>()
+  for (const p of projects) {
+    const key = crossProviderKey(p)
+    const existing = mergedMap.get(key)
+    if (existing) {
+      existing.sessions.push(...p.sessions)
+      existing.totalCostUSD += p.totalCostUSD
+      existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
+      existing.totalApiCalls += p.totalApiCalls
+    } else {
+      mergedMap.set(key, { ...p })
+    }
+  }
+  return mergedMap
+}
+
 export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
@@ -2639,23 +2665,7 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     return { ...p, project: projectNameFromPath(canonical.path, p.project), projectPath: canonical.path }
   }))
 
-  const crossProviderKey = (p: ProjectSummary): string => {
-    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
-    return path.includes('/') ? path : p.project.toLowerCase()
-  }
-  const mergedMap = new Map<string, ProjectSummary>()
-  for (const p of [...claudeProjects, ...resolvedOtherProjects]) {
-    const key = crossProviderKey(p)
-    const existing = mergedMap.get(key)
-    if (existing) {
-      existing.sessions.push(...p.sessions)
-      existing.totalCostUSD += p.totalCostUSD
-      existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
-      existing.totalApiCalls += p.totalApiCalls
-    } else {
-      mergedMap.set(key, { ...p })
-    }
-  }
+  const mergedMap = mergeProjectsByCrossProviderKey([...claudeProjects, ...resolvedOtherProjects])
 
   // Re-derive proxy attribution on the merged total: the merge above sums
   // totalCostUSD across providers that share a canonical path but never

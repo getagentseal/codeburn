@@ -127,3 +127,39 @@ describe('estimated cost propagation (#639)', () => {
     expect(onlySession(second).totalEstimatedCostUSD).toBeCloseTo(firstCost)
   })
 })
+
+describe('cross-provider project merge (#639 regression)', () => {
+  function summaryFor(path: string, opts: { cost: number; estimated?: number }): ProjectSummary {
+    return {
+      project: path.split('/').pop()!,
+      projectPath: path,
+      sessions: [],
+      totalCostUSD: opts.cost,
+      totalSavingsUSD: 0,
+      totalApiCalls: 1,
+      totalProxiedCostUSD: 0,
+      ...(opts.estimated !== undefined ? { totalEstimatedCostUSD: opts.estimated } : {}),
+    } as ProjectSummary
+  }
+
+  it('keeps merged-in estimated dollars when two providers share a repo', async () => {
+    const { mergeProjectsByCrossProviderKey } = await import('../src/parser.js')
+    const merged = mergeProjectsByCrossProviderKey([
+      summaryFor('/repos/shared', { cost: 10 }),                     // measured provider, no estimate
+      summaryFor('/repos/shared', { cost: 5, estimated: 5 }),        // estimated provider
+    ])
+    expect(merged.size).toBe(1)
+    const project = [...merged.values()][0]!
+    expect(project.totalCostUSD).toBe(15)
+    expect(project.totalEstimatedCostUSD).toBe(5)
+  })
+
+  it('sums estimated dollars when both merged sides carry them', async () => {
+    const { mergeProjectsByCrossProviderKey } = await import('../src/parser.js')
+    const merged = mergeProjectsByCrossProviderKey([
+      summaryFor('/repos/shared', { cost: 3, estimated: 3 }),
+      summaryFor('/repos/shared', { cost: 4, estimated: 4 }),
+    ])
+    expect([...merged.values()][0]!.totalEstimatedCostUSD).toBe(7)
+  })
+})
