@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { getDateRange } from '../src/cli-date.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import type { DateRange } from '../src/types.js'
@@ -135,5 +136,17 @@ describe('Antigravity timestamp stability across .db rewrites', () => {
       ),
     )
     expect(januaryKeys.length).toBeGreaterThan(0)
+
+    // `today` must NOT include the call: first-seen is January, not "now",
+    // even though the file mtime was rewritten to June (and wall-clock is later).
+    clearSessionCache()
+    const { range: todayRange } = getDateRange('today')
+    const todayProjects = await parseAllSessions(todayRange, 'antigravity')
+    const todayKeys = todayProjects.flatMap(project =>
+      project.sessions.flatMap(session =>
+        session.turns.flatMap(turn => turn.assistantCalls.map(call => call.deduplicationKey)),
+      ),
+    )
+    expect(todayKeys).toHaveLength(0)
   })
 })
