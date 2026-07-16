@@ -244,7 +244,13 @@ export class Telemetry {
         headers: { 'content-type': 'application/json' },
         body,
       })
-      if (!res.ok) return false
+      if (!res.ok) {
+        // 4xx is a permanent rejection of this batch (schema drift, bad shape):
+        // retrying the same payload forever would wedge the queue at its cap.
+        // Drop it. 5xx/network are transient — keep the batch for the next beat.
+        if (res.status >= 400 && res.status < 500) this.queue = this.queue.filter(e => !events.includes(e))
+        return false
+      }
       // Only drop what was sent; events tracked mid-flight stay queued.
       this.queue = this.queue.filter(e => !events.includes(e))
       return true

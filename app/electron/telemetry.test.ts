@@ -137,15 +137,23 @@ describe('events', () => {
     expect(telemetry.queueLength).toBe(before + 1)
   })
 
-  it('keeps the queue on a failed POST and clears it on success', async () => {
+  it('keeps the queue on a transient failure (5xx) and clears it on success', async () => {
     let ok = false
-    const fetchFn = vi.fn(async () => ({ ok })) as unknown as typeof fetch
+    const fetchFn = vi.fn(async () => ({ ok, status: 503 })) as unknown as typeof fetch
     const { telemetry } = make({ fetchFn })
     telemetry.completeOnboarding(true)
     expect(await telemetry.flush()).toBe(false)
     expect(telemetry.queueLength).toBe(1)
     ok = true
     expect(await telemetry.flush()).toBe(true)
+    expect(telemetry.queueLength).toBe(0)
+  })
+
+  it('drops a permanently rejected batch (4xx) instead of wedging the queue', async () => {
+    const fetchFn = vi.fn(async () => ({ ok: false, status: 400 })) as unknown as typeof fetch
+    const { telemetry } = make({ fetchFn })
+    telemetry.completeOnboarding(true)
+    expect(await telemetry.flush()).toBe(false)
     expect(telemetry.queueLength).toBe(0)
   })
 
