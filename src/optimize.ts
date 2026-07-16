@@ -102,6 +102,9 @@ const CONTEXT_BLOAT_GROWTH_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
 const CONTEXT_BLOAT_RATIO_DISPLAY_CAP = 1000
 const WORTH_IT_MIN_COST_USD = 2
 const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
+// A zero-edit session's full cost is an upper bound on recoverable waste, not
+// a point estimate, so use a bounded fraction for honest savings numbers.
+const WORTH_IT_NO_EDIT_RECOVERY_FRACTION = 0.5
 const WORTH_IT_MIN_RETRIES = 3
 const WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES = 2
 const WORTH_IT_PREVIEW = 5
@@ -1961,8 +1964,9 @@ function sessionTotalTurns(session: ProjectSummary['sessions'][number]): number 
 }
 
 // Token-savings estimate for a low-worth candidate. Two regimes:
-//   - No-edit sessions: full session tokens are at risk (the session produced
-//     no apparent output to weigh against the spend).
+//   - No-edit sessions: a bounded fraction of full session tokens is counted
+//     as recoverable. Full cost is an upper bound, not a point estimate:
+//     read-only work may still contain useful exploration or analysis.
 //   - Sessions with edits but with retries / no one-shot: only the retry
 //     fraction is counted as recoverable. Edits may still have been useful;
 //     we credit the model with that and only flag the retry overhead.
@@ -1974,7 +1978,7 @@ function estimateLowWorthRecoverableTokens(
   retries: number,
 ): number {
   const tokens = sessionTokenTotal(session)
-  if (editTurns === 0) return tokens
+  if (editTurns === 0) return Math.round(tokens * WORTH_IT_NO_EDIT_RECOVERY_FRACTION)
   const totalTurns = sessionTotalTurns(session)
   if (totalTurns === 0) return 0
   const fraction = Math.min(1, Math.max(0, retries / totalTurns))
@@ -2054,8 +2058,8 @@ export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding
     .map(s => `${s.project}/${s.sessionId} on ${s.date}: ${formatCost(s.cost)} (${s.reasons.join(', ')})`)
     .join('; ')
   const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
-  // Per-candidate `tokens` is already the recoverable estimate (full session
-  // for no-edit, retry-fraction for edit-with-retries). Sum across candidates.
+  // Per-candidate `tokens` is already the recoverable estimate (bounded
+  // no-edit fraction, retry-fraction for edit-with-retries). Sum across candidates.
   const tokensSaved = Math.round(candidates.reduce((sum, s) => sum + s.tokens, 0))
   const totalCost = candidates.reduce((sum, s) => sum + s.cost, 0)
 
