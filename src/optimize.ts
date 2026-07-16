@@ -82,6 +82,10 @@ const MCP_NEW_CONFIG_GRACE_MS = 24 * 60 * 60 * 1000
 const BASH_DEFAULT_LIMIT = 30000
 const BASH_RECOMMENDED_LIMIT = 15000
 const MIN_SESSIONS_FOR_OUTLIER = 3
+// A project is still bootstrapping until it has twice the minimum sessions
+// needed to evaluate outliers; below that, its peer average is too thin to
+// distinguish founding work from waste.
+const YOUNG_PROJECT_SESSION_LIMIT = 2 * MIN_SESSIONS_FOR_OUTLIER
 const SESSION_OUTLIER_MULTIPLIER = 2
 const MIN_SESSION_OUTLIER_COST_USD = 1
 const SESSION_OUTLIER_PREVIEW = 5
@@ -2267,6 +2271,29 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
   }
 }
 
+function findYoungProjectFirstSessionIds(projects: ProjectSummary[]): Set<string> {
+  const firstSessionIds = new Set<string>()
+
+  for (const project of projects) {
+    const costed = project.sessions.filter(s => s.totalCostUSD > 0)
+    if (costed.length >= YOUNG_PROJECT_SESSION_LIMIT) continue
+
+    let firstSession: ProjectSummary['sessions'][number] | null = null
+    for (const session of costed) {
+      if (
+        firstSession === null
+        || new Date(session.firstTimestamp).getTime() < new Date(firstSession.firstTimestamp).getTime()
+      ) {
+        firstSession = session
+      }
+    }
+
+    if (firstSession) firstSessionIds.add(firstSession.sessionId)
+  }
+
+  return firstSessionIds
+}
+
 // ============================================================================
 // Scoring
 // ============================================================================
@@ -2391,7 +2418,8 @@ export async function scanAndDetect(
       .filter(c => !lowWorthSessionIds.has(c.sessionId))
       .map(c => c.sessionId),
   )
-  const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds])
+  const firstSessionIds = findYoungProjectFirstSessionIds(projects)
+  const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds, ...firstSessionIds])
   const syncDetectors: Array<() => WasteFinding | null> = [
     () => detectCacheBloat(apiCalls, projects, dateRange),
     () => detectLowReadEditRatio(toolCalls),

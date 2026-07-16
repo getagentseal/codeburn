@@ -1148,3 +1148,678 @@ describe('copilot provider - OTel cache token parsing', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// JetBrains (IntelliJ / PyCharm / …) session parsing
+// ---------------------------------------------------------------------------
+//
+// The JetBrains Copilot plugin persists sessions to a Nitrite (H2 MVStore) .db
+// (~/.config/github-copilot/<ide>/<kind>/<storeId>/copilot-*-nitrite.db) of
+// Java-serialized documents. Assistant replies are nested-escaped
+// {"__first__":{"type":"Subgraph",…}} blobs; the model and projectName are
+// separate serialized fields. These helpers reproduce that on-disk shape so
+// tests exercise the real regex/scan extraction path.
+
+describe('copilot provider - JetBrains parsing', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-test-'))
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  // A JetBrains source: session content lives in the Nitrite .db.
+  function jbDbSource(path: string, sessionId: string, mtime = '2026-07-03T12:00:00.000Z') {
+    return {
+      path, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId, storeId: sessionId, dbPath: path, mtime,
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string }
+  }
+
+  // ---- Nitrite .db parsing ----
+
+  // Build an assistant response blob in the real nested-escaped shape:
+  // {"__first__":{"type":"Subgraph","value":"{\"<uuid>\":{\"type\":\"Value\",
+  //   \"value\":\"{\\\"type\\\":\\\"Markdown\\\",\\\"data\\\":\\\"{\\\\\\\"text\\\\\\\":...}\"}"}}
+  function jbAssistantBlob(text: string, opts: { model?: string; errored?: boolean; files?: string[] } = {}) {
+    const innerMd = { type: 'Markdown', data: JSON.stringify({ text, annotations: [] }) }
+    const valueMap: Record<string, unknown> = {
+      'a1b2c3d4-0000-0000-0000-000000000001': { type: 'Value', value: JSON.stringify(innerMd) },
+    }
+    if (opts.model) valueMap['__model__'] = { type: 'Value', value: `{"model":"${opts.model}"}` }
+    // Files the turn referenced — project is derived from these file:// paths.
+    if (opts.files) {
+      valueMap['__refs__'] = {
+        type: 'Value',
+        value: JSON.stringify({ type: 'References', data: opts.files.map((f) => `file://${f}`).join(' ') }),
+      }
+    }
+    const outer: Record<string, unknown> = {
+      __first__: { type: 'Subgraph', value: JSON.stringify(valueMap) },
+    }
+    if (opts.errored) {
+      // Real failed turns store the error under a type:"Error" record with a
+      // `message` field (NOT a Markdown `text`), so it is not billable output.
+      outer['__err__'] = {
+        type: 'Value',
+        value: JSON.stringify({ type: 'Error', message: 'Sorry, an error occurred while generating a response' }),
+      }
+    }
+    return JSON.stringify(outer)
+  }
+
+  // An AGENT-MODE assistant blob: the reply lives in an AgentRound record, and
+  // (as in real agent sessions) the Markdown record holds the USER's prompt,
+  // which must NOT be counted as the reply. `rounds` is a list of AgentRound
+  // replies (a single blob can carry several); a pure tool-call round has ''.
+  function jbAgentBlob(rounds: string[], opts: { model?: string; userPrompt?: string; errored?: boolean } = {}) {
+    const valueMap: Record<string, unknown> = {}
+    let n = 0
+    // The user prompt as a Markdown record — a decoy the reply extractor must
+    // skip in agent mode (real stores put the prompt here, not the answer).
+    if (opts.userPrompt !== undefined) {
+      const md = { type: 'Markdown', data: JSON.stringify({ text: opts.userPrompt, annotations: [] }) }
+      valueMap[`u0000000-0000-0000-0000-00000000000${n++}`] = { type: 'Value', value: JSON.stringify(md) }
+    }
+    for (const reply of rounds) {
+      const ar = { type: 'AgentRound', data: JSON.stringify({ roundId: n, reply, toolCalls: [] }) }
+      valueMap[`a0000000-0000-0000-0000-00000000000${n++}`] = { type: 'Value', value: JSON.stringify(ar) }
+    }
+    if (opts.model) valueMap['__model__'] = { type: 'Value', value: `{"model":"${opts.model}"}` }
+    const outer: Record<string, unknown> = { __first__: { type: 'Subgraph', value: JSON.stringify(valueMap) } }
+    if (opts.errored) {
+      outer['__err__'] = {
+        type: 'Value',
+        value: JSON.stringify({ type: 'Error', message: 'Sorry, an error occurred while generating a response' }),
+      }
+    }
+    return JSON.stringify(outer)
+  }
+
+  // A conversation title record in the real framing: `$<GUID>…name…value<TITLE>t\x00\x06source`.
+  function jbConversationRecord(guid: string, title: string) {
+    return `$${guid}t\x00\x04namesq\x00\x01?@\x00\x00w\x00\x00t\x00value t\x00${title}t\x00\x06sourcet\x00copilotx`
+  }
+
+  // Assemble a minimal Nitrite-.db-shaped buffer: MVStore header + entity-class
+  // anchor + optional conversation records + assistant blobs. When a blob is
+  // preceded by a conversation record, turns attribute to that conversation.
+  function jbDbContent(blobs: string[], conversations: string[] = []) {
+    return (
+      'H:2,block:9,blockSize:1000,format:3\n' +
+      'com.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n' +
+      conversations.join('\n') + '\n' +
+      blobs.join('\nt\x00\x00model\n') +
+      '\n'
+    )
+  }
+
+  async function createJetBrainsDb(root: string, ide: string, kind: string, storeId: string, content: string) {
+    const dir = join(root, ide, kind, storeId)
+    await mkdir(dir, { recursive: true })
+    const dbName =
+      kind === 'chat-agent-sessions'
+        ? 'copilot-agent-sessions-nitrite.db'
+        : kind === 'chat-edit-sessions'
+          ? 'copilot-edit-sessions-nitrite.db'
+          : 'copilot-chat-nitrite.db'
+    await writeFile(join(dir, dbName), content)
+    return join(dir, dbName)
+  }
+
+  // The plugin-recorded project label, in the real Java-serialized framing:
+  // the field key `projectName` followed by TC_STRING `0x74 <u16 len> <value>`,
+  // then the sibling `user` field. This is what extractJetBrainsProjectName reads.
+  function jbProjectNameField(name: string) {
+    // TC_STRING length is the UTF-8 BYTE count (the .db is written UTF-8 and
+    // read back as latin1), not the JS UTF-16 code-unit count.
+    const len = Buffer.byteLength(name, 'utf8')
+    const hi = String.fromCharCode((len >> 8) & 0xff)
+    const lo = String.fromCharCode(len & 0xff)
+    return `t\x00\x0bprojectName\x74${hi}${lo}${name}t\x00\x04usert\x00\x08dev-user`
+  }
+
+  it('parses assistant turns from a Nitrite .db and estimates cost', async () => {
+    const content = jbDbContent([
+      jbAssistantBlob('Hello! How can I help you today?'),
+      jbAssistantBlob('Here is a longer architecture overview with plenty of detail.', { model: 'claude-opus-4.5' }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-1', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-1'))
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+    expect(calls[0]!.costIsEstimated).toBe(true)
+    expect(calls[0]!.inputTokens).toBe(0)
+    // Per-turn model recovered from inside the blob, normalised dots→dashes.
+    expect(calls[1]!.model).toBe('claude-opus-4-5')
+    expect(calls[1]!.costUSD).toBeGreaterThan(0)
+    // Dedup keys are conversation-scoped, content-derived, and distinct.
+    expect(calls[0]!.deduplicationKey).toMatch(/^copilot:jb:conv-1:[0-9a-f]{12}:1$/)
+    expect(calls[1]!.deduplicationKey).toMatch(/^copilot:jb:conv-1:[0-9a-f]{12}:1$/)
+    expect(calls[0]!.deduplicationKey).not.toBe(calls[1]!.deduplicationKey)
+  })
+
+  it('recovers a reply containing quotes without garbling or duplicating it', async () => {
+    // Regression: the unescape loop must run extraction ONLY on the final,
+    // fully-unescaped form. Accumulating matches at every depth would union a
+    // half-unescaped (quote-truncated) capture with the full one, producing a
+    // garbled duplicate and inflating the token/cost estimate.
+    const reply = 'Use `printf "%s"` to print, then check "status" here.'
+    const content = jbDbContent([jbAssistantBlob(reply, { model: 'claude-opus-4.5' })])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-quote', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-quote'))
+    expect(calls).toHaveLength(1)
+    // Token estimate reflects the true reply length (CHARS_PER_TOKEN = 4), not
+    // an inflated garbled copy.
+    expect(calls[0]!.outputTokens).toBe(Math.ceil(reply.length / 4))
+  })
+
+  it('counts a multibyte UTF-8 reply by codepoints, not latin1 bytes', async () => {
+    // The .db is read as latin1; the parser must re-decode to UTF-8 so a
+    // multibyte char counts as one codepoint for the token estimate.
+    const reply = 'café ☕ déjà vu — naïve façade' // several multibyte chars
+    const content = jbDbContent([jbAssistantBlob(reply, { model: 'claude-opus-4.5' })])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-utf8', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-utf8'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBe(Math.ceil(reply.length / 4))
+  })
+
+  it('extracts agent-mode replies from AgentRound (not the user prompt Markdown)', async () => {
+    // Agent-mode sessions (e.g. PyCharm) store the reply in an AgentRound record;
+    // the Markdown record holds the USER prompt. The reply extractor must read
+    // the AgentRound reply and ignore the prompt — otherwise the turn bills $0
+    // (reply never found) or bills the user's words as output.
+    const reply = "Here's a quick summary of this repo: it does X, Y, and Z."
+    const content = jbDbContent([
+      jbAgentBlob([reply], { model: 'claude-opus-4.5', userPrompt: 'summarise this repo' }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'py', 'chat-agent-sessions', 'conv-agent', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-agent'))
+    expect(calls).toHaveLength(1)
+    // Priced from the AgentRound reply, not the (shorter) user prompt.
+    expect(calls[0]!.outputTokens).toBe(Math.ceil(reply.length / 4))
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[0]!.model).toBe('claude-opus-4-5')
+  })
+
+  it('skips pure tool-call agent rounds (empty reply → no billable output)', async () => {
+    // A round that only issued tool calls has reply:'' — it contributes nothing,
+    // exactly like a Steps-only ask-mode blob.
+    const content = jbDbContent([jbAgentBlob([''], { model: 'claude-opus-4.5' })])
+    const dbPath = await createJetBrainsDb(tmpDir, 'py', 'chat-agent-sessions', 'conv-toolonly', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-toolonly'))
+    expect(calls).toHaveLength(0)
+  })
+
+  it('a failed agent turn bills $0 and never counts the user prompt as the reply', async () => {
+    // Failed agent turn: empty AgentRound reply + an error marker + a user-prompt
+    // Markdown record. The parser must NOT fall back to the Markdown (that would
+    // bill the user's words); an agent blob is agent mode regardless of whether
+    // its reply is empty, so this is an errored turn → $0.
+    const content = jbDbContent([
+      jbAgentBlob([''], { model: 'claude-opus-4.5', userPrompt: 'do the thing', errored: true }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'py', 'chat-agent-sessions', 'conv-agenterr', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-agenterr'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBe(0)
+    expect(calls[0]!.costUSD).toBe(0)
+  })
+
+  it('collects multiple AgentRound replies within one blob', async () => {
+    // A multi-round agent turn: the first round explores (tool call, empty
+    // reply), the second answers. Both non-empty replies are joined.
+    const content = jbDbContent([
+      jbAgentBlob(['Let me explore the project.', '', 'Done — here is what it does.'], {
+        model: 'claude-opus-4.5',
+      }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'py', 'chat-agent-sessions', 'conv-multiround', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-multiround'))
+    expect(calls).toHaveLength(1)
+    const joined = 'Let me explore the project.\nDone — here is what it does.'
+    expect(calls[0]!.outputTokens).toBe(Math.ceil(joined.length / 4))
+  })
+
+  it('treats errored turns as $0 (failed generation, no billable output)', async () => {
+    const content = jbDbContent([
+      jbAssistantBlob('', { errored: true }),
+      jbAssistantBlob('A real successful reply.', { model: 'claude-opus-4.5' }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-err', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-err'))
+    expect(calls).toHaveLength(2)
+    const errored = calls.find((c) => c.outputTokens === 0)
+    const good = calls.find((c) => c.outputTokens > 0)
+    expect(errored).toBeDefined()
+    expect(errored!.costUSD).toBe(0)
+    expect(good).toBeDefined()
+    expect(good!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('de-duplicates repeated byte-copies of the same reply within a .db', async () => {
+    const content = jbDbContent([
+      jbAssistantBlob('identical reply text stored twice'),
+      jbAssistantBlob('identical reply text stored twice'),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-dup', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-dup'))
+    expect(calls).toHaveLength(1)
+  })
+
+  it('skips Steps/progress-only assistant blobs (no billable text)', async () => {
+    const stepsBlob = JSON.stringify({
+      __first__: {
+        type: 'Subgraph',
+        value: JSON.stringify({ x: { type: 'Value', value: JSON.stringify({ type: 'Steps', data: '[]' }) } }),
+      },
+    })
+    const content = jbDbContent([stepsBlob, jbAssistantBlob('The only real answer.')])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-steps', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-steps'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
+  it('per-turn model differences within one .db (opus vs gpt) are priced separately', async () => {
+    const content = jbDbContent([
+      jbAssistantBlob('Opus answer with enough words to score tokens.', { model: 'claude-opus-4.5' }),
+      jbAssistantBlob('GPT answer with enough words to score tokens.', { model: 'gpt-5.3' }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-multi', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-multi'))
+    expect(calls).toHaveLength(2)
+    expect(calls.map((c) => c.model).sort()).toEqual(['claude-opus-4-5', 'gpt-5.3'])
+  })
+
+  it('splits one .db into sessions by conversation; project = repo, title = session label', async () => {
+    const guidA = '6acf5299-f9f7-404f-812d-dbe8300e1e5b'
+    const guidB = '485825c0-3331-46a7-acb2-c71875ad6640'
+    // Conversation A references a file in a real git repo; B touches no files.
+    const repoDir = join(tmpDir, 'container', 'web-api')
+    await mkdir(join(repoDir, '.git'), { recursive: true })
+    await mkdir(join(repoDir, 'src'), { recursive: true })
+    const fileA = join(repoDir, 'src', 'Main.java')
+    // Interleave each conversation record before its own turns (turns attribute
+    // to the nearest preceding conversation GUID). Title evolves default→final.
+    const content =
+      'H:2,block:9,blockSize:1000,format:3\n' +
+      'com.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n' +
+      jbConversationRecord(guidA, 'New Agent Session') + '\n' +
+      jbConversationRecord(guidA, 'Understanding the API Architecture') + '\n' +
+      jbAssistantBlob('Answer about the web API.', { model: 'claude-opus-4.5', files: [fileA] }) + '\n' +
+      jbConversationRecord(guidB, 'Exploring the Controller Layer in Spring Boot') + '\n' +
+      jbAssistantBlob('Answer about the controller layer breakdown.', { model: 'gpt-5.3' }) + '\n'
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'multi-conv', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'multi-conv'))
+    expect(calls).toHaveLength(2)
+    const bySession = new Map(calls.map((c) => [c.sessionId, c]))
+    // Sessions are split by conversation GUID.
+    expect(bySession.has(guidA)).toBe(true)
+    expect(bySession.has(guidB)).toBe(true)
+    // Project = the git repo root of the referenced file; else the generic
+    // bucket when the chat touched no files.
+    expect(bySession.get(guidA)!.project).toBe('web-api')
+    expect(bySession.get(guidB)!.project).toBe('copilot-jetbrains')
+    // The conversation TITLE is the session label (userMessage), NOT the project.
+    expect(bySession.get(guidA)!.userMessage).toBe('Understanding the API Architecture')
+    expect(bySession.get(guidB)!.userMessage).toBe('Exploring the Controller Layer in Spring Boot')
+    // Titles must never appear as project names (they are chat threads).
+    expect(calls.map((c) => c.project)).not.toContain('Understanding the API Architecture')
+  })
+
+  it('is idempotent across re-parses of the same .db (shared seenKeys)', async () => {
+    const content = jbDbContent([jbAssistantBlob('first reply'), jbAssistantBlob('second reply')])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-idem', content)
+
+    const seen = new Set<string>()
+    const first = await collectCalls(jbDbSource(dbPath, 'conv-idem'), seen)
+    const second = await collectCalls(jbDbSource(dbPath, 'conv-idem'), seen)
+    expect(first).toHaveLength(2)
+    expect(second).toHaveLength(0)
+  })
+
+  it('discovers a store dir with a Nitrite .db', async () => {
+    const content = jbDbContent([jbAssistantBlob('hi there')])
+    await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'db-only', content)
+
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const jb = sessions.filter((s) => (s as { sourceType?: string }).sourceType === 'jetbrains')
+    expect(jb).toHaveLength(1)
+    expect((jb[0] as { dbPath?: string }).dbPath).toContain('copilot-agent-sessions-nitrite.db')
+  })
+
+  it('infers project as the git repo root of a referenced file (deep subdir → repo root)', async () => {
+    // Create a real git repo on disk so the .git walk-up can resolve it.
+    const repoDir = join(tmpDir, 'container', 'myapp')
+    await mkdir(join(repoDir, '.git'), { recursive: true })
+    await mkdir(join(repoDir, 'src', 'a'), { recursive: true })
+    const fileA = join(repoDir, 'src', 'a', 'One.ts')
+    const content = jbDbContent([
+      jbAssistantBlob('Editing files in a real repo.', { model: 'gpt-4.1', files: [fileA] }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-gitwalk', content)
+
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-gitwalk'))
+    expect(calls).toHaveLength(1)
+    // Project = basename of the nearest ancestor with .git (the repo root
+    // 'myapp'), NOT the deep subdir 'a'/'src' or the container dir.
+    expect(calls[0]!.project).toBe('myapp')
+    expect(calls[0]!.model).toBe('gpt-4.1')
+  })
+
+  it('falls back to copilot-jetbrains when no referenced file resolves to a git repo', async () => {
+    const content = jbDbContent([
+      jbAssistantBlob('Editing a file outside any repo.', {
+        model: 'gpt-4.1',
+        files: ['/nonexistent/no-repo-here/src/One.ts'],
+      }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-norepo', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-norepo'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.project).toBe('copilot-jetbrains')
+  })
+
+  it('resolves a git repo whose name contains a space', async () => {
+    const repoDir = join(tmpDir, 'My Project')
+    await mkdir(join(repoDir, '.git'), { recursive: true })
+    await mkdir(join(repoDir, 'src'), { recursive: true })
+    const file = join(repoDir, 'src', 'One.ts')
+    const content = jbDbContent([
+      jbAssistantBlob('Reading a file in a spaced repo.', { model: 'gpt-4.1', files: [file] }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-space', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-space'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.project).toBe('My Project')
+  })
+
+  it('discovers JetBrains sessions across IDE dirs and session kinds', async () => {
+    const content = jbDbContent([jbAssistantBlob('Hello from agent mode.', { model: 'claude-opus-4.5' })])
+    await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'a1', content)
+    await createJetBrainsDb(tmpDir, 'intellij', 'chat-agent-sessions', 'b1', content)
+
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const jb = sessions.filter((s) => (s as { sourceType?: string }).sourceType === 'jetbrains')
+    expect(jb.map((s) => (s as { sessionId?: string }).sessionId).sort()).toEqual(['a1', 'b1'])
+  })
+
+  it('does not crash on a corrupt/truncated .db', async () => {
+    const dbPath = await createJetBrainsDb(
+      tmpDir,
+      'iu',
+      'chat-agent-sessions',
+      'conv-corrupt',
+      'H:2,block:9\ncom.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n{"__first__":{"type":"Subgraph"' // truncated, unbalanced
+    )
+    const calls = await collectCalls(jbDbSource(dbPath, 'conv-corrupt'))
+    expect(Array.isArray(calls)).toBe(true) // no throw; may be empty
+  })
+
+  // ---- projectName field (JetBrains Copilot 1.12+) ----
+
+  it('uses the plugin-recorded projectName over the file-path git-walk', async () => {
+    // Same store carries both a projectName AND a file ref; projectName wins.
+    const repoDir = join(tmpDir, 'container', 'walkable-repo')
+    await mkdir(join(repoDir, '.git'), { recursive: true })
+    const file = join(repoDir, 'Main.java')
+    const content = jbDbContent([
+      jbProjectNameField('shared-utils'),
+      jbAssistantBlob('An answer referencing a file in a real git repo.', {
+        model: 'claude-opus-4.5',
+        files: [file],
+      }),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-pn', content)
+    // discoverSessions populates source.projectName; feed the resolved source.
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const src = sessions.find((s) => (s as { storeId?: string }).storeId === 'conv-pn')!
+    expect((src as { projectName?: string }).projectName).toBe('shared-utils')
+    const calls = await collectCalls(src as never)
+    expect(calls.length).toBeGreaterThan(0)
+    // projectName beats the git-walk result (`walkable-repo`).
+    expect(calls.every((c) => c.project === 'shared-utils')).toBe(true)
+  })
+
+  it('joins projectName across kind dirs by store id (turns in agent, name in edit)', async () => {
+    // The billable turns live in chat-agent-sessions but carry NO projectName;
+    // the sibling chat-edit-sessions store (same id) records it. Discovery must
+    // join them so the agent session is labelled with the real repo.
+    const storeId = 'store-xyz-123'
+    const agentContent = jbDbContent([
+      jbAssistantBlob('Architecture overview of the repo, no file refs at all.', { model: 'claude-opus-4.5' }),
+    ])
+    await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', storeId, agentContent)
+    // Edit-kind store: has the projectName, but no billable turns.
+    const editContent = jbDbContent([], []) + jbProjectNameField('web-api')
+    await createJetBrainsDb(tmpDir, 'iu', 'chat-edit-sessions', storeId, editContent)
+
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const jb = sessions.filter((s) => (s as { sourceType?: string }).sourceType === 'jetbrains')
+    // Every source for this store id inherits the sibling-recorded name.
+    for (const s of jb) {
+      expect((s as { projectName?: string }).projectName).toBe('web-api')
+    }
+    const agentSrc = jb.find((s) => ((s as { dbPath?: string }).dbPath ?? '').includes('chat-agent-sessions'))!
+    const calls = await collectCalls(agentSrc as never)
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every((c) => c.project === 'web-api')).toBe(true)
+  })
+
+  it('falls back to git-walk then bucket when no projectName is recorded', async () => {
+    // No projectName, no file refs → the honest generic bucket (older plugins).
+    const content = jbDbContent([jbAssistantBlob('A reply with no project signal at all.')])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'conv-nopn', content)
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const src = sessions.find((s) => (s as { storeId?: string }).storeId === 'conv-nopn')!
+    expect((src as { projectName?: string }).projectName).toBeUndefined()
+    const calls = await collectCalls(src as never)
+    expect(calls.every((c) => c.project === 'copilot-jetbrains')).toBe(true)
+  })
+
+  it('extractJetBrainsProjectName reads the length-prefixed value, immune to embedded quotes', async () => {
+    // A value containing a quote/newline must not truncate: length-prefixed read.
+    const tricky = 'weird"name'
+    const raw = jbDbContent([jbAssistantBlob('x')]) + jbProjectNameField(tricky)
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-sessions', 'conv-tricky', raw)
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const src = sessions.find((s) => (s as { storeId?: string }).storeId === 'conv-tricky')!
+    expect((src as { projectName?: string }).projectName).toBe(tricky)
+  })
+
+  it('reads a non-ASCII (multibyte UTF-8) projectName', async () => {
+    // The value is length-delimited in UTF-8 bytes and re-decoded latin1→utf8,
+    // so a repo name with multibyte characters must round-trip intact.
+    const name = 'проект-café'
+    const raw = jbDbContent([jbAssistantBlob('x')]) + jbProjectNameField(name)
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-sessions', 'conv-utf8name', raw)
+    const provider = createCopilotProvider('/nonexistent/legacy', '/nonexistent/ws', '/nonexistent/global', tmpDir)
+    const sessions = await provider.discoverSessions()
+    const src = sessions.find((s) => (s as { storeId?: string }).storeId === 'conv-utf8name')!
+    expect((src as { projectName?: string }).projectName).toBe(name)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Old plugin format (≤1.5.x, e.g. 1.5.59-243)
+  // ---------------------------------------------------------------------------
+  // In the old plugin all session turns live inside ONE large binary-framed
+  // outer Nitrite document. Each turn's response is stored as a UUID-keyed
+  // Value entry containing an AgentRound record (one escaping level deeper than
+  // the __first__/Subgraph format used by plugins ≥1.12.x).
+
+  /**
+   * Build an outer Nitrite document in the old plugin format.
+   * The document is preceded by a single binary byte (0x81) and starts with a
+   * UUID-keyed Value entry. Each AgentRound is stored as a Value whose value
+   * field is a JSON string containing {\"type\":\"AgentRound\",\"data\":\"...\"}
+   * (one level of JSON-string escaping from the document root).
+   */
+  function jbOldFormatDoc(rounds: Array<{ reply: string; model?: string }>, opts: { upperUuid?: boolean } = {}) {
+    const cased = (u: string) => (opts.upperUuid ? u.toUpperCase() : u)
+    const entries: Record<string, unknown> = {}
+    // Lead entry (mimics the References record always present in real DBs)
+    entries[cased('0f383f5c-f169-4fee-9115-c06d4dd8985f')] = {
+      type: 'Value',
+      value: JSON.stringify({ type: 'References', data: '[]' }),
+    }
+    rounds.forEach((r, i) => {
+      const uuid = cased(`ccadf30b-fa34-4387-9f14-0a5f63457d${String(i).padStart(2, '0')}`)
+      const agentRoundData = JSON.stringify({ roundId: i + 1, reply: r.reply, toolCalls: [] })
+      const agentRoundValue = JSON.stringify({ type: 'AgentRound', data: agentRoundData })
+      entries[uuid] = { type: 'Value', value: agentRoundValue }
+      if (r.model) {
+        const modelUuid = cased(`bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb${String(i).padStart(4, '0')}`)
+        entries[modelUuid] = { type: 'Value', value: `{"model":"${r.model}"}` }
+      }
+    })
+    // Binary framing byte (0x81) followed by the JSON document
+    return '\x81' + JSON.stringify(entries)
+  }
+
+  it('parses agent turns from old plugin format (≤1.5.x, no __first__ blobs)', async () => {
+    // The old plugin stores all turns in one big outer Nitrite document with a
+    // binary framing byte. The fallback path must find and parse it.
+    const convGuid = '17a5d71b-27f7-4937-8803-7fc2cbb705cb'
+    const convRecord = jbConversationRecord(convGuid, 'Understanding HBase Architecture')
+    const oldFormatContent =
+      'H:2,block:8,blockSize:1000,format:3\n' +
+      'com.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n' +
+      convRecord + '\n' +
+      jbOldFormatDoc([
+        { reply: "I'll scan the repository to find the top-level project structure.", model: 'gpt-4.1' },
+        { reply: "Now I'll open the README to explain architecture." },
+        { reply: '' }, // empty reply (pure tool-call round) — must not produce a call
+      ])
+
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'old-fmt-1', oldFormatContent)
+    const calls = await collectCalls(jbDbSource(dbPath, 'old-fmt-1'))
+
+    // The fallback emits one call per outer document (all replies joined).
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.costIsEstimated).toBe(true)
+    // The two NON-EMPTY rounds are captured and joined; the empty (tool-call)
+    // round contributes nothing. Assert the exact combined token count so the
+    // test fails if either reply is dropped or the empty round leaks in.
+    const joined =
+      "I'll scan the repository to find the top-level project structure.\n" +
+      "Now I'll open the README to explain architecture."
+    expect(calls[0]!.outputTokens).toBe(Math.ceil(joined.length / 4))
+    // The session label is the conversation TITLE, not the reply text.
+    expect(calls[0]!.userMessage).toBe('Understanding HBase Architecture')
+  })
+
+  it('parses old plugin format when the outer-doc UUIDs are uppercase hex', async () => {
+    // The outer-doc detection must be case-insensitive: an uppercase UUID must
+    // not make the whole session fall through to $0.
+    const convRecord = jbConversationRecord('27b6e82c-38f8-4048-9914-8fd3dcc816dc', 'Conv Upper')
+    const content =
+      'H:2,block:8,blockSize:1000,format:3\n' +
+      'com.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n' +
+      convRecord + '\n' +
+      jbOldFormatDoc([{ reply: 'An uppercase-UUID reply with enough words to score.' }], { upperUuid: true })
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'old-fmt-upper', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'old-fmt-upper'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
+  it('old plugin format: does not parse when __first__ blobs already yield turns (no double-count)', async () => {
+    // When the newer __first__/Subgraph path finds turns, the old-format fallback
+    // must not run (turns.length > 0 prevents it).
+    const content = jbDbContent([
+      jbAgentBlob(['A reply from the new format.']),
+    ])
+    const dbPath = await createJetBrainsDb(tmpDir, 'iu', 'chat-agent-sessions', 'new-fmt-guard', content)
+    const calls = await collectCalls(jbDbSource(dbPath, 'new-fmt-guard'))
+    // Only the one Subgraph-format turn — no old-format duplicates
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+})
+
+describe('copilot provider - JetBrains dedup key stability across store rewrites', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-jetbrains-dedup-'))
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  function jbDedupSource(path: string, sessionId: string) {
+    return {
+      path, project: 'copilot-jetbrains', provider: 'copilot', sourceType: 'jetbrains',
+      sessionId, storeId: sessionId, dbPath: path, mtime: '2026-07-03T12:00:00.000Z',
+    } as unknown as { path: string; project: string; provider: string; sourceType?: string }
+  }
+
+  function blobFor(text: string) {
+    const innerMd = { type: 'Markdown', data: JSON.stringify({ text, annotations: [] }) }
+    const valueMap = { 'a1b2c3d4-0000-0000-0000-000000000001': { type: 'Value', value: JSON.stringify(innerMd) } }
+    return JSON.stringify({ __first__: { type: 'Subgraph', value: JSON.stringify(valueMap) } })
+  }
+
+  function dbContent(blobs: string[]) {
+    return (
+      'H:2,block:9,blockSize:1000,format:3\n' +
+      'com.github.copilot.agent.session.persistence.nitrite.entity.NtAgentTurn\n' +
+      '\n' + blobs.join('\nt\x00\x00model\n') + '\n'
+    )
+  }
+
+  it('a compaction that moves a new blob ahead of an old one must not re-bill the old turn', async () => {
+    // copilot is a durable provider: cached turns are never deleted, and a
+    // re-parse appends any dedup key it has not seen. MVStore compaction can
+    // rewrite the file with blobs in a different byte order. If dedup keys were
+    // positional (conversation + scan index), a rewrite that puts a NEW turn
+    // before an OLD one would hand the new turn the old turn's key (skipped as
+    // already-seen) and re-emit the old turn under a fresh index — billing it
+    // twice and never billing the new turn. Content-derived keys are immune.
+    const oldReply = 'The original answer, long enough to carry a token estimate.'
+    const newReply = 'A fresh answer written after the compaction happened.'
+
+    const dir = join(tmpDir, 'iu', 'chat-agent-sessions', 'conv-rewrite')
+    await mkdir(dir, { recursive: true })
+    const dbPath = join(dir, 'copilot-agent-sessions-nitrite.db')
+
+    const seen = new Set<string>()
+
+    // Scan 1: the store holds only the old turn.
+    await writeFile(dbPath, dbContent([blobFor(oldReply)]))
+    const first = await collectCalls(jbDedupSource(dbPath, 'conv-rewrite'), seen)
+    expect(first).toHaveLength(1)
+    expect(first[0]!.outputTokens).toBe(Math.ceil(oldReply.length / 4))
+
+    // Scan 2: compaction rewrote the file — the new turn now sits BEFORE the
+    // old one in byte order.
+    await writeFile(dbPath, dbContent([blobFor(newReply), blobFor(oldReply)]))
+    const second = await collectCalls(jbDedupSource(dbPath, 'conv-rewrite'), seen)
+
+    // Exactly the new turn must be billed — once, at its own length. The old
+    // turn is already cached and must not re-enter under a different key.
+    expect(second).toHaveLength(1)
+    expect(second[0]!.outputTokens).toBe(Math.ceil(newReply.length / 4))
+  })
+})

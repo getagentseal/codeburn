@@ -155,4 +155,45 @@ describe('provider turn grouping', () => {
     expect(session.totalOutputTokens).toBe(90)
     expect(session.categoryBreakdown[turn.category].oneShotTurns).toBe(0)
   })
+
+  it('preserves Kiro credit-based cost through cache conversion instead of re-pricing from tokens', async () => {
+    const kiroHome = join(home, '.kiro')
+    const cliDir = join(kiroHome, 'sessions', 'cli')
+    await mkdir(cliDir, { recursive: true })
+    process.env['KIRO_HOME'] = kiroHome
+
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeFile(join(cliDir, `${sessionId}.jsonl`), [
+      JSON.stringify({ version: '1', kind: 'Prompt', data: { message_id: 'm1', content: [{ kind: 'text', data: 'hi' }], meta: { timestamp: 1778925600 } } }),
+      JSON.stringify({ version: '1', kind: 'AssistantMessage', data: { message_id: 'm2', content: [{ kind: 'text', data: 'short reply' }] } }),
+    ].join('\n') + '\n')
+    await writeFile(join(cliDir, `${sessionId}.json`), JSON.stringify({
+      session_id: sessionId,
+      cwd: '/Users/test/project-a',
+      created_at: '2026-05-16T10:00:00Z',
+      updated_at: '2026-05-16T10:01:00Z',
+      session_state: {
+        rts_model_state: { model_info: { model_id: 'claude-sonnet-4.6' } },
+        conversation_metadata: {
+          user_turn_metadatas: [{
+            end_timestamp: '2026-05-16T10:00:30Z',
+            // 2.5 credits × $0.04/credit = $0.10 — far from any token estimate
+            // of this tiny transcript, so passing means the metered cost was
+            // preserved through providerCallToCachedCall/cachedCallToApiCall.
+            metering_usage: [{ value: 2.5, unit: 'credit' }],
+          }],
+        },
+      },
+    }))
+
+    try {
+      const parseAllSessions = await loadParser()
+      const projects = await parseAllSessions(dayRange(), 'kiro')
+      const session = projects[0]!.sessions[0]!
+
+      expect(session.totalCostUSD).toBeCloseTo(2.5 * 0.04, 8)
+    } finally {
+      delete process.env['KIRO_HOME']
+    }
+  })
 })

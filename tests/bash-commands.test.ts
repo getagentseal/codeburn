@@ -73,6 +73,43 @@ describe('extractBashCommands', () => {
   it('handles env vars combined with chained commands', () => {
     expect(extractBashCommands('NODE_ENV=test npm test && git push')).toEqual(['npm', 'git'])
   })
+
+  it('skips command wrapper prefixes', () => {
+    expect(extractBashCommands('rtk git status')).toEqual(['git'])
+    expect(extractBashCommands('sudo npm install')).toEqual(['npm'])
+    expect(extractBashCommands('npx vitest --run')).toEqual(['vitest'])
+  })
+
+  it('skips prefix combined with env var assignment', () => {
+    expect(extractBashCommands('DEBUG=1 rtk git status')).toEqual(['git'])
+  })
+
+  it('skips nested wrapper prefixes', () => {
+    expect(extractBashCommands('sudo npx vitest --run')).toEqual(['vitest'])
+  })
+
+  it('skips prefix across chained commands', () => {
+    expect(extractBashCommands('rtk git add . && rtk git commit -m "msg"')).toEqual(['git', 'git'])
+  })
+
+  it('keeps a standalone prefix with no following command', () => {
+    expect(extractBashCommands('rtk')).toEqual(['rtk'])
+    expect(extractBashCommands('sudo')).toEqual(['sudo'])
+  })
+
+  it('keeps prefix when the next token is a flag', () => {
+    expect(extractBashCommands('nice -n 10 git push')).toEqual(['nice'])
+  })
+
+  it('skips env assignment that follows a wrapper prefix', () => {
+    expect(extractBashCommands('sudo NODE_ENV=production node server.js')).toEqual(['node'])
+    expect(extractBashCommands('time FOO=1 make build')).toEqual(['make'])
+  })
+
+  it('keeps prefix when the next token is quoted', () => {
+    expect(extractBashCommands('npx "@angular/cli" new app')).toEqual(['npx'])
+    expect(extractBashCommands("npx 'ts-node' script.ts")).toEqual(['npx'])
+  })
 })
 
 describe('BASH_TOOLS', () => {

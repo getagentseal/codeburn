@@ -289,6 +289,8 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'kimi-auto':                     'kimi-k2-thinking',
   'kimi-code':                     'kimi-k2-thinking',
   'kimi-for-coding':               'kimi-k2-thinking',
+  'mimo-v2-flash':                 'xiaomi/mimo-v2-flash',
+  'kat-coder-pro-v1':              'kwaipilot/kat-coder-pro',
   // Cursor emits dot-version tier-last names plus tier/reasoning suffixes
   // that LiteLLM does not index (`-high`, `-low`, `-medium`, `-thinking`,
   // `-high-thinking`, `-fast-mode`). Missing aliases here surface as $0 in
@@ -575,6 +577,8 @@ export function getProxyPathsConfigHash(): string {
 function resolveAlias(model: string): string {
   if (Object.hasOwn(userAliases, model)) return userAliases[model]!
   if (Object.hasOwn(BUILTIN_ALIASES, model)) return BUILTIN_ALIASES[model]!
+  const lowercase = model.toLowerCase()
+  if (lowercase !== model && Object.hasOwn(BUILTIN_ALIASES, lowercase)) return BUILTIN_ALIASES[lowercase]!
   return model
 }
 function getCanonicalName(model: string): string {
@@ -582,6 +586,16 @@ function getCanonicalName(model: string): string {
     .replace(/@.*$/, '')       // strip pin: claude-sonnet-4-6@20250929 -> claude-sonnet-4-6
     .replace(/-\d{8}$/, '')   // strip date: claude-sonnet-4-20250514 -> claude-sonnet-4
     .replace(/^[^/]+\//, '') // strip provider prefix: anthropic/foo -> foo
+}
+
+function stripKnownPricingVariantSuffix(model: string): string | null {
+  const withoutColonSuffix = model.replace(/:(thinking|cloud)$/i, '')
+  if (withoutColonSuffix !== model) return withoutColonSuffix
+
+  const withoutTeeSuffix = model.replace(/-TEE$/i, '')
+  if (withoutTeeSuffix !== model) return withoutTeeSuffix
+
+  return null
 }
 
 export function getModelCosts(model: string): ModelCosts | null {
@@ -631,6 +645,18 @@ export function getModelCosts(model: string): ModelCosts | null {
   const byPrefix = lowerIndex.get(withPrefix.toLowerCase())
   if (byPrefix) return byPrefix
 
+  const withPrefixVariant = stripKnownPricingVariantSuffix(withPrefix)
+  if (withPrefixVariant && withPrefixVariant !== withPrefix) {
+    const variantCosts = getModelCosts(withPrefixVariant)
+    if (variantCosts) return variantCosts
+  }
+
+  const canonicalVariant = stripKnownPricingVariantSuffix(canonical)
+  if (canonicalVariant && canonicalVariant !== canonical && canonicalVariant !== withPrefixVariant) {
+    const variantCosts = getModelCosts(canonicalVariant)
+    if (variantCosts) return variantCosts
+  }
+
   return null
 }
 
@@ -651,6 +677,71 @@ function looksLikeLocalModel(name: string): boolean {
   // GGUF / quantized fingerprints commonly seen in local inference.
   if (/[-_](q[2-8](_[a-z0-9]+)?|bf16|fp16|gguf|f16|f32)$/i.test(name)) return true
   return false
+}
+
+export interface UnpricedModelUsage {
+  model: string
+  calls: number
+  tokens: number
+}
+
+function hasBillableRate(costs: ModelCosts): boolean {
+  return costs.inputCostPerToken > 0
+    || costs.outputCostPerToken > 0
+    || costs.cacheWriteCostPerToken > 0
+    || costs.cacheReadCostPerToken > 0
+}
+
+// Exact-override lookup with the same key derivation getModelCosts uses. Lets
+// the unpriced detector distinguish "explicitly declared free by the user" (a
+// zero-rate override) from a zero-rate LiteLLM stub, which means "listed but
+// unknown price" and must still be flagged. Only the EXACT override form is
+// consulted: getModelCosts checks it before any table hit, so when one exists
+// it is provably what priced the model. Prefix and case-insensitive overrides
+// resolve AFTER table hits and so cannot prove the $0 was intentional; a
+// zero-rate stub shadowed by one still gets flagged (the honest direction).
+function exactPriceOverrideFor(model: string): ModelCosts | null {
+  const withPrefix = model.replace(/@.*$/, '').replace(/-\d{8}$/, '')
+  const canonicalName = getCanonicalName(model)
+  const canonical = resolveAlias(canonicalName)
+  return getPriceOverrideExact(model, withPrefix, canonicalName, canonical)
+}
+
+// Render-time unpriced detection (#638): flag aggregated model rows that carry
+// usage but $0 cost AND whose pricing lookup yields no billable rate right
+// now. Cost is computed at parse time and cached, so a parse-time registry
+// would miss cached sessions; a render-time check covers both and heals the
+// moment pricing data, an alias, or a price override arrives.
+//
+// Rows with cost > 0 are never flagged: aggregation keys rows by DISPLAY name
+// (parser.ts keys modelBreakdown via getShortModelName), which the pricing
+// lookup misses, so a priced model like "Opus 4.8" would otherwise false-flag.
+// $0 display-name rows ARE flagged even when the raw id would price today:
+// those tokens really did enter the report at $0 (a provider priced a
+// transformed name, or the session was cached before its model's pricing
+// landed). Conservative by design: a display key merging priced and unpriced
+// raw ids carries cost > 0 and is not flagged. Local-looking models and
+// models with a local-savings mapping are excluded because $0 is their
+// correct cost, as are zero-rate USER overrides (explicitly declared free).
+export function findUnpricedModels(
+  rows: Iterable<{ model: string; calls: number; cost: number; tokens?: number }>,
+): UnpricedModelUsage[] {
+  const out: UnpricedModelUsage[] = []
+  for (const row of rows) {
+    const { model } = row
+    const tokens = row.tokens ?? 0
+    if (!model || model === '<synthetic>') continue
+    if (row.calls <= 0 && tokens <= 0) continue
+    if (row.cost > 0) continue
+    if (looksLikeLocalModel(model)) continue
+    if (getLocalSavingsBaseline(model)) continue
+    const costs = getModelCosts(model)
+    if (costs && hasBillableRate(costs)) continue
+    if (costs && exactPriceOverrideFor(model)) continue
+    out.push({ model, calls: row.calls, tokens })
+  }
+  return out.sort((a, b) => (b.tokens - a.tokens) || (b.calls - a.calls)
+    || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0))
 }
 
 function shouldWarnAboutUnknownModel(name: string): boolean {

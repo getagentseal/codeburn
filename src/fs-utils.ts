@@ -29,7 +29,10 @@ function notice(msg: string): void {
   process.stderr.write(`codeburn: ${msg}\n`)
 }
 
-export async function readSessionFile(filePath: string): Promise<string | null> {
+export async function readSessionFile(
+  filePath: string,
+  encoding: BufferEncoding = 'utf-8'
+): Promise<string | null> {
   let size: number
   try {
     size = (await stat(filePath)).size
@@ -44,7 +47,7 @@ export async function readSessionFile(filePath: string): Promise<string | null> 
   }
 
   try {
-    return await readFile(filePath, 'utf-8')
+    return await readFile(filePath, encoding)
   } catch (err) {
     warn(`read failed for ${filePath}: ${(err as NodeJS.ErrnoException).code ?? 'unknown'}`)
     return null

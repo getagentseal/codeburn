@@ -45,14 +45,16 @@ struct DataClient {
                       days: Set<String> = [],
                       provider: ProviderFilter,
                       includeOptimize: Bool,
-                      scope: MenubarScope = .local) async throws -> MenubarPayload {
+                      scope: MenubarScope = .local,
+                      claudeConfigSourceId: String? = nil) async throws -> MenubarPayload {
         let subcommand = statusSubcommand(
             period: period,
             day: day,
             days: days,
             provider: provider,
             includeOptimize: includeOptimize,
-            scope: scope
+            scope: scope,
+            claudeConfigSourceId: claudeConfigSourceId
         )
         let result = try await runCLI(subcommand: subcommand)
         guard result.exitCode == 0 else {
@@ -76,7 +78,8 @@ struct DataClient {
                                  days: Set<String> = [],
                                  provider: ProviderFilter,
                                  includeOptimize: Bool,
-                                 scope: MenubarScope = .local) -> [String] {
+                                 scope: MenubarScope = .local,
+                                 claudeConfigSourceId: String? = nil) -> [String] {
         let effectiveScope: MenubarScope = days.count > 1 ? .local : scope
         let effectiveProvider: ProviderFilter = effectiveScope == .combined ? .all : provider
         var subcommand = [
@@ -86,6 +89,9 @@ struct DataClient {
         ]
         if effectiveScope == .combined {
             subcommand.append(contentsOf: ["--scope", effectiveScope.cliArg])
+        }
+        if effectiveScope == .local, let claudeConfigSourceId, !claudeConfigSourceId.isEmpty {
+            subcommand.append(contentsOf: ["--claude-config-source", claudeConfigSourceId])
         }
         if days.count > 1 {
             subcommand.append(contentsOf: ["--days", days.sorted().joined(separator: ",")])

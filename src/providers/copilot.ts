@@ -39,6 +39,7 @@
 //   CODEBURN_COPILOT_DISABLE_OTEL=1 — Skip OTel entirely, use only JSONL
 //   CODEBURN_COPILOT_WS_STORAGE_DIR — Override VS Code workspaceStorage
 //   CODEBURN_COPILOT_GLOBAL_STORAGE_DIR — Override VS Code globalStorage
+//   CODEBURN_COPILOT_JETBRAINS_DIR — Override the JetBrains github-copilot root
 //
 // ARCHITECTURE:
 //   discoverSessions() returns OTel sessions and legacy JSONL sessions. When
@@ -60,9 +61,11 @@ import { readdir, stat } from 'fs/promises'
 import { homedir, platform } from 'os'
 import { join, basename, dirname, posix, win32 } from 'path'
 import { existsSync } from 'fs'
+import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
+import { estimateTokens } from '../context-tree.js'
 import type {
   Provider,
   SessionSource,
@@ -100,6 +103,15 @@ const toolNameMap: Record<string, string> = {
   github_repo: 'GitHub',
   web_search: 'WebSearch',
   run_in_terminal: 'Shell',
+  // JetBrains Copilot agent tool names (snake_case)
+  insert_edit_into_file: 'Edit',
+  create_file: 'Edit',
+  get_errors: 'Diagnostics',
+  file_search: 'Search',
+  grep_search: 'Search',
+  semantic_search: 'Search',
+  list_dir: 'Search',
+  fetch_webpage: 'Web',
   // OTel execute_tool span names from Copilot Chat:
   readFile: 'Read',
   writeFile: 'Edit',
@@ -275,6 +287,40 @@ function getAgentTracesDbPath(): string | null {
     if (existsSync(candidate)) return candidate
   }
   return null
+}
+
+/**
+ * Locate the GitHub Copilot config root used by the JetBrains IDE plugin
+ * (IntelliJ IDEA, PyCharm, RubyMine, …). The JetBrains Copilot agent persists
+ * chat/agent sessions here — a location none of the VS Code or CLI sources
+ * touch, so this is the only way JetBrains-driven Copilot usage becomes
+ * visible to CodeBurn.
+ *
+ * The path mirrors the plugin's own `getXdgConfigPath` logic (observed in the
+ * bundled copilot-agent language server):
+ *   - $XDG_CONFIG_HOME/github-copilot (when set to an absolute path)
+ *   - macOS / Linux: ~/.config/github-copilot
+ *   - Windows:       %USERPROFILE%\AppData\Local\github-copilot
+ *
+ * Under this root, each IDE has its own subdir (e.g. `iu` for IntelliJ IDEA
+ * Ultimate, `intellij` for the community edition) containing
+ * chat-agent-sessions/, chat-sessions/, and chat-edit-sessions/.
+ */
+function getJetBrainsCopilotRoot(override?: string): string {
+  const envOverride = override ?? process.env['CODEBURN_COPILOT_JETBRAINS_DIR']
+  if (envOverride) return envOverride
+
+  const xdg = process.env['XDG_CONFIG_HOME']
+  if (xdg && (posix.isAbsolute(xdg) || win32.isAbsolute(xdg))) {
+    return join(xdg, 'github-copilot')
+  }
+
+  if (platform() === 'win32') {
+    const local = process.env['LOCALAPPDATA'] ?? join(homedir(), 'AppData', 'Local')
+    return join(local, 'github-copilot')
+  }
+
+  return join(homedir(), '.config', 'github-copilot')
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +887,602 @@ function createChatSessionParser(
 }
 
 // ---------------------------------------------------------------------------
+// JetBrains parser (Nitrite .db from ~/.config/github-copilot)
+// ---------------------------------------------------------------------------
+//
+// The JetBrains Copilot plugin stores each chat/agent session in a Nitrite
+// (H2 MVStore) .db of Java-serialized documents. There is NO token accounting
+// anywhere in the store, so we estimate output tokens from the assistant reply
+// text (the same char-count approach CodeBurn already uses for Cursor and
+// legacy Copilot JSONL). Cost is therefore marked costIsEstimated.
+//
+// The model (e.g. "claude-opus-4.5", "gpt-4.1") is not always tagged on each
+// turn, so we recover it by scanning the raw buffer for a known model token.
+
+// Known JetBrains Copilot model tokens, longest-first so we match the most
+// specific name (e.g. "gpt-4.1-mini" before "gpt-4.1").
+const JETBRAINS_MODEL_TOKENS = [
+  'claude-opus-4.5',
+  'claude-opus-4.1',
+  'claude-opus-4',
+  'claude-sonnet-4.5',
+  'claude-sonnet-4',
+  'gpt-5.3-codex',
+  'gpt-5.3',
+  'gpt-5.2',
+  'gpt-5.1',
+  'gpt-5-mini',
+  'gpt-5',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'gpt-4.1',
+  'gpt-4o-mini',
+  'gpt-4o',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash',
+  'o3-mini',
+  'o4-mini',
+  'o3',
+]
+
+/**
+ * Normalise a raw JetBrains model token to CodeBurn's canonical model id.
+ * Claude names use dots on disk (claude-opus-4.5) but dashes in the pricing
+ * tables (claude-opus-4-5); GPT/Gemini names are kept verbatim.
+ */
+function normalizeJetBrainsModelName(raw: string): string {
+  const t = raw.trim()
+  if (!t) return ''
+  if (t.startsWith('claude-')) return t.replace(/\./g, '-')
+  return t
+}
+
+/** Match a known model token at an alnum boundary anywhere in a string. */
+function findJetBrainsModelToken(s: string): string {
+  for (const token of JETBRAINS_MODEL_TOKENS) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    // "o3" etc. must not match inside words like "iso3166".
+    if (new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`).test(s)) {
+      return normalizeJetBrainsModelName(token)
+    }
+  }
+  return ''
+}
+
+/** Recover a model from a raw buffer by scanning for a known token. */
+function inferJetBrainsModel(raw: string): string {
+  return findJetBrainsModelToken(raw)
+}
+
+/**
+ * Infer the project (repository name) from the file:// URIs a chat referenced.
+ *
+ * The JetBrains store has no workspace/cwd record, and there is no reliable
+ * marker inside a path for where the repo root sits (users nest repos under
+ * arbitrary container dirs). So for each referenced file we walk UP the real
+ * filesystem to the nearest ancestor containing a `.git` entry and use that
+ * directory's basename — the true repo root. This is the one approach that
+ * yields a clean, consistent name (e.g. `my-service`) instead of a deep subdir
+ * or an inconsistent prose-scraped guess.
+ *
+ * Returns undefined when the chat referenced no files or none resolve to a repo
+ * that still exists on disk (caller then falls back to a generic bucket).
+ */
+function inferJetBrainsProject(raw: string): string | undefined {
+  // Capture referenced absolute paths (original case — we hit the real FS).
+  const re = /file:\/\/(\/[^"\\]+?)(?:\\|")/g
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    // Decode %20 etc. and strip a trailing .rej/.orig suffix noise; keep the dir.
+    let p = m[1]
+    try { p = decodeURIComponent(p) } catch { /* leave as-is */ }
+    const dir = p.slice(0, p.lastIndexOf('/'))
+    if (dir.startsWith('/')) seen.add(dir)
+  }
+  if (seen.size === 0) return undefined
+
+  for (const dir of seen) {
+    const repo = findGitRepoRoot(dir)
+    if (repo) return repo
+  }
+  return undefined
+}
+
+/** Walk up from `dir` to the nearest ancestor containing `.git`; return its basename. */
+function findGitRepoRoot(dir: string): string | undefined {
+  let cur = dir
+  // Bound the walk to avoid pathological loops; repos are never this deep.
+  for (let i = 0; i < 40 && cur && cur !== '/'; i++) {
+    if (existsSync(join(cur, '.git'))) {
+      const name = basename(cur)
+      return name || undefined
+    }
+    const parent = dirname(cur)
+    if (parent === cur) break
+    cur = parent
+  }
+  return undefined
+}
+
+/**
+ * Recover the plugin-recorded project label from a Nitrite .db.
+ *
+ * JetBrains Copilot 1.12+ serialises a `projectName` field on the session doc
+ * (e.g. `my-service`, `codeburn`). It is the plugin's OWN authoritative
+ * label — the JetBrains analogue of the OTel source's
+ * `github.copilot.git.repository` — so it is preferred over the file-path
+ * git-walk heuristic when present.
+ *
+ * The field is a Java-serialized string: the key bytes `projectName` are
+ * followed immediately by TC_STRING framing `0x74 <u16 big-endian length>
+ * <UTF-8 bytes>`. We read exactly `length` bytes (so an embedded newline or
+ * quote can't truncate it) and accept the first occurrence whose value is a
+ * plausible short, printable repo name. Older plugins that don't write the
+ * field simply yield undefined (callers fall back to the git-walk).
+ *
+ * Note: the field lives on the session doc, which the plugin writes into the
+ * `chat-sessions` / `chat-edit-sessions` stores — often NOT the
+ * `chat-agent-sessions` store where the billable turns live. Discovery joins
+ * the two by store id; see resolveJetBrainsProjectNames.
+ */
+function extractJetBrainsProjectName(raw: string): string | undefined {
+  const re = /projectName\x74([\x00-\xff])([\x00-\xff])/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    const len = (m[1]!.charCodeAt(0) << 8) | m[2]!.charCodeAt(0)
+    // Repo names are short; a huge length means we matched a schema/key
+    // occurrence rather than a value-bearing one — skip it.
+    if (len < 1 || len > 128) continue
+    const start = m.index + m[0].length
+    // The .db is read as latin1, so re-interpret the length-delimited bytes as
+    // UTF-8 (repo names can contain non-ASCII). Reject only if the decoded value
+    // holds control chars — a sign we matched a non-value occurrence, not a name.
+    const val = Buffer.from(raw.slice(start, start + len), 'latin1').toString('utf8')
+    // eslint-disable-next-line no-control-regex
+    if (val.length > 0 && !/[\x00-\x1f]/.test(val)) return val
+  }
+  return undefined
+}
+
+// ---------------------------------------------------------------------------
+// Nitrite .db (H2 MVStore) extraction
+// ---------------------------------------------------------------------------
+//
+// JetBrains Copilot sessions store their conversation in the Nitrite .db
+// (copilot-*-nitrite.db). One .db holds many conversations. Assistant replies
+// are stored as a distinct blob shape:
+//
+//   {"__first__":{"type":"Subgraph","value":"..."}, ...}
+//
+// which is more deeply escaped than the user-message value-maps. The reply text
+// is recovered by progressive unescaping and collecting "text":"..." fields.
+// Failed turns ("Sorry, an error occurred …") carry an error status and no reply
+// text — they are detected and billed as $0.
+
+// One assistant turn recovered from a .db.
+type JBDbTurn = {
+  replyText: string
+  model: string
+  errored: boolean
+  // The owning conversation (chat tab): its internal GUID and title. One .db
+  // holds many conversations; turns are grouped back to their tab by this id.
+  conversationId: string
+  conversationTitle: string
+  // The file path this conversation referenced (home-relative common dir), or
+  // '' if the chat touched no files. Used as the project label.
+  conversationProject: string
+}
+
+// A conversation (chat tab) recovered from a .db: internal GUID → title.
+type JBConversation = { id: string; title: string }
+
+/**
+ * Recover the conversation (chat-tab) records from a raw .db buffer. Each is
+ * stored as `$<GUID> … name … value <title> … source copilot`. Returns the
+ * GUID→title map so turns can be grouped back to the tab the user sees.
+ */
+function extractJetBrainsConversations(raw: string): JBConversation[] {
+  // A conversation's title EVOLVES as the user chats: it starts as "New Agent
+  // Session", may pass through an auto-generated name, and ends at the final
+  // title shown in the UI. The same `$<GUID> … name … value <title> … source`
+  // record is rewritten each time, so we collect every occurrence per GUID and
+  // keep the LAST meaningful (non-default) one.
+  const DEFAULT_TITLES = new Set(['New Agent Session', 'New Session', 'New Chat'])
+  const byId = new Map<string, string>()
+  const re = /\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})[\s\S]{0,8}name/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    const id = m[1]
+    const window = raw.slice(m.index, m.index + 400)
+    // The title is the Java-UTF string between the `value` marker and `source`.
+    const tm = window.match(/value.{1,6}?([\x20-\x7e]{3,80}?)t\x00\x06source/)
+    if (!tm) continue
+    const title = Buffer.from(tm[1].replace(/^[^A-Za-z0-9]*/, ''), 'latin1').toString('utf8').trim()
+    if (!title) continue
+    // Keep the latest non-default title; only fall back to a default if no
+    // meaningful title has been seen for this conversation yet.
+    const existing = byId.get(id)
+    if (existing && !DEFAULT_TITLES.has(existing) && DEFAULT_TITLES.has(title)) continue
+    byId.set(id, title)
+  }
+  return [...byId.entries()].map(([id, title]) => ({ id, title }))
+}
+
+/** Brace-match a JSON object starting at `start`, tolerating escaped quotes. */
+function matchJsonObject(raw: string, start: number): { chunk: string; end: number } {
+  let depth = 0
+  let inStr = false
+  let esc = false
+  let i = start
+  for (; i < raw.length; i++) {
+    const c = raw[i]
+    if (esc) { esc = false; continue }
+    if (c === '\\') { esc = true; continue }
+    if (c === '"') { inStr = !inStr; continue }
+    if (inStr) continue
+    if (c === '{') depth++
+    else if (c === '}') { depth--; if (depth === 0) { i++; break } }
+  }
+  return { chunk: raw.slice(start, i), end: i }
+}
+
+/**
+ * Recover the assistant reply text from a `__first__`/Subgraph response blob.
+ *
+ * JetBrains Copilot has two turn shapes, both handled here:
+ *
+ *  - **Ask mode:** the reply is a `Markdown` record whose `data` is an escaped
+ *    JSON document `{"text":"…","annotations":…}`.
+ *  - **Agent mode** (e.g. PyCharm agent sessions): the reply is the `reply`
+ *    field of an `AgentRound` record `{"roundId":N,"reply":"…","toolCalls":[…]}`.
+ *    In agent mode the `Markdown` records hold the USER's prompts, not the
+ *    reply, so we must NOT read them — the assistant output is the AgentRound
+ *    reply.
+ *
+ * Both are read STRUCTURALLY rather than by fully unescaping the blob (which
+ * would strip the reply's own quotes and make regex extraction ambiguous): we
+ * locate each `data`/`reply` value, read it as a properly-delimited JSON-string
+ * literal (honouring escaping), unescape one level, and `JSON.parse` to reach
+ * the text. We unescape the blob one level at a time and extract at the first
+ * depth that yields text, never accumulating across depths (which would union a
+ * quote-truncated half-unescaped capture with the full one and garble the
+ * reply, inflating the token/cost estimate).
+ *
+ * Steps/error/progress-only blobs (no Markdown text and no AgentRound reply)
+ * yield '' and are billed as $0 upstream.
+ */
+function extractResponseText(blob: string): string {
+  let s = blob
+  for (let depth = 0; depth < 8; depth++) {
+    // Decide the mode by the PRESENCE of an AgentRound record, not by whether it
+    // yielded a reply. In agent mode the Markdown record holds the USER prompt,
+    // so an agent blob whose reply is empty (a failed turn, or a pure tool-call
+    // round) must NOT fall back to Markdown — that would bill the user's prompt
+    // as the assistant's output. Ask-mode blobs have no AgentRound record and
+    // use Markdown. (Verified across every observed store: the two reply shapes
+    // never coexist in one blob, so this mode split is unambiguous.)
+    const isAgentMode = /"type":"AgentRound"/.test(s)
+    if (isAgentMode || /"type":"Markdown"/.test(s)) {
+      const decoded = isAgentMode ? extractAgentRoundReplies(s) : extractMarkdownTexts(s)
+      // The .db is read as latin1 (byte-stable), so multibyte UTF-8 characters
+      // are split into separate code units. Re-interpret as UTF-8 so the char
+      // count (→ token estimate) reflects real content length, not byte count.
+      // decoded may be empty (failed/tool-only agent turn) → '' (billed $0).
+      return Buffer.from(decoded.join('\n').trim(), 'latin1').toString('utf8')
+    }
+    // Not yet at the depth where record markers appear bare — unescape one level
+    // in a single left-to-right pass so `\\` and `\"` resolve together (a
+    // two-pass replace would turn `\\"` into `\"` not `\\` + `"`).
+    const next = s.replace(/\\([\\"])/g, '$1')
+    if (next === s) break
+    s = next
+  }
+  return ''
+}
+
+/**
+ * Collect the `text` of every `Markdown` record in `s`, treating each record's
+ * `data` value as a one-level-escaped JSON string parsed structurally (so the
+ * reply's own quotes never truncate it). Returns [] if `s` is not yet at the
+ * right unescape depth (no bare `"type":"Markdown"` with a parseable `data`).
+ * Scoping to Markdown skips `Error` (`message`) and `Steps` records — not
+ * billable output. Revisions repeat a reply, so identical texts are de-duped.
+ */
+function extractMarkdownTexts(s: string): string[] {
+  return extractRecordStrings(s, '"type":"Markdown"', '"data":"', 'text')
+}
+
+/**
+ * Collect the non-empty `reply` of every `AgentRound` record (agent mode). A
+ * single blob can hold several rounds (a multi-turn agent session); each round's
+ * `reply` is the assistant's text for that step (empty on pure tool-call rounds).
+ * Deduped in order.
+ */
+function extractAgentRoundReplies(s: string): string[] {
+  return extractRecordStrings(s, '"type":"AgentRound"', '"data":"', 'reply')
+}
+
+/**
+ * Shared structural reader: for every `<marker>` in `s`, find the following
+ * `<dataKey>` string literal (a one-level-escaped JSON document), parse it, and
+ * collect `doc[field]` when it is a non-empty string. Reading the value as a
+ * delimited literal — not a greedy regex — means the payload's own quotes never
+ * truncate it. Returns [] when `s` is not yet at the depth where the marker
+ * appears bare with a parseable payload. De-dupes in order (the store keeps
+ * byte-copies/revisions of each reply).
+ */
+function extractRecordStrings(s: string, marker: string, dataKey: string, field: string): string[] {
+  const texts: string[] = []
+  const seen = new Set<string>()
+  const re = new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    const dk = s.indexOf(dataKey, m.index)
+    if (dk === -1 || dk - m.index > 200) continue
+    // The value runs from after `<dataKey>` to the first UNescaped quote (an odd
+    // run of preceding backslashes escapes it).
+    const start = dk + dataKey.length
+    let i = start
+    for (; i < s.length; i++) {
+      if (s[i] !== '"') continue
+      let bs = 0
+      for (let j = i - 1; j >= start && s[j] === '\\'; j--) bs++
+      if (bs % 2 === 0) break
+    }
+    const literal = s.slice(start, i)
+    try {
+      // Wrapping in quotes + parsing unescapes exactly one level → the inner
+      // JSON document as a string; parsing THAT reaches { <field>, … }.
+      const doc = JSON.parse(JSON.parse('"' + literal + '"') as string) as Record<string, unknown>
+      const text = typeof doc[field] === 'string' ? (doc[field] as string) : ''
+      if (text && !seen.has(text)) {
+        seen.add(text)
+        texts.push(text)
+      }
+    } catch {
+      // Not the right depth (or not a matching record) — skip.
+    }
+  }
+  return texts
+}
+
+/**
+ * Extract assistant turns from a raw (latin1) Nitrite .db buffer. Each turn is
+ * one `{"__first__":{"type":"Subgraph"…}` blob; the per-turn model is recovered
+ * from inside the blob when present, else the whole-store default. Each turn is
+ * grouped back to its owning conversation (chat tab) by the nearest preceding
+ * conversation GUID. Duplicate byte-copies of the same reply (the store keeps
+ * several) are de-duplicated by content, per conversation.
+ */
+function extractJetBrainsDbTurns(raw: string): JBDbTurn[] {
+  const conversations = extractJetBrainsConversations(raw)
+  // Precompute the byte offset of each conversation GUID's full form so a turn
+  // can be attributed to the conversation whose id most recently precedes it.
+  const convById = new Map(conversations.map((c) => [c.id, c]))
+
+  const turns: JBDbTurn[] = []
+  const seenReplies = new Set<string>() // keyed by `${conversationId}::${reply}`
+  const re = /\{"__first__":\{"type":"Subgraph"/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw))) {
+    const { chunk, end } = matchJsonObject(raw, m.index)
+    re.lastIndex = end
+
+    // Attribute this turn to the conversation whose GUID last appears before it.
+    let conversationId = ''
+    let conversationTitle = ''
+    let bestPos = -1
+    for (const c of convById.values()) {
+      const p = raw.lastIndexOf(c.id, m.index)
+      if (p > bestPos) {
+        bestPos = p
+        conversationId = c.id
+        conversationTitle = c.title
+      }
+    }
+
+    const replyText = extractResponseText(chunk)
+    // The files this turn referenced (home-relative common dir) → project label.
+    const conversationProject = inferJetBrainsProject(chunk) ?? ''
+    // A per-turn model token sometimes appears inside the blob.
+    const model = findJetBrainsModelToken(chunk)
+    // A failed turn carries an error status / phrase AND produces no reply text.
+    // Requiring empty text avoids misclassifying a genuine reply that merely
+    // *discusses* an error (e.g. explaining a stack trace) as a failed turn.
+    const hasErrorMarker = /error occurred|"isError":true|\\+"status\\+":\\+"(?:error|failed)\\+"/i.test(chunk)
+    if (hasErrorMarker && !replyText) {
+      turns.push({ replyText: '', model, errored: true, conversationId, conversationTitle, conversationProject })
+      continue
+    }
+    if (!replyText) continue // Steps/progress-only blob — no billable output
+    const dedupeKey = `${conversationId}::${replyText}`
+    if (seenReplies.has(dedupeKey)) continue
+    seenReplies.add(dedupeKey)
+    turns.push({ replyText, model, errored: false, conversationId, conversationTitle, conversationProject })
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fallback: old JetBrains Copilot plugin format (≤1.5.x, e.g. 1.5.59-243)
+  // ---------------------------------------------------------------------------
+  // In this format ALL session turns are stored inside ONE large outer Nitrite
+  // document — a binary-framed JSON object with UUID-keyed Value entries — rather
+  // than the per-turn {"__first__":{"type":"Subgraph",...}} blobs used by newer
+  // plugins (≥1.12.x). The AgentRound entries sit one escaping level deeper
+  // inside the outer document's string values, so `extractResponseText`'s
+  // depth-unescape loop handles extraction correctly once we feed it the right
+  // chunk. MVStore keeps two identical copies of the collection; `seenReplies`
+  // deduplicates them automatically.
+  //
+  // Detection heuristic: the __first__/Subgraph path produced no turns AND the
+  // raw file contains bare 'AgentRound' text (meaning old-format data is present).
+  if (turns.length === 0 && raw.includes('AgentRound')) {
+    // The outer Nitrite document is preceded by a single binary framing byte
+    // (0x81 in practice, but any non-printable/non-ASCII byte in MVStore).
+    // It starts with a UUID-keyed Value entry: {"<uuid>":{"type":"Value",...}}.
+    // Hex is matched case-insensitively — an uppercase UUID must not cause the
+    // whole session to fall through to $0 (the exact bug this path fixes).
+    const outerDocRe = /[\x00-\x1f\x7f-\xff]\{"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}":\{"type":"Value"/g
+    let dm: RegExpExecArray | null
+    while ((dm = outerDocRe.exec(raw))) {
+      // Skip the leading binary byte; matchJsonObject starts at the '{'.
+      const docStart = dm.index + 1
+      const { chunk, end } = matchJsonObject(raw, docStart)
+      outerDocRe.lastIndex = end
+
+      // Skip documents that contain no AgentRound data (e.g. empty sessions).
+      if (!chunk.includes('AgentRound')) continue
+
+      // Attribute to the conversation whose GUID most recently precedes this doc.
+      let conversationId = ''
+      let conversationTitle = ''
+      let bestPos = -1
+      for (const c of convById.values()) {
+        const p = raw.lastIndexOf(c.id, docStart)
+        if (p > bestPos) {
+          bestPos = p
+          conversationId = c.id
+          conversationTitle = c.title
+        }
+      }
+
+      // extractResponseText handles the depth-1 unescape needed to surface the
+      // AgentRound records, then calls extractAgentRoundReplies for each turn.
+      // Because the outer document holds ALL turns in one blob we get back a
+      // single joined string; split it on the '\n' join to yield per-turn texts.
+      const allReplies = extractResponseText(chunk)
+      if (!allReplies) continue
+
+      const conversationProject = inferJetBrainsProject(chunk) ?? ''
+      const storeModel = findJetBrainsModelToken(chunk)
+
+      // extractResponseText joins multiple replies with '\n'. Since individual
+      // replies can themselves span multiple lines we cannot cleanly split here —
+      // instead we emit one ParsedProviderCall per outer document (one session).
+      const dedupeKey = `${conversationId}::${allReplies}`
+      if (seenReplies.has(dedupeKey)) continue
+      seenReplies.add(dedupeKey)
+
+      turns.push({
+        replyText: allReplies,
+        model: storeModel,
+        errored: false,
+        conversationId,
+        conversationTitle,
+        conversationProject,
+      })
+    }
+  }
+
+  // A project derived from ANY turn of a conversation applies to all its turns
+  // (the files are usually referenced in the first substantive turn only).
+  const projByConv = new Map<string, string>()
+  for (const t of turns) {
+    if (t.conversationProject && !projByConv.has(t.conversationId)) {
+      projByConv.set(t.conversationId, t.conversationProject)
+    }
+  }
+  for (const t of turns) {
+    if (!t.conversationProject) t.conversationProject = projByConv.get(t.conversationId) ?? ''
+  }
+
+  return turns
+}
+
+// ---------------------------------------------------------------------------
+// JetBrains parser: one ParsedProviderCall per assistant turn in the .db
+// ---------------------------------------------------------------------------
+
+function createJetBrainsParser(
+  source: JetBrainsSessionSource,
+  seenKeys: Set<string>
+): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      const sessionId = source.sessionId
+
+      // Nitrite .db (the store's authoritative session content). Read as latin1
+      // so byte offsets are stable through the binary MVStore framing.
+      if (source.dbPath) {
+        let dbRaw: string | null = null
+        try {
+          dbRaw = await readSessionFile(source.dbPath, 'latin1')
+        } catch {
+          dbRaw = null
+        }
+        if (dbRaw) {
+          const storeModel = inferJetBrainsModel(dbRaw)
+          const turns = extractJetBrainsDbTurns(dbRaw)
+          // Dedup keys derive from the reply CONTENT, not the scan position:
+          // copilot is a durable provider (cached turns are never deleted and a
+          // re-parse appends any key it hasn't seen), while MVStore compaction
+          // can rewrite the file with blobs in a different byte order. With
+          // positional keys, a rewrite that puts a new blob ahead of an old one
+          // hands the new turn the old turn's key (skipped as seen) and re-emits
+          // the old turn under a fresh index — double-billing it. The per-hash
+          // counter keeps genuinely repeated replies and errored turns (which
+          // share replyText '') distinct within a conversation.
+          const perContentIndex = new Map<string, number>()
+          for (const turn of turns) {
+            // One .db holds many chat tabs; group each turn under its own
+            // conversation so the user sees one session per tab, not per file.
+            const convId = turn.conversationId || sessionId
+            const contentHash = createHash('sha256').update(turn.replyText).digest('hex').slice(0, 12)
+            const nth = (perContentIndex.get(`${convId}:${contentHash}`) ?? 0) + 1
+            perContentIndex.set(`${convId}:${contentHash}`, nth)
+            const dedupKey = `copilot:jb:${convId}:${contentHash}:${nth}`
+            if (seenKeys.has(dedupKey)) continue
+            seenKeys.add(dedupKey)
+
+            // Prefer the per-turn model, else the store default, else a generic
+            // Copilot bucket so a real reply is never mis-priced as free.
+            const model = turn.model || storeModel || 'copilot-anthropic-auto'
+            // Errored turns (failed generation) contribute no billable output.
+            const outputTokens = turn.errored ? 0 : estimateTokens(turn.replyText)
+            const costUSD = outputTokens > 0 ? calculateCost(model, 0, outputTokens, 0, 0, 0) : 0
+            // Project resolution precedence:
+            //   1. projectName — the plugin's own recorded label (1.12+),
+            //      joined across kind dirs by store id. Authoritative.
+            //   2. the git repo root of a file:// path the chat referenced
+            //      (older plugins / when projectName is absent).
+            //   3. one honest bucket when neither signal exists.
+            // The conversation TITLE is a chat-thread name, NOT a project, and is
+            // kept out of `project` (it would otherwise pollute By-Project).
+            const project =
+              source.projectName || turn.conversationProject || 'copilot-jetbrains'
+
+            yield {
+              provider: 'copilot',
+              sessionId: convId,
+              project,
+              model,
+              inputTokens: 0,
+              outputTokens,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+              cachedInputTokens: 0,
+              reasoningTokens: 0,
+              webSearchRequests: 0,
+              costUSD,
+              costIsEstimated: true,
+              tools: [],
+              bashCommands: [],
+              timestamp: source.mtime,
+              speed: 'standard' as const,
+              deduplicationKey: dedupKey,
+              // Surface the chat-thread name here (it is the session's label, not
+              // a project) so it remains visible in session-level views.
+              userMessage: turn.conversationTitle,
+            }
+          }
+        }
+      }
+
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // OTel SQLite parser — reads agent-traces.db for FULL token data
 // ---------------------------------------------------------------------------
 
@@ -1093,12 +1735,37 @@ interface ChatSessionSource extends SessionSource {
   sourceType: 'chatsession'
 }
 
+interface JetBrainsSessionSource extends SessionSource {
+  sourceType: 'jetbrains'
+  // Fallback conversation id for turns whose own GUID can't be recovered (the
+  // on-disk store dir name). Normally each turn is grouped by its own tab GUID.
+  sessionId: string
+  // On-disk store directory name — the join key for the projectName lookup
+  // across sibling kind dirs (chat-sessions / chat-edit-sessions).
+  storeId: string
+  // Nitrite .db (copilot-*-nitrite.db) — the store's session content.
+  dbPath: string
+  // File mtime (ISO). The store has no reliable per-turn timestamp, so this
+  // places every turn on a day — without it, calls fall outside date ranges.
+  mtime: string
+  // Plugin-recorded project label (JetBrains Copilot 1.12+), resolved across
+  // all kind dirs by store id. The billable turns live in chat-agent-sessions,
+  // but the projectName field is usually written only into the sibling
+  // chat-sessions / chat-edit-sessions store, so discovery joins them by id.
+  // Undefined for older plugins that don't record it.
+  projectName?: string
+}
+
 function isOtelSource(source: SessionSource): source is OTelSessionSource {
   return (source as OTelSessionSource).sourceType === 'otel'
 }
 
 function isChatSessionSource(source: SessionSource): source is ChatSessionSource {
   return (source as ChatSessionSource).sourceType === 'chatsession'
+}
+
+function isJetBrainsSource(source: SessionSource): source is JetBrainsSessionSource {
+  return (source as JetBrainsSessionSource).sourceType === 'jetbrains'
 }
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1827,132 @@ async function discoverOtelSessions(
     return []
   }
   return [{ path: dbPath, project: 'copilot-chat', provider: 'copilot', sourceType: 'otel' }]
+}
+
+// ---------------------------------------------------------------------------
+// Session discovery: JetBrains (IntelliJ IDEA, PyCharm, …)
+// ---------------------------------------------------------------------------
+
+// The three JetBrains Copilot session kinds (agent / ask / edit mode). Each
+// store directory holds a Nitrite .db with that kind's session content.
+const JETBRAINS_SESSION_KINDS = ['chat-agent-sessions', 'chat-sessions', 'chat-edit-sessions']
+
+// Candidate Nitrite .db filenames per kind, plus a generic fallback.
+const JETBRAINS_DB_NAMES: Record<string, string> = {
+  'chat-agent-sessions': 'copilot-agent-sessions-nitrite.db',
+  'chat-sessions': 'copilot-chat-nitrite.db',
+  'chat-edit-sessions': 'copilot-edit-sessions-nitrite.db',
+}
+
+/** Locate the Nitrite .db in a store dir (known name, else any *-nitrite.db). */
+async function findNitriteDbPath(storeDir: string, kind: string): Promise<string | null> {
+  const known = JETBRAINS_DB_NAMES[kind]
+  if (known) {
+    const p = join(storeDir, known)
+    if ((await stat(p).catch(() => null))?.isFile()) return p
+  }
+  let files: string[]
+  try {
+    files = await readdir(storeDir)
+  } catch {
+    return null
+  }
+  const db = files.find((f) => f.endsWith('-nitrite.db'))
+  return db ? join(storeDir, db) : null
+}
+
+/**
+ * Discover JetBrains Copilot sessions under the github-copilot config root.
+ *
+ * Layout: <root>/<ide>/<kind>/<storeId>/copilot-*-nitrite.db
+ *   <ide>  — per-IDE dir (iu, intellij, PyCharm2025.2, …)
+ *   <kind> — one of JETBRAINS_SESSION_KINDS
+ *
+ * Emits one source per store directory that has a Nitrite .db. The store
+ * records no token counts, so the parser estimates output tokens from the
+ * assistant reply text (see createJetBrainsParser).
+ */
+async function discoverJetBrainsSessions(
+  root: string
+): Promise<JetBrainsSessionSource[]> {
+  const sources: JetBrainsSessionSource[] = []
+
+  let ideDirs: string[]
+  try {
+    ideDirs = await readdir(root)
+  } catch {
+    return sources
+  }
+
+  for (const ide of ideDirs) {
+    for (const kind of JETBRAINS_SESSION_KINDS) {
+      const kindDir = join(root, ide, kind)
+      let storeDirs: string[]
+      try {
+        storeDirs = await readdir(kindDir)
+      } catch {
+        continue // this IDE doesn't have this session kind
+      }
+
+      for (const storeId of storeDirs) {
+        const storeDir = join(kindDir, storeId)
+        const dbPath = await findNitriteDbPath(storeDir, kind)
+        if (!dbPath) continue
+
+        const dbStat = await stat(dbPath).catch(() => null)
+        const mtime = (dbStat?.mtime ?? new Date(0)).toISOString()
+
+        sources.push({
+          path: dbPath,
+          project: 'copilot-jetbrains',
+          provider: 'copilot',
+          sourceType: 'jetbrains',
+          sessionId: storeId,
+          storeId,
+          dbPath,
+          mtime,
+        })
+      }
+    }
+  }
+
+  // Join projectName across kinds by store id. The plugin records the label on
+  // the session doc, which usually lands in the chat-sessions/chat-edit-sessions
+  // store — NOT the chat-agent-sessions store where the billable turns live.
+  // Without this join, every current agent session falls to the generic bucket
+  // even though its repo name is sitting one store dir over.
+  await resolveJetBrainsProjectNames(sources)
+
+  return sources
+}
+
+/**
+ * Populate each source's `projectName` from whichever store dir (of the same
+ * store id) actually recorded it. Reads each source's .db once; a store whose
+ * own .db lacks the field inherits it from a sibling-kind store with the same
+ * id. Best-effort — read/parse failures leave projectName undefined.
+ */
+async function resolveJetBrainsProjectNames(
+  sources: JetBrainsSessionSource[]
+): Promise<void> {
+  const byStore = new Map<string, string>()
+  for (const src of sources) {
+    // Already found this store's name via a sibling-kind source — skip the read.
+    if (!src.dbPath || byStore.has(src.storeId)) continue
+    let raw: string | null = null
+    try {
+      raw = await readSessionFile(src.dbPath, 'latin1')
+    } catch {
+      raw = null
+    }
+    if (!raw) continue
+    const name = extractJetBrainsProjectName(raw)
+    if (name) byStore.set(src.storeId, name)
+  }
+  for (const src of sources) {
+    const name = byStore.get(src.storeId)
+    if (name) src.projectName = name
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1388,7 +2181,8 @@ async function discoverTranscriptSessions(
 export function createCopilotProvider(
   sessionStateDir?: string,
   workspaceStorageDir?: string,
-  globalStorageDir?: string
+  globalStorageDir?: string,
+  jetbrainsDir?: string
 ): Provider {
   // jsonlDir is resolved lazily inside discoverSessions so that env-var
   // overrides set after module load (e.g. in tests) are respected.
@@ -1486,6 +2280,18 @@ export function createCopilotProvider(
         // Transcript discovery failed
       }
 
+      // 6. Discover JetBrains IDE sessions (IntelliJ, PyCharm, …). These live
+      // in a store none of the VS Code / CLI sources touch, so there is no
+      // overlap to dedupe against; the shared seenKeys set still guards it.
+      try {
+        const jetbrainsSources = await discoverJetBrainsSessions(
+          getJetBrainsCopilotRoot(jetbrainsDir)
+        )
+        sources.push(...jetbrainsSources)
+      } catch {
+        // JetBrains discovery failed
+      }
+
       return sources
     },
 
@@ -1502,6 +2308,9 @@ export function createCopilotProvider(
       }
       if (isChatSessionSource(source)) {
         return createChatSessionParser(source, seenKeys)
+      }
+      if (isJetBrainsSource(source)) {
+        return createJetBrainsParser(source, seenKeys)
       }
       return createJsonlParser(source, seenKeys)
     },

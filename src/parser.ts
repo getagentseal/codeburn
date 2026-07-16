@@ -33,6 +33,7 @@ import type {
   ParsedTurn,
   ProjectSummary,
   SessionSummary,
+  SessionSourceMetadata,
   TokenUsage,
   ToolCall,
   ToolUseBlock,
@@ -1274,6 +1275,7 @@ function buildSessionSummary(
   project: string,
   turns: ClassifiedTurn[],
   mcpInventory?: string[],
+  source?: SessionSourceMetadata,
 ): SessionSummary {
   const modelBreakdown: SessionSummary['modelBreakdown'] = Object.create(null)
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
@@ -1399,6 +1401,7 @@ function buildSessionSummary(
     categoryBreakdown,
     skillBreakdown,
     subagentBreakdown,
+    ...(source ? { source } : {}),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
   }
 }
@@ -1518,7 +1521,7 @@ export async function readAgentType(filePath: string): Promise<string | undefine
 }
 
 async function scanProjectDirs(
-  dirs: Array<{ path: string; name: string }>,
+  dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
   seenMsgIds: Set<string>,
   diskCache: SessionCache,
   dateRange?: DateRange,
@@ -1526,11 +1529,13 @@ async function scanProjectDirs(
   const section = getOrCreateProviderSection(diskCache, 'claude')
   const allDiscoveredFiles = new Set<string>()
 
-  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>> }
-  const unchangedFiles: Array<{ filePath: string; dirName: string; cached: CachedFile }> = []
+  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>>; source?: SessionSourceMetadata }
+  const unchangedFiles: Array<{ filePath: string; dirName: string; source?: SessionSourceMetadata; cached: CachedFile }> = []
   const changedFiles: Array<{ filePath: string; info: FileInfo }> = []
 
-  for (const { path: dirPath, name: dirName } of dirs) {
+  const discoverProgress = createScanProgress('scanning claude project dirs', dirs.length)
+  let dirsDone = 0
+  for (const { path: dirPath, name: dirName, source } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
     for (const filePath of jsonlFiles) {
       allDiscoveredFiles.add(filePath)
@@ -1539,12 +1544,15 @@ async function scanProjectDirs(
 
       const action = reconcileFile(fp, section.files[filePath])
       if (action.action === 'unchanged') {
-        unchangedFiles.push({ filePath, dirName, cached: section.files[filePath]! })
+        unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
       } else {
-        changedFiles.push({ filePath, info: { dirName, fp } })
+        changedFiles.push({ filePath, info: { dirName, fp, source } })
       }
     }
+    dirsDone++
+    await discoverProgress.tick(dirsDone)
   }
+  discoverProgress.finish()
 
   // Pre-seed dedup set from cached (unchanged) files
   for (const { cached } of unchangedFiles) {
@@ -1555,13 +1563,15 @@ async function scanProjectDirs(
     }
   }
 
+  const parseProgress = createScanProgress('parsing changed claude sessions', changedFiles.length)
+  let filesDone = 0
   for (const { filePath, info } of changedFiles) {
     delete section.files[filePath]
 
     try {
       const tracker = { lastCompleteLineOffset: 0 }
       const entries = await parseClaudeEntries(filePath, tracker)
-      if (!entries) continue
+      if (!entries) { filesDone++; await parseProgress.tick(filesDone); continue }
 
       const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
       const cwd = extractCanonicalCwd(entries)
@@ -1586,7 +1596,10 @@ async function scanProjectDirs(
       ;(diskCache as { _dirty?: boolean })._dirty = true
       warnProviderParseFailure('claude', filePath, err)
     }
+    filesDone++
+    await parseProgress.tick(filesDone)
   }
+  parseProgress.finish()
 
   if (dirs.length > 0) {
     for (const cachedPath of Object.keys(section.files)) {
@@ -1600,11 +1613,11 @@ async function scanProjectDirs(
   const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
-    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName })),
-    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName })),
+    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
+    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName, source: f.info.source })),
   ]
 
-  for (const { filePath, dirName } of allFiles) {
+  for (const { filePath, dirName, source } of allFiles) {
     const cachedFile = section.files[filePath]
     if (!cachedFile || cachedFile.turns.length === 0) continue
 
@@ -1626,7 +1639,7 @@ async function scanProjectDirs(
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
-    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
+    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
 
     if (session.apiCalls > 0) {
@@ -1741,7 +1754,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       webSearchRequests: call.webSearchRequests,
       cacheCreationOneHourTokens: 0,
     },
-    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes') ? call.costUSD : undefined,
+    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes' || call.provider === 'kiro') ? call.costUSD : undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1955,6 +1968,58 @@ function warnProviderParseFailure(providerName: string, sourcePath: string, err:
   process.stderr.write(
     `codeburn: skipped ${providerName} session that failed to parse: ${sourcePath} (${msg})${tail}\n`
   )
+}
+
+// A cold-cache scan over a large ~/.claude/projects tree (hundreds of project
+// dirs, e.g. a git-worktree-per-task workflow) can run long enough that it
+// looks hung, and is CPU-heavy enough on a single thread to visibly compete
+// with anything else running interactively on the same machine. Two cheap
+// mitigations, neither of which reduces total CPU work: (1) a `\r`-updated
+// progress line so a long cold run reads as "working" instead of "stuck",
+// gated on isTTY so it never corrupts piped/captured output (export.ts, the
+// --no-color path, or a subprocess capturing stderr); (2) yielding to the
+// event loop every YIELD_EVERY items so the OS scheduler gets regular break
+// points instead of one long uninterrupted synchronous block. This does NOT
+// fix CPU contention with a separate process (that's the OS scheduler's job
+// regardless), it only keeps this process itself responsive and honest about
+// progress during the scan.
+const YIELD_EVERY = 25
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
+
+// Suppress the scan-progress line while an interactive Ink UI is live. The
+// dashboard and compare render to stdout on the same terminal, and their scans
+// run (dashboard) or re-run every 30s (dashboard auto-refresh, including the
+// getPlanUsages → parseAllSessions path) AFTER render() has painted a frame, so
+// a `\r` progress line on stderr prints over it and garbles the screen. isTTY
+// alone can't tell them apart from a plain CLI command. The interactive
+// entrypoints call setInteractiveScanUI() right before render(); a pre-render
+// scan (e.g. compare's cold start) still shows progress and finish() clears the
+// line before Ink paints.
+let interactiveScanUI = false
+export function setInteractiveScanUI(active = true): void {
+  interactiveScanUI = active
+}
+
+export function createScanProgress(label: string, total: number) {
+  const show = !interactiveScanUI && total > 20 && process.stderr.isTTY === true
+  let lastWrite = 0
+  return {
+    async tick(done: number): Promise<void> {
+      if (done % YIELD_EVERY === 0) await yieldToEventLoop()
+      if (!show) return
+      const now = Date.now()
+      if (done !== total && now - lastWrite < 100) return
+      lastWrite = now
+      process.stderr.write(`\rcodeburn: ${label} ${done}/${total}…`)
+    },
+    finish(): void {
+      if (!show) return
+      process.stderr.write('\r\x1b[K')
+    },
+  }
 }
 
 async function parseProviderSources(
@@ -2317,8 +2382,22 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
         return ds !== null && days.has(ds)
       })
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
+    if (sessions.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+  }
+  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+  for (const project of projects) {
+    // Match by source id across both claude-config and claude-desktop kinds so
+    // the Claude Desktop bucket is selectable too.
+    const sessions = project.sessions.filter(session =>
+      session.source?.id === sourceId
+    )
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
   }
@@ -2332,7 +2411,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
@@ -2355,7 +2434,13 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
 
-  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
+  const claudeDirs = claudeSources.map(s => ({
+    path: s.path,
+    name: s.project,
+    source: s.sourceId && s.sourceLabel && s.sourcePath && s.sourceKind
+      ? { id: s.sourceId, label: s.sourceLabel, path: s.sourcePath, kind: s.sourceKind }
+      : undefined,
+  }))
   const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange)
 
   const providerGroups = new Map<string, SessionSource[]>()

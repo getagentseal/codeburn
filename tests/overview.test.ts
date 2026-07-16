@@ -116,3 +116,36 @@ describe('renderOverview', () => {
     expect(out).not.toContain(' OS ')
   })
 })
+
+describe('renderOverview unpriced models', () => {
+  it('warns when a model with usage has no pricing data', () => {
+    const out = renderOverview([makeProject({
+      project: 'mystery',
+      projectPath: '/Users/test/mystery',
+      cost: 0,
+      calls: 4,
+      model: 'zz-mystery-paid-model-999',
+      provider: 'claude',
+      tokens: { input: 1000, output: 200, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).toContain('Unpriced')
+    expect(out).toContain('1 model at $0')
+    expect(out).toContain('zz-mystery-paid-model-999')
+    expect(out).toContain('codeburn model-alias')
+  })
+
+  it('stays silent when every model is priced', () => {
+    const out = renderOverview([makeProject({
+      project: 'priced',
+      projectPath: '/Users/test/priced',
+      cost: 5,
+      calls: 2,
+      model: 'claude-opus-4-8',
+      provider: 'claude',
+      tokens: { input: 100, output: 50, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).not.toContain('Unpriced')
+  })
+})

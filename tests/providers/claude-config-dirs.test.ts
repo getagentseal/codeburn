@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'os'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
 import { claude, getDesktopSessionsDir } from '../../src/providers/claude.js'
-import { parseAllSessions } from '../../src/parser.js'
+import { clearSessionCache, filterProjectsByClaudeConfigSource, parseAllSessions } from '../../src/parser.js'
 
 let tmpRoot: string
 const savedEnv = {
@@ -28,6 +28,7 @@ function withPlatform<T>(platform: typeof process.platform, run: () => T): T {
 }
 
 beforeEach(async () => {
+  clearSessionCache()
   tmpRoot = await mkdtemp(join(tmpdir(), 'codeburn-claude-multi-'))
   // Point HOME at a scratch dir so the default `~/.claude` fallback resolves
   // somewhere we control. Without this, a stray `~/.claude` on the test
@@ -41,6 +42,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  clearSessionCache()
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
@@ -154,6 +156,9 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
     )
     expect(ourSources).toHaveLength(2)
     expect(new Set(ourSources.map(s => s.project))).toEqual(new Set(['-Users-you-app']))
+    expect(new Set(ourSources.map(s => s.sourceKind))).toEqual(new Set(['claude-config']))
+    expect(new Set(ourSources.map(s => s.sourceLabel))).toEqual(new Set(['claude-work', 'claude-personal']))
+    expect(ourSources.every(s => typeof s.sourceId === 'string' && s.sourceId.startsWith('claude-config:'))).toBe(true)
   })
 
   it('tolerates a non-existent dir in the list without dropping the real ones', async () => {
@@ -347,6 +352,41 @@ describe('claude parser — multi-dir aggregation (issue #208 option 1)', () => 
     // — option 1 explicitly avoids attribution.
     expect((matches[0]! as Record<string, unknown>)['account']).toBeUndefined()
     expect((matches[0]! as Record<string, unknown>)['accountPath']).toBeUndefined()
+  })
+
+  it('keeps source metadata on merged sessions so one Claude config can be selected', async () => {
+    const work = await makeConfigDir('claude-work', [])
+    const personal = await makeConfigDir('claude-personal', [])
+    process.env['CLAUDE_CONFIG_DIRS'] = [work, personal].join(pathDelimiter)
+
+    const slug = '-Users-you-shared-app'
+    const cwd = '/Users/you/shared-app'
+    await writeSession(work, slug, 'sess-work', [
+      summaryLine('sess-work', cwd),
+      userLine('u1', 'sess-work', cwd, 'hi from work'),
+      assistantLine('a1', 'u1', 'sess-work', cwd),
+    ])
+    await writeSession(personal, slug, 'sess-personal', [
+      summaryLine('sess-personal', cwd),
+      userLine('u2', 'sess-personal', cwd, 'hi from personal'),
+      assistantLine('a2', 'u2', 'sess-personal', cwd),
+    ])
+
+    const projects = await parseAllSessions(undefined, 'claude')
+    const merged = projects.find(p => p.project === slug)
+    expect(merged).toBeDefined()
+    expect(merged!.sessions).toHaveLength(2)
+
+    const sourceIds = new Map(merged!.sessions.map(s => [s.source?.label, s.source?.id]))
+    const workSourceId = sourceIds.get('claude-work')
+    expect(workSourceId).toBeDefined()
+
+    const workOnly = filterProjectsByClaudeConfigSource(projects, workSourceId!)
+    expect(workOnly).toHaveLength(1)
+    expect(workOnly[0]!.project).toBe(slug)
+    expect(workOnly[0]!.totalApiCalls).toBe(1)
+    expect(workOnly[0]!.sessions.map(s => s.sessionId)).toEqual(['sess-work'])
+    expect(workOnly[0]!.sessions[0]!.source?.label).toBe('claude-work')
   })
 
   // Documents the path-aware merge behavior: the mergedMap in parseAllSessions

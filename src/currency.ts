@@ -30,6 +30,7 @@ let active: CurrencyState = { code: 'USD', rate: 1, symbol: '$' }
 const USD: CurrencyState = { code: 'USD', rate: 1, symbol: '$' }
 const SYMBOL_OVERRIDES: Record<string, string> = {
   CNY: '¥',
+  RON: 'lei',
 }
 
 // Intl.NumberFormat throws on invalid ISO 4217 codes, so we use it as a validator
