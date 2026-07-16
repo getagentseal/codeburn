@@ -89,6 +89,7 @@ const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
 const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
+  codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
   hermes: ['HERMES_HOME'],
   'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
@@ -111,6 +112,7 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'cowork-space-grouping-v1',
   cline: 'worktree-project-grouping-v1',
+  codewhale: 'aggregate-session-v1',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
   // provider parser otherwise). Covers native mcp_tool_call_end (#513) and

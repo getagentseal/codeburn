@@ -18,11 +18,11 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
-**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 32 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
+**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 36 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
 
 You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
 
-CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **32 AI tools**.
+CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **36 AI tools**.
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily.
 
@@ -317,6 +317,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
 <p align="center">
   <a href="docs/providers/claude.md" title="Claude Code &amp; Claude Desktop"><img src="assets/providers/claude.jpg" alt="Claude Code &amp; Claude Desktop" height="34" /></a>
   <a href="docs/providers/cline.md" title="Cline"><img src="assets/providers/cline.svg" alt="Cline" height="34" /></a>
+  <a href="docs/providers/codewhale.md" title="CodeWhale"><img src="assets/providers/codewhale.svg" alt="CodeWhale" height="34" /></a>
   <a href="docs/providers/codex.md" title="Codex (OpenAI)"><img src="assets/providers/codex.png" alt="Codex (OpenAI)" height="34" /></a>
   <a href="docs/providers/cursor.md" title="Cursor"><img src="assets/providers/cursor.jpg" alt="Cursor" height="34" /></a>
   <a href="docs/providers/cursor-agent.md" title="cursor-agent"><img src="assets/providers/cursor-agent.jpg" alt="cursor-agent" height="34" /></a>
@@ -627,6 +628,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 | **Pi / OMP** | `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl` (Pi), `~/.omp/agent/sessions/<sanitized-cwd>/*.jsonl` (OMP) | Each assistant message carries usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` blocks. Tool names normalize to the standard set (`bash` → `Bash`, `dispatch_agent` → `Agent`); bash commands come from `toolCall.arguments.command`. |
 | **Codebuff** (formerly Manicode) | `~/.config/manicode/projects/<project>/chats/<chatId>/chat-messages.json` (honors `CODEBUFF_DATA_DIR`; walks `manicode-dev` / `manicode-staging`) | Bills in credits, so each completed assistant message is costed at the public rate of $0.01/credit via `msg.credits`. When an upstream provider's stashed RunState records token-level usage (`message.metadata.runState.sessionState.mainAgentState.messageHistory[*].providerOptions`), the real tokens and LiteLLM cost take precedence. Native tool names (`read_files`, `str_replace`, `run_terminal_command`, `spawn_agents`) normalize to `Read`, `Edit`, `Bash`, `Agent`. |
 | **Cline / Roo Code / KiloCode** | VS Code `globalStorage`: Cline at `saoudrizwan.claude-dev` and `~/.cline/data`; Roo Code and KiloCode across VS Code, VS Code Insiders, and VSCodium | Cline-family agents. CodeBurn reads `ui_messages.json` from each task directory, extracting token counts from `type: "say"` entries with `say: "api_req_started"`. |
+| **CodeWhale** | `~/.codewhale/sessions/*.json` plus unmigrated legacy `~/.deepseek/sessions/*.json`; `$CODEWHALE_HOME/sessions` is an exact override | Emits one cumulative record per saved session. CodeWhale exposes only `total_tokens`, so CodeBurn preserves that aggregate in the input column rather than inventing an input/output split. Cost is the exact stored parent-session plus subagent USD total; model pricing is used only when the cost snapshot is absent. Tool blocks, shell commands, skills, and subagent types are retained. |
 | **IBM Bob** | `User/globalStorage/ibm.bob-code/tasks/<task-id>/` (GA `IBM Bob` and preview `Bob-IDE` app folders) | Reads `ui_messages.json` for API request token/cost records and `api_conversation_history.json` for the selected model. |
 | **Kimi Code CLI** | `$KIMI_SHARE_DIR/sessions/<workdir-hash>/<session-id>/` or `~/.kimi/sessions/<workdir-hash>/<session-id>/` | Reads `wire.jsonl` `StatusUpdate.token_usage` records, mapping `input_other`, `input_cache_read`, `input_cache_creation`, and `output` into the standard token columns; includes subagents under each session's `subagents/` folder. |
 | **LingTai TUI** | `~/.lingtai/<agent>/logs/token_ledger.jsonl` plus project homes from `~/.lingtai-tui/registry.jsonl` (`<project>/.lingtai/<agent>/logs/token_ledger.jsonl`); honors `LINGTAI_HOME` / `LINGTAI_TUI_HOME` | Reads LingTai's append-only token ledger, mapping `input - cached` to fresh input, `cached` to cache reads, `output` to output, and `thinking` to reasoning. Nested daemon ledgers are skipped because parent ledgers already mirror daemon usage with `source`/`run_id` tags. |
@@ -647,6 +649,7 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 | `CLAUDE_CONFIG_DIRS` | OS-delimited list of Claude data directories to scan together (e.g. `~/.claude-work:~/.claude-personal`). Sessions merge into one row per project. Overrides `CLAUDE_CONFIG_DIR` when set. |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
 | `CODEBUFF_DATA_DIR` | Override Codebuff data directory (default: `~/.config/manicode`) |
+| `CODEWHALE_HOME` | Override the exact CodeWhale home directory; sessions are read from `<CODEWHALE_HOME>/sessions` |
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
 | `KIMI_SHARE_DIR` | Override Kimi Code CLI share directory (default: `~/.kimi`) |
 | `KIMI_MODEL_NAME` | Override Kimi model name when Kimi sessions do not record the model |
@@ -668,7 +671,7 @@ Keeping 30 integrations accurate is constant work. The tools underneath change e
 Where your sponsorship goes:
 
 - **Honest numbers.** New models and price changes are mapped quickly, so your cost is the real cost, not a guess.
-- **More tools.** Every one of the 30 providers started as a single file. Sponsorship funds the next one.
+- **More tools.** Every one of the 36 providers started as a single file. Sponsorship funds the next one.
 - **Fast fixes.** When a vendor breaks something, paid time is what gets it patched now instead of someday.
 
 Sponsoring as a team or company? Your logo lands right here, in front of every developer who opens the repo. The first sponsor gets it to themselves until the next one shows up.

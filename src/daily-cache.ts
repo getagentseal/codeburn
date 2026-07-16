@@ -5,7 +5,11 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 10: cursor accounting changed (real composer context tokens on
+// Bumped to 11: CodeWhale support adds historical usage that v10 rollups did
+// not contain. Raising MIN_SUPPORTED_VERSION forces a one-time re-hydration
+// so existing users see those sessions across prior finalized days.
+//
+// v10: cursor accounting changed (real composer context tokens on
 // conversation-anchored records, Cursor-published composer pricing), so days
 // finalized at v9 carry the old double-counted agentKv estimates and
 // sonnet-proxy composer costs. Raising MIN_SUPPORTED_VERSION forces the
@@ -15,8 +19,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 10
-const MIN_SUPPORTED_VERSION = 10
+export const DAILY_CACHE_VERSION = 11
+const MIN_SUPPORTED_VERSION = 11
 const DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
