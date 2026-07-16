@@ -415,6 +415,7 @@ Sync sends token counts, costs, models, and projects — never prompts or code. 
 
 | Command | What it does |
 |---------|--------------|
+| `codeburn doctor` | Per-provider detection status: paths probed, sessions found, parse health (`--json`, `--provider`) |
 | `codeburn audit` | Per provider-model token source table: where every number comes from |
 | `codeburn context` | What fills a session's context window: interactive browser (Claude Code and Codex) |
 | `codeburn context <id> --json` | The same context tree, scriptable |
@@ -559,6 +560,18 @@ codeburn report --to 2026-04-10                      # earliest data through thi
 ```
 
 Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only; pressing `1` through `5` switches back to predefined periods.
+
+### Diagnosing detection
+
+When a tool shows zero (or a number that looks wrong), `codeburn doctor` explains why. It runs fully offline and read-only, and never writes to caches or config.
+
+```bash
+codeburn doctor                     # every provider, human-readable table
+codeburn doctor --provider opencode # diagnose one provider
+codeburn doctor --json              # machine-readable, pipe to jq
+```
+
+For each provider it shows the exact directories or databases probed (with any env override such as `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `OPENCODE_DATA_DIR` and whether the path exists), how many session files were found, how many of a bounded sample parsed cleanly, the cached file count, and a one-line verdict: `OK (n sessions)`, `NOTHING FOUND` with the likely cause (directory missing, override points at an empty dir, or the tool is not installed), or `ERRORS (n parse failures)`. A provider that throws is caught and reported as its own error row, never crashing the rest of the report.
 
 ### JSON Output
 

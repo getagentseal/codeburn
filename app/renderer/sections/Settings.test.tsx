@@ -155,6 +155,31 @@ describe('Settings', () => {
     expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all')
   })
 
+  it('keys provider logos on the internal id from providerDetails', async () => {
+    mocks.getOverview.mockResolvedValue({
+      current: {
+        providers: { 'grok build': 8.1, apex: 2.2 },
+        providerDetails: [
+          { id: 'grok', label: 'Grok Build', cost: 8.1 },
+          { id: 'apex', label: 'Apex', cost: 2.2 },
+        ],
+      },
+    } as unknown as MenubarPayload)
+    const user = userEvent.setup()
+    const { container } = render(<Settings period="week" />)
+    await user.click(screen.getByRole('button', { name: 'Providers' }))
+
+    // grok has a themed mark, keyed on the internal id, so a real image renders.
+    const grokRow = (await screen.findByText('Grok Build')).closest('.set-prov-head')!
+    expect(grokRow.querySelector('img.provider-logo')).toBeInTheDocument()
+    expect(grokRow.querySelector('.provider-mono')).toBeNull()
+
+    // an unknown provider still renders a monogram badge, never nothing.
+    const apexRow = screen.getByText('Apex').closest('.set-prov-head')!
+    expect(apexRow.querySelector('span.provider-mono')).toHaveTextContent('A')
+    expect(container.querySelector('.set-prov-head img[src="grok build"]')).toBeNull()
+  })
+
   it('lists, adds, and removes model aliases through the action bridge', async () => {
     const user = userEvent.setup()
     render(<Settings period="month" />)

@@ -94,7 +94,7 @@ export const CACHE_VERSION = 5
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
-const PROVIDER_ENV_VARS: Record<string, string[]> = {
+export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
   codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
@@ -118,11 +118,11 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
 // Estimated-cost surfacing (#639): providers that set `costIsEstimated` carry a
 // `-est-cost` suffix (or a new entry) so their already-cached sessions reparse
-// once and the flag lands, instead of silently reading as measured. Copilot is
-// intentionally excluded: it is a durable provider, so changing its env
-// fingerprint would discard OTel cache entries whose source rows may already be
-// pruned (permanent data loss); its flag surfaces naturally as new data arrives.
-const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
+// once and the flag lands, instead of silently reading as measured. Copilot
+// needs no suffix: the cli-shutdown-cost-v1 bump below already forces its one
+// re-parse, which lands the flag too, and durable orphans now survive
+// fingerprint changes (the carry-forward in getOrCreateProviderSection).
+export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'advisor-usage-v1',
   cline: 'worktree-project-grouping-v1',
   codewhale: 'aggregate-session-v1-est-cost',
@@ -133,7 +133,7 @@ const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   codex: 'mcp-attribution-v2-est-cost',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
-  copilot: 'otel-durable-v1',
+  copilot: 'cli-shutdown-cost-v1',
   grok: 'estimated-cost-v1',
   hermes: 'reasoning-output-accounting-v1-est-cost',
   'lingtai-tui': 'token-ledger-registry-activity-v3',

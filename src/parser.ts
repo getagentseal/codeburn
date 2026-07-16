@@ -1,3 +1,4 @@
+import { existsSync } from 'fs'
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
@@ -2051,7 +2052,19 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
   const envFp = computeEnvFingerprint(provider)
   const existing = cache.providers[provider]
   if (existing && existing.envFingerprint === envFp) return existing
-  const section = { envFingerprint: envFp, files: {} }
+  const section: ProviderSection = { envFingerprint: envFp, files: {} }
+  // A fingerprint change (env override or parse-version bump) must re-parse
+  // every present source, but for durable providers the cache is the ONLY
+  // remaining record of usage whose source rows were already pruned (OTel
+  // orphans). Discarding those with the section would permanently erase
+  // month-to-date history that cannot be re-derived, so carry forward exactly
+  // the entries whose source no longer exists; everything present on disk is
+  // dropped and re-parsed under the new fingerprint.
+  if (existing && DURABLE_PROVIDER_NAMES.has(provider)) {
+    for (const [path, file] of Object.entries(existing.files)) {
+      if (!existsSync(path)) section.files[path] = file
+    }
+  }
   cache.providers[provider] = section
   return section
 }

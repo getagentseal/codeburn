@@ -9,6 +9,16 @@ import { delimiter, dirname, join } from 'node:path'
 export type CliErrorKind = 'not-found' | 'nonzero' | 'bad-json' | 'timeout' | 'too-large' | 'bad-args'
 export type ActionResult = { ok: boolean; stdout: string; stderr: string; code: number | null }
 
+/**
+ * A resolved CLI target. `external` is a standalone `codeburn` executable (the
+ * dev repo build, a persisted path, or one found on PATH) spawned directly.
+ * `bundled` is the copy shipped inside the packaged app under `resources/cli`;
+ * it has no Node runner of its own, so it is spawned with Electron's own binary
+ * acting as Node via `ELECTRON_RUN_AS_NODE`.
+ */
+export type CliTarget = { kind: 'external'; bin: string } | { kind: 'bundled'; entry: string }
+type SpawnSpec = { bin: string; args: string[]; env: NodeJS.ProcessEnv }
+
 /** Structured failure so the renderer can pick the right empty/permission state. */
 export class CliError extends Error {
   readonly kind: CliErrorKind
@@ -92,11 +102,38 @@ export function spawnEnvFor(bin: string): NodeJS.ProcessEnv {
   return { ...process.env, PATH: path }
 }
 
+/**
+ * The concrete spawn (executable, argv, env) for a resolved target. An external
+ * `codeburn` runs directly with the PATH augmentation above. The bundled copy
+ * has no runner of its own, so it runs as `process.execPath` (Electron's binary)
+ * with `ELECTRON_RUN_AS_NODE=1` turning it into plain Node and the bundle path
+ * as the first argument. PATH is still augmented so anything the CLI itself
+ * shells out to (pairing, sync) resolves the same way an external CLI would.
+ */
+export function spawnSpecFor(target: CliTarget, args: string[]): SpawnSpec {
+  if (target.kind === 'bundled') {
+    return {
+      bin: process.execPath,
+      args: [target.entry, ...args],
+      env: { ...spawnEnvFor(target.entry), ELECTRON_RUN_AS_NODE: '1' },
+    }
+  }
+  return { bin: target.bin, args, env: spawnEnvFor(target.bin) }
+}
+
 function isExecutableFile(p: string): boolean {
   try {
     if (!statSync(p).isFile()) return false
     accessSync(p, constants.X_OK)
     return true
+  } catch {
+    return false
+  }
+}
+
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile()
   } catch {
     return false
   }
@@ -128,45 +165,61 @@ function readPersistedPath(): string | null {
 }
 
 /**
- * Resolve the absolute path to the `codeburn` binary, or null if not found.
+ * Resolve which `codeburn` to run, or null if none is available.
  * Order: dev override (`CODEBURN_BIN`) → repo CLI in Vite development →
+ * bundled CLI shipped in the packaged app (`CODEBURN_BUNDLED_CLI`) →
  * persisted-path file → PATH / brew / nvm / volta / asdf → null.
  *
- * The dev repo CLI intentionally beats the persisted-path file: in `npm run
- * dev` the developer is iterating on this repo, so its freshly-built
- * `dist/cli.js` must win over a stale globally-installed/persisted binary
- * (which may lack newly-added commands). Setting `CODEBURN_BIN` still overrides
- * everything. In production `VITE_DEV_SERVER_URL` is unset, so the persisted
- * path behaves exactly as before.
+ * The dev repo CLI intentionally beats both the bundled and persisted paths: in
+ * `npm run dev` the developer is iterating on this repo, so its freshly-built
+ * `dist/cli.js` must win over anything older (which may lack newly-added
+ * commands). The bundled CLI beats the persisted/PATH ones so a packaged app is
+ * version-matched to itself and never falls back to an older globally-installed
+ * `codeburn`. `CODEBURN_BIN` still overrides everything. In an unpackaged
+ * dev/test run `CODEBURN_BUNDLED_CLI` is unset, so resolution behaves exactly as
+ * before.
  */
-export function resolveCodeburnPath(): string | null {
+export function resolveTarget(): CliTarget | null {
   const override = process.env.CODEBURN_BIN
-  if (override && override.startsWith('/') && isExecutableFile(override)) return override
+  if (override && override.startsWith('/') && isExecutableFile(override)) return { kind: 'external', bin: override }
 
   // Dev convenience: when launched by the Vite dev server, prefer the repo's own
   // freshly-built CLI over a stale globally-installed/persisted one, so
   // newly-added commands (sessions/compare/act JSON) work without CODEBURN_BIN.
   if (process.env.VITE_DEV_SERVER_URL) {
     const devBin = join(__dirname, '..', '..', '..', 'dist', 'cli.js')
-    if (isExecutableFile(devBin)) return devBin
+    if (isExecutableFile(devBin)) return { kind: 'external', bin: devBin }
     // Vitest loads this source module from app/electron rather than the emitted
     // app/dist/electron directory; keep the same repo CLI discoverable there.
     const sourceDevBin = join(__dirname, '..', '..', 'dist', 'cli.js')
-    if (isExecutableFile(sourceDevBin)) return sourceDevBin
+    if (isExecutableFile(sourceDevBin)) return { kind: 'external', bin: sourceDevBin }
   }
 
+  // Packaged app: main.ts sets CODEBURN_BUNDLED_CLI to resources/cli/dist/cli.js.
+  // It is passed as an argument to Electron-as-node, so it only needs to be a
+  // readable file — no exec bit or working shebang required.
+  const bundled = process.env.CODEBURN_BUNDLED_CLI
+  if (bundled && bundled.startsWith('/') && isFile(bundled)) return { kind: 'bundled', entry: bundled }
+
   const persisted = readPersistedPath()
-  if (persisted) return persisted
+  if (persisted) return { kind: 'external', bin: persisted }
 
   for (const bin of searchDirs().map(dir => join(dir, 'codeburn'))) {
-    if (isExecutableFile(bin)) return bin
+    if (isExecutableFile(bin)) return { kind: 'external', bin }
   }
   return null
 }
 
-function runCli(bin: string, args: string[], timeoutMs: number): Promise<unknown> {
+/** The resolved CLI's path for display/status, or null. See {@link resolveTarget}. */
+export function resolveCodeburnPath(): string | null {
+  const target = resolveTarget()
+  if (!target) return null
+  return target.kind === 'bundled' ? target.entry : target.bin
+}
+
+function runCli(spec: SpawnSpec, cmdLabel: string, timeoutMs: number): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
-    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnvFor(bin) })
+    const child = spawn(spec.bin, spec.args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spec.env })
     activeChildren.add(child)
     let stdout = ''
     let stderr = ''
@@ -184,7 +237,7 @@ function runCli(bin: string, args: string[], timeoutMs: number): Promise<unknown
     const timer = setTimeout(() => {
       finish(() => {
         child.kill('SIGKILL')
-        reject(new CliError('timeout', `codeburn ${args[0] ?? ''} timed out after ${timeoutMs}ms`))
+        reject(new CliError('timeout', `codeburn ${cmdLabel} timed out after ${timeoutMs}ms`))
       })
     }, timeoutMs)
 
@@ -193,7 +246,7 @@ function runCli(bin: string, args: string[], timeoutMs: number): Promise<unknown
       if (total > MAX_OUTPUT_BYTES) {
         finish(() => {
           child.kill('SIGKILL')
-          reject(new CliError('too-large', `codeburn ${args[0] ?? ''} produced more than ${MAX_OUTPUT_BYTES} bytes`))
+          reject(new CliError('too-large', `codeburn ${cmdLabel} produced more than ${MAX_OUTPUT_BYTES} bytes`))
         })
       }
     }
@@ -234,16 +287,17 @@ function runCli(bin: string, args: string[], timeoutMs: number): Promise<unknown
  * absorbs same-cadence pollers. Never use this for config-mutating commands.
  */
 export function spawnCli(args: string[], opts: { timeoutMs?: number } = {}): Promise<unknown> {
-  const bin = resolveCodeburnPath()
-  if (!bin) return Promise.reject(new CliError('not-found', 'codeburn CLI not found'))
+  const target = resolveTarget()
+  if (!target) return Promise.reject(new CliError('not-found', 'codeburn CLI not found'))
+  const spec = spawnSpecFor(target, args)
 
-  const key = JSON.stringify([bin, ...args])
+  const key = JSON.stringify([spec.bin, ...spec.args])
   const cached = readCache.get(key)
   if (cached && Date.now() - cached.at < COALESCE_TTL_MS) return Promise.resolve(cached.value)
   const existing = readInflight.get(key)
   if (existing) return existing
 
-  const flight = runCli(bin, args, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const flight = runCli(spec, args[0] ?? '', opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     .then(value => { readCache.set(key, { at: Date.now(), value }); return value })
     .finally(() => { readInflight.delete(key) })
   readInflight.set(key, flight)
@@ -254,13 +308,14 @@ export function spawnCli(args: string[], opts: { timeoutMs?: number } = {}): Pro
 export function spawnCliAction(args: string[], opts: { timeoutMs?: number } = {}): Promise<ActionResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   return new Promise<ActionResult>(resolve => {
-    const bin = resolveCodeburnPath()
-    if (!bin) {
+    const target = resolveTarget()
+    if (!target) {
       resolve({ ok: false, stdout: '', stderr: 'codeburn CLI not found', code: null })
       return
     }
+    const spec = spawnSpecFor(target, args)
 
-    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnvFor(bin) })
+    const child = spawn(spec.bin, spec.args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spec.env })
     activeChildren.add(child)
     let stdout = ''
     let stderr = ''

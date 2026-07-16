@@ -18,7 +18,7 @@ npm --prefix app run typecheck
 
 ## CLI Dependency
 
-The app depends on a working `codeburn` CLI on the local machine. Electron resolves and spawns the CLI from the main process, then sends decoded JSON through the secure preload bridge into the renderer.
+Packaged builds ship their own version-matched copy of the `codeburn` CLI and require nothing installed — the app spawns the bundled CLI with Electron's own binary as Node (`ELECTRON_RUN_AS_NODE`). In development (Vite dev server) the app uses the repo's freshly-built CLI, and either can be overridden with `CODEBURN_BIN` or a persisted path file. See `DISTRIBUTION.md` for the bundling and resolution details. Electron resolves and spawns the CLI from the main process, then sends decoded JSON through the secure preload bridge into the renderer.
 
 This follows the menubar pattern:
 
@@ -55,12 +55,11 @@ Supported M1 periods are `today`, `week`, `30days`, `month`, and `all`. Provider
 
 ## Packaging
 
-`npm run package` produces an ad-hoc-signed macOS `.dmg`/`.zip` (arm64 and x64) via `electron-builder`, no paid Apple Developer account required. See `DISTRIBUTION.md` for build instructions, artifact locations, and the Gatekeeper first-open story.
+`npm run package` produces an ad-hoc-signed macOS `.dmg`/`.zip` (arm64 and x64) via `electron-builder`, no paid Apple Developer account required. Packaging rebuilds the root CLI and bundles it into the app (`Resources/cli`), so installs need nothing on the target machine. See `DISTRIBUTION.md` for build instructions, the bundled-CLI mechanism, artifact locations, and the Gatekeeper first-open story.
 
 ## M2 Backlog
 
-- Deliver a self-contained app that bundles the CodeBurn engine and auto-updates itself with Electron `autoUpdater`.
-- Ship end-user installs via `.dmg` and `install.sh`; end users should not need npm.
+- Add Electron `autoUpdater` (the app already bundles its own version-matched CLI, so end-user installs need nothing on the machine; auto-update is the remaining piece).
 - Keep npm as a separate CLI-user channel at the same version as the desktop app.
 - Add macOS code signing with a paid Developer ID and notarization (ad-hoc packaging exists today; see `DISTRIBUTION.md`).
 - Add a `codeburn desktop` launcher subcommand.

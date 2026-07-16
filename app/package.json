@@ -11,11 +11,12 @@
     "dev": "npm run build:electron && concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "package": "npm run build && electron-builder --mac",
-    "package:arm64": "npm run build && electron-builder --mac --arm64",
-    "package:x64": "npm run build && electron-builder --mac --x64",
-    "package:win": "npm run build && electron-builder --win",
-    "package:linux": "npm run build && electron-builder --linux"
+    "stage-cli": "npm --prefix .. run build:cli && node scripts/stage-cli.mjs",
+    "package": "npm run stage-cli && npm run build && electron-builder --mac",
+    "package:arm64": "npm run stage-cli && npm run build && electron-builder --mac --arm64",
+    "package:x64": "npm run stage-cli && npm run build && electron-builder --mac --x64",
+    "package:win": "npm run stage-cli && npm run build && electron-builder --win",
+    "package:linux": "npm run stage-cli && npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -53,6 +54,7 @@
       "dist/renderer/**/*",
       "package.json"
     ],
+    "afterPack": "./scripts/after-pack.cjs",
     "mac": {
       "target": [
         {

@@ -313,6 +313,15 @@ function bootstrap(): void {
     console.error('Unhandled promise rejection in main process:', reason)
   })
 
+  // Packaged builds ship their own version-matched CLI under resources/cli (the
+  // afterPack hook copies it in). Point the resolver at the launch shim before
+  // any handler spawns; cli.ts runs it with Electron-as-node. The shim, not
+  // cli.js, is the entry — it corrects argv for commander under Electron. Unset
+  // in dev, where the repo build is used instead.
+  if (app.isPackaged) {
+    process.env.CODEBURN_BUNDLED_CLI = path.join(process.resourcesPath, 'cli', 'dist', 'launch.js')
+  }
+
   // A second launch focuses the running window instead of opening a rival one.
   if (!app.requestSingleInstanceLock()) {
     app.quit()

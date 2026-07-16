@@ -39,6 +39,7 @@
 }
 
 .provider-logo { display: inline-flex; object-fit: contain; flex: 0 0 auto; border-radius: 4px; }
+.provider-mono { align-items: center; justify-content: center; background: var(--fill); color: var(--mut); border: 1px solid var(--line); font-weight: 600; line-height: 1; text-transform: uppercase; }
 .pl-dark { display: none; }
 
 @media (prefers-color-scheme: dark) {

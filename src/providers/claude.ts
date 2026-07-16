@@ -3,7 +3,7 @@ import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
 import { createHash } from 'crypto'
 
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
 import { getShortModelName } from '../models.js'
 import { readConfig } from '../config.js'
 
@@ -213,6 +213,16 @@ export const claude: Provider = {
 
   toolDisplayName(rawTool: string): string {
     return rawTool
+  },
+
+  // Each config dir's `projects/` subdir is what discoverSessions readdir's,
+  // plus the Claude Desktop sessions base. Resolved via the same helpers so a
+  // CLAUDE_CONFIG_DIR(S) override is reflected exactly.
+  async probeRoots(): Promise<ProbeRoot[]> {
+    const dirs = await getClaudeConfigDirs()
+    const roots: ProbeRoot[] = dirs.map(dir => ({ path: join(dir, 'projects'), label: 'projects' }))
+    roots.push({ path: getDesktopSessionsDir(), label: 'desktop' })
+    return roots
   },
 
   async discoverSessions(): Promise<SessionSource[]> {

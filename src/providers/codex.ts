@@ -9,7 +9,7 @@ import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import type { ToolCall } from '../types.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const modelDisplayNames: Record<string, string> = {
   'codex-auto-review': 'Codex Auto Review',
@@ -683,6 +683,15 @@ export function createCodexProvider(codexDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    // Same `dir` discoverSessionsInDir walks: <codexDir>/sessions (dated
+    // rollout files) and <codexDir>/archived_sessions. Honors CODEX_HOME.
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [
+        { path: join(dir, 'sessions'), label: 'sessions' },
+        { path: join(dir, 'archived_sessions'), label: 'archived' },
+      ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

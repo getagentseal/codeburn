@@ -168,6 +168,33 @@ describe('Models', () => {
     expect(dots[1]).toHaveAttribute('style', expect.stringContaining('var(--s-gpt)'))
   })
 
+  it('names the provider on each model row so duplicate model names stay distinguishable', async () => {
+    const dupRows: ModelReportRow[] = [
+      { ...rows[0], provider: 'minimax', providerDisplayName: 'MiniMax', model: 'minimax-m3', modelDisplayName: 'MiniMax M3' },
+      { ...rows[1], provider: 'openrouter', providerDisplayName: 'OpenRouter', model: 'minimax-m3', modelDisplayName: 'MiniMax M3' },
+    ]
+    getModels.mockResolvedValue(dupRows)
+
+    render(<Models period="30days" provider="all" />)
+
+    // Same display name, two rows — each tagged with its own provider.
+    expect(await screen.findAllByText('MiniMax M3')).toHaveLength(2)
+    expect(screen.getByText('MiniMax')).toBeInTheDocument()
+    expect(screen.getByText('OpenRouter')).toBeInTheDocument()
+  })
+
+  it('names the provider on each by-task model group', async () => {
+    getModels.mockResolvedValueOnce([rows[0]]).mockResolvedValueOnce(byTaskRows)
+
+    render(<Models period="week" provider="all" />)
+
+    expect(await screen.findByText('Claude Opus 4.8')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'By task' }))
+
+    expect(await screen.findByText('coding')).toBeInTheDocument()
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
+  })
+
   it('renders codex rows with credits and real cost as priced', async () => {
     getModels.mockResolvedValue([rows[1]])
 

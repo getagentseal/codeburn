@@ -26,6 +26,10 @@ function fmtInt(n: number): string {
   return n.toLocaleString('en-US')
 }
 
+// Muted secondary tag naming a row's provider, so the same model name coming
+// from different providers reads as distinct rows.
+const providerTagStyle = { color: 'var(--mut)', fontSize: 'var(--fs-label)', fontWeight: 450 } as const
+
 export function Models({
   period,
   provider,
@@ -272,6 +276,7 @@ function ModelTableRow({ row, onAddAlias }: { row: ModelReportRow; onAddAlias: (
             <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button>
           </>
         ) : null}
+        <span style={{ ...providerTagStyle, display: 'block', marginTop: 2, paddingLeft: 16 }}>{row.providerDisplayName}</span>
       </td>
       <td className={cellClass}>{fmtInt(row.calls)}</td>
       <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
@@ -298,7 +303,10 @@ function ModelGroupRow({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlia
             className="mdot"
             style={{ background: seriesColorForModel(model.modelDisplayName || model.model) }}
           />
-          <span className="model-group-name">{model.modelDisplayName}</span>
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <span className="model-group-name">{model.modelDisplayName}</span>
+            <span style={providerTagStyle}>{model.providerDisplayName}</span>
+          </span>
           {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
         </span>
       </td>

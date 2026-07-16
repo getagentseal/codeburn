@@ -261,6 +261,31 @@ describe('App shortcuts', () => {
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'grok'))
   })
 
+  it('lists a detected provider with no spend this period and sorts it last', async () => {
+    // Hermes has usage only outside the current period: the CLI still emits it
+    // as a detected provider (cost 0), so the picker must show it, at the bottom.
+    const payload = overviewPayload()
+    payload.current.providers = { claude: 10, hermes: 0 }
+    payload.current.providerDetails = [
+      { id: 'claude', label: 'Claude', cost: 10 },
+      { id: 'hermes', label: 'Hermes', cost: 0 },
+    ]
+    mocks.getOverview.mockResolvedValue(payload)
+
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('All providers'))
+    const claudeOption = await screen.findByRole('option', { name: 'Claude' })
+    const hermesOption = screen.getByRole('option', { name: 'Hermes' })
+    const options = screen.getAllByRole('option')
+    // Zero-cost Hermes appears, and sorts after the provider that has spend.
+    expect(options.indexOf(hermesOption)).toBeGreaterThan(options.indexOf(claudeOption))
+
+    fireEvent.click(hermesOption)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'hermes'))
+  })
+
   it('hides the Claude config picker when the payload carries no claudeConfigs', async () => {
     render(<App />)
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()

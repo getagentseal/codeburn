@@ -8,21 +8,48 @@ the CLI and menubar release processes in `../RELEASING.md`) — packaging is run
 by hand on a maintainer's machine. All three targets are produced by
 `electron-builder` and can be cross-built from a single macOS host.
 
-## Prerequisite on the target machine: the codeburn CLI
+## The bundled CLI (no install prerequisite)
 
-The desktop app does not bundle the CLI — every screen gets its data by
-spawning `codeburn`, resolved from the persisted path file, Homebrew/node
-version-manager locations, or `PATH` (`electron/cli.ts`). On a machine
-without it, the app launches into its "CLI not found" state until the user
-runs:
+The packaged app ships its own copy of the `codeburn` CLI and needs nothing
+installed on the target machine. Packaging stages a self-contained copy of the
+root repo's CLI into `app/build/cli` (see `scripts/stage-cli.mjs`) — the tsup
+bundle (`dist/main.js`), its Node-version launcher (`dist/cli.js`), the root
+`package.json` (the bundle reads its `version`), plus the CLI's production
+`node_modules` closure. An `afterPack` hook (`scripts/after-pack.cjs`) copies
+that tree into the app at `Contents/Resources/cli/` after packaging and before
+signing, so it lands inside the code signature.
 
-```sh
-npm install -g codeburn
-```
+At runtime a packaged build spawns the bundled CLI with Electron's own binary
+acting as Node (`ELECTRON_RUN_AS_NODE=1`), so **no Node install is required** —
+the app is version-matched to itself. `main.ts` sets `CODEBURN_BUNDLED_CLI` to
+`Resources/cli/dist/launch.js` (a small shim that corrects `argv` for
+commander under Electron, then hands off to `main.js`), and `electron/cli.ts`
+resolves it ahead of any persisted path or `PATH` lookup.
 
-Bundling `dist/cli.js` into the app (`extraResources` + spawning it with
-Electron's own binary via `ELECTRON_RUN_AS_NODE`) is the known path to a
-zero-dependency install; not implemented yet.
+A user-installed CLI is only consulted **outside** a packaged build (dev via the
+Vite dev server) or when explicitly overridden — `CODEBURN_BIN=/abs/path`, or a
+persisted path file (`Application Support/CodeBurn/codeburn-cli-path.v1`). The
+full resolution order in `electron/cli.ts` is: `CODEBURN_BIN` → dev repo CLI
+(Vite) → bundled CLI → persisted path → `PATH`/Homebrew/nvm/volta/asdf.
+
+### Freshness
+
+Packaging **always rebuilds the root CLI** before staging: the app `stage-cli`
+script runs the root `build:cli` (tsup only — no dashboard build, no network
+`bundle-litellm` fetch), so `dist/main.js` and `dist/cli.js` are regenerated
+from current `src/` on every `package*` run. A stale global `codeburn` can never
+ship, and the app can never be older than the JSON surfaces it calls. The
+bundled CLI's deps are pure JS (no native bindings), so the same staged tree is
+valid for every arch.
+
+### Why `afterPack`, not `extraResources`
+
+electron-builder routes every `node_modules` directory it copies through its
+production-dependency filter, which keeps only the *app's* own deps — so the
+bundled CLI's dependency tree gets stripped out of an `extraResources` copy
+(`filter: ["**/*"]` does not defeat this). `afterPack` copies the staged tree
+in verbatim, which is the electron-builder-recommended mechanism for adding
+unpacked files that must not be ASAR-archived.
 
 ## Versioning
 
@@ -42,12 +69,14 @@ npm --prefix app run package:win      # Windows NSIS installer, x64
 npm --prefix app run package:linux    # Linux AppImage, x64
 ```
 
-`package` runs `npm run build` (compiles `electron/` with `tsc`, builds the
-renderer with `vite`) and then `electron-builder --mac`. `package:win` and
-`package:linux` mirror it exactly, swapping the final flag for
-`electron-builder --win` and `electron-builder --linux`. All three can run on
-the same macOS host — electron-builder downloads the NSIS and AppImage tooling
-on first use.
+`package` runs `npm run stage-cli` (rebuilds the root CLI and stages the
+self-contained bundle into `app/build/cli`; see "The bundled CLI" above), then
+`npm run build` (compiles `electron/` with `tsc`, builds the renderer with
+`vite`), then `electron-builder --mac` (whose `afterPack` hook copies the
+staged CLI into the app). `package:win` and `package:linux` mirror it exactly,
+swapping the final flag for `electron-builder --win` and `electron-builder
+--linux`. All three can run on the same macOS host — electron-builder downloads
+the NSIS and AppImage tooling on first use.
 
 ### Artifacts
 
@@ -78,8 +107,12 @@ separate `electron-builder.yml`):
 - `files`: only `dist/electron/**/*`, `dist/renderer/**/*`, and `package.json`.
   The Electron main process has no npm runtime dependencies (only Node/Electron
   builtins — see `app/electron/cli.ts` and `app/electron/quota/*.ts`), and the
-  renderer is a single Vite bundle, so `node_modules` does not need to ship at
-  all.
+  renderer is a single Vite bundle, so the app's own `node_modules` does not
+  need to ship at all. (The *bundled CLI* has its own `node_modules`, added to
+  `Resources/cli/` by the `afterPack` hook — see "The bundled CLI" above.)
+- `afterPack: "./scripts/after-pack.cjs"` — copies the staged CLI bundle
+  (`app/build/cli`) into `Contents/Resources/cli` after packaging and before
+  signing.
 - `mac.identity: "-"` — forces ad-hoc signing. **`identity: null` does NOT
   ad-hoc sign — it skips signing entirely**, which produces a bundle with a
   broken/absent seal (`codesign --verify --deep --strict` fails with
