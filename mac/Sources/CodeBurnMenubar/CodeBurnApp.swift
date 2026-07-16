@@ -36,8 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var lastContextMenuPresentedAt: Date = .distantPast
     fileprivate let store = AppStore()
     let updateChecker = UpdateChecker()
-    /// Held for the lifetime of the app to opt out of App Nap and Automatic Termination.
-    private var backgroundActivity: NSObjectProtocol?
+    /// True while the displays are asleep. Refresh ticks skip spawning
+    /// entirely then: nobody can see the menubar, and every fetch is a full
+    /// Node process (#647).
+    private var displayAsleep = false
+    /// Bounds status staleness under App Nap: the 30s timer can be coalesced
+    /// once the app naps (no permanent activity assertion anymore, #647), so
+    /// this system-scheduled activity guarantees a tick attempt every few
+    /// minutes. It goes through the same cadence gate as every other tick.
+    private var napBackstop: NSBackgroundActivityScheduler?
     private var pendingRefreshWork: DispatchWorkItem?
     private var refreshTimer: DispatchSourceTimer?
     private var forceRefreshTask: Task<Void, Never>?
@@ -81,16 +88,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.automaticTerminationSupportEnabled = false
         ProcessInfo.processInfo.disableSuddenTermination()
-        backgroundActivity = ProcessInfo.processInfo.beginActivity(
-            options: [.automaticTerminationDisabled, .suddenTerminationDisabled],
-            reason: "CodeBurn menubar background refresh"
-        )
+        // Deliberately NO app-lifetime beginActivity here. A permanent
+        // assertion opted the app out of App Nap forever, which kept the 30s
+        // spawn loop running at full tilt on battery and with the display
+        // off (#647). App Nap coalescing an idle tick is the desired
+        // behavior; each in-flight refresh holds its own short .background
+        // activity so a fetch is never napped mid-flight, and any user
+        // interaction (popover open, wake) refreshes immediately.
 
         restorePersistedCurrency()
         setupStatusItem()
         setupPopover()
         observeStore()
         startRefreshLoop()
+        startNapBackstop()
         setupWakeObservers()
         removeLegacyRefreshAgent()
         registerLoginItemIfNeeded()
@@ -123,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.displayAsleep = false
                 self?.recoverRefreshPipelineAfterInterruption(resetLoading: true, reason: "wake")
             }
         }
@@ -133,7 +145,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.displayAsleep = false
                 self?.recoverRefreshPipelineAfterInterruption(resetLoading: true, reason: "screen wake")
+            }
+        }
+
+        // Display sleep without system sleep (clamshell displays off, screen
+        // saver energy settings) previously kept the full spawn cadence
+        // running for hours. Skip refreshes until the screens wake.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.displayAsleep = true
             }
         }
     }
@@ -181,7 +207,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             }
             startRefreshLoop(forceQuotaOnStart: false)
         } else {
-            runRefreshLoopTick(reason: reason, forcePayload: true, forceQuota: false)
+            // Manual cadence means no automatic spawns, wakes included; the
+            // user refreshes via popover open or Refresh Now. The tick still
+            // runs so stuck-state cleanup happens.
+            runRefreshLoopTick(
+                reason: reason,
+                forcePayload: UsageRefreshCadence.current != .manual,
+                forceQuota: false
+            )
         }
     }
 
@@ -284,11 +317,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         return false
     }
 
-    private func refreshStatusPayloadIfNeeded(reason: String, force: Bool = false) {
+    private func refreshStatusPayloadIfNeeded(reason: String, force: Bool = false, minAgeSeconds: TimeInterval = 0) {
         let now = Date()
         _ = clearStaleStatusPayloadRefreshIfNeeded(now: now)
         guard statusPayloadRefreshTask == nil else { return }
         guard force || store.needsStatusPayloadRefresh else { return }
+        // The 30s cache TTL would otherwise defeat the battery/low-power
+        // backoff through this fallback path: honor the same spawn interval
+        // the main loop uses. A missing payload (nil age) always fetches.
+        if !force, minAgeSeconds > 0, let age = store.menubarPayloadAgeSeconds,
+           TimeInterval(age) < minAgeSeconds { return }
 
         let menubarPeriod = store.menubarPeriod
         if let age = store.menubarPayloadAgeSeconds, age > 120 {
@@ -300,6 +338,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let generation = statusPayloadRefreshGeneration
         statusPayloadRefreshTask = Task { [weak self] in
             guard let self else { return }
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: .background, reason: "CodeBurn status refresh")
+            defer { ProcessInfo.processInfo.endActivity(activity) }
             await self.store.refreshQuietly(period: menubarPeriod, force: true)
             self.refreshStatusButton()
             guard self.statusPayloadRefreshGeneration == generation, !Task.isCancelled else { return }
@@ -324,6 +365,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let generation = forceRefreshGeneration
 
         forceRefreshTask = Task {
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: .background, reason: "CodeBurn refresh")
+            defer { ProcessInfo.processInfo.endActivity(activity) }
             async let main: Void = refreshUsagePayloads(force: true, showLoading: true)
             async let quotas: Bool = refreshLiveQuotaProgressIfDue(force: forceQuota)
             _ = await main
@@ -340,6 +384,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func refreshUsagePayloads(force: Bool, showLoading: Bool = false) async {
         let menubarPeriod = store.menubarPeriod
+
+        // With the popover closed, only the payloads the status item actually
+        // renders are worth a Node spawn: the menubar period, plus today for
+        // the context-menu summary and day views. The popover's selected key
+        // is refreshed by refreshPayloadForPopoverOpen the moment it opens,
+        // so a closed-popover tick never pays for it (#647).
+        if !(popover?.isShown ?? false) {
+            async let menubar: Void = store.refreshQuietly(period: menubarPeriod, force: force)
+            async let today: Void = menubarPeriod != .today
+                ? store.refreshQuietly(period: .today, force: force)
+                : ()
+            _ = await (menubar, today)
+            return
+        }
+
         let needsMenubarPayload = store.selectedPeriod != menubarPeriod || store.selectedProvider != .all
         let needsTodayPayload = (store.selectedPeriod != .today || store.selectedProvider != .all) && menubarPeriod != .today
 
@@ -458,9 +517,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // key's stuck loading / in-flight / generation bookkeeping and force a
         // fresh fetch — even if the cache looks "not stale yet". This is the
         // guaranteed one-round-trip recovery path.
+        // An open popover also proves the screens are on: recover from a
+        // missed screensDidWake so a latched flag can't suppress refreshes.
+        displayAsleep = false
         if refreshTimer == nil {
             startRefreshLoop(forceQuotaOnStart: false)
         }
+        // The status figure may have gone stale under App Nap while the
+        // popover was closed; catch it up alongside the visible payload.
+        refreshStatusPayloadIfNeeded(reason: "popover open")
         if store.shouldResetInteractiveRefreshPipeline,
            let age = store.staleInteractivePayloadAgeSeconds {
             NSLog("CodeBurn: popover opened with %ds stale payload cache - hard recovery", age)
@@ -478,18 +543,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         refreshTimer = nil
     }
 
+    private func startNapBackstop() {
+        let scheduler = NSBackgroundActivityScheduler(
+            identifier: "org.agentseal.codeburn-menubar.refresh-backstop")
+        scheduler.repeats = true
+        scheduler.interval = 180
+        scheduler.tolerance = 60
+        scheduler.qualityOfService = .utility
+        scheduler.schedule { [weak self] completion in
+            Task { @MainActor [weak self] in
+                self?.runRefreshLoopTick(reason: "nap backstop")
+                completion(.finished)
+            }
+        }
+        napBackstop = scheduler
+    }
+
     private func runRefreshLoopTick(reason: String, forcePayload: Bool = false, forceQuota: Bool = false) {
         refreshLoopHeartbeatAt = Date()
+        if displayAsleep && !forcePayload { return }
         let hadForceRefreshInFlight = forceRefreshTask != nil
         let clearedStaleForceRefresh = clearStaleForceRefreshIfNeeded()
         let clearedStaleStatusRefresh = clearStaleStatusPayloadRefreshIfNeeded()
         let clearedStaleLoading = store.clearStaleLoadingIfNeeded()
         let statusPayloadStale = store.needsStatusPayloadRefresh
         let sinceLast = Date().timeIntervalSince(lastRefreshTime)
+        // The timer stays at 30s; the spawn interval follows the user's
+        // Settings cadence, stretching on battery / Low Power Mode in Auto
+        // and never auto-spawning in Manual (#647).
+        let interval = currentRefreshInterval()
+        let intervalElapsed = interval.map { sinceLast >= $0 } ?? false
+        // Stuck-refresh cleanup may retrigger a spawn only when the cadence
+        // allows auto-spawns at all: in Manual mode the stale state is
+        // cleared and the next user interaction fetches fresh.
+        let recoveryRespawnAllowed = interval != nil
         let shouldForceRefresh = forcePayload ||
-            clearedStaleForceRefresh ||
-            clearedStaleLoading ||
-            sinceLast >= TimeInterval(refreshIntervalSeconds)
+            ((clearedStaleForceRefresh || clearedStaleLoading) && recoveryRespawnAllowed) ||
+            intervalElapsed
 
         if shouldForceRefresh {
             forceRefresh(bypassRateLimit: true, forceQuota: forceQuota)
@@ -497,8 +587,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         let forceRefreshWasBlocked = hadForceRefreshInFlight && forceRefreshTask != nil
         if statusPayloadStale && (!shouldForceRefresh || forceRefreshWasBlocked || clearedStaleStatusRefresh) {
-            refreshStatusPayloadIfNeeded(reason: reason, force: forcePayload)
+            guard forcePayload || interval != nil else { return }
+            refreshStatusPayloadIfNeeded(reason: reason, force: forcePayload, minAgeSeconds: interval ?? 0)
         }
+    }
+
+    private func currentRefreshInterval() -> TimeInterval? {
+        RefreshCadence.interval(
+            mode: UsageRefreshCadence.current,
+            popoverOpen: popover?.isShown ?? false,
+            onBattery: PowerSource.isOnBattery(),
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled
+        )
     }
 
     private func startRefreshLoop(forceQuotaOnStart: Bool = false) {
@@ -543,6 +643,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         manualRefreshTask = Task { [weak self] in
             guard let self else { return }
+            let activity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiated, reason: "CodeBurn manual refresh")
+            defer { ProcessInfo.processInfo.endActivity(activity) }
             // "Refresh Now" should refresh the menubar payload AND every
             // connected provider's live quota. The user's intent is "make
             // this match reality right now."
@@ -765,6 +868,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // restart. Skips redundant writes by tracking the last payload's `generated`
     // stamp. This is the only writer now that the launchd fetcher is gone.
     private func persistBadgeStatusFile() {
+        // Only persist the unscoped (All) badge. Config selection resets to All
+        // on relaunch, so a scoped payload on disk would show the wrong config's
+        // number at next launch.
+        guard store.selectedClaudeConfigSourceId == nil else { return }
         guard let payload = store.menubarPayload else { return }
         guard payload.generated != lastWrittenBadgeGenerated else { return }
         do {
@@ -780,6 +887,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // The 10-min bound discards a file too stale to trust.
     private func badgePayload() -> MenubarPayload? {
         let inMemory = store.menubarPayload
+        // While scoped to a config, never fall back to the on-disk badge: it
+        // holds the unscoped All payload and would show the wrong number.
+        if store.selectedClaudeConfigSourceId != nil { return inMemory }
         let inMemoryAge = store.menubarPayloadAgeSeconds.map(TimeInterval.init)
         guard let fileRead = MenubarStatusCache.standard().readBadgePayload(maxAgeSeconds: 600) else {
             return inMemory

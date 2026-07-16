@@ -15,9 +15,13 @@ const oneShot = (r: number | null) => (r === null ? 'n/a' : pct(r * 100))
 
 export function renderSummaryTable(p: MenubarPayload): string {
   const c = p.current
+  const unpriced = c.unpricedModels ?? []
   return [
     `**${c.label}** — ${formatCost(c.cost)} · ${c.calls} calls · ${c.sessions} sessions`,
     `cache hit ${pct(c.cacheHitPercent)} · one-shot ${oneShot(c.oneShotRate)} · in ${formatTokens(c.inputTokens)} / out ${formatTokens(c.outputTokens)}`,
+    ...(unpriced.length > 0
+      ? [`⚠ ${unpriced.length} model${unpriced.length === 1 ? '' : 's'} unpriced, counted at $0: ${unpriced.map(u => `${u.model} (${u.calls} calls)`).join(', ')}. Cost above understates real spend; fix with \`codeburn model-alias\` or \`codeburn price-override\`.`]
+      : []),
     '',
     '_Top models_',
     mdTable(['Model', 'Cost', 'Calls'], c.topModels.slice(0, 5).map(m => [m.name, formatCost(m.cost), String(m.calls)])),

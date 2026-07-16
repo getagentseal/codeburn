@@ -4,7 +4,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from 'ink'
 import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } from './compare-stats.js'
 import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, scanSelfCorrections } from './compare-stats.js'
 import { formatCost } from './format.js'
-import { parseAllSessions } from './parser.js'
+import { parseAllSessions, setInteractiveScanUI } from './parser.js'
 import { getAllProviders } from './providers/index.js'
 import type { ProjectSummary, DateRange } from './types.js'
 import { patchStdoutForWindows } from './ink-win.js'
@@ -467,6 +467,10 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
 }
 
 export async function renderCompare(range: DateRange, provider: string): Promise<void> {
+  // Interactive Ink UI: suppress the CLI scan-progress line for the whole
+  // lifetime so it can't print over the rendered comparison. Plain CLI
+  // commands still show progress.
+  setInteractiveScanUI()
   const isTTY = process.stdin.isTTY && process.stdout.isTTY
   if (!isTTY) {
     process.stdout.write('Model comparison requires an interactive terminal.\n')

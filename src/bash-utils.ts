@@ -5,6 +5,14 @@ function stripQuotedStrings(command: string): string {
   return command.replace(/"[^"]*"|'[^']*'/g, match => ' '.repeat(match.length))
 }
 
+const COMMAND_PREFIXES = new Set([
+  'sudo', 'doas',
+  'npx', 'bunx',
+  'time',
+  'nice', 'nohup', 'stdbuf',
+  'rtk',
+])
+
 export function extractBashCommands(rawCommand: string): string[] {
   if (!rawCommand || !rawCommand.trim()) return []
 
@@ -34,7 +42,17 @@ export function extractBashCommands(rawCommand: string): string[] {
 
     const tokens = segment.split(/\s+/)
     let i = 0
-    while (i < tokens.length && /^\w+=/.test(tokens[i]!)) i++
+    while (i < tokens.length) {
+      if (/^\w+=/.test(tokens[i]!)) { i++; continue }
+      const next = tokens[i + 1]
+      if (
+        next !== undefined &&
+        COMMAND_PREFIXES.has(basename(tokens[i]!)) &&
+        !next.startsWith('-') &&
+        !/["']/.test(next)
+      ) { i++; continue }
+      break
+    }
     const base = i < tokens.length ? basename(tokens[i]!) : ''
 
     if (base && base !== 'cd' && base !== 'true' && base !== 'false') {

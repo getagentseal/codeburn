@@ -63,6 +63,7 @@ const CURRENCIES = [
   { code: 'MXN', symbol: 'MX$' },
   { code: 'ZAR', symbol: 'R ' },
   { code: 'DKK', symbol: 'kr ' },
+  { code: 'RON', symbol: 'lei ' },
   { code: 'CNY', symbol: '¥' },
 ];
 

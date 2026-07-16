@@ -4,6 +4,10 @@ export type SessionSource = {
   path: string
   project: string
   provider: string
+  sourceId?: string
+  sourceLabel?: string
+  sourcePath?: string
+  sourceKind?: 'claude-config' | 'claude-desktop'
 }
 
 export type SessionParser = {

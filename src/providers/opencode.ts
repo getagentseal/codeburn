@@ -72,13 +72,16 @@ export function createOpenCodeProvider(dataDir?: string): Provider {
       return toolNameMap[rawTool] ?? rawTool
     },
 
-    // OpenCode 1.1+ stores sessions as file-based JSON; older builds used a
-    // SQLite DB. Prefer file-based when present, otherwise fall back to the DB
-    // so pre-migration installs keep reporting.
+    // OpenCode migrated from file-based JSON (storage/session/*.json) to a
+    // SQLite DB (opencode.db). After an in-place upgrade, legacy JSON files
+    // remain on disk while all new data flows into the SQLite DB. Merge both
+    // sources so migrated installs keep reporting legacy sessions AND pick up
+    // current SQLite data. Dedup is handled per-message in createSessionParser
+    // via seenKeys (keyed by `${provider}:${sessionId}:${messageId}`).
     async discoverSessions(): Promise<SessionSource[]> {
       const fileSessions = await discoverOpenCodeFileSessions(resolvedDataDir, 'opencode')
-      if (fileSessions.length > 0) return fileSessions
-      return discoverSqliteSessions(sqliteConfig)
+      const sqliteSessions = await discoverSqliteSessions(sqliteConfig)
+      return [...fileSessions, ...sqliteSessions]
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

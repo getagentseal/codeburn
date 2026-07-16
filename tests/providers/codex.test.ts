@@ -105,6 +105,14 @@ async function writeSession(dir: string, date: string, filename: string, lines: 
   return filePath
 }
 
+async function writeArchivedSession(dir: string, filename: string, lines: string[]) {
+  const archivedDir = join(dir, 'archived_sessions')
+  await mkdir(archivedDir, { recursive: true })
+  const filePath = join(archivedDir, filename)
+  await writeFile(filePath, lines.join('\n') + '\n')
+  return filePath
+}
+
 describe('codex provider - model display names', () => {
   it('maps gpt-5.3-codex-spark to its own label', () => {
     const provider = createCodexProvider(tmpDir)
@@ -134,6 +142,22 @@ describe('codex provider - session discovery', () => {
     expect(sessions[0]!.provider).toBe('codex')
     expect(sessions[0]!.project).toBe('Users-test-myproject')
     expect(sessions[0]!.path).toContain('rollout-abc123.jsonl')
+  })
+
+  it('discovers sessions moved to the flat archived_sessions directory', async () => {
+    const filePath = await writeArchivedSession(tmpDir, 'rollout-archived.jsonl', [
+      sessionMeta({ cwd: '/Users/test/archived' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toEqual([{
+      path: filePath,
+      project: 'Users-test-archived',
+      provider: 'codex',
+    }])
   })
 
   it('returns empty for non-existent directory', async () => {
@@ -330,6 +354,51 @@ describe('codex provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['mcp__github__get_issue'])
+  })
+
+  it('attributes CLI-wrapped MCP calls (mcp-cli call server tool) to MCP + Bash', async () => {
+    const execStr = (command: string) => JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-04-14T10:00:30Z',
+      payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command }) },
+    })
+    // command as an array (Codex sometimes logs argv form).
+    const execArr = (command: string[]) => JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-04-14T10:00:30Z',
+      payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command }) },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcpcli.jsonl', [
+      sessionMeta({ session_id: 'sess-mcpcli', model: 'gpt-5.5' }),
+      userMessage('look up an issue via the MCP CLI'),
+      // Real invocation forms that MUST attribute to MCP:
+      execStr("bash -lc \"mcp-cli call github get_issue '{\\\"id\\\": 5}'\""),   // bash -lc wrapper
+      execStr('mcp-cli -c ./mcp.json call linear list_issues'),                 // flags before subcommand
+      execArr(['mcp-cli', 'call', 'slack', 'post_message', '{}']),              // argv array form
+      // Lookups and unrelated commands that must NOT attribute:
+      execStr('mcp-cli info github'),
+      execStr('mcp-cli grep "*issue*"'),
+      execStr('my-mcp-cli-wrapper call github get_issue'),                       // not the mcp-cli binary
+      execStr('ls -la'),
+      tokenCount({ timestamp: '2026-04-14T10:01:00Z', last: { input: 300, output: 100 }, total: { total: 400 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const parser = provider.createSessionParser(source, new Set())
+    const calls: ParsedProviderCall[] = []
+    for await (const call of parser.parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    const tools = calls[0]!.tools
+    // Every exec still counts as Bash (7 exec_commands total).
+    expect(tools.filter(t => t === 'Bash')).toHaveLength(7)
+    // Exactly the three `call` invocations attribute to MCP; info/grep/wrapper/ls do not.
+    expect(tools.filter(t => t.startsWith('mcp__')).sort()).toEqual([
+      'mcp__github__get_issue',
+      'mcp__linear__list_issues',
+      'mcp__slack__post_message',
+    ])
   })
 
   it('normalizes Codex subagent tool calls to Agent', async () => {

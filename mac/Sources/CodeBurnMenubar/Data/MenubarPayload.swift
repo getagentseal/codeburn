@@ -8,6 +8,46 @@ struct MenubarPayload: Codable, Sendable {
     let optimize: OptimizeBlock
     let history: HistoryBlock
     let combined: CombinedUsage?
+    let claudeConfigs: ClaudeConfigSelector?
+
+    init(generated: String,
+         current: CurrentBlock,
+         optimize: OptimizeBlock,
+         history: HistoryBlock,
+         combined: CombinedUsage?,
+         claudeConfigs: ClaudeConfigSelector? = nil) {
+        self.generated = generated
+        self.current = current
+        self.optimize = optimize
+        self.history = history
+        self.combined = combined
+        self.claudeConfigs = claudeConfigs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case generated, current, optimize, history, combined, claudeConfigs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated = try c.decode(String.self, forKey: .generated)
+        current = try c.decode(CurrentBlock.self, forKey: .current)
+        optimize = try c.decode(OptimizeBlock.self, forKey: .optimize)
+        history = try c.decode(HistoryBlock.self, forKey: .history)
+        combined = try c.decodeIfPresent(CombinedUsage.self, forKey: .combined)
+        claudeConfigs = try c.decodeIfPresent(ClaudeConfigSelector.self, forKey: .claudeConfigs)
+    }
+}
+
+struct ClaudeConfigSelector: Codable, Sendable {
+    let selectedId: String?
+    let options: [ClaudeConfigOption]
+}
+
+struct ClaudeConfigOption: Codable, Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let path: String
 }
 
 struct CombinedUsage: Codable, Sendable {
@@ -422,6 +462,7 @@ extension MenubarPayload {
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
         history: HistoryBlock(daily: []),
-        combined: nil
+        combined: nil,
+        claudeConfigs: nil
     )
 }

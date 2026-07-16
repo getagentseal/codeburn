@@ -63,6 +63,7 @@
     "@types/node": "^22.19.17",
     "@types/react": "^19.2.14",
     "@types/selfsigned": "^2.0.4",
+    "playwright": "^1.61.1",
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

@@ -8,13 +8,19 @@ OpenAI Codex CLI.
 
 ## Where it reads from
 
-`$CODEX_HOME` if set, otherwise `~/.codex`. Sessions are nested by date:
+`$CODEX_HOME` if set, otherwise `~/.codex`. Active sessions are nested by date:
 
 ```
 ~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl
 ```
 
-The discovery walk uses strict regex (`^\d{4}$`, `^\d{2}$`) on each path component.
+Archived sessions are stored in a flat directory and are included in usage reports:
+
+```
+~/.codex/archived_sessions/rollout-*.jsonl
+```
+
+The active-session discovery walk uses strict regex (`^\d{4}$`, `^\d{2}$`) on each path component.
 
 ## Storage format
 

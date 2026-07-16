@@ -17,13 +17,20 @@ struct PayloadCacheKey: Hashable {
     let provider: ProviderFilter
     let day: String?
     let days: Set<String>
+    let claudeConfigSourceId: String?
 
-    init(scope: MenubarScope = .local, period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = []) {
+    init(scope: MenubarScope = .local,
+         period: Period,
+         provider: ProviderFilter,
+         day: String? = nil,
+         days: Set<String> = [],
+         claudeConfigSourceId: String? = nil) {
         self.scope = scope
         self.period = period
         self.provider = provider
         self.day = days.count <= 1 ? (day ?? days.first) : nil
         self.days = days.count > 1 ? days : []
+        self.claudeConfigSourceId = claudeConfigSourceId
     }
 
     var label: String {
@@ -40,6 +47,7 @@ final class AppStore {
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
     var selectedScope: MenubarScope = MenubarScope.savedMenubarScope()
+    var selectedClaudeConfigSourceId: String?
     var selectedDays: Set<String> = []
     var activeScope: MenubarScope { effectiveSelectedScope }
 
@@ -171,19 +179,42 @@ final class AppStore {
     }
 
     private var menubarStatusKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: menubarPeriod, provider: .all, day: nil)
+        // Scope the menu-bar figure to the selected Claude config so the icon
+        // matches the popover instead of always showing the merged All total.
+        PayloadCacheKey(scope: .local, period: menubarPeriod, provider: .all, day: nil, claudeConfigSourceId: selectedClaudeConfigSourceId)
     }
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(scope: effectiveSelectedScope, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: effectiveSelectedScope,
+            period: selectedPeriod,
+            provider: selectedProvider,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     private var localCurrentKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: .local,
+            period: selectedPeriod,
+            provider: selectedProvider,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     private var periodAllKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: .local,
+            period: selectedPeriod,
+            provider: .all,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     var payload: MenubarPayload {
@@ -196,7 +227,8 @@ final class AppStore {
                         current: localPayload.current,
                         optimize: localPayload.optimize,
                         history: localPayload.history,
-                        combined: combined
+                        combined: combined,
+                        claudeConfigs: localPayload.claudeConfigs
                     )
                 }
                 return localPayload
@@ -235,6 +267,17 @@ final class AppStore {
     /// per-provider costs that match the active period, not just today.
     var periodAllPayload: MenubarPayload? {
         cache[periodAllKey]?.payload
+    }
+
+    var claudeConfigOptions: [ClaudeConfigOption] {
+        payload.claudeConfigs?.options
+            ?? periodAllPayload?.claudeConfigs?.options
+            ?? todayPayload?.claudeConfigs?.options
+            ?? []
+    }
+
+    var shouldShowClaudeConfigSelector: Bool {
+        claudeConfigOptions.count > 1
     }
 
     var isDayMode: Bool {
@@ -313,16 +356,18 @@ final class AppStore {
                                     provider: ProviderFilter,
                                     day: String? = nil,
                                     days: Set<String> = [],
+                                    claudeConfigSourceId: String? = nil,
                                     fetchedAt: Date) {
-        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
     }
 
     func cachedPayloadForTesting(scope: MenubarScope = .local,
                                  period: Period,
                                  provider: ProviderFilter,
                                  day: String? = nil,
-                                 days: Set<String> = []) -> MenubarPayload? {
-        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)]?.payload
+                                 days: Set<String> = [],
+                                 claudeConfigSourceId: String? = nil) -> MenubarPayload? {
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)]?.payload
     }
 
     func setLastErrorForTesting(_ error: String,
@@ -412,6 +457,9 @@ final class AppStore {
         if shouldResetProvider {
             selectedProvider = .all
         }
+        if scope == .combined {
+            selectedClaudeConfigSourceId = nil
+        }
 #if DEBUG
         if refreshSuppressedForTesting { return }
 #endif
@@ -426,6 +474,21 @@ final class AppStore {
     /// in parallel so the tab strip costs stay in sync with the hero.
     func switchTo(provider: ProviderFilter) {
         selectedProvider = provider
+        // A Claude config scope only applies to All/Claude views; picking any
+        // other provider tab clears it (the CLI rejects the contradictory combo).
+        if provider != .all && provider != .claude {
+            selectedClaudeConfigSourceId = nil
+        }
+        startInteractiveSelectionRefresh()
+    }
+
+    func switchTo(claudeConfigSourceId: String?) {
+        guard selectedClaudeConfigSourceId != claudeConfigSourceId else { return }
+        selectedClaudeConfigSourceId = claudeConfigSourceId
+        if claudeConfigSourceId != nil {
+            selectedProvider = .all
+            selectedScope = .local
+        }
         startInteractiveSelectionRefresh()
     }
 
@@ -435,6 +498,9 @@ final class AppStore {
         selectedScope = scope
         if shouldResetProvider {
             selectedProvider = .all
+        }
+        if scope == .combined {
+            selectedClaudeConfigSourceId = nil
         }
         startInteractiveSelectionRefresh()
     }
@@ -450,9 +516,10 @@ final class AppStore {
         let scope = effectiveSelectedScope
         let day = selectedDay
         let days = selectedDays
-        let key = PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)
-        let localKey = PayloadCacheKey(scope: .local, period: period, provider: provider, day: day, days: days)
-        let allKey = PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, days: days)
+        let claudeConfigSourceId = selectedClaudeConfigSourceId
+        let key = PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
+        let localKey = PayloadCacheKey(scope: .local, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
+        let allKey = PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
         lastErrorByKey[key] = nil
         switchTask = Task {
             if scope == .combined {
@@ -569,6 +636,15 @@ final class AppStore {
         cache.removeAll()
     }
 
+    private func reconcileClaudeConfigSelection(from payload: MenubarPayload, for key: PayloadCacheKey) {
+        guard let selected = key.claudeConfigSourceId else { return }
+        guard selectedClaudeConfigSourceId == selected else { return }
+        let valid = payload.claudeConfigs?.options.contains { $0.id == selected } ?? false
+        if !valid || payload.claudeConfigs?.selectedId != selected {
+            selectedClaudeConfigSourceId = nil
+        }
+    }
+
     func recoverFromStuckLoading() async {
         guard prepareStuckLoadingRecovery() else { return }
         await refresh(includeOptimize: false, force: true, showLoading: true)
@@ -612,7 +688,8 @@ final class AppStore {
             period: selectedPeriod,
             provider: selectedProvider,
             day: selectedDay,
-            days: selectedDays
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
         )
         if scope == .combined {
             async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
@@ -659,7 +736,15 @@ final class AppStore {
             }
         }
         do {
-            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize, scope: key.scope)
+            let fresh = try await DataClient.fetch(
+                period: key.period,
+                day: key.day,
+                days: key.days,
+                provider: key.provider,
+                includeOptimize: includeOptimize,
+                scope: key.scope,
+                claudeConfigSourceId: key.claudeConfigSourceId
+            )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
                 return
@@ -682,6 +767,7 @@ final class AppStore {
                 return
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
+            reconcileClaudeConfigSelection(from: fresh, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
         } catch {
@@ -689,7 +775,15 @@ final class AppStore {
             NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
-                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false, scope: key.scope)
+                    let fallback = try await DataClient.fetch(
+                        period: key.period,
+                        day: key.day,
+                        days: key.days,
+                        provider: key.provider,
+                        includeOptimize: false,
+                        scope: key.scope,
+                        claudeConfigSourceId: key.claudeConfigSourceId
+                    )
                     guard !Task.isCancelled else { return }
                     if generationAtStart != payloadRefreshGeneration { return }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
@@ -697,6 +791,7 @@ final class AppStore {
                         return
                     }
                     cache[key] = CachedPayload(payload: fallback, fetchedAt: Date())
+                    reconcileClaudeConfigSelection(from: fallback, for: key)
                     lastSuccessByKey[key] = Date()
                     lastErrorByKey[key] = nil
                     return
@@ -708,7 +803,14 @@ final class AppStore {
             lastErrorByKey[key] = String(describing: error)
         }
 
-        let allKey = PayloadCacheKey(scope: .local, period: key.period, provider: .all, day: key.day, days: key.days)
+        let allKey = PayloadCacheKey(
+            scope: .local,
+            period: key.period,
+            provider: .all,
+            day: key.day,
+            days: key.days,
+            claudeConfigSourceId: key.claudeConfigSourceId
+        )
         if key != allKey, cache[allKey]?.isFresh != true {
             await refreshQuietly(key: allKey, includeOptimize: false, force: false)
         }
@@ -718,7 +820,9 @@ final class AppStore {
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
     func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
-        await refreshQuietly(key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day), includeOptimize: false, force: force)
+        // Scope the status-payload fetch to the selected config so the menu-bar
+        // figure matches the popover (see menubarStatusKey).
+        await refreshQuietly(key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, claudeConfigSourceId: selectedClaudeConfigSourceId), includeOptimize: false, force: force)
     }
 
     private func refreshQuietly(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false) async {
@@ -742,7 +846,8 @@ final class AppStore {
                 days: key.days,
                 provider: key.provider,
                 includeOptimize: includeOptimize,
-                scope: key.scope
+                scope: key.scope,
+                claudeConfigSourceId: key.claudeConfigSourceId
             )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
@@ -755,6 +860,7 @@ final class AppStore {
                 return
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
+            reconcileClaudeConfigSelection(from: fresh, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
         } catch {
@@ -1188,7 +1294,7 @@ final class AppStore {
 }
 
 enum SupportedCurrency: String, CaseIterable, Identifiable {
-    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
+    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK, RON
     var id: String { rawValue }
     var displayName: String {
         switch self {
@@ -1210,6 +1316,7 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
         case .MXN: "Mexican Peso"
         case .ZAR: "South African Rand"
         case .DKK: "Danish Krone"
+        case .RON: "Romanian Leu"
         }
     }
 }
@@ -1228,6 +1335,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
+    case lingtaiTui = "LingTai TUI"
     case kiloCode = "KiloCode"
     case openclaw = "OpenClaw"
     case opencode = "OpenCode"
@@ -1257,6 +1365,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .goose: ["goose"]
         case .grok: ["grok", "grok build"]
         case .hermes: ["hermes", "hermes agent"]
+        case .lingtaiTui: ["lingtai-tui", "lingtai tui"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1277,6 +1386,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kiloCode: "kilo-code"
         case .kiro: "kiro"
         case .kimi: "kimi"
+        case .lingtaiTui: "lingtai-tui"
         case .openclaw: "openclaw"
         case .opencode: "opencode"
         case .pi: "pi"

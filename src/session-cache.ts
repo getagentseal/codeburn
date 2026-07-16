@@ -82,7 +82,11 @@ export type SessionCache = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-export const CACHE_VERSION = 4
+// v5: kiro joined the costUSD pass-through allowlist (credit-based pricing).
+// Cached kiro entries from v4 carry costUSD: undefined and would keep being
+// re-priced from estimated tokens forever, since historical session files
+// never change. Bump forces a one-time re-parse so metered credit costs land.
+export const CACHE_VERSION = 5
 
 const CACHE_FILE = 'session-cache.json'
 const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
@@ -91,6 +95,7 @@ const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
   codex: ['CODEX_HOME'],
   hermes: ['HERMES_HOME'],
+  'lingtai-tui': ['LINGTAI_HOME', 'LINGTAI_TUI_HOME', 'LINGTAI_TUI_GLOBAL_DIR'],
   droid: ['FACTORY_DIR'],
   cursor: ['XDG_DATA_HOME'],
   'cursor-agent': ['XDG_DATA_HOME'],
@@ -110,11 +115,18 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   claude: 'cowork-space-grouping-v1',
   cline: 'worktree-project-grouping-v1',
+  // Bump when the Codex parser changes attribution so unchanged, already-cached
+  // session files re-parse (session-cache.json serves them without invoking the
+  // provider parser otherwise). Covers native mcp_tool_call_end (#513) and
+  // CLI-wrapped `mcp-cli call` (#478) MCP attribution.
+  codex: 'mcp-attribution-v2',
   cursor: 'composer-anchored-crediting-v1',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'otel-durable-v1',
   hermes: 'reasoning-output-accounting-v1',
+  'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
+  kiro: 'ide-parsing-v1',
   'kilo-code': 'worktree-project-grouping-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1',
@@ -284,6 +296,15 @@ export async function saveCache(cache: SessionCache): Promise<void> {
 }
 
 // ── File Fingerprinting ────────────────────────────────────────────────
+//
+// Fingerprints cover the source's transcript file only. Providers that keep
+// metadata in a companion file (kiro CLI: credits in `<id>.json` next to the
+// `.jsonl`; kiro v2: modelId in `session.json` next to `messages.jsonl`) have
+// a blind spot: a parse that races the companion write caches the turn with
+// fallback values, and if the transcript never changes again (a session's
+// final turn) the entry never invalidates. Mid-session turns self-heal since
+// append-only transcripts keep changing. Fixing this properly means
+// multi-file fingerprints per source.
 
 export async function fingerprintFile(filePath: string): Promise<FileFingerprint | null> {
   try {

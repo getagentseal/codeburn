@@ -5,8 +5,8 @@ import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { parseAllSessions, filterProjectsByName } from './parser.js'
-import { loadPricing } from './models.js'
+import { parseAllSessions, filterProjectsByName, setInteractiveScanUI } from './parser.js'
+import { findUnpricedModels, loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, type ContextBudget } from './context-budget.js'
@@ -358,6 +358,12 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   }
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
+  const unpriced = findUnpricedModels(Object.entries(modelTotals).map(([model, d]) => ({
+    model,
+    calls: d.calls,
+    cost: d.costUSD,
+    tokens: d.freshInput + d.cacheRead + d.cacheWrite,
+  })))
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
@@ -381,6 +387,11 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
           </Text>
         )
       })}
+      {unpriced.length > 0 && (
+        <Text color="yellow" wrap="truncate-end">
+          {`! ${unpriced.length} model${unpriced.length === 1 ? '' : 's'} unpriced at $0, fix: codeburn model-alias (${unpriced.slice(0, 2).map(u => u.model).join(', ')}${unpriced.length > 2 ? ', ...' : ''})`}
+        </Text>
+      )}
     </Panel>
   )
 }
@@ -1075,6 +1086,11 @@ function StaticDashboard({ projects, period, activeProvider, planUsages, label, 
 }
 
 export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string, initialDay?: string): Promise<void> {
+  // Interactive Ink UI: it renders to the same terminal and has its own in-frame
+  // loading state, so the CLI scan-progress line must stay silent for its whole
+  // lifetime (initial scan and every 30s auto-refresh, including the
+  // getPlanUsages → parseAllSessions path). Plain CLI commands are unaffected.
+  setInteractiveScanUI()
   await loadPricing()
   const dayRange = initialDay ? getDayRange(initialDay) : null
   const range = dayRange ?? customRange ?? getPeriodRange(period)

@@ -35,7 +35,19 @@ private func combinedUsage(cost: Double = 12.5) -> CombinedUsage {
     )
 }
 
-private func menubarPayload(cost: Double, combined: CombinedUsage? = nil) -> MenubarPayload {
+private func claudeConfigSelector(selectedId: String? = nil) -> ClaudeConfigSelector {
+    ClaudeConfigSelector(
+        selectedId: selectedId,
+        options: [
+            ClaudeConfigOption(id: "claude-config:work", label: "claude-work", path: "/tmp/claude-work"),
+            ClaudeConfigOption(id: "claude-config:personal", label: "claude-personal", path: "/tmp/claude-personal")
+        ]
+    )
+}
+
+private func menubarPayload(cost: Double,
+                            combined: CombinedUsage? = nil,
+                            claudeConfigs: ClaudeConfigSelector? = nil) -> MenubarPayload {
     MenubarPayload(
         generated: "test",
         current: CurrentBlock(
@@ -64,7 +76,8 @@ private func menubarPayload(cost: Double, combined: CombinedUsage? = nil) -> Men
         ),
         optimize: OptimizeBlock(findingCount: 0, savingsUSD: 0, topFindings: []),
         history: HistoryBlock(daily: []),
-        combined: combined
+        combined: combined,
+        claudeConfigs: claudeConfigs
     )
 }
 
@@ -199,6 +212,72 @@ struct AppStoreRefreshRecoveryTests {
         store.switchTo(scope: .combined)
 
         #expect(store.selectedScope == .combined)
+        #expect(store.selectedProvider == .all)
+    }
+
+    @Test("selected Claude config partitions payload cache")
+    func selectedClaudeConfigPartitionsPayloadCache() {
+        let store = AppStore()
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 10, claudeConfigs: claudeConfigSelector()),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 4, claudeConfigs: claudeConfigSelector(selectedId: "claude-config:work")),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            claudeConfigSourceId: "claude-config:work",
+            fetchedAt: Date()
+        )
+
+        #expect(store.payload.current.cost == 10)
+
+        store.selectedClaudeConfigSourceId = "claude-config:work"
+
+        #expect(store.payload.current.cost == 4)
+        #expect(store.cachedPayloadForTesting(scope: .local, period: .today, provider: .all)?.current.cost == 10)
+        #expect(store.cachedPayloadForTesting(scope: .local, period: .today, provider: .all, claudeConfigSourceId: "claude-config:work")?.current.cost == 4)
+    }
+
+    @Test("Claude config selector is hidden until multiple configs are available")
+    func claudeConfigSelectorVisibilityRequiresMultipleConfigs() {
+        let store = AppStore()
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 1),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+        #expect(!store.shouldShowClaudeConfigSelector)
+
+        store.setCachedPayloadForTesting(
+            menubarPayload(cost: 2, claudeConfigs: claudeConfigSelector()),
+            scope: .local,
+            period: .today,
+            provider: .all,
+            fetchedAt: Date()
+        )
+
+        #expect(store.shouldShowClaudeConfigSelector)
+        #expect(store.claudeConfigOptions.map(\.label) == ["claude-work", "claude-personal"])
+    }
+
+    @Test("selecting Claude config resets provider and combined scope")
+    func selectingClaudeConfigResetsProviderAndCombinedScope() {
+        let store = AppStore()
+        store.suppressRefreshesForTesting()
+        store.selectedScope = .combined
+        store.selectedProvider = .codex
+
+        store.switchTo(claudeConfigSourceId: "claude-config:work")
+
+        #expect(store.selectedClaudeConfigSourceId == "claude-config:work")
+        #expect(store.selectedScope == .local)
         #expect(store.selectedProvider == .all)
     }
 
