@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 
 // Runs entirely in the Electron main process. This module must NOT import
 // `electron` so it stays unit-testable in a plain node environment.
@@ -75,6 +75,21 @@ function searchDirs(): string[] {
   if (override !== undefined) return override.split(delimiter).filter(Boolean)
   const pathDirs = (process.env.PATH || '').split(delimiter).filter(Boolean)
   return [...pathDirs, ...nodeManagerDirs()]
+}
+
+/**
+ * Spawn env for the resolved CLI. A GUI-launched app inherits a minimal PATH
+ * (/usr/bin:/bin:...) that lacks the user's node install, and the `codeburn`
+ * npm shim starts with `#!/usr/bin/env node` — so spawning it fails with
+ * "env: node: No such file or directory" even though the shim itself was
+ * found. Prepend the shim's own directory (node sits beside it in nvm,
+ * Homebrew, and npm-prefix layouts) plus the same dirs the resolver searches.
+ */
+export function spawnEnvFor(bin: string): NodeJS.ProcessEnv {
+  const parts = [dirname(bin), ...searchDirs(), ...(process.env.PATH || '').split(delimiter)]
+  const seen = new Set<string>()
+  const path = parts.filter(p => p && !seen.has(p) && (seen.add(p), true)).join(delimiter)
+  return { ...process.env, PATH: path }
 }
 
 function isExecutableFile(p: string): boolean {
@@ -151,7 +166,7 @@ export function resolveCodeburnPath(): string | null {
 
 function runCli(bin: string, args: string[], timeoutMs: number): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
-    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnvFor(bin) })
     activeChildren.add(child)
     let stdout = ''
     let stderr = ''
@@ -245,7 +260,7 @@ export function spawnCliAction(args: string[], opts: { timeoutMs?: number } = {}
       return
     }
 
-    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: spawnEnvFor(bin) })
     activeChildren.add(child)
     let stdout = ''
     let stderr = ''

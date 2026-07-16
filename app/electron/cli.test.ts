@@ -2,9 +2,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
-import { spawnCli, spawnCliAction, killAll, CliError, nodeManagerDirs, resolveCodeburnPath } from './cli'
+import { spawnCli, spawnCliAction, spawnEnvFor, killAll, CliError, nodeManagerDirs, resolveCodeburnPath } from './cli'
 
 let dir: string
 const originalBin = process.env.CODEBURN_BIN
@@ -112,6 +112,24 @@ describe('spawnCli', () => {
   it('rejects with kind "too-large" and kills a binary that floods stdout', async () => {
     fakeBin('flood.js', "const s='x'.repeat(1024*1024); for(let i=0;i<20;i++) process.stdout.write(s); setInterval(()=>{},1000)")
     await expect(spawnCli(['status'])).rejects.toMatchObject({ kind: 'too-large' } satisfies Partial<CliError>)
+  })
+})
+
+describe('spawn PATH augmentation (GUI-launched apps have a minimal PATH)', () => {
+  it("prepends the resolved binary's own directory so its env-shebang finds node", async () => {
+    const bin = fakeBin('path-echo.js', 'process.stdout.write(JSON.stringify({ path: process.env.PATH }))')
+    const result = await spawnCli(['status']) as { path: string }
+    expect(result.path.split(':')[0]).toBe(dirname(bin))
+  })
+
+  it('spawnEnvFor dedupes and keeps the original PATH entries', () => {
+    const env = spawnEnvFor('/some/tool/bin/codeburn')
+    const parts = (env.PATH ?? '').split(':')
+    expect(parts[0]).toBe('/some/tool/bin')
+    expect(new Set(parts).size).toBe(parts.length)
+    for (const original of (process.env.PATH ?? '').split(':').filter(Boolean)) {
+      expect(parts).toContain(original)
+    }
   })
 })
 
