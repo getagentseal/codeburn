@@ -2527,10 +2527,12 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
 }
 
 // Merge projects that resolve to the same repository across providers (the
-// same repo used with Claude Code + Codex, say). Additive totals must ALL be
-// summed here; a field summed at the session level but forgotten in this merge
-// silently under-reports for exactly the multi-provider users (this bit
-// totalEstimatedCostUSD once, caught in #639 verification).
+// same repo used with Claude Code + Codex, say). An additive total summed at
+// the session level but forgotten here silently under-reports for exactly the
+// multi-provider users (this bit totalEstimatedCostUSD once, caught in #639
+// verification). Known gaps, deliberate: totalSavingsUSD is still not summed
+// (pre-existing, tracked separately) and totalProxiedCostUSD is re-derived
+// after the merge rather than summed here.
 export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
   const crossProviderKey = (p: ProjectSummary): string => {
     const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()

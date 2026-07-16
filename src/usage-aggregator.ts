@@ -262,6 +262,10 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
   }
   if (isAllProviders) {
+    // Load-bearing overwrite: the daily-cache path above never carries
+    // estimatedCostUSD (DailyEntry has no such field), so this fresh-parse
+    // rebuild is what keeps the estimated marker alive on cached periods.
+    // Removing it as redundant silently drops the flag.
     currentData = buildPeriodData(periodInfo.label, scanProjects)
   }
   claudeConfigs = claudeConfigs ?? await claudeConfigSelector(scanProjects, null)
