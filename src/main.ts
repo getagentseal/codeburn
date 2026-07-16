@@ -1895,19 +1895,24 @@ program
 
 program
   .command('models')
-  .description('Per-model token + cost table, optionally exploded by task type')
+  .description('Per-model token + cost table, optionally exploded by task type or agent')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--task <category>', 'Filter to one task type (e.g. feature, debugging, refactoring)')
   .option('--by-task', 'One row per (provider, model, task) instead of one row per (provider, model)')
+  .option('--by-agent', 'One row per (provider, model, agent) instead of one row per (provider, model). Claude subagent transcripts only; other providers and main sessions bucket under "main"')
   .option('--top <n>', 'Show only the top N rows', (v: string) => parseInt(v, 10))
   .option('--min-cost <usd>', 'Hide rows below this cost threshold', (v: string) => parseFloat(v))
   .option('--no-totals', 'Suppress the footer totals row')
   .option('--format <format>', 'Output format: table, markdown, json, csv', 'table')
   .action(async (opts) => {
     assertProvider(opts.provider, 'models')
+    if (opts.byTask && opts.byAgent) {
+      process.stderr.write('codeburn: --by-task and --by-agent cannot be combined. Pick one breakdown.\n')
+      process.exit(1)
+    }
     const { aggregateModels, renderTable, renderMarkdown, renderJson, renderCsv } = await import('./models-report.js')
     await loadPricing()
 
@@ -1926,6 +1931,7 @@ program
     const projects = await parseAllSessions(range, opts.provider)
     const rows = await aggregateModels(projects, {
       byTask: !!opts.byTask,
+      byAgent: !!opts.byAgent,
       taskFilter: opts.task,
       topN: typeof opts.top === 'number' && Number.isFinite(opts.top) ? opts.top : undefined,
       minCost: typeof opts.minCost === 'number' && Number.isFinite(opts.minCost) ? opts.minCost : 0.01,
@@ -1939,11 +1945,11 @@ program
     if (fmt === 'json') {
       process.stdout.write(renderJson(rows) + '\n')
     } else if (fmt === 'csv') {
-      process.stdout.write(renderCsv(rows, { byTask: !!opts.byTask }) + '\n')
+      process.stdout.write(renderCsv(rows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent }) + '\n')
     } else if (fmt === 'markdown' || fmt === 'md') {
-      process.stdout.write(renderMarkdown(rows, { byTask: !!opts.byTask, showTotals: opts.totals !== false }) + '\n')
+      process.stdout.write(renderMarkdown(rows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else if (fmt === 'table') {
-      process.stdout.write(renderTable(rows, { byTask: !!opts.byTask, showTotals: opts.totals !== false }) + '\n')
+      process.stdout.write(renderTable(rows, { byTask: !!opts.byTask, byAgent: !!opts.byAgent, showTotals: opts.totals !== false }) + '\n')
     } else {
       process.stderr.write(`codeburn: unknown --format "${opts.format}". Choose table, markdown, json, or csv.\n`)
       process.exit(1)

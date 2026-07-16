@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process'
+
 import { describe, it, expect } from 'vitest'
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
@@ -95,6 +97,22 @@ function makeProject(turns: ClassifiedTurn[]): ProjectSummary {
     project: 'p',
     projectPath: '/tmp/p',
     sessions: [makeSession(turns)],
+    totalCostUSD: 0,
+    totalApiCalls: 0,
+  }
+}
+
+// A session carrying an explicit agentType (Claude subagent transcript). Left
+// undefined for ordinary main sessions.
+function makeAgentSession(opts: { sessionId: string; agentType?: string; turns: ClassifiedTurn[] }): SessionSummary {
+  return { ...makeSession(opts.turns), sessionId: opts.sessionId, agentType: opts.agentType }
+}
+
+function projectFromSessions(sessions: SessionSummary[]): ProjectSummary {
+  return {
+    project: 'p',
+    projectPath: '/tmp/p',
+    sessions,
     totalCostUSD: 0,
     totalApiCalls: 0,
   }
@@ -241,6 +259,77 @@ describe('aggregateModels', () => {
   })
 })
 
+describe('aggregateModels byAgent', () => {
+  // One project, four sessions: a planner agent on two models, a reviewer agent
+  // sharing one of those models, an ordinary main session, and a non-Claude
+  // provider session (no agentType).
+  function crossProject(): ProjectSummary {
+    return projectFromSessions([
+      makeAgentSession({ sessionId: 'a', agentType: 'planner', turns: [
+        makeTurn('planning', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 6.0, input: 100, output: 20 })]),
+        makeTurn('planning', [makeCall({ provider: 'claude', model: 'claude-sonnet-4-6', costUSD: 2.0, input: 50, output: 10 })]),
+      ] }),
+      makeAgentSession({ sessionId: 'b', agentType: 'reviewer', turns: [
+        makeTurn('exploration', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 3.0, input: 40, output: 8 })]),
+      ] }),
+      // no agentType -> ordinary main session
+      makeAgentSession({ sessionId: 'c', turns: [
+        makeTurn('feature', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 1.0, input: 30, output: 5 })]),
+      ] }),
+      // non-Claude provider, no agentType -> also 'main'
+      makeAgentSession({ sessionId: 'd', turns: [
+        makeTurn('feature', [makeCall({ provider: 'codex', model: 'gpt-5', costUSD: 0.5, input: 20, output: 4 })]),
+      ] }),
+    ])
+  }
+
+  it('crosses model x agent, labelling main/undefined and non-Claude sessions "main"', async () => {
+    const rows = await aggregateModels([crossProject()], { byAgent: true })
+    const byKey = Object.fromEntries(rows.map(r => [`${r.provider}:${r.model}:${r.agentType}`, r]))
+    // one agent (planner) split across two models
+    expect(byKey['claude:claude-opus-4-8:planner']!.costUSD).toBeCloseTo(6.0, 6)
+    expect(byKey['claude:claude-sonnet-4-6:planner']!.costUSD).toBeCloseTo(2.0, 6)
+    // two agents (planner + reviewer) on the same model
+    expect(byKey['claude:claude-opus-4-8:reviewer']!.costUSD).toBeCloseTo(3.0, 6)
+    // ordinary main session buckets under 'main'
+    expect(byKey['claude:claude-opus-4-8:main']!.costUSD).toBeCloseTo(1.0, 6)
+    // non-Claude provider (no agentType) also buckets under 'main'
+    expect(byKey['codex:gpt-5:main']!.agentType).toBe('main')
+    expect(byKey['codex:gpt-5:main']!.costUSD).toBeCloseTo(0.5, 6)
+    // three distinct agent rows share claude-opus-4-8
+    expect(rows.filter(r => r.model === 'claude-opus-4-8')).toHaveLength(3)
+  })
+
+  it('groups rows by (provider, model) ordered by total model cost, agents by cost desc within a group', async () => {
+    const project = projectFromSessions([
+      makeAgentSession({ sessionId: 'a', agentType: 'planner', turns: [
+        makeTurn('planning', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 6.0, input: 10, output: 2 })]),
+        makeTurn('planning', [makeCall({ provider: 'claude', model: 'claude-sonnet-4-6', costUSD: 2.0, input: 10, output: 2 })]),
+      ] }),
+      makeAgentSession({ sessionId: 'b', agentType: 'reviewer', turns: [
+        makeTurn('exploration', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 3.0, input: 10, output: 2 })]),
+      ] }),
+    ])
+    const rows = await aggregateModels([project], { byAgent: true })
+    // opus group total (9) sorts before sonnet (2); within opus, planner (6) before reviewer (3).
+    expect(rows.map(r => `${r.model}:${r.agentType}`)).toEqual([
+      'claude-opus-4-8:planner',
+      'claude-opus-4-8:reviewer',
+      'claude-sonnet-4-6:planner',
+    ])
+  })
+
+  it('leaves agentType null in the default and byTask views', async () => {
+    const project = projectFromSessions([
+      makeAgentSession({ sessionId: 'a', agentType: 'planner', turns: [
+        makeTurn('planning', [makeCall({ provider: 'claude', model: 'claude-opus-4-8', costUSD: 6.0, input: 10, output: 2 })]),
+      ] }),
+    ])
+    expect((await aggregateModels([project]))[0]!.agentType).toBeNull()
+    expect((await aggregateModels([project], { byTask: true }))[0]!.agentType).toBeNull()
+  })
+})
+
 describe('renderTable', () => {
   function visibleWidth(line: string): number {
     return stripAnsi(line).length
@@ -281,6 +370,22 @@ describe('renderTable', () => {
     expect(dataLines[1]).not.toContain('Sonnet 4.6')
     expect(dataLines[1]).not.toContain('Claude')
     expect(dataLines[1]).toContain('Debugging')
+  })
+
+  it('renders an Agent column and blanks repeated provider/model in byAgent mode', () => {
+    const rows: ModelReportRow[] = [
+      row({ agentType: 'planner', costUSD: 6.0, inputTokens: 100, outputTokens: 20, totalTokens: 120 }),
+      row({ agentType: 'reviewer', costUSD: 3.0, inputTokens: 40, outputTokens: 8, totalTokens: 48 }),
+    ]
+    const out = renderTable(rows, { byAgent: true, showTotals: false, terminalWidth: 200 })
+    expect(out).toContain('Agent')
+    const dataLines = out.split('\n').slice(3, -1)
+    expect(dataLines[0]).toContain('Sonnet 4.6')
+    expect(dataLines[0]).toContain('planner')
+    // same (provider, model) group -> model/provider blanked, agent still shown
+    expect(dataLines[1]).not.toContain('Sonnet 4.6')
+    expect(dataLines[1]).not.toContain('Claude')
+    expect(dataLines[1]).toContain('reviewer')
   })
 
   it('keeps provider/model cells on every row in default mode', () => {
@@ -376,6 +481,30 @@ describe('renderMarkdown', () => {
     expect(lines[2]).toContain('Feature Dev (60%)')
   })
 
+  it('uses an Agent header and the agent value in byAgent mode', () => {
+    const rows: ModelReportRow[] = [
+      {
+        provider: 'claude',
+        providerDisplayName: 'Claude',
+        model: 'claude-opus-4-8',
+        modelDisplayName: 'Opus 4.8',
+        category: null,
+        agentType: 'planner',
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 150,
+        costUSD: 6.0,
+        calls: 1,
+      },
+    ]
+    const md = renderMarkdown(rows, { byAgent: true, showTotals: false })
+    const lines = md.split('\n')
+    expect(lines[0]).toBe('| Provider | Model | Agent | Input | Output | Cache Write | Cache Read | Total | Cost | Saved |')
+    expect(lines[2]).toContain('| planner |')
+  })
+
   it('escapes pipe characters in provider/model names', () => {
     const rows: ModelReportRow[] = [
       {
@@ -457,6 +586,30 @@ describe('renderJson', () => {
       totalTokens: 150,
       calls: 1,
     })
+    // agentType is null outside byAgent mode
+    expect(parsed[0]!['agentType']).toBeNull()
+  })
+
+  it('emits the agentType field in byAgent rows', () => {
+    const rows: ModelReportRow[] = [
+      {
+        provider: 'claude',
+        providerDisplayName: 'Claude',
+        model: 'claude-opus-4-8',
+        modelDisplayName: 'Opus 4.8',
+        category: null,
+        agentType: 'planner',
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 150,
+        costUSD: 6.0,
+        calls: 1,
+      },
+    ]
+    const parsed = JSON.parse(renderJson(rows)) as Array<Record<string, unknown>>
+    expect(parsed[0]!['agentType']).toBe('planner')
   })
 })
 
@@ -487,6 +640,32 @@ describe('renderCsv', () => {
     expect(lines[1]).toBe('Claude,Sonnet 4.6,Feature Dev,0.6000,100,50,0,0,150,1,1.500000,0.000000,')
   })
 
+  it('emits an agent column in byAgent mode', () => {
+    const rows: ModelReportRow[] = [
+      {
+        provider: 'claude',
+        providerDisplayName: 'Claude',
+        model: 'claude-opus-4-8',
+        modelDisplayName: 'Opus 4.8',
+        category: null,
+        agentType: 'planner',
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 150,
+        costUSD: 6.0,
+        savingsUSD: 0,
+        savingsBaselineModel: '',
+        calls: 1,
+      },
+    ]
+    const csv = renderCsv(rows, { byAgent: true })
+    const lines = csv.split('\n')
+    expect(lines[0]).toBe('provider,model,agent,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,total_tokens,calls,cost_usd,savings_usd,savings_baseline_model')
+    expect(lines[1]).toBe('Claude,Opus 4.8,planner,100,50,0,0,150,1,6.000000,0.000000,')
+  })
+
   it('escapes commas in provider/model cells', () => {
     const rows: ModelReportRow[] = [
       {
@@ -509,5 +688,17 @@ describe('renderCsv', () => {
     ]
     const csv = renderCsv(rows)
     expect(csv.split('\n')[1]).toContain('"Weird, Co."')
+  })
+})
+
+describe('models CLI breakdown flags', () => {
+  it('rejects --by-task and --by-agent together with a clear error and exit 1', () => {
+    const res = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', 'src/cli.ts', 'models', '--by-agent', '--by-task', '-p', 'today'],
+      { cwd: process.cwd(), env: { ...process.env, TZ: 'UTC' }, encoding: 'utf-8', timeout: 30_000 },
+    )
+    expect(res.status).toBe(1)
+    expect(res.stderr).toContain('--by-task and --by-agent cannot be combined')
   })
 })

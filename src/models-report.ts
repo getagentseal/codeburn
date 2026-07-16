@@ -12,6 +12,11 @@ export type ModelReportRow = {
   model: string
   modelDisplayName: string
   category: TaskCategory | null
+  /// Set only in `byAgent` mode: the Claude subagent type this row's spend ran
+  /// under (`general-purpose`, `Explore`, a workflow agent, …), or `'main'` for
+  /// ordinary non-agent sessions and every non-Claude provider. `null` in the
+  /// default and `byTask` views.
+  agentType?: string | null
   inputTokens: number
   outputTokens: number
   cacheWriteTokens: number
@@ -31,6 +36,10 @@ export type ModelReportRow = {
 
 export type AggregateOptions = {
   byTask?: boolean
+  /// One row per (provider, model, agent). Mutually exclusive with `byTask`;
+  /// the caller enforces that. Non-Claude providers and ordinary sessions bucket
+  /// under `'main'`.
+  byAgent?: boolean
   taskFilter?: TaskCategory
   topN?: number
   /// Threshold for the `cost`-based filter. The default `0.01` would
@@ -44,6 +53,7 @@ type Bucket = {
   provider: string
   model: string
   category: TaskCategory | null
+  agentType: string | null
   inputTokens: number
   outputTokens: number
   cacheWriteTokens: number
@@ -57,18 +67,21 @@ type Bucket = {
 type ModelKey = string
 type CategoryKey = TaskCategory
 
-function bucketKey(provider: string, model: string, category: TaskCategory | null): string {
-  return `${provider} ${model} ${category ?? ''}`
+function bucketKey(provider: string, model: string, category: TaskCategory | null, agentType: string | null): string {
+  return `${provider} ${model} ${category ?? ''} ${agentType ?? ''}`
 }
 
 /// Walks every parsed turn, attributes each assistant call to a
-/// (provider, model, category) bucket, and returns rows keyed by either
-/// (provider, model) when `byTask` is false or (provider, model, category) when true.
+/// (provider, model, category, agent) bucket, and returns rows keyed by
+/// (provider, model) by default, (provider, model, category) under `byTask`, or
+/// (provider, model, agent) under `byAgent`.
 ///
 /// Default view: rows sorted by cost descending.
-/// byTask view: rows grouped by (provider, model) so the renderer can blank
-/// repeated provider/model cells. Group order follows total cost across that
-/// model; within each group, rows go by cost descending.
+/// byTask / byAgent view: rows grouped by (provider, model) so the renderer can
+/// blank repeated provider/model cells. Group order follows total cost across
+/// that model; within each group, rows go by cost descending. The agent label
+/// comes from the subagent transcript's own `session.agentType`; ordinary
+/// sessions and every non-Claude provider bucket under `'main'`.
 export async function aggregateModels(projects: ProjectSummary[], opts: AggregateOptions = {}): Promise<ModelReportRow[]> {
   const buckets = new Map<string, Bucket>()
   const perModelCategoryCost = new Map<ModelKey, Map<CategoryKey, number>>()
@@ -82,13 +95,18 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           const provider = call.provider || 'unknown'
           const model = call.model || 'unknown'
           const category: TaskCategory | null = opts.byTask ? turn.category : null
-          const key = bucketKey(provider, model, category)
+          // Non-Claude sessions and ordinary main sessions have no agentType, so
+          // their spend all lands under 'main'. That is correct: the report never
+          // fabricates an agent for calls that were not driven by one.
+          const agentType: string | null = opts.byAgent ? (session.agentType ?? 'main') : null
+          const key = bucketKey(provider, model, category, agentType)
           let bucket = buckets.get(key)
           if (!bucket) {
             bucket = {
               provider,
               model,
               category,
+              agentType,
               inputTokens: 0,
               outputTokens: 0,
               cacheWriteTokens: 0,
@@ -151,6 +169,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       model: bucket.model,
       modelDisplayName: meta.formatModel(bucket.model),
       category: bucket.category,
+      agentType: bucket.agentType,
       inputTokens: bucket.inputTokens,
       outputTokens: bucket.outputTokens,
       cacheWriteTokens: bucket.cacheWriteTokens,
@@ -172,7 +191,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         : null,
     }
 
-    if (!opts.byTask) {
+    if (!opts.byTask && !opts.byAgent) {
       const perCat = perModelCategoryCost.get(`${bucket.provider} ${bucket.model}`)
       if (perCat && perCat.size > 0) {
         let topCat: TaskCategory = 'general'
@@ -194,7 +213,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
     rows.push(row)
   }
 
-  if (opts.byTask) {
+  if (opts.byTask || opts.byAgent) {
     rows.sort((a, b) => {
       const aTotal = perModelTotalCost.get(`${a.provider} ${a.model}`) ?? 0
       const bTotal = perModelTotalCost.get(`${b.provider} ${b.model}`) ?? 0
@@ -263,9 +282,17 @@ type Column = {
 
 type TableRenderOptions = {
   byTask?: boolean
+  byAgent?: boolean
   showTotals?: boolean
   terminalWidth?: number
   fullWidth?: boolean
+}
+
+/// The third column reuses the `task` slot for all three modes: 'Top Task' in
+/// the default view, 'Task' under byTask, 'Agent' under byAgent.
+function thirdColumnHeader(byTask: boolean, byAgent: boolean): string {
+  if (byAgent) return 'Agent'
+  return byTask ? 'Task' : 'Top Task'
 }
 
 const DROP_COLUMN_GROUPS: Array<Array<Column['key']>> = [
@@ -275,7 +302,7 @@ const DROP_COLUMN_GROUPS: Array<Array<Column['key']>> = [
   ['saved'],
 ]
 
-function defaultColumns(byTask: boolean, showSaved: boolean): Column[] {
+function defaultColumns(byTask: boolean, byAgent: boolean, showSaved: boolean): Column[] {
   // Higher priority numbers drop FIRST when the terminal is narrow.
   // Cache columns are the cheapest to lose, then input/output, then top-task.
   // Provider/Model/Total/Cost stay regardless. The Saved column only appears
@@ -284,9 +311,9 @@ function defaultColumns(byTask: boolean, showSaved: boolean): Column[] {
   // dashes for the majority of users, so it is omitted entirely.
   // Widths are MINIMUMS; sizeColumnsToContent() expands them to fit cell text.
   return [
-    { key: 'provider',   header: 'Provider',                   align: 'left',  width: 8,  priority: 0 },
-    { key: 'model',      header: 'Model',                      align: 'left',  width: 8,  priority: 0 },
-    { key: 'task',       header: byTask ? 'Task' : 'Top Task', align: 'left',  width: 8,  priority: 1 },
+    { key: 'provider',   header: 'Provider',                          align: 'left',  width: 8,  priority: 0 },
+    { key: 'model',      header: 'Model',                             align: 'left',  width: 8,  priority: 0 },
+    { key: 'task',       header: thirdColumnHeader(byTask, byAgent),  align: 'left',  width: 8,  priority: 1 },
     { key: 'input',      header: 'Input',                      align: 'right', width: 6,  priority: 2 },
     { key: 'output',     header: 'Output',                     align: 'right', width: 6,  priority: 2 },
     { key: 'cacheWrite', header: 'Cache Write',                align: 'right', width: 11, priority: 3 },
@@ -318,8 +345,8 @@ function frameWidth(columns: Column[]): number {
   return 2 + columns.reduce((acc, c) => acc + c.width + 2, 0) + (columns.length - 1)
 }
 
-function chooseColumns(byTask: boolean, available: number, showSaved: boolean): Column[] {
-  const all = defaultColumns(byTask, showSaved)
+function chooseColumns(byTask: boolean, byAgent: boolean, available: number, showSaved: boolean): Column[] {
+  const all = defaultColumns(byTask, byAgent, showSaved)
   if (frameWidth(all) <= available) return all
 
   // Drop in this order so the table degrades sensibly. Cache columns drop as
@@ -417,6 +444,10 @@ export function renderTable(
   opts: TableRenderOptions = {},
 ): string {
   const byTask = opts.byTask ?? false
+  const byAgent = opts.byAgent ?? false
+  // Both byTask and byAgent group rows under (provider, model) and blank the
+  // repeated provider/model cells; the default view keeps them on every row.
+  const grouped = byTask || byAgent
   const showTotals = opts.showTotals ?? true
   const available = opts.terminalWidth ?? defaultTerminalWidth()
   const fullWidth = opts.fullWidth ?? true
@@ -428,6 +459,7 @@ export function renderTable(
       case 'provider':   return isNewGroup ? row.providerDisplayName : ''
       case 'model':      return isNewGroup ? row.modelDisplayName : ''
       case 'task':
+        if (byAgent) return row.agentType ?? ''
         if (byTask) return row.category ? categoryLabel(row.category) : ''
         return row.topCategory
           ? `${categoryLabel(row.topCategory)} ${chalk.dim(`(${Math.round((row.topCategoryShare ?? 0) * 100)}%)`)}`
@@ -448,9 +480,9 @@ export function renderTable(
   let prevProviderModel = ''
   for (const row of rows) {
     const groupKey = `${row.provider} ${row.model}`
-    const isNewGroup = !byTask || groupKey !== prevProviderModel
+    const isNewGroup = !grouped || groupKey !== prevProviderModel
     prevProviderModel = groupKey
-    const allCells = defaultColumns(byTask, showSaved).map(col => {
+    const allCells = defaultColumns(byTask, byAgent, showSaved).map(col => {
       const raw = valueOf(row, col.key, isNewGroup)
       if (col.key === 'provider' && raw) return chalk.dim(raw)
       return raw
@@ -473,7 +505,7 @@ export function renderTable(
       },
       { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, total: 0, cost: 0, savings: 0 },
     )
-    const cells = defaultColumns(byTask, showSaved).map(col => {
+    const cells = defaultColumns(byTask, byAgent, showSaved).map(col => {
       switch (col.key) {
         case 'provider':   return ''
         case 'model':      return chalk.yellow.bold('Total')
@@ -493,9 +525,9 @@ export function renderTable(
   // Pick which columns to include based on terminal width, then size them.
   // We index into `cells` by the column key to avoid object-identity pitfalls
   // across defaultColumns() invocations.
-  const allKeys = defaultColumns(byTask, showSaved).map(c => c.key)
+  const allKeys = defaultColumns(byTask, byAgent, showSaved).map(c => c.key)
   const indexByKey = new Map(allKeys.map((k, i) => [k, i]))
-  const columns = chooseColumns(byTask, available, showSaved)
+  const columns = chooseColumns(byTask, byAgent, available, showSaved)
   const projectColumns = (cols: Column[], entry: RowCells) =>
     cols.map(c => entry.cells[indexByKey.get(c.key)!] ?? '')
   const cellMatrix = [
@@ -532,7 +564,7 @@ export function renderTable(
 
   let isFirstRow = true
   for (const entry of rowEntries) {
-    if (byTask && entry.isNewGroup && !isFirstRow) {
+    if (grouped && entry.isNewGroup && !isFirstRow) {
       lines.push(renderBorder(final, BOX.leftT, BOX.cross, BOX.rightT))
     }
     isFirstRow = false
@@ -556,6 +588,7 @@ export function renderJson(rows: ModelReportRow[]): string {
       model: r.model,
       modelDisplayName: r.modelDisplayName,
       category: r.category ?? r.topCategory ?? null,
+      agentType: r.agentType ?? null,
       topCategory: r.topCategory ?? null,
       topCategoryShare: r.topCategoryShare ?? null,
       inputTokens: r.inputTokens,
@@ -591,13 +624,12 @@ function mdEscape(value: string): string {
 /// chat platforms that understand markdown. Always shows provider/model on
 /// every row (no blank-repeat trick) so the table remains useful when copied
 /// into a context that loses whitespace alignment.
-export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean; showTotals?: boolean } = {}): string {
+export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean; byAgent?: boolean; showTotals?: boolean } = {}): string {
   const byTask = opts.byTask ?? false
+  const byAgent = opts.byAgent ?? false
   const showTotals = opts.showTotals ?? true
 
-  const header = byTask
-    ? ['Provider', 'Model', 'Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
-    : ['Provider', 'Model', 'Top Task', 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
+  const header = ['Provider', 'Model', thirdColumnHeader(byTask, byAgent), 'Input', 'Output', 'Cache Write', 'Cache Read', 'Total', 'Cost', 'Saved']
   const align = ['---', '---', '---', '---:', '---:', '---:', '---:', '---:', '---:', '---:']
 
   const lines: string[] = []
@@ -605,11 +637,13 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
   lines.push(`| ${align.join(' | ')} |`)
 
   for (const row of rows) {
-    const taskCell = byTask
-      ? row.category ? categoryLabel(row.category) : ''
-      : row.topCategory
-        ? `${categoryLabel(row.topCategory)} (${Math.round((row.topCategoryShare ?? 0) * 100)}%)`
-        : '-'
+    const taskCell = byAgent
+      ? row.agentType ?? ''
+      : byTask
+        ? row.category ? categoryLabel(row.category) : ''
+        : row.topCategory
+          ? `${categoryLabel(row.topCategory)} (${Math.round((row.topCategoryShare ?? 0) * 100)}%)`
+          : '-'
     const cells = [
       mdEscape(row.providerDisplayName),
       `\`${mdEscape(row.modelDisplayName)}\``,
@@ -657,16 +691,34 @@ export function renderMarkdown(rows: ModelReportRow[], opts: { byTask?: boolean;
   return lines.join('\n')
 }
 
-export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean } = {}): string {
+export function renderCsv(rows: ModelReportRow[], opts: { byTask?: boolean; byAgent?: boolean } = {}): string {
   const byTask = opts.byTask ?? false
+  const byAgent = opts.byAgent ?? false
   // CSV intentionally repeats provider/model on every row so downstream
   // consumers can sort/filter without first reconstructing the grouping.
-  const header = byTask
+  const header = byAgent
+    ? ['provider', 'model', 'agent', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
+    : byTask
     ? ['provider', 'model', 'task', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
     : ['provider', 'model', 'top_task', 'top_task_share', 'input_tokens', 'output_tokens', 'cache_write_tokens', 'cache_read_tokens', 'total_tokens', 'calls', 'cost_usd', 'savings_usd', 'savings_baseline_model']
   const lines: string[] = [header.join(',')]
   for (const r of rows) {
-    const cells = byTask
+    const cells = byAgent
+      ? [
+          csvEscape(r.providerDisplayName),
+          csvEscape(r.modelDisplayName),
+          csvEscape(r.agentType ?? ''),
+          String(r.inputTokens),
+          String(r.outputTokens),
+          String(r.cacheWriteTokens),
+          String(r.cacheReadTokens),
+          String(r.totalTokens),
+          String(r.calls),
+          r.costUSD.toFixed(6),
+          (r.savingsUSD ?? 0).toFixed(6),
+          csvEscape(r.savingsBaselineModel),
+        ]
+      : byTask
       ? [
           csvEscape(r.providerDisplayName),
           csvEscape(r.modelDisplayName),
