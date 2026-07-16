@@ -19,6 +19,22 @@ export type DailyEntry = {
   topModels: ModelDay[]
 }
 
+export type GranularSeries = { id: string; label: string }
+export type GranularValue = { seriesId: string; cost: number; tokens: number }
+export type GranularPoint = {
+  timestamp: string
+  cost: number
+  tokens: number
+  models: GranularValue[]
+  sessions: GranularValue[]
+}
+export type GranularHistory = {
+  bucketMinutes: number
+  modelSeries: GranularSeries[]
+  sessionSeries: GranularSeries[]
+  points: GranularPoint[]
+}
+
 export type Current = {
   label: string
   cost: number
@@ -48,7 +64,7 @@ export type Current = {
 export type Payload = {
   generated: string
   current: Current
-  history: { daily: DailyEntry[] }
+  history: { daily: DailyEntry[]; timeline?: GranularHistory }
 }
 
 export async function fetchUsage(period: Period, provider: string): Promise<Payload> {
@@ -78,6 +94,27 @@ declare global {
 function normalizePayload(p?: Payload): Payload | undefined {
   if (!p) return p
   const c = (p.current ?? {}) as Partial<Current>
+  const rawTimeline = p.history?.timeline
+  const timeline = rawTimeline ? {
+    bucketMinutes: rawTimeline.bucketMinutes ?? 1440,
+    modelSeries: rawTimeline.modelSeries ?? [],
+    sessionSeries: rawTimeline.sessionSeries ?? [],
+    points: (rawTimeline.points ?? []).map((point) => ({
+      timestamp: point.timestamp,
+      cost: point.cost ?? 0,
+      tokens: point.tokens ?? 0,
+      models: (point.models ?? []).map((value) => ({
+        seriesId: value.seriesId,
+        cost: value.cost ?? 0,
+        tokens: value.tokens ?? 0,
+      })),
+      sessions: (point.sessions ?? []).map((value) => ({
+        seriesId: value.seriesId,
+        cost: value.cost ?? 0,
+        tokens: value.tokens ?? 0,
+      })),
+    })),
+  } : undefined
   return {
     generated: p.generated,
     current: {
@@ -122,6 +159,7 @@ function normalizePayload(p?: Payload): Payload | undefined {
           outputTokens: m.outputTokens ?? 0,
         })),
       })),
+      ...(timeline ? { timeline } : {}),
     },
   }
 }

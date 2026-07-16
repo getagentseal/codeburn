@@ -281,16 +281,27 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   return entry
 }
 
-async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
-  const sessionsDir = join(codexDir, 'sessions')
-  const sources: SessionSource[] = []
+async function discoverSessionFile(filePath: string): Promise<SessionSource | null> {
+  const s = await stat(filePath).catch(() => null)
+  if (!s?.isFile()) return null
 
-  let years: string[]
-  try {
-    years = await readdir(sessionsDir)
-  } catch {
-    return sources
+  const cachedProject = await getCachedCodexProject(filePath)
+  if (cachedProject) {
+    return { path: filePath, project: cachedProject, provider: 'codex' }
   }
+
+  const { valid, meta } = await isValidCodexSession(filePath)
+  if (!valid || !meta) return null
+
+  const cwd = meta.payload?.cwd ?? 'unknown'
+  return { path: filePath, project: sanitizeProject(cwd), provider: 'codex' }
+}
+
+async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+  const sessionsDir = join(codexDir, 'sessions')
+
+  const years = await readdir(sessionsDir).catch(() => [] as string[])
 
   for (const year of years) {
     if (!/^\d{4}$/.test(year)) continue
@@ -310,23 +321,21 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
         for (const file of files) {
           if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
           const filePath = join(dayDir, file)
-          const s = await stat(filePath).catch(() => null)
-          if (!s?.isFile()) continue
-
-          const cachedProject = await getCachedCodexProject(filePath)
-          if (cachedProject) {
-            sources.push({ path: filePath, project: cachedProject, provider: 'codex' })
-            continue
-          }
-
-          const { valid, meta } = await isValidCodexSession(filePath)
-          if (!valid || !meta) continue
-
-          const cwd = meta.payload?.cwd ?? 'unknown'
-          sources.push({ path: filePath, project: sanitizeProject(cwd), provider: 'codex' })
+          const source = await discoverSessionFile(filePath)
+          if (source) sources.push(source)
         }
       }
     }
+  }
+
+  // Codex moves archived sessions into a flat directory. Keep them in usage
+  // reports so archiving a conversation does not erase its historical usage.
+  const archivedDir = join(codexDir, 'archived_sessions')
+  const archivedFiles = await readdir(archivedDir).catch(() => [] as string[])
+  for (const file of archivedFiles) {
+    if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
+    const source = await discoverSessionFile(join(archivedDir, file))
+    if (source) sources.push(source)
   }
 
   return sources

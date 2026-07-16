@@ -105,7 +105,10 @@ export function getDesktopSessionsDir(): string {
   const override = process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
   if (override) return override
   if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')
-  if (process.platform === 'win32') return join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions')
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA']?.trim()
+    return join(appData || join(homedir(), 'AppData', 'Roaming'), 'Claude', 'local-agent-mode-sessions')
+  }
   return join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')
 }
 
