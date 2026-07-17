@@ -3,16 +3,19 @@ import { execSync } from 'node:child_process'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Build stamp baked in at package/build time so About + the splash footer can
-// name the exact commit running. Best-effort: a non-git checkout still builds.
+import { isDirtyIgnoringGenerated } from './scripts/buildStamp'
+
+// Build stamp baked in at package/build time so the About modal can name the
+// exact commit running. Best-effort: a non-git checkout still builds.
 function buildStamp(): { sha: string; date: string } {
   let sha = 'unknown'
   try {
     sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim() || 'unknown'
     // A build off a dirty tree (local fix build) must never read as the clean
     // release of the same commit — that ambiguity is exactly what a build stamp
-    // exists to kill.
-    if (execSync('git status --porcelain', { encoding: 'utf8' }).trim()) sha += '-dirty'
+    // exists to kill. But packaging regenerates the pricing snapshots mid-build,
+    // so ignore those: a change limited to them is not a dirty source tree.
+    if (isDirtyIgnoringGenerated(execSync('git status --porcelain', { encoding: 'utf8' }))) sha += '-dirty'
   } catch { /* not a git checkout */ }
   return { sha, date: new Date().toISOString().slice(0, 10) }
 }

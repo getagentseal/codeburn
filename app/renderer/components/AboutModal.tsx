@@ -1,8 +1,9 @@
-import { useEffect, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 
 import { version } from '../../package.json'
 import { FlameMark } from './FlameMark'
 import { BUILD_STAMP } from '../lib/build'
+import { releasePageUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { codeburn } from '../lib/ipc'
 
 export type SocialLink = {
@@ -11,14 +12,15 @@ export type SocialLink = {
   icon: ReactNode
 }
 
-const RELEASES_URL = 'https://github.com/getagentseal/codeburn/releases'
-
 function openExternal(event: MouseEvent<HTMLAnchorElement>, url: string): void {
   event.preventDefault()
   void codeburn.openExternal(url)
 }
 
 export function AboutModal({ socials, onClose }: { socials: SocialLink[]; onClose: () => void }) {
+  const status = useUpdateStatus()
+  const [checked, setChecked] = useState(false)
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -67,10 +69,30 @@ export function AboutModal({ socials, onClose }: { socials: SocialLink[]; onClos
               <button
                 className="about-modal-update-button"
                 type="button"
-                onClick={() => { void codeburn.openExternal(RELEASES_URL) }}
+                onClick={() => setChecked(true)}
               >
                 Check for updates
               </button>
+              {checked && (
+                <p className="about-modal-update-note" role="status">
+                  {status?.updateAvailable && status.tag ? (
+                    <>
+                      Update available: {status.latestVersion} ·{' '}
+                      <button
+                        type="button"
+                        className="set-text-button"
+                        onClick={() => { void codeburn.openExternal(releasePageUrl(status.tag!)) }}
+                      >
+                        Download
+                      </button>
+                    </>
+                  ) : status?.latestVersion ? (
+                    "You're on the latest version"
+                  ) : (
+                    'Unable to check right now'
+                  )}
+                </p>
+              )}
             </div>
           </div>
         </div>

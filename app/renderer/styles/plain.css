@@ -187,6 +187,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
   background: var(--panel); color: var(--ink); font: inherit; font-size: 11.5px; font-weight: 540; cursor: pointer;
 }
 .about-modal-update-button:hover { border-color: var(--accent); color: var(--accent); }
+.about-modal-update-note { margin-top: 9px; color: var(--mut); font-size: 11.5px; line-height: 1.4; }
 .about-modal-credit {
   padding: 13px 18px; border-top: 1px solid var(--line2); color: var(--mut2);
   font-size: 10.5px; text-align: center;
@@ -895,9 +896,6 @@ html.page-hidden *::after {
 }
 .splash-version {
   margin-top: 2px; font-size: var(--fs-label); font-weight: var(--fw-body); color: #b3a595;
-}
-.splash-build {
-  margin-top: 1px; font-size: var(--fs-label); font-weight: var(--fw-body); color: #6f665c; font-variant-numeric: tabular-nums;
 }
 
 .splash-lit .splash-mark {
