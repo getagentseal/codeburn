@@ -95,7 +95,7 @@ function ConfirmButton({ label, prompt, onConfirm }: { label: string; prompt: st
   )
 }
 
-export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null }) {
+export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void }) {
   const [pane, setPane] = useState<Pane>(initialPane ?? 'general')
 
   return (
@@ -111,11 +111,11 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
           ))}
         </nav>
         <main className="set-pane">
-          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} />}
+          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} />}
           {pane === 'providers' && <ProvidersPane period={period} refreshToken={refreshToken} />}
-          {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} />}
-          {pane === 'pricing' && <PricingPane refreshToken={refreshToken} />}
-          {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} />}
+          {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
+          {pane === 'pricing' && <PricingPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
+          {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
           {pane === 'devices' && <DevicesPane period={period} refreshToken={refreshToken} />}
           {pane === 'export' && <ExportPane period={period} refreshToken={refreshToken} />}
           {pane === 'privacy' && <PrivacyPane />}
@@ -126,7 +126,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
   )
 }
 
-function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null }) {
+function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, onConfigMutated }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null; onConfigMutated?: () => void }) {
   const [currencyNonce, setCurrencyNonce] = useState(0)
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, currencyNonce])
   const [theme, setTheme] = useState<Theme>(() => {
@@ -161,7 +161,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource }
   }
   const finishCurrency = (result: ActionResult) => {
     showToast(result.ok ? 'Updated' : result.stderr || 'Unable to update currency', result.ok ? 'ok' : 'error')
-    if (result.ok) setCurrencyNonce(value => value + 1)
+    if (result.ok) { setCurrencyNonce(value => value + 1); onConfigMutated?.() }
   }
   const currencies = [...CURRENCIES]
   if (plans.data?.currency && !currencies.includes(plans.data.currency)) currencies.push(plans.data.currency)
@@ -217,7 +217,7 @@ function ProvidersPane({ period, refreshToken }: { period: Period; refreshToken:
   </section>
 }
 
-function AliasesPane({ refreshToken }: { refreshToken: number }) {
+function AliasesPane({ refreshToken, onConfigMutated }: { refreshToken: number; onConfigMutated?: () => void }) {
   const [actionNonce, setActionNonce] = useState(0)
   const aliases = usePolled<AliasRow[]>(() => codeburn.getAliases(), [refreshToken, actionNonce])
   const [from, setFrom] = useState('')
@@ -228,6 +228,7 @@ function AliasesPane({ refreshToken }: { refreshToken: number }) {
     setError('')
     if (added) { setFrom(''); setTo('') }
     setActionNonce(value => value + 1)
+    onConfigMutated?.()
   }
   return <section className="set-p on">
     <div><h3 className="set-h">Model aliases</h3><p className="set-sub">Map an unrecognized model name to a priced model so its cost shows up.</p></div>
@@ -256,7 +257,7 @@ function parseRate(raw: string): number | undefined | 'invalid' {
   return value
 }
 
-function PricingPane({ refreshToken }: { refreshToken: number }) {
+function PricingPane({ refreshToken, onConfigMutated }: { refreshToken: number; onConfigMutated?: () => void }) {
   const [actionNonce, setActionNonce] = useState(0)
   const overrides = usePolled<PriceOverrideList>(() => codeburn.getPriceOverrides(), [refreshToken, actionNonce])
   const [model, setModel] = useState('')
@@ -271,6 +272,7 @@ function PricingPane({ refreshToken }: { refreshToken: number }) {
     setError('')
     if (added) { setModel(''); setInput(''); setOutput(''); setCacheRead(''); setCacheCreation('') }
     setActionNonce(value => value + 1)
+    onConfigMutated?.()
   }
 
   const add = () => {
@@ -323,7 +325,7 @@ function DetectedRow({ quota, onReconnect }: { quota: QuotaProvider; onReconnect
   </div>
 }
 
-function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refreshToken: number; onNavigate?: (section: Section) => void }) {
+function PlansPane({ period, refreshToken, onNavigate, onConfigMutated }: { period: Period; refreshToken: number; onNavigate?: (section: Section) => void; onConfigMutated?: () => void }) {
   const [nonce, setNonce] = useState(0)
   // Steady poll serves cached quota (force=false); the Connect affordance's
   // Refresh forces a keychain-allowed fetch via the same path as Plans.tsx.
@@ -341,7 +343,7 @@ function PlansPane({ period, refreshToken, onNavigate }: { period: Period; refre
 
   const finish = (result: ActionResult) => {
     showToast(result.ok ? (result.stdout.trim() || 'Plan updated') : (result.stderr || 'Plan action failed'), result.ok ? 'ok' : 'error')
-    if (result.ok) setNonce(value => value + 1)
+    if (result.ok) { setNonce(value => value + 1); onConfigMutated?.() }
   }
   const remove = (plan: JsonPlanSummary) => {
     void codeburn.resetPlan(plan.provider).then(finish)

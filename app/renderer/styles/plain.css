@@ -842,6 +842,16 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
   .panel:hover, .ov-card:hover, .btnp:active, .btn:active, .ov-coach-cta:active { transform: none; }
 }
 
+/* Energy: pause every looping animation while the window is hidden/minimized so
+   the compositor stops waking. `page-hidden` is toggled on <html> from document
+   visibility (renderer/lib/pageVisibility.ts). !important beats the `animation`
+   shorthands (e.g. .fm-flicker) that would otherwise reset play-state to running. */
+html.page-hidden *,
+html.page-hidden *::before,
+html.page-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 /* ————— Flame mark + launch splash (Batch G4). Every animated class below is
    added only through motionClass()/motionEnabled(); the media query is a
    belt-and-suspenders escape hatch. ————— */

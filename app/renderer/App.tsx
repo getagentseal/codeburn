@@ -10,7 +10,7 @@ import { Splash } from './components/Splash'
 import { ToastHost } from './components/ToastHost'
 import { rangeLabel, TopBar } from './components/TopBar'
 import { Window } from './components/Window'
-import { hasPolledMemo, primePolledMemo, setPolledMemoMax, usePolled } from './hooks/usePolled'
+import { clearPolledMemo, hasPolledMemo, primePolledMemo, setPolledMemoMax, usePolled } from './hooks/usePolled'
 import { readDailyBudget } from './lib/budget'
 import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import { motionClass } from './lib/motion'
@@ -256,9 +256,15 @@ function AppMain() {
   useEffect(() => {
     const currency = overview.data?.currency
     if (!currency) return
+    // While `switching`, `data` is a memo-served payload from a previous key that
+    // may carry a STALE currency (cached before a Settings currency change): never
+    // let it regress the display. Apply currency only from a freshly-resolved
+    // fetch; the fresh result (switching false) re-runs this and applies the real
+    // one. clearPolledMemo() on a currency mutation also purges those stale entries.
+    if (overview.switching) return
     setActiveCurrency(currency)
     setCurrencyTick(tick => tick + 1)
-  }, [overview.data?.currency?.code, overview.data?.currency?.rate, overview.data?.currency?.symbol])
+  }, [overview.data?.currency?.code, overview.data?.currency?.rate, overview.data?.currency?.symbol, overview.switching])
 
   // Size the instant-switch memo to hold every prefetched provider overview plus
   // the base keys, so warmed entries survive between polls instead of evicting.
@@ -316,6 +322,17 @@ function AppMain() {
     refreshOverview()
     setRefreshToken(token => token + 1)
   }, [refreshOverview])
+
+  // A Settings action changed config that alters computed costs/currency
+  // (currency/alias/plan/price-override). The electron read-cache is flushed CLI-
+  // side, but the renderer's instant-switch memo still holds payloads computed
+  // under the OLD config — a later provider switch would repaint the stale currency.
+  // Purge the memo, then force-refresh the active view so the new values land in a
+  // couple seconds (quick like the menubar) instead of at the next poll.
+  const onConfigMutated = useCallback(() => {
+    clearPolledMemo()
+    refreshVisible()
+  }, [refreshVisible])
 
   const navigate = useCallback((next: Section, pane: SettingsPane = 'general') => {
     setSettingsPane(pane)
@@ -395,7 +412,7 @@ function AppMain() {
         {section === 'plans' ? (
           <Plans period={period} refreshToken={refreshToken} onNavigate={navigate} ready={ready} />
         ) : section === 'settings' ? (
-          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} />
+          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} />
         ) : (
           <>
             <TopBar

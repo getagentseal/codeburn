@@ -3,7 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App, overviewMemoKey } from './App'
-import { __resetPolledMemo, hasPolledMemo } from './hooks/usePolled'
+import { __resetPolledMemo, hasPolledMemo, primePolledMemo } from './hooks/usePolled'
+import { setActiveCurrency } from './lib/format'
 import type { DateRange, MenubarPayload, OptimizeJsonReport, SpendFlow } from './lib/types'
 
 const stored = new Map<string, string>()
@@ -30,6 +31,10 @@ const mocks = vi.hoisted(() => ({
   getDevicesScan: vi.fn(),
   getIdentity: vi.fn(),
   cliStatus: vi.fn(),
+  getPriceOverrides: vi.fn(),
+  getAliases: vi.fn(),
+  setCurrency: vi.fn(),
+  resetCurrency: vi.fn(),
 }))
 
 vi.mock('./lib/ipc', async orig => {
@@ -39,6 +44,11 @@ vi.mock('./lib/ipc', async orig => {
 
 function dateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function setVisibility(state: 'visible' | 'hidden') {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
 }
 
 function overviewPayload(): MenubarPayload {
@@ -106,57 +116,65 @@ function withConfigs(payload: MenubarPayload): MenubarPayload {
   }
 }
 
+function installDefaultMocks() {
+  for (const mock of Object.values(mocks)) mock.mockReset()
+  mocks.getOverview.mockResolvedValue(overviewPayload())
+  mocks.getSpendFlow.mockResolvedValue({ period: { label: 'Last 30 days', start: '', end: '' }, models: [], projects: [], links: [] })
+  mocks.getOptimizeReport.mockResolvedValue({
+    period: { label: 'Last 30 days', start: null, end: null },
+    summary: {
+      healthScore: 100, healthGrade: 'A', findingCount: 0, periodCostUSD: 0,
+      sessions: 0, calls: 0, potentialSavingsTokens: 0, potentialSavingsCostUSD: 0,
+      potentialSavingsPercent: 0, costRateUSD: 0,
+    },
+    findings: [],
+  })
+  mocks.getModels.mockResolvedValue([])
+  mocks.getSessions.mockResolvedValue([])
+  mocks.getCompareModels.mockResolvedValue([])
+  mocks.getQuota.mockResolvedValue([
+    { provider: 'claude', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] },
+    { provider: 'codex', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] },
+  ])
+  mocks.getPlans.mockResolvedValue({})
+  mocks.getActReport.mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
+  mocks.getYield.mockResolvedValue({
+    period: { label: 'Last 30 days', start: '', end: '' },
+    summary: {
+      productive: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
+      reverted: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
+      abandoned: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
+      total: { costUSD: 0, sessions: 0 },
+      productiveToRevertedCostRatio: null,
+    },
+    details: [],
+  })
+  mocks.getIdentity.mockResolvedValue({ name: 'CodeBurn Mac', fingerprint: 'AA:BB:CC' })
+  mocks.getDevicesScan.mockResolvedValue({ found: [] })
+  mocks.getDevices.mockResolvedValue({
+    perDevice: [],
+    combined: {
+      cost: 0,
+      calls: 0,
+      sessions: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreateTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 0,
+      deviceCount: 1,
+      reachableCount: 1,
+    },
+  })
+  mocks.getPriceOverrides.mockResolvedValue({ overrides: [] })
+  mocks.getAliases.mockResolvedValue([])
+  mocks.setCurrency.mockResolvedValue({ ok: true, stdout: '', stderr: '' })
+  mocks.resetCurrency.mockResolvedValue({ ok: true, stdout: '', stderr: '' })
+}
+
 describe('App shortcuts', () => {
   beforeEach(() => {
-    for (const mock of Object.values(mocks)) mock.mockReset()
-    mocks.getOverview.mockResolvedValue(overviewPayload())
-    mocks.getSpendFlow.mockResolvedValue({ period: { label: 'Last 30 days', start: '', end: '' }, models: [], projects: [], links: [] })
-    mocks.getOptimizeReport.mockResolvedValue({
-      period: { label: 'Last 30 days', start: null, end: null },
-      summary: {
-        healthScore: 100, healthGrade: 'A', findingCount: 0, periodCostUSD: 0,
-        sessions: 0, calls: 0, potentialSavingsTokens: 0, potentialSavingsCostUSD: 0,
-        potentialSavingsPercent: 0, costRateUSD: 0,
-      },
-      findings: [],
-    })
-    mocks.getModels.mockResolvedValue([])
-    mocks.getSessions.mockResolvedValue([])
-    mocks.getCompareModels.mockResolvedValue([])
-    mocks.getQuota.mockResolvedValue([
-      { provider: 'claude', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] },
-      { provider: 'codex', connection: 'disconnected', primary: null, details: [], planLabel: null, footerLines: [] },
-    ])
-    mocks.getPlans.mockResolvedValue({})
-    mocks.getActReport.mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
-    mocks.getYield.mockResolvedValue({
-      period: { label: 'Last 30 days', start: '', end: '' },
-      summary: {
-        productive: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
-        reverted: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
-        abandoned: { costUSD: 0, sessions: 0, costPercent: 0, sessionPercent: 0 },
-        total: { costUSD: 0, sessions: 0 },
-        productiveToRevertedCostRatio: null,
-      },
-      details: [],
-    })
-    mocks.getIdentity.mockResolvedValue({ name: 'CodeBurn Mac', fingerprint: 'AA:BB:CC' })
-    mocks.getDevicesScan.mockResolvedValue({ found: [] })
-    mocks.getDevices.mockResolvedValue({
-      perDevice: [],
-      combined: {
-        cost: 0,
-        calls: 0,
-        sessions: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreateTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 0,
-        deviceCount: 1,
-        reachableCount: 1,
-      },
-    })
+    installDefaultMocks()
     localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
   })
@@ -460,6 +478,9 @@ describe('provider prefetch storm', () => {
       details: [],
     })
     localStorage.clear()
+    // Pin the cadence to 30s so the fake-timer soak math below is independent of
+    // the app-wide default (bumped to 60s for energy).
+    localStorage.setItem('codeburn.refreshInterval', '30s')
     __resetPolledMemo()
   })
 
@@ -499,5 +520,107 @@ describe('provider prefetch storm', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('energy: hidden-window polling', () => {
+  beforeEach(() => {
+    installDefaultMocks()
+    localStorage.clear()
+    localStorage.setItem('codeburn.refreshInterval', '30s') // pin cadence for the soak math
+    __resetPolledMemo()
+  })
+
+  // The whole app's data flows through usePolled, which is the ONLY driver of CLI
+  // spawns (each codeburn.getX → IPC → spawnCli). This measures that a hidden
+  // window issues ZERO new interval spawns, and that visibility resumes them —
+  // the unit-level stand-in for the packaged visible-vs-hidden sample.
+  it('issues zero new interval spawns while hidden and resumes when visible', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('visible')
+      render(<App />)
+      // Boot + three visible 30s cadences: the overview section's yield poll (a
+      // pure usePolled interval, never prefetched) fires each cadence.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * 3) })
+      const visibleYield = mocks.getYield.mock.calls.length
+      expect(visibleYield).toBeGreaterThan(1) // polling while visible
+
+      // Hidden for five cadences: not a single new spawn on any poller.
+      setVisibility('hidden')
+      const atHideYield = mocks.getYield.mock.calls.length
+      const atHideOverview = mocks.getOverview.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000 * 5) })
+      expect(mocks.getYield.mock.calls.length).toBe(atHideYield)
+      expect(mocks.getOverview.mock.calls.length).toBe(atHideOverview)
+
+      // Back to visible: the stale-by-a-cadence polls catch up immediately.
+      setVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(mocks.getYield.mock.calls.length).toBeGreaterThan(atHideYield)
+      expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(atHideOverview)
+    } finally {
+      setVisibility('visible')
+      vi.useRealTimers()
+      localStorage.clear()
+    }
+  })
+})
+
+describe('currency correctness', () => {
+  const USD = { code: 'USD', symbol: '$', rate: 1 }
+  const EUR = { code: 'EUR', symbol: '€', rate: 0.9 }
+
+  beforeEach(() => {
+    installDefaultMocks()
+    // Reset the module-level display currency so a prior test never bleeds in.
+    setActiveCurrency(USD)
+    localStorage.clear()
+    __resetPolledMemo()
+  })
+
+  it('never regresses the applied currency to a memo-served (stale) payload during a switch', async () => {
+    const usd = { ...overviewPayload(), currency: USD }
+    // A stale EUR payload cached for `claude`, as if warmed before a currency
+    // change. The claude fetch is left pending so `switching` stays true and the
+    // memo-served EUR payload is what's on screen during the assertion window.
+    const eur = { ...overviewPayload(), currency: EUR }
+    mocks.getOverview.mockImplementation((_period: string, provider: string) =>
+      provider === 'claude' ? new Promise<MenubarPayload>(() => {}) : Promise.resolve(usd))
+    primePolledMemo(overviewMemoKey('claude', '30days', null, null), eur)
+
+    render(<App />)
+    // Boot on the USD ('all') view.
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+    expect(screen.queryByText(/€/)).not.toBeInTheDocument()
+
+    // Switch to claude: usePolled paints the memoized EUR payload (switching) while
+    // its fresh fetch hangs. The currency effect must NOT apply that stale EUR.
+    fireEvent.click(screen.getByText('All providers'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Claude' }))
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'claude'))
+
+    expect(screen.queryByText(/€/)).not.toBeInTheDocument()
+  })
+
+  it('clears the instant-switch memo and force-refreshes when currency is reset', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    // A warmed entry (as the prefetcher would leave one) that must be purged so a
+    // later switch can't repaint a payload computed under the old currency.
+    primePolledMemo('sentinel-warmed-key', { stale: true })
+    expect(hasPolledMemo('sentinel-warmed-key')).toBe(true)
+
+    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    const overviewCalls = mocks.getOverview.mock.calls.length
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset to USD' }))
+
+    await waitFor(() => expect(mocks.resetCurrency).toHaveBeenCalled())
+    // Memo purged and the active view force-refreshed so the new currency lands fast.
+    await waitFor(() => expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(overviewCalls))
+    expect(hasPolledMemo('sentinel-warmed-key')).toBe(false)
   })
 })

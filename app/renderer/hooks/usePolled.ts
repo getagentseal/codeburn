@@ -72,6 +72,14 @@ export function __resetPolledMemo(): void {
   memoMax = DEFAULT_MEMO_MAX
 }
 
+/** Empty the instant-switch memo. Called when a Settings action mutates config
+ *  that changes computed costs or currency (currency/alias/plan/price-override):
+ *  a later provider/period switch must never paint a payload cached under the OLD
+ *  config, which is what stuck the display on the previous currency. */
+export function clearPolledMemo(): void {
+  memoStore.clear()
+}
+
 /** Seed the instant-switch memo out of band. The prefetcher (App.tsx) warms the
  *  overview result for every detected provider so a picker switch to one paints
  *  from memory in the same frame instead of waiting on a fresh CLI spawn. Keyed
@@ -122,6 +130,9 @@ export function usePolled<T>(
   // still current. This is what keeps a slow fetch from an older deps/period
   // from clobbering a newer one that already resolved.
   const epochRef = useRef(0)
+  // Wall-clock of the last successful fetch, mirrored out of state so the
+  // visibilitychange catch-up can read it without re-subscribing on every poll.
+  const lastSuccessRef = useRef<number | null>(null)
 
   const load = useCallback(() => {
     if (!enabled) return
@@ -148,7 +159,9 @@ export function usePolled<T>(
         if (epochRef.current !== epoch) return
         setData(result)
         setError(null)
-        setLastSuccessAt(Date.now())
+        const at = Date.now()
+        setLastSuccessAt(at)
+        lastSuccessRef.current = at
         if (memoKey) memoSet(memoKey, result)
       })
       .catch(err => {
@@ -168,10 +181,30 @@ export function usePolled<T>(
 
   useEffect(() => {
     load()
+    // Skip interval ticks while the window is hidden/minimized/occluded: a
+    // backgrounded dashboard polling the CLI is pure energy waste. A visible-
+    // but-unfocused window (e.g. a second monitor) reports 'visible' and keeps
+    // polling. Read visibility live per tick so pausing holds even if a
+    // visibilitychange event was missed.
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      load()
+    }
     // Manual cadence (intervalMs == null) skips the interval entirely.
-    const id = intervalMs != null ? setInterval(() => load(), intervalMs) : null
+    const id = intervalMs != null ? setInterval(tick, intervalMs) : null
+    // On return to visible, if the last success is older than a full cadence,
+    // refresh once immediately instead of waiting up to intervalMs for the next
+    // tick. Manual cadence has no catch-up (the user drives refresh).
+    const onVisible = () => {
+      if (intervalMs == null) return
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+      const last = lastSuccessRef.current
+      if (last == null || Date.now() - last >= intervalMs) load()
+    }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
     return () => {
       if (id != null) clearInterval(id)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
       // Retire this generation so an in-flight fetch can't resolve into state
       // after unmount or a deps change.
       epochRef.current++

@@ -1,15 +1,26 @@
 // @vitest-environment jsdom
 import { createElement, type ReactNode } from 'react'
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 
 import { RefreshCadenceContext, type RefreshCadence } from '../lib/refreshCadence'
-import { usePolled } from './usePolled'
+import { clearPolledMemo, hasPolledMemo, primePolledMemo, usePolled } from './usePolled'
 
 function cadenceWrapper(intervalMs: number | null) {
   const value: RefreshCadence = { value: 'x', intervalMs, setValue: () => {} }
   return ({ children }: { children: ReactNode }) => createElement(RefreshCadenceContext.Provider, { value }, children)
 }
+
+/** Override document visibility for the hidden-polling tests. jsdom defaults to
+ *  'visible'; the own-property override is torn down in afterEach. */
+function setVisibility(state: 'visible' | 'hidden') {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
+}
+afterEach(() => {
+  delete (document as unknown as { visibilityState?: unknown }).visibilityState
+  delete (document as unknown as { hidden?: unknown }).hidden
+})
 
 describe('usePolled', () => {
   it('discards a stale in-flight fetch that resolves after a newer one (epoch guard)', async () => {
@@ -156,6 +167,62 @@ describe('usePolled', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('skips interval polls while the document is hidden, then catches up on return to visible', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('visible')
+      const fetcher = vi.fn().mockResolvedValue('x')
+      renderHook(() => usePolled(fetcher, [], { intervalMs: 1000 }))
+      expect(fetcher).toHaveBeenCalledTimes(1) // mount fetch
+      // Let the mount fetch resolve so lastSuccess is recorded.
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+      // Hidden (minimized/occluded): five interval ticks must spawn NOTHING.
+      setVisibility('hidden')
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+
+      // Back to visible with the last success now older than a full cadence:
+      // exactly one immediate catch-up fetch, not a wait for the next tick.
+      setVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(fetcher).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not fire a catch-up when returning to visible within one cadence', async () => {
+    vi.useFakeTimers()
+    try {
+      setVisibility('visible')
+      const fetcher = vi.fn().mockResolvedValue('x')
+      renderHook(() => usePolled(fetcher, [], { intervalMs: 10_000 }))
+      expect(fetcher).toHaveBeenCalledTimes(1)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+
+      // Hidden only briefly (well under the 10s cadence), then visible again:
+      // the last success is still fresh, so no catch-up fetch.
+      setVisibility('hidden')
+      await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+      setVisibility('visible')
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clearPolledMemo empties the instant-switch memo', () => {
+    primePolledMemo('k1', 'v1')
+    primePolledMemo('k2', 'v2')
+    expect(hasPolledMemo('k1')).toBe(true)
+    expect(hasPolledMemo('k2')).toBe(true)
+    clearPolledMemo()
+    expect(hasPolledMemo('k1')).toBe(false)
+    expect(hasPolledMemo('k2')).toBe(false)
   })
 
   it('defaults the interval to the RefreshCadence context, and Manual disables the timer', async () => {

@@ -389,6 +389,12 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Chromium's default (kept explicit): when the window is minimized or fully
+      // occluded the renderer's document.visibilityState flips to 'hidden' and a
+      // visibilitychange fires. usePolled and the flame animation gate on that to
+      // stop background CLI polls and compositor wakeups while hidden. A merely
+      // unfocused-but-visible window stays 'visible' and keeps polling.
+      backgroundThrottling: true,
     },
   })
 

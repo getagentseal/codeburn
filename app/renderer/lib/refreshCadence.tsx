@@ -13,8 +13,13 @@ export const REFRESH_OPTIONS: ReadonlyArray<{ value: string; label: string; ms: 
   { value: '10m', label: '10 minutes', ms: 600_000 },
 ]
 
-export const DEFAULT_REFRESH_VALUE = '30s'
-const DEFAULT_MS = 30_000
+// 60s is the default cadence: it halves idle CLI spawns versus the old 30s while
+// staying fresh enough for a usage dashboard. 30s is still offered for anyone who
+// wants it. Only an explicit choice is persisted (persistRefreshValue runs solely
+// from Settings), so bumping this default silently migrates users who never chose,
+// while any stored value below keeps overriding it.
+export const DEFAULT_REFRESH_VALUE = '1m'
+const DEFAULT_MS = 60_000
 const STORAGE_KEY = 'codeburn.refreshInterval'
 
 export function refreshValueToMs(value: string): number | null {
