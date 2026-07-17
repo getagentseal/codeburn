@@ -29,6 +29,7 @@ For the architectural picture, see `../architecture.md`.
 | [Pi](pi.md) | JSONL | `src/providers/pi.ts` | `tests/providers/pi.test.ts` |
 | [OMP](omp.md) | JSONL | `src/providers/pi.ts` | `tests/providers/omp.test.ts` |
 | [Qwen](qwen.md) | JSONL | `src/providers/qwen.ts` | none |
+| [Quick Desktop](quickdesk.md) | EMF JSONL + SQLite | `src/providers/quickdesk.ts` | `tests/providers/quickdesk.test.ts` |
 | [Roo Code](roo-code.md) | JSON | `src/providers/roo-code.ts` | `tests/providers/roo-code.test.ts` |
 | [Zerostack](zerostack.md) | JSON | `src/providers/zerostack.ts` | `tests/providers/zerostack.test.ts` |
 | [Grok Build](grok.md) | JSON/JSONL | `src/providers/grok.ts` | `tests/providers/grok.test.ts` |
