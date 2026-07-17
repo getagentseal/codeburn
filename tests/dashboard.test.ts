@@ -2,7 +2,8 @@ import { homedir } from 'os'
 
 import { describe, it, expect } from 'vitest'
 
-import { getDailyActivityRows, pageHistoryCursor, scrollHistoryCursor, shortProject, showEmptyState } from '../src/dashboard.js'
+import { getDailyActivityRows, getDashboardScanRange, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
+import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
 
@@ -173,6 +174,35 @@ describe('avg/s in ProjectBreakdown', () => {
 })
 
 describe('Daily Activity history', () => {
+  it('uses one concrete six-month scan for standard dashboard periods', () => {
+    const scanRange = getDashboardScanRange('week', null, null)
+    const allRange = getDateRange('all').range
+
+    expect(scanRange.start.getTime()).toBe(allRange.start.getTime())
+    expect(scanRange.end.getTime()).toBe(allRange.end.getTime())
+  })
+
+  it('keeps non-interactive output scoped to the selected period', () => {
+    const scanRange = getDashboardScanRange('week', null, null, false)
+    const weekRange = getDateRange('week').range
+
+    expect(scanRange.start.getTime()).toBe(weekRange.start.getTime())
+    expect(scanRange.end.getTime()).toBe(weekRange.end.getTime())
+  })
+
+  it('derives the selected period from the bounded history scan', () => {
+    const recent = new Date().toISOString()
+    const old = new Date()
+    old.setMonth(old.getMonth() - 2)
+    const session = makeSession('s1', 0)
+    session.turns = [makeTurn(old.toISOString(), [1]), makeTurn(recent, [2])]
+
+    const selected = selectDashboardPeriodProjects([makeProject('proj', [session])], 'week', true)
+    expect(getDailyActivityRows(selected)).toEqual([
+      { day: recent.slice(0, 10), cost: 2, calls: 1 },
+    ])
+  })
+
   it('aggregates every active day in chronological order', () => {
     const session = makeSession('s1', 0)
     session.turns = [

@@ -5,7 +5,7 @@ import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens, markEstimated } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { parseAllSessions, filterProjectsByName, setInteractiveScanUI } from './parser.js'
+import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI } from './parser.js'
 import { findUnpricedModels, loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
@@ -129,6 +129,20 @@ function getPeriodRange(period: Period): { start: Date; end: Date } {
 
 function getDayRange(day: string): DateRange {
   return parseDayFlag(day)!.range
+}
+
+export function getDashboardScanRange(period: Period, customRange: DateRange | null | undefined, day: string | null, scrollableHistory = true): DateRange {
+  if (day) return getDayRange(day)
+  if (customRange) return customRange
+  // Daily Activity is scrollable on the standard dashboard, so one bounded
+  // six-month scan supplies both the selected period and its history. A
+  // concrete range is also required by network-backed providers.
+  return getPeriodRange(scrollableHistory ? 'all' : period)
+}
+
+export function selectDashboardPeriodProjects(projects: ProjectSummary[], period: Period, scrollableHistory: boolean): ProjectSummary[] {
+  if (!scrollableHistory || period === 'all') return projects
+  return filterProjectsByDateRange(projects, getPeriodRange(period))
 }
 
 function isHeavyPeriod(period: Period): boolean {
@@ -817,8 +831,9 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay }: {
+function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay }: {
   initialProjects: ProjectSummary[]
+  initialDailyHistoryProjects?: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
   initialPlanUsages?: PlanUsage[]
@@ -841,8 +856,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const [planUsages, setPlanUsages] = useState<PlanUsage[]>(initialPlanUsages ?? [])
   const [dayDate, setDayDate] = useState<string | null>(initialDay ?? null)
-  const [dailyHistoryProjects, setDailyHistoryProjects] = useState<ProjectSummary[]>(initialProjects)
-  const [dailyHistoryLoading, setDailyHistoryLoading] = useState(initialDay == null && customRange == null)
+  const [dailyHistoryProjects, setDailyHistoryProjects] = useState<ProjectSummary[]>(initialDailyHistoryProjects ?? initialProjects)
   const [dailyHistoryCursor, setDailyHistoryCursor] = useState(0)
   // Cursor for the OptimizeView's findings window. Reset whenever the user
   // leaves the optimize view OR the underlying findings change so a long
@@ -867,7 +881,6 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const reloadInFlightRef = useRef(false)
   const currentReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
   const pendingReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
-  const dailyHistoryGenerationRef = useRef(0)
   const findingCount = optimizeResult?.findings.length ?? 0
 
   useEffect(() => {
@@ -909,6 +922,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
     reloadInFlightRef.current = true
     currentReloadRef.current = { period: p, provider: prov, day }
+    const shouldLoadHistory = !day && customRange == null
     const generation = ++reloadGenerationRef.current
     setLoading(true)
     setOptimizeLoading(false)
@@ -920,14 +934,15 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         await nextTick()
         if (reloadGenerationRef.current !== generation) return
       }
-      const range = day ? getDayRange(day) : getPeriodRange(p)
+      const range = getDashboardScanRange(p, customRange, day, shouldLoadHistory)
       const data = await parseAllSessions(range, prov)
       if (reloadGenerationRef.current !== generation) return
 
       const filteredProjects = filterProjectsByName(data, projectFilter, excludeFilter)
       if (reloadGenerationRef.current !== generation) return
 
-      setProjects(filteredProjects)
+      if (shouldLoadHistory) setDailyHistoryProjects(filteredProjects)
+      setProjects(selectDashboardPeriodProjects(filteredProjects, p, shouldLoadHistory))
       const usage = await getPlanUsages()
       if (reloadGenerationRef.current !== generation) return
       setPlanUsages(usage)
@@ -945,7 +960,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         void reloadData(pending.period, pending.provider, pending.day)
       }
     }
-  }, [projectFilter, excludeFilter])
+  }, [projectFilter, excludeFilter, customRange])
 
   const currentRange = useCallback(() => {
     return dayDate ? getDayRange(dayDate) : getPeriodRange(period)
@@ -969,37 +984,12 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     }
   }, [optimizeAvailable, projects, currentRange, optimizeLoading, optimizeResult])
 
-  const loadDailyHistory = useCallback(async (provider: string) => {
-    const generation = ++dailyHistoryGenerationRef.current
-    setDailyHistoryLoading(true)
-    try {
-      const data = await parseAllSessions(undefined, provider)
-      if (dailyHistoryGenerationRef.current !== generation) return
-      setDailyHistoryProjects(filterProjectsByName(data, projectFilter, excludeFilter))
-    } catch (error) {
-      if (dailyHistoryGenerationRef.current !== generation) return
-      console.error(error)
-      setDailyHistoryProjects([])
-    } finally {
-      if (dailyHistoryGenerationRef.current === generation) setDailyHistoryLoading(false)
-    }
-  }, [projectFilter, excludeFilter])
-
-  useEffect(() => {
-    if (!scrollableDailyHistory) return
-    setDailyHistoryCursor(0)
-    void loadDailyHistory(activeProvider)
-  }, [activeProvider, loadDailyHistory, scrollableDailyHistory])
-
   useEffect(() => {
     if (!refreshSeconds || refreshSeconds <= 0) return
     if (!dayDate && isHeavyPeriod(period)) return
-    const id = setInterval(() => {
-      void reloadData(period, activeProvider, dayDate)
-      if (scrollableDailyHistory) void loadDailyHistory(activeProvider)
-    }, refreshSeconds * 1000)
+    const id = setInterval(() => { void reloadData(period, activeProvider, dayDate) }, refreshSeconds * 1000)
     return () => clearInterval(id)
-  }, [refreshSeconds, period, activeProvider, dayDate, reloadData, scrollableDailyHistory, loadDailyHistory])
+  }, [refreshSeconds, period, activeProvider, dayDate, reloadData])
 
   const switchPeriod = useCallback((np: Period) => {
     if (np === period && !dayDate) return
@@ -1150,7 +1140,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
         ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} dailyHistoryLoading={dailyHistoryLoading} />}
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} />}
       {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
     </Box>
   )
@@ -1192,15 +1182,17 @@ export async function renderDashboard(period: Period = 'week', provider: string 
   setInteractiveScanUI()
   await loadPricing()
   const dayRange = initialDay ? getDayRange(initialDay) : null
-  const range = dayRange ?? customRange ?? getPeriodRange(period)
-  const filteredProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
+  const isTTY = Boolean(process.stdin.isTTY && process.stdout.isTTY)
+  const scrollableDailyHistory = isTTY && dayRange == null && customRange == null
+  const range = getDashboardScanRange(period, customRange, initialDay ?? null, scrollableDailyHistory)
+  const scannedProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
+  const filteredProjects = selectDashboardPeriodProjects(scannedProjects, period, scrollableDailyHistory)
   const planUsages = await getPlanUsages()
-  const isTTY = process.stdin.isTTY && process.stdout.isTTY
   const label = initialDay ? formatDayRangeLabel(initialDay) : customRangeLabel
   patchStdoutForWindows()
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={filteredProjects} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} />
+      <InteractiveDashboard initialProjects={filteredProjects} initialDailyHistoryProjects={scrollableDailyHistory ? scannedProjects : undefined} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} />
     )
     await waitUntilExit()
   } else {

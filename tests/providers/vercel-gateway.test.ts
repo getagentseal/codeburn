@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { fetchVercelGatewayReport, vercelGateway } from '../../src/providers/vercel-gateway.js'
 import { parseAllSessions, clearSessionCache } from '../../src/parser.js'
+import { getDashboardScanRange } from '../../src/dashboard.js'
 
 describe('vercel-gateway provider', () => {
   const originalFetch = globalThis.fetch
@@ -105,10 +106,7 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
       }),
     })) as typeof fetch
 
-    const range = {
-      start: new Date('2026-05-01T00:00:00.000Z'),
-      end: new Date('2026-06-09T23:59:59.999Z'),
-    }
+    const range = getDashboardScanRange('week', null, null)
     const projects = await parseAllSessions(range, 'vercel-gateway')
     const total = projects.reduce((sum, p) => sum + p.totalCostUSD, 0)
 
