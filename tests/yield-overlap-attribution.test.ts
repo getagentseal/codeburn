@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -52,12 +52,16 @@ function makeSession(overrides: Partial<SessionSummary>): SessionSummary {
 
 describe('yield attribution for overlapping sessions (issue #641)', () => {
   let repoDir: string
+  let worktreeDir: string
+  let worktreeParentDir: string
 
   beforeAll(async () => {
     repoDir = await mkdtemp(join(tmpdir(), 'codeburn-yield-overlap-'))
     git(repoDir, ['init', '-b', 'main'])
     git(repoDir, ['config', 'user.email', 'test@example.com'])
     git(repoDir, ['config', 'user.name', 'Test'])
+    await mkdir(join(repoDir, 'packages', 'a'), { recursive: true })
+    await mkdir(join(repoDir, 'packages', 'b'), { recursive: true })
     await writeFile(join(repoDir, 'file.txt'), 'hello\n')
     git(repoDir, ['add', '.'])
     // One commit on main at 10:30, inside both sessions' time windows.
@@ -65,9 +69,15 @@ describe('yield attribution for overlapping sessions (issue #641)', () => {
       GIT_AUTHOR_DATE: '2026-01-01T10:30:00Z',
       GIT_COMMITTER_DATE: '2026-01-01T10:30:00Z',
     })
+    worktreeParentDir = await mkdtemp(join(tmpdir(), 'codeburn-yield-worktree-'))
+    worktreeDir = join(worktreeParentDir, 'linked')
+    git(repoDir, ['worktree', 'add', '--detach', worktreeDir])
+    await mkdir(join(worktreeDir, 'packages', 'linked'), { recursive: true })
   })
 
   afterAll(async () => {
+    git(repoDir, ['worktree', 'remove', '--force', worktreeDir])
+    await rm(worktreeParentDir, { recursive: true, force: true })
     await rm(repoDir, { recursive: true, force: true })
   })
 
@@ -194,5 +204,75 @@ describe('yield attribution for overlapping sessions (issue #641)', () => {
     expect(productive.map(d => d.sessionId)).toEqual(['proj1-session'])
     expect(productive[0]!.commitCount).toBe(1)
     expect(summary.details.find(d => d.sessionId === 'proj2-session')!.category).toBe('ambiguous')
+  })
+
+  it('credits one owner across project paths inside the same repository (issue #713)', async () => {
+    const sessionA = makeSession({
+      sessionId: 'monorepo-a',
+      project: 'package-a',
+      firstTimestamp: '2026-01-01T10:15:00.000Z',
+      lastTimestamp: '2026-01-01T10:45:00.000Z',
+      totalCostUSD: 2,
+    })
+    const sessionB = makeSession({
+      sessionId: 'monorepo-b',
+      project: 'package-b',
+      firstTimestamp: '2026-01-01T10:00:00.000Z',
+      lastTimestamp: '2026-01-01T11:00:00.000Z',
+      totalCostUSD: 3,
+    })
+    parseAllSessionsMock.mockResolvedValue([
+      { project: 'package-a', projectPath: join(repoDir, 'packages', 'a'), sessions: [sessionA] } as ProjectSummary,
+      { project: 'package-b', projectPath: join(repoDir, 'packages', 'b'), sessions: [sessionB] } as ProjectSummary,
+    ])
+
+    const summary = await computeYield(
+      { start: new Date('2026-01-01T00:00:00.000Z'), end: new Date('2026-01-02T00:00:00.000Z') },
+      repoDir,
+    )
+
+    const productive = summary.details.filter(detail => detail.category === 'productive')
+    expect(productive.map(detail => detail.sessionId)).toEqual(['monorepo-a'])
+    expect(productive[0]!.commitCount).toBe(1)
+    expect(summary.details.find(detail => detail.sessionId === 'monorepo-b')).toMatchObject({
+      category: 'ambiguous',
+      commitCount: 0,
+    })
+    expect(summary.productive.sessions).toBe(1)
+  })
+
+  it('credits one owner across a main-repo path and linked worktree (issue #713)', async () => {
+    const mainSession = makeSession({
+      sessionId: 'worktree-main',
+      project: 'main-package',
+      firstTimestamp: '2026-01-01T10:15:00.000Z',
+      lastTimestamp: '2026-01-01T10:45:00.000Z',
+      totalCostUSD: 2,
+    })
+    const linkedSession = makeSession({
+      sessionId: 'worktree-linked',
+      project: 'linked-package',
+      firstTimestamp: '2026-01-01T10:00:00.000Z',
+      lastTimestamp: '2026-01-01T11:00:00.000Z',
+      totalCostUSD: 3,
+    })
+    parseAllSessionsMock.mockResolvedValue([
+      { project: 'main-package', projectPath: join(repoDir, 'packages', 'a'), sessions: [mainSession] } as ProjectSummary,
+      { project: 'linked-package', projectPath: join(worktreeDir, 'packages', 'linked'), sessions: [linkedSession] } as ProjectSummary,
+    ])
+
+    const summary = await computeYield(
+      { start: new Date('2026-01-01T00:00:00.000Z'), end: new Date('2026-01-02T00:00:00.000Z') },
+      repoDir,
+    )
+
+    const productive = summary.details.filter(detail => detail.category === 'productive')
+    expect(productive.map(detail => detail.sessionId)).toEqual(['worktree-main'])
+    expect(productive[0]!.commitCount).toBe(1)
+    expect(summary.details.find(detail => detail.sessionId === 'worktree-linked')).toMatchObject({
+      category: 'ambiguous',
+      commitCount: 0,
+    })
+    expect(summary.productive.sessions).toBe(1)
   })
 })

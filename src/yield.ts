@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process'
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { parseAllSessions } from './parser.js'
 import type { DateRange, SessionSummary } from './types.js'
 
@@ -60,8 +62,31 @@ function runGit(args: string[], cwd: string): string | null {
   }
 }
 
-function isGitRepo(dir: string): boolean {
-  return runGit(['rev-parse', '--is-inside-work-tree'], dir) === 'true'
+type RepoResolution = {
+  readonly root: string
+  readonly commonDir: string
+}
+
+function canonicalizePath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+function resolveRepo(dir: string): RepoResolution | null {
+  // Accepted residual: moving the main repo after worktree add leaves stale Git metadata; Git fails and sessions fall back to cwd.
+  const root = runGit(['rev-parse', '--show-toplevel'], dir)
+  if (!root) return null
+
+  const commonDir = runGit(['rev-parse', '--git-common-dir'], root)
+  return {
+    root,
+    // Linked worktrees have different top-levels but `git log --all` reads
+    // the same shared repository history, so they must share attribution.
+    commonDir: canonicalizePath(commonDir ? resolve(root, commonDir) : root),
+  }
 }
 
 function getMainBranch(cwd: string): string {
@@ -252,40 +277,47 @@ export async function computeYield(range: DateRange, cwd: string, provider: stri
     details: [],
   }
 
-  // Get all commits in the date range for correlation
-  const commits = isGitRepo(cwd)
-    ? getCommitsInRange(cwd, range.start, range.end, getMainBranch(cwd))
-    : []
+  // Resolve each recorded path once. Multiple project entries can carry the
+  // same path, and each uncached lookup would otherwise spawn git again.
+  const repoResolutionCache = new Map<string, RepoResolution | null>()
+  const resolveRepoCached = (dir: string): RepoResolution | null => {
+    if (!repoResolutionCache.has(dir)) repoResolutionCache.set(dir, resolveRepo(dir))
+    return repoResolutionCache.get(dir) ?? null
+  }
+  const cwdRepo = resolveRepoCached(cwd)
 
-  // Group sessions by resolved repo before attributing: every project entry
-  // whose projectPath is missing (or not a git repo) falls back to the same
-  // cwd and shares one commit list, so attribution must run once per repo or
-  // two such entries could each award the same commit to one of their sessions.
+  // Canonical top-levels are the primary keys. A secondary common-dir index
+  // aliases linked worktree roots to one group because --all sees the same
+  // shared history from each worktree. Missing/non-git paths still use cwd.
   type RepoGroup = { commits: CommitInfo[]; sessions: SessionSummary[]; projectNames: string[] }
   const repoGroups = new Map<string, RepoGroup>()
+  const commonDirGroups = new Map<string, RepoGroup>()
+  const uniqueRepoGroups = new Set<RepoGroup>()
   for (const project of projects) {
-    const projectCwd = project.projectPath && isGitRepo(project.projectPath)
-      ? project.projectPath
-      : cwd
+    const repo = (project.projectPath && resolveRepoCached(project.projectPath)) || cwdRepo
+    const projectCwd = repo?.root ?? cwd
+    const groupKey = repo?.root ?? cwd
 
-    let group = repoGroups.get(projectCwd)
+    let group = repoGroups.get(groupKey) ?? (repo ? commonDirGroups.get(repo.commonDir) : undefined)
     if (!group) {
       group = {
-        commits: projectCwd === cwd
-          ? commits
-          : getCommitsInRange(projectCwd, range.start, range.end, getMainBranch(projectCwd)),
+        commits: repo
+          ? getCommitsInRange(projectCwd, range.start, range.end, getMainBranch(projectCwd))
+          : [],
         sessions: [],
         projectNames: [],
       }
-      repoGroups.set(projectCwd, group)
+      uniqueRepoGroups.add(group)
     }
+    repoGroups.set(groupKey, group)
+    if (repo) commonDirGroups.set(repo.commonDir, group)
     for (const session of project.sessions) {
       group.sessions.push(session)
       group.projectNames.push(project.project)
     }
   }
 
-  for (const group of repoGroups.values()) {
+  for (const group of uniqueRepoGroups) {
     const attributions = attributeCommits(group.sessions, group.commits)
     for (const [index, session] of group.sessions.entries()) {
       const attribution = attributions[index]
