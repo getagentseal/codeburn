@@ -18,6 +18,8 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
+<p align="center">If CodeBurn shows you something your bill never did, <a href="https://github.com/getagentseal/codeburn/stargazers">star the repo</a> so other developers find it, and consider <a href="https://github.com/sponsors/iamtoruk">sponsoring</a> to keep 36 integrations honest.</p>
+
 <table align="center">
   <tr>
     <td align="center" width="50%">
@@ -47,6 +49,8 @@
     </td>
   </tr>
 </table>
+
+<p align="center"><em>Four surfaces, one source of truth: everything reads the session files already on your disk.</em></p>
 
 **CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 36 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
 
@@ -86,7 +90,7 @@ That opens the interactive dashboard (last 7 days by default). Arrow keys switch
 npm install -g codeburn
 ```
 
-Also runs via `bunx codeburn` or `dx codeburn`, or `brew install codeburn` on macOS.
+Also runs via `bunx codeburn` or `pnpm dlx codeburn`, or `brew install codeburn` on macOS.
 
 **Menu bar app** for macOS, with your spend always in the menu bar:
 
@@ -232,7 +236,7 @@ Did the spend actually ship? `codeburn yield` correlates AI sessions with git co
 | Abandoned | No commits near session, or commits never merged |
 | Ambiguous | Session ran parallel to another and its window's commits were attributed to the tighter one |
 
-Attribution is timestamp-window based (heuristic): each commit is credited to at most one session — the tightest window containing it. The JSON report carries `methodology: "timestamp-window"`.
+Attribution is timestamp-window based (heuristic): each commit is credited to at most one session, the tightest window containing it. The JSON report carries `methodology: "timestamp-window"`.
 
 Requires a git repository. Run from your project directory.
 
@@ -271,7 +275,7 @@ Pairing is PIN-authorized and stays on your local network. You can also discover
 codeburn menubar
 ```
 
-One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
+One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. The native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
 
 The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
 
@@ -416,7 +420,7 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 | `codeburn sync logout` | Revoke token and remove credentials |
 | `codeburn sync reset --confirm` | Clear sent-ledger (re-send all data on next push) |
 
-Sync sends token counts, costs, models, and projects — never prompts or code. This feature is in preview; the protocol may change between releases. See [docs/sync/](docs/sync/) for details.
+Sync sends token counts, costs, models, and projects, never prompts or code. This feature is in preview; the protocol may change between releases. See [docs/sync/](docs/sync/) for details.
 
 **Web & devices**
 
@@ -460,7 +464,7 @@ Sync sends token counts, costs, models, and projects — never prompts or code. 
 |---------|--------------|
 | `codeburn models` | Per-model token + cost table (last 30 days) |
 | `codeburn models --by-task` | Break each model into per-task-type rows |
-| `codeburn models --by-agent` | Break each model into per-agent rows (which agent drove which model's spend); Claude subagent transcripts only, other providers and main sessions bucket under `(main)`. The default `--min-cost 0.01` hides sub-cent agent buckets; use `--min-cost 0` for a complete inventory. |
+| `codeburn models --by-agent` | Break each model into per-agent rows: which agent drove which model's spend (`(main)` covers non-agent sessions; `--min-cost 0` shows sub-cent agents) |
 | `codeburn models --top 10` | Only the 10 most expensive models |
 | `codeburn models --format markdown` | Emit a paste-friendly markdown table |
 | `codeburn models --task feature` | Filter to feature-development work |
@@ -624,7 +628,7 @@ CodeBurn surfaces the data; you read the story. A few patterns worth knowing:
 | Cache hit < 80% | System prompt or context is not stable, or caching is not enabled |
 | Lots of `Read` calls per session | Agent re-reading same files, missing context |
 | Low 1-shot rate (Coding 30%) | Agent struggling with edits, retry loops |
-| Opus 4.6 dominating cost on small turns | Overpowered model for simple tasks |
+| Opus 4.8 dominating cost on small turns | Overpowered model for simple tasks |
 | `dispatch_agent` / `task` heavy | Sub-agent fan-out, expected or excessive |
 | No MCP usage shown | Either you don't use MCP servers, or your config is broken |
 | Bash dominated by `git status`, `ls` | Agent exploring instead of executing |
@@ -698,7 +702,7 @@ CodeBurn deduplicates messages (by API message ID for Claude, by cumulative toke
 
 CodeBurn is free, runs entirely on your machine, and exists to cut your AI bill. If it has already saved you more than a sponsorship costs, consider sending a little of that back.
 
-Keeping 30 integrations accurate is constant work. The tools underneath change every week: Cursor reshapes its database, Claude moves a config path, new models ship at new prices. Sponsorship keeps CodeBurn current with all of it, so the numbers you see are always the real ones.
+Keeping 36 integrations accurate is constant work. The tools underneath change every week: Cursor reshapes its database, Claude moves a config path, new models ship at new prices. Sponsorship keeps CodeBurn current with all of it, so the numbers you see are always the real ones.
 
 Where your sponsorship goes:
 
@@ -712,10 +716,10 @@ Sponsoring as a team or company? Your logo lands right here, in front of every d
   <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/Sponsor_CodeBurn-♥-F97316?style=for-the-badge&logo=github&labelColor=1a1a1a" alt="Sponsor CodeBurn" /></a>
 </p>
 
-
 ## License
 
-MIT
+MIT.
+
 CodeBurn is an AgentSeal open-source project and is not affiliated with CodeBurn Bt. or codeburn.hu.
 
 ## Credits
