@@ -1,6 +1,6 @@
 {
   "name": "codeburn",
-  "version": "0.9.15",
+  "version": "0.9.16",
   "description": "See where your AI spend goes - by task, tool, model, and project",
   "type": "module",
   "main": "./dist/cli.js",
