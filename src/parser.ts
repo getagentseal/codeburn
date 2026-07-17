@@ -1,3 +1,4 @@
+import { existsSync } from 'fs'
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
@@ -14,16 +15,19 @@ import {
   type CachedTurn,
   type ProviderSection,
   type SessionCache,
+  beginColdHydration,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
   DURABLE_PROVIDER_NAMES,
   fingerprintFile,
+  isCacheComplete,
   loadCache,
   reconcileFile,
   saveCache,
 } from './session-cache.js'
 import type { ParsedProviderCall, SessionSource } from './providers/types.js'
 import type {
+  ApiUsageIteration,
   AssistantMessageContent,
   ClassifiedTurn,
   ContentBlock,
@@ -33,6 +37,7 @@ import type {
   ParsedTurn,
   ProjectSummary,
   SessionSummary,
+  SessionSourceMetadata,
   TokenUsage,
   ToolCall,
   ToolUseBlock,
@@ -126,14 +131,14 @@ const LARGE_JSONL_LINE_BYTES = 32 * 1024
 
 export function parseJsonlLine(line: string | Buffer): JournalEntry | null {
   if (Buffer.isBuffer(line)) {
-    if (line.length > LARGE_JSONL_LINE_BYTES) return parseLargeJsonlBuffer(line)
+    if (line.length > LARGE_JSONL_LINE_BYTES) return parseLargeJsonl(line)
     try {
       return JSON.parse(line.toString('utf-8')) as JournalEntry
     } catch {
       return null
     }
   }
-  if (line.length > LARGE_JSONL_LINE_BYTES) return parseLargeJsonlLine(line)
+  if (line.length > LARGE_JSONL_LINE_BYTES) return parseLargeJsonl(line)
   try {
     return JSON.parse(line) as JournalEntry
   } catch {
@@ -149,125 +154,121 @@ type JsonValueBounds = {
   kind: 'string' | 'object' | 'array' | 'scalar'
 }
 
-function findJsonStringEnd(source: string, start: number, limit = source.length): number {
-  for (let i = start + 1; i < limit; i++) {
-    const ch = source.charCodeAt(i)
-    if (ch === 0x5c) {
-      i++
-      continue
-    }
-    if (ch === 0x22) return i
-  }
-  return -1
+type JsonIndexedSource = string | Buffer
+
+type JsonSource = {
+  readonly raw: JsonIndexedSource
+  readonly length: number
+  readonly slice: (start: number, end: number, maxChars?: number) => string
 }
 
-function findJsonContainerEnd(source: string, start: number, open: number, close: number, limit = source.length): number {
-  let depth = 0
-  let inString = false
-  for (let i = start; i < limit; i++) {
-    const ch = source.charCodeAt(i)
-    if (inString) {
-      if (ch === 0x5c) {
-        i++
-      } else if (ch === 0x22) {
-        inString = false
-      }
-      continue
-    }
-    if (ch === 0x22) {
-      inString = true
-    } else if (ch === open) {
-      depth++
-    } else if (ch === close) {
-      depth--
-      if (depth === 0) return i
-    }
-  }
-  return -1
+function isAsciiWhitespace(ch: number | undefined): boolean {
+  return ch === 0x20 || ch === 0x0a || ch === 0x0d || ch === 0x09 || ch === 0x0b || ch === 0x0c
 }
 
-function findJsonValueBounds(source: string, start: number, limit = source.length): JsonValueBounds | null {
+function isBufferWhitespaceAt(source: Buffer, index: number): boolean {
+  const byte = source[index]
+  if (isAsciiWhitespace(byte)) return true
+  if (byte === undefined || byte < 0x80) return false
+
+  let start = index
+  while (start > 0) {
+    const preceding = source[start]
+    if (preceding === undefined || (preceding & 0xc0) !== 0x80) break
+    start--
+  }
+  const first = source[start]
+  if (first === undefined) return false
+  let codePoint: number | undefined
+  let byteLength = 0
+  if (first >= 0xc2 && first <= 0xdf) {
+    const second = source[start + 1]
+    if (second === undefined || (second & 0xc0) !== 0x80) return false
+    codePoint = ((first & 0x1f) << 6) | (second & 0x3f)
+    byteLength = 2
+  } else if (first >= 0xe0 && first <= 0xef) {
+    const second = source[start + 1]
+    const third = source[start + 2]
+    if (second === undefined || third === undefined || (second & 0xc0) !== 0x80 || (third & 0xc0) !== 0x80) return false
+    codePoint = ((first & 0x0f) << 12) | ((second & 0x3f) << 6) | (third & 0x3f)
+    byteLength = 3
+  } else if (first >= 0xf0 && first <= 0xf4) {
+    const second = source[start + 1]
+    const third = source[start + 2]
+    const fourth = source[start + 3]
+    if (second === undefined || third === undefined || fourth === undefined || (second & 0xc0) !== 0x80 || (third & 0xc0) !== 0x80 || (fourth & 0xc0) !== 0x80) {
+      return false
+    }
+    codePoint = ((first & 0x07) << 18) | ((second & 0x3f) << 12) | ((third & 0x3f) << 6) | (fourth & 0x3f)
+    byteLength = 4
+  }
+  if (codePoint === undefined || index >= start + byteLength) return false
+  return codePoint === 0x00a0 || codePoint === 0x1680 || (codePoint >= 0x2000 && codePoint <= 0x200a) || codePoint === 0x2028 || codePoint === 0x2029 || codePoint === 0x202f || codePoint === 0x205f || codePoint === 0x3000 || codePoint === 0xfeff
+}
+
+function safeBufferSegmentEnd(source: Buffer, index: number): number {
+  while (index > 0 && ((source[index] ?? 0) & 0xc0) === 0x80) index--
+  return index
+}
+
+function createJsonSource(source: string | Buffer): JsonSource {
+  if (typeof source === 'string') {
+    return {
+      raw: source,
+      length: source.length,
+      slice: (start, end, maxChars = Number.POSITIVE_INFINITY) => source.slice(start, Math.min(end, start + maxChars)),
+    }
+  }
+
+  return {
+    raw: source,
+    length: source.length,
+    slice: (start, end, maxChars = Number.POSITIVE_INFINITY) => {
+      const cappedEnd = Number.isFinite(maxChars) ? safeBufferSegmentEnd(source, Math.min(end, start + maxChars * 4)) : end
+      return source.subarray(start, cappedEnd).toString('utf-8').slice(0, maxChars)
+    },
+  }
+}
+
+function jsonCharCodeAt(source: JsonSource, index: number): number {
+  return typeof source.raw === 'string' ? source.raw.charCodeAt(index) : source.raw[index] ?? Number.NaN
+}
+
+function skipJsonWhitespace(source: JsonSource, start: number, limit = source.length): number {
+  if (typeof source.raw === 'string') {
+    let i = start
+    while (i < limit && /\s/.test(source.raw[i]!)) i++
+    return i
+  }
   let i = start
-  while (i < limit && /\s/.test(source[i]!)) i++
-  if (i >= limit) return null
-  const ch = source.charCodeAt(i)
-  if (ch === 0x22) {
-    const end = findJsonStringEnd(source, i, limit)
-    return end === -1 ? null : { start: i, end: end + 1, kind: 'string' }
-  }
-  if (ch === 0x7b) {
-    const end = findJsonContainerEnd(source, i, 0x7b, 0x7d, limit)
-    return end === -1 ? null : { start: i, end: end + 1, kind: 'object' }
-  }
-  if (ch === 0x5b) {
-    const end = findJsonContainerEnd(source, i, 0x5b, 0x5d, limit)
-    return end === -1 ? null : { start: i, end: end + 1, kind: 'array' }
-  }
-  let end = i
-  while (end < limit) {
-    const c = source.charCodeAt(end)
-    if (c === 0x2c || c === 0x7d || c === 0x5d || /\s/.test(source[end]!)) break
-    end++
-  }
-  return { start: i, end, kind: 'scalar' }
+  while (i < limit && isBufferWhitespaceAt(source.raw, i)) i++
+  return i
 }
 
-function findObjectFieldValue(source: string, objectStart: number, objectEnd: number, field: string): JsonValueBounds | null {
-  if (source.charCodeAt(objectStart) !== 0x7b) return null
-  let i = objectStart + 1
-  while (i < objectEnd - 1) {
-    while (i < objectEnd && /\s/.test(source[i]!)) i++
-    if (source.charCodeAt(i) === 0x2c) {
-      i++
-      continue
-    }
-    if (source.charCodeAt(i) !== 0x22) {
-      i++
-      continue
-    }
-    const keyEnd = findJsonStringEnd(source, i, objectEnd)
-    if (keyEnd === -1) return null
-    const key = source.slice(i + 1, keyEnd)
-    i = keyEnd + 1
-    while (i < objectEnd && /\s/.test(source[i]!)) i++
-    if (source.charCodeAt(i) !== 0x3a) continue
-    const value = findJsonValueBounds(source, i + 1, objectEnd)
-    if (!value) return null
-    if (key === field) return value
-    i = value.end
-  }
-  return null
+function findJsonStringEnd(source: JsonSource, start: number, limit = source.length): number {
+  return typeof source.raw === 'string'
+    ? findJsonStringEndString(source.raw, start, limit)
+    : findJsonStringEndBuffer(source.raw, start, limit)
 }
 
-function readJsonString(source: string, bounds: JsonValueBounds | null, cap = Number.POSITIVE_INFINITY): string | undefined {
-  if (!bounds || bounds.kind !== 'string') return undefined
-  let out = ''
-  for (let i = bounds.start + 1; i < bounds.end - 1 && out.length < cap; i++) {
-    const ch = source[i]!
-    if (ch !== '\\') {
-      out += ch
-      continue
-    }
-    const next = source[++i]
-    if (!next) break
-    if (next === 'n') out += '\n'
-    else if (next === 'r') out += '\r'
-    else if (next === 't') out += '\t'
-    else if (next === 'b') out += '\b'
-    else if (next === 'f') out += '\f'
-    else if (next === 'u' && i + 4 < bounds.end) {
-      const hex = source.slice(i + 1, i + 5)
-      const code = Number.parseInt(hex, 16)
-      if (Number.isFinite(code)) out += String.fromCharCode(code)
-      i += 4
-    } else {
-      out += next
-    }
-  }
-  return out
+function findJsonContainerEnd(source: JsonSource, start: number, open: number, close: number, limit = source.length): number {
+  return typeof source.raw === 'string'
+    ? findJsonContainerEndString(source.raw, start, open, close, limit)
+    : findJsonContainerEndBuffer(source.raw, start, open, close, limit)
 }
 
-function readJsonNumberField(source: string, objectBounds: JsonValueBounds | null, field: string): number | undefined {
+function findObjectFieldValue(source: JsonSource, objectStart: number, objectEnd: number, field: string): JsonValueBounds | null {
+  return typeof source.raw === 'string'
+    ? findObjectFieldValueString(source.raw, objectStart, objectEnd, field)
+    : findObjectFieldValueBuffer(source.raw, objectStart, objectEnd, field)
+}
+
+function readJsonString(source: JsonSource, bounds: JsonValueBounds | null, cap = Number.POSITIVE_INFINITY): string | undefined {
+  if (typeof source.raw === 'string') return readJsonStringString(source.raw, bounds, cap)
+  return readJsonStringBuffer(source.raw, bounds, cap)
+}
+
+function readJsonNumberField(source: JsonSource, objectBounds: JsonValueBounds | null, field: string): number | undefined {
   if (!objectBounds || objectBounds.kind !== 'object') return undefined
   const bounds = findObjectFieldValue(source, objectBounds.start, objectBounds.end, field)
   if (!bounds) return undefined
@@ -275,7 +276,27 @@ function readJsonNumberField(source: string, objectBounds: JsonValueBounds | nul
   return Number.isFinite(value) ? value : undefined
 }
 
-function parseLargeUsage(source: string, usageBounds: JsonValueBounds | null) {
+// The large-line parsers avoid JSON.parse on the whole (multi-KB) line, but the
+// usage object itself is tiny; parse just that slice to recover advisor
+// (/advisor) iterations, which the byte-scanner cannot cheaply extract. Without
+// this, an advisor escalation on a large assistant turn would be dropped.
+function extractAdvisorIterations(usageObjectJson: string): ApiUsageIteration[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(usageObjectJson)
+  } catch {
+    return undefined
+  }
+  const iterations = (parsed as { iterations?: unknown }).iterations
+  if (!Array.isArray(iterations)) return undefined
+  const advisor = iterations.filter(
+    (it): it is ApiUsageIteration =>
+      !!it && typeof it === 'object' && (it as { type?: unknown }).type === 'advisor_message',
+  )
+  return advisor.length > 0 ? advisor : undefined
+}
+
+function parseLargeUsage(source: JsonSource, usageBounds: JsonValueBounds | null) {
   const usage: AssistantMessageContent['usage'] = {
     input_tokens: readJsonNumberField(source, usageBounds, 'input_tokens') ?? 0,
     output_tokens: readJsonNumberField(source, usageBounds, 'output_tokens') ?? 0,
@@ -306,22 +327,25 @@ function parseLargeUsage(source: string, usageBounds: JsonValueBounds | null) {
 
     const speed = readJsonString(source, findObjectFieldValue(source, usageBounds.start, usageBounds.end, 'speed'))
     if (speed === 'standard' || speed === 'fast') usage.speed = speed
+
+    const advisor = extractAdvisorIterations(source.slice(usageBounds.start, usageBounds.end))
+    if (advisor) usage.iterations = advisor
   }
 
   return usage
 }
 
-function extractLargeToolBlocks(source: string, contentBounds: JsonValueBounds | null): ToolUseBlock[] {
+function extractLargeToolBlocks(source: JsonSource, contentBounds: JsonValueBounds | null): ToolUseBlock[] {
   if (!contentBounds || contentBounds.kind !== 'array') return []
   const tools: ToolUseBlock[] = []
   let i = contentBounds.start + 1
   while (i < contentBounds.end - 1 && tools.length < MAX_TOOL_BLOCKS) {
-    while (i < contentBounds.end && /\s/.test(source[i]!)) i++
-    if (source.charCodeAt(i) === 0x2c) {
+    i = skipJsonWhitespace(source, i, contentBounds.end)
+    if (jsonCharCodeAt(source, i) === 0x2c) {
       i++
       continue
     }
-    if (source.charCodeAt(i) !== 0x7b) {
+    if (jsonCharCodeAt(source, i) !== 0x7b) {
       i++
       continue
     }
@@ -358,7 +382,7 @@ function extractLargeToolBlocks(source: string, contentBounds: JsonValueBounds |
   return tools
 }
 
-function extractLargeUserText(source: string, contentBounds: JsonValueBounds | null): string | undefined {
+function extractLargeUserText(source: JsonSource, contentBounds: JsonValueBounds | null): string | undefined {
   if (!contentBounds) return undefined
   if (contentBounds.kind === 'string') return readJsonString(source, contentBounds, USER_TEXT_CAP)
   if (contentBounds.kind !== 'array') return undefined
@@ -366,12 +390,12 @@ function extractLargeUserText(source: string, contentBounds: JsonValueBounds | n
   let text = ''
   let i = contentBounds.start + 1
   while (i < contentBounds.end - 1 && text.length < USER_TEXT_CAP) {
-    while (i < contentBounds.end && /\s/.test(source[i]!)) i++
-    if (source.charCodeAt(i) === 0x2c) {
+    i = skipJsonWhitespace(source, i, contentBounds.end)
+    if (jsonCharCodeAt(source, i) === 0x2c) {
       i++
       continue
     }
-    if (source.charCodeAt(i) !== 0x7b) {
+    if (jsonCharCodeAt(source, i) !== 0x7b) {
       i++
       continue
     }
@@ -392,7 +416,7 @@ function extractLargeUserText(source: string, contentBounds: JsonValueBounds | n
   return text || undefined
 }
 
-function extractLargeAddedNames(source: string, attachmentBounds: JsonValueBounds | null): string[] {
+function extractLargeAddedNames(source: JsonSource, attachmentBounds: JsonValueBounds | null): string[] {
   if (!attachmentBounds || attachmentBounds.kind !== 'object') return []
   const attachmentType = readJsonString(source, findObjectFieldValue(source, attachmentBounds.start, attachmentBounds.end, 'type'))
   if (attachmentType !== 'deferred_tools_delta') return []
@@ -401,12 +425,12 @@ function extractLargeAddedNames(source: string, attachmentBounds: JsonValueBound
   const names: string[] = []
   let i = addedNames.start + 1
   while (i < addedNames.end - 1 && names.length < MAX_ADDED_NAMES) {
-    while (i < addedNames.end && /\s/.test(source[i]!)) i++
-    if (source.charCodeAt(i) === 0x2c) {
+    i = skipJsonWhitespace(source, i, addedNames.end)
+    if (jsonCharCodeAt(source, i) === 0x2c) {
       i++
       continue
     }
-    if (source.charCodeAt(i) !== 0x22) {
+    if (jsonCharCodeAt(source, i) !== 0x22) {
       i++
       continue
     }
@@ -419,65 +443,119 @@ function extractLargeAddedNames(source: string, attachmentBounds: JsonValueBound
   return names
 }
 
-function parseLargeJsonlLine(line: string): JournalEntry | null {
-  const rootEnd = findJsonContainerEnd(line, 0, 0x7b, 0x7d)
+function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
+  const source = createJsonSource(line)
+  const rootStart = skipJsonWhitespace(source, 0)
+  const rootEnd = findJsonContainerEnd(source, rootStart, 0x7b, 0x7d)
   if (rootEnd === -1) return null
-  const rootStart = 0
   const rootLimit = rootEnd + 1
-  const type = readJsonString(line, findObjectFieldValue(line, rootStart, rootLimit, 'type'))
+  const type = readJsonString(source, findObjectFieldValue(source, rootStart, rootLimit, 'type'))
   if (!type) return null
 
   const entry: JournalEntry = { type }
-  const timestamp = readJsonString(line, findObjectFieldValue(line, rootStart, rootLimit, 'timestamp'))
-  const sessionId = readJsonString(line, findObjectFieldValue(line, rootStart, rootLimit, 'sessionId'))
-  const cwd = readJsonString(line, findObjectFieldValue(line, rootStart, rootLimit, 'cwd'))
+  const timestamp = readJsonString(source, findObjectFieldValue(source, rootStart, rootLimit, 'timestamp'))
+  const sessionId = readJsonString(source, findObjectFieldValue(source, rootStart, rootLimit, 'sessionId'))
+  const cwd = readJsonString(source, findObjectFieldValue(source, rootStart, rootLimit, 'cwd'))
   if (timestamp !== undefined) entry.timestamp = timestamp
   if (sessionId !== undefined) entry.sessionId = sessionId
   if (cwd !== undefined) entry.cwd = cwd
-  const addedNames = extractLargeAddedNames(line, findObjectFieldValue(line, rootStart, rootLimit, 'attachment'))
+  const addedNames = extractLargeAddedNames(source, findObjectFieldValue(source, rootStart, rootLimit, 'attachment'))
   if (addedNames.length > 0) {
     ;(entry as Record<string, unknown>)['attachment'] = { type: 'deferred_tools_delta', addedNames }
   }
 
   if (type === 'user') {
-    const message = findObjectFieldValue(line, rootStart, rootLimit, 'message')
+    const message = findObjectFieldValue(source, rootStart, rootLimit, 'message')
     if (message?.kind === 'object') {
-      const content = findObjectFieldValue(line, message.start, message.end, 'content')
-      const text = extractLargeUserText(line, content)
+      const content = findObjectFieldValue(source, message.start, message.end, 'content')
+      const text = extractLargeUserText(source, content)
       if (text !== undefined) entry.message = { role: 'user', content: text }
     }
     return entry
   }
 
   if (type !== 'assistant') return entry
-  const message = findObjectFieldValue(line, rootStart, rootLimit, 'message')
+  const message = findObjectFieldValue(source, rootStart, rootLimit, 'message')
   if (message?.kind !== 'object') return entry
-  const model = readJsonString(line, findObjectFieldValue(line, message.start, message.end, 'model'))
-  const usageBounds = findObjectFieldValue(line, message.start, message.end, 'usage')
+  const model = readJsonString(source, findObjectFieldValue(source, message.start, message.end, 'model'))
+  const usageBounds = findObjectFieldValue(source, message.start, message.end, 'usage')
   if (!model || usageBounds?.kind !== 'object') return entry
-  const id = readJsonString(line, findObjectFieldValue(line, message.start, message.end, 'id'))
-  const contentBounds = findObjectFieldValue(line, message.start, message.end, 'content')
+  const id = readJsonString(source, findObjectFieldValue(source, message.start, message.end, 'id'))
+  const contentBounds = findObjectFieldValue(source, message.start, message.end, 'content')
 
   entry.message = {
     type: 'message',
     role: 'assistant',
     model,
     ...(id !== undefined ? { id } : {}),
-    content: extractLargeToolBlocks(line, contentBounds),
-    usage: parseLargeUsage(line, usageBounds),
+    content: extractLargeToolBlocks(source, contentBounds),
+    usage: parseLargeUsage(source, usageBounds),
   }
 
   return entry
 }
 
-type BufferJsonValueBounds = {
-  start: number
-  end: number
-  kind: 'string' | 'object' | 'array' | 'scalar'
+function findJsonStringEndString(source: string, start: number, limit = source.length): number {
+  for (let i = start + 1; i < limit; i++) {
+    const ch = source.charCodeAt(i)
+    if (ch === 0x5c) {
+      i++
+      continue
+    }
+    if (ch === 0x22) return i
+  }
+  return -1
 }
 
-function isJsonWhitespaceByte(ch: number | undefined): boolean {
-  return ch === 0x20 || ch === 0x0a || ch === 0x0d || ch === 0x09
+function findJsonContainerEndString(source: string, start: number, open: number, close: number, limit = source.length): number {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < limit; i++) {
+    const ch = source.charCodeAt(i)
+    if (inString) {
+      if (ch === 0x5c) {
+        i++
+      } else if (ch === 0x22) {
+        inString = false
+      }
+      continue
+    }
+    if (ch === 0x22) {
+      inString = true
+    } else if (ch === open) {
+      depth++
+    } else if (ch === close) {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+function findJsonValueBoundsString(source: string, start: number, limit = source.length): JsonValueBounds | null {
+  let i = start
+  while (i < limit && /\s/.test(source[i]!)) i++
+  if (i >= limit) return null
+  const ch = source.charCodeAt(i)
+  if (ch === 0x22) {
+    const end = findJsonStringEndString(source, i, limit)
+    return end === -1 ? null : { start: i, end: end + 1, kind: 'string' }
+  }
+  if (ch === 0x7b) {
+    const end = findJsonContainerEndString(source, i, 0x7b, 0x7d, limit)
+    return end === -1 ? null : { start: i, end: end + 1, kind: 'object' }
+  }
+  if (ch === 0x5b) {
+    const end = findJsonContainerEndString(source, i, 0x5b, 0x5d, limit)
+    return end === -1 ? null : { start: i, end: end + 1, kind: 'array' }
+  }
+  let end = i
+  while (end < limit) {
+    const c = source.charCodeAt(end)
+    if (c === 0x2c || c === 0x7d || c === 0x5d || /\s/.test(source[end]!)) break
+    end++
+  }
+  return { start: i, end, kind: 'scalar' }
 }
 
 function findJsonStringEndBuffer(source: Buffer, start: number, limit = source.length): number {
@@ -517,9 +595,9 @@ function findJsonContainerEndBuffer(source: Buffer, start: number, open: number,
   return -1
 }
 
-function findJsonValueBoundsBuffer(source: Buffer, start: number, limit = source.length): BufferJsonValueBounds | null {
+function findJsonValueBoundsBuffer(source: Buffer, start: number, limit = source.length): JsonValueBounds | null {
   let i = start
-  while (i < limit && isJsonWhitespaceByte(source[i])) i++
+  while (i < limit && isBufferWhitespaceAt(source, i)) i++
   if (i >= limit) return null
   const ch = source[i]
   if (ch === 0x22) {
@@ -537,22 +615,44 @@ function findJsonValueBoundsBuffer(source: Buffer, start: number, limit = source
   let end = i
   while (end < limit) {
     const c = source[end]
-    if (c === 0x2c || c === 0x7d || c === 0x5d || isJsonWhitespaceByte(c)) break
+    if (c === 0x2c || c === 0x7d || c === 0x5d || isBufferWhitespaceAt(source, end)) break
     end++
   }
   return { start: i, end, kind: 'scalar' }
 }
 
-function bufferKeyEquals(source: Buffer, keyStart: number, keyEnd: number, field: string): boolean {
-  if (keyEnd - keyStart !== field.length) return false
-  return source.subarray(keyStart, keyEnd).equals(Buffer.from(field))
+function findObjectFieldValueString(source: string, objectStart: number, objectEnd: number, field: string): JsonValueBounds | null {
+  if (source.charCodeAt(objectStart) !== 0x7b) return null
+  let i = objectStart + 1
+  while (i < objectEnd - 1) {
+    while (i < objectEnd && /\s/.test(source[i]!)) i++
+    if (source.charCodeAt(i) === 0x2c) {
+      i++
+      continue
+    }
+    if (source.charCodeAt(i) !== 0x22) {
+      i++
+      continue
+    }
+    const keyEnd = findJsonStringEndString(source, i, objectEnd)
+    if (keyEnd === -1) return null
+    const keyStart = i + 1
+    i = keyEnd + 1
+    while (i < objectEnd && /\s/.test(source[i]!)) i++
+    if (source.charCodeAt(i) !== 0x3a) continue
+    const value = findJsonValueBoundsString(source, i + 1, objectEnd)
+    if (!value) return null
+    if (source.slice(keyStart, keyEnd) === field) return value
+    i = value.end
+  }
+  return null
 }
 
-function findObjectFieldValueBuffer(source: Buffer, objectStart: number, objectEnd: number, field: string): BufferJsonValueBounds | null {
+function findObjectFieldValueBuffer(source: Buffer, objectStart: number, objectEnd: number, field: string): JsonValueBounds | null {
   if (source[objectStart] !== 0x7b) return null
   let i = objectStart + 1
   while (i < objectEnd - 1) {
-    while (i < objectEnd && isJsonWhitespaceByte(source[i])) i++
+    while (i < objectEnd && isBufferWhitespaceAt(source, i)) i++
     if (source[i] === 0x2c) {
       i++
       continue
@@ -565,34 +665,97 @@ function findObjectFieldValueBuffer(source: Buffer, objectStart: number, objectE
     if (keyEnd === -1) return null
     const keyStart = i + 1
     i = keyEnd + 1
-    while (i < objectEnd && isJsonWhitespaceByte(source[i])) i++
+    while (i < objectEnd && isBufferWhitespaceAt(source, i)) i++
     if (source[i] !== 0x3a) continue
     const value = findJsonValueBoundsBuffer(source, i + 1, objectEnd)
     if (!value) return null
-    if (bufferKeyEquals(source, keyStart, keyEnd, field)) return value
+    if (keyEnd - keyStart === field.length && source.subarray(keyStart, keyEnd).equals(Buffer.from(field))) return value
     i = value.end
   }
   return null
 }
 
+function appendStringJsonSegment(source: string, start: number, end: number, current: string, cap: number): string {
+  if (start >= end || current.length >= cap) return current
+  return current + source.slice(start, Math.min(end, start + cap - current.length))
+}
+
 function appendBufferJsonSegment(source: Buffer, start: number, end: number, current: string, cap: number): string {
   if (start >= end || current.length >= cap) return current
   const remaining = cap - current.length
-  const cappedEnd = Number.isFinite(cap) ? Math.min(end, start + remaining * 4) : end
+  const cappedEnd = Number.isFinite(cap) ? safeBufferSegmentEnd(source, Math.min(end, start + remaining * 4)) : end
   return current + source.subarray(start, cappedEnd).toString('utf-8').slice(0, remaining)
 }
 
-function readJsonStringBuffer(source: Buffer, bounds: BufferJsonValueBounds | null, cap = Number.POSITIVE_INFINITY): string | undefined {
+function readJsonStringString(source: string, bounds: JsonValueBounds | null, cap = Number.POSITIVE_INFINITY): string | undefined {
   if (!bounds || bounds.kind !== 'string') return undefined
   let out = ''
+  const contentEnd = bounds.end - 1
   let segmentStart = bounds.start + 1
-  for (let i = bounds.start + 1; i < bounds.end - 1 && out.length < cap; i++) {
-    const ch = source[i]
-    if (ch !== 0x5c) continue
+  let i = segmentStart
+  let scanLimit = Number.isFinite(cap) ? Math.min(contentEnd, segmentStart + cap) : contentEnd
+  while (i < contentEnd && out.length < cap) {
+    if (i >= scanLimit) {
+      out = appendStringJsonSegment(source, segmentStart, i, out, cap)
+      if (out.length >= cap) break
+      segmentStart = i
+      scanLimit = Number.isFinite(cap) ? Math.min(contentEnd, i + cap - out.length) : contentEnd
+      continue
+    }
+    const ch = source.charCodeAt(i)
+    if (ch !== 0x5c) {
+      i++
+      continue
+    }
+    out = appendStringJsonSegment(source, segmentStart, i, out, cap)
+    if (out.length >= cap) break
+    i++
+    const next = source.charCodeAt(i)
+    if (Number.isNaN(next)) break
+    if (next === 0x6e) out += '\n'
+    else if (next === 0x72) out += '\r'
+    else if (next === 0x74) out += '\t'
+    else if (next === 0x62) out += '\b'
+    else if (next === 0x66) out += '\f'
+    else if (next === 0x75 && i + 4 < bounds.end) {
+      const code = Number.parseInt(source.slice(i + 1, i + 5), 16)
+      if (Number.isFinite(code)) out += String.fromCharCode(code)
+      i += 4
+    } else {
+      out += String.fromCharCode(next)
+    }
+    segmentStart = i + 1
+    i++
+  }
+  return appendStringJsonSegment(source, segmentStart, contentEnd, out, cap)
+}
 
+function readJsonStringBuffer(source: Buffer, bounds: JsonValueBounds | null, cap = Number.POSITIVE_INFINITY): string | undefined {
+  if (!bounds || bounds.kind !== 'string') return undefined
+  let out = ''
+  const contentEnd = bounds.end - 1
+  let segmentStart = bounds.start + 1
+  let i = segmentStart
+  let scanLimit = Number.isFinite(cap) ? Math.min(contentEnd, segmentStart + cap * 4) : contentEnd
+  while (i < contentEnd && out.length < cap) {
+    if (i >= scanLimit) {
+      const segmentEnd = safeBufferSegmentEnd(source, i)
+      out = appendBufferJsonSegment(source, segmentStart, segmentEnd, out, cap)
+      if (out.length >= cap) break
+      segmentStart = segmentEnd
+      i = segmentEnd
+      scanLimit = Number.isFinite(cap) ? Math.min(contentEnd, i + (cap - out.length) * 4) : contentEnd
+      continue
+    }
+    const ch = source[i]
+    if (ch !== 0x5c) {
+      i++
+      continue
+    }
     out = appendBufferJsonSegment(source, segmentStart, i, out, cap)
     if (out.length >= cap) break
-    const next = source[++i]
+    i++
+    const next = source[i]
     if (next === undefined) break
     if (next === 0x6e) out += '\n'
     else if (next === 0x72) out += '\r'
@@ -600,224 +763,16 @@ function readJsonStringBuffer(source: Buffer, bounds: BufferJsonValueBounds | nu
     else if (next === 0x62) out += '\b'
     else if (next === 0x66) out += '\f'
     else if (next === 0x75 && i + 4 < bounds.end) {
-      const hex = source.subarray(i + 1, i + 5).toString('ascii')
-      const code = Number.parseInt(hex, 16)
+      const code = Number.parseInt(source.subarray(i + 1, i + 5).toString('ascii'), 16)
       if (Number.isFinite(code)) out += String.fromCharCode(code)
       i += 4
     } else {
       out += String.fromCharCode(next)
     }
     segmentStart = i + 1
+    i++
   }
-  return appendBufferJsonSegment(source, segmentStart, bounds.end - 1, out, cap)
-}
-
-function readJsonNumberFieldBuffer(source: Buffer, objectBounds: BufferJsonValueBounds | null, field: string): number | undefined {
-  if (!objectBounds || objectBounds.kind !== 'object') return undefined
-  const bounds = findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, field)
-  if (!bounds) return undefined
-  const value = Number(source.subarray(bounds.start, bounds.end).toString('ascii'))
-  return Number.isFinite(value) ? value : undefined
-}
-
-function parseLargeUsageBuffer(source: Buffer, usageBounds: BufferJsonValueBounds | null) {
-  const usage: AssistantMessageContent['usage'] = {
-    input_tokens: readJsonNumberFieldBuffer(source, usageBounds, 'input_tokens') ?? 0,
-    output_tokens: readJsonNumberFieldBuffer(source, usageBounds, 'output_tokens') ?? 0,
-    cache_creation_input_tokens: readJsonNumberFieldBuffer(source, usageBounds, 'cache_creation_input_tokens'),
-    cache_read_input_tokens: readJsonNumberFieldBuffer(source, usageBounds, 'cache_read_input_tokens'),
-  }
-
-  if (usageBounds?.kind === 'object') {
-    const cacheCreation = findObjectFieldValueBuffer(source, usageBounds.start, usageBounds.end, 'cache_creation')
-    const ephemeral5m = readJsonNumberFieldBuffer(source, cacheCreation, 'ephemeral_5m_input_tokens')
-    const ephemeral1h = readJsonNumberFieldBuffer(source, cacheCreation, 'ephemeral_1h_input_tokens')
-    if (ephemeral5m !== undefined || ephemeral1h !== undefined) {
-      ;(usage as AssistantMessageContent['usage']).cache_creation = {
-        ...(ephemeral5m !== undefined ? { ephemeral_5m_input_tokens: ephemeral5m } : {}),
-        ...(ephemeral1h !== undefined ? { ephemeral_1h_input_tokens: ephemeral1h } : {}),
-      }
-    }
-
-    const serverToolUse = findObjectFieldValueBuffer(source, usageBounds.start, usageBounds.end, 'server_tool_use')
-    const webSearch = readJsonNumberFieldBuffer(source, serverToolUse, 'web_search_requests')
-    const webFetch = readJsonNumberFieldBuffer(source, serverToolUse, 'web_fetch_requests')
-    if (webSearch !== undefined || webFetch !== undefined) {
-      ;(usage as AssistantMessageContent['usage']).server_tool_use = {
-        ...(webSearch !== undefined ? { web_search_requests: webSearch } : {}),
-        ...(webFetch !== undefined ? { web_fetch_requests: webFetch } : {}),
-      }
-    }
-
-    const speed = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, usageBounds.start, usageBounds.end, 'speed'))
-    if (speed === 'standard' || speed === 'fast') usage.speed = speed
-  }
-
-  return usage
-}
-
-function extractLargeToolBlocksBuffer(source: Buffer, contentBounds: BufferJsonValueBounds | null): ToolUseBlock[] {
-  if (!contentBounds || contentBounds.kind !== 'array') return []
-  const tools: ToolUseBlock[] = []
-  let i = contentBounds.start + 1
-  while (i < contentBounds.end - 1 && tools.length < MAX_TOOL_BLOCKS) {
-    while (i < contentBounds.end && isJsonWhitespaceByte(source[i])) i++
-    if (source[i] === 0x2c) {
-      i++
-      continue
-    }
-    if (source[i] !== 0x7b) {
-      i++
-      continue
-    }
-    const objectEnd = findJsonContainerEndBuffer(source, i, 0x7b, 0x7d, contentBounds.end)
-    if (objectEnd === -1) break
-    const objectBounds = { start: i, end: objectEnd + 1, kind: 'object' as const }
-    const blockType = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'type'))
-    if (blockType === 'tool_use') {
-      const name = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'name')) ?? ''
-      const id = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'id')) ?? ''
-      const inputBounds = findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'input')
-      const input: Record<string, unknown> = {}
-      if (inputBounds?.kind === 'object') {
-        if (name === 'Skill') {
-          const skill = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'skill'), 200)
-          const skillName = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'name'), 200)
-          if (skill !== undefined) input['skill'] = skill
-          if (skillName !== undefined) input['name'] = skillName
-        } else if (name === 'Read' || name === 'FileReadTool' || EDIT_TOOLS.has(name)) {
-          const filePath = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'file_path'), BASH_COMMAND_CAP)
-          if (filePath !== undefined) input['file_path'] = filePath
-        } else if (name === 'Agent' || name === 'Task') {
-          const subagentType = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'subagent_type'), 200)
-          if (subagentType !== undefined) input['subagent_type'] = subagentType
-        } else if (BASH_TOOLS.has(name)) {
-          const command = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, inputBounds.start, inputBounds.end, 'command'), BASH_COMMAND_CAP)
-          if (command !== undefined) input['command'] = command
-        }
-      }
-      tools.push({ type: 'tool_use', id, name, input })
-    }
-    i = objectEnd + 1
-  }
-  return tools
-}
-
-function extractLargeUserTextBuffer(source: Buffer, contentBounds: BufferJsonValueBounds | null): string | undefined {
-  if (!contentBounds) return undefined
-  if (contentBounds.kind === 'string') return readJsonStringBuffer(source, contentBounds, USER_TEXT_CAP)
-  if (contentBounds.kind !== 'array') return undefined
-
-  let text = ''
-  let i = contentBounds.start + 1
-  while (i < contentBounds.end - 1 && text.length < USER_TEXT_CAP) {
-    while (i < contentBounds.end && isJsonWhitespaceByte(source[i])) i++
-    if (source[i] === 0x2c) {
-      i++
-      continue
-    }
-    if (source[i] !== 0x7b) {
-      i++
-      continue
-    }
-    const objectEnd = findJsonContainerEndBuffer(source, i, 0x7b, 0x7d, contentBounds.end)
-    if (objectEnd === -1) break
-    const objectBounds = { start: i, end: objectEnd + 1, kind: 'object' as const }
-    const type = readJsonStringBuffer(source, findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'type'))
-    if (type === 'text' || type === 'input_text') {
-      const part = readJsonStringBuffer(
-        source,
-        findObjectFieldValueBuffer(source, objectBounds.start, objectBounds.end, 'text'),
-        USER_TEXT_CAP - text.length,
-      )
-      if (part) text += (text ? ' ' : '') + part
-    }
-    i = objectEnd + 1
-  }
-  return text || undefined
-}
-
-function extractLargeAddedNamesBuffer(source: Buffer, attachmentBounds: BufferJsonValueBounds | null): string[] {
-  if (!attachmentBounds || attachmentBounds.kind !== 'object') return []
-  const attachmentType = readJsonStringBuffer(
-    source,
-    findObjectFieldValueBuffer(source, attachmentBounds.start, attachmentBounds.end, 'type'),
-  )
-  if (attachmentType !== 'deferred_tools_delta') return []
-  const addedNames = findObjectFieldValueBuffer(source, attachmentBounds.start, attachmentBounds.end, 'addedNames')
-  if (!addedNames || addedNames.kind !== 'array') return []
-  const names: string[] = []
-  let i = addedNames.start + 1
-  while (i < addedNames.end - 1 && names.length < MAX_ADDED_NAMES) {
-    while (i < addedNames.end && isJsonWhitespaceByte(source[i])) i++
-    if (source[i] === 0x2c) {
-      i++
-      continue
-    }
-    if (source[i] !== 0x22) {
-      i++
-      continue
-    }
-    const end = findJsonStringEndBuffer(source, i, addedNames.end)
-    if (end === -1) break
-    const name = readJsonStringBuffer(source, { start: i, end: end + 1, kind: 'string' }, 500)
-    if (name) names.push(name)
-    i = end + 1
-  }
-  return names
-}
-
-function parseLargeJsonlBuffer(line: Buffer): JournalEntry | null {
-  let rootStart = 0
-  while (rootStart < line.length && isJsonWhitespaceByte(line[rootStart])) rootStart++
-  if (line[rootStart] !== 0x7b) return null
-  const rootEnd = findJsonContainerEndBuffer(line, rootStart, 0x7b, 0x7d)
-  if (rootEnd === -1) return null
-  const rootLimit = rootEnd + 1
-  const type = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, rootStart, rootLimit, 'type'))
-  if (!type) return null
-
-  const entry: JournalEntry = { type }
-  const timestamp = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, rootStart, rootLimit, 'timestamp'))
-  const sessionId = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, rootStart, rootLimit, 'sessionId'))
-  const cwd = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, rootStart, rootLimit, 'cwd'))
-  if (timestamp !== undefined) entry.timestamp = timestamp
-  if (sessionId !== undefined) entry.sessionId = sessionId
-  if (cwd !== undefined) entry.cwd = cwd
-  const addedNames = extractLargeAddedNamesBuffer(line, findObjectFieldValueBuffer(line, rootStart, rootLimit, 'attachment'))
-  if (addedNames.length > 0) {
-    ;(entry as Record<string, unknown>)['attachment'] = { type: 'deferred_tools_delta', addedNames }
-  }
-
-  if (type === 'user') {
-    const message = findObjectFieldValueBuffer(line, rootStart, rootLimit, 'message')
-    if (message?.kind === 'object') {
-      const content = findObjectFieldValueBuffer(line, message.start, message.end, 'content')
-      const text = extractLargeUserTextBuffer(line, content)
-      if (text !== undefined) entry.message = { role: 'user', content: text }
-    }
-    return entry
-  }
-
-  if (type !== 'assistant') return entry
-  const message = findObjectFieldValueBuffer(line, rootStart, rootLimit, 'message')
-  if (message?.kind !== 'object') return entry
-  const model = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, message.start, message.end, 'model'))
-  const usageBounds = findObjectFieldValueBuffer(line, message.start, message.end, 'usage')
-  if (!model || usageBounds?.kind !== 'object') return entry
-  const id = readJsonStringBuffer(line, findObjectFieldValueBuffer(line, message.start, message.end, 'id'))
-  const contentBounds = findObjectFieldValueBuffer(line, message.start, message.end, 'content')
-
-  entry.message = {
-    type: 'message',
-    role: 'assistant',
-    model,
-    ...(id !== undefined ? { id } : {}),
-    content: extractLargeToolBlocksBuffer(line, contentBounds),
-    usage: parseLargeUsageBuffer(line, usageBounds),
-  }
-
-  return entry
+  return appendBufferJsonSegment(source, segmentStart, contentEnd, out, cap)
 }
 
 function getTopLevelRawJsonStringField(head: string, field: string): string | null {
@@ -833,15 +788,15 @@ function getTopLevelRawJsonStringField(head: string, field: string): string | nu
     }
     if (head.charCodeAt(i) === 0x7d) return null
     if (head.charCodeAt(i) !== 0x22) return null
-    const keyEnd = findJsonStringEnd(head, i)
+    const keyEnd = findJsonStringEndString(head, i)
     if (keyEnd === -1) return null
     const key = head.slice(i + 1, keyEnd)
     i = keyEnd + 1
     while (i < head.length && /\s/.test(head[i]!)) i++
     if (head.charCodeAt(i) !== 0x3a) return null
-    const value = findJsonValueBounds(head, i + 1)
+    const value = findJsonValueBoundsString(head, i + 1)
     if (!value) return null
-    if (key === field) return readJsonString(head, value) ?? null
+    if (key === field) return readJsonStringString(head, value) ?? null
     i = value.end
   }
   return null
@@ -951,6 +906,33 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
     }
   }
   if (u.speed) compactUsage.speed = u.speed
+  // Preserve only advisor_message iterations (/advisor sub-usage) so
+  // parseAdvisorCalls can attribute the advisor model's spend; drop the rest to
+  // keep the cache small. Other iteration types (plain `message`, and the
+  // `fallback_message` written when a turn retries on another model) are not
+  // accounted here, a separate pre-existing gap, so they are not preserved.
+  if (Array.isArray(u.iterations)) {
+    const advisorIterations = u.iterations
+      .filter((it): it is ApiUsageIteration => !!it && it.type === 'advisor_message')
+      .map(it => {
+        const compact: ApiUsageIteration = { type: 'advisor_message' }
+        if (typeof it.model === 'string') compact.model = it.model
+        if (it.input_tokens) compact.input_tokens = it.input_tokens
+        if (it.output_tokens) compact.output_tokens = it.output_tokens
+        if (it.cache_creation_input_tokens) compact.cache_creation_input_tokens = it.cache_creation_input_tokens
+        if (it.cache_read_input_tokens) compact.cache_read_input_tokens = it.cache_read_input_tokens
+        if (it.cache_creation) {
+          compact.cache_creation = {
+            ...(it.cache_creation.ephemeral_5m_input_tokens ? { ephemeral_5m_input_tokens: it.cache_creation.ephemeral_5m_input_tokens } : {}),
+            ...(it.cache_creation.ephemeral_1h_input_tokens ? { ephemeral_1h_input_tokens: it.cache_creation.ephemeral_1h_input_tokens } : {}),
+          }
+        }
+        if (it.server_tool_use?.web_search_requests) compact.server_tool_use = { web_search_requests: it.server_tool_use.web_search_requests }
+        if (it.speed) compact.speed = it.speed
+        return compact
+      })
+    if (advisorIterations.length > 0) compactUsage.iterations = advisorIterations
+  }
 
   entry.message = {
     type: 'message',
@@ -1036,7 +1018,10 @@ export function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
-function extractClaudeCacheCreation(usage: AssistantMessageContent['usage']): { totalTokens: number; oneHourTokens: number } {
+function extractClaudeCacheCreation(usage: {
+  cache_creation_input_tokens?: number
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number }
+}): { totalTokens: number; oneHourTokens: number } {
   const legacyTotal = safeNumber(usage.cache_creation_input_tokens)
   const cacheCreation = usage.cache_creation
   const fiveMinuteTokens = safeNumber(cacheCreation?.ephemeral_5m_input_tokens)
@@ -1148,6 +1133,73 @@ export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
   })
 }
 
+/// Claude Code's advisor tool (/advisor) escalates hard decisions to a stronger
+/// advisor model mid-turn. Those tokens are recorded as `advisor_message`
+/// records inside `message.usage.iterations` under the advisor's own model, and
+/// are excluded from the top-level `message.usage` totals that `parseApiCall`
+/// reads. Emit them as separate calls so the advisor's spend is counted and
+/// attributed to the advisor model rather than silently dropped.
+export function parseAdvisorCalls(entry: JournalEntry): ParsedApiCall[] {
+  if (entry.type !== 'assistant') return []
+  const msg = entry.message as AssistantMessageContent | undefined
+  const iterations = msg?.usage?.iterations
+  if (!msg?.usage || !Array.isArray(iterations)) return []
+
+  const calls: ParsedApiCall[] = []
+  const baseKey = msg.id ?? `claude:${entry.timestamp}`
+  // Ordinal among advisor entries (not the raw array index) so the dedup key is
+  // identical whether it is computed from the raw record (guard path) or the
+  // compacted record whose non-advisor iterations were dropped (report path).
+  let advisorOrdinal = 0
+  for (const it of iterations) {
+    if (!it || it.type !== 'advisor_message') continue
+    const model = typeof it.model === 'string' && it.model ? it.model : msg.model
+    if (!model) continue
+    const index = advisorOrdinal++
+
+    const cacheCreation = extractClaudeCacheCreation(it)
+    const tokens: TokenUsage = {
+      inputTokens: it.input_tokens ?? 0,
+      outputTokens: it.output_tokens ?? 0,
+      cacheCreationInputTokens: cacheCreation.totalTokens,
+      cacheReadInputTokens: it.cache_read_input_tokens ?? 0,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      webSearchRequests: it.server_tool_use?.web_search_requests ?? 0,
+    }
+    const speed = it.speed ?? msg.usage.speed ?? 'standard'
+    const costUSD = calculateCost(
+      model,
+      tokens.inputTokens,
+      tokens.outputTokens,
+      tokens.cacheCreationInputTokens,
+      tokens.cacheReadInputTokens,
+      tokens.webSearchRequests,
+      speed,
+      cacheCreation.oneHourTokens,
+    )
+
+    calls.push(applyLocalModelSavings({
+      provider: 'claude',
+      model,
+      usage: tokens,
+      costUSD,
+      tools: [],
+      mcpTools: [],
+      skills: [],
+      subagentTypes: [],
+      hasAgentSpawn: false,
+      hasPlanMode: false,
+      speed,
+      timestamp: entry.timestamp ?? '',
+      bashCommands: [],
+      deduplicationKey: `${baseKey}:advisor:${index}`,
+      cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
+    }))
+  }
+  return calls
+}
+
 export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry[] {
   const firstIdxById = new Map<string, number>()
   const lastIdxById = new Map<string, number>()
@@ -1202,6 +1254,7 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
       if (msgId) seenMsgIds.add(msgId)
       const call = parseApiCall(entry)
       if (call) currentCalls.push(call)
+      for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
     }
   }
 
@@ -1274,6 +1327,7 @@ function buildSessionSummary(
   project: string,
   turns: ClassifiedTurn[],
   mcpInventory?: string[],
+  source?: SessionSourceMetadata,
 ): SessionSummary {
   const modelBreakdown: SessionSummary['modelBreakdown'] = Object.create(null)
   const toolBreakdown: SessionSummary['toolBreakdown'] = Object.create(null)
@@ -1285,6 +1339,7 @@ function buildSessionSummary(
 
   let totalCost = 0
   let totalSavings = 0
+  let totalEstimated = 0
   let totalInput = 0
   let totalOutput = 0
   let totalReasoning = 0
@@ -1326,8 +1381,10 @@ function buildSessionSummary(
 
     for (const call of turn.assistantCalls) {
       const callSavings = call.savingsUSD ?? 0
+      const callEstimated = call.isEstimated ? call.costUSD : 0
       totalCost += call.costUSD
       totalSavings += callSavings
+      totalEstimated += callEstimated
       totalInput += call.usage.inputTokens
       totalOutput += call.usage.outputTokens
       totalReasoning += call.usage.reasoningTokens
@@ -1341,12 +1398,14 @@ function buildSessionSummary(
           calls: 0,
           costUSD: 0,
           savingsUSD: 0,
+          estimatedCostUSD: 0,
           tokens: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0 },
         }
       }
       modelBreakdown[modelKey].calls++
       modelBreakdown[modelKey].costUSD += call.costUSD
       modelBreakdown[modelKey].savingsUSD += callSavings
+      modelBreakdown[modelKey].estimatedCostUSD = (modelBreakdown[modelKey].estimatedCostUSD ?? 0) + callEstimated
       modelBreakdown[modelKey].tokens.inputTokens += call.usage.inputTokens
       modelBreakdown[modelKey].tokens.outputTokens += call.usage.outputTokens
       modelBreakdown[modelKey].tokens.cacheReadInputTokens += call.usage.cacheReadInputTokens
@@ -1385,6 +1444,7 @@ function buildSessionSummary(
     lastTimestamp: lastTs || turns[turns.length - 1]?.timestamp || '',
     totalCostUSD: totalCost,
     totalSavingsUSD: totalSavings,
+    totalEstimatedCostUSD: totalEstimated,
     totalInputTokens: totalInput,
     totalOutputTokens: totalOutput,
     totalReasoningTokens: totalReasoning,
@@ -1399,6 +1459,7 @@ function buildSessionSummary(
     categoryBreakdown,
     skillBreakdown,
     subagentBreakdown,
+    ...(source ? { source } : {}),
     ...(mcpInventory && mcpInventory.length > 0 ? { mcpInventory } : {}),
   }
 }
@@ -1518,19 +1579,25 @@ export async function readAgentType(filePath: string): Promise<string | undefine
 }
 
 async function scanProjectDirs(
-  dirs: Array<{ path: string; name: string }>,
+  dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
   seenMsgIds: Set<string>,
   diskCache: SessionCache,
   dateRange?: DateRange,
+  // Cold-run robustness: called after every parsed Claude file so a throttled
+  // caller (parseAllSessions) can persist partial progress. A run killed
+  // mid-scan then resumes from a warm cache instead of re-parsing from zero.
+  onFileParsed?: () => Promise<void>,
 ): Promise<ProjectSummary[]> {
   const section = getOrCreateProviderSection(diskCache, 'claude')
   const allDiscoveredFiles = new Set<string>()
 
-  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>> }
-  const unchangedFiles: Array<{ filePath: string; dirName: string; cached: CachedFile }> = []
+  type FileInfo = { dirName: string; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>>; source?: SessionSourceMetadata }
+  const unchangedFiles: Array<{ filePath: string; dirName: string; source?: SessionSourceMetadata; cached: CachedFile }> = []
   const changedFiles: Array<{ filePath: string; info: FileInfo }> = []
 
-  for (const { path: dirPath, name: dirName } of dirs) {
+  const discoverProgress = createScanProgress('scanning claude project dirs', dirs.length)
+  let dirsDone = 0
+  for (const { path: dirPath, name: dirName, source } of dirs) {
     const jsonlFiles = await collectJsonlFiles(dirPath)
     for (const filePath of jsonlFiles) {
       allDiscoveredFiles.add(filePath)
@@ -1539,12 +1606,15 @@ async function scanProjectDirs(
 
       const action = reconcileFile(fp, section.files[filePath])
       if (action.action === 'unchanged') {
-        unchangedFiles.push({ filePath, dirName, cached: section.files[filePath]! })
+        unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
       } else {
-        changedFiles.push({ filePath, info: { dirName, fp } })
+        changedFiles.push({ filePath, info: { dirName, fp, source } })
       }
     }
+    dirsDone++
+    await discoverProgress.tick(dirsDone)
   }
+  discoverProgress.finish()
 
   // Pre-seed dedup set from cached (unchanged) files
   for (const { cached } of unchangedFiles) {
@@ -1555,13 +1625,17 @@ async function scanProjectDirs(
     }
   }
 
+  const parseProgress = createScanProgress('parsing changed claude sessions', changedFiles.length)
+  const progressTotal = changedFiles.length
+  let filesDone = 0
+  emitScanProgress({ kind: 'tick', provider: 'claude', done: 0, total: progressTotal })
   for (const { filePath, info } of changedFiles) {
     delete section.files[filePath]
 
     try {
       const tracker = { lastCompleteLineOffset: 0 }
       const entries = await parseClaudeEntries(filePath, tracker)
-      if (!entries) continue
+      if (!entries) { filesDone++; await parseProgress.tick(filesDone); continue }
 
       const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
       const cwd = extractCanonicalCwd(entries)
@@ -1586,7 +1660,16 @@ async function scanProjectDirs(
       ;(diskCache as { _dirty?: boolean })._dirty = true
       warnProviderParseFailure('claude', filePath, err)
     }
+    filesDone++
+    await parseProgress.tick(filesDone)
+    // Machine-readable tick for the app splash (throttled to ~every 50 files so
+    // a large cold run doesn't flood stderr), plus a partial-progress save.
+    if (filesDone % 50 === 0 || filesDone === progressTotal) {
+      emitScanProgress({ kind: 'tick', provider: 'claude', done: filesDone, total: progressTotal })
+    }
+    if (onFileParsed) await onFileParsed()
   }
+  parseProgress.finish()
 
   if (dirs.length > 0) {
     for (const cachedPath of Object.keys(section.files)) {
@@ -1600,11 +1683,11 @@ async function scanProjectDirs(
   const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
-    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName })),
-    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName })),
+    ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
+    ...changedFiles.map(f => ({ filePath: f.filePath, dirName: f.info.dirName, source: f.info.source })),
   ]
 
-  for (const { filePath, dirName } of allFiles) {
+  for (const { filePath, dirName, source } of allFiles) {
     const cachedFile = section.files[filePath]
     if (!cachedFile || cachedFile.turns.length === 0) continue
 
@@ -1626,7 +1709,7 @@ async function scanProjectDirs(
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
-    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv)
+    const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
 
     if (session.apiCalls > 0) {
@@ -1683,6 +1766,7 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
     sessions,
     totalCostUSD,
     totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
+    totalEstimatedCostUSD: sessions.reduce((s, sess) => s + (sess.totalEstimatedCostUSD ?? 0), 0),
     totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
   }
@@ -1715,6 +1799,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     timestamp: call.timestamp,
     bashCommands: call.bashCommands,
     deduplicationKey: call.deduplicationKey,
+    isEstimated: call.costIsEstimated,
   })
 
   return {
@@ -1741,7 +1826,8 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
       webSearchRequests: call.webSearchRequests,
       cacheCreationOneHourTokens: 0,
     },
-    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes') ? call.costUSD : undefined,
+    costUSD: (call.provider === 'mistral-vibe' || call.provider === 'antigravity' || call.provider === 'devin' || call.provider === 'vercel-gateway' || call.provider === 'hermes' || call.provider === 'kiro' || call.provider === 'codewhale') ? call.costUSD : undefined,
+    isEstimated: call.costIsEstimated || undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1773,6 +1859,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     provider: call.provider,
     model: call.model,
     usage: { ...call.usage, cacheCreationOneHourTokens: call.cacheCreationOneHourTokens ?? 0 },
+    isEstimated: call.isEstimated || undefined,
     speed: call.speed,
     timestamp: call.timestamp,
     tools: call.tools,
@@ -1853,6 +1940,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
       webSearchRequests: u.webSearchRequests,
     },
     costUSD: call.costUSD ?? costUSD,
+    isEstimated: call.isEstimated,
     tools: call.tools,
     mcpTools: extractMcpTools(call.tools),
     skills: call.skills,
@@ -1902,7 +1990,19 @@ function getOrCreateProviderSection(cache: SessionCache, provider: string): Prov
   const envFp = computeEnvFingerprint(provider)
   const existing = cache.providers[provider]
   if (existing && existing.envFingerprint === envFp) return existing
-  const section = { envFingerprint: envFp, files: {} }
+  const section: ProviderSection = { envFingerprint: envFp, files: {} }
+  // A fingerprint change (env override or parse-version bump) must re-parse
+  // every present source, but for durable providers the cache is the ONLY
+  // remaining record of usage whose source rows were already pruned (OTel
+  // orphans). Discarding those with the section would permanently erase
+  // month-to-date history that cannot be re-derived, so carry forward exactly
+  // the entries whose source no longer exists; everything present on disk is
+  // dropped and re-parsed under the new fingerprint.
+  if (existing && DURABLE_PROVIDER_NAMES.has(provider)) {
+    for (const [path, file] of Object.entries(existing.files)) {
+      if (!existsSync(path)) section.files[path] = file
+    }
+  }
   cache.providers[provider] = section
   return section
 }
@@ -1955,6 +2055,94 @@ function warnProviderParseFailure(providerName: string, sourcePath: string, err:
   process.stderr.write(
     `codeburn: skipped ${providerName} session that failed to parse: ${sourcePath} (${msg})${tail}\n`
   )
+}
+
+// A permission error (EPERM/EACCES) on a provider's data — e.g. a directory or
+// SQLite DB the OS won't let us read without Full Disk Access. Per-file and
+// discovery errors are already isolated; this catches a provider-level throw so
+// one locked provider skips-and-continues instead of aborting the whole
+// hydration (which would empty the cache/daily backfill for every provider).
+function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code
+  return code === 'EPERM' || code === 'EACCES'
+}
+
+// A cold-cache scan over a large ~/.claude/projects tree (hundreds of project
+// dirs, e.g. a git-worktree-per-task workflow) can run long enough that it
+// looks hung, and is CPU-heavy enough on a single thread to visibly compete
+// with anything else running interactively on the same machine. Two cheap
+// mitigations, neither of which reduces total CPU work: (1) a `\r`-updated
+// progress line so a long cold run reads as "working" instead of "stuck",
+// gated on isTTY so it never corrupts piped/captured output (export.ts, the
+// --no-color path, or a subprocess capturing stderr); (2) yielding to the
+// event loop every YIELD_EVERY items so the OS scheduler gets regular break
+// points instead of one long uninterrupted synchronous block. This does NOT
+// fix CPU contention with a separate process (that's the OS scheduler's job
+// regardless), it only keeps this process itself responsive and honest about
+// progress during the scan.
+const YIELD_EVERY = 25
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
+
+// Suppress the scan-progress line while an interactive Ink UI is live. The
+// dashboard and compare render to stdout on the same terminal, and their scans
+// run (dashboard) or re-run every 30s (dashboard auto-refresh, including the
+// getPlanUsages → parseAllSessions path) AFTER render() has painted a frame, so
+// a `\r` progress line on stderr prints over it and garbles the screen. isTTY
+// alone can't tell them apart from a plain CLI command. The interactive
+// entrypoints call setInteractiveScanUI() right before render(); a pre-render
+// scan (e.g. compare's cold start) still shows progress and finish() clears the
+// line before Ink paints.
+let interactiveScanUI = false
+export function setInteractiveScanUI(active = true): void {
+  interactiveScanUI = active
+}
+
+// Machine-readable scan progress for the desktop app's first-run splash. Plain
+// CLI/terminal usage is untouched: emission is gated on CODEBURN_PROGRESS=1,
+// which only the app's cold-start warmup spawn sets. Each event is one
+// newline-delimited JSON object behind a sentinel prefix so the reader can pick
+// it out of stderr that may also carry provider warnings. This is orthogonal to
+// createScanProgress's `\r` TTY line (that one never fires under a piped spawn).
+export const PROGRESS_LINE_PREFIX = 'CODEBURN_PROGRESS '
+export type ScanProgressEvent =
+  // `cold` is true only for a genuine full hydration (the on-disk cache was
+  // empty). A warm launch's incremental re-parse of a handful of changed files
+  // still emits `providers`/`tick`, so consumers must gate any "indexing" UI on
+  // this flag, not on the mere presence of tick work.
+  | { kind: 'providers'; providers: string[]; cold?: boolean }
+  | { kind: 'provider'; provider: string; state: 'start' | 'done' | 'skipped'; files?: number }
+  | { kind: 'tick'; provider: string; done: number; total: number }
+
+export function emitScanProgress(event: ScanProgressEvent): void {
+  if (process.env['CODEBURN_PROGRESS'] !== '1') return
+  try { process.stderr.write(`${PROGRESS_LINE_PREFIX}${JSON.stringify(event)}\n`) } catch { /* stderr closed */ }
+}
+
+// Minimum spacing between partial-progress saves during a cold parse. Low enough
+// that an interrupted long run loses little work, high enough that repeated
+// full-cache writes never dominate a fast warm run.
+const PROGRESS_SAVE_THROTTLE_MS = 5000
+
+export function createScanProgress(label: string, total: number) {
+  const show = !interactiveScanUI && total > 20 && process.stderr.isTTY === true
+  let lastWrite = 0
+  return {
+    async tick(done: number): Promise<void> {
+      if (done % YIELD_EVERY === 0) await yieldToEventLoop()
+      if (!show) return
+      const now = Date.now()
+      if (done !== total && now - lastWrite < 100) return
+      lastWrite = now
+      process.stderr.write(`\rcodeburn: ${label} ${done}/${total}…`)
+    },
+    finish(): void {
+      if (!show) return
+      process.stderr.write('\r\x1b[K')
+    },
+  }
 }
 
 async function parseProviderSources(
@@ -2317,8 +2505,50 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
         return ds !== null && days.has(ds)
       })
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
+    if (sessions.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+  }
+  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+// Merge projects that resolve to the same repository across providers (the
+// same repo used with Claude Code + Codex, say). An additive total summed at
+// the session level but forgotten here silently under-reports for exactly the
+// multi-provider users (this bit totalEstimatedCostUSD once, caught in #639
+// verification). Known gaps, deliberate: totalSavingsUSD is still not summed
+// (pre-existing, tracked separately) and totalProxiedCostUSD is re-derived
+// after the merge rather than summed here.
+export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
+  const crossProviderKey = (p: ProjectSummary): string => {
+    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
+    return path.includes('/') ? path : p.project.toLowerCase()
+  }
+  const mergedMap = new Map<string, ProjectSummary>()
+  for (const p of projects) {
+    const key = crossProviderKey(p)
+    const existing = mergedMap.get(key)
+    if (existing) {
+      existing.sessions.push(...p.sessions)
+      existing.totalCostUSD += p.totalCostUSD
+      existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
+      existing.totalApiCalls += p.totalApiCalls
+    } else {
+      mergedMap.set(key, { ...p })
+    }
+  }
+  return mergedMap
+}
+
+export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+  for (const project of projects) {
+    // Match by source id across both claude-config and claude-desktop kinds so
+    // the Claude Desktop bucket is selectable too.
+    const sessions = project.sessions.filter(session =>
+      session.source?.id === sourceId
+    )
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
   }
@@ -2332,7 +2562,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory))
+      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
     }
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
@@ -2340,23 +2570,52 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
 
+// Reflects whether the most recently completed parse left the session cache
+// fully hydrated. The daily backfill reads this so it never finalizes history
+// built on a partial (interrupted) session cache. Set only at the end of a
+// runParse that reaches completion; a killed run leaves it false.
+let sessionHydrationComplete = false
+export function isSessionHydrationComplete(): boolean {
+  return sessionHydrationComplete
+}
+
 export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
   const key = cacheKey(dateRange, providerFilter)
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
 
-  const diskCache = await loadCache()
+  let diskCache = await loadCache()
   await cleanupOrphanedTempFiles()
 
+  // Cold-hydration coordination (advisory, cross-process). Engages whenever the
+  // on-disk cache is not COMPLETE — an empty cache OR a partial one an interrupted
+  // cold start left behind. Keying on completeness (not mere non-emptiness) is
+  // what keeps a resumed partial hydration under the lock, so a concurrent menubar
+  // + desktop can't race their partial writes and freeze a partial daily history.
+  // If another live process is already hydrating, wait for it, then reload the
+  // now-warm cache instead of double-parsing. Never a correctness gate: on any
+  // doubt it proceeds unlocked.
+  const hydration = await beginColdHydration(!isCacheComplete(diskCache))
+  if (hydration.waited) diskCache = await loadCache()
+
+  // Cold = this run finishes a genuine (possibly resumed) full parse. A warm run
+  // reconciles an already-complete corpus. Drives the splash's cold-only reveal
+  // and the daily backfill's "don't finalize partial history" guard.
+  const isCold = !isCacheComplete(diskCache)
+  try {
+    return await runParse(key, diskCache, dateRange, providerFilter, isCold)
+  } finally {
+    await hydration.release()
+  }
+}
+
+async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRange, providerFilter?: string, isCold = false): Promise<ProjectSummary[]> {
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(providerFilter)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
-
-  const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
-  const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange)
 
   const providerGroups = new Map<string, SessionSource[]>()
   for (const source of nonClaudeSources) {
@@ -2365,10 +2624,56 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     providerGroups.set(source.provider, existing)
   }
 
+  // Cold-run robustness: persist partial progress during a long parse (throttled)
+  // so a run interrupted before the single end-of-parse save still leaves a warm
+  // cache behind. saveCache is atomic (temp + rename) and clears `_dirty`, so this
+  // never races the final save below.
+  let lastSaveAt = Date.now()
+  const saveProgress = async (): Promise<void> => {
+    if (!(diskCache as { _dirty?: boolean })._dirty) return
+    if (Date.now() - lastSaveAt < PROGRESS_SAVE_THROTTLE_MS) return
+    lastSaveAt = Date.now()
+    try { await saveCache(diskCache) } catch { /* best-effort partial save */ }
+  }
+
+  emitScanProgress({ kind: 'providers', cold: isCold, providers: [
+    ...(claudeSources.length > 0 ? ['claude'] : []),
+    ...providerGroups.keys(),
+  ] })
+
+  const claudeDirs = claudeSources.map(s => ({
+    path: s.path,
+    name: s.project,
+    source: s.sourceId && s.sourceLabel && s.sourcePath && s.sourceKind
+      ? { id: s.sourceId, label: s.sourceLabel, path: s.sourcePath, kind: s.sourceKind }
+      : undefined,
+  }))
+  if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'start' })
+  let claudeProjects: ProjectSummary[] = []
+  try {
+    claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress)
+    if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
+  } catch (err) {
+    if (!isPermissionError(err)) throw err
+    process.stderr.write(`codeburn: skipped claude data (permission denied; grant Full Disk Access to include it)\n`)
+    emitScanProgress({ kind: 'provider', provider: 'claude', state: 'skipped' })
+  }
+
   const otherProjects: ProjectSummary[] = []
   for (const [providerName, sources] of providerGroups) {
-    const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange)
-    otherProjects.push(...projects)
+    emitScanProgress({ kind: 'provider', provider: providerName, state: 'start' })
+    try {
+      const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange)
+      emitScanProgress({ kind: 'provider', provider: providerName, state: 'done', files: sources.length })
+      otherProjects.push(...projects)
+    } catch (err) {
+      // A permission-locked provider skips-and-continues; any other error is a
+      // real bug and still aborts (per-file/DB-lock cases are handled deeper).
+      if (!isPermissionError(err)) throw err
+      process.stderr.write(`codeburn: skipped ${providerName} data (permission denied; grant Full Disk Access to include it)\n`)
+      emitScanProgress({ kind: 'provider', provider: providerName, state: 'skipped' })
+    }
+    await saveProgress()
   }
 
   // Durable providers with cached data but NO discovered sources (all files pruned
@@ -2391,9 +2696,18 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     otherProjects.push(...projects)
   }
 
-  if ((diskCache as { _dirty?: boolean })._dirty) {
+  // The full scan reached the end: this cache is now complete. Mark it and
+  // persist even when nothing else is dirty, so a pre-marker cache (or a partial
+  // that happened to already hold every current file) stops being re-read as cold
+  // on every launch, and the completeness marker the daily backfill + splash rely
+  // on is durable. A run killed before here never reaches this, so its throttled
+  // partial saves keep `complete: false` and the next launch resumes cold.
+  const wasComplete = isCacheComplete(diskCache)
+  if (!wasComplete) diskCache.complete = true
+  if ((diskCache as { _dirty?: boolean })._dirty || !wasComplete) {
     try { await saveCache(diskCache) } catch {}
   }
+  sessionHydrationComplete = true
 
   // Merge across providers by normalised project path so the same repository
   // is not double-counted when it was worked on with more than one tool
@@ -2418,22 +2732,7 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     return { ...p, project: projectNameFromPath(canonical.path, p.project), projectPath: canonical.path }
   }))
 
-  const crossProviderKey = (p: ProjectSummary): string => {
-    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
-    return path.includes('/') ? path : p.project.toLowerCase()
-  }
-  const mergedMap = new Map<string, ProjectSummary>()
-  for (const p of [...claudeProjects, ...resolvedOtherProjects]) {
-    const key = crossProviderKey(p)
-    const existing = mergedMap.get(key)
-    if (existing) {
-      existing.sessions.push(...p.sessions)
-      existing.totalCostUSD += p.totalCostUSD
-      existing.totalApiCalls += p.totalApiCalls
-    } else {
-      mergedMap.set(key, { ...p })
-    }
-  }
+  const mergedMap = mergeProjectsByCrossProviderKey([...claudeProjects, ...resolvedOtherProjects])
 
   // Re-derive proxy attribution on the merged total: the merge above sums
   // totalCostUSD across providers that share a canonical path but never

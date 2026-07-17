@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createRequire } from 'node:module'
@@ -604,5 +604,121 @@ describe('antigravity provider helpers', () => {
       else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
       await rm(tempHome, { recursive: true, force: true })
     }
+  })
+
+  async function withTempAntigravityHome(prefix: string, fn: (tempHome: string) => Promise<void>): Promise<void> {
+    const tempHome = await mkdtemp(join(tmpdir(), prefix))
+    const previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(tempHome, 'cache')
+    try {
+      await fn(tempHome)
+    } finally {
+      if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+      else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
+      await rm(tempHome, { recursive: true, force: true })
+    }
+  }
+
+  it('stamps file mtime as fallback timestamp for SQLite-parsed calls', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-timestamp-', async (tempHome) => {
+      const fixture = JSON.parse(await readFile(
+        new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+        'utf-8',
+      )) as CurrentCliFixture
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-ide', 'conversations')
+
+      await mkdir(conversationsDir, { recursive: true })
+
+      const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+      createCurrentAntigravityCliDb(dbPath, fixture)
+
+      const beforeStat = await stat(dbPath)
+
+      const parser = createAntigravityProvider().createSessionParser({
+        path: dbPath,
+        project: 'antigravity-ide',
+        provider: 'antigravity',
+      }, new Set())
+      const calls: ParsedProviderCall[] = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls.length).toBeGreaterThan(0)
+      for (const call of calls) {
+        expect(call.timestamp).not.toBe('')
+        const callTime = new Date(call.timestamp).getTime()
+        expect(Math.abs(callTime - beforeStat.mtimeMs)).toBeLessThan(5000)
+      }
+    })
+  })
+
+  it('decodes ChatStartMetadata.created_at and prefers it over the file mtime', async () => {
+    if (!isSqliteAvailable()) return
+
+    await withTempAntigravityHome('codeburn-antigravity-createdat-', async (tempHome) => {
+      // Encode a gen_metadata blob matching the real on-disk shape:
+      //   GeneratorMetadata.chatModel(#1) {
+      //     usage(#4) { input(#2), totalOutput(#3) }
+      //     chatStartMetadata(#9) { created_at(#4): Timestamp { seconds(#1), nanos(#2) } }
+      //   }
+      const varint = (n: number): number[] => {
+        const out: number[] = []
+        let v = n
+        while (v > 0x7f) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128) }
+        out.push(v)
+        return out
+      }
+      const tag = (field: number, wire: number): number[] => varint(field * 8 + wire)
+      const varintField = (field: number, n: number): number[] => [...tag(field, 0), ...varint(n)]
+      const lenField = (field: number, bytes: number[]): number[] => [...tag(field, 2), ...varint(bytes.length), ...bytes]
+
+      const seconds = 1783326234
+      const nanos = 724675400
+      const timestamp = [...varintField(1, seconds), ...varintField(2, nanos)]
+      const chatStartMetadata = lenField(4, timestamp)
+      const usage = lenField(4, [...varintField(2, 100), ...varintField(3, 50)])
+      const chatModel = [...usage, ...lenField(9, chatStartMetadata)]
+      const hex = Buffer.from(lenField(1, chatModel)).toString('hex')
+
+      const conversationsDir = join(tempHome, '.gemini', 'antigravity-ide', 'conversations')
+      await mkdir(conversationsDir, { recursive: true })
+      const dbPath = join(conversationsDir, 'created-at-session.db')
+      createCurrentAntigravityCliDb(dbPath, { conversationId: 'created-at-session', rows: [{ idx: 0, hex }] })
+
+      // Pin the file mtime to a different day so a wrong fallback is obvious.
+      const mtime = new Date('2026-01-01T00:00:00.000Z')
+      await utimes(dbPath, mtime, mtime)
+
+      const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity-ide', provider: 'antigravity' })
+
+      expect(calls.length).toBe(1)
+      // The real created_at (July), not the January file mtime.
+      expect(calls[0]!.timestamp).toBe('2026-07-06T08:23:54.724Z')
+    })
+  })
+
+  it('classifies paths by their .gemini root, not by the profile directory name', () => {
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity-ide/conversations/abc.db',
+    )).toBe('antigravity-ide')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity-cli/conversations/abc.db',
+    )).toBe('antigravity-cli')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      '/Users/User/.gemini/antigravity/conversations/abc.db',
+    )).toBe('antigravity')
+
+    // A profile directory literally named "Antigravity IDE" must not override
+    // the .gemini root: these are CLI and base-app paths, not IDE paths.
+    expect(antigravityAppDataDirFromSourcePath(
+      'C:\\Users\\Antigravity IDE\\.gemini\\antigravity-cli\\conversations\\abc.db',
+    )).toBe('antigravity-cli')
+
+    expect(antigravityAppDataDirFromSourcePath(
+      'C:\\Users\\Antigravity IDE\\.gemini\\antigravity\\conversations\\abc.db',
+    )).toBe('antigravity')
   })
 })

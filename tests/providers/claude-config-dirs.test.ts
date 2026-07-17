@@ -1,20 +1,34 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { delimiter as pathDelimiter, join } from 'path'
-import { tmpdir, homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
-import { claude } from '../../src/providers/claude.js'
-import { parseAllSessions } from '../../src/parser.js'
+import { claude, getDesktopSessionsDir } from '../../src/providers/claude.js'
+import { clearSessionCache, filterProjectsByClaudeConfigSource, parseAllSessions } from '../../src/parser.js'
 
 let tmpRoot: string
 const savedEnv = {
   CLAUDE_CONFIG_DIR: process.env['CLAUDE_CONFIG_DIR'],
   CLAUDE_CONFIG_DIRS: process.env['CLAUDE_CONFIG_DIRS'],
+  CODEBURN_DESKTOP_SESSIONS_DIR: process.env['CODEBURN_DESKTOP_SESSIONS_DIR'],
+  APPDATA: process.env['APPDATA'],
   HOME: process.env['HOME'],
 }
 
+function withPlatform<T>(platform: typeof process.platform, run: () => T): T {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: platform, enumerable: true, configurable: true })
+  try {
+    return run()
+  } finally {
+    if (descriptor) Object.defineProperty(process, 'platform', descriptor)
+    else delete (process as { platform?: NodeJS.Platform }).platform
+  }
+}
+
 beforeEach(async () => {
+  clearSessionCache()
   tmpRoot = await mkdtemp(join(tmpdir(), 'codeburn-claude-multi-'))
   // Point HOME at a scratch dir so the default `~/.claude` fallback resolves
   // somewhere we control. Without this, a stray `~/.claude` on the test
@@ -23,9 +37,12 @@ beforeEach(async () => {
   await mkdir(process.env['HOME'], { recursive: true })
   delete process.env['CLAUDE_CONFIG_DIR']
   delete process.env['CLAUDE_CONFIG_DIRS']
+  delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
+  delete process.env['APPDATA']
 })
 
 afterEach(async () => {
+  clearSessionCache()
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v
@@ -139,6 +156,9 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
     )
     expect(ourSources).toHaveLength(2)
     expect(new Set(ourSources.map(s => s.project))).toEqual(new Set(['-Users-you-app']))
+    expect(new Set(ourSources.map(s => s.sourceKind))).toEqual(new Set(['claude-config']))
+    expect(new Set(ourSources.map(s => s.sourceLabel))).toEqual(new Set(['claude-work', 'claude-personal']))
+    expect(ourSources.every(s => typeof s.sourceId === 'string' && s.sourceId.startsWith('claude-config:'))).toBe(true)
   })
 
   it('tolerates a non-existent dir in the list without dropping the real ones', async () => {
@@ -194,6 +214,35 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
     const sources = await claude.discoverSessions()
     expect(sources.some(s => s.path === join(real, 'projects', '-Users-you-app'))).toBe(true)
     expect(sources.every(s => !s.path.startsWith(filePath))).toBe(true)
+  })
+})
+
+describe('claude provider — Desktop sessions dir', () => {
+  it('uses APPDATA as the Windows Claude Desktop sessions root', () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    process.env['APPDATA'] = appData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(join(appData, 'Claude', 'local-agent-mode-sessions'))
+    })
+  })
+
+  it('falls back to the legacy Windows roaming profile path when APPDATA is unset', () => {
+    delete process.env['APPDATA']
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions'))
+    })
+  })
+
+  it('keeps CODEBURN_DESKTOP_SESSIONS_DIR ahead of Windows APPDATA discovery', () => {
+    const override = join(tmpRoot, 'desktop-override')
+    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = override
+    process.env['APPDATA'] = join(tmpRoot, 'roaming-profile')
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDir()).toBe(override)
+    })
   })
 })
 
@@ -303,6 +352,41 @@ describe('claude parser — multi-dir aggregation (issue #208 option 1)', () => 
     // — option 1 explicitly avoids attribution.
     expect((matches[0]! as Record<string, unknown>)['account']).toBeUndefined()
     expect((matches[0]! as Record<string, unknown>)['accountPath']).toBeUndefined()
+  })
+
+  it('keeps source metadata on merged sessions so one Claude config can be selected', async () => {
+    const work = await makeConfigDir('claude-work', [])
+    const personal = await makeConfigDir('claude-personal', [])
+    process.env['CLAUDE_CONFIG_DIRS'] = [work, personal].join(pathDelimiter)
+
+    const slug = '-Users-you-shared-app'
+    const cwd = '/Users/you/shared-app'
+    await writeSession(work, slug, 'sess-work', [
+      summaryLine('sess-work', cwd),
+      userLine('u1', 'sess-work', cwd, 'hi from work'),
+      assistantLine('a1', 'u1', 'sess-work', cwd),
+    ])
+    await writeSession(personal, slug, 'sess-personal', [
+      summaryLine('sess-personal', cwd),
+      userLine('u2', 'sess-personal', cwd, 'hi from personal'),
+      assistantLine('a2', 'u2', 'sess-personal', cwd),
+    ])
+
+    const projects = await parseAllSessions(undefined, 'claude')
+    const merged = projects.find(p => p.project === slug)
+    expect(merged).toBeDefined()
+    expect(merged!.sessions).toHaveLength(2)
+
+    const sourceIds = new Map(merged!.sessions.map(s => [s.source?.label, s.source?.id]))
+    const workSourceId = sourceIds.get('claude-work')
+    expect(workSourceId).toBeDefined()
+
+    const workOnly = filterProjectsByClaudeConfigSource(projects, workSourceId!)
+    expect(workOnly).toHaveLength(1)
+    expect(workOnly[0]!.project).toBe(slug)
+    expect(workOnly[0]!.totalApiCalls).toBe(1)
+    expect(workOnly[0]!.sessions.map(s => s.sessionId)).toEqual(['sess-work'])
+    expect(workOnly[0]!.sessions[0]!.source?.label).toBe('claude-work')
   })
 
   // Documents the path-aware merge behavior: the mergedMap in parseAllSessions

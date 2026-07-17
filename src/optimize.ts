@@ -10,6 +10,7 @@ import { parseJsonlLine, shouldSkipLine } from './parser.js'
 import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
+import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
 
 // ============================================================================
 // Display constants
@@ -82,6 +83,10 @@ const MCP_NEW_CONFIG_GRACE_MS = 24 * 60 * 60 * 1000
 const BASH_DEFAULT_LIMIT = 30000
 const BASH_RECOMMENDED_LIMIT = 15000
 const MIN_SESSIONS_FOR_OUTLIER = 3
+// A project is still bootstrapping until it has twice the minimum sessions
+// needed to evaluate outliers; below that, its peer average is too thin to
+// distinguish founding work from waste.
+const YOUNG_PROJECT_SESSION_LIMIT = 2 * MIN_SESSIONS_FOR_OUTLIER
 const SESSION_OUTLIER_MULTIPLIER = 2
 const MIN_SESSION_OUTLIER_COST_USD = 1
 const SESSION_OUTLIER_PREVIEW = 5
@@ -98,6 +103,9 @@ const CONTEXT_BLOAT_GROWTH_MAX_GAP_MS = 7 * 24 * 60 * 60 * 1000
 const CONTEXT_BLOAT_RATIO_DISPLAY_CAP = 1000
 const WORTH_IT_MIN_COST_USD = 2
 const WORTH_IT_NO_EDIT_MIN_COST_USD = 3
+// A zero-edit session's full cost is an upper bound on recoverable waste, not
+// a point estimate, so use a bounded fraction for honest savings numbers.
+const WORTH_IT_NO_EDIT_RECOVERY_FRACTION = 0.5
 const WORTH_IT_MIN_RETRIES = 3
 const WORTH_IT_RETRY_WITH_EDIT_MIN_RETRIES = 2
 const WORTH_IT_PREVIEW = 5
@@ -300,6 +308,7 @@ export type OptimizeResult = {
   costRate: number
   healthScore: number
   healthGrade: HealthGrade
+  modelRecommendations?: ModelDefaultRecommendation[]
 }
 
 export type OptimizeJsonReport = {
@@ -330,6 +339,7 @@ export type OptimizeJsonReport = {
     estimatedSavingsUSD: number
     fix: WasteAction
   }>
+  modelRecommendations?: Array<ModelDefaultRecommendation>
 }
 
 export type ToolCall = {
@@ -2524,8 +2534,9 @@ function sessionTotalTurns(session: ProjectSummary['sessions'][number]): number 
 }
 
 // Token-savings estimate for a low-worth candidate. Two regimes:
-//   - No-edit sessions: full session tokens are at risk (the session produced
-//     no apparent output to weigh against the spend).
+//   - No-edit sessions: a bounded fraction of full session tokens is counted
+//     as recoverable. Full cost is an upper bound, not a point estimate:
+//     read-only work may still contain useful exploration or analysis.
 //   - Sessions with edits but with retries / no one-shot: only the retry
 //     fraction is counted as recoverable. Edits may still have been useful;
 //     we credit the model with that and only flag the retry overhead.
@@ -2537,7 +2548,7 @@ function estimateLowWorthRecoverableTokens(
   retries: number,
 ): number {
   const tokens = sessionTokenTotal(session)
-  if (editTurns === 0) return tokens
+  if (editTurns === 0) return Math.round(tokens * WORTH_IT_NO_EDIT_RECOVERY_FRACTION)
   const totalTurns = sessionTotalTurns(session)
   if (totalTurns === 0) return 0
   const fraction = Math.min(1, Math.max(0, retries / totalTurns))
@@ -2617,8 +2628,8 @@ export function detectLowWorthSessions(projects: ProjectSummary[]): WasteFinding
     .map(s => `${s.project}/${s.sessionId} on ${s.date}: ${formatCost(s.cost)} (${s.reasons.join(', ')})`)
     .join('; ')
   const extra = candidates.length > preview.length ? `; +${candidates.length - preview.length} more` : ''
-  // Per-candidate `tokens` is already the recoverable estimate (full session
-  // for no-edit, retry-fraction for edit-with-retries). Sum across candidates.
+  // Per-candidate `tokens` is already the recoverable estimate (bounded
+  // no-edit fraction, retry-fraction for edit-with-retries). Sum across candidates.
   const tokensSaved = Math.round(candidates.reduce((sum, s) => sum + s.tokens, 0))
   const totalCost = candidates.reduce((sum, s) => sum + s.cost, 0)
 
@@ -2834,6 +2845,29 @@ export function detectSessionOutliers(projects: ProjectSummary[], excludedSessio
   }
 }
 
+function findYoungProjectFirstSessionIds(projects: ProjectSummary[]): Set<string> {
+  const firstSessionIds = new Set<string>()
+
+  for (const project of projects) {
+    const costed = project.sessions.filter(s => s.totalCostUSD > 0)
+    if (costed.length >= YOUNG_PROJECT_SESSION_LIMIT) continue
+
+    let firstSession: ProjectSummary['sessions'][number] | null = null
+    for (const session of costed) {
+      if (
+        firstSession === null
+        || new Date(session.firstTimestamp).getTime() < new Date(firstSession.firstTimestamp).getTime()
+      ) {
+        firstSession = session
+      }
+    }
+
+    if (firstSession) firstSessionIds.add(firstSession.sessionId)
+  }
+
+  return firstSessionIds
+}
+
 // ============================================================================
 // Scoring
 // ============================================================================
@@ -2937,7 +2971,7 @@ export async function scanAndDetect(
   dateRange?: DateRange,
 ): Promise<OptimizeResult> {
   if (projects.length === 0) {
-    return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A' }
+    return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A', modelRecommendations: [] }
   }
 
   const key = cacheKey(projects, dateRange)
@@ -2958,7 +2992,8 @@ export async function scanAndDetect(
       .filter(c => !lowWorthSessionIds.has(c.sessionId))
       .map(c => c.sessionId),
   )
-  const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds])
+  const firstSessionIds = findYoungProjectFirstSessionIds(projects)
+  const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds, ...firstSessionIds])
   const syncDetectors: Array<() => WasteFinding | null> = [
     () => detectCacheBloat(apiCalls, projects, dateRange),
     () => detectLowReadEditRatio(toolCalls),
@@ -2992,7 +3027,14 @@ export async function scanAndDetect(
 
   findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
   const { score, grade } = computeHealth(findings)
-  const result: OptimizeResult = { findings, costRate, healthScore: score, healthGrade: grade }
+  
+  const modelRecommendations: ModelDefaultRecommendation[] = []
+  for (const project of projects) {
+    const rec = recommendModelDefault(project, { now: dateRange?.end })
+    if (rec) modelRecommendations.push(rec)
+  }
+
+  const result: OptimizeResult = { findings, costRate, healthScore: score, healthGrade: grade, modelRecommendations }
   resultCache.set(key, { data: result, ts: Date.now() })
   return result
 }
@@ -3099,6 +3141,7 @@ function renderOptimize(
   healthGrade: HealthGrade,
   appliedHeader?: string,
   previouslyApplied?: Record<string, string>,
+  modelRecommendations?: ModelDefaultRecommendation[],
 ): string {
   const lines: string[] = []
   lines.push('')
@@ -3144,6 +3187,19 @@ function renderOptimize(
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
   lines.push(chalk.dim('  Estimates only.'))
   lines.push('')
+  
+  if (modelRecommendations && modelRecommendations.length > 0) {
+    lines.push(chalk.bold.hex(ORANGE)('  Model defaults recommendation'))
+    lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
+    for (const rec of modelRecommendations) {
+      lines.push(`  ${rec.project}: ${chalk.bold(rec.currentModel)} -> ${chalk.bold.hex(GREEN)(rec.candidateModel)}`)
+      lines.push(chalk.dim(`  Current:  ${(rec.currentOneShotRate*100).toFixed(1)}% one-shot over ${rec.currentEditTurns} edits, ${formatCost(rec.currentCostPerEdit)}/edit`))
+      lines.push(chalk.dim(`  Candidate: ${(rec.candidateOneShotRate*100).toFixed(1)}% one-shot over ${rec.candidateEditTurns} edits, ${formatCost(rec.candidateCostPerEdit)}/edit`))
+      lines.push(`  To apply: ${chalk.hex(CYAN)(`codeburn act apply-model ${rec.project}`)}`)
+      lines.push('')
+    }
+  }
+
   return lines.join('\n')
 }
 
@@ -3174,7 +3230,7 @@ export async function runOptimize(
     return
   }
 
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied)
+  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied, result.modelRecommendations)
   console.log(output)
 }
 
@@ -3221,5 +3277,6 @@ export function buildOptimizeJsonReport(
       estimatedSavingsUSD: f.tokensSaved * result.costRate,
       fix: f.fix,
     })),
+    modelRecommendations: result.modelRecommendations,
   }
 }

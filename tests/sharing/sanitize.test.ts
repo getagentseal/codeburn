@@ -25,7 +25,21 @@ function fixture(): MenubarPayload {
       tools: [{ name: 'Bash', calls: 9 }],
       topSessions: [{ project: 'secret-project', cost: 100, savingsUSD: 0, calls: 5, date: '2026-06-01' }],
     },
-    history: { daily: [] },
+    history: {
+      daily: [],
+      timeline: {
+        bucketMinutes: 15,
+        modelSeries: [{ id: 'model_0', label: 'claude-opus-4-6' }],
+        sessionSeries: [{ id: 'session_0', label: 'secret-project · abc123…cdef (claude)' }],
+        points: [{
+          timestamp: '2026-06-01T10:00:00.000Z',
+          cost: 5,
+          tokens: 150,
+          models: [{ seriesId: 'model_0', cost: 5, tokens: 150 }],
+          sessions: [{ seriesId: 'session_0', cost: 5, tokens: 150 }],
+        }],
+      },
+    },
   } as unknown as MenubarPayload
 }
 
@@ -37,6 +51,10 @@ describe('sanitizeForSharing', () => {
     expect(clean.current.cost).toBe(100)
     expect(clean.current.topModels[0]!.name).toBe('Opus')
     expect(clean.current.providers).toEqual({ claude: 100 })
+    expect(clean.history.timeline?.sessionSeries).toEqual([])
+    expect(clean.history.timeline?.points[0]!.sessions).toEqual([])
+    expect(clean.history.timeline?.modelSeries).toHaveLength(1)
+    expect(clean.history.timeline?.points[0]!.models).toHaveLength(1)
   })
 
   it('leaks no project name anywhere in the shared payload', () => {

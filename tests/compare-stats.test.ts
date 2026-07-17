@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, scanSelfCorrections, type ModelStats } from '../src/compare-stats.js'
+import { aggregateModelStats, buildCompareJson, computeComparison, computeCategoryComparison, computeWorkingStyle, renderCompareJson, scanSelfCorrections, type ModelStats } from '../src/compare-stats.js'
 import type { ProjectSummary, SessionSummary, ClassifiedTurn } from '../src/types.js'
 
 function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retries?: number; outputTokens?: number; inputTokens?: number; cacheRead?: number; cacheWrite?: number; timestamp?: string; category?: string; hasAgentSpawn?: boolean; hasPlanMode?: boolean; speed?: 'standard' | 'fast'; tools?: string[] } = {}): ClassifiedTurn {
@@ -230,11 +230,39 @@ describe('computeComparison', () => {
     const rows = computeComparison(a, b)
 
     const cacheRow = rows.find(r => r.label === 'Cache hit rate')!
-    const totalA = 5000 + 30000 + 5000
-    const totalB = 10000 + 10000 + 5000
+    // Cache writes are excluded from the denominator (reads / reads + fresh
+    // input), matching src/menubar-json.ts and the desktop app.
+    const totalA = 5000 + 30000
+    const totalB = 10000 + 10000
     expect(cacheRow.valueA).toBeCloseTo(30000 / totalA * 100)
     expect(cacheRow.valueB).toBeCloseTo(10000 / totalB * 100)
     expect(cacheRow.winner).toBe('a')
+  })
+})
+
+describe('compare JSON emitter', () => {
+  it('builds and renders the full comparison shape', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: true, retries: 0 }),
+      makeTurn('model-b', 0.20, { hasEdits: true, retries: 1 }),
+    ])
+    const models = aggregateModelStats([project])
+    const modelA = models.find(model => model.model === 'model-a')!
+    const modelB = models.find(model => model.model === 'model-b')!
+    modelA.selfCorrections = 2
+    modelB.selfCorrections = 1
+
+    const parsed = JSON.parse(renderCompareJson(
+      buildCompareJson([project], modelA, modelB, 'All Time', 'all'),
+    ))
+
+    expect(Object.keys(parsed)).toEqual(['period', 'modelA', 'modelB', 'metrics', 'categories', 'workingStyle'])
+    expect(parsed.period).toEqual({ label: 'All Time', provider: 'all' })
+    expect(parsed.modelA.selfCorrections).toBe(2)
+    expect(parsed.metrics.some((row: { section: string }) => row.section === 'Performance')).toBe(true)
+    expect(parsed.metrics.some((row: { section: string }) => row.section === 'Efficiency')).toBe(true)
+    expect(parsed.categories).toHaveLength(1)
+    expect(parsed.workingStyle).toHaveLength(4)
   })
 })
 

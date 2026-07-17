@@ -1,10 +1,17 @@
 import { readFile, readdir, stat } from 'fs/promises'
 import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
+import { createHash } from 'crypto'
 
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import type { Provider, ProbeRoot, SessionSource, SessionParser } from './types.js'
 import { getShortModelName } from '../models.js'
 import { readConfig } from '../config.js'
+
+export type ClaudeConfigSource = {
+  id: string
+  label: string
+  path: string
+}
 
 function expandHome(p: string): string {
   if (p === '~') return homedir()
@@ -24,6 +31,31 @@ function dedupeResolved(paths: string[]): string[] {
   return out
 }
 
+function claudeConfigSourceId(path: string): string {
+  return 'claude-config:' + createHash('sha256').update(path).digest('hex').slice(0, 16)
+}
+
+function baseClaudeConfigLabel(path: string): string {
+  const normalized = resolve(path)
+  if (normalized === resolve(join(homedir(), '.claude'))) return 'Default Claude'
+  const name = basename(normalized).replace(/^\./, '').trim()
+  return name || normalized
+}
+
+function makeUniqueLabels(sources: ClaudeConfigSource[]): ClaudeConfigSource[] {
+  const counts = new Map<string, number>()
+  for (const source of sources) counts.set(source.label, (counts.get(source.label) ?? 0) + 1)
+  if (![...counts.values()].some(count => count > 1)) return sources
+
+  const seen = new Map<string, number>()
+  return sources.map(source => {
+    if ((counts.get(source.label) ?? 0) <= 1) return source
+    const index = (seen.get(source.label) ?? 0) + 1
+    seen.set(source.label, index)
+    return { ...source, label: `${source.label} ${index}` }
+  })
+}
+
 /// Returns every Claude config dir to scan, in priority order with duplicates
 /// removed (resolved-path equality). Precedence: `CLAUDE_CONFIG_DIRS` (a
 /// `path.delimiter`-separated list, ":" on POSIX, ";" on Windows), then
@@ -33,7 +65,7 @@ function dedupeResolved(paths: string[]): string[] {
 /// then `~/.claude`. Sessions from every returned dir are merged into one
 /// ProjectSummary per project name in `src/parser.ts:scanProjectDirs`, so two
 /// dirs holding the same sanitized project slug naturally aggregate (#208).
-async function getClaudeConfigDirs(): Promise<string[]> {
+export async function getClaudeConfigDirs(): Promise<string[]> {
   const multi = process.env['CLAUDE_CONFIG_DIRS']
   if (multi !== undefined && multi !== '') {
     const dirs = multi
@@ -60,11 +92,23 @@ async function getClaudeConfigDirs(): Promise<string[]> {
   return [join(homedir(), '.claude')]
 }
 
+export async function discoverClaudeConfigSources(): Promise<ClaudeConfigSource[]> {
+  const dirs = await getClaudeConfigDirs()
+  return makeUniqueLabels(dirs.map(path => ({
+    id: claudeConfigSourceId(path),
+    label: baseClaudeConfigLabel(path),
+    path,
+  })))
+}
+
 export function getDesktopSessionsDir(): string {
   const override = process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
   if (override) return override
   if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')
-  if (process.platform === 'win32') return join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions')
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA']?.trim()
+    return join(appData || join(homedir(), 'AppData', 'Roaming'), 'Claude', 'local-agent-mode-sessions')
+  }
   return join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')
 }
 
@@ -171,13 +215,24 @@ export const claude: Provider = {
     return rawTool
   },
 
+  // Each config dir's `projects/` subdir is what discoverSessions readdir's,
+  // plus the Claude Desktop sessions base. Resolved via the same helpers so a
+  // CLAUDE_CONFIG_DIR(S) override is reflected exactly.
+  async probeRoots(): Promise<ProbeRoot[]> {
+    const dirs = await getClaudeConfigDirs()
+    const roots: ProbeRoot[] = dirs.map(dir => ({ path: join(dir, 'projects'), label: 'projects' }))
+    roots.push({ path: getDesktopSessionsDir(), label: 'desktop' })
+    return roots
+  },
+
   async discoverSessions(): Promise<SessionSource[]> {
     const sources: SessionSource[] = []
     const seenProjectDirs = new Set<string>()
-    const configDirs = await getClaudeConfigDirs()
+    const configSources = await discoverClaudeConfigSources()
     let anyDirReadable = false
 
-    for (const claudeDir of configDirs) {
+    for (const configSource of configSources) {
+      const claudeDir = configSource.path
       const projectsDir = join(claudeDir, 'projects')
       let entries: string[]
       try {
@@ -201,7 +256,15 @@ export const claude: Provider = {
         // `project: dirName` is identical across config dirs for the same
         // sanitized slug, which is exactly what makes the parser merge
         // their sessions into a single ProjectSummary.
-        sources.push({ path: dirPath, project: dirName, provider: 'claude' })
+        sources.push({
+          path: dirPath,
+          project: dirName,
+          provider: 'claude',
+          sourceId: configSource.id,
+          sourceLabel: configSource.label,
+          sourcePath: configSource.path,
+          sourceKind: 'claude-config',
+        })
       }
     }
 
@@ -211,10 +274,10 @@ export const claude: Provider = {
     // the platform expects `;`, which produces a single bogus path that
     // silently resolves to nothing on disk.
     const explicitMulti = process.env['CLAUDE_CONFIG_DIRS']
-    if (!anyDirReadable && explicitMulti !== undefined && explicitMulti !== '' && configDirs.length > 0) {
+    if (!anyDirReadable && explicitMulti !== undefined && explicitMulti !== '' && configSources.length > 0) {
       process.stderr.write(
         `codeburn: CLAUDE_CONFIG_DIRS was set but no listed directory could be read. ` +
-        `Tried: ${configDirs.join(', ')}. ` +
+        `Tried: ${configSources.map(s => s.path).join(', ')}. ` +
         `Use "${pathDelimiter}" as the separator on this platform.\n`,
       )
     }
@@ -222,6 +285,11 @@ export const claude: Provider = {
     const desktopBase = getDesktopSessionsDir()
     const desktopDirs = await findDesktopProjectDirs(desktopBase)
     const sep = desktopBase.includes('\\') ? '\\' : '/'
+    // Desktop / Cowork sessions belong to no CLAUDE_CONFIG_DIR. Tag them with a
+    // distinct source so a per-config view can account for them as their own
+    // "Claude Desktop" bucket instead of silently dropping them (which made
+    // sum-of-configs < All).
+    const desktopSourceId = 'claude-desktop:' + createHash('sha256').update(resolve(desktopBase)).digest('hex').slice(0, 16)
     for (const dirPath of desktopDirs) {
       const resolved = resolve(dirPath)
       if (seenProjectDirs.has(resolved)) continue
@@ -250,7 +318,15 @@ export const claude: Provider = {
         }
       }
 
-      sources.push({ path: dirPath, project: projectName, provider: 'claude' })
+      sources.push({
+        path: dirPath,
+        project: projectName,
+        provider: 'claude',
+        sourceId: desktopSourceId,
+        sourceLabel: 'Claude Desktop',
+        sourcePath: desktopBase,
+        sourceKind: 'claude-desktop',
+      })
     }
 
     return sources

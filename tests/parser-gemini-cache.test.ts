@@ -5,7 +5,7 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
-import { CACHE_VERSION, computeEnvFingerprint } from '../src/session-cache.js'
+import { CACHE_VERSION, computeEnvFingerprint, sessionCachePath } from '../src/session-cache.js'
 import type { DateRange } from '../src/types.js'
 
 let home: string
@@ -54,7 +54,7 @@ describe('Gemini session cache migration', () => {
     }))
 
     const fileStat = await stat(sessionPath)
-    await writeFile(join(cacheDir, 'session-cache.json'), JSON.stringify({
+    await writeFile(sessionCachePath(), JSON.stringify({
       version: CACHE_VERSION,
       providers: {
         gemini: {
@@ -117,7 +117,7 @@ describe('Gemini session cache migration', () => {
       'gemini:gemini-session-1:g2',
     ])
 
-    const savedCache = JSON.parse(await readFile(join(cacheDir, 'session-cache.json'), 'utf-8'))
+    const savedCache = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
     const savedKeys = savedCache.providers.gemini.files[sessionPath].turns.flatMap((turn: { calls: Array<{ deduplicationKey: string }> }) =>
       turn.calls.map(call => call.deduplicationKey),
     )

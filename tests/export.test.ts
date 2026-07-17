@@ -16,7 +16,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
 })
 
-function makeProject(projectPath: string): ProjectSummary {
+function makeProject(projectPath: string, agentType?: string): ProjectSummary {
   return {
     project: projectPath,
     projectPath,
@@ -24,6 +24,7 @@ function makeProject(projectPath: string): ProjectSummary {
       {
         sessionId: 'sess-001',
         project: projectPath,
+        agentType,
         firstTimestamp: '2026-04-14T10:00:00Z',
         lastTimestamp: '2026-04-14T10:01:00Z',
         totalCostUSD: 1.23,
@@ -57,6 +58,7 @@ function makeProject(projectPath: string): ProjectSummary {
                 tools: ['Read'],
                 mcpTools: [],
                 skills: [],
+                subagentTypes: [],
                 hasAgentSpawn: false,
                 hasPlanMode: false,
                 speed: 'standard',
@@ -205,9 +207,57 @@ describe('exportCsv', () => {
     expect(mcp).toContain('Server,Calls,Share (%)')
     expect(mcp).toContain('node_repl,5,100')
   })
+
+  it('writes optional subagentType and model fields to per-call records.csv', async () => {
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app', 'planner')] }]
+
+    const folder = await exportCsv(periods, join(tmpDir, 'records.csv'))
+    const records = await readFile(join(folder, 'records.csv'), 'utf-8')
+    const lines = records.trimEnd().split('\n')
+
+    expect(lines[0]).toContain('subagentType,model')
+    expect(lines[1]).toContain('planner')
+    expect(lines[1]).toContain("'+danger-model")
+  })
+
+  it('adds optional subagentType and unambiguous model fields to sessions.csv', async () => {
+    const periods: PeriodExport[] = [{ label: '30 Days', projects: [makeProject('app', 'planner')] }]
+
+    const folder = await exportCsv(periods, join(tmpDir, 'sessions.csv'))
+    const sessions = await readFile(join(folder, 'sessions.csv'), 'utf-8')
+
+    expect(sessions.split('\n')[0]).toBe('Project,Session ID,Started At,Cost (USD),Saved (USD),API Calls,Turns,subagentType,model')
+    expect(sessions.split('\n')[1]).toContain('planner')
+    expect(sessions.split('\n')[1]).toContain("'+danger-model")
+  })
 })
 
 describe('exportJson', () => {
+  it('adds per-call records with optional subagentType and model fields', async () => {
+    const periods: PeriodExport[] = [{
+      label: '30 Days',
+      projects: [makeProject('agent-project', 'planner'), makeProject('main-project')],
+    }]
+
+    const outputPath = join(tmpDir, 'records.json')
+    const saved = await exportJson(periods, outputPath)
+    const data = JSON.parse(await readFile(saved, 'utf-8'))
+
+    expect(data.records[0]).toMatchObject({
+      project: 'agent-project',
+      subagentType: 'planner',
+      model: '+danger-model',
+      inputTokens: 100,
+      outputTokens: 50,
+      cost: 1.23,
+    })
+    expect(data.records[1]).toMatchObject({ project: 'main-project', model: '+danger-model' })
+    expect(data.records[1]).not.toHaveProperty('subagentType')
+    expect(data.sessions[0]).toMatchObject({ subagentType: 'planner', model: '+danger-model' })
+    expect(data.sessions[1]).toMatchObject({ model: '+danger-model' })
+    expect(data.sessions[1]).not.toHaveProperty('subagentType')
+  })
+
   it('includes an mcp section with per-server usage', async () => {
     const project = makeProject('app')
     project.sessions[0]!.mcpBreakdown = { node_repl: { calls: 3 }, github: { calls: 1 } }

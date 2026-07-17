@@ -8,8 +8,9 @@ import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject, fingerprintFile } from '../codex-cache.js'
 import { normalizeContentBlocks } from '../content-utils.js'
+import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const modelDisplayNames: Record<string, string> = {
   'codex-auto-review': 'Codex Auto Review',
@@ -39,6 +40,40 @@ const toolNameMap: Record<string, string> = {
   close_agent: 'Agent',
   wait_agent: 'Agent',
   read_dir: 'Glob',
+}
+
+// CLI-based MCP wrappers (e.g. philschmid/mcp-cli) let Codex call an MCP tool
+// through a shell command instead of registering the server natively. Codex
+// then logs a plain exec_command with no `mcp_tool_call_end` event, so the MCP
+// usage would only appear as a shell command and be absent from the MCP
+// breakdown (issue #478). Recognize the `mcp-cli [options] call <server>
+// <tool>` form and return the canonical mcp__<server>__<tool> so the call is
+// also attributed to MCP. Only the `call` subcommand (an actual tool execution)
+// is matched; info / grep / bare listing are lookups. The exec_command still
+// counts as Bash since it genuinely is a shell exec. Scoped to the mcp-cli
+// binary; other wrappers would need their own pattern.
+//
+// The negative lookbehind keeps `mcp-cli` a standalone binary (a leading
+// quote/space/slash from a `bash -lc "..."` wrapper or absolute path is fine,
+// but `foo-mcp-cli` is not). `(?:\s+(?!call\b)[^\s;|&]+)*` skips any options and
+// their values between the binary and the subcommand (e.g.
+// `mcp-cli -c ./mcp.json call ...`) without crossing a shell separator, and
+// stops at the `call` token. This is substring matching, so a command that
+// merely mentions the phrase (a comment, an echo, a commit message) can
+// false-positive, an accepted tradeoff for the common case. \s+ and the token
+// class don't overlap, so there is no catastrophic backtracking.
+const MCP_CLI_CALL = /(?<![\w.-])mcp-cli(?:\s+(?!call\b)[^\s;|&]+)*\s+call\s+(\S+)\s+(\S+)/
+function mcpToolFromShellCommand(command: unknown): string | null {
+  const text = typeof command === 'string'
+    ? command
+    : Array.isArray(command) ? command.filter(x => typeof x === 'string').join(' ') : ''
+  if (!text) return null
+  const m = MCP_CLI_CALL.exec(text)
+  if (!m) return null
+  const server = m[1]!.replace(/['"]/g, '')
+  const tool = m[2]!.replace(/['"]/g, '')
+  if (!server || !tool) return null
+  return `mcp__${server}__${tool}`
 }
 
 type CodexEntry = {
@@ -72,7 +107,6 @@ type CodexTokenUsage = {
   total_tokens?: number
 }
 
-const CHARS_PER_TOKEN = 4
 const RAW_HEAD_BYTES = 64 * 1024
 const LARGE_TEXT_CAP = 2000
 
@@ -247,16 +281,27 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
   return entry
 }
 
-async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
-  const sessionsDir = join(codexDir, 'sessions')
-  const sources: SessionSource[] = []
+async function discoverSessionFile(filePath: string): Promise<SessionSource | null> {
+  const s = await stat(filePath).catch(() => null)
+  if (!s?.isFile()) return null
 
-  let years: string[]
-  try {
-    years = await readdir(sessionsDir)
-  } catch {
-    return sources
+  const cachedProject = await getCachedCodexProject(filePath)
+  if (cachedProject) {
+    return { path: filePath, project: cachedProject, provider: 'codex' }
   }
+
+  const { valid, meta } = await isValidCodexSession(filePath)
+  if (!valid || !meta) return null
+
+  const cwd = meta.payload?.cwd ?? 'unknown'
+  return { path: filePath, project: sanitizeProject(cwd), provider: 'codex' }
+}
+
+async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
+  const sources: SessionSource[] = []
+  const sessionsDir = join(codexDir, 'sessions')
+
+  const years = await readdir(sessionsDir).catch(() => [] as string[])
 
   for (const year of years) {
     if (!/^\d{4}$/.test(year)) continue
@@ -276,23 +321,21 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
         for (const file of files) {
           if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
           const filePath = join(dayDir, file)
-          const s = await stat(filePath).catch(() => null)
-          if (!s?.isFile()) continue
-
-          const cachedProject = await getCachedCodexProject(filePath)
-          if (cachedProject) {
-            sources.push({ path: filePath, project: cachedProject, provider: 'codex' })
-            continue
-          }
-
-          const { valid, meta } = await isValidCodexSession(filePath)
-          if (!valid || !meta) continue
-
-          const cwd = meta.payload?.cwd ?? 'unknown'
-          sources.push({ path: filePath, project: sanitizeProject(cwd), provider: 'codex' })
+          const source = await discoverSessionFile(filePath)
+          if (source) sources.push(source)
         }
       }
     }
+  }
+
+  // Codex moves archived sessions into a flat directory. Keep them in usage
+  // reports so archiving a conversation does not erase its historical usage.
+  const archivedDir = join(codexDir, 'archived_sessions')
+  const archivedFiles = await readdir(archivedDir).catch(() => [] as string[])
+  for (const file of archivedFiles) {
+    if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
+    const source = await discoverSessionFile(join(archivedDir, file))
+    if (source) sources.push(source)
   }
 
   return sources
@@ -386,6 +429,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             if (typeof fp === 'string') call.file = fp
             const cmd = args['command'] ?? args['cmd']
             if (typeof cmd === 'string') call.command = cmd
+            // Attribute a CLI-wrapped MCP call (e.g. `mcp-cli call server tool`)
+            // to the MCP breakdown too; the exec still counts as Bash above.
+            const mcpTool = mcpToolFromShellCommand(cmd)
+            if (mcpTool) {
+              pendingTools.push(mcpTool)
+              pendingToolSequence.push([{ tool: mcpTool }])
+            }
           }
           pendingToolSequence.push([call])
           continue
@@ -450,8 +500,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const info = entry.payload.info
           if (!info) {
             if (pendingOutputChars === 0 && pendingUserMessage.length === 0) continue
-            const estInput = Math.ceil(pendingUserMessage.length / CHARS_PER_TOKEN)
-            const estOutput = Math.ceil(pendingOutputChars / CHARS_PER_TOKEN)
+            const estInput = estimateTokensFromChars(pendingUserMessage.length)
+            const estOutput = estimateTokensFromChars(pendingOutputChars)
             if (estInput === 0 && estOutput === 0) continue
 
             const model = sessionModel ?? 'gpt-5'
@@ -633,6 +683,15 @@ export function createCodexProvider(codexDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    // Same `dir` discoverSessionsInDir walks: <codexDir>/sessions (dated
+    // rollout files) and <codexDir>/archived_sessions. Honors CODEX_HOME.
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [
+        { path: join(dir, 'sessions'), label: 'sessions' },
+        { path: join(dir, 'archived_sessions'), label: 'archived' },
+      ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

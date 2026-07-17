@@ -482,6 +482,7 @@ extension ProviderFilter {
         case .all: return Theme.brandAccent
         case .claude: return Theme.categoricalClaude
         case .cline: return Color(red: 0x23/255.0, green: 0x8A/255.0, blue: 0x7E/255.0)
+        case .codewhale: return Color(red: 0x38/255.0, green: 0xBD/255.0, blue: 0xF8/255.0)
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .cursorAgent: return Color(red: 0x4E/255.0, green: 0xC9/255.0, blue: 0xB0/255.0)
@@ -493,6 +494,7 @@ extension ProviderFilter {
         case .kiloCode: return Color(red: 0x00/255.0, green: 0x96/255.0, blue: 0x88/255.0)
         case .kiro: return Color(red: 0x4A/255.0, green: 0x9E/255.0, blue: 0xC4/255.0)
         case .kimi: return Color(red: 0xA4/255.0, green: 0xC6/255.0, blue: 0x39/255.0)
+        case .lingtaiTui: return Color(red: 0x22/255.0, green: 0xA7/255.0, blue: 0xA0/255.0)
         case .openclaw: return Color(red: 0xDA/255.0, green: 0x70/255.0, blue: 0x56/255.0)
         case .opencode: return Color(red: 0x5B/255.0, green: 0x83/255.0, blue: 0x5B/255.0)
         case .pi: return Color(red: 0xB2/255.0, green: 0x6B/255.0, blue: 0x3D/255.0)

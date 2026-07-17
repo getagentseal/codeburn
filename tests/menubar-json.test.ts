@@ -196,21 +196,37 @@ describe('buildMenubarPayload', () => {
     expect(payload.optimize.savingsUSD).toBeCloseTo(15 * 1000 * 0.00002)
   })
 
-  it('maps providers into a lowercased dict inside the current-period block', () => {
+  it('maps providers into a lowercased display-name dict inside the current-period block', () => {
     const providers: ProviderCost[] = [
-      { name: 'Claude Code', cost: 76.45 },
-      { name: 'Cursor', cost: 2.18 },
-      { name: 'Codex', cost: 1.5 },
+      { name: 'cursor-agent', displayName: 'Cursor Agent', cost: 76.45 },
+      { name: 'cursor', displayName: 'Cursor', cost: 2.18 },
+      { name: 'codex', displayName: 'Codex', cost: 1.5 },
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
-    expect(payload.current.providers).toEqual({ 'claude code': 76.45, cursor: 2.18, codex: 1.5 })
+    // Keys stay lowercased DISPLAY names (byte-compatible with the Swift menubar).
+    expect(payload.current.providers).toEqual({ 'cursor agent': 76.45, cursor: 2.18, codex: 1.5 })
+  })
+
+  it('emits providerDetails with the internal id and display label alongside the providers map', () => {
+    const providers: ProviderCost[] = [
+      { name: 'grok', displayName: 'Grok Build', cost: 12.5 },
+      { name: 'cursor-agent', displayName: 'Cursor Agent', cost: 3.4 },
+    ]
+    const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
+    // providerDetails carries the internal id (round-trips as --provider) + label.
+    expect(payload.current.providerDetails).toEqual([
+      { id: 'grok', label: 'Grok Build', cost: 12.5 },
+      { id: 'cursor-agent', label: 'Cursor Agent', cost: 3.4 },
+    ])
+    // ... while the existing providers map keys stay the lowercased display names.
+    expect(payload.current.providers).toEqual({ 'grok build': 12.5, 'cursor agent': 3.4 })
   })
 
   it('keeps zero-cost providers in the dict so installed-but-unused providers still render as tabs', () => {
     const providers: ProviderCost[] = [
-      { name: 'Claude', cost: 76.45 },
-      { name: 'Codex', cost: 0 },
-      { name: 'Cursor', cost: 2.18 },
+      { name: 'claude', displayName: 'Claude', cost: 76.45 },
+      { name: 'codex', displayName: 'Codex', cost: 0 },
+      { name: 'cursor', displayName: 'Cursor', cost: 2.18 },
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45, codex: 0, cursor: 2.18 })
@@ -252,13 +268,41 @@ describe('buildMenubarPayload', () => {
     expect(payload.history.daily).toEqual([])
   })
 
+  it('emits the active display currency (USD by default) so the client can convert raw-USD costs', () => {
+    const payload = buildMenubarPayload(emptyPeriod('Today'), [], null)
+    expect(payload.currency).toEqual({ code: 'USD', symbol: '$', rate: 1 })
+  })
+
+  it('preserves the optional selected-period timeline alongside daily history', () => {
+    const timeline = {
+      bucketMinutes: 15,
+      modelSeries: [{ id: 'model_0', label: 'claude-opus-4-6' }],
+      sessionSeries: [{ id: 'session_0', label: 'codeburn · abc123 (claude)' }],
+      points: [{
+        timestamp: '2026-07-15T10:00:00.000Z',
+        cost: 1.5,
+        tokens: 200,
+        models: [{ seriesId: 'model_0', cost: 1.5, tokens: 200 }],
+        sessions: [{ seriesId: 'session_0', cost: 1.5, tokens: 200 }],
+      }],
+    }
+    const payload = buildMenubarPayload(
+      emptyPeriod('Today'), [], null,
+      undefined, undefined, undefined, undefined, undefined,
+      timeline,
+    )
+
+    expect(payload.history).toEqual({ daily: [], timeline })
+  })
+
   it('drops providers with negative cost defensively', () => {
     const providers: ProviderCost[] = [
-      { name: 'Claude', cost: 76.45 },
-      { name: 'Broken', cost: -1 },
+      { name: 'claude', displayName: 'Claude', cost: 76.45 },
+      { name: 'broken', displayName: 'Broken', cost: -1 },
     ]
     const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
     expect(payload.current.providers).toEqual({ claude: 76.45 })
+    expect(payload.current.providerDetails).toEqual([{ id: 'claude', label: 'Claude', cost: 76.45 }])
   })
 
   it('omits combined usage by default and accepts the documented combined shape when attached', () => {
@@ -297,5 +341,29 @@ describe('buildMenubarPayload', () => {
     payload.combined = combined
 
     expect(payload.combined).toEqual(combined)
+  })
+
+  it('emits Claude config selector metadata only when multiple configs are available', () => {
+    const oneConfig = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, undefined, undefined, undefined, {
+      selectedId: null,
+      options: [{ id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' }],
+    })
+    expect(oneConfig).not.toHaveProperty('claudeConfigs')
+
+    const twoConfigs = buildMenubarPayload(emptyPeriod('Today'), [], null, undefined, undefined, undefined, undefined, {
+      selectedId: 'claude-config:b',
+      options: [
+        { id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' },
+        { id: 'claude-config:b', label: 'claude-personal', path: '/tmp/claude-personal' },
+      ],
+    })
+
+    expect(twoConfigs.claudeConfigs).toEqual({
+      selectedId: 'claude-config:b',
+      options: [
+        { id: 'claude-config:a', label: 'claude-work', path: '/tmp/claude-work' },
+        { id: 'claude-config:b', label: 'claude-personal', path: '/tmp/claude-personal' },
+      ],
+    })
   })
 })

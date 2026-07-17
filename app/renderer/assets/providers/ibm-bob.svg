@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="IBM Bob">
+  <rect width="64" height="64" rx="12" fill="#0F62FE"/>
+  <path d="M14 19h36v5H14zm0 10h36v5H14zm0 10h36v5H14z" fill="#fff" opacity=".9"/>
+  <circle cx="24" cy="32" r="4" fill="#0F62FE"/>
+  <circle cx="40" cy="32" r="4" fill="#0F62FE"/>
+</svg>

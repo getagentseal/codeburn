@@ -5,19 +5,43 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 10: cursor accounting changed (real composer context tokens on
+// Bumped to 13: day bucketing is now TURN-anchored (a turn's whole cost/calls
+// land on the day of its user-message timestamp) to match the live headline/
+// report rollup. v12 bucketed each call by its own timestamp, so a midnight-
+// straddling turn split across two days and history.daily / the provider
+// breakdown never reconciled to current.cost. Raising MIN_SUPPORTED_VERSION
+// forces the one-time re-hydration that rebuilds history under turn bucketing.
+//
+// v12: CodeWhale support adds historical usage that earlier rollups
+// did not contain. Both the CodeWhale branch and the kiro credit-pricing
+// change (below) claimed v11 independently, so v12 is the first version that
+// contains both; raising MIN_SUPPORTED_VERSION forces the one-time
+// re-hydration for days finalized at either v11.
+//
+// v11: kiro cost accounting changed (metered credits pass through
+// the session cache instead of being re-priced from estimated tokens), so
+// days finalized at v10 carry token-estimated kiro costs that were off by up
+// to 16× per model. Raising MIN_SUPPORTED_VERSION forces the one-time full
+// re-hydration that backfills history under credit-based pricing.
+//
+// v10: cursor accounting changed (real composer context tokens on
 // conversation-anchored records, Cursor-published composer pricing), so days
 // finalized at v9 carry the old double-counted agentKv estimates and
-// sonnet-proxy composer costs. Raising MIN_SUPPORTED_VERSION forces the
-// one-time full re-hydration that backfills history under the new accounting.
+// sonnet-proxy composer costs.
 //
 // v9: providers added since the v8 rollup (Grok, Hermes, ZCode) parse usage
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 10
-const MIN_SUPPORTED_VERSION = 10
-const DAILY_CACHE_FILENAME = 'daily-cache.json'
+export const DAILY_CACHE_VERSION = 13
+const MIN_SUPPORTED_VERSION = 13
+// Version-suffixed so different binaries each own a distinct file and never
+// clobber an incompatible schema. Bumping the version mints a fresh filename.
+const DAILY_CACHE_FILENAME = `daily-cache.v${DAILY_CACHE_VERSION}.json`
+// The pre-versioning filename. Never written or deleted anymore (old binaries
+// own it). Adopt-copied once on first load when the versioned file is absent and
+// the legacy file's version matches ours; a different version is ignored.
+const LEGACY_DAILY_CACHE_FILENAME = 'daily-cache.json'
 
 export type DailyEntry = {
   date: string
@@ -51,23 +75,50 @@ export type DailyCache = {
   /// hash mismatches and `ensureCacheHydrated` discards the cached days
   /// so historical savings are recomputed against the current mapping.
   savingsConfigHash: string
+  /// IANA local timezone the days were bucketed under (day boundaries are
+  /// local-time). If the machine's timezone changes, previously-cached days are
+  /// bucketed against the wrong midnight, so a mismatch forces a full re-hydrate
+  /// (same self-heal as `savingsConfigHash`). Absent on caches written before
+  /// this field existed → not treated as a mismatch (no gratuitous rebuild).
+  tzKey?: string
   lastComputedDate: string | null
   days: DailyEntry[]
+  /// True only once the full backfill window has been hydrated from a COMPLETE
+  /// session parse. A cache that was finalized against a partial (interrupted)
+  /// session hydration — the "chart is empty for the first ~20 days" bug — reads
+  /// as incomplete and is fully re-backfilled. Absent on caches written before
+  /// this field existed → treated as incomplete (one self-healing re-backfill).
+  complete?: boolean
 }
 
 function getCacheDir(): string {
   return process.env['CODEBURN_CACHE_DIR'] ?? join(homedir(), '.cache', 'codeburn')
 }
 
+/** IANA name of the current local timezone (respects the TZ env var). Days are
+ *  bucketed by local midnight, so this tags the cache for TZ-change invalidation. */
+export function currentTzKey(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { return '' }
+}
+
 function getCachePath(): string {
   return join(getCacheDir(), DAILY_CACHE_FILENAME)
 }
 
-export function emptyCache(savingsConfigHash = ''): DailyCache {
-  return { version: DAILY_CACHE_VERSION, savingsConfigHash, lastComputedDate: null, days: [] }
+function getLegacyCachePath(): string {
+  return join(getCacheDir(), LEGACY_DAILY_CACHE_FILENAME)
 }
 
-function isMigratableCache(parsed: unknown): parsed is { version: number; lastComputedDate: string | null; savingsConfigHash?: string; days: Record<string, unknown>[] } {
+/** Absolute path of the active (version-suffixed) daily cache file. */
+export function dailyCachePath(): string {
+  return getCachePath()
+}
+
+export function emptyCache(savingsConfigHash = ''): DailyCache {
+  return { version: DAILY_CACHE_VERSION, savingsConfigHash, tzKey: currentTzKey(), lastComputedDate: null, days: [], complete: false }
+}
+
+function isMigratableCache(parsed: unknown): parsed is { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean } {
   if (!parsed || typeof parsed !== 'object') return false
   const c = parsed as Partial<DailyCache>
   if (typeof c.version !== 'number') return false
@@ -94,31 +145,50 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
   }))
 }
 
-async function backupOldCache(path: string, version: number): Promise<void> {
-  const backupPath = `${path}.v${version}.bak`
-  try { await rename(path, backupPath) } catch { /* best-effort */ }
+function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean }): DailyCache {
+  return {
+    version: DAILY_CACHE_VERSION,
+    savingsConfigHash: parsed.savingsConfigHash ?? '',
+    tzKey: parsed.tzKey,
+    lastComputedDate: parsed.lastComputedDate,
+    days: migrateDays(parsed.days),
+    // Only a cache explicitly marked complete stays trusted; one written before
+    // the marker existed reads false and is re-backfilled once.
+    complete: parsed.complete === true,
+  }
 }
 
 export async function loadDailyCache(): Promise<DailyCache> {
   const path = getCachePath()
-  if (!existsSync(path)) return emptyCache()
-  try {
-    const raw = await readFile(path, 'utf-8')
-    const parsed: unknown = JSON.parse(raw)
-    if (isMigratableCache(parsed)) {
-      const migrated: DailyCache = {
-        version: DAILY_CACHE_VERSION,
-        savingsConfigHash: parsed.savingsConfigHash ?? '',
-        lastComputedDate: parsed.lastComputedDate,
-        days: migrateDays(parsed.days),
+  if (existsSync(path)) {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+      if (isMigratableCache(parsed)) {
+        const migrated = migratedFrom(parsed)
+        if (parsed.version < DAILY_CACHE_VERSION) await saveDailyCache(migrated).catch(() => {})
+        return migrated
       }
-      if (parsed.version < DAILY_CACHE_VERSION) {
-        await saveDailyCache(migrated).catch(() => {})
-      }
-      return migrated
+      return emptyCache()
+    } catch {
+      return emptyCache()
     }
-    const oldVersion = (parsed as { version?: number })?.version
-    if (typeof oldVersion === 'number') await backupOldCache(path, oldVersion)
+  }
+  // Versioned file absent: adopt the legacy unversioned file once, only when its
+  // version matches ours. A different-version legacy file is ignored and left
+  // intact — old binaries still own it, so we never write or delete it.
+  return adoptLegacyDailyCache()
+}
+
+async function adoptLegacyDailyCache(): Promise<DailyCache> {
+  const legacy = getLegacyCachePath()
+  if (!existsSync(legacy)) return emptyCache()
+  try {
+    const parsed: unknown = JSON.parse(await readFile(legacy, 'utf-8'))
+    if (isMigratableCache(parsed) && parsed.version === DAILY_CACHE_VERSION) {
+      const adopted = migratedFrom(parsed)
+      await saveDailyCache(adopted).catch(() => {})
+      return adopted
+    }
     return emptyCache()
   } catch {
     return emptyCache()
@@ -172,8 +242,10 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
   return {
     version: DAILY_CACHE_VERSION,
     savingsConfigHash: cache.savingsConfigHash,
+    tzKey: cache.tzKey,
     lastComputedDate: nextLast,
     days: pruned,
+    complete: cache.complete,
   }
 }
 
@@ -208,6 +280,12 @@ export async function ensureCacheHydrated(
   /// longer accurate, so we treat the cache as stale and force a full
   /// re-hydration. Pass `''` for "no savings config" to disable.
   savingsConfigHash: string = '',
+  /// Whether the session parse that fed this backfill left the session cache
+  /// fully hydrated. A partial (interrupted) session cache yields empty/partial
+  /// older days; finalizing them would freeze that gap into the daily history.
+  /// So the backfill is only marked `complete` when this returns true. Defaults
+  /// to a trusting `true` for callers that don't (or can't) supply it.
+  sessionComplete: () => boolean = () => true,
 ): Promise<DailyCache> {
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -217,17 +295,33 @@ export async function ensureCacheHydrated(
   return withDailyCacheLock(async () => {
     let c = await loadDailyCache()
 
-    // Savings config changed: roll the cache forward into the active
-    // mapping. We can't cheaply recompute savings for already-cached
-    // historical days without re-parsing every session, so we drop the
-    // cached days and re-hydrate from the daily cache retention window.
-    if (c.savingsConfigHash !== savingsConfigHash) {
+    // Three reasons to drop the cached days and re-hydrate the whole retention
+    // window:
+    //  1. Savings config changed — the cached `savingsUSD` totals are stale, and
+    //     we can't cheaply recompute them per historical day without re-parsing.
+    //  2. The cache was never finalized against a COMPLETE session parse (an old
+    //     pre-marker cache, or one frozen from a partial/interrupted hydration).
+    //     Its older days may be empty or partial; trusting `lastComputedDate`
+    //     would leave that gap forever (the "first ~20 days missing" bug).
+    //  3. The local timezone changed — days are bucketed by local midnight, so a
+    //     TZ change mis-buckets every cached day. Only invalidate when a tzKey is
+    //     present and differs (a cache written before this field, or a test
+    //     fixture, has none → left alone rather than force a spurious rebuild).
+    const tzKey = currentTzKey()
+    const tzChanged = c.tzKey !== undefined && c.tzKey !== tzKey
+    if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged) {
       c = {
         version: DAILY_CACHE_VERSION,
         savingsConfigHash,
+        tzKey,
         lastComputedDate: null,
         days: [],
+        complete: false,
       }
+    } else if (c.tzKey === undefined) {
+      // First write under the tzKey scheme: tag the cache so a later TZ change is
+      // detectable, without discarding the (still-valid, same-TZ) cached days.
+      c = { ...c, tzKey }
     }
 
     // Drop any cached entry dated today or later. The cache only ever stores
@@ -255,6 +349,17 @@ export async function ensureCacheHydrated(
       const gapProjects = await parseSessions(gapRange)
       const gapDays = aggregateDays(gapProjects)
       c = addNewDays(c, gapDays, yesterdayStr)
+      // Finalize as complete ONLY when the session parse that produced these days
+      // was itself complete. If it was partial, leave `complete: false` so the
+      // next launch (once the session cache is whole) re-backfills instead of
+      // freezing the partial history.
+      c = { ...c, complete: sessionComplete() }
+      await saveDailyCache(c)
+    } else if (c.complete !== true && sessionComplete()) {
+      // No gap to fill (already current through yesterday) but not yet marked —
+      // e.g. a brand-new machine whose only data is today. Finalize so future
+      // launches don't re-backfill the whole window every time.
+      c = { ...c, complete: true }
       await saveDailyCache(c)
     }
     return c

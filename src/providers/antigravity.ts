@@ -16,34 +16,39 @@ type AntigravityConversationRoot = {
   extensions: readonly string[]
 }
 
-const CONVERSATION_ROOTS: readonly AntigravityConversationRoot[] = [
-  {
-    dir: join(homedir(), '.gemini', 'antigravity', 'conversations'),
-    project: 'antigravity',
-    extensions: ['.pb', '.db'],
-  },
-  {
-    dir: join(homedir(), '.gemini', 'antigravity-cli', 'conversations'),
-    project: 'antigravity-cli',
-    extensions: ['.pb', '.db'],
-  },
-  {
-    dir: join(homedir(), '.gemini', 'antigravity-cli', 'implicit'),
-    project: 'antigravity-cli',
-    extensions: ['.pb'],
-  },
-  {
-    dir: join(homedir(), '.gemini', 'antigravity-ide', 'conversations'),
-    project: 'antigravity-ide',
-    extensions: ['.pb', '.db'],
-  },
-  {
-    dir: join(homedir(), '.gemini', 'antigravity-ide', 'implicit'),
-    project: 'antigravity-ide',
-    extensions: ['.pb'],
-  },
-] as const
-const CACHE_VERSION = 2
+// Computed on each call rather than frozen at module load so discovery honors
+// the current home directory (env overrides in tests, and any runtime change).
+function conversationRoots(): readonly AntigravityConversationRoot[] {
+  const home = homedir()
+  return [
+    {
+      dir: join(home, '.gemini', 'antigravity', 'conversations'),
+      project: 'antigravity',
+      extensions: ['.pb', '.db'],
+    },
+    {
+      dir: join(home, '.gemini', 'antigravity-cli', 'conversations'),
+      project: 'antigravity-cli',
+      extensions: ['.pb', '.db'],
+    },
+    {
+      dir: join(home, '.gemini', 'antigravity-cli', 'implicit'),
+      project: 'antigravity-cli',
+      extensions: ['.pb'],
+    },
+    {
+      dir: join(home, '.gemini', 'antigravity-ide', 'conversations'),
+      project: 'antigravity-ide',
+      extensions: ['.pb', '.db'],
+    },
+    {
+      dir: join(home, '.gemini', 'antigravity-ide', 'implicit'),
+      project: 'antigravity-ide',
+      extensions: ['.pb'],
+    },
+  ]
+}
+const CACHE_VERSION = 5
 
 const RPC_TIMEOUT_MS = 5000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -690,6 +695,40 @@ function antigravitySqliteModel(chatFields: readonly ProtoField[]): string {
   return getCanonicalModelId(rawModel, displayName)
 }
 
+// Decode a proto field that carries a time into an ISO-8601 string. Antigravity
+// may encode ChatStartMetadata.created_at as an ISO string, a Timestamp
+// submessage (seconds in field 1), or a bare unix varint. Returns '' when the
+// field is absent or unparseable so the caller can fall back.
+function protoTimestampToIso(field: ProtoField | undefined): string {
+  if (!field) return ''
+  const text = protoFieldText(field)
+  if (text && !Number.isNaN(Date.parse(text))) return new Date(text).toISOString()
+  if (field.bytes) {
+    // google.protobuf.Timestamp submessage: seconds (#1), nanos (#2).
+    const tsFields = parseProtoFields(field.bytes)
+    const seconds = firstProtoField(tsFields, 1)?.value
+    if (seconds !== undefined) {
+      const nanos = firstProtoField(tsFields, 2)?.value ?? 0n
+      const ms = Number(seconds) * 1000 + Math.floor(Number(nanos) / 1e6)
+      if (Number.isSafeInteger(ms) && ms > 0) return new Date(ms).toISOString()
+    }
+  }
+  if (field.value !== undefined) {
+    const raw = Number(field.value)
+    const ms = raw < 1e12 ? raw * 1000 : raw
+    if (Number.isSafeInteger(ms) && ms > 0) return new Date(ms).toISOString()
+  }
+  return ''
+}
+
+// ChatStartMetadata lives at chatModel(#1).#9; its created_at is #4. Not every
+// gen_metadata row carries it, so this returns '' when missing.
+function antigravitySqliteCreatedAt(chatFields: readonly ProtoField[]): string {
+  const metadataBytes = protoFieldBytes(firstProtoField(chatFields, 9))
+  if (!metadataBytes) return ''
+  return protoTimestampToIso(firstProtoField(parseProtoFields(metadataBytes), 4))
+}
+
 function buildCallFromSqliteGenMetadataRow(cascadeId: string, row: AntigravityGenMetadataRow): ParsedProviderCall | null {
   const rootFields = parseProtoFields(genMetadataDataBytes(row.data))
   const chatFields = parseProtoFields(protoFieldBytes(firstProtoField(rootFields, 1)) ?? new Uint8Array())
@@ -729,7 +768,7 @@ function buildCallFromSqliteGenMetadataRow(cascadeId: string, row: AntigravityGe
     costUSD,
     tools: [],
     bashCommands: [],
-    timestamp: '',
+    timestamp: antigravitySqliteCreatedAt(chatFields),
     speed: 'standard',
     deduplicationKey: `antigravity:${cascadeId}:${responseId}`,
     userMessage: '',
@@ -880,11 +919,14 @@ export function isAntigravityStatusLineEventsPath(path: string): boolean {
 }
 
 export async function discoverAntigravitySessionSources(
-  roots: readonly AntigravityConversationRoot[] = CONVERSATION_ROOTS,
+  roots?: readonly AntigravityConversationRoot[],
 ): Promise<SessionSource[]> {
-  const includeStatusLineEvents = roots === CONVERSATION_ROOTS
+  // The statusline JSONL is a synthetic source only appended for the real
+  // default roots, not when a caller passes an explicit (test) root set.
+  const includeStatusLineEvents = roots === undefined
+  const effectiveRoots = roots ?? conversationRoots()
   const sources: SessionSource[] = []
-  for (const root of roots) {
+  for (const root of effectiveRoots) {
     let files: string[]
     try {
       files = await readdir(root.dir)
@@ -1134,10 +1176,12 @@ export async function snapshotAntigravityStatusLinePayload(input: unknown): Prom
     metadata = extractAntigravityGeneratorMetadata(
       await rpc(server, 'GetCascadeTrajectoryGeneratorMetadata', { cascadeId }),
     )
+    const snapshotCalls = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+    assignStableTimestamps(snapshotCalls, cached?.calls, new Date(s.mtimeMs).toISOString())
     cache.cascades[cascadeId] = {
       mtimeMs: s.mtimeMs,
       sizeBytes: s.size,
-      calls: buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap),
+      calls: snapshotCalls,
     }
     cacheDirty = true
     await flushCache()
@@ -1197,6 +1241,41 @@ function applyAntigravityProject(call: ParsedProviderCall, source: SessionSource
   call.project = source.project
 }
 
+// gen_metadata rows and RPC entries without a real ChatStartMetadata.created_at
+// carry no per-call timestamp. Left empty, those calls are dropped by the
+// date-range filters in parser.ts (`if (!callTs) continue`), so each needs a
+// fallback. The fallback must be *stable* across file rewrites: the generic
+// session-cache persists whatever timestamp is emitted, and a non-durable
+// source is cleared and reparsed whenever its mtime changes, so stamping the
+// current mtime on every reparse would retro-date the whole session forward.
+//
+// assignStableTimestamps carries forward the timestamp already recorded for a
+// dedup key (its first-seen time, held in the durable Antigravity cache) and
+// only falls back to the current file mtime for genuinely new calls. Real
+// timestamps (created_at) are preserved untouched. This runs on the fresh-parse
+// paths whose result is written back to the cache.
+function assignStableTimestamps(
+  calls: ParsedProviderCall[],
+  priorCalls: readonly ParsedProviderCall[] | undefined,
+  firstSeenTimestamp: string,
+): void {
+  const priorByKey = new Map<string, string>()
+  for (const prior of priorCalls ?? []) {
+    if (prior.timestamp) priorByKey.set(prior.deduplicationKey, prior.timestamp)
+  }
+  for (const call of calls) {
+    if (call.timestamp) continue
+    call.timestamp = priorByKey.get(call.deduplicationKey) ?? firstSeenTimestamp
+  }
+}
+
+// Emit-time safety net for cache-hit / cached-fallback paths, where the calls
+// already carry stable timestamps from a prior parse. Applied to a copy so the
+// cache is never mutated; only fills a still-empty timestamp defensively.
+function withFallbackTimestamp(call: ParsedProviderCall, fallbackTimestamp: string): ParsedProviderCall {
+  return call.timestamp ? call : { ...call, timestamp: fallbackTimestamp }
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -1215,6 +1294,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       if (!s) return
 
       const projectPath = await extractWorkspacePath(source.path)
+      const fallbackTimestamp = new Date(s.mtimeMs).toISOString()
 
       const cached = cache.cascades[cascadeId]
       if (cached && cached.mtimeMs === s.mtimeMs && cached.sizeBytes === s.size && cached.calls.length > 0) {
@@ -1222,13 +1302,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           applyAntigravityProject(call, source, projectPath)
           if (seenKeys.has(call.deduplicationKey)) continue
           seenKeys.add(call.deduplicationKey)
-          yield call
+          yield withFallbackTimestamp(call, fallbackTimestamp)
         }
         return
       }
 
       const sqliteResults = await parseSqliteGenMetadataCalls(source.path, cascadeId)
       if (sqliteResults.length > 0) {
+        assignStableTimestamps(sqliteResults, cached?.calls, fallbackTimestamp)
         for (const call of sqliteResults) {
           applyAntigravityProject(call, source, projectPath)
         }
@@ -1255,7 +1336,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
-            yield call
+            yield withFallbackTimestamp(call, fallbackTimestamp)
           }
         }
         return
@@ -1274,13 +1355,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             applyAntigravityProject(call, source, projectPath)
             if (seenKeys.has(call.deduplicationKey)) continue
             seenKeys.add(call.deduplicationKey)
-            yield call
+            yield withFallbackTimestamp(call, fallbackTimestamp)
           }
         }
         return
       }
 
       const results = buildCallsFromGeneratorMetadata(cascadeId, metadata, modelMap)
+      assignStableTimestamps(results, cached?.calls, fallbackTimestamp)
       for (const call of results) {
         applyAntigravityProject(call, source, projectPath)
       }

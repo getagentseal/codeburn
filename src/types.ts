@@ -35,6 +35,29 @@ export type ApiUsage = {
     web_fetch_requests?: number
   }
   speed?: 'standard' | 'fast'
+  // Claude Code advisor tool (/advisor): per-turn sub-usage records. A record
+  // with type 'advisor_message' carries the advisor model's own tokens and is
+  // NOT included in the top-level totals above; type 'message' records mirror
+  // the main model and are already covered by the top-level totals.
+  iterations?: ApiUsageIteration[]
+}
+
+export type ApiUsageIteration = {
+  type?: string
+  model?: string
+  input_tokens?: number
+  output_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+  }
+  cache_read_input_tokens?: number
+  server_tool_use?: {
+    web_search_requests?: number
+    web_fetch_requests?: number
+  }
+  speed?: 'standard' | 'fast'
 }
 
 export type AssistantMessageContent = {
@@ -93,6 +116,12 @@ export type ParsedApiCall = {
   savingsUSD?: number
   savingsBaselineModel?: string
   isLocalSavings?: boolean
+  /// True when this call's `costUSD` is priced from estimated token counts or
+  /// otherwise synthesized by the provider (e.g. Warp/Kiro/Cursor derive tokens
+  /// from content length). Carried from `ParsedProviderCall.costIsEstimated`
+  /// across the parser/cache boundary. Aggregates roll the estimated portion up
+  /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
+  isEstimated?: boolean
 }
 
 export type ToolCall = {
@@ -123,9 +152,17 @@ export type ClassifiedTurn = ParsedTurn & {
   hasEdits: boolean
 }
 
+export type SessionSourceMetadata = {
+  id: string
+  label: string
+  path: string
+  kind: 'claude-config' | 'claude-desktop'
+}
+
 export type SessionSummary = {
   sessionId: string
   project: string
+  source?: SessionSourceMetadata
   // Claude Code only: agent type of a subagent transcript session
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
@@ -134,6 +171,10 @@ export type SessionSummary = {
   lastTimestamp: string
   totalCostUSD: number
   totalSavingsUSD: number
+  /// Portion of `totalCostUSD` contributed by calls whose price is estimated
+  /// (see `ParsedApiCall.isEstimated`). Optional so SessionSummary fixtures and
+  /// producers predating the field keep compiling; the parser always sets it.
+  totalEstimatedCostUSD?: number
   totalInputTokens: number
   totalOutputTokens: number
   totalReasoningTokens: number
@@ -141,7 +182,7 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   apiCalls: number
   turns: ClassifiedTurn[]
-  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number }>
+  modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number; estimatedCostUSD?: number }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>
   bashBreakdown: Record<string, { calls: number }>
@@ -162,6 +203,9 @@ export type ProjectSummary = {
   sessions: SessionSummary[]
   totalCostUSD: number
   totalSavingsUSD: number
+  /// Portion of `totalCostUSD` priced from estimated tokens (see
+  /// `SessionSummary.totalEstimatedCostUSD`). Optional for the same reason.
+  totalEstimatedCostUSD?: number
   totalApiCalls: number
   // Portion of `totalCostUSD` served through a subscription-backed proxy
   // (config `proxyPaths`). `totalCostUSD` is left at the full API rate (the

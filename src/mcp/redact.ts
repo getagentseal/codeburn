@@ -32,6 +32,7 @@ function redactSessionDetails(details: Array<{ cost: number; savingsUSD: number;
 
 export function redactProjectNames(payload: MenubarPayload, includeNames: boolean): MenubarPayload {
   if (includeNames) return payload
+  const timeline = payload.history?.timeline
   return {
     ...payload,
     current: {
@@ -42,6 +43,16 @@ export function redactProjectNames(payload: MenubarPayload, includeNames: boolea
         sessionDetails: p.sessionDetails ? redactSessionDetails(p.sessionDetails) : [],
       })),
       topSessions: payload.current.topSessions.map(s => ({ ...s, project: pseudonym(s.project) })),
+    },
+    history: {
+      ...payload.history,
+      ...(timeline ? {
+        timeline: {
+          ...timeline,
+          sessionSeries: [],
+          points: timeline.points.map(point => ({ ...point, sessions: [] })),
+        },
+      } : {}),
     },
   }
 }

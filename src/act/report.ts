@@ -1,4 +1,5 @@
 import { existsSync } from 'fs'
+import { dirname } from 'node:path'
 import type { DateRange, ProjectSummary, SessionSummary } from '../types.js'
 import type { ActionBaseline, ActionKind, ActionRecord } from './types.js'
 import type { FindingPlan } from './plans.js'
@@ -122,6 +123,26 @@ function sessionsInWindow(projects: ProjectSummary[], start: Date, end: Date): S
     }
   }
   return out
+}
+
+function projectPathKey(path: string): string {
+  const normalized = path.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalized.toLowerCase()
+}
+
+function modelDefaultSessionsInWindow(
+  rec: ActionRecord, projects: ProjectSummary[], start: Date, end: Date,
+): { projectFound: boolean; sessions: SessionSummary[] } {
+  const settingsPath = rec.changes[0]?.path
+  if (!settingsPath) return { projectFound: false, sessions: [] }
+  const normalizedSettingsPath = settingsPath.replace(/\\/g, '/')
+  const targetProjectPath = dirname(dirname(normalizedSettingsPath))
+  const targetKey = projectPathKey(targetProjectPath)
+  const targetProjects = projects.filter(project => projectPathKey(project.projectPath) === targetKey)
+  return {
+    projectFound: targetProjects.length > 0,
+    sessions: sessionsInWindow(targetProjects, start, end),
+  }
 }
 
 function countToolCalls(sessions: SessionSummary[], names: ReadonlySet<string>): number {
@@ -284,7 +305,61 @@ async function guardRow(
   }
 }
 
-async function computeRow(rec: ActionRecord, sessions: SessionSummary[], afterStart: Date, now: Date, opts: ActReportOptions): Promise<ActReportRow> {
+async function modelDefaultRow(
+  base: ActReportRow, rec: ActionRecord, sessions: SessionSummary[],
+  baseline: ActionBaseline, afterStart: Date, now: Date, projectFound: boolean,
+): Promise<ActReportRow> {
+  if (!projectFound) {
+    return { ...base, note: 'not measurable: project not found in current data (path may have changed)' }
+  }
+  const models = Object.keys(baseline.metrics)
+  if (models.length < 2) return { ...base, note: 'not measurable: invalid baseline' }
+  const candidateModel = baseline.candidateModel ?? models[0]!
+  const preApplyRate = baseline.metrics[candidateModel]
+  if (preApplyRate === undefined) return { ...base, note: 'not measurable: invalid baseline' }
+  
+  const mockProject: ProjectSummary = {
+    project: 'mock',
+    projectPath: 'mock',
+    totalCostUSD: 0,
+    totalSavingsUSD: 0,
+    totalApiCalls: 0,
+    totalProxiedCostUSD: 0,
+    sessions,
+  }
+  
+  const { aggregateModelStats } = await import('../compare-stats.js')
+  const stats = aggregateModelStats([mockProject]).find(s => s.model === candidateModel)
+  
+  if (!stats || stats.editTurns < 20) {
+    return { ...base, note: `not measurable: < 20 edit turns for ${candidateModel} since apply` }
+  }
+  
+  const postApplyRate = stats.oneShotTurns / stats.editTurns
+  
+  if (postApplyRate < preApplyRate - 0.05) {
+    return {
+      ...base,
+      status: 'measured',
+      realizedTokens: 0,
+      confidence: 'low',
+      note: `quality regression, consider undo: one-shot rate ${(preApplyRate * 100).toFixed(1)}% -> ${(postApplyRate * 100).toFixed(1)}%`
+    }
+  }
+
+  return {
+    ...base,
+    status: 'measured',
+    realizedTokens: 0,
+    confidence: confidenceFor(sessions.length, baseline, afterStart, now),
+    note: `correlation, not attribution: one-shot rate ${(preApplyRate * 100).toFixed(1)}% -> ${(postApplyRate * 100).toFixed(1)}%`
+  }
+}
+
+async function computeRow(
+  rec: ActionRecord, sessions: SessionSummary[], afterStart: Date, now: Date,
+  opts: ActReportOptions, modelDefaultProjectFound = true,
+): Promise<ActReportRow> {
   const estimatedAtApply = rec.baseline?.estimatedTokens ?? 0
   const base: ActReportRow = {
     id: rec.id,
@@ -307,6 +382,7 @@ async function computeRow(rec: ActionRecord, sessions: SessionSummary[], afterSt
   if (rec.kind === 'claude-md-rule') return readEditRow(base, sessions, baseline, afterStart, now)
   if (rec.kind === 'shell-config') return { ...base, note: 'not measurable: bash result token sizes are not retained in the summary' }
   if (rec.kind === 'guard-install') return guardRow(base, afterStart, now, baseline, opts)
+  if (rec.kind === 'model-default') return modelDefaultRow(base, rec, sessions, baseline, afterStart, now, modelDefaultProjectFound)
   return { ...base, note: 'not measurable: kind is not tracked by act report' }
 }
 
@@ -361,7 +437,11 @@ export async function computeActReport(opts: ActReportOptions = {}): Promise<Act
   const rows: ActReportRow[] = []
   for (const rec of eligible) {
     const afterStart = new Date(Math.max(new Date(rec.at).getTime(), windowStart.getTime()))
-    rows.push(await computeRow(rec, sessionsInWindow(projects, afterStart, now), afterStart, now, opts))
+    const modelDefaultWindow = rec.kind === 'model-default'
+      ? modelDefaultSessionsInWindow(rec, projects, afterStart, now)
+      : undefined
+    const sessions = modelDefaultWindow?.sessions ?? sessionsInWindow(projects, afterStart, now)
+    rows.push(await computeRow(rec, sessions, afterStart, now, opts, modelDefaultWindow?.projectFound))
   }
 
   const measuredRows = rows.filter(r => r.status === 'measured' && isTokenKind(r.kind))
@@ -405,6 +485,7 @@ function realizedCell(r: ActReportRow): string {
   if (r.status === 'reverted') return 'reverted'
   if (r.status === 'not-measurable') return 'not measurable'
   if (r.correlation) return `abandoned ${r.correlation.abandonedPctThen}% -> ${r.correlation.abandonedPctNow}% (corr.)`
+  if (r.kind === 'model-default') return 'correlation'
   return formatTokens(r.realizedTokens)
 }
 

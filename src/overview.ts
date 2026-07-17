@@ -3,15 +3,21 @@ import { Chalk, type ChalkInstance } from 'chalk'
 import { homedir } from 'os'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
-import { formatCost as baseCost } from './currency.js'
-import { getShortModelName } from './models.js'
+import { formatCost as baseCost, getCurrency } from './currency.js'
+import { findUnpricedModels, getShortModelName } from './models.js'
+import { markEstimated } from './format.js'
 import { dateKey } from './day-aggregator.js'
+import type { BudgetStatus, BudgetTier } from './budget.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
 // a precise statement. Aggregation uses raw numbers; these only affect render.
 function formatCost(usd: number): string {
   return baseCost(usd).replace(/(\d)(?=(\d{3})+(\.|$))/g, '$1,')
+}
+function formatDisplayCost(amount: number): string {
+  const { rate } = getCurrency()
+  return formatCost(rate > 0 ? amount / rate : amount)
 }
 function formatTokens(n: number): string {
   // Pin the locale so grouping is deterministic regardless of the host's
@@ -38,6 +44,11 @@ function projectName(p: ProjectSummary): string {
 }
 
 type Col = { header: string; right?: boolean }
+type OverviewBudget = {
+  tier: BudgetTier
+  status: BudgetStatus
+  inProgress: boolean
+}
 
 // Visible width, ignoring ANSI color codes, so padding stays aligned.
 function vlen(s: string): number {
@@ -74,7 +85,7 @@ function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
 
 export function renderOverview(
   projects: ProjectSummary[],
-  opts: { label: string; color: boolean },
+  opts: { label: string; color: boolean; budget?: OverviewBudget },
 ): string {
   const c = new Chalk(opts.color ? {} : { level: 0 })
   const heading = (text: string): string => c.cyan.bold(text)
@@ -91,7 +102,7 @@ export function renderOverview(
   let cost = 0, savings = 0, calls = 0, sessions = 0
   let inTok = 0, outTok = 0, cacheR = 0, cacheW = 0
   const byProvider = new Map<string, { cost: number; tokens: number }>()
-  const byModel = new Map<string, { cost: number; calls: number; tokens: number }>()
+  const byModel = new Map<string, { cost: number; calls: number; tokens: number; estimatedCost: number }>()
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
@@ -113,9 +124,10 @@ export function renderOverview(
       cacheR += s.totalCacheReadTokens
       cacheW += s.totalCacheWriteTokens
       for (const [m, d] of Object.entries(s.modelBreakdown)) {
-        const e = byModel.get(m) ?? { cost: 0, calls: 0, tokens: 0 }
+        const e = byModel.get(m) ?? { cost: 0, calls: 0, tokens: 0, estimatedCost: 0 }
         e.cost += d.costUSD
         e.calls += d.calls
+        e.estimatedCost += d.estimatedCostUSD ?? 0
         e.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
         byModel.set(m, e)
       }
@@ -160,6 +172,31 @@ export function renderOverview(
   out.push(kv('Calls', formatCount(calls) + c.dim('   sessions ') + formatCount(sessions)))
   out.push(kv('Cache hit', `${cacheHit.toFixed(1)}%`))
   if (savings > 0) out.push(kv('Savings', formatCost(savings) + c.dim(' (local models)')))
+  const unpriced = findUnpricedModels(
+    [...byModel.entries()].map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens })),
+  )
+  if (unpriced.length > 0) {
+    const shown = unpriced.slice(0, 3)
+      .map((u) => `${u.model} (${formatTokens(u.tokens)} tok)`)
+      .join(', ')
+    const more = unpriced.length > 3 ? ` +${unpriced.length - 3} more` : ''
+    out.push(kv('Unpriced', c.yellow(`${unpriced.length} model${unpriced.length === 1 ? '' : 's'} at $0: `) + shown + more))
+    out.push(kv('', c.dim('Fix: codeburn model-alias "<model>" <known-model>')))
+  }
+  if (opts.budget) {
+    const label = opts.budget.tier === 'daily'
+      ? 'Daily'
+      : opts.budget.tier === 'weekly'
+        ? 'Weekly'
+        : 'Monthly'
+    const status = opts.budget.status
+    const pct = `${Math.floor(status.pct)}%`
+    const statusColor = status.state === 'over' ? c.red : status.state === 'warn' ? c.yellow : c.green
+    const projected = opts.budget.inProgress
+      ? c.dim(`  projected ${formatDisplayCost(status.projected)} by ${opts.budget.tier === 'monthly' ? 'month' : opts.budget.tier === 'weekly' ? 'week' : 'day'} end`)
+      : ''
+    out.push('  ' + statusColor(`${label} budget: ${formatDisplayCost(status.spent)} of ${formatDisplayCost(status.budget)} (${pct})`) + projected)
+  }
   out.push('')
 
   // Tokens breakdown: input / output / cache in (written) / cache out (read)
@@ -198,8 +235,11 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), formatCost(v.cost), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [getShortModelName(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
+    if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
+      out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
+    }
     out.push('')
   }
 

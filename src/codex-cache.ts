@@ -8,7 +8,10 @@ import type { ParsedProviderCall } from './providers/types.js'
 
 // v4: attribute MCP calls emitted as event_msg/mcp_tool_call_end (issue #478).
 // Recent Codex sessions cached under v3 dropped these, so force a re-parse.
-const CODEX_CACHE_VERSION = 4
+// v5: also attribute CLI-wrapped MCP calls (`mcp-cli call server tool`) that
+// Codex logs as a plain exec_command (issue #478 follow-up). Force a re-parse
+// so sessions cached under v4 pick up the CLI-MCP attribution.
+const CODEX_CACHE_VERSION = 5
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }

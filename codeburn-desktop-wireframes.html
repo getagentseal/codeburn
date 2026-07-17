@@ -1,0 +1,731 @@
+<title>CodeBurn Desktop — Wireframes</title>
+<style>
+  :root {
+    --pg: #08090E;
+    --pg-ink: #EEF0F6;
+    --pg-mut: #8A90A3;
+    --pg-line: rgba(160,175,255,.10);
+
+    --canvas: #0B0D13;
+    --side: #0D0F16;
+    --panel: #12151F;
+    --phead: #161A27;
+    --hair: rgba(160,175,255,.07);
+    --hair2: rgba(160,175,255,.13);
+    --t1: #F2F4F9;
+    --t2: #9BA3B7;
+    --t3: #5F6780;
+
+    --blue: #5B8CFF;
+    --purple: #8B7CF6;
+    --lav: #B5A8FF;
+    --cyan: #4DD8E6;
+    --mint: #3ECF8E;
+    --amber: #E8B93E;
+    --red: #F26D6D;
+
+    --grad: linear-gradient(135deg, #5B8CFF, #8B7CF6);
+    --grad-bar: linear-gradient(to top, rgba(91,140,255,.55), #6FA2FF 60%, #4DD8E6);
+    --mono: ui-monospace, "SF Mono", "Berkeley Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  body {
+    background:
+      radial-gradient(90% 60% at 8% -10%, rgba(91,140,255,.08), transparent 55%),
+      radial-gradient(80% 60% at 100% 115%, rgba(139,124,246,.07), transparent 55%),
+      var(--pg);
+    color: var(--pg-ink); font-family: var(--sans); line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1060px; margin: 0 auto; padding: 60px 28px 100px; }
+
+  header h1 { font-size: 30px; font-weight: 650; letter-spacing: -.025em; margin: 0 0 10px; }
+  header h1 em { font-style: normal; background: linear-gradient(100deg, #6FA2FF, #A78BFA 60%, #4DD8E6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header .sub { color: var(--pg-mut); font-size: 15px; max-width: 66ch; margin: 0; }
+  header .meta { color: var(--pg-mut); font-size: 12px; margin: 14px 0 0; }
+  header .meta b { color: var(--pg-ink); font-weight: 600; }
+
+  section { margin-top: 76px; }
+  h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px; }
+  .lede { color: var(--pg-mut); font-size: 13.5px; max-width: 68ch; margin: 0 0 20px; }
+  .cap { color: var(--pg-mut); font-size: 12.5px; max-width: 76ch; margin: 14px 0 0; line-height: 1.7; }
+  .cap b { color: var(--pg-ink); font-weight: 600; }
+  .cap code { font-family: var(--mono); font-size: 11.5px; color: var(--lav); }
+
+  .toks { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 22px; }
+  .tok { display: flex; align-items: center; gap: 9px; border: 1px solid var(--pg-line); border-radius: 8px; padding: 7px 12px 7px 8px; background: #0E1017; }
+  .tok i { width: 22px; height: 22px; border-radius: 6px; display: block; border: 1px solid rgba(255,255,255,.08); }
+  .tok span { font-family: var(--mono); font-size: 10.5px; color: var(--pg-mut); }
+  .tok span b { display: block; color: var(--pg-ink); font-weight: 600; font-size: 11px; font-family: var(--sans); }
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 28px; margin: 0; padding: 0; list-style: none; }
+  .principles li { border-top: 1px solid var(--pg-line); padding: 12px 0 2px; font-size: 13px; color: var(--pg-mut); }
+  .principles li b { display: block; color: var(--pg-ink); font-weight: 600; font-size: 13.5px; margin-bottom: 2px; }
+
+  /* ————— window ————— */
+  .frame { overflow-x: auto; padding: 4px; }
+  .win {
+    min-width: 800px; display: flex; border-radius: 13px; overflow: hidden; font-size: 13px; min-height: 420px;
+    background:
+      radial-gradient(70% 50% at 85% -8%, rgba(91,140,255,.07), transparent 60%),
+      var(--canvas);
+    color: var(--t1); letter-spacing: -.006em;
+    box-shadow: 0 0 0 1px rgba(160,175,255,.09), 0 34px 70px -30px rgba(0,0,0,.95);
+  }
+  .sb { flex: 0 0 186px; background: var(--side); border-right: 1px solid var(--hair); display: flex; flex-direction: column; padding: 0 8px 10px; }
+  .lights { display: flex; gap: 8px; padding: 15px 8px 16px; }
+  .lights i { width: 11px; height: 11px; border-radius: 50%; background: #262B3A; }
+  .app { display: flex; align-items: center; padding: 0 8px 14px; }
+  .app b { font-size: 14px; font-weight: 700; letter-spacing: -.02em; background: linear-gradient(100deg, #FFC24D, #F97316 60%, #F04D0A); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 10px rgba(249,115,22,.35)); }
+  .ni { position: relative; display: flex; align-items: center; gap: 9px; padding: 5.5px 8px 5.5px 12px; border-radius: 7px; color: var(--t2); font-size: 12.5px; font-weight: 480; margin-bottom: 1px; }
+  .ni.on { background: linear-gradient(90deg, rgba(91,140,255,.14), rgba(139,124,246,.05)); color: var(--t1); font-weight: 560; box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+  .ni.on::before { content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2.5px; border-radius: 2px; background: var(--grad); }
+  .ni .k { margin-left: auto; font-size: 10px; color: var(--t3); border: 1px solid var(--hair2); border-radius: 4px; padding: 0 4px; font-family: var(--mono); }
+  .sb .push { flex: 1; }
+  .sb .status { font-size: 11px; color: var(--t2); padding: 10px 8px 0; border-top: 1px solid var(--hair); font-variant-numeric: tabular-nums; font-family: var(--mono); }
+  .sb .status b { color: var(--t1); font-weight: 560; }
+
+  .ct { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 13px 18px 11px; border-bottom: 1px solid var(--hair); }
+  .bar .t { font-size: 14px; font-weight: 600; letter-spacing: -.012em; }
+  .bar .scope { font-size: 11px; color: var(--t3); }
+  .sp { flex: 1; }
+  .seg { display: inline-flex; background: rgba(160,175,255,.06); border-radius: 7px; padding: 2px; }
+  .seg span { padding: 2.5px 9px; border-radius: 5px; font-size: 11px; color: var(--t2); white-space: nowrap; }
+  .seg .on { background: #232A3F; color: var(--t1); font-weight: 550; box-shadow: inset 0 1px 0 rgba(255,255,255,.09); }
+  .pop { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--hair2); border-radius: 7px; padding: 2.5px 9px; font-size: 11px; color: #C6CBDA; white-space: nowrap; }
+  .pop::after { content: "⌄"; color: var(--t3); }
+  .btn { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 550; padding: 3.5px 12px; border-radius: 7px; white-space: nowrap; }
+  .btn-p { background: var(--grad); color: #fff; box-shadow: 0 2px 12px rgba(107,124,246,.4), inset 0 1px 0 rgba(255,255,255,.28); }
+  .btn-s { background: #1B2030; color: var(--t1); border: 1px solid var(--hair2); }
+  .body { flex: 1; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; }
+
+  /* cards — Dash0 style: header strip + body */
+  .panel { background: var(--panel); border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 1px 2px rgba(0,0,0,.25); }
+  .phead { display: flex; align-items: center; gap: 8px; padding: 8px 13px; background: var(--phead); border-bottom: 1px solid var(--hair); }
+  .phead b { font-size: 11.5px; font-weight: 560; color: var(--t2); }
+  .phead .r { margin-left: auto; font-size: 11px; color: var(--t3); }
+  .phead .r.link { color: var(--lav); font-weight: 530; }
+  .pbody { padding: 12px 14px; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .stat .v { font-size: 24px; font-weight: 640; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .v small { font-size: 11px; color: var(--t3); font-weight: 500; letter-spacing: 0; }
+  .stat .d { font-size: 10.5px; margin-top: 4px; color: var(--t3); font-variant-numeric: tabular-nums; }
+  .stat .d.info { color: var(--blue); }
+  .stat .d.bad { color: var(--red); }
+  .stat .d.hot { color: var(--amber); }
+  .stat .d.ok { color: var(--mint); }
+
+  /* capsule chart (ref: gradient pill bars) */
+  .plot { position: relative; height: 108px; }
+  .gl { position: absolute; left: 0; right: 30px; border-top: 1px solid var(--hair); }
+  .gl em { position: absolute; right: -30px; top: -7px; font-style: normal; font-size: 9.5px; color: var(--t3); font-family: var(--mono); }
+  .bars { position: absolute; inset: 0 30px 0 0; display: flex; align-items: flex-end; gap: 3px; padding: 0 8px; }
+  .bars .c { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+  .bars .b { width: 100%; max-width: 12px; background: linear-gradient(to top, #232A3F, #2E3750); border-radius: 99px; min-height: 6px; }
+  .bars .c.hi .b { background: var(--grad-bar); box-shadow: 0 0 18px rgba(91,140,255,.35); }
+  .bars .c.hi2 .b { background: linear-gradient(to top, rgba(91,140,255,.4), #5B8CFF); }
+  .days { display: flex; justify-content: space-between; padding: 6px 38px 0 8px; }
+  .days span { font-size: 9.5px; color: var(--t3); font-family: var(--mono); }
+
+  /* stacked multi-series bars */
+  .sbars { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 0 4px; }
+  .sbars .c { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; justify-content: flex-start; align-items: center; gap: 1.5px; }
+  .sbars .s { width: 100%; max-width: 11px; border-radius: 2px; }
+  .s-opus { background: var(--blue); }
+  .s-son { background: var(--purple); }
+  .s-hai { background: var(--lav); }
+  .s-gpt { background: var(--cyan); }
+  .legend { display: flex; gap: 16px; padding: 9px 4px 0; font-size: 10.5px; color: var(--t2); flex-wrap: wrap; }
+  .legend i { width: 8px; height: 8px; border-radius: 2.5px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
+  .li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--hair); }
+  .li:first-of-type { border-top: 0; padding-top: 0; }
+  .li .no { font-family: var(--mono); font-size: 10.5px; color: var(--t3); flex: 0 0 17px; }
+  .li .lx { flex: 1; min-width: 0; }
+  .li .lx b { display: block; font-size: 12.5px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .li .lx span { font-size: 10.5px; color: var(--t3); }
+  .li .lx span.hot { color: var(--amber); }
+  .li .lx span.bad { color: var(--red); }
+  .li .val { font-family: var(--mono); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .li .val.ok { color: var(--mint); }
+  .li .chev { color: #333A50; }
+  .mdot { width: 8px; height: 8px; border-radius: 2.5px; flex: 0 0 auto; }
+
+  .hint { display: flex; gap: 14px; padding: 8px 18px; border-top: 1px solid var(--hair); font-size: 10.5px; color: var(--t3); }
+  .hint .k { font-family: var(--mono); border: 1px solid var(--hair2); border-radius: 4px; padding: 0 4px; margin-right: 4px; color: var(--t2); }
+  .hint .r { margin-left: auto; }
+
+  table { border-collapse: collapse; width: 100%; }
+  th { font-size: 10.5px; color: var(--t3); font-weight: 500; text-align: right; padding: 0 10px 7px; border-bottom: 1px solid var(--hair2); }
+  th:first-child, td:first-child { text-align: left; padding-left: 2px; }
+  th:last-child, td:last-child { padding-right: 2px; }
+  td { font-family: var(--mono); font-size: 11.5px; text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--hair); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td:first-child { font-family: var(--sans); font-size: 12.5px; font-weight: 520; }
+  tr:last-child td { border-bottom: 0; }
+  td .pos { color: var(--mint); }
+  .dim { color: var(--t3); }
+  .est { font-size: 9.5px; color: var(--t3); font-family: var(--mono); }
+  .alias { color: var(--lav); font-family: var(--sans); font-size: 11px; font-weight: 530; }
+
+  .ev { font-size: 10.5px; color: var(--t3); margin-top: 3px; font-family: var(--mono); }
+  .ev a { color: var(--lav); text-decoration: none; }
+  .fixrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .codechip { font-family: var(--mono); font-size: 10.5px; background: rgba(160,175,255,.06); border: 1px solid var(--hair); border-radius: 6px; padding: 3px 9px; white-space: nowrap; }
+
+  .track { height: 5px; border-radius: 3px; background: rgba(160,175,255,.08); position: relative; margin-top: 8px; }
+  .track i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--grad); }
+  .track i.over { background: linear-gradient(90deg, #F26D6D, #E8484F); }
+  .track i.mut { background: #2A3145; }
+  .plrow { display: flex; align-items: baseline; gap: 10px; }
+  .plrow b { font-size: 13px; font-weight: 580; }
+  .plrow span { font-size: 11px; color: var(--t3); }
+  .plrow .r { margin-left: auto; font-family: var(--mono); font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .pace { font-size: 10.5px; margin-top: 7px; color: var(--t3); }
+  .pace.hot { color: var(--amber); }
+  .pace.ok { color: var(--mint); }
+
+  .rail { flex: 0 0 146px; padding: 2px 12px 0 0; }
+  .rail .ni { padding: 4.5px 8px 4.5px 12px; }
+  .tglon { width: 28px; height: 17px; border-radius: 9px; background: var(--grad); position: relative; flex: 0 0 auto; box-shadow: 0 1px 8px rgba(107,124,246,.4); }
+  .tglon::after { content: ""; position: absolute; top: 2px; right: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; }
+
+  .minirow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .mini { background: #0E1017; border: 1px solid var(--pg-line); border-radius: 10px; padding: 15px 16px; font-size: 12px; min-height: 150px; }
+  .mini h5 { font-size: 11px; color: var(--pg-mut); margin: 0 0 12px; font-weight: 550; }
+  .skel { height: 8px; border-radius: 4px; background: rgba(160,175,255,.08); margin: 8px 0; }
+
+  .footer { margin-top: 80px; border-top: 1px solid var(--pg-line); padding-top: 18px; font-size: 12px; color: var(--pg-mut); line-height: 1.8; }
+
+  @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } .minirow { grid-template-columns: 1fr; } }
+</style>
+
+<div class="page">
+  <header>
+    <h1>CodeBurn Desktop — <em>indigo instrument</em></h1>
+    <p class="sub">Wireframes v6. Cool near-black system with clean gradients: indigo→violet as the single UI gradient, blue/purple/lavender/cyan as the model-series palette, capsule gradient bars, and a Sankey cost-flow as the premium signature. Machined base kept: hairlines, mono digits, keycaps, scope labels.</p>
+    <p class="meta"><b>v6.1</b> · 2026-07-10 · references: Dash0 AI-coding dashboard (series palette, card headers, Sankey), gradient-capsule chart, ambient glow · 30-day default period (7 bars never balloon again) · shiny orange CodeBurn brand mark · full period vocabulary: Today / 7D / 30D / Month / 6M / Custom</p>
+  </header>
+
+  <section>
+    <h2>Design language</h2>
+    <p class="lede">One gradient for the UI (indigo→violet: active rail, primary button, plan tracks, toggle). Data gets the series palette. Trouble is text color only — amber pace, red overage, mint savings.</p>
+    <div class="toks">
+      <div class="tok"><i style="background:#0B0D13"></i><span><b>Canvas</b>#0B0D13 + ambient glow</span></div>
+      <div class="tok"><i style="background:#12151F"></i><span><b>Panel</b>#12151F / head #161A27</span></div>
+      <div class="tok"><i style="background:linear-gradient(135deg,#5B8CFF,#8B7CF6)"></i><span><b>UI gradient</b>#5B8CFF → #8B7CF6</span></div>
+      <div class="tok"><i style="background:#5B8CFF"></i><span><b>Opus</b>#5B8CFF</span></div>
+      <div class="tok"><i style="background:#8B7CF6"></i><span><b>Sonnet</b>#8B7CF6</span></div>
+      <div class="tok"><i style="background:#B5A8FF"></i><span><b>Haiku</b>#B5A8FF</span></div>
+      <div class="tok"><i style="background:#4DD8E6"></i><span><b>GPT / Codex</b>#4DD8E6</span></div>
+      <div class="tok"><i style="background:#3ECF8E"></i><span><b>Savings</b>#3ECF8E</span></div>
+      <div class="tok"><i style="background:#E8B93E"></i><span><b>Pace</b>#E8B93E</span></div>
+      <div class="tok"><i style="background:#F26D6D"></i><span><b>Overage</b>#F26D6D</span></div>
+    </div>
+    <ul class="principles">
+      <li><b>One UI gradient</b>Indigo→violet marks what's interactive or active. It never colors data.</li>
+      <li><b>Series palette for data</b>Each model owns a hue everywhere — chart, legend, Sankey, table dot. Recognition over decoration.</li>
+      <li><b>Capsule bars</b>History in muted slate capsules; the emphasized bar gets the blue→cyan gradient and a soft glow.</li>
+      <li><b>Card = header + body</b>Dash0-style header strip carries the title and controls, keeping bodies pure content.</li>
+      <li><b>Status is text</b>Amber pace, red overage, mint savings. No dots, no pills, no gradient alarms.</li>
+    </ul>
+  </section>
+
+  <!-- ============ OVERVIEW ============ -->
+  <section>
+    <h2>01 · Overview</h2>
+    <p class="lede">Ten-second triage. Big clean numbers, one glowing capsule chart, the damage list.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni on">Overview<span class="k">⌘1</span></div>
+          <div class="ni">Spend<span class="k">⌘2</span></div>
+          <div class="ni">Optimize<span class="k">⌘3</span></div>
+          <div class="ni">Models<span class="k">⌘4</span></div>
+          <div class="ni">Plans<span class="k">⌘5</span></div>
+          <div class="ni">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">Today <b>$6.20</b> · Mo <b>$312.40</b></div>
+        </nav>
+        <div class="ct">
+          <div class="bar">
+            <div class="t">Overview</div>
+            <span class="scope">Last 30 days · All providers · 2 devices</span>
+            <div class="sp"></div>
+            <div class="seg"><span>Today</span><span>7D</span><span class="on">30D</span><span>Month</span><span>6M</span><span>Custom</span></div>
+            <div class="pop">All providers</div>
+          </div>
+          <div class="body">
+            <div class="stats">
+              <div class="panel stat"><div class="phead"><b>Today</b></div><div class="pbody"><div class="v">$6.20</div><div class="d info">12 sessions</div></div></div>
+              <div class="panel stat"><div class="phead"><b>Month to date</b></div><div class="pbody"><div class="v">$312.40</div><div class="d hot">+24% vs June pace</div></div></div>
+              <div class="panel stat"><div class="phead"><b>Projected month</b></div><div class="pbody"><div class="v">$968 <small>est</small></div><div class="d bad">$748 over plans</div></div></div>
+              <div class="panel stat"><div class="phead"><b>Waste found</b></div><div class="pbody"><div class="v">$23.60 <small>/wk</small></div><div class="d ok">3 fixes ready</div></div></div>
+            </div>
+            <div class="panel">
+              <div class="phead"><b>Daily spend</b><span class="r">biggest driver: Opus 4.8 in codeburn, +61% — <span style="color:var(--lav)">why ›</span></span></div>
+              <div class="pbody">
+                <div class="plot">
+                  <div class="gl" style="top:0"><em>32</em></div>
+                  <div class="gl" style="top:50%"><em>16</em></div>
+                  <div class="gl" style="top:100%"><em>0</em></div>
+                  <div class="bars">
+                    <div class="c"><div class="b" style="height:40%"></div></div>
+                    <div class="c"><div class="b" style="height:58%"></div></div>
+                    <div class="c"><div class="b" style="height:22%"></div></div>
+                    <div class="c"><div class="b" style="height:72%"></div></div>
+                    <div class="c"><div class="b" style="height:45%"></div></div>
+                    <div class="c"><div class="b" style="height:66%"></div></div>
+                    <div class="c"><div class="b" style="height:30%"></div></div>
+                    <div class="c"><div class="b" style="height:52%"></div></div>
+                    <div class="c"><div class="b" style="height:80%"></div></div>
+                    <div class="c"><div class="b" style="height:38%"></div></div>
+                    <div class="c"><div class="b" style="height:60%"></div></div>
+                    <div class="c"><div class="b" style="height:26%"></div></div>
+                    <div class="c"><div class="b" style="height:48%"></div></div>
+                    <div class="c"><div class="b" style="height:70%"></div></div>
+                    <div class="c"><div class="b" style="height:34%"></div></div>
+                    <div class="c"><div class="b" style="height:55%"></div></div>
+                    <div class="c hi2"><div class="b" style="height:90%"></div></div>
+                    <div class="c"><div class="b" style="height:42%"></div></div>
+                    <div class="c"><div class="b" style="height:64%"></div></div>
+                    <div class="c"><div class="b" style="height:28%"></div></div>
+                    <div class="c"><div class="b" style="height:50%"></div></div>
+                    <div class="c"><div class="b" style="height:75%"></div></div>
+                    <div class="c"><div class="b" style="height:36%"></div></div>
+                    <div class="c"><div class="b" style="height:58%"></div></div>
+                    <div class="c hi"><div class="b" style="height:99%"></div></div>
+                    <div class="c"><div class="b" style="height:44%"></div></div>
+                    <div class="c"><div class="b" style="height:68%"></div></div>
+                    <div class="c"><div class="b" style="height:32%"></div></div>
+                    <div class="c"><div class="b" style="height:46%"></div></div>
+                    <div class="c"><div class="b" style="height:20%"></div></div>
+                  </div>
+                </div>
+                <div class="days"><span>Jun 11</span><span>Jun 18</span><span>Jun 25</span><span>Jul 2</span><span>Jul 10</span></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="phead"><b>Most expensive sessions</b><span class="r link">See all ›</span></div>
+              <div class="pbody">
+                <div class="li"><span class="no">01</span><span class="mdot" style="background:var(--blue)"></span><div class="lx"><b>Refactor parser OOM buffer reader</b><span>codeburn · Wed 14:32 · Opus 4.8 · 41 turns</span></div><span class="val">$8.41</span><span class="chev">›</span></div>
+                <div class="li"><span class="no">02</span><span class="mdot" style="background:var(--blue)"></span><div class="lx"><b>Device pairing e2e + mTLS handshake</b><span>codeburn · Tue 10:05 · Opus 4.8 · 33 turns</span></div><span class="val">$6.12</span><span class="chev">›</span></div>
+                <div class="li"><span class="no">03</span><span class="mdot" style="background:var(--purple)"></span><div class="lx"><b>Honeycomb logo iterations</b><span>agentseal-dash · Mon 16:48 · Sonnet 5 · 27 turns</span></div><span class="val">$4.98</span><span class="chev">›</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="hint"><span><span class="k">⌘K</span>Command</span><span><span class="k">⌘E</span>Export view</span><span><span class="k">→</span>Drill in</span><span class="r">refreshed 30s ago</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> Capsule bars: slate history, gradient + glow on the peak, plain blue on second-highest — the eye finds Monday instantly. Session rows carry the model's series dot. Deltas: blue = neutral info, amber = pace, red = overage, mint = good.</p>
+  </section>
+
+  <!-- ============ SPEND ============ -->
+  <section>
+    <h2>02 · Spend</h2>
+    <p class="lede">Stacked series by model, then the signature: cost flowing model → project as a Sankey. Every ribbon is a filterable claim.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni">Overview<span class="k">⌘1</span></div>
+          <div class="ni on">Spend<span class="k">⌘2</span></div>
+          <div class="ni">Optimize<span class="k">⌘3</span></div>
+          <div class="ni">Models<span class="k">⌘4</span></div>
+          <div class="ni">Plans<span class="k">⌘5</span></div>
+          <div class="ni">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">30d <b>$612.48</b></div>
+        </nav>
+        <div class="ct">
+          <div class="bar">
+            <div class="t">Spend</div>
+            <span class="scope">Last 30 days · All providers</span>
+            <div class="sp"></div>
+            <div class="seg"><span>Today</span><span>7D</span><span class="on">30D</span><span>Month</span><span>6M</span><span>Custom</span></div>
+            <div class="pop">All providers</div>
+          </div>
+          <div class="body">
+            <div class="seg" style="align-self:flex-start"><span class="on">Projects</span><span>Activity</span><span>Tools</span><span>MCP</span><span>Subagents</span></div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px">
+              <div class="panel">
+                <div class="phead"><b>Daily spend by model</b></div>
+                <div class="pbody">
+                  <div class="sbars">
+                    <div class="c"><span class="s s-opus" style="height:22%"></span><span class="s s-son" style="height:8%"></span><span class="s s-gpt" style="height:6%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:30%"></span><span class="s s-son" style="height:10%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:8%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:12%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:6%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:38%"></span><span class="s s-son" style="height:14%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:11%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:24%"></span><span class="s s-son" style="height:10%"></span><span class="s s-gpt" style="height:8%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:34%"></span><span class="s s-son" style="height:13%"></span><span class="s s-hai" style="height:5%"></span><span class="s s-gpt" style="height:10%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:15%"></span><span class="s s-gpt" style="height:5%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:27%"></span><span class="s s-son" style="height:9%"></span><span class="s s-gpt" style="height:7%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:42%"></span><span class="s s-son" style="height:15%"></span><span class="s s-hai" style="height:5%"></span><span class="s s-gpt" style="height:12%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:19%"></span><span class="s s-son" style="height:7%"></span><span class="s s-gpt" style="height:6%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:31%"></span><span class="s s-son" style="height:11%"></span><span class="s s-gpt" style="height:9%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:13%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:5%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:25%"></span><span class="s s-son" style="height:9%"></span><span class="s s-gpt" style="height:7%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:36%"></span><span class="s s-son" style="height:13%"></span><span class="s s-hai" style="height:5%"></span><span class="s s-gpt" style="height:10%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:17%"></span><span class="s s-son" style="height:6%"></span><span class="s s-gpt" style="height:5%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:28%"></span><span class="s s-son" style="height:10%"></span><span class="s s-gpt" style="height:8%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:46%"></span><span class="s s-son" style="height:17%"></span><span class="s s-hai" style="height:6%"></span><span class="s s-gpt" style="height:13%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:21%"></span><span class="s s-son" style="height:8%"></span><span class="s s-gpt" style="height:6%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:33%"></span><span class="s s-son" style="height:12%"></span><span class="s s-gpt" style="height:9%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:14%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:5%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:26%"></span><span class="s s-son" style="height:9%"></span><span class="s s-gpt" style="height:7%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:39%"></span><span class="s s-son" style="height:14%"></span><span class="s s-hai" style="height:5%"></span><span class="s s-gpt" style="height:11%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:18%"></span><span class="s s-son" style="height:7%"></span><span class="s s-gpt" style="height:6%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:29%"></span><span class="s s-son" style="height:11%"></span><span class="s s-gpt" style="height:8%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:52%"></span><span class="s s-son" style="height:19%"></span><span class="s s-hai" style="height:6%"></span><span class="s s-gpt" style="height:15%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:23%"></span><span class="s s-son" style="height:8%"></span><span class="s s-gpt" style="height:7%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:35%"></span><span class="s s-son" style="height:13%"></span><span class="s s-hai" style="height:4%"></span><span class="s s-gpt" style="height:10%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:16%"></span><span class="s s-son" style="height:6%"></span><span class="s s-gpt" style="height:5%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:24%"></span><span class="s s-son" style="height:9%"></span><span class="s s-gpt" style="height:7%"></span></div>
+                    <div class="c"><span class="s s-opus" style="height:10%"></span><span class="s s-gpt" style="height:4%"></span></div>
+                  </div>
+                  <div class="legend">
+                    <span><i style="background:var(--blue)"></i>Opus 4.8</span>
+                    <span><i style="background:var(--purple)"></i>Sonnet 5</span>
+                    <span><i style="background:var(--lav)"></i>Haiku 4.5</span>
+                    <span><i style="background:var(--cyan)"></i>GPT-5.5 Codex</span>
+                  </div>
+                </div>
+              </div>
+              <div class="panel">
+                <div class="phead"><b>By project</b><span class="r">16 projects</span></div>
+                <div class="pbody">
+                  <div class="li"><span class="no">01</span><div class="lx"><b>codeburn</b><span>124 sessions</span></div><span class="val">$246.10</span><span class="chev">›</span></div>
+                  <div class="li"><span class="no">02</span><div class="lx"><b>agentseal-dash</b><span>74 sessions</span></div><span class="val">$141.30</span><span class="chev">›</span></div>
+                  <div class="li"><span class="no">03</span><div class="lx"><b>hermes-eval</b><span>38 sessions</span></div><span class="val">$77.85</span><span class="chev">›</span></div>
+                  <div class="li"><span class="no">04</span><div class="lx"><b>client-api <span class="est">est</span></b><span>29 sessions · Cursor</span></div><span class="val">$58.60</span><span class="chev">›</span></div>
+                  <div class="li"><span class="no">05</span><div class="lx"><b>dotfiles</b><span>21 sessions</span></div><span class="val">$34.20</span><span class="chev">›</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="phead"><b>Cost flow · model → project</b><span class="r">click a ribbon to filter</span></div>
+              <div class="pbody" style="overflow-x:auto">
+                <svg viewBox="0 0 640 190" width="100%" style="min-width:560px; display:block">
+                  <defs>
+                    <linearGradient id="gOp" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5B8CFF"/><stop offset="1" stop-color="#5B8CFF" stop-opacity=".25"/></linearGradient>
+                    <linearGradient id="gSo" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8B7CF6"/><stop offset="1" stop-color="#8B7CF6" stop-opacity=".25"/></linearGradient>
+                    <linearGradient id="gHa" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#B5A8FF"/><stop offset="1" stop-color="#B5A8FF" stop-opacity=".25"/></linearGradient>
+                    <linearGradient id="gGp" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4DD8E6"/><stop offset="1" stop-color="#4DD8E6" stop-opacity=".25"/></linearGradient>
+                  </defs>
+                  <path d="M 78 30 C 300 30 380 36 562 36" stroke="url(#gOp)" stroke-width="26" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 55 C 300 55 380 98 562 98" stroke="url(#gOp)" stroke-width="16" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 68 C 300 68 380 136 562 136" stroke="url(#gOp)" stroke-width="9" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 92 C 300 92 380 54 562 54" stroke="url(#gGp)" stroke-width="14" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 103 C 300 103 380 164 562 164" stroke="url(#gGp)" stroke-width="10" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 128 C 300 128 380 112 562 112" stroke="url(#gSo)" stroke-width="12" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 141 C 300 141 380 66 562 66" stroke="url(#gSo)" stroke-width="10" fill="none" stroke-opacity=".40"/>
+                  <path d="M 78 166 C 300 166 380 146 562 146" stroke="url(#gHa)" stroke-width="7" fill="none" stroke-opacity=".40"/>
+                  <rect x="72" y="14" width="5" height="62" rx="2.5" fill="#5B8CFF"/>
+                  <rect x="72" y="84" width="5" height="26" rx="2.5" fill="#4DD8E6"/>
+                  <rect x="72" y="118" width="5" height="30" rx="2.5" fill="#8B7CF6"/>
+                  <rect x="72" y="158" width="5" height="14" rx="2.5" fill="#B5A8FF"/>
+                  <rect x="562" y="22" width="5" height="52" rx="2.5" fill="#3A4258"/>
+                  <rect x="562" y="88" width="5" height="34" rx="2.5" fill="#3A4258"/>
+                  <rect x="562" y="128" width="5" height="22" rx="2.5" fill="#3A4258"/>
+                  <rect x="562" y="156" width="5" height="16" rx="2.5" fill="#3A4258"/>
+                  <text x="64" y="48" text-anchor="end" font-size="10" fill="#9BA3B7">Opus 4.8 · $331.20</text>
+                  <text x="64" y="100" text-anchor="end" font-size="10" fill="#9BA3B7">GPT-5.5 · $137.90</text>
+                  <text x="64" y="136" text-anchor="end" font-size="10" fill="#9BA3B7">Sonnet 5 · $108.63</text>
+                  <text x="64" y="168" text-anchor="end" font-size="10" fill="#9BA3B7">Haiku 4.5 · $34.75</text>
+                  <text x="575" y="51" font-size="10" fill="#9BA3B7">codeburn · $246.10</text>
+                  <text x="575" y="108" font-size="10" fill="#9BA3B7">agentseal-dash · $141.30</text>
+                  <text x="575" y="142" font-size="10" fill="#9BA3B7">hermes-eval · $77.85</text>
+                  <text x="575" y="167" font-size="10" fill="#9BA3B7">others · $147.23</text>
+                </svg>
+              </div>
+            </div>
+          </div>
+          <div class="hint"><span><span class="k">⌘K</span>Command</span><span><span class="k">⌘E</span>Export view</span><span><span class="k">⇥</span>Switch lens</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> The Sankey is the premium signature — each ribbon inherits its model's hue and fades toward the project side; clicking one scopes every panel to that model × project pair. Stacked bars share the same series palette, so the legend teaches colors once for the whole app.</p>
+  </section>
+
+  <!-- ============ OPTIMIZE ============ -->
+  <section>
+    <h2>03 · Optimize</h2>
+    <p class="lede">Waste, reverts, abandoned, fixes. Findings ranked by recoverable dollars, evidence in mono, savings in mint.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni">Overview<span class="k">⌘1</span></div>
+          <div class="ni">Spend<span class="k">⌘2</span></div>
+          <div class="ni on">Optimize<span class="k">⌘3</span></div>
+          <div class="ni">Models<span class="k">⌘4</span></div>
+          <div class="ni">Plans<span class="k">⌘5</span></div>
+          <div class="ni">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">Recoverable <b>$23.60/wk</b></div>
+        </nav>
+        <div class="ct">
+          <div class="bar">
+            <div class="t">Optimize</div>
+            <span class="scope">Last 30 days · All providers</span>
+            <div class="sp"></div>
+            <div class="seg"><span>Today</span><span>7D</span><span class="on">30D</span><span>Month</span><span>6M</span><span>Custom</span></div>
+            <div class="pop">All providers</div>
+          </div>
+          <div class="body">
+            <div class="seg" style="align-self:flex-start"><span class="on">Waste $94.40</span><span>Reverts $107.00</span><span>Abandoned $65.40</span><span>Fixes 3</span></div>
+            <div class="panel">
+              <div class="pbody">
+                <div class="li" style="align-items:flex-start">
+                  <span class="no">01</span>
+                  <div class="lx">
+                    <b>Opus is doing your small talk</b>
+                    <span>38% of Opus 4.8 turns had zero tool calls — pure conversation. Sonnet answers the same turns at 1/5 the price.</span>
+                    <div class="ev">856 turns · <a>124 sessions ›</a> · 856 × $0.052 − sonnet $0.011</div>
+                    <div class="fixrow"><span class="codechip">/model sonnet</span><span class="btn btn-s">Copy fix</span></div>
+                  </div>
+                  <span class="val ok">$9.10/wk</span>
+                </div>
+                <div class="li" style="align-items:flex-start">
+                  <span class="no">02</span>
+                  <div class="lx">
+                    <b>Cache hit is low in agentseal-dash</b>
+                    <span>41% vs your 68% average — sessions restart context instead of resuming.</span>
+                    <div class="ev"><a>72 sessions ›</a> · 37.6M uncached reads × $0.93/M delta</div>
+                    <div class="fixrow"><span class="codechip">claude --continue</span><span class="btn btn-s">Copy fix</span></div>
+                  </div>
+                  <span class="val ok">$8.70/wk</span>
+                </div>
+                <div class="li" style="align-items:flex-start">
+                  <span class="no">03</span>
+                  <div class="lx">
+                    <b>Twelve sessions went nowhere</b>
+                    <span>$39.20 across 12 abandoned sessions with no surviving edits — nearly all started without a stated goal.</span>
+                    <div class="ev">no surviving edits vs git · <a>12 sessions ›</a> · full list under Abandoned</div>
+                  </div>
+                  <span class="val ok">$5.80/wk</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="hint"><span><span class="k">⌘C</span>Copy fix</span><span><span class="k">→</span>Open sessions</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> The old Yield analysis lives under Reverts and Abandoned (git-correlated, per <code>codeburn yield</code>). Segments carry their dollar totals so the tab row itself is a summary.</p>
+  </section>
+
+  <!-- ============ MODELS ============ -->
+  <section>
+    <h2>04 · Models</h2>
+    <p class="lede">The pricing table with each model's series dot. Compare is a mode; unpriced rows carry their own fix.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni">Overview<span class="k">⌘1</span></div>
+          <div class="ni">Spend<span class="k">⌘2</span></div>
+          <div class="ni">Optimize<span class="k">⌘3</span></div>
+          <div class="ni on">Models<span class="k">⌘4</span></div>
+          <div class="ni">Plans<span class="k">⌘5</span></div>
+          <div class="ni">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">4 models · <b>$612.48</b></div>
+        </nav>
+        <div class="ct">
+          <div class="bar">
+            <div class="t">Models</div>
+            <span class="scope">Last 30 days · All providers</span>
+            <div class="sp"></div>
+            <div class="seg"><span class="on">By model</span><span>By task</span></div>
+            <span class="btn btn-s">Compare…</span>
+          </div>
+          <div class="body">
+            <div class="panel">
+              <div class="pbody" style="overflow-x:auto">
+                <table>
+                  <thead><tr><th>Model</th><th>Calls</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cost</th><th>Saved</th></tr></thead>
+                  <tbody>
+                    <tr><td><span class="mdot" style="display:inline-block; background:var(--blue); margin-right:8px"></span>Claude Opus 4.8</td><td>4,812</td><td>152.6M</td><td>9.64M</td><td>119.4M</td><td>$331.20</td><td class="pos">$86.40</td></tr>
+                    <tr><td><span class="mdot" style="display:inline-block; background:var(--cyan); margin-right:8px"></span>GPT-5.5 Codex</td><td>2,704</td><td>86.9M</td><td>7.52M</td><td>45.1M</td><td>$137.90</td><td class="pos">$35.10</td></tr>
+                    <tr><td><span class="mdot" style="display:inline-block; background:var(--purple); margin-right:8px"></span>Claude Sonnet 5</td><td>3,318</td><td>77.7M</td><td>6.08M</td><td>63.3M</td><td>$108.63</td><td class="pos">$27.90</td></tr>
+                    <tr><td><span class="mdot" style="display:inline-block; background:var(--lav); margin-right:8px"></span>Claude Haiku 4.5</td><td>1,270</td><td>32.5M</td><td>2.84M</td><td>16.9M</td><td>$34.75</td><td class="pos">$5.85</td></tr>
+                    <tr><td class="dim"><span class="mdot" style="display:inline-block; background:#3A4258; margin-right:8px"></span>my-proxy-model <span class="alias">add alias ›</span></td><td class="dim">176</td><td class="dim">4.8M</td><td class="dim">0.4M</td><td class="dim">—</td><td class="dim">$0.00</td><td class="dim">—</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="hint"><span><span class="k">⌘E</span>Export table</span><span><span class="k">Space</span>Select for compare</span><span class="r">friendly names · raw IDs on hover</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> Series dots make the table, charts, and Sankey one continuous vocabulary. By-task nests category rows under each model (<code>models --by-task</code>); Compare… slides a sheet over the table for the selected rows.</p>
+  </section>
+
+  <!-- ============ PLANS ============ -->
+  <section>
+    <h2>05 · Plans</h2>
+    <p class="lede">Vendor clocks, not analytics periods. The gradient track is UI; the warning is text.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni">Overview<span class="k">⌘1</span></div>
+          <div class="ni">Spend<span class="k">⌘2</span></div>
+          <div class="ni">Optimize<span class="k">⌘3</span></div>
+          <div class="ni">Models<span class="k">⌘4</span></div>
+          <div class="ni on">Plans<span class="k">⌘5</span></div>
+          <div class="ni">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">2 plans · 1 pace warning</div>
+        </nav>
+        <div class="ct">
+          <div class="bar">
+            <div class="t">Plans</div>
+            <span class="scope">Cycle Jun 15 – Jul 14 · day 26 of 30</span>
+            <div class="sp"></div>
+            <div class="pop">Cycle: Jun 15 – Jul 14</div>
+            <span class="btn btn-s">Add plan…</span>
+          </div>
+          <div class="body">
+            <div class="panel"><div class="pbody">
+              <div class="plrow"><b>Claude Max</b><span>$200 / month · claude</span><span class="r">$186.20 · 93%</span></div>
+              <div class="track"><i style="width:93%"></i></div>
+              <div class="pace hot">On pace to exceed in 4 days — projected $214 by Jul 14</div>
+            </div></div>
+            <div class="panel"><div class="pbody">
+              <div class="plrow"><b>Cursor Pro</b><span>$20 / month · cursor</span><span class="r">$8.20 · 41%</span></div>
+              <div class="track"><i style="width:41%"></i></div>
+              <div class="pace ok">On track</div>
+            </div></div>
+            <div class="panel"><div class="pbody">
+              <div class="plrow"><b>API usage</b><span>codex · pay as you go, no plan</span><span class="r">$31.02 this cycle</span></div>
+              <div class="track"><i class="mut" style="width:15%"></i></div>
+            </div></div>
+          </div>
+          <div class="hint"><span><span class="k">↵</span>Edit plan</span><span class="r">presets: Claude Max/Pro · Cursor Pro · custom</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> One overage line per provider plan, mirroring the CLI. Past 100% the fill switches to the red gradient and the overage renders in dollars beside it.</p>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section>
+    <h2>06 · Settings — with Devices inside</h2>
+    <p class="lede">Own rail, deep-linkable. Pairing is the only amber on screen; Approve is the view's single gradient button.</p>
+    <div class="frame">
+      <div class="win">
+        <nav class="sb">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <div class="app"><b>CodeBurn</b></div>
+          <div class="ni">Overview<span class="k">⌘1</span></div>
+          <div class="ni">Spend<span class="k">⌘2</span></div>
+          <div class="ni">Optimize<span class="k">⌘3</span></div>
+          <div class="ni">Models<span class="k">⌘4</span></div>
+          <div class="ni">Plans<span class="k">⌘5</span></div>
+          <div class="ni on">Settings<span class="k">⌘,</span></div>
+          <div class="push"></div>
+          <div class="status">v0.10.0 · CLI 0.10.0</div>
+        </nav>
+        <div class="ct">
+          <div class="bar"><div class="t">Settings</div></div>
+          <div class="body" style="flex-direction:row; gap:14px">
+            <nav class="rail">
+              <div class="ni">General</div>
+              <div class="ni">Providers</div>
+              <div class="ni">Model aliases</div>
+              <div class="ni">Plans</div>
+              <div class="ni on">Devices</div>
+              <div class="ni">Export</div>
+              <div class="ni">Privacy &amp; data</div>
+            </nav>
+            <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:10px">
+              <div class="panel">
+                <div class="phead"><b>This device</b></div>
+                <div class="pbody"><div class="li"><div class="lx"><b>Toruk's MacBook Pro</b><span>Visible on the local network as codeburn-mbp.local</span></div><span class="btn btn-s">Visibility: on</span></div></div>
+              </div>
+              <div class="panel">
+                <div class="phead"><b>Discovered nearby</b><span class="r">listening…</span></div>
+                <div class="pbody"><div class="li"><div class="lx"><b>Mac Studio</b><span class="hot">wants to pair · fingerprint 7F:2A:…:C4</span></div><span class="btn btn-p">Approve</span></div></div>
+              </div>
+              <div class="panel">
+                <div class="phead"><b>Paired</b></div>
+                <div class="pbody">
+                  <div class="li"><div class="lx"><b>toruk-mini</b><span>last pull 2h ago · 34 sessions · $41.20 this month</span></div><span class="btn btn-s">Pull now</span></div>
+                  <div class="li"><div class="lx"><b>Combine usage from paired devices</b><span>scope captions gain “· 2 devices” when on</span></div><span class="tglon"></span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="hint"><span><span class="k">esc</span>Back</span><span class="r">pairing uses mutual TLS · approve-style, no PIN</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap"><b>Notes.</b> No period chrome — configuration is timeless. Approve-style pairing mirrors the CLI: a human verifies the fingerprint, no PIN.</p>
+  </section>
+
+  <!-- ============ STATES ============ -->
+  <section>
+    <h2>07 · States &amp; trust</h2>
+    <p class="lede">Missing tools, denied permissions, empty data are normal for local-first scanning. Text status only.</p>
+    <div class="minirow">
+      <div class="mini">
+        <h5>Empty / permission</h5>
+        <div class="li"><div class="lx"><b>Claude</b><span>1,412 sessions</span></div></div>
+        <div class="li"><div class="lx"><b>Codex</b><span>688 sessions</span></div></div>
+        <div class="li"><div class="lx"><b>Cursor</b><span class="bad">permission denied — grant Full Disk Access</span></div><span class="btn btn-s">Fix…</span></div>
+        <div class="li"><div class="lx"><b style="color:var(--t3)">Devin</b><span>not installed</span></div></div>
+      </div>
+      <div class="mini">
+        <h5>Loading</h5>
+        <b style="font-size:12.5px; color:var(--t1)">Scanning 30 providers…</b>
+        <p style="color:var(--pg-mut); font-size:11.5px; margin:4px 0 8px">First scan reads every session file; later scans are incremental via the daily cache.</p>
+        <div class="skel" style="width:84%"></div>
+        <div class="skel" style="width:62%"></div>
+        <div class="skel" style="width:71%"></div>
+      </div>
+      <div class="mini">
+        <h5>Provenance</h5>
+        <b style="font-family:var(--mono); font-size:14px; color:var(--t1)">$31.02 <span class="est">est</span></b>
+        <p style="color:var(--pg-mut); font-size:11.5px; margin:4px 0 10px">Cursor reports messages without token counts; cost is estimated from message sizes and LiteLLM prices.</p>
+        <div class="ev"><a>How this number is computed ›</a></div>
+        <div class="ev"><a>Open source session file ›</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Behavior spec</h2>
+    <p class="cap">
+      <b>Inactive window:</b> gradient rail and selection dim to slate.
+      <b>Focus:</b> indigo focus rings, never browser outlines.
+      <b>Hover:</b> row fills at 5% lavender; chart hover = column highlight + mono value popover; Sankey ribbons brighten on hover and filter on click.
+      <b>Scrolling:</b> native overlay scrollbars.
+      <b>⌘K palette:</b> filters, export, view jumps, session search.
+      <b>Series rule:</b> each model's hue is global — chart, Sankey, dots, legends. UI gradient never colors data.
+      <b>Light theme:</b> same ladder on paper (#FAFBFE, panels white, hairlines 6% indigo-black) — implementation deliverable, same tokens.
+      <b>Export:</b> ⌘E everywhere, scoped to current filters.
+      <b>Motion (codex):</b> bars rise on view entry, Sankey ribbons draw left→right, active rail glides — 120–180ms, no bounce.
+      <b>Depth (codex):</b> cards carry a 1px top-edge light and faint bottom occlusion; active controls get inner highlight + subtle bloom, centers stay dark; 1–2% canvas noise to kill flat Electron darkness.
+      <b>Rendering (codex):</b> charts locked to device pixel ratio, fixed bar geometry, legends exactly matching series colors — test at 1×/2×.
+      <b>Numerals:</b> aligned decimals, muted currency symbols, deltas enlarged only when meaningful.
+      <b>Period control:</b> all six options shown per product decision; codex's alternative (segmented Today·7D·30D·Month + “More ▾” holding 6M/Custom) is on file if the toolbar ever feels crowded.
+      <b>Orange discipline (codex):</b> the flame mark stays the single warm object — never data, progress, status, nav, or chart highlights.
+    </p>
+  </section>
+
+  <div class="footer">
+    CodeBurn Desktop · wireframes v6 “indigo instrument” · 2026-07-10 · re-skinned per reference boards (Dash0 series palette + Sankey, gradient capsules, ambient glow)<br>
+    Nav: Overview · Spend · Optimize (waste, reverts, abandoned, fixes) · Models (+ compare) · Plans · Settings (providers, aliases, plans, devices, export, privacy).<br>
+    Covers all CLI surfaces: report/overview · optimize · compare · yield · models · plans · currency · aliases · providers · export · device sharing · settings · status.<br>
+    Next: your review → design spec → implementation plan.
+  </div>
+</div>

@@ -6,10 +6,10 @@ import { tmpdir } from 'os'
 
 import { getAllProviders } from '../../src/providers/index.js'
 import { createCursorAgentProvider } from '../../src/providers/cursor-agent.js'
+import { estimateTokensFromChars } from '../../src/token-estimate.js'
 import type { ParsedProviderCall, Provider, SessionSource } from '../../src/providers/types.js'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 
-const CHARS_PER_TOKEN = 4
 const CURSOR_AGENT_DEFAULT_MODEL = 'cursor-agent-auto'
 const FIXED_UUID = '123e4567-e89b-12d3-a456-426614174000'
 
@@ -180,8 +180,8 @@ describe('cursor-agent provider', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.provider).toBe('cursor-agent')
     expect(calls[0]!.model).toBe(CURSOR_AGENT_DEFAULT_MODEL)
-    expect(calls[0]!.inputTokens).toBe(Math.ceil(userText.length / CHARS_PER_TOKEN))
-    expect(calls[0]!.outputTokens).toBe(Math.ceil(assistantText.length / CHARS_PER_TOKEN))
+    expect(calls[0]!.inputTokens).toBe(estimateTokensFromChars(userText.length))
+    expect(calls[0]!.outputTokens).toBe(estimateTokensFromChars(assistantText.length))
     expect(calls[0]!.reasoningTokens).toBe(0)
     expect(calls[0]!.deduplicationKey).toBe(`cursor-agent:${FIXED_UUID}:0`)
   })

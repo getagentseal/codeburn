@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { readFile, rm, writeFile, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 import {
   CACHE_VERSION,
@@ -19,7 +19,11 @@ import {
   mergeCallByDedupKey,
   reconcileFile,
   saveCache,
+  sessionCachePath,
 } from '../src/session-cache.js'
+
+// Version-suffixed filename (e.g. session-cache.v5.json) the cache now writes to.
+const CACHE_FILE = () => basename(sessionCachePath())
 
 const TMP_DIR = join(tmpdir(), `codeburn-scache-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -132,6 +136,32 @@ describe('loadCache / saveCache', () => {
     expect(loaded.providers['pi']?.files['/path/to/bad.jsonl']?.turns).toEqual([])
   })
 
+  it('preserves the estimated-cost flag through save/load; a measured call stays unflagged', async () => {
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        warp: {
+          envFingerprint: 'abc123',
+          files: {
+            '/path/to/warp.sqlite': makeCachedFile({
+              turns: [makeTurn({ calls: [
+                makeCall({ deduplicationKey: 'est', costUSD: 0.5, isEstimated: true }),
+                makeCall({ deduplicationKey: 'measured', costUSD: 0.5 }),
+              ] })],
+            }),
+          },
+        },
+      },
+    }
+
+    await saveCache(cache)
+    const loaded = await loadCache()
+    const calls = loaded.providers['warp']?.files['/path/to/warp.sqlite']?.turns[0]?.calls
+    expect(calls?.[0]?.isEstimated).toBe(true)
+    // A call with no flag round-trips as undefined, not silently coerced to true.
+    expect(calls?.[1]?.isEstimated).toBeUndefined()
+  })
+
   it('returns empty cache on version mismatch', async () => {
     const bad: SessionCache = { version: 999, providers: { claude: { envFingerprint: 'x', files: {} } } }
     await mkdir(TMP_DIR, { recursive: true })
@@ -153,8 +183,70 @@ describe('loadCache / saveCache', () => {
 
   it('atomic write does not leave partial file on error', async () => {
     await saveCache(emptyCache())
-    const raw = await readFile(join(TMP_DIR, 'session-cache.json'), 'utf-8')
+    const raw = await readFile(sessionCachePath(), 'utf-8')
     expect(JSON.parse(raw)).toEqual(emptyCache())
+  })
+})
+
+// ── versioned filename + legacy adoption ───────────────────────────────
+
+describe('versioned cache file + legacy adoption', () => {
+  function validCache(): SessionCache {
+    return {
+      version: CACHE_VERSION,
+      providers: { claude: { envFingerprint: 'abc123', files: { '/path/to/session.jsonl': makeCachedFile() } } },
+    }
+  }
+
+  it('writes and reads the version-suffixed file, never the legacy name', async () => {
+    expect(basename(sessionCachePath())).toBe(`session-cache.v${CACHE_VERSION}.json`)
+    await saveCache(validCache())
+    expect(existsSync(sessionCachePath())).toBe(true)
+    expect(existsSync(join(TMP_DIR, 'session-cache.json'))).toBe(false)
+    expect(await loadCache()).toEqual(validCache())
+  })
+
+  it('adopts a matching-version legacy file once, without deleting or rewriting it', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const legacy = join(TMP_DIR, 'session-cache.json')
+    await writeFile(legacy, JSON.stringify(validCache()))
+
+    // Versioned file absent → adopt-copy from legacy on first load.
+    expect(await loadCache()).toEqual(validCache())
+    expect(existsSync(sessionCachePath())).toBe(true)
+    // Legacy left intact (not deleted, not rewritten).
+    expect(existsSync(legacy)).toBe(true)
+    expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(validCache())
+
+    // Adoption is one-time: a later legacy edit is ignored once the versioned
+    // file exists.
+    const mutated: SessionCache = { version: CACHE_VERSION, providers: { codex: { envFingerprint: 'zzz', files: {} } } }
+    await writeFile(legacy, JSON.stringify(mutated))
+    expect(await loadCache()).toEqual(validCache())
+  })
+
+  it('ignores a different-version legacy file and never touches it', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const legacy = join(TMP_DIR, 'session-cache.json')
+    const stale = { version: 999, providers: { claude: { envFingerprint: 'x', files: {} } } }
+    await writeFile(legacy, JSON.stringify(stale))
+
+    expect((await loadCache()).providers).toEqual({})
+    // No versioned file adopted; legacy left byte-intact.
+    expect(existsSync(sessionCachePath())).toBe(false)
+    expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(stale)
+  })
+
+  it('saveCache never creates or overwrites a pre-existing legacy file', async () => {
+    await mkdir(TMP_DIR, { recursive: true })
+    const legacy = join(TMP_DIR, 'session-cache.json')
+    const legacyContent = JSON.stringify({ version: CACHE_VERSION, providers: {} })
+    await writeFile(legacy, legacyContent)
+
+    await saveCache(validCache())
+    // The versioned file holds the new data; the legacy file is byte-untouched.
+    expect(await readFile(legacy, 'utf-8')).toBe(legacyContent)
+    expect(JSON.parse(await readFile(sessionCachePath(), 'utf-8'))).toEqual(validCache())
   })
 })
 
@@ -545,7 +637,7 @@ describe('cleanupOrphanedTempFiles', () => {
   it('removes .tmp files older than 5 minutes', async () => {
     await mkdir(TMP_DIR, { recursive: true })
 
-    const oldTmp = join(TMP_DIR, 'session-cache.json.abc123.tmp')
+    const oldTmp = join(TMP_DIR, `${CACHE_FILE()}.abc123.tmp`)
     await writeFile(oldTmp, 'stale')
     const { utimes } = await import('fs/promises')
     const oldTime = new Date(Date.now() - 10 * 60 * 1000)
@@ -558,7 +650,7 @@ describe('cleanupOrphanedTempFiles', () => {
   it('preserves recent .tmp files', async () => {
     await mkdir(TMP_DIR, { recursive: true })
 
-    const recentTmp = join(TMP_DIR, 'session-cache.json.def456.tmp')
+    const recentTmp = join(TMP_DIR, `${CACHE_FILE()}.def456.tmp`)
     await writeFile(recentTmp, 'recent')
 
     await cleanupOrphanedTempFiles()

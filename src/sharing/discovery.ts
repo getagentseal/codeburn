@@ -35,9 +35,38 @@ function pickAddress(service: Service): string | null {
 // devices found, deduped by fingerprint.
 export function browse(timeoutMs = 2500): Promise<DiscoveredDevice[]> {
   return new Promise((resolve) => {
-    const bonjour = new Bonjour()
     const found = new Map<string, DiscoveredDevice>()
-    const browser = bonjour.find({ type: SERVICE_TYPE }, (service) => {
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let browser: { stop: () => void } | null = null
+    let bonjour: Bonjour | null = null
+
+    const finish = (devices: DiscoveredDevice[]) => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      browser?.stop()
+      if (!bonjour) {
+        resolve(devices)
+        return
+      }
+      try {
+        bonjour.destroy(() => resolve(devices))
+      } catch {
+        resolve(devices)
+      }
+    }
+
+    const finishWithError = (err?: unknown) => {
+      if (err) console.error(`codeburn devices scan: mDNS discovery failed: ${err instanceof Error ? err.message : String(err)}`)
+      else console.error('codeburn devices scan: mDNS discovery failed')
+      finish([...found.values()])
+    }
+
+    bonjour = new Bonjour({}, finishWithError)
+    const mdns = (bonjour as unknown as { server?: { mdns?: { on: (event: string, cb: () => void) => void } } }).server?.mdns
+    mdns?.on('error', finishWithError)
+    browser = bonjour.find({ type: SERVICE_TYPE }, (service) => {
       const txt = (service.txt ?? {}) as Record<string, string>
       const fingerprint = txt['fp']
       const address = pickAddress(service)
@@ -45,10 +74,7 @@ export function browse(timeoutMs = 2500): Promise<DiscoveredDevice[]> {
       const name = txt['dn'] || service.name || address
       found.set(fingerprint, { name, host: address, port: service.port, fingerprint })
     })
-    const timer = setTimeout(() => {
-      browser.stop()
-      bonjour.destroy(() => resolve([...found.values()]))
-    }, timeoutMs)
+    timer = setTimeout(() => finish([...found.values()]), timeoutMs)
     timer.unref?.()
   })
 }

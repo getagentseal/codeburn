@@ -45,16 +45,19 @@ struct DataClient {
                       days: Set<String> = [],
                       provider: ProviderFilter,
                       includeOptimize: Bool,
-                      scope: MenubarScope = .local) async throws -> MenubarPayload {
+                      scope: MenubarScope = .local,
+                      claudeConfigSourceId: String? = nil,
+                      qualityOfService: QualityOfService = .userInitiated) async throws -> MenubarPayload {
         let subcommand = statusSubcommand(
             period: period,
             day: day,
             days: days,
             provider: provider,
             includeOptimize: includeOptimize,
-            scope: scope
+            scope: scope,
+            claudeConfigSourceId: claudeConfigSourceId
         )
-        let result = try await runCLI(subcommand: subcommand)
+        let result = try await runCLI(subcommand: subcommand, qualityOfService: qualityOfService)
         guard result.exitCode == 0 else {
             throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
         }
@@ -76,7 +79,8 @@ struct DataClient {
                                  days: Set<String> = [],
                                  provider: ProviderFilter,
                                  includeOptimize: Bool,
-                                 scope: MenubarScope = .local) -> [String] {
+                                 scope: MenubarScope = .local,
+                                 claudeConfigSourceId: String? = nil) -> [String] {
         let effectiveScope: MenubarScope = days.count > 1 ? .local : scope
         let effectiveProvider: ProviderFilter = effectiveScope == .combined ? .all : provider
         var subcommand = [
@@ -86,6 +90,9 @@ struct DataClient {
         ]
         if effectiveScope == .combined {
             subcommand.append(contentsOf: ["--scope", effectiveScope.cliArg])
+        }
+        if effectiveScope == .local, let claudeConfigSourceId, !claudeConfigSourceId.isEmpty {
+            subcommand.append(contentsOf: ["--claude-config-source", claudeConfigSourceId])
         }
         if days.count > 1 {
             subcommand.append(contentsOf: ["--days", days.sorted().joined(separator: ",")])
@@ -112,10 +119,13 @@ struct DataClient {
     /// dozens of node processes at once.
     private static let spawnLimiter = AsyncSemaphore(maxConcurrentSpawns)
 
-    private static func runCLI(subcommand: [String]) async throws -> ProcessResult {
+    private static func runCLI(
+        subcommand: [String],
+        qualityOfService: QualityOfService = .userInitiated
+    ) async throws -> ProcessResult {
         await spawnLimiter.acquire()
         defer { Task { await spawnLimiter.release() } }
-        let process = CodeburnCLI.makeProcess(subcommand: subcommand)
+        let process = CodeburnCLI.makeProcess(subcommand: subcommand, qualityOfService: qualityOfService)
         return try await runProcess(process,
                                     timeoutSeconds: spawnTimeoutSeconds,
                                     label: subcommand.joined(separator: " "))

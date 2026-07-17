@@ -96,6 +96,7 @@ const modelDisplayNames: Record<string, string> = {
 const toolNameMap: Record<string, string> = {
   // JSONL session-state tool names
   bash: 'Bash',
+  skill: 'Skill',
   read_file: 'Read',
   write_file: 'Edit',
   edit_file: 'Edit',
@@ -195,12 +196,28 @@ type SubagentSelectedData = {
   tools?: string[]
 }
 
+// Per-model usage rollup the CLI writes into session.shutdown. inputTokens is
+// cache-INCLUSIVE (input + cache_read + cache_write); see the shutdown handler.
+type ShutdownModelUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+}
+
+type SessionShutdownData = {
+  modelMetrics?: Record<string, { usage?: ShutdownModelUsage }>
+  sessionStartTime?: number
+}
+
 type CopilotEvent =
   | { type: 'session.start'; data: SessionStartData; timestamp?: string }
   | { type: 'session.model_change'; data: ModelChangeData; timestamp?: string }
   | { type: 'user.message'; data: UserMessageData; timestamp?: string }
   | { type: 'assistant.message'; data: AssistantMessageData; timestamp?: string }
   | { type: 'subagent.selected'; data: SubagentSelectedData; timestamp?: string }
+  | { type: 'session.shutdown'; data: SessionShutdownData; timestamp?: string }
 
 type ChatJournalPathSegment = string | number
 type ChatSessionRequest = Record<string, unknown>
@@ -722,6 +739,11 @@ function createJsonlParser(
         if (!currentModel) return // no toolCallIds to infer model from
       }
 
+      // Shutdown rollups may lack their own timestamp; remember the last
+      // stamped event so the supplementary call is never left with an empty
+      // timestamp, which the date-range filters silently drop.
+      let lastEventTimestamp = ''
+
       for (const line of lines) {
         let event: CopilotEvent
         try {
@@ -729,6 +751,7 @@ function createJsonlParser(
         } catch {
           continue
         }
+        if (typeof event.timestamp === 'string' && event.timestamp) lastEventTimestamp = event.timestamp
 
         if (event.type === 'session.start') {
           if (!isTranscript) {
@@ -749,6 +772,80 @@ function createJsonlParser(
 
         if (event.type === 'user.message') {
           pendingUserMessage = (event.data as UserMessageData).content ?? ''
+          continue
+        }
+
+        if (event.type === 'session.shutdown') {
+          // The Copilot CLI writes a per-model token/cost rollup here at
+          // shutdown: the only place a CLI session records input, cache-read
+          // and cache-write tokens (assistant.message events carry output
+          // only). VS Code transcripts never carry this rollup, so this path
+          // is gated to the CLI (non-transcript) format, leaving VS Code,
+          // JetBrains and OTel sources untouched.
+          //
+          // We emit one supplementary call per model carrying ONLY the
+          // input/cache tokens the per-turn events lack; output is excluded so
+          // the assistant.message output (and its cost) is not double-counted.
+          // Combined with the per-turn output cost, this yields the full,
+          // CLI-measured session cost.
+          if (isTranscript) continue
+          const shutdownData = event.data as SessionShutdownData
+          const modelMetrics = shutdownData.modelMetrics
+          if (!isRecord(modelMetrics)) continue
+
+          const shutdownTimestamp =
+            (event.timestamp ?? '') || timestampToISO(shutdownData.sessionStartTime) || lastEventTimestamp
+
+          for (const [model, metrics] of Object.entries(modelMetrics)) {
+            if (!model || !isRecord(metrics)) continue
+            const usage = metrics['usage']
+            if (!isRecord(usage)) continue
+
+            const cacheReadTokens = numberOrZero(usage['cacheReadTokens'])
+            const cacheWriteTokens = numberOrZero(usage['cacheWriteTokens'])
+            const reasoningTokens = numberOrZero(usage['reasoningTokens'])
+            // usage.inputTokens is cache-INCLUSIVE (input + cache_read +
+            // cache_write). calculateCost expects the uncached input alone with
+            // cache tokens billed separately, so subtract the cache components.
+            // Clamp at 0 in case a future schema reports input non-inclusively.
+            const inputTokens = Math.max(
+              0,
+              numberOrZero(usage['inputTokens']) - cacheReadTokens - cacheWriteTokens
+            )
+
+            // Nothing this call would add over the per-turn events, so skip it
+            // to avoid an empty $0 row (output is intentionally excluded).
+            if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) continue
+
+            const dedupKey = `copilot:${sessionId}:shutdown:${model}`
+            if (seenKeys.has(dedupKey)) continue
+            seenKeys.add(dedupKey)
+
+            // Tokens are real counts written by the CLI, so this cost is
+            // measured, not char-estimated: costIsEstimated is false.
+            const costUSD = calculateCost(model, inputTokens, 0, cacheWriteTokens, cacheReadTokens, 0)
+
+            yield {
+              provider: 'copilot',
+              sessionId,
+              model,
+              inputTokens,
+              outputTokens: 0,
+              cacheCreationInputTokens: cacheWriteTokens,
+              cacheReadInputTokens: cacheReadTokens,
+              cachedInputTokens: 0,
+              reasoningTokens,
+              webSearchRequests: 0,
+              costUSD,
+              costIsEstimated: false,
+              tools: [],
+              bashCommands: [],
+              timestamp: shutdownTimestamp,
+              speed: 'standard' as const,
+              deduplicationKey: dedupKey,
+              userMessage: '',
+            }
+          }
           continue
         }
 
@@ -776,6 +873,14 @@ function createJsonlParser(
               return typeof raw === 'string' ? normalizeTool(raw) : null
             })
             .filter((t): t is string => t !== null)
+
+          const skills = toolRequests.flatMap((t) => {
+            if (typeof t !== 'object' || t === null) return []
+            const name = (t.name ?? t.toolName) ?? ''
+            if (name !== 'skill') return []
+            const skill = t.arguments?.['skill']
+            return typeof skill === 'string' && skill.trim().length > 0 ? [skill.trim()] : []
+          })
 
           // Extract base command names from bash-type tool requests, routing the
           // raw command through the shared extractBashCommands helper so chained
@@ -808,6 +913,7 @@ function createJsonlParser(
             costUSD,
             tools,
             bashCommands,
+            skills: skills.length > 0 ? skills : undefined,
             subagentTypes: currentSubagentType ? [currentSubagentType] : undefined,
             timestamp: event.timestamp ?? '',
             speed: 'standard' as const,

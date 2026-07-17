@@ -41,7 +41,15 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
 
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
-        const turnDate = dateKey(turn.assistantCalls[0]!.timestamp)
+        // Turn-anchored bucketing: attribute the WHOLE turn — every one of its
+        // calls — to the day of the turn's user-message timestamp, matching the
+        // live headline/report rollup (main.ts daily). Falls back to the first
+        // assistant-call timestamp when the user line is missing (continuation
+        // sessions that begin mid-conversation). Previously the calls were
+        // bucketed per-call by each call's own timestamp, so a midnight-
+        // straddling turn split across two days and history.daily / the provider
+        // breakdown never reconciled to current.cost (a constant offset).
+        const turnDate = dateKey(turn.timestamp || turn.assistantCalls[0]!.timestamp)
         const turnDay = ensure(turnDate)
 
         const editTurns = turn.hasEdits ? 1 : 0
@@ -61,19 +69,17 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         turnDay.categories[turn.category] = cat
 
         for (const call of turn.assistantCalls) {
-          const callDate = dateKey(call.timestamp)
-          const callDay = ensure(callDate)
           const callSavings = call.savingsUSD ?? 0
 
-          callDay.cost += call.costUSD
-          callDay.savingsUSD += callSavings
-          callDay.calls += 1
-          callDay.inputTokens += call.usage.inputTokens
-          callDay.outputTokens += call.usage.outputTokens
-          callDay.cacheReadTokens += call.usage.cacheReadInputTokens
-          callDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          turnDay.cost += call.costUSD
+          turnDay.savingsUSD += callSavings
+          turnDay.calls += 1
+          turnDay.inputTokens += call.usage.inputTokens
+          turnDay.outputTokens += call.usage.outputTokens
+          turnDay.cacheReadTokens += call.usage.cacheReadInputTokens
+          turnDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
-          const model = callDay.models[call.model] ?? {
+          const model = turnDay.models[call.model] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -85,13 +91,13 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           model.outputTokens += call.usage.outputTokens
           model.cacheReadTokens += call.usage.cacheReadInputTokens
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
-          callDay.models[call.model] = model
+          turnDay.models[call.model] = model
 
-          const provider = callDay.providers[call.provider] ?? { calls: 0, cost: 0, savingsUSD: 0 }
+          const provider = turnDay.providers[call.provider] ?? { calls: 0, cost: 0, savingsUSD: 0 }
           provider.calls += 1
           provider.cost += call.costUSD
           provider.savingsUSD += callSavings
-          callDay.providers[call.provider] = provider
+          turnDay.providers[call.provider] = provider
         }
       }
     }

@@ -4,6 +4,10 @@ export type SessionSource = {
   path: string
   project: string
   provider: string
+  sourceId?: string
+  sourceLabel?: string
+  sourcePath?: string
+  sourceKind?: 'claude-config' | 'claude-desktop'
 }
 
 export type SessionParser = {
@@ -41,6 +45,15 @@ export type ParsedProviderCall = {
   projectPath?: string
 }
 
+// A directory or database file that a provider's discoverSessions() scans.
+// Reported by `codeburn doctor` so an empty or wrong result is self-diagnosable:
+// the path is resolved exactly as discovery resolves it (honoring env overrides
+// and configured dirs), and the doctor checks existence separately.
+export type ProbeRoot = {
+  path: string
+  label: string
+}
+
 export type Provider = {
   name: string
   displayName: string
@@ -56,4 +69,10 @@ export type Provider = {
   toolDisplayName(rawTool: string): string
   discoverSessions(): Promise<SessionSource[]>
   createSessionParser(source: SessionSource, seenKeys: Set<string>, dateRange?: DateRange): SessionParser
+  // The exact directories/dbs discoverSessions() scans, resolved the same way.
+  // Optional: providers that implement it let `codeburn doctor` show and
+  // existence-check the probed paths even when zero sessions are found (so
+  // "tool not installed" vs "wrong override" is distinguishable). Providers
+  // without it fall back to the paths of whatever sessions were discovered.
+  probeRoots?(): Promise<ProbeRoot[]>
 }

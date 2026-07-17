@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "node16",
+    "moduleResolution": "node16",
+    "outDir": "dist/electron",
+    "rootDir": "electron",
+    "lib": ["ES2023"],
+    "sourceMap": true
+  },
+  "include": ["electron"],
+  "exclude": ["electron/**/*.test.ts"]
+}

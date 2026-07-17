@@ -10,9 +10,24 @@ OpenCode (sst/opencode).
 
 Default `~/.local/share/opencode/` or `$XDG_DATA_HOME/opencode/`. The discovery walk picks up `opencode*.db` files (`opencode.ts:71-88`).
 
+For renamed/forked OpenCode-compatible builds (e.g. MiMoCode writing
+`~/.local/share/mimocode/mimicode.db` with the same `session`/`message`/`part`
+schema), point CodeBurn at the fork's data directory with two env vars:
+
+- `OPENCODE_DATA_DIR` — the **exact** data directory (no `opencode` suffix is
+  appended). Example: `OPENCODE_DATA_DIR=$HOME/.local/share/mimocode`. Relocates
+  both file-based and SQLite storage.
+- `OPENCODE_DB_PREFIX` — the SQLite filename prefix (default `opencode`,
+  matching `opencode*.db`). Example: `OPENCODE_DB_PREFIX=mimicode` discovers
+  `mimicode*.db`. Affects SQLite discovery only; file-based storage under
+  `<OPENCODE_DATA_DIR>/storage/` is found regardless.
+
+Precedence when no `dataDir` argument is passed (the production path):
+`OPENCODE_DATA_DIR` → `$XDG_DATA_HOME/opencode` → `~/.local/share/opencode`.
+
 ## Storage format
 
-SQLite.
+SQLite (older builds) or file-based JSON (OpenCode 1.1+, under `storage/`).
 
 ## Caching
 

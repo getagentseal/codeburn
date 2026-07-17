@@ -60,7 +60,8 @@ final class CurrencyState: Sendable {
         "CHF": "CHF",
         "SEK": "kr",
         "DKK": "kr",
-        "ZAR": "R"
+        "ZAR": "R",
+        "RON": "lei"
     ]
 }
 

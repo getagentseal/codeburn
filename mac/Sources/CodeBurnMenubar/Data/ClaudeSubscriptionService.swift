@@ -153,7 +153,10 @@ enum ClaudeSubscriptionService {
             throw FetchError.usageHTTPError(401, String(data: data, encoding: .utf8))
         case 429:
             let body = String(data: data, encoding: .utf8)
-            let retryAfter = parseRetryAfter(body: body)
+            let retryAfter = parseRetryAfter(
+                header: http.value(forHTTPHeaderField: "Retry-After"),
+                body: body
+            )
             let until = recordUsageRateLimit(retryAfterSeconds: retryAfter)
             throw FetchError.rateLimited(retryAt: until)
         default:
@@ -173,13 +176,69 @@ enum ClaudeSubscriptionService {
 
     @discardableResult
     private static func recordUsageRateLimit(retryAfterSeconds: Int?) -> Date {
-        let seconds = max(retryAfterSeconds ?? 300, 60)
-        let until = Date().addingTimeInterval(TimeInterval(seconds))
+        let now = Date()
+        let until = rateLimitBlockUntil(
+            existingUntil: usageBlockedUntil(),
+            now: now,
+            retryAfterSeconds: retryAfterSeconds
+        )
         UserDefaults.standard.set(until, forKey: usageBlockedUntilKey)
         return until
     }
 
-    private static func parseRetryAfter(body: String?) -> Int? {
+    static func rateLimitBlockUntil(
+        existingUntil: Date?,
+        now: Date,
+        retryAfterSeconds: Int?
+    ) -> Date {
+        let seconds = max(retryAfterSeconds ?? 300, 60)
+        let newUntil = now.addingTimeInterval(TimeInterval(seconds))
+        return max(existingUntil ?? .distantPast, newUntil)
+    }
+
+    /// Returns the effective Retry-After delay. HTTP headers take precedence
+    /// over the provider-specific JSON body, with the existing 300-second
+    /// fallback preserved when neither source is usable.
+    static func parseRetryAfter(
+        header: String?,
+        body: String?,
+        now: Date = Date()
+    ) -> Int {
+        if let seconds = parseRetryAfterHeader(header, now: now) {
+            return seconds
+        }
+        if let seconds = parseRetryAfterBody(body) {
+            return seconds
+        }
+        return 300
+    }
+
+    private static func parseRetryAfterHeader(_ value: String?, now: Date) -> Int? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if let seconds = Int(value), seconds >= 0 {
+            return seconds
+        }
+
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "EEE MMM d HH:mm:ss yyyy"
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) {
+                return max(0, Int(ceil(date.timeIntervalSince(now))))
+            }
+        }
+        return nil
+    }
+
+    private static func parseRetryAfterBody(_ body: String?) -> Int? {
         guard let body, let data = body.data(using: .utf8) else { return nil }
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             if let n = json["retry_after"] as? Int { return n }

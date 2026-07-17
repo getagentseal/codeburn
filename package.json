@@ -13,6 +13,7 @@
   "scripts": {
     "bundle-litellm": "node scripts/bundle-litellm.mjs",
     "build": "node scripts/bundle-litellm.mjs && tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\" && npm run build:dash",
+    "build:cli": "tsup && node -e \"const fs=require('fs'); fs.copyFileSync('src/cli.ts','dist/cli.js'); fs.chmodSync('dist/cli.js',0o755)\"",
     "build:dash": "cd dash && npm install --no-audit --no-fund --silent && npm run build",
     "dev": "NODE_OPTIONS=--no-deprecation tsx src/cli.ts",
     "test": "vitest",
@@ -28,6 +29,7 @@
     "opencode",
     "pi",
     "codebuff",
+    "codewhale",
     "ai-coding",
     "token-usage",
     "cost-tracking",
@@ -63,6 +65,7 @@
     "@types/node": "^22.19.17",
     "@types/react": "^19.2.14",
     "@types/selfsigned": "^2.0.4",
+    "playwright": "^1.61.1",
     "tsup": "^8.4.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

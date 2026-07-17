@@ -2,6 +2,8 @@
 
 This document describes the actual steps a maintainer takes to cut a CLI or macOS menubar release. CLI releases are run by hand with `npm publish`; macOS menubar releases are automated by `.github/workflows/release-menubar.yml` when a `mac-v*` tag is pushed.
 
+The Electron desktop app (`app/`) is not part of either flow yet — it has no version tag pattern or CI automation. See `app/DISTRIBUTION.md` for how to build and distribute it as an ad-hoc-signed, non-notarized macOS build.
+
 ## Versioning
 
 CodeBurn uses semantic versioning (major.minor.patch). The CLI and macOS menubar share the same version number for clarity.

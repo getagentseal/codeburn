@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { parseAllSessions } from './parser.js'
 import type { DateRange, SessionSummary } from './types.js'
 
-export type YieldCategory = 'productive' | 'reverted' | 'abandoned'
+export type YieldCategory = 'productive' | 'reverted' | 'abandoned' | 'ambiguous'
 
 export type SessionYield = {
   sessionId: string
@@ -16,6 +16,7 @@ export type YieldSummary = {
   productive: { cost: number; sessions: number }
   reverted: { cost: number; sessions: number }
   abandoned: { cost: number; sessions: number }
+  ambiguous: { cost: number; sessions: number }
   total: { cost: number; sessions: number }
   details: SessionYield[]
 }
@@ -30,9 +31,11 @@ export type YieldJsonReport = {
     productive: YieldBucketJson
     reverted: YieldBucketJson
     abandoned: YieldBucketJson
+    ambiguous: YieldBucketJson
     total: { costUSD: number; sessions: number }
     productiveToRevertedCostRatio: number | null
   }
+  methodology: 'timestamp-window'
   details: SessionYieldJson[]
 }
 
@@ -80,6 +83,18 @@ type CommitInfo = {
   inMain: boolean
   /** Set when a LATER commit's body says "This reverts commit <sha>" — i.e. the work in this commit was reverted out of main. */
   wasReverted: boolean
+}
+
+type SessionWindow = {
+  readonly start: Date
+  readonly end: Date
+  readonly sessionId: string
+}
+
+type SessionAttribution = {
+  readonly window: SessionWindow | null
+  readonly commits: CommitInfo[]
+  lostCandidacy: boolean
 }
 
 /**
@@ -141,50 +156,98 @@ function getCommitsInRange(cwd: string, since: Date, until: Date, mainBranch: st
   })
 }
 
+function sessionWindow(session: SessionSummary): SessionWindow | null {
+  if (!session.firstTimestamp) return null
+
+  const start = new Date(session.firstTimestamp)
+  const lastTs = session.lastTimestamp ?? session.firstTimestamp
+  const end = new Date(new Date(lastTs).getTime() + 60 * 60 * 1000)
+  return { start, end, sessionId: session.sessionId }
+}
+
+function attributeCommits(
+  sessions: SessionSummary[],
+  commits: CommitInfo[],
+): SessionAttribution[] {
+  const attributions: SessionAttribution[] = sessions.map(session => ({
+    window: sessionWindow(session),
+    commits: [],
+    lostCandidacy: false,
+  }))
+
+  for (const commit of commits) {
+    const candidates = attributions.filter((attribution): attribution is SessionAttribution & { window: SessionWindow } =>
+      attribution.window !== null &&
+      commit.timestamp >= attribution.window.start &&
+      commit.timestamp <= attribution.window.end,
+    )
+
+    const owner = candidates.reduce<SessionAttribution & { window: SessionWindow } | null>((current, candidate) => {
+      if (current === null) return candidate
+
+      const currentSpan = current.window.end.getTime() - current.window.start.getTime()
+      const candidateSpan = candidate.window.end.getTime() - candidate.window.start.getTime()
+      if (candidateSpan !== currentSpan) return candidateSpan < currentSpan ? candidate : current
+      if (candidate.window.start.getTime() !== current.window.start.getTime()) {
+        return candidate.window.start < current.window.start ? candidate : current
+      }
+      // sessionId, not array position: session order is cache-state dependent.
+      return candidate.window.sessionId < current.window.sessionId ? candidate : current
+    }, null)
+
+    for (const candidate of candidates) {
+      if (candidate !== owner) candidate.lostCandidacy = true
+    }
+    owner?.commits.push(commit)
+  }
+
+  return attributions
+}
+
 function categorizeSession(
   session: SessionSummary,
-  commits: CommitInfo[]
+  commits: CommitInfo[],
+  lostCandidacy: boolean,
 ): { category: YieldCategory; commitCount: number } {
   if (!session.firstTimestamp) {
     return { category: 'abandoned', commitCount: 0 }
   }
 
-  const sessionStart = new Date(session.firstTimestamp)
-  const lastTs = session.lastTimestamp ?? session.firstTimestamp
-  const sessionEnd = new Date(new Date(lastTs).getTime() + 60 * 60 * 1000) // +1 hour
-
-  const relevantCommits = commits.filter(c =>
-    c.timestamp >= sessionStart && c.timestamp <= sessionEnd
-  )
-
-  if (relevantCommits.length === 0) {
-    return { category: 'abandoned', commitCount: 0 }
+  if (commits.length === 0) {
+    // Ambiguous only when this session's window actually contained a commit
+    // that a tighter window won — mere overlap with a credited session is not
+    // enough to withhold the abandoned classification.
+    return {
+      category: lostCandidacy ? 'ambiguous' : 'abandoned',
+      commitCount: 0,
+    }
   }
 
-  const inMainCount = relevantCommits.filter(c => c.inMain).length
+  const inMainCount = commits.filter(c => c.inMain).length
   // A session is "reverted" when at least half of its in-main commits were
   // later reverted out (revert detected via "This reverts commit <sha>"
   // anywhere later in history, not in the same time window).
-  const revertedCount = relevantCommits.filter(c => c.inMain && c.wasReverted).length
+  const revertedCount = commits.filter(c => c.inMain && c.wasReverted).length
 
   if (revertedCount > 0 && revertedCount >= inMainCount / 2) {
-    return { category: 'reverted', commitCount: relevantCommits.length }
+    return { category: 'reverted', commitCount: commits.length }
   }
 
   if (inMainCount > 0) {
     return { category: 'productive', commitCount: inMainCount }
   }
 
-  return { category: 'abandoned', commitCount: relevantCommits.length }
+  return { category: 'abandoned', commitCount: commits.length }
 }
 
-export async function computeYield(range: DateRange, cwd: string): Promise<YieldSummary> {
-  const projects = await parseAllSessions(range, 'all')
+export async function computeYield(range: DateRange, cwd: string, provider: string = 'all'): Promise<YieldSummary> {
+  const projects = await parseAllSessions(range, provider)
 
   const summary: YieldSummary = {
     productive: { cost: 0, sessions: 0 },
     reverted: { cost: 0, sessions: 0 },
     abandoned: { cost: 0, sessions: 0 },
+    ambiguous: { cost: 0, sessions: 0 },
     total: { cost: 0, sessions: 0 },
     details: [],
   }
@@ -194,18 +257,43 @@ export async function computeYield(range: DateRange, cwd: string): Promise<Yield
     ? getCommitsInRange(cwd, range.start, range.end, getMainBranch(cwd))
     : []
 
+  // Group sessions by resolved repo before attributing: every project entry
+  // whose projectPath is missing (or not a git repo) falls back to the same
+  // cwd and shares one commit list, so attribution must run once per repo or
+  // two such entries could each award the same commit to one of their sessions.
+  type RepoGroup = { commits: CommitInfo[]; sessions: SessionSummary[]; projectNames: string[] }
+  const repoGroups = new Map<string, RepoGroup>()
   for (const project of projects) {
-    // Try project-specific git repo first, fall back to cwd
     const projectCwd = project.projectPath && isGitRepo(project.projectPath)
       ? project.projectPath
       : cwd
 
-    const projectCommits = projectCwd !== cwd && isGitRepo(projectCwd)
-      ? getCommitsInRange(projectCwd, range.start, range.end, getMainBranch(projectCwd))
-      : commits
-
+    let group = repoGroups.get(projectCwd)
+    if (!group) {
+      group = {
+        commits: projectCwd === cwd
+          ? commits
+          : getCommitsInRange(projectCwd, range.start, range.end, getMainBranch(projectCwd)),
+        sessions: [],
+        projectNames: [],
+      }
+      repoGroups.set(projectCwd, group)
+    }
     for (const session of project.sessions) {
-      const { category, commitCount } = categorizeSession(session, projectCommits)
+      group.sessions.push(session)
+      group.projectNames.push(project.project)
+    }
+  }
+
+  for (const group of repoGroups.values()) {
+    const attributions = attributeCommits(group.sessions, group.commits)
+    for (const [index, session] of group.sessions.entries()) {
+      const attribution = attributions[index]
+      const { category, commitCount } = categorizeSession(
+        session,
+        attribution?.commits ?? [],
+        attribution?.lostCandidacy ?? false,
+      )
 
       summary[category].cost += session.totalCostUSD
       summary[category].sessions += 1
@@ -214,7 +302,7 @@ export async function computeYield(range: DateRange, cwd: string): Promise<Yield
 
       summary.details.push({
         sessionId: session.sessionId,
-        project: project.project,
+        project: group.projectNames[index] ?? session.project,
         cost: session.totalCostUSD,
         category,
         commitCount,
@@ -226,7 +314,7 @@ export async function computeYield(range: DateRange, cwd: string): Promise<Yield
 }
 
 export function formatYieldSummary(summary: YieldSummary): string {
-  const { productive, reverted, abandoned, total } = summary
+  const { productive, reverted, abandoned, ambiguous, total } = summary
 
   const pct = (n: number) => total.cost > 0 ? Math.round((n / total.cost) * 100) : 0
   const fmt = (n: number) => `$${n.toFixed(2)}`
@@ -236,6 +324,9 @@ export function formatYieldSummary(summary: YieldSummary): string {
     `Productive:  ${fmt(productive.cost).padStart(8)} (${pct(productive.cost)}%) - ${productive.sessions} sessions shipped to main`,
     `Reverted:    ${fmt(reverted.cost).padStart(8)} (${pct(reverted.cost)}%) - ${reverted.sessions} sessions were reverted`,
     `Abandoned:   ${fmt(abandoned.cost).padStart(8)} (${pct(abandoned.cost)}%) - ${abandoned.sessions} sessions never committed`,
+    `Ambiguous:   ${fmt(ambiguous.cost).padStart(8)} (${pct(ambiguous.cost)}%) - ${ambiguous.sessions} sessions lost commits to concurrent sessions`,
+    '',
+    'Attribution: timestamp-window based (heuristic)',
     '',
     `Total:       ${fmt(total.cost).padStart(8)}     - ${total.sessions} sessions`,
     '',
@@ -270,6 +361,7 @@ export function buildYieldJsonReport(
       productive: bucket(summary.productive),
       reverted: bucket(summary.reverted),
       abandoned: bucket(summary.abandoned),
+      ambiguous: bucket(summary.ambiguous),
       total: {
         costUSD: summary.total.cost,
         sessions: summary.total.sessions,
@@ -278,6 +370,7 @@ export function buildYieldJsonReport(
         ? Math.round((summary.productive.cost / summary.reverted.cost) * 100) / 100
         : null,
     },
+    methodology: 'timestamp-window',
     details: summary.details.map(detail => ({
       sessionId: detail.sessionId,
       project: detail.project,

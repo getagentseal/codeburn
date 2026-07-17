@@ -14,7 +14,7 @@ import { createRequire } from 'node:module'
 
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
-import { loadCache, saveCache } from '../src/session-cache.js'
+import { loadCache, saveCache, sessionCachePath } from '../src/session-cache.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
 
 // ── Synthetic provider state ───────────────────────────────────────────────
@@ -410,5 +410,48 @@ describe('(e) 90-day age-out for durable providers', () => {
     // Second parse: orphan with 89d timestamp → retained + counted via orphan pass
     const proj2 = await parseAllSessions(undefined, 'test-synthetic')
     expect(totalOutput(proj2)).toBe(7)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (f) Version-bump survival: a PROVIDER_PARSE_VERSIONS bump (or any env
+//     fingerprint change) must NOT erase durable orphans. The cache is the
+//     only remaining record of usage whose source was pruned; discarding the
+//     section wholesale on fingerprint mismatch permanently lost that history
+//     (caught in the #684 re-review).
+// ═══════════════════════════════════════════════════════════════════════════
+describe('(f) durable orphans survive a parse-version bump', () => {
+  it('keeps counting a pruned-source orphan after the provider fingerprint changes', async () => {
+    const sessionStateDir = join(tmpHome, 'session-state')
+    await mkdir(sessionStateDir, { recursive: true })
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STATE_DIR', sessionStateDir)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    vi.stubEnv('CODEBURN_COPILOT_WS_STORAGE_DIR', join(tmpHome, 'no-ws'))
+
+    // Parse once so the session is cached, then prune the source: the cache
+    // entry becomes a durable orphan (its only record).
+    const eventsPath = await createJsonlSession(sessionStateDir, 'sess-bump', 200)
+    const before = totalOutput(await parseAllSessions(undefined, 'copilot'))
+    expect(before).toBe(200)
+    await unlink(eventsPath)
+    clearSessionCache()
+
+    // Simulate the fingerprint a PREVIOUS release computed (any mismatching
+    // value takes the same code path as a real parse-version bump).
+    const { readFile, writeFile: writeFileFs } = await import('fs/promises')
+    const cachePath = sessionCachePath()
+    const disk = JSON.parse(await readFile(cachePath, 'utf-8')) as { providers: Record<string, { envFingerprint: string }> }
+    expect(disk.providers['copilot']).toBeDefined()
+    disk.providers['copilot']!.envFingerprint = '0000000000000000'
+    await writeFileFs(cachePath, JSON.stringify(disk), 'utf-8')
+
+    // First parse after the "upgrade": the orphan must still be counted and
+    // must survive in the rewritten cache, not be erased with the section.
+    const after = totalOutput(await parseAllSessions(undefined, 'copilot'))
+    expect(after).toBe(200)
+
+    clearSessionCache()
+    const again = totalOutput(await parseAllSessions(undefined, 'copilot'))
+    expect(again).toBe(200)
   })
 })

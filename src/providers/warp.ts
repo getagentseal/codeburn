@@ -4,6 +4,7 @@ import { homedir } from 'os'
 import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { blobToText, getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
+import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 import { safeNumber } from '../parser.js'
 
@@ -11,8 +12,6 @@ const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
 const WARP_STABLE_BUNDLE_ID = 'dev.warp.Warp-Stable'
 const WARP_PREVIEW_BUNDLE_ID = 'dev.warp.Warp-Preview'
 const PRIMARY_AGENT_CATEGORY = 'primary_agent'
-const CHARS_PER_TOKEN = 4
-
 const modelAliases: Record<string, string> = {
   'Claude Sonnet 4.6': 'claude-sonnet-4-6',
   'Claude Sonnet 4.5': 'claude-sonnet-4-5',
@@ -199,7 +198,7 @@ function extractUserMessage(rawInput: string): string {
 function estimateWeight(rawInput: string): number {
   const userMessage = extractUserMessage(rawInput)
   const source = userMessage || rawInput
-  const tokens = Math.ceil(source.length / CHARS_PER_TOKEN)
+  const tokens = estimateTokensFromChars(source.length)
   return Math.max(1, tokens)
 }
 

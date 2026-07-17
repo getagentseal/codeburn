@@ -49,6 +49,9 @@ describe('web dashboard server: invalid query returns 400 without exiting', () =
     // A successful follow-up request proves the server survived the bad one.
     const ok = await fetch(`${base}/api/usage?period=today`)
     expect(ok.status).toBe(200)
+    const payload = await ok.json() as { history: { timeline?: { bucketMinutes: number; points: unknown[] } } }
+    expect(payload.history.timeline?.bucketMinutes).toBe(15)
+    expect(Array.isArray(payload.history.timeline?.points)).toBe(true)
   })
 
   it('answers 400 for an invalid /api/devices period', async () => {

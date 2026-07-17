@@ -8,6 +8,7 @@ describe('buildYieldJsonReport', () => {
       productive: { cost: 8, sessions: 2 },
       reverted: { cost: 2, sessions: 1 },
       abandoned: { cost: 10, sessions: 1 },
+      ambiguous: { cost: 0, sessions: 0 },
       total: { cost: 20, sessions: 4 },
       details: [
         { sessionId: 's1', project: 'app', cost: 8, category: 'productive', commitCount: 2 },
@@ -32,8 +33,15 @@ describe('buildYieldJsonReport', () => {
     })
     expect(report.summary.reverted.costPercent).toBe(10)
     expect(report.summary.abandoned.sessionPercent).toBe(25)
+    expect(report.summary.ambiguous).toEqual({
+      costUSD: 0,
+      sessions: 0,
+      costPercent: 0,
+      sessionPercent: 0,
+    })
     expect(report.summary.total).toEqual({ costUSD: 20, sessions: 4 })
     expect(report.summary.productiveToRevertedCostRatio).toBe(4)
+    expect(report.methodology).toBe('timestamp-window')
     expect(report.details).toHaveLength(2)
     expect(report.details[0]).toMatchObject({ sessionId: 's1', costUSD: 8, category: 'productive' })
     expect(report.details[0]).not.toHaveProperty('cost')
@@ -44,6 +52,7 @@ describe('buildYieldJsonReport', () => {
       productive: { cost: 1, sessions: 1 },
       reverted: { cost: 0, sessions: 0 },
       abandoned: { cost: 0, sessions: 0 },
+      ambiguous: { cost: 0, sessions: 0 },
       total: { cost: 1, sessions: 1 },
       details: [],
     }

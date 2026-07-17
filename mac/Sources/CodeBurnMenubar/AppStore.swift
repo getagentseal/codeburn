@@ -17,13 +17,20 @@ struct PayloadCacheKey: Hashable {
     let provider: ProviderFilter
     let day: String?
     let days: Set<String>
+    let claudeConfigSourceId: String?
 
-    init(scope: MenubarScope = .local, period: Period, provider: ProviderFilter, day: String? = nil, days: Set<String> = []) {
+    init(scope: MenubarScope = .local,
+         period: Period,
+         provider: ProviderFilter,
+         day: String? = nil,
+         days: Set<String> = [],
+         claudeConfigSourceId: String? = nil) {
         self.scope = scope
         self.period = period
         self.provider = provider
         self.day = days.count <= 1 ? (day ?? days.first) : nil
         self.days = days.count > 1 ? days : []
+        self.claudeConfigSourceId = claudeConfigSourceId
     }
 
     var label: String {
@@ -40,6 +47,7 @@ final class AppStore {
     var selectedProvider: ProviderFilter = .all
     var selectedPeriod: Period = .today
     var selectedScope: MenubarScope = MenubarScope.savedMenubarScope()
+    var selectedClaudeConfigSourceId: String?
     var selectedDays: Set<String> = []
     var activeScope: MenubarScope { effectiveSelectedScope }
 
@@ -171,19 +179,42 @@ final class AppStore {
     }
 
     private var menubarStatusKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: menubarPeriod, provider: .all, day: nil)
+        // Scope the menu-bar figure to the selected Claude config so the icon
+        // matches the popover instead of always showing the merged All total.
+        PayloadCacheKey(scope: .local, period: menubarPeriod, provider: .all, day: nil, claudeConfigSourceId: selectedClaudeConfigSourceId)
     }
 
     private var currentKey: PayloadCacheKey {
-        PayloadCacheKey(scope: effectiveSelectedScope, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: effectiveSelectedScope,
+            period: selectedPeriod,
+            provider: selectedProvider,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     private var localCurrentKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: selectedProvider, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: .local,
+            period: selectedPeriod,
+            provider: selectedProvider,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     private var periodAllKey: PayloadCacheKey {
-        PayloadCacheKey(scope: .local, period: selectedPeriod, provider: .all, day: selectedDay, days: selectedDays)
+        PayloadCacheKey(
+            scope: .local,
+            period: selectedPeriod,
+            provider: .all,
+            day: selectedDay,
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
+        )
     }
 
     var payload: MenubarPayload {
@@ -196,7 +227,8 @@ final class AppStore {
                         current: localPayload.current,
                         optimize: localPayload.optimize,
                         history: localPayload.history,
-                        combined: combined
+                        combined: combined,
+                        claudeConfigs: localPayload.claudeConfigs
                     )
                 }
                 return localPayload
@@ -235,6 +267,17 @@ final class AppStore {
     /// per-provider costs that match the active period, not just today.
     var periodAllPayload: MenubarPayload? {
         cache[periodAllKey]?.payload
+    }
+
+    var claudeConfigOptions: [ClaudeConfigOption] {
+        payload.claudeConfigs?.options
+            ?? periodAllPayload?.claudeConfigs?.options
+            ?? todayPayload?.claudeConfigs?.options
+            ?? []
+    }
+
+    var shouldShowClaudeConfigSelector: Bool {
+        claudeConfigOptions.count > 1
     }
 
     var isDayMode: Bool {
@@ -313,16 +356,18 @@ final class AppStore {
                                     provider: ProviderFilter,
                                     day: String? = nil,
                                     days: Set<String> = [],
+                                    claudeConfigSourceId: String? = nil,
                                     fetchedAt: Date) {
-        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)] = CachedPayload(payload: payload, fetchedAt: fetchedAt)
     }
 
     func cachedPayloadForTesting(scope: MenubarScope = .local,
                                  period: Period,
                                  provider: ProviderFilter,
                                  day: String? = nil,
-                                 days: Set<String> = []) -> MenubarPayload? {
-        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)]?.payload
+                                 days: Set<String> = [],
+                                 claudeConfigSourceId: String? = nil) -> MenubarPayload? {
+        cache[PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)]?.payload
     }
 
     func setLastErrorForTesting(_ error: String,
@@ -412,6 +457,9 @@ final class AppStore {
         if shouldResetProvider {
             selectedProvider = .all
         }
+        if scope == .combined {
+            selectedClaudeConfigSourceId = nil
+        }
 #if DEBUG
         if refreshSuppressedForTesting { return }
 #endif
@@ -426,6 +474,21 @@ final class AppStore {
     /// in parallel so the tab strip costs stay in sync with the hero.
     func switchTo(provider: ProviderFilter) {
         selectedProvider = provider
+        // A Claude config scope only applies to All/Claude views; picking any
+        // other provider tab clears it (the CLI rejects the contradictory combo).
+        if provider != .all && provider != .claude {
+            selectedClaudeConfigSourceId = nil
+        }
+        startInteractiveSelectionRefresh()
+    }
+
+    func switchTo(claudeConfigSourceId: String?) {
+        guard selectedClaudeConfigSourceId != claudeConfigSourceId else { return }
+        selectedClaudeConfigSourceId = claudeConfigSourceId
+        if claudeConfigSourceId != nil {
+            selectedProvider = .all
+            selectedScope = .local
+        }
         startInteractiveSelectionRefresh()
     }
 
@@ -435,6 +498,9 @@ final class AppStore {
         selectedScope = scope
         if shouldResetProvider {
             selectedProvider = .all
+        }
+        if scope == .combined {
+            selectedClaudeConfigSourceId = nil
         }
         startInteractiveSelectionRefresh()
     }
@@ -450,25 +516,26 @@ final class AppStore {
         let scope = effectiveSelectedScope
         let day = selectedDay
         let days = selectedDays
-        let key = PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days)
-        let localKey = PayloadCacheKey(scope: .local, period: period, provider: provider, day: day, days: days)
-        let allKey = PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, days: days)
+        let claudeConfigSourceId = selectedClaudeConfigSourceId
+        let key = PayloadCacheKey(scope: scope, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
+        let localKey = PayloadCacheKey(scope: .local, period: period, provider: provider, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
+        let allKey = PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, days: days, claudeConfigSourceId: claudeConfigSourceId)
         lastErrorByKey[key] = nil
         switchTask = Task {
             if scope == .combined {
-                async let local: Void = refresh(key: localKey, includeOptimize: false, force: false, showLoading: false)
-                async let combined: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let local = refresh(key: localKey, includeOptimize: false, force: false, showLoading: false)
+                async let combined = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
                 if provider == .all {
                     _ = await (local, combined)
                 } else {
-                    async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
+                    async let all = refreshQuietly(key: allKey, includeOptimize: false, force: false)
                     _ = await (local, combined, all)
                 }
             } else if provider == .all {
                 await refresh(key: key, includeOptimize: false, force: true, showLoading: true)
             } else {
-                async let main: Void = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
-                async let all: Void = refreshQuietly(key: allKey, includeOptimize: false, force: false)
+                async let main = refresh(key: key, includeOptimize: false, force: true, showLoading: true)
+                async let all = refreshQuietly(key: allKey, includeOptimize: false, force: false)
                 _ = await (main, all)
             }
         }
@@ -569,9 +636,19 @@ final class AppStore {
         cache.removeAll()
     }
 
-    func recoverFromStuckLoading() async {
-        guard prepareStuckLoadingRecovery() else { return }
-        await refresh(includeOptimize: false, force: true, showLoading: true)
+    private func reconcileClaudeConfigSelection(from payload: MenubarPayload, for key: PayloadCacheKey) {
+        guard let selected = key.claudeConfigSourceId else { return }
+        guard selectedClaudeConfigSourceId == selected else { return }
+        let valid = payload.claudeConfigs?.options.contains { $0.id == selected } ?? false
+        if !valid || payload.claudeConfigs?.selectedId != selected {
+            selectedClaudeConfigSourceId = nil
+        }
+    }
+
+    @discardableResult
+    func recoverFromStuckLoading() async -> Bool {
+        guard prepareStuckLoadingRecovery() else { return false }
+        return await refresh(includeOptimize: false, force: true, showLoading: true)
     }
 
     /// Decides whether stuck-loading recovery should kick off a fresh fetch for
@@ -596,13 +673,37 @@ final class AppStore {
         lastErrorByKey[currentKey] = "Could not load \(label). Check that the codeburn CLI is installed and working."
     }
 
-    func refresh(includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+    @discardableResult
+    func refresh(
+        includeOptimize: Bool,
+        force: Bool = false,
+        showLoading: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         if effectiveSelectedScope == .combined {
-            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: includeOptimize, force: force)
-            async let combined: Void = refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
-            _ = await (local, combined)
+            async let local = refreshQuietly(
+                key: localCurrentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                qualityOfService: qualityOfService
+            )
+            async let combined = refresh(
+                key: currentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                showLoading: showLoading,
+                qualityOfService: qualityOfService
+            )
+            let (localSucceeded, combinedSucceeded) = await (local, combined)
+            return localSucceeded && combinedSucceeded
         } else {
-            await refresh(key: currentKey, includeOptimize: includeOptimize, force: force, showLoading: showLoading)
+            return await refresh(
+                key: currentKey,
+                includeOptimize: includeOptimize,
+                force: force,
+                showLoading: showLoading,
+                qualityOfService: qualityOfService
+            )
         }
     }
 
@@ -612,24 +713,32 @@ final class AppStore {
             period: selectedPeriod,
             provider: selectedProvider,
             day: selectedDay,
-            days: selectedDays
+            days: selectedDays,
+            claudeConfigSourceId: selectedClaudeConfigSourceId
         )
         if scope == .combined {
-            async let local: Void = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
-            async let combined: Void = refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
+            async let local = refreshQuietly(key: localCurrentKey, includeOptimize: false, force: false)
+            async let combined = refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
             _ = await (local, combined)
         } else {
             await refreshQuietly(key: scopedKey, includeOptimize: false, force: force)
         }
     }
 
-    private func refresh(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false, showLoading: Bool = false) async {
+    @discardableResult
+    private func refresh(
+        key: PayloadCacheKey,
+        includeOptimize: Bool,
+        force: Bool = false,
+        showLoading: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         invalidateStaleDayCache()
         let cacheDateAtStart = cacheDate
         let generationAtStart = payloadRefreshGeneration
-        if Task.isCancelled { return }
-        if !force, cache[key]?.isFresh == true { return }
-        if inFlightKeys[key] != nil { return }
+        if Task.isCancelled { return false }
+        if !force, cache[key]?.isFresh == true { return true }
+        if inFlightKeys[key] != nil { return false }
         inFlightKeys[key] = Date()
         attemptedKeys.insert(key)
         lastErrorByKey[key] = nil
@@ -658,11 +767,21 @@ final class AppStore {
                 attemptedKeys.remove(key)
             }
         }
+        var succeeded = false
         do {
-            let fresh = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: includeOptimize, scope: key.scope)
+            let fresh = try await DataClient.fetch(
+                period: key.period,
+                day: key.day,
+                days: key.days,
+                provider: key.provider,
+                includeOptimize: includeOptimize,
+                scope: key.scope,
+                claudeConfigSourceId: key.claudeConfigSourceId,
+                qualityOfService: qualityOfService
+            )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — refresh pipeline reset mid-fetch")
-                return
+                return false
             }
             if Task.isCancelled {
                 // Distinguish cancellation (user switched tabs mid-fetch) from
@@ -670,7 +789,7 @@ final class AppStore {
                 // fetch leaves cache empty + lastError nil and the user sees
                 // perpetual loading with nothing in the diagnostics.
                 NSLog("CodeBurn: fetch for \(key.label)/\(key.provider.rawValue) cancelled before result was applied")
-                return
+                return false
             }
             // Day-rollover race guard: if the calendar date changed during the
             // fetch, this payload was computed against yesterday's date and
@@ -679,52 +798,98 @@ final class AppStore {
             if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                 invalidateStaleDayCache()
                 NSLog("CodeBurn: dropping fetch result for \(key.label)/\(key.provider.rawValue) — calendar rolled mid-fetch")
-                return
+                return false
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
+            reconcileClaudeConfigSelection(from: fresh, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
+            succeeded = true
         } catch {
-            if Task.isCancelled { return }
+            if Task.isCancelled { return false }
             NSLog("CodeBurn: fetch failed for \(key.label)/\(key.provider.rawValue): \(error)")
             if includeOptimize, cache[key] == nil {
                 do {
-                    let fallback = try await DataClient.fetch(period: key.period, day: key.day, days: key.days, provider: key.provider, includeOptimize: false, scope: key.scope)
-                    guard !Task.isCancelled else { return }
-                    if generationAtStart != payloadRefreshGeneration { return }
+                    let fallback = try await DataClient.fetch(
+                        period: key.period,
+                        day: key.day,
+                        days: key.days,
+                        provider: key.provider,
+                        includeOptimize: false,
+                        scope: key.scope,
+                        claudeConfigSourceId: key.claudeConfigSourceId,
+                        qualityOfService: qualityOfService
+                    )
+                    guard !Task.isCancelled else { return false }
+                    if generationAtStart != payloadRefreshGeneration { return false }
                     if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                         invalidateStaleDayCache()
-                        return
+                        return false
                     }
                     cache[key] = CachedPayload(payload: fallback, fetchedAt: Date())
+                    reconcileClaudeConfigSelection(from: fallback, for: key)
                     lastSuccessByKey[key] = Date()
                     lastErrorByKey[key] = nil
-                    return
+                    return true
                 } catch {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled { return false }
                     NSLog("CodeBurn: fallback fetch also failed: \(error)")
                 }
             }
             lastErrorByKey[key] = String(describing: error)
         }
 
-        let allKey = PayloadCacheKey(scope: .local, period: key.period, provider: .all, day: key.day, days: key.days)
+        guard succeeded else { return false }
+
+        let allKey = PayloadCacheKey(
+            scope: .local,
+            period: key.period,
+            provider: .all,
+            day: key.day,
+            days: key.days,
+            claudeConfigSourceId: key.claudeConfigSourceId
+        )
         if key != allKey, cache[allKey]?.isFresh != true {
-            await refreshQuietly(key: allKey, includeOptimize: false, force: false)
+            await refreshQuietly(
+                key: allKey,
+                includeOptimize: false,
+                force: false,
+                qualityOfService: qualityOfService
+            )
         }
+        return true
     }
 
     /// Background refresh for a period other than the visible one (e.g. keeping today fresh for the menubar badge).
     /// Does not toggle isLoading, so the popover's loading overlay is unaffected.
     /// Always uses the .all provider since the menubar badge shows total spend.
-    func refreshQuietly(period: Period, day: String? = nil, force: Bool = false) async {
-        await refreshQuietly(key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day), includeOptimize: false, force: force)
+    @discardableResult
+    func refreshQuietly(
+        period: Period,
+        day: String? = nil,
+        force: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
+        // Scope the status-payload fetch to the selected config so the menu-bar
+        // figure matches the popover (see menubarStatusKey).
+        return await refreshQuietly(
+            key: PayloadCacheKey(scope: .local, period: period, provider: .all, day: day, claudeConfigSourceId: selectedClaudeConfigSourceId),
+            includeOptimize: false,
+            force: force,
+            qualityOfService: qualityOfService
+        )
     }
 
-    private func refreshQuietly(key: PayloadCacheKey, includeOptimize: Bool, force: Bool = false) async {
+    @discardableResult
+    private func refreshQuietly(
+        key: PayloadCacheKey,
+        includeOptimize: Bool,
+        force: Bool = false,
+        qualityOfService: QualityOfService = .userInitiated
+    ) async -> Bool {
         invalidateStaleDayCache()
-        if !force, cache[key]?.isFresh == true { return }
-        if inFlightKeys[key] != nil { return }
+        if !force, cache[key]?.isFresh == true { return true }
+        if inFlightKeys[key] != nil { return false }
         inFlightKeys[key] = Date()
         attemptedKeys.insert(key)
         let cacheDateAtStart = cacheDate
@@ -742,19 +907,22 @@ final class AppStore {
                 days: key.days,
                 provider: key.provider,
                 includeOptimize: includeOptimize,
-                scope: key.scope
+                scope: key.scope,
+                claudeConfigSourceId: key.claudeConfigSourceId,
+                qualityOfService: qualityOfService
             )
             if generationAtStart != payloadRefreshGeneration {
                 NSLog("CodeBurn: dropping quiet fetch result for \(key.label) — refresh pipeline reset mid-fetch")
-                return
+                return false
             }
             // Same day-rollover guard as refresh(): drop yesterday's payload if
             // the calendar rolled over during the fetch.
             if cacheDate != cacheDateAtStart || cacheDate != currentCacheDate() {
                 invalidateStaleDayCache()
-                return
+                return false
             }
             cache[key] = CachedPayload(payload: fresh, fetchedAt: Date())
+            reconcileClaudeConfigSelection(from: fresh, for: key)
             lastSuccessByKey[key] = Date()
             lastErrorByKey[key] = nil
         } catch {
@@ -762,7 +930,9 @@ final class AppStore {
             if key.scope == .combined {
                 lastErrorByKey[key] = String(describing: error)
             }
+            return false
         }
+        return true
     }
 
     /// User-initiated. Reads Claude's source (this is what triggers the macOS keychain
@@ -1188,7 +1358,7 @@ final class AppStore {
 }
 
 enum SupportedCurrency: String, CaseIterable, Identifiable {
-    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK
+    case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK, RON
     var id: String { rawValue }
     var displayName: String {
         switch self {
@@ -1210,6 +1380,7 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
         case .MXN: "Mexican Peso"
         case .ZAR: "South African Rand"
         case .DKK: "Danish Krone"
+        case .RON: "Romanian Leu"
         }
     }
 }
@@ -1218,6 +1389,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case all = "All"
     case claude = "Claude"
     case cline = "Cline"
+    case codewhale = "CodeWhale"
     case codex = "Codex"
     case cursor = "Cursor"
     case cursorAgent = "Cursor Agent"
@@ -1228,6 +1400,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
+    case lingtaiTui = "LingTai TUI"
     case kiloCode = "KiloCode"
     case openclaw = "OpenClaw"
     case opencode = "OpenCode"
@@ -1249,6 +1422,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .cursor: ["cursor"]
         case .cursorAgent: ["cursor-agent", "cursor agent"]
         case .cline: ["cline"]
+        case .codewhale: ["codewhale"]
         case .rooCode: ["roo-code", "roo code"]
         case .kiloCode: ["kilo-code", "kilocode"]
         case .ibmBob: ["ibm-bob", "ibm bob"]
@@ -1257,6 +1431,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .goose: ["goose"]
         case .grok: ["grok", "grok build"]
         case .hermes: ["hermes", "hermes agent"]
+        case .lingtaiTui: ["lingtai-tui", "lingtai tui"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1266,6 +1441,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .all: "all"
         case .claude: "claude"
         case .cline: "cline"
+        case .codewhale: "codewhale"
         case .codex: "codex"
         case .cursor: "cursor"
         case .cursorAgent: "cursor-agent"
@@ -1277,6 +1453,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kiloCode: "kilo-code"
         case .kiro: "kiro"
         case .kimi: "kimi"
+        case .lingtaiTui: "lingtai-tui"
         case .openclaw: "openclaw"
         case .opencode: "opencode"
         case .pi: "pi"

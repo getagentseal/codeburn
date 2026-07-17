@@ -1,4 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../src/providers/index.js', async (importOriginal) => {
+  type ProvidersModule = typeof import('../src/providers/index.js')
+  const actual = await importOriginal<ProvidersModule>()
+  return {
+    ...actual,
+    async discoverAllSessions() {
+      return []
+    },
+  }
+})
 
 import {
   detectJunkReads,
@@ -10,6 +21,7 @@ import {
   detectCapabilityReliability,
   detectLowWorthSessions,
   detectSessionOutliers,
+  scanAndDetect,
   computeHealth,
   computeTrend,
   buildOptimizeJsonReport,
@@ -58,6 +70,22 @@ function projectWithSessions(costs: number[], project = 'app'): ProjectSummary {
     sessions,
     totalCostUSD: costs.reduce((sum, cost) => sum + cost, 0),
     totalApiCalls: sessions.length,
+  }
+}
+
+function projectWithDeliveredSessions(costs: number[], project = 'app'): ProjectSummary {
+  const summary = projectWithSessions(costs, project)
+  for (const session of summary.sessions) {
+    session.bashBreakdown = { 'git commit -m test': { calls: 1 } }
+  }
+  return summary
+}
+
+function optimizeDateRange(day: number) {
+  const padded = String(day).padStart(2, '0')
+  return {
+    start: new Date(`2026-06-${padded}T00:00:00Z`),
+    end: new Date(`2026-06-${padded}T23:59:59Z`),
   }
 }
 
@@ -601,8 +629,9 @@ describe('detectLowWorthSessions', () => {
     expect(finding!.explanation).toContain('app/s1')
     expect(finding!.explanation).toContain('no edit turns')
     // sessionTokenTotal = input + output + cache. The lowWorthSession helper
-    // sets input=output=cost*1000, so the savings ceiling is 2x cost*1000.
-    expect(finding!.tokensSaved).toBe(8_000)
+    // sets input=output=cost*1000, so the full session total is 8K and the
+    // bounded no-edit recovery fraction gives a 4K savings estimate.
+    expect(finding!.tokensSaved).toBe(4_000)
   })
 
   it('flags retry-heavy sessions', () => {
@@ -639,13 +668,13 @@ describe('detectLowWorthSessions', () => {
     expect(finding!.tokensSaved).toBe(4_000)
   })
 
-  it('uses full session tokens as the savings ceiling for no-edit sessions', () => {
+  it('uses the bounded recovery fraction for no-edit sessions', () => {
     const project = projectWithLowWorthSessions([
       lowWorthSession(4, 0, { turns: [lowWorthTurn({ hasEdits: false })] }),
     ])
     const finding = detectLowWorthSessions([project])
-    // No edits at all -> entire session is at risk. sessionTokenTotal = 8K.
-    expect(finding!.tokensSaved).toBe(8_000)
+    // No edits at all -> bounded half-session estimate. sessionTokenTotal = 8K.
+    expect(finding!.tokensSaved).toBe(4_000)
   })
 
   it('keeps all reasons that apply to the same session', () => {
@@ -977,6 +1006,38 @@ describe('detectSessionOutliers', () => {
     const finding = detectSessionOutliers([project], excluded)
     expect(finding).not.toBeNull()
     expect(finding!.explanation).toContain('app/s4')
+  })
+
+  it('scanAndDetect excludes the earliest high-cost session while the project is young', async () => {
+    const result = await scanAndDetect(
+      [projectWithDeliveredSessions([20, 1, 1, 1])],
+      optimizeDateRange(1),
+    )
+
+    const finding = result.findings.find(f => f.id === 'cost-outliers')
+    expect(finding).toBeUndefined()
+  })
+
+  it('scanAndDetect still flags a later high-cost session while the project is young', async () => {
+    const result = await scanAndDetect(
+      [projectWithDeliveredSessions([1, 20, 1, 1])],
+      optimizeDateRange(2),
+    )
+
+    const finding = result.findings.find(f => f.id === 'cost-outliers')
+    expect(finding).toBeDefined()
+    expect(finding!.explanation).toContain('app/s2')
+  })
+
+  it('scanAndDetect still flags the earliest high-cost session once the project is mature', async () => {
+    const result = await scanAndDetect(
+      [projectWithDeliveredSessions([20, 1, 1, 1, 1, 1])],
+      optimizeDateRange(3),
+    )
+
+    const finding = result.findings.find(f => f.id === 'cost-outliers')
+    expect(finding).toBeDefined()
+    expect(finding!.explanation).toContain('app/s1')
   })
 })
 

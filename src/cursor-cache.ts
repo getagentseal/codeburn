@@ -79,6 +79,10 @@ export async function writeCachedResults(
   calls: ParsedProviderCall[],
   lookbackFloor: string,
 ): Promise<void> {
+  // Diagnostic contexts (codeburn doctor) sample-parse providers under a
+  // strictly read-only promise; this is the one parse path that writes to
+  // disk before its first yield, so it honors the suppression flag.
+  if (process.env['CODEBURN_SUPPRESS_CACHE_WRITES']) return
   const fp = await getDbFingerprint(dbPath)
   if (!fp) return
 

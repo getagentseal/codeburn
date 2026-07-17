@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPersistentCodeburnLookupPath,
+  formatGitHubReleaseLookupError,
   resolveLatestMenubarReleaseAssets,
   resolveMenubarReleaseAssets,
   resolvePersistentCodeburnPathFromWhichOutput,
   resolveProxyUrlForUrl,
+  resolveVersionedMenubarReleaseAssets,
+  shouldFallbackToReleaseApi,
   type ReleaseResponse,
 } from '../src/menubar-installer.js'
 
@@ -74,6 +77,49 @@ describe('resolveMenubarReleaseAssets', () => {
 
     expect(resolved.release.tag_name).toBe('mac-v0.9.8')
     expect(resolved.zip.name).toBe('CodeBurnMenubar-v0.9.8.zip')
+  })
+
+  it('builds direct release asset URLs from the CLI version', () => {
+    const resolved = resolveVersionedMenubarReleaseAssets('0.9.15')
+
+    expect(resolved.release.tag_name).toBe('mac-v0.9.15')
+    expect(resolved.zip.name).toBe('CodeBurnMenubar-v0.9.15.zip')
+    expect(resolved.zip.browser_download_url).toBe(
+      'https://github.com/getagentseal/codeburn/releases/download/mac-v0.9.15/CodeBurnMenubar-v0.9.15.zip'
+    )
+    expect(resolved.checksum.name).toBe('CodeBurnMenubar-v0.9.15.zip.sha256')
+    expect(resolved.checksum.browser_download_url).toBe(
+      'https://github.com/getagentseal/codeburn/releases/download/mac-v0.9.15/CodeBurnMenubar-v0.9.15.zip.sha256'
+    )
+  })
+
+  it('normalizes a leading v when building direct release URLs', () => {
+    const resolved = resolveVersionedMenubarReleaseAssets('v0.9.15')
+
+    expect(resolved.release.tag_name).toBe('mac-v0.9.15')
+    expect(resolved.zip.name).toBe('CodeBurnMenubar-v0.9.15.zip')
+  })
+
+  it('falls back to the release API only for missing direct assets', () => {
+    expect(shouldFallbackToReleaseApi(404)).toBe(true)
+    expect(shouldFallbackToReleaseApi(410)).toBe(true)
+    expect(shouldFallbackToReleaseApi(403)).toBe(false)
+    expect(shouldFallbackToReleaseApi(429)).toBe(false)
+    expect(shouldFallbackToReleaseApi(500)).toBe(false)
+  })
+
+  it('explains likely rate limiting for GitHub API 403 and 429 errors', () => {
+    const headerValues: Record<string, string> = {
+      'retry-after': '120',
+      'x-ratelimit-reset': '1783539204',
+    }
+    const headers = { get: (name: string) => headerValues[name] ?? null }
+
+    expect(formatGitHubReleaseLookupError(403, headers)).toContain(
+      'GitHub may be rate limiting unauthenticated release API requests'
+    )
+    expect(formatGitHubReleaseLookupError(403, headers)).toContain('retry-after=120')
+    expect(formatGitHubReleaseLookupError(429, headers)).toContain('x-ratelimit-reset=1783539204')
   })
 
   it('preserves the caller PATH when building the persistent CLI lookup PATH', () => {
