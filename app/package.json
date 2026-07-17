@@ -107,6 +107,18 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "category": "Development",
@@ -114,5 +126,7 @@
       "maintainer": "AgentSeal <hello@agentseal.org>",
       "executableName": "codeburn"
     }
-  }
+  },
+  "homepage": "https://github.com/getagentseal/codeburn",
+  "author": "AgentSeal <hello@agentseal.org>"
 }
