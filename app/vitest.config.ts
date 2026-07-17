@@ -9,6 +9,6 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     setupFiles: ['./renderer/test/setup.ts'],
-    include: ['renderer/**/*.test.{ts,tsx}', 'electron/**/*.test.ts'],
+    include: ['renderer/**/*.test.{ts,tsx}', 'electron/**/*.test.ts', 'scripts/**/*.test.ts'],
   },
 })

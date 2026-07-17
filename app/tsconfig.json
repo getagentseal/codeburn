@@ -16,5 +16,5 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["renderer", "electron", "vite.config.ts", "vitest.config.ts"]
+  "include": ["renderer", "electron", "scripts", "vite.config.ts", "vitest.config.ts"]
 }
