@@ -18,6 +18,36 @@
     <a href="https://github.com/sponsors/iamtoruk"><img src="https://img.shields.io/badge/sponsor-♥-F97316?logo=github" alt="Sponsor" /></a>
 </p>
 
+<table align="center">
+  <tr>
+    <td align="center" width="50%">
+      <strong>Desktop</strong><br/>
+      <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/desktop.jpg" alt="CodeBurn Desktop" /><br/>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.15/CodeBurn-0.9.15-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.15/CodeBurn-0.9.15.dmg"><img src="https://img.shields.io/badge/macOS-Intel-F97316?logo=apple&logoColor=white" alt="Download for macOS (Intel)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.15/CodeBurn-0.9.15.AppImage"><img src="https://img.shields.io/badge/Linux-AppImage-F97316?logo=linux&logoColor=white" alt="Download for Linux" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.15/CodeBurn-Setup-0.9.15.exe"><img src="https://img.shields.io/badge/Windows-Setup-F97316?logoColor=white" alt="Download for Windows" /></a>
+    </td>
+    <td align="center" width="50%">
+      <strong>Web</strong><br/>
+      <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/web.jpg" alt="CodeBurn Web dashboard" /><br/>
+      <code>npx codeburn web</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <strong>Terminal</strong><br/>
+      <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" /><br/>
+      <code>npx codeburn</code>
+    </td>
+    <td align="center" width="50%">
+      <strong>macOS Menubar</strong><br/>
+      <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/menubar-app.jpg" alt="CodeBurn macOS menubar" /><br/>
+      <code>codeburn menubar</code>
+    </td>
+  </tr>
+</table>
+
 **CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 36 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
 
 You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
@@ -25,11 +55,6 @@ You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells
 CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **36 AI tools**.
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="760" />
-</p>
-<p align="center"><em>A week across every tool you use, in one screen.</em></p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
@@ -128,10 +153,6 @@ codeburn optimize --format json         # setup health + findings as JSON
 - Possibly low-worth expensive sessions with no edit turns or repeated retries
   when no `git`/`gh` delivery command is observed
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/optimize.jpg" alt="CodeBurn optimize" width="760" />
-</p>
-
 Each finding shows the estimated token and dollar savings plus a ready-to-paste fix: a `CLAUDE.md` line, an environment variable, or a `mv` command to archive unused items. Findings are ranked by urgency (impact weighted against observed waste) and rolled up into an A to F setup health grade. Repeat runs classify each finding as new, improving, or resolved against a 48-hour recent window.
 
 You can also open it inline from the dashboard: press `o` when a finding count appears in the status bar, `b` to return.
@@ -179,10 +200,6 @@ codeburn compare --provider claude      # Claude Code sessions only
 ```
 
 Which model is actually better for *your* work? Press `c` in the dashboard, or run `codeburn compare`. Arrow keys switch periods, `b` to return.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/compare.jpg" alt="CodeBurn compare" width="760" />
-</p>
 
 | Section | Metric | What it measures |
 |---------|--------|-----------------|
@@ -255,10 +272,6 @@ codeburn menubar
 ```
 
 One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift and SwiftUI app lives in `mac/` (see `mac/README.md` for build details).
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/menubar-0.9.11.png" alt="CodeBurn macOS menubar" width="440" />
-</p>
 
 The menubar icon shows the spend period selected in Settings (Today by default; Week, Month, and 6 Months are also available). Non-today periods add a short suffix such as `$42 / mo` so the menu bar value stays clear. Click to open a popover with agent tabs, period switcher (Today, 7 Days, 30 Days, Month, All), Trend, Forecast, Pulse, Stats, and Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes every 30 seconds.
 
