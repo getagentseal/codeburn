@@ -263,9 +263,9 @@ export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
 
 export const MS_PER_DAY = 24 * 60 * 60 * 1000
 export const BACKFILL_DAYS = 365
-// Keep 2 years of history so the longest UI-exposed period (6 months
-// today, with headroom for future longer windows) always reads from
-// cache while old entries get pruned.
+// Keep 2 years of history so the longest bounded UI period (6 months
+// via `all`) and the uncapped `lifetime` period both have headroom to
+// read from cache while old entries get pruned.
 export const DAILY_CACHE_RETENTION_DAYS = 730
 
 export function toDateString(date: Date): string {

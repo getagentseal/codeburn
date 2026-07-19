@@ -234,4 +234,51 @@ describe('codeburn report --format json daily[] one-shot fields (issue #279)', (
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  it('includes older sessions under --period lifetime but not under --period all', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-json-lifetime-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'app')
+      await mkdir(projectDir, { recursive: true })
+
+      await writeFile(
+        join(projectDir, 'history.jsonl'),
+        [
+          userLine('old', '2025-10-01T09:00:00Z'),
+          assistantEditLine('old', '2025-10-01T09:01:00Z', 'm-old'),
+          userLine('recent', '2026-06-01T09:00:00Z'),
+          assistantEditLine('recent', '2026-06-01T09:01:00Z', 'm-recent'),
+        ].join('\n'),
+      )
+
+      const allResult = runCli([
+        '--format', 'json',
+        '--period', 'all',
+        '--provider', 'claude',
+      ], home)
+      expect(allResult.status).toBe(0)
+      const allReport = JSON.parse(allResult.stdout) as {
+        daily: Array<{ date: string; calls: number }>
+        projects: Array<{ calls: number }>
+      }
+      expect(allReport.daily.map(d => d.date)).toEqual(['2026-06-01'])
+      expect(allReport.projects[0]?.calls).toBe(1)
+
+      const lifetimeResult = runCli([
+        '--format', 'json',
+        '--period', 'lifetime',
+        '--provider', 'claude',
+      ], home)
+      expect(lifetimeResult.status).toBe(0)
+      const lifetimeReport = JSON.parse(lifetimeResult.stdout) as {
+        daily: Array<{ date: string; calls: number }>
+        projects: Array<{ calls: number }>
+      }
+      expect(lifetimeReport.daily.map(d => d.date)).toEqual(['2025-10-01', '2026-06-01'])
+      expect(lifetimeReport.projects[0]?.calls).toBe(2)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

@@ -8,16 +8,16 @@ const END_OF_DAY_MINUTES = 59
 const END_OF_DAY_SECONDS = 59
 const END_OF_DAY_MS = 999
 
-// "All Time" is intentionally bounded to the last 6 months. Older data is
-// rarely actionable for a cost tracker, and capping the range keeps the parse
-// path bounded so providers like Codex/Cursor with sparse multi-year history
-// still load in seconds. Users who need an unbounded window can use
-// `--from` / `--to`.
+// The "all" period is intentionally bounded to the last 6 months. Older data
+// is rarely actionable for a cost tracker, and capping the range keeps the
+// parse path bounded so providers like Codex/Cursor with sparse multi-year
+// history still load in seconds. Users who need an unbounded window can use
+// the explicit `lifetime` period or `--from` / `--to`.
 const ALL_TIME_MONTHS = 6
 
-export type Period = 'today' | 'week' | '30days' | 'month' | 'all'
+export type Period = 'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime'
 
-export const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
+export const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
 
 // Short labels suitable for the dashboard tab strip. Long-form labels for
 // header text come from `getDateRange().label`.
@@ -27,9 +27,10 @@ export const PERIOD_LABELS: Record<Period, string> = {
   '30days': '30 Days',
   month: 'This Month',
   all: '6 Months',
+  lifetime: 'Lifetime',
 }
 
-const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all']
+const VALID_PERIODS: ReadonlyArray<Period> = ['today', 'week', '30days', 'month', 'all', 'lifetime']
 
 export class UsageQueryError extends Error {
   constructor(message: string) {
@@ -145,8 +146,8 @@ export function parseDateRangeFlags(from: string | undefined, to: string | undef
  * surfaces a few extra inputs not exposed in the dashboard tab strip
  * (e.g. `'yesterday'`). Unknown values fall back to `'week'`.
  *
- * Note: `'all'` is bounded to the last 6 months. Use `--from`/`--to` for
- * an unbounded historical window.
+ * Note: `'all'` is bounded to the last 6 months. Use `'lifetime'` or
+ * `--from`/`--to` for an unbounded historical window.
  */
 export function getDateRange(period: string): { range: DateRange; label: string } {
   const now = new Date()
@@ -185,9 +186,13 @@ export function getDateRange(period: string): { range: DateRange; label: string 
       const start = new Date(now.getFullYear(), now.getMonth() - ALL_TIME_MONTHS, 1)
       return { range: { start, end }, label: 'Last 6 months' }
     }
+    case 'lifetime': {
+      const start = new Date(1970, 0, 1)
+      return { range: { start, end }, label: 'Lifetime' }
+    }
     default: {
       process.stderr.write(
-        `codeburn: unknown period "${period}". Valid values: today, week, 30days, month, all.\n`
+        `codeburn: unknown period "${period}". Valid values: today, week, 30days, month, all, lifetime.\n`
       )
       process.exit(1)
     }
