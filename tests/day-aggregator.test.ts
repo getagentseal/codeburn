@@ -168,6 +168,48 @@ describe('aggregateProjectsIntoDays', () => {
     })
   })
 
+  it('skips a timestamped empty-call turn without throwing or counting it at day level', () => {
+    const projects: ProjectSummary[] = [
+      makeProject({
+        sessions: [{
+          sessionId: 'empty-call-turn',
+          project: 'p',
+          firstTimestamp: '2026-04-09T10:00:00',
+          lastTimestamp: '2026-04-09T10:00:00',
+          totalCostUSD: 0,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          totalCacheReadTokens: 0,
+          totalCacheWriteTokens: 0,
+          apiCalls: 0,
+          turns: [{
+            userMessage: 'no assistant response',
+            timestamp: '2026-04-09T10:00:00',
+            sessionId: 'empty-call-turn',
+            category: 'coding',
+            retries: 0,
+            hasEdits: true,
+            assistantCalls: [],
+          }],
+          modelBreakdown: {},
+          toolBreakdown: {},
+          mcpBreakdown: {},
+          bashBreakdown: {},
+          categoryBreakdown: {} as never,
+          skillBreakdown: {} as never,
+        }],
+      }),
+    ]
+
+    let days: ReturnType<typeof aggregateProjectsIntoDays> = []
+    expect(() => { days = aggregateProjectsIntoDays(projects) }).not.toThrow()
+
+    expect(days).toHaveLength(1)
+    expect(days[0]).toMatchObject({ cost: 0, calls: 0, editTurns: 0, oneShotTurns: 0 })
+    expect(days[0]!.categories).toEqual({})
+    expect(days[0]!.providers).toEqual({})
+  })
+
   it('counts a session under its firstTimestamp date', () => {
     const projects: ProjectSummary[] = [
       makeProject({

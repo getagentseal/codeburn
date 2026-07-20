@@ -613,7 +613,10 @@ function setOwn<T>(target: Record<string, T>, key: string, value: T): void {
 /// provider's oldest fresh day (or the preceding day for timezone changes).
 export type SecondaryCoveragePolicy = {
   /// A timezone change can move a turn to an adjacent calendar day, so the day
-  /// immediately before the fresh provider floor is covered as well.
+  /// immediately before the fresh provider floor is covered as well. This
+  /// assumes the old/new timezone offset delta is at most 24 hours. Crossing
+  /// the date line can produce a 26-hour delta (UTC+14 to UTC-12) and move a
+  /// bucket by two calendar days; that rare case is a known, accepted limit.
   widenByOneDay: boolean
 }
 
@@ -669,6 +672,10 @@ export function mergeDayEntries(
       // Coverage can suppress one provider while another provider on the same
       // secondary-only day still needs carrying. Rebuild that day exclusively
       // from eligible slices so blocked totals cannot leak through day fields.
+      // Day-level projects cannot be attributed per provider: when a kept skinny
+      // slice has no slice.projects, its old day.projects entries are dropped.
+      // Copying them wholesale could restore the blocked provider's project
+      // totals, so this conservative loss is intentional.
       const copy = emptyDay(day.date)
       for (const [provider, slice] of providerEntries) {
         if ((!hasSliceData(slice) && !(slice.sessions ?? 0)) || !mayCarry(day.date, provider, slice)) continue

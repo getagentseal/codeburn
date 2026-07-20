@@ -286,3 +286,50 @@ src/types.ts:190:  skillBreakdown: Record<string, { turns: number; costUSD: numb
 ```
 
 STATUS: BLOCKED (`npx vitest run` exits 1: 48 pre-existing discovery/import suite failures plus unrelated 5-second CLI timeouts; tried isolated timeout reproduction, a clean HEAD-plus-lane snapshot with locked app dependencies and one worker, and all clean root tests with a 15-second diagnostic timeout)
+
+## ADDENDUM
+
+### Touched files
+
+| file | added | deleted |
+|---|---:|---:|
+| `src/daily-cache.ts` | 8 | 1 |
+| `tests/day-aggregator.test.ts` | 42 | 0 |
+
+### New test
+
+| file | test |
+|---|---|
+| `tests/day-aggregator.test.ts` | `skips a timestamped empty-call turn without throwing or counting it at day level` |
+
+### `git diff --exit-code e07f324 -- src/day-aggregator.ts`
+
+Exit code: `0`
+
+```text
+```
+
+### `npx vitest run tests/daily-cache-carry-forward.test.ts tests/day-aggregator.test.ts`
+
+Exit code: `0`
+
+```text
+ RUN  v3.2.6 /Volumes/T8/Claude Projects/codeburn
+
+ ✓ tests/day-aggregator.test.ts (13 tests) 16ms
+ ✓ tests/daily-cache-carry-forward.test.ts (45 tests) 318ms
+
+ Test Files  2 passed (2)
+      Tests  58 passed (58)
+   Start at  17:14:56
+   Duration  740ms (transform 99ms, setup 49ms, collect 115ms, tests 334ms, environment 0ms, prepare 158ms)
+```
+
+### `npx tsc --noEmit`
+
+Exit code: `0`
+
+```text
+```
+
+STATUS: COMPLETE
