@@ -11,6 +11,7 @@ import type { DateRange, ProjectSummary, SessionSummary } from './types.js'
 import { formatCost } from './currency.js'
 import { formatTokens } from './format.js'
 import { recommendModelDefault, type ModelDefaultRecommendation } from './act/model-defaults.js'
+import { aggregateFileChurn, buildCoachingNotes, scanUserCorrections, medianTimeToFirstEditMs, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 
 // ============================================================================
 // Display constants
@@ -339,6 +340,10 @@ export type OptimizeJsonReport = {
     estimatedSavingsUSD: number
     fix: WasteAction
   }>
+  /// Files most reworked by edit-family calls, relative to project root (top 15).
+  topReworkedFiles: ReworkedFile[]
+  /// 1-3 templated one-liners keyed on the strongest workflow signals.
+  coachingNotes: string[]
   modelRecommendations?: Array<ModelDefaultRecommendation>
 }
 
@@ -3130,6 +3135,28 @@ function renderFinding(n: number, f: WasteFinding, costRate: number): string[] {
   return lines
 }
 
+function renderWorkflowSection(reworkedFiles: ReworkedFile[], coachingNotes: string[]): string[] {
+  const lines: string[] = []
+  if (reworkedFiles.length > 0) {
+    lines.push(chalk.bold.hex(ORANGE)('  Top reworked files'))
+    lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
+    for (const f of reworkedFiles) {
+      const meta = chalk.dim(`${f.sessions} session${f.sessions === 1 ? '' : 's'}, ${f.edits} edit${f.edits === 1 ? '' : 's'}`)
+      lines.push(`  ${f.path}  ${meta}`)
+    }
+    lines.push('')
+  }
+  if (coachingNotes.length > 0) {
+    lines.push(chalk.bold.hex(ORANGE)('  Coaching notes'))
+    lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
+    for (const note of coachingNotes) {
+      lines.push(wrap('- ' + note, PANEL_WIDTH, '  '))
+    }
+    lines.push('')
+  }
+  return lines
+}
+
 function renderOptimize(
   findings: WasteFinding[],
   costRate: number,
@@ -3139,6 +3166,8 @@ function renderOptimize(
   callCount: number,
   healthScore: number,
   healthGrade: HealthGrade,
+  reworkedFiles: ReworkedFile[],
+  coachingNotes: string[],
   appliedHeader?: string,
   previouslyApplied?: Record<string, string>,
   modelRecommendations?: ModelDefaultRecommendation[],
@@ -3165,6 +3194,7 @@ function renderOptimize(
     lines.push(chalk.dim('  token waste: junk directory reads, duplicate file reads, unused'))
     lines.push(chalk.dim('  agents/skills/MCP servers, bloated CLAUDE.md, and more.'))
     lines.push('')
+    lines.push(...renderWorkflowSection(reworkedFiles, coachingNotes))
     return lines.join('\n')
   }
 
@@ -3187,7 +3217,9 @@ function renderOptimize(
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
   lines.push(chalk.dim('  Estimates only.'))
   lines.push('')
-  
+
+  lines.push(...renderWorkflowSection(reworkedFiles, coachingNotes))
+
   if (modelRecommendations && modelRecommendations.length > 0) {
     lines.push(chalk.bold.hex(ORANGE)('  Model defaults recommendation'))
     lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
@@ -3201,6 +3233,22 @@ function renderOptimize(
   }
 
   return lines.join('\n')
+}
+
+// File churn + coaching notes for the workflow-intelligence section. Both are
+// derived from the same parsed projects the detectors already ran on, so this
+// adds no extra file I/O.
+function buildWorkflowReport(projects: ProjectSummary[]): { topReworkedFiles: ReworkedFile[]; coachingNotes: string[] } {
+  const topReworkedFiles = aggregateFileChurn(projects)
+  const corrections = scanUserCorrections(projects)
+  const coachingNotes = buildCoachingNotes({
+    worstOneShot: worstOneShotCategory(projects),
+    corrections: corrections.corrections,
+    correctionRate: corrections.correctionRate,
+    topReworkedFile: topReworkedFiles[0] ?? null,
+    medianTimeToFirstEditMs: medianTimeToFirstEditMs(projects),
+  })
+  return { topReworkedFiles, coachingNotes }
 }
 
 export async function runOptimize(
@@ -3230,7 +3278,8 @@ export async function runOptimize(
     return
   }
 
-  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, opts.appliedHeader, opts.previouslyApplied, result.modelRecommendations)
+  const { topReworkedFiles, coachingNotes } = buildWorkflowReport(projects)
+  const output = renderOptimize(findings, costRate, periodLabel, periodCost, sessions.length, callCount, healthScore, healthGrade, topReworkedFiles, coachingNotes, opts.appliedHeader, opts.previouslyApplied, result.modelRecommendations)
   console.log(output)
 }
 
@@ -3277,6 +3326,7 @@ export function buildOptimizeJsonReport(
       estimatedSavingsUSD: f.tokensSaved * result.costRate,
       fix: f.fix,
     })),
+    ...buildWorkflowReport(projects),
     modelRecommendations: result.modelRecommendations,
   }
 }

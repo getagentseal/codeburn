@@ -32,6 +32,16 @@ export type PeriodData = {
   projects?: Array<{ name: string; cost: number; savingsUSD: number; sessions: number; sessionDetails?: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> }>
   modelEfficiency?: Array<{ name: string; costPerEdit: number | null; oneShotRate: number | null }>
   topSessions?: Array<{ project: string; cost: number; savingsUSD: number; calls: number; date: string }>
+  /// Workflow-intelligence rollups (issue: workflow intelligence). Optional so
+  /// the day-aggregator PeriodData path (which has no per-turn data) can omit
+  /// them; the fresh-parse payload path always sets them.
+  workflow?: { corrections: number; correctionRate: number | null; medianTimeToFirstEditMs: number | null }
+  /// Files most reworked by edit-family calls, relative to project root, ranked
+  /// by distinct sessions then edits. Full (top 15) list; the payload basenames
+  /// and trims it.
+  topReworkedFiles?: ReworkedFile[]
+  /// Share (0-1) of cost-bearing calls that resolved a price.
+  pricingCoverage?: number
 }
 
 export type ProviderCost = {
@@ -44,6 +54,7 @@ export type ProviderCost = {
 import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
+import type { ReworkedFile } from './workflow-insights.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_MODELS_LIMIT = 20
@@ -53,6 +64,7 @@ const SYNTHETIC_MODEL_NAME = '<synthetic>'
 const TOP_PROJECTS_LIMIT = 5
 const TOP_SESSIONS_LIMIT = 3
 const MODEL_EFFICIENCY_LIMIT = 5
+const TOP_REWORKED_FILES_LIMIT = 8
 
 export type DailyModelBreakdown = {
   name: string
@@ -215,6 +227,21 @@ export type MenubarPayload = {
       calls: number
       date: string
     }>
+    /// Workflow-intelligence rollup for the period. `unansweredSessions` is
+    /// add-only and optional: sessions that ended with no assistant reply are
+    /// not computable from the session cache (the parser drops a trailing
+    /// unanswered user turn), so it stays unset until a parse-time capture lands.
+    workflow: {
+      corrections: number
+      correctionRate: number | null
+      medianTimeToFirstEditMs: number | null
+      unansweredSessions?: number
+    }
+    /// Files most reworked by edit-family calls (top 8). Path is basename-only
+    /// for privacy; distinct sessions and total edit calls per file.
+    topReworkedFiles: Array<{ path: string; sessions: number; edits: number }>
+    /// Share (0-1) of cost-bearing calls that resolved a price.
+    pricingCoverage: number
     retryTax: {
       totalUSD: number
       retries: number
@@ -377,6 +404,22 @@ function buildModelEfficiency(models: PeriodData['modelEfficiency']): MenubarPay
     .map(m => ({ name: m.name, costPerEdit: m.costPerEdit, oneShotRate: m.oneShotRate }))
 }
 
+function buildWorkflow(workflow: PeriodData['workflow']): MenubarPayload['current']['workflow'] {
+  return {
+    corrections: workflow?.corrections ?? 0,
+    correctionRate: workflow?.correctionRate ?? null,
+    medianTimeToFirstEditMs: workflow?.medianTimeToFirstEditMs ?? null,
+  }
+}
+
+function buildTopReworkedFiles(files: PeriodData['topReworkedFiles']): MenubarPayload['current']['topReworkedFiles'] {
+  return (files ?? [])
+    .slice(0, TOP_REWORKED_FILES_LIMIT)
+    // Basename only: the menubar/web payload can leave the machine, so drop the
+    // directory path and keep just the file name.
+    .map(f => ({ path: f.path.split('/').pop() || f.path, sessions: f.sessions, edits: f.edits }))
+}
+
 function buildTopSessions(sessions: PeriodData['topSessions']): MenubarPayload['current']['topSessions'] {
   return (sessions ?? [])
     .sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD))
@@ -432,6 +475,9 @@ export function buildMenubarPayload(
       topProjects: buildTopProjects(current.projects ?? []),
       modelEfficiency: buildModelEfficiency(current.modelEfficiency ?? []),
       topSessions: buildTopSessions(current.topSessions ?? []),
+      workflow: buildWorkflow(current.workflow),
+      topReworkedFiles: buildTopReworkedFiles(current.topReworkedFiles),
+      pricingCoverage: current.pricingCoverage ?? 1,
       retryTax: retryTax ?? { totalUSD: 0, retries: 0, editTurns: 0, byModel: [] },
       routingWaste: routingWaste ?? { totalSavingsUSD: 0, baselineModel: '', baselineCostPerEdit: 0, byModel: [] },
       tools: breakdowns?.tools ?? [],

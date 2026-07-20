@@ -83,9 +83,6 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
   const toolBars: BarItem[] = c
     ? Object.entries(c.providers).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
     : []
-  const modelBars: BarItem[] = c
-    ? c.topModels.filter((m) => m.cost > 0).slice(0, 8).map((m) => ({ name: m.name, value: m.cost, display: usd(m.cost) }))
-    : []
   const activityBars: BarItem[] = c
     ? c.topActivities.filter((a) => a.cost > 0).map((a) => ({ name: a.name, value: a.cost, display: usd(a.cost) }))
     : []
@@ -136,7 +133,37 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
           <BarList items={toolBars} total={c?.cost} />
         </Panel>
         <Panel title="Top models">
-          <BarList items={modelBars} total={c?.cost} />
+          <DataTable
+            columns={[
+              { key: 'name', label: 'Model' },
+              { key: 'cost', label: 'Cost', num: true },
+              { key: 'calls', label: 'Calls', num: true },
+              { key: 'savings', label: 'Savings', num: true },
+            ]}
+            rows={(c?.topModels ?? []).filter((m) => m.cost > 0).slice(0, 8).map((m) => ({
+              name: m.name,
+              cost: usd(m.cost),
+              calls: fmtNum(m.calls),
+              savings: usd(m.savingsUSD),
+            }))}
+          />
+        </Panel>
+      </div>
+
+      <div className="mb-3">
+        <Panel title="Model efficiency">
+          <DataTable
+            columns={[
+              { key: 'name', label: 'Model' },
+              { key: 'costPerEdit', label: 'Cost/edit', num: true },
+              { key: 'oneShot', label: 'One-shot', num: true },
+            ]}
+            rows={(c?.modelEfficiency ?? []).slice(0, 10).map((m) => ({
+              name: m.name,
+              costPerEdit: usd(m.costPerEdit),
+              oneShot: `${Math.round(m.oneShotRate * 100)}%`,
+            }))}
+          />
         </Panel>
       </div>
 
@@ -152,11 +179,13 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
                 { key: 'name', label: 'Project' },
                 { key: 'cost', label: 'Cost', num: true },
                 { key: 'sessions', label: 'Sessions', num: true },
+                { key: 'avgCost', label: 'Avg/session', num: true },
               ]}
               rows={(c?.topProjects ?? []).slice(0, 10).map((p) => ({
                 name: p.name,
                 cost: usd(p.cost),
                 sessions: fmtNum(p.sessions),
+                avgCost: usd(p.avgCostPerSession),
               }))}
             />
           )}
