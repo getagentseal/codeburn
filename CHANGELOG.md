@@ -2,7 +2,7 @@
 
 ## 0.9.19 - 2026-07-20
 
-One version across every surface: CLI, macOS menubar, and the desktop app all ship as 0.9.19. Replaces 0.9.18, which was packaged from a pre-fix commit and deprecated within hours; everything below ships here.
+One version across every surface: CLI, macOS menubar, and the desktop app all ship as 0.9.19.
 
 ### Accuracy
 - **Every surface now shows the same numbers.** CLI, TUI, menubar, desktop app, and web dashboard totals all come from one durable aggregation path and match exactly, including history whose session logs have since been deleted; the terminal overview notes how much was preserved from expired logs. (#755, #760, #759)
