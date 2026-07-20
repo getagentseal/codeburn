@@ -2,6 +2,8 @@ import type { ProjectSummary, SessionSummary } from './types.js'
 
 export type SessionRow = {
   sessionId: string
+  /// Captured human title, empty when the transcript never produced one.
+  title: string
   project: string
   provider: string
   models: string[]
@@ -41,6 +43,7 @@ function durationMs(startedAt: string, endedAt: string): number {
 export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
   return projects.flatMap(project => project.sessions.map(session => ({
     sessionId: session.sessionId,
+    title: session.title ?? '',
     project: session.project || project.project,
     provider: inferProvider(session),
     models: Object.keys(session.modelBreakdown),
@@ -63,9 +66,10 @@ export function renderJson(rows: SessionRow[]): string {
 }
 
 export function renderTable(rows: SessionRow[]): string {
-  const headers = ['SESSION', 'PROJECT', 'PROVIDER', 'MODELS', 'COST', 'SAVED', 'CALLS', 'TURNS', 'STARTED']
+  const headers = ['SESSION', 'TITLE', 'PROJECT', 'PROVIDER', 'MODELS', 'COST', 'SAVED', 'CALLS', 'TURNS', 'STARTED']
   const values = rows.map(row => [
     row.sessionId,
+    row.title.length > 38 ? row.title.slice(0, 37) + '\u2026' : row.title,
     row.project,
     row.provider,
     row.models.join(', '),

@@ -2047,6 +2047,7 @@ async function scanProjectDirs(
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
     if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
+    if (cachedFile.title) session.title = cachedFile.title
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
@@ -2744,7 +2745,7 @@ async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[]; prLinks?: Set<string> }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -2777,12 +2778,14 @@ async function parseProviderSources(
           const links = (existing.prLinks ??= new Set())
           for (const link of cachedFile.prLinks) links.add(link)
         }
+        if (!existing.title && cachedFile.title) existing.title = cachedFile.title
       } else {
         sessionMap.set(key, {
           project,
           projectPath: turn.calls[0]?.projectPath,
           turns: [classified],
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
+          ...(cachedFile.title ? { title: cachedFile.title } : {}),
         })
       }
     }
@@ -2826,10 +2829,11 @@ async function parseProviderSources(
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, turns, prLinks }] of sessionMap) {
+  for (const [key, { project, projectPath, turns, prLinks, title }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
     if (prLinks?.size) session.prLinks = [...prLinks].sort()
+    if (title) session.title = title
     if (session.apiCalls > 0) {
       const existing = projectMap.get(project)
       if (existing) {

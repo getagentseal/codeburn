@@ -78,6 +78,7 @@ describe('sessions JSON emitter', () => {
 
     expect(parsed).toEqual([{
       sessionId: 'session-1',
+      title: '',
       project: 'codeburn',
       provider: 'claude',
       models: ['claude-sonnet-4-5'],
