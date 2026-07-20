@@ -197,8 +197,33 @@ describe('aggregateProjectsIntoDays', () => {
       inputTokens: 100, outputTokens: 200,
       cacheReadTokens: 50, cacheWriteTokens: 0,
     })
-    expect(day.providers['claude']).toEqual({ calls: 1, cost: 7, savingsUSD: 0 })
-    expect(day.providers['codex']).toEqual({ calls: 1, cost: 3, savingsUSD: 0 })
+    // Provider slices carry the full per-provider breakdown (v14) so that a
+    // carried-forward slice stays exact across daily-cache rebuilds.
+    expect(day.providers['claude']).toMatchObject({
+      calls: 1, cost: 7, savingsUSD: 0,
+      inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0,
+    })
+    expect(day.providers['claude']!.models).toEqual({
+      'Opus 4.7': { calls: 1, cost: 7, savingsUSD: 0, inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0 },
+    })
+    expect(day.providers['codex']).toMatchObject({
+      calls: 1, cost: 3, savingsUSD: 0,
+      inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0,
+    })
+    expect(day.providers['codex']!.models).toEqual({
+      'gpt-5': { calls: 1, cost: 3, savingsUSD: 0, inputTokens: 100, outputTokens: 200, cacheReadTokens: 50, cacheWriteTokens: 0 },
+    })
+    // Slice categories hold only that provider's share of the turn — a slice
+    // must never carry another provider's spend into a later merge.
+    expect(day.providers['claude']!.categories!['coding']).toMatchObject({ turns: 1, cost: 7 })
+    expect(day.providers['codex']!.categories!['coding']).toMatchObject({ turns: 1, cost: 3 })
+    // Day-level category still counts the whole turn once.
+    expect(day.categories['coding']).toMatchObject({ turns: 1, cost: 10 })
+    // Per-project rollup at day level and inside each provider slice; path is
+    // stored so display layers can derive a friendly name once sessions expire.
+    expect(day.projects!['p']).toEqual({ cost: 10, calls: 2, savingsUSD: 0, sessions: 1, path: '/p' })
+    expect(day.providers['claude']!.projects!['p']).toMatchObject({ cost: 7, calls: 1 })
+    expect(day.providers['codex']!.projects!['p']).toMatchObject({ cost: 3, calls: 1 })
   })
 })
 

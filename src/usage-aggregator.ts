@@ -11,7 +11,7 @@ import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { scanAndDetect } from './optimize.js'
-import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache } from './daily-cache.js'
+import { getDaysInRange, ensureCacheHydrated, loadDailyCache, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -226,6 +226,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   let scanProjects!: ProjectSummary[]
   let scanRange!: DateRange
   let cache: DailyCache = emptyCache()
+  /// The exact day set behind the all-provider headline (cache-backed
+  /// historical days + today's live days, day-filtered). Non-null only on the
+  /// unscoped all-provider path; it is the authority the projects view merges
+  /// from, so carried days count even after their session files are gone.
+  let cacheDaysForPeriod: DailyEntry[] | null = null
   let todayProviderData: PeriodData | null = null
   let claudeConfigs: ClaudeConfigSelector | undefined
   const requestedClaudeConfigSourceId = opts.claudeConfigSourceId?.trim() || null
@@ -286,6 +291,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
       const unfilteredDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
       const allDays = daysSelection ? unfilteredDays.filter(d => daysSelection.days.has(d.date)) : unfilteredDays
+      cacheDaysForPeriod = allDays
       currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
     } else {
       cache = await loadDailyCache()
@@ -298,11 +304,38 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
   }
   if (isAllProviders) {
-    // Load-bearing overwrite: the daily-cache path above never carries
-    // estimatedCostUSD (DailyEntry has no such field), so this fresh-parse
-    // rebuild is what keeps the estimated marker alive on cached periods.
-    // Removing it as redundant silently drops the flag.
-    currentData = buildPeriodData(periodInfo.label, scanProjects)
+    const scanData = buildPeriodData(periodInfo.label, scanProjects)
+    if (cacheDaysForPeriod === null) {
+      // Scoped all-provider path (claude-config source selected): the scan IS
+      // the authority, as before.
+      currentData = scanData
+    } else {
+      // The daily-cache path is the authority for headline totals: it includes
+      // carried days whose session files no longer exist, which the fresh
+      // parse cannot see. Replacing it wholesale with the scan (the previous
+      // behavior) silently truncated cost/calls/models/categories to the
+      // source-retention window. The scan contributes ONLY what DailyEntry
+      // genuinely lacks: the estimated-cost markers and unpriced-model
+      // detection, both derivable solely from surviving sessions.
+      currentData.estimatedCostUSD = scanData.estimatedCostUSD
+      currentData.unpricedModels = scanData.unpricedModels
+      // Sessions: the cache buckets a session on its START day, the scan
+      // counts it on any day it was ACTIVE. Each undercounts differently
+      // (day-filtered views miss midnight-spanners; the scan misses expired
+      // sessions). Both count distinct real sessions, so max is the tightest
+      // safe bound and never double counts.
+      currentData.sessions = Math.max(currentData.sessions, scanData.sessions)
+      const estimatedByModel = new Map(
+        scanData.models
+          .filter(m => m.estimatedCostUSD != null)
+          .map(m => [m.name, m.estimatedCostUSD!]),
+      )
+      if (estimatedByModel.size > 0) {
+        currentData.models = currentData.models.map(m =>
+          estimatedByModel.has(m.name) ? { ...m, estimatedCostUSD: estimatedByModel.get(m.name) } : m,
+        )
+      }
+    }
   }
   claudeConfigs = claudeConfigs ?? await claudeConfigSelector(scanProjects, null)
 
@@ -416,33 +449,71 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   }
 
   const home = homedir()
-  const friendlyProject = (p: ProjectSummary) => {
-    const resolved = p.projectPath || p.project
-    if (resolved === home || resolved === home + '/') return 'Home'
-    return resolved.split('/').filter(Boolean).pop() || p.project
+  const friendlyFromPath = (path: string | undefined, fallback: string): string => {
+    if (!path) return fallback
+    if (path === home || path === home + '/') return 'Home'
+    return path.split('/').filter(Boolean).pop() || fallback
   }
+  const friendlyProject = (p: ProjectSummary) => friendlyFromPath(p.projectPath || p.project, p.project)
+  const sessionDetailsOf = (p: ProjectSummary) => [...p.sessions]
+    .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+    .slice(0, 10)
+    .map(s => ({
+      cost: s.totalCostUSD,
+      savingsUSD: s.totalSavingsUSD,
+      calls: s.apiCalls,
+      inputTokens: s.totalInputTokens,
+      outputTokens: s.totalOutputTokens,
+      date: s.firstTimestamp?.split('T')[0] ?? '',
+      models: Object.entries(s.modelBreakdown)
+        .map(([name, m]) => ({ name, cost: m.costUSD, savingsUSD: m.savingsUSD }))
+        .sort((a, b) => b.cost - a.cost)
+        .slice(0, 3),
+    }))
 
-  currentData.projects = scanProjects.map(p => ({
-    name: friendlyProject(p),
-    cost: p.totalCostUSD,
-    savingsUSD: p.totalSavingsUSD,
-    sessions: p.sessions.length,
-    sessionDetails: [...p.sessions]
-      .sort((a, b) => b.totalCostUSD - a.totalCostUSD)
-      .slice(0, 10)
-      .map(s => ({
-        cost: s.totalCostUSD,
-        savingsUSD: s.totalSavingsUSD,
-        calls: s.apiCalls,
-        inputTokens: s.totalInputTokens,
-        outputTokens: s.totalOutputTokens,
-        date: s.firstTimestamp?.split('T')[0] ?? '',
-        models: Object.entries(s.modelBreakdown)
-          .map(([name, m]) => ({ name, cost: m.costUSD, savingsUSD: m.savingsUSD }))
-          .sort((a, b) => b.cost - a.cost)
-          .slice(0, 3),
-      })),
-  }))
+  if (cacheDaysForPeriod !== null) {
+    // Project totals come from the SAME day set as the headline, so carried
+    // days count here too. The surviving-session parse contributes only what
+    // day entries cannot: the per-session drill-down and a fresher project
+    // path. Days recorded before the projects rollup existed have totals but
+    // no project split, so this list can sum to less than the headline — an
+    // honest gap, not a bug.
+    type CachedProjectTotal = { cost: number; savingsUSD: number; sessions: number; path?: string }
+    const cachedTotals = new Map<string, CachedProjectTotal>()
+    for (const d of cacheDaysForPeriod) {
+      for (const [name, p] of Object.entries(d.projects ?? {})) {
+        const acc = cachedTotals.get(name) ?? { cost: 0, savingsUSD: 0, sessions: 0 }
+        acc.cost += p.cost
+        acc.savingsUSD += p.savingsUSD
+        acc.sessions += p.sessions
+        if (!acc.path && p.path) acc.path = p.path
+        cachedTotals.set(name, acc)
+      }
+    }
+    const liveByName = new Map(scanProjects.map(p => [p.project, p]))
+    const names = new Set([...cachedTotals.keys(), ...liveByName.keys()])
+    currentData.projects = [...names].map(name => {
+      const cached = cachedTotals.get(name)
+      const live = liveByName.get(name)
+      return {
+        name: live ? friendlyProject(live) : friendlyFromPath(cached?.path, name),
+        cost: cached?.cost ?? live!.totalCostUSD,
+        savingsUSD: cached?.savingsUSD ?? live!.totalSavingsUSD,
+        // max for the same reason as the headline: start-day bucketing vs
+        // active-day counting, both lower bounds of distinct sessions.
+        sessions: Math.max(cached?.sessions ?? 0, live?.sessions.length ?? 0),
+        ...(live ? { sessionDetails: sessionDetailsOf(live) } : {}),
+      }
+    }).sort((a, b) => b.cost - a.cost)
+  } else {
+    currentData.projects = scanProjects.map(p => ({
+      name: friendlyProject(p),
+      cost: p.totalCostUSD,
+      savingsUSD: p.totalSavingsUSD,
+      sessions: p.sessions.length,
+      sessionDetails: sessionDetailsOf(p),
+    }))
+  }
 
   const effMap = aggregateModelEfficiency(scanProjects)
   currentData.modelEfficiency = [...effMap.entries()].map(([name, eff]) => ({

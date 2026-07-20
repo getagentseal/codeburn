@@ -110,7 +110,8 @@ Requires **Node.js 22.13+** and at least one supported tool with session data on
 codeburn overview                                    # this month, clean tables
 codeburn overview --no-color                         # plain text, ready to paste
 codeburn overview --from 2026-06-01 --to 2026-06-15  # any date range
-codeburn overview -p all                             # all time
+codeburn overview -p all                             # last 6 months
+codeburn overview -p lifetime                        # full history (uncapped)
 codeburn overview --provider claude                  # one tool only
 ```
 
@@ -386,7 +387,7 @@ Adding a new provider is a single file. See `src/providers/codex.ts` for an exam
 <details>
 <summary><strong>All commands and keyboard shortcuts</strong></summary>
 
-Run `codeburn` for the dashboard, or use a subcommand below. Most commands also accept `--provider`, `--project` / `--exclude`, and a period flag (`-p today|week|30days|month|all`).
+Run `codeburn` for the dashboard, or use a subcommand below. Most commands also accept `--provider`, `--project` / `--exclude`, and a period flag (`-p today|week|30days|month|all|lifetime`).
 
 **Dashboard & reports**
 
@@ -472,7 +473,7 @@ Sync sends token counts, costs, models, and projects, never prompts or code. Thi
 | `codeburn models --task feature` | Filter to feature-development work |
 | `codeburn models --provider claude` | Filter to a single provider |
 
-Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, and 6 Months (use `--from` / `--to` for an exact historical window). The main Daily Activity panel always shows scrollable full history: use up/down to move one day, Page Up/Page Down (or Shift+Space/Space) to page, and `g`/`G` to jump to either end. These keys update the panel in place instead of moving terminal scrollback. Press `q` to quit, `1` `2` `3` `4` `5` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, and Lifetime (use `--from` / `--to` for an exact historical window). The main Daily Activity panel always shows scrollable full history: use up/down to move one day, Page Up/Page Down (or Shift+Space/Space) to page, and `g`/`G` to jump to either end. These keys update the panel in place instead of moving terminal scrollback. Press `q` to quit, `1` `2` `3` `4` `5` `6` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
 
 </details>
 
@@ -582,7 +583,7 @@ codeburn report --from 2026-04-01                    # this date through today
 codeburn report --to 2026-04-10                      # earliest data through this date
 ```
 
-Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only; pressing `1` through `5` switches back to predefined periods.
+Either flag alone is valid. Inverted or malformed dates exit with a clear error. In the TUI, the custom range sets the initial load only; pressing `1` through `6` switches back to predefined periods.
 
 ### Diagnosing detection
 

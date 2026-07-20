@@ -255,12 +255,19 @@ export function resolveTarget(): CliTarget | null {
   // freshly-built CLI over a stale globally-installed/persisted one, so
   // newly-added commands (sessions/compare/act JSON) work without CODEBURN_BIN.
   if (process.env.VITE_DEV_SERVER_URL) {
-    const devBin = join(__dirname, '..', '..', '..', 'dist', 'cli.js')
-    if (isExecutableFile(devBin)) return { kind: 'external', bin: devBin }
-    // Vitest loads this source module from app/electron rather than the emitted
-    // app/dist/electron directory; keep the same repo CLI discoverable there.
-    const sourceDevBin = join(__dirname, '..', '..', 'dist', 'cli.js')
-    if (isExecutableFile(sourceDevBin)) return { kind: 'external', bin: sourceDevBin }
+    const devRepoRoot = process.env.CODEBURN_DEV_REPO_ROOT
+    if (devRepoRoot) {
+      // Test/advanced override, matching CODEBURN_PATH_DIRS: keep dev lookup in an isolated repo root.
+      const devBin = join(devRepoRoot, 'dist', 'cli.js')
+      if (isExecutableFile(devBin)) return { kind: 'external', bin: devBin }
+    } else {
+      const devBin = join(__dirname, '..', '..', '..', 'dist', 'cli.js')
+      if (isExecutableFile(devBin)) return { kind: 'external', bin: devBin }
+      // Vitest loads this source module from app/electron rather than the emitted
+      // app/dist/electron directory; keep the same repo CLI discoverable there.
+      const sourceDevBin = join(__dirname, '..', '..', 'dist', 'cli.js')
+      if (isExecutableFile(sourceDevBin)) return { kind: 'external', bin: sourceDevBin }
+    }
   }
 
   // Packaged app: main.ts sets CODEBURN_BUNDLED_CLI to resources/cli/dist/cli.js.

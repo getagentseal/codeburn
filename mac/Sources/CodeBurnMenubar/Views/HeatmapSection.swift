@@ -2076,7 +2076,7 @@ private struct CodexPlanInsight: View {
                     label: "\(primary.windowLabel) window",
                     percent: primary.usedPercent,
                     resetsAt: primary.resetsAt,
-                    projection: nil
+                    projection: pace(for: primary)
                 )
             }
             if let secondary = usage.secondary {
@@ -2084,7 +2084,7 @@ private struct CodexPlanInsight: View {
                     label: "\(secondary.windowLabel) window",
                     percent: secondary.usedPercent,
                     resetsAt: secondary.resetsAt,
-                    projection: nil
+                    projection: pace(for: secondary)
                 )
             }
             // Surface non-zero per-model rate limits (Codex Spark, etc.) so
@@ -2095,7 +2095,7 @@ private struct CodexPlanInsight: View {
                         label: "\(limit.name) · \(p.windowLabel)",
                         percent: p.usedPercent,
                         resetsAt: p.resetsAt,
-                        projection: nil
+                        projection: pace(for: p)
                     )
                 }
                 if let s = limit.secondary, s.usedPercent > 0 {
@@ -2103,7 +2103,7 @@ private struct CodexPlanInsight: View {
                         label: "\(limit.name) · \(s.windowLabel)",
                         percent: s.usedPercent,
                         resetsAt: s.resetsAt,
-                        projection: nil
+                        projection: pace(for: s)
                     )
                 }
             }
@@ -2126,6 +2126,25 @@ private struct CodexPlanInsight: View {
         .padding(.bottom, 8)
     }
 
+    /// Codex has no snapshot history yet, so this is the linear phase-1 pace
+    /// (#726): deficit/reserve everywhere, projection and ETA only where the
+    /// window is long enough for a whole-window rate to be defensible.
+    private func pace(for window: CodexUsage.Window) -> WindowProjection? {
+        guard let result = QuotaPace.evaluate(
+            usedPercent: window.usedPercent,
+            resetsAt: window.resetsAt,
+            windowSeconds: window.limitWindowSeconds
+        ) else { return nil }
+        return WindowProjection(
+            percent: result.projectedPercent,
+            willOverflow: result.willOverflow,
+            hitsLimitAt: result.hitsLimitAt,
+            source: .linear,
+            deltaPercent: result.deltaPercent,
+            compact: TimeInterval(window.limitWindowSeconds) <= QuotaPace.etaSuppressionMaxSeconds
+        )
+    }
+
     private func resetCreditsLabel(_ resets: CodexUsage.ResetCredits) -> String {
         let count = "\(resets.availableCount) available"
         guard let next = resets.nextExpiresAt else { return count }
@@ -2145,6 +2164,12 @@ private struct WindowProjection {
     let willOverflow: Bool
     let hitsLimitAt: Date?
     let source: Source
+    /// used% − expected%; set by pace-aware callers (#726) to get the
+    /// deficit/reserve caption. Nil keeps the original caption wording.
+    var deltaPercent: Double? = nil
+    /// Stage-only caption: deficit/reserve without projection or ETA. Used on
+    /// short windows where a linear extrapolation isn't defensible.
+    var compact: Bool = false
 }
 
 private struct UtilizationRow: View {
@@ -2211,6 +2236,21 @@ private struct ProjectionCaption: View {
 
     private var captionText: String {
         let projected = String(format: "%.0f%%", projection.percent)
+        // Deficit-first wording (#726): pace state up front, projection or
+        // ETA after it, and neither on windows flagged compact.
+        if let delta = projection.deltaPercent {
+            if abs(delta) <= 2 {
+                return projection.compact ? "On pace" : "On pace: \(projected) at reset"
+            }
+            let stage = delta > 0
+                ? String(format: "%.0f%% in deficit", delta)
+                : String(format: "%.0f%% in reserve", -delta)
+            if projection.compact { return stage }
+            if projection.willOverflow, let hit = projection.hitsLimitAt {
+                return "\(stage) · hits 100% \(relativeReset(hit))"
+            }
+            return "\(stage) · \(projected) at reset"
+        }
         switch projection.source {
         case .linear:
             if projection.willOverflow, let hit = projection.hitsLimitAt {
