@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory, type DateRange } from './types.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, buildMenubarPayload } from './menubar-json.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, isSessionHydrationComplete } from './parser.js'
-import { findUnpricedModels, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName } from './models.js'
+import { findUnpricedModels, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { claude, getClaudeConfigDirs, getDesktopSessionsDir } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
@@ -46,7 +46,7 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
   const unpricedModels = findUnpricedModels(Object.entries(modelTotals)
     .map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens })))
   const costBearingCalls = Object.entries(modelTotals)
-    .reduce((s, [model, d]) => s + (model === '<synthetic>' ? 0 : d.calls), 0)
+    .reduce((s, [model, d]) => s + (model === '<synthetic>' || isExpectedFreeModel(model) ? 0 : d.calls), 0)
   const unpricedCalls = unpricedModels.reduce((s, m) => s + m.calls, 0)
   const corrections = scanUserCorrections(projects)
 

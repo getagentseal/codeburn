@@ -241,7 +241,9 @@ export type MenubarPayload = {
     /// for privacy; distinct sessions and total edit calls per file.
     topReworkedFiles: Array<{ path: string; sessions: number; edits: number }>
     /// Share (0-1) of cost-bearing calls that resolved a price.
-    pricingCoverage: number
+    /// null when not computable (no scan data on this path) — "unknown" must
+    /// never render as 100% coverage.
+    pricingCoverage: number | null
     retryTax: {
       totalUSD: number
       retries: number
@@ -477,7 +479,7 @@ export function buildMenubarPayload(
       topSessions: buildTopSessions(current.topSessions ?? []),
       workflow: buildWorkflow(current.workflow),
       topReworkedFiles: buildTopReworkedFiles(current.topReworkedFiles),
-      pricingCoverage: current.pricingCoverage ?? 1,
+      pricingCoverage: current.pricingCoverage ?? null,
       retryTax: retryTax ?? { totalUSD: 0, retries: 0, editTurns: 0, byModel: [] },
       routingWaste: routingWaste ?? { totalSavingsUSD: 0, baselineModel: '', baselineCostPerEdit: 0, byModel: [] },
       tools: breakdowns?.tools ?? [],

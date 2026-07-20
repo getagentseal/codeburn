@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   scanUserCorrections,
   medianTimeToFirstEditMs,
+  sessionTimeToFirstEditMs,
   aggregateFileChurn,
   computePricingCoverage,
   worstOneShotCategory,
   buildCoachingNotes,
   USER_CORRECTION_PATTERNS,
 } from '../src/workflow-insights.js'
+import { isExpectedFreeModel } from '../src/models.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary, TaskCategory, ToolCall } from '../src/types.js'
 
 function call(opts: { tools?: string[]; timestamp?: string; toolSequence?: ToolCall[][]; model?: string; costUSD?: number } = {}): ParsedApiCall {
@@ -74,18 +76,38 @@ function cat(editTurns: number, oneShotTurns: number): SessionSummary['categoryB
 }
 
 describe('scanUserCorrections', () => {
-  it('counts turns whose user message signals a correction', () => {
+  it('counts follow-up turns whose user message signals a correction', () => {
     const p = project([session('s1', [
+      turn({ userMessage: "add a new feature please" }),
       turn({ userMessage: "no, I meant the other file" }),
       turn({ userMessage: "that's not what I asked for" }),
       turn({ userMessage: "you missed the edge case" }),
       turn({ userMessage: "revert that change" }),
-      turn({ userMessage: "add a new feature please" }),
     ])])
     const r = scanUserCorrections([p])
     expect(r.corrections).toBe(4)
     expect(r.userTurns).toBe(5)
     expect(r.correctionRate).toBeCloseTo(0.8)
+  })
+
+  it('never counts the session-opening prompt, however correction-shaped', () => {
+    // An opener cannot be correcting THIS assistant; "revert the last release"
+    // as a first message is a task, not a correction.
+    const p = project([session('s1', [
+      turn({ userMessage: 'revert the last release' }),
+      turn({ userMessage: 'thanks, looks good' }),
+    ])])
+    const r = scanUserCorrections([p])
+    expect(r.corrections).toBe(0)
+    expect(r.userTurns).toBe(2)
+  })
+
+  it('does not match "revert the <noun>" task phrasing even as a follow-up', () => {
+    const p = project([session('s1', [
+      turn({ userMessage: 'build the feature' }),
+      turn({ userMessage: 'now revert the migration we shipped last week' }),
+    ])])
+    expect(scanUserCorrections([p]).corrections).toBe(0)
   })
 
   it('does not flag praise or ordinary requests (false-positive guards)', () => {
@@ -105,14 +127,15 @@ describe('scanUserCorrections', () => {
 
   it('ignores continuation turns with no fresh prompt', () => {
     const p = project([session('s1', [
+      turn({ userMessage: 'build the feature' }),
       turn({ userMessage: '' }),
       turn({ userMessage: '   ' }),
       turn({ userMessage: 'that is wrong' }),
     ])])
     const r = scanUserCorrections([p])
-    expect(r.userTurns).toBe(1)
+    expect(r.userTurns).toBe(2)
     expect(r.corrections).toBe(1)
-    expect(r.correctionRate).toBe(1)
+    expect(r.correctionRate).toBe(0.5)
   })
 
   it('returns a null rate for empty input', () => {
@@ -284,5 +307,37 @@ describe('buildCoachingNotes', () => {
   it('requires both a high rate and a minimum count for the correction note', () => {
     const highRateLowCount = buildCoachingNotes({ correctionRate: 0.5, corrections: 1 })
     expect(highRateLowCount).toEqual([])
+  })
+})
+
+// ── Review-findings regressions (post-#756 review) ─────────────────────────
+describe('review-findings regressions', () => {
+  const edit = (ts: string) => call({ tools: ['Edit'], timestamp: ts })
+
+  it('an unparseable FIRST edit timestamp yields null, never time-to-a-later-edit', () => {
+    const s = session('s1', [
+      turn({ timestamp: '2026-06-01T10:00:00Z', calls: [edit('garbage-timestamp')] }),
+      turn({ timestamp: '2026-06-01T10:30:00Z', calls: [edit('2026-06-01T10:30:00Z')] }),
+    ])
+    expect(sessionTimeToFirstEditMs(s)).toBeNull()
+  })
+
+  it('normalizes backslashed Windows paths: one churn entry, relativized, no username leak', () => {
+    const p = project([session('s1', [
+      turn({ calls: [call({ tools: ['Edit'], toolSequence: [[{ tool: 'Edit', file: 'C:\\work\\proj\\src\\a.ts' }]] })] }),
+      turn({ calls: [call({ tools: ['Edit'], toolSequence: [[{ tool: 'Edit', file: 'C:/work/proj/src/a.ts' }]] })] }),
+    ])], 'C:\\work\\proj')
+    const churn = aggregateFileChurn([p])
+    expect(churn).toHaveLength(1)
+    expect(churn[0]!.path).toBe('src/a.ts')
+    expect(churn[0]!.edits).toBe(2)
+  })
+
+  it('isExpectedFreeModel excludes local-style models from the coverage denominator', () => {
+    expect(isExpectedFreeModel('qwen3.6:35b-a3b-bf16')).toBe(true)
+    expect(isExpectedFreeModel('llama-3-8b-q4')).toBe(true)
+    expect(isExpectedFreeModel('claude-opus-4-8')).toBe(false)
+    // 95 local calls + 5 unpriced cloud calls: coverage must be 0, not 0.95.
+    expect(computePricingCoverage(5, 5)).toBe(0)
   })
 })
