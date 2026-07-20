@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateByPr, prLinkedTotals, shortenPrUrl } from '../src/sessions-report.js'
-import type { ProjectSummary, SessionSummary } from '../src/types.js'
+import { aggregateByPr, attributeSessionPrSpend, prLinkedTotals, shortenPrUrl } from '../src/sessions-report.js'
+import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
 
+const A = 'https://github.com/o/r/pull/1'
+const B = 'https://github.com/o/r/pull/2'
+
+// A legacy session: session-level prLinks but NO per-turn refs (turns: []), so
+// the by-PR path takes the even-split fallback.
 function session(id: string, cost: number, calls: number, prLinks?: string[], first = '2026-07-01T10:00:00Z', last = '2026-07-01T11:00:00Z'): SessionSummary {
   return {
     sessionId: id, project: 'p',
@@ -19,6 +24,37 @@ function session(id: string, cost: number, calls: number, prLinks?: string[], fi
   }
 }
 
+const ZERO_USAGE: TokenUsage = {
+  inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0,
+  cacheReadInputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0,
+}
+
+let keySeq = 0
+function call(cost: number): ParsedApiCall {
+  return {
+    provider: 'claude', model: 'claude', usage: ZERO_USAGE, costUSD: cost,
+    tools: [], mcpTools: [], skills: [], subagentTypes: [],
+    hasAgentSpawn: false, hasPlanMode: false, speed: 'standard',
+    timestamp: '2026-07-01T10:00:00Z', bashCommands: [], deduplicationKey: `k${keySeq++}`,
+  }
+}
+
+// A turn whose total cost `cost` is split across `calls` API calls, optionally
+// referencing `prRefs` (the PRs touched during the turn).
+function cturn(cost: number, calls = 1, prRefs?: string[]): ClassifiedTurn {
+  return {
+    userMessage: '',
+    assistantCalls: Array.from({ length: calls }, () => call(cost / calls)),
+    timestamp: '2026-07-01T10:00:00Z', sessionId: 's',
+    category: 'coding', retries: 0, hasEdits: false,
+    ...(prRefs ? { prRefs } : {}),
+  }
+}
+
+function sessionWithTurns(id: string, prLinks: string[], turns: ClassifiedTurn[], first = '2026-07-01T10:00:00Z', last = '2026-07-01T11:00:00Z'): SessionSummary {
+  return { ...session(id, 0, 0, prLinks, first, last), turns }
+}
+
 function project(sessions: SessionSummary[]): ProjectSummary {
   return { project: 'p', projectPath: '/p', sessions, totalCostUSD: 0, totalSavingsUSD: 0, totalApiCalls: 0, totalProxiedCostUSD: 0 }
 }
@@ -30,14 +66,126 @@ describe('shortenPrUrl', () => {
   })
 })
 
-describe('aggregateByPr', () => {
-  it('groups sessions by PR, sorted by cost, tracking the date span', () => {
+describe('attributeSessionPrSpend (turn-level state machine)', () => {
+  it('attributes each turn of interleaved A,B,A,B to its own PR', () => {
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 40, apiCalls: 4, totalSavingsUSD: 0,
+      turns: [
+        { prRefs: [A], assistantCalls: [{ costUSD: 10 }] },
+        { prRefs: [B], assistantCalls: [{ costUSD: 10 }] },
+        { prRefs: [A], assistantCalls: [{ costUSD: 10 }] },
+        { prRefs: [B], assistantCalls: [{ costUSD: 10 }] },
+      ],
+    })
+    expect(perUrl.get(A)!.cost).toBeCloseTo(20, 6)
+    expect(perUrl.get(B)!.cost).toBeCloseTo(20, 6)
+    expect(perUrl.get(A)!.approx).toBe(false)
+    expect(unattributed.cost).toBe(0)
+  })
+
+  it('splits a multi-PR merge-sweep turn evenly across its refs (cost and calls)', () => {
+    const { perUrl } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 100, apiCalls: 4, totalSavingsUSD: 0,
+      turns: [{ prRefs: [A, B], assistantCalls: [{ costUSD: 25 }, { costUSD: 25 }, { costUSD: 25 }, { costUSD: 25 }] }],
+    })
+    expect(perUrl.get(A)!.cost).toBeCloseTo(50, 6)
+    expect(perUrl.get(B)!.cost).toBeCloseTo(50, 6)
+    expect(perUrl.get(A)!.calls).toBeCloseTo(2, 6)
+    expect(perUrl.get(B)!.calls).toBeCloseTo(2, 6)
+  })
+
+  it('accumulates pre-first-reference turns into the unattributed bucket', () => {
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A], totalCostUSD: 40, apiCalls: 2, totalSavingsUSD: 0,
+      turns: [
+        { assistantCalls: [{ costUSD: 30 }] },
+        { prRefs: [A], assistantCalls: [{ costUSD: 10 }] },
+      ],
+    })
+    expect(unattributed.cost).toBeCloseTo(30, 6)
+    expect(perUrl.get(A)!.cost).toBeCloseTo(10, 6)
+  })
+
+  it('carries the current PR forward so a single-PR session attributes everything', () => {
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A], totalCostUSD: 60, apiCalls: 3, totalSavingsUSD: 0,
+      turns: [
+        { prRefs: [A], assistantCalls: [{ costUSD: 10 }] },
+        { assistantCalls: [{ costUSD: 20 }] },
+        { assistantCalls: [{ costUSD: 30 }] },
+      ],
+    })
+    expect(perUrl.get(A)!.cost).toBeCloseTo(60, 6)
+    expect(unattributed.cost).toBe(0)
+  })
+
+  it('falls back to an even whole-session split (approx) when no turn carries refs', () => {
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 100, apiCalls: 8, totalSavingsUSD: 4,
+      turns: [{ assistantCalls: [{ costUSD: 100, savingsUSD: 4 }] }],
+    })
+    expect(perUrl.get(A)!.cost).toBeCloseTo(50, 6)
+    expect(perUrl.get(B)!.cost).toBeCloseTo(50, 6)
+    expect(perUrl.get(A)!.calls).toBeCloseTo(4, 6)
+    expect(perUrl.get(A)!.approx).toBe(true)
+    expect(perUrl.get(B)!.approx).toBe(true)
+    expect(unattributed.cost).toBe(0)
+  })
+
+  it('attributed + unattributed equals the sum of turn costs', () => {
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 0, apiCalls: 0, totalSavingsUSD: 0,
+      turns: [
+        { assistantCalls: [{ costUSD: 7 }] },
+        { prRefs: [A], assistantCalls: [{ costUSD: 13 }] },
+        { prRefs: [A, B], assistantCalls: [{ costUSD: 20 }] },
+      ],
+    })
+    const attributed = [...perUrl.values()].reduce((s, c) => s + c.cost, 0)
+    expect(attributed + unattributed.cost).toBeCloseTo(40, 6)
+  })
+})
+
+describe('aggregateByPr (turn-level attribution)', () => {
+  it('splits a multi-PR session across turns instead of counting the full cost to each', () => {
     const rows = aggregateByPr([project([
-      session('a', 100, 40, ['https://github.com/o/r/pull/1'], '2026-07-01T10:00:00Z', '2026-07-01T11:00:00Z'),
-      session('b', 50, 10, ['https://github.com/o/r/pull/1'], '2026-06-20T09:00:00Z', '2026-06-20T10:00:00Z'),
-      session('c', 200, 80, ['https://github.com/o/r/pull/2']),
+      sessionWithTurns('s', [A, B], [
+        cturn(10, 1, [A]),
+        cturn(30, 1, [B]),
+        cturn(20, 1),            // no refs → carries B forward
+      ]),
     ])])
-    expect(rows.map(r => r.label)).toEqual(['o/r#2', 'o/r#1'])
+    const a = rows.find(r => r.url === A)!
+    const b = rows.find(r => r.url === B)!
+    expect(a.cost).toBeCloseTo(10, 6)   // NOT the full 60 a by-reference count would give
+    expect(b.cost).toBeCloseTo(50, 6)
+    expect(a.approx).toBe(false)
+    expect(a.sessions).toBe(1)
+  })
+
+  it('rows are summable: attributed rows + unattributed equal the PR-linked total', () => {
+    const projects = [project([
+      sessionWithTurns('s', [A], [
+        cturn(30, 1),            // overhead before the first PR reference
+        cturn(10, 1, [A]),
+      ]),
+    ])]
+    const rows = aggregateByPr(projects)
+    const totals = prLinkedTotals(projects)
+    const rowSum = rows.reduce((s, r) => s + r.cost, 0)
+    expect(rowSum).toBeCloseTo(totals.attributedCost, 6)
+    expect(totals.attributedCost).toBeCloseTo(10, 6)
+    expect(totals.unattributedCost).toBeCloseTo(30, 6)
+    expect(totals.cost).toBeCloseTo(40, 6)
+  })
+
+  it('groups legacy sessions by PR, sorted by cost, tracking the date span', () => {
+    const rows = aggregateByPr([project([
+      session('a', 100, 40, [A], '2026-07-01T10:00:00Z', '2026-07-01T11:00:00Z'),
+      session('b', 50, 10, [A], '2026-06-20T09:00:00Z', '2026-06-20T10:00:00Z'),
+      session('c', 200, 80, [B]),
+    ])])
+    expect(rows.map(r => r.url)).toEqual([B, A])
     const pr1 = rows[1]!
     expect(pr1.cost).toBe(150)
     expect(pr1.sessions).toBe(2)
@@ -46,13 +194,14 @@ describe('aggregateByPr', () => {
     expect(pr1.lastEnded).toBe('2026-07-01T11:00:00Z')
   })
 
-  it('a session referencing several PRs counts fully toward each row', () => {
+  it('a legacy multi-PR session splits its cost evenly and marks the rows approx', () => {
     const rows = aggregateByPr([project([
-      session('a', 100, 40, ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2']),
+      session('a', 100, 40, [A, B]),
     ])])
     expect(rows).toHaveLength(2)
-    expect(rows[0]!.cost).toBe(100)
-    expect(rows[1]!.cost).toBe(100)
+    expect(rows[0]!.cost).toBeCloseTo(50, 6)
+    expect(rows[1]!.cost).toBeCloseTo(50, 6)
+    expect(rows.every(r => r.approx)).toBe(true)
   })
 
   it('sessions without links contribute nothing', () => {
@@ -61,12 +210,22 @@ describe('aggregateByPr', () => {
 })
 
 describe('prLinkedTotals', () => {
-  it('counts each PR-linked session once regardless of how many PRs it references', () => {
+  it('splits attributed vs unattributed and counts each PR-linked session once', () => {
     const totals = prLinkedTotals([project([
-      session('a', 100, 40, ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2']),
-      session('b', 50, 10, ['https://github.com/o/r/pull/1']),
-      session('c', 999, 1),
+      session('a', 100, 40, [A, B]),   // legacy: 50 + 50 attributed
+      session('b', 50, 10, [A]),       // legacy: 50 attributed
+      session('c', 999, 1),            // no links → excluded
     ])])
-    expect(totals).toEqual({ cost: 150, sessions: 2 })
+    expect(totals).toEqual({ cost: 150, sessions: 2, attributedCost: 150, unattributedCost: 0 })
+  })
+
+  it('captures the unattributed remainder from pre-reference overhead', () => {
+    const totals = prLinkedTotals([project([
+      sessionWithTurns('s', [A], [cturn(30, 1), cturn(10, 1, [A])]),
+    ])])
+    expect(totals.attributedCost).toBeCloseTo(10, 6)
+    expect(totals.unattributedCost).toBeCloseTo(30, 6)
+    expect(totals.cost).toBeCloseTo(40, 6)
+    expect(totals.sessions).toBe(1)
   })
 })

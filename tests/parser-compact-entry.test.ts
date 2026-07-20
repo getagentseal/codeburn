@@ -28,6 +28,19 @@ describe('compactEntry', () => {
     expect((c as Record<string, unknown>)['someHugeField']).toBeUndefined()
   })
 
+  it('preserves prUrl on a pr-link entry for per-turn PR attribution', () => {
+    const raw = entry({ type: 'pr-link', prUrl: 'https://github.com/o/r/pull/1', extra: 'x'.repeat(10_000) })
+    const c = compactEntry(raw)
+    expect((c as Record<string, unknown>)['prUrl']).toBe('https://github.com/o/r/pull/1')
+    expect((c as Record<string, unknown>)['extra']).toBeUndefined()
+  })
+
+  it('does not copy prUrl onto non-pr-link entries', () => {
+    const raw = entry({ type: 'user', prUrl: 'https://github.com/o/r/pull/1' })
+    const c = compactEntry(raw)
+    expect((c as Record<string, unknown>)['prUrl']).toBeUndefined()
+  })
+
   it('preserves deferred_tools_delta attachment with copied names', () => {
     const raw = entry({
       type: 'attachment',

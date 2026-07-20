@@ -59,7 +59,7 @@ function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullReq
 }
 
 function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
-  const { rows, distinctCost, distinctSessions } = pullRequests
+  const { rows, attributedCost, unattributedCost, distinctSessions } = pullRequests
   const sessionWord = distinctSessions === 1 ? 'session' : 'sessions'
   return (
     <>
@@ -80,12 +80,17 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
         </table>
       </div>
       <p className="pr-footnote">
-        {formatUsd(distinctCost)} across {distinctSessions.toLocaleString('en-US')} distinct {sessionWord} produced pull requests.
-        {' '}Attribution is by reference: a session referencing several PRs counts toward each, so the rows above are not summed.
+        {formatUsd(attributedCost)} attributed to the rows above, across {distinctSessions.toLocaleString('en-US')} PR-linked {sessionWord}.
+        {' '}Each turn's cost goes to the PR it was working on, so the rows are summable.
       </p>
+      {unattributedCost > 0 && (
+        <p className="pr-unattributed">Not tied to a specific PR: {formatUsd(unattributedCost)}</p>
+      )}
     </>
   )
 }
+
+const APPROX_TITLE = 'Approximate: the transcript expired before per-turn capture, so this PR’s share is an even split of the whole session.'
 
 function PrRowView({ pr }: { pr: PrRow }) {
   return (
@@ -93,7 +98,9 @@ function PrRowView({ pr }: { pr: PrRow }) {
       <td className="ov-model-name">
         <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
       </td>
-      <td className="num mono">{formatUsd(pr.cost)}</td>
+      <td className="num mono" {...(pr.approx ? { title: APPROX_TITLE } : {})}>
+        {pr.approx ? '~' : ''}{formatUsd(pr.cost)}
+      </td>
       <td className="num">{pr.sessions.toLocaleString('en-US')}</td>
       <td className="num">{pr.calls.toLocaleString('en-US')}</td>
       <td className="num pr-span">{spanLabel(pr.firstStarted, pr.lastEnded)}</td>

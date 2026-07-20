@@ -2037,7 +2037,7 @@ program
         process.stdout.write('No sessions with captured PR links in this period. Links are captured as sessions are parsed; older transcripts gain them on their next re-parse.\n')
         return
       }
-      const { cost, sessions } = prLinkedTotals(projects)
+      const { attributedCost, unattributedCost, sessions } = prLinkedTotals(projects)
       const { renderTable: renderTextTable } = await import('./text-table.js')
       const table = renderTextTable(
         [
@@ -2051,7 +2051,7 @@ program
         ],
         prRows.map(r => [
           r.label,
-          `$${r.cost.toFixed(2)}`,
+          `${r.approx ? '~' : ''}$${r.cost.toFixed(2)}`,
           `$${r.savingsUSD.toFixed(2)}`,
           String(r.sessions),
           String(r.calls),
@@ -2059,7 +2059,10 @@ program
           r.lastEnded.slice(0, 10),
         ]),
       )
-      process.stdout.write(table + `\nDistinct PR-linked spend: $${cost.toFixed(2)} across ${sessions} session${sessions === 1 ? '' : 's'}. A session referencing several PRs counts toward each, so rows exceed this total when links overlap.\n`)
+      const approxNote = prRows.some(r => r.approx)
+        ? ' ~ marks rows estimated from a whole-session even split (transcript expired before per-turn capture).'
+        : ''
+      process.stdout.write(table + `\nRows sum to $${attributedCost.toFixed(2)} attributed across ${sessions} PR-linked session${sessions === 1 ? '' : 's'}. $${unattributedCost.toFixed(2)} of that spend was not tied to a specific PR.${approxNote}\n`)
       return
     }
     const rows = aggregateSessions(projects)

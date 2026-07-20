@@ -52,7 +52,7 @@ function richFile(): CachedFile {
     prLinks: ['https://github.com/o/r/pull/1', 'https://github.com/o/r/pull/2'],
     isSidechain: true,
     turns: [
-      { timestamp: '2026-07-01T10:00:00Z', sessionId: 's1', userMessage: 'hi', gitBranch: 'feature/x', calls: [richCall()] },
+      { timestamp: '2026-07-01T10:00:00Z', sessionId: 's1', userMessage: 'hi', gitBranch: 'feature/x', prRefs: ['https://github.com/o/r/pull/1'], calls: [richCall()] },
     ],
   }
 }
@@ -73,6 +73,7 @@ describe('session cache round-trip for rich-capture fields', () => {
 
     const turn = file.turns[0]!
     expect(turn.gitBranch).toBe('feature/x')
+    expect(turn.prRefs).toEqual(['https://github.com/o/r/pull/1'])
 
     const call = turn.calls[0]!
     expect(call.locAdded).toBe(12)

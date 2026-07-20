@@ -95,6 +95,10 @@ export type PrRow = {
   calls: number
   firstStarted: string
   lastEnded: string
+  /// True when any contributing session used the legacy even-split fallback
+  /// (session-level prLinks but no surviving per-turn refs), so this row's share
+  /// is an approximation rather than genuine turn-level attribution.
+  approx: boolean
 }
 
 const GITHUB_PR_RE = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/
@@ -104,47 +108,146 @@ export function shortenPrUrl(url: string): string {
   return m ? `${m[1]}/${m[2]}#${m[3]}` : url
 }
 
-/// Spend attributed to each pull request a session's transcript referenced.
-/// A session that mentions two PRs counts fully toward BOTH rows: attribution
-/// is by reference, not a split, so rows must never be summed into a grand
-/// total (the caller reports distinct-session spend separately).
+/// One PR's slice of a session's spend.
+export type PrContribution = { cost: number; calls: number; savingsUSD: number; approx: boolean }
+
+/// A single session's PR-attributed spend: `perUrl` is the turn-level split
+/// across the PRs it referenced; `unattributed` is the spend that belongs to no
+/// specific PR (turns before the session's first PR reference).
+export type SessionPrAttribution = {
+  perUrl: Map<string, PrContribution>
+  unattributed: { cost: number; calls: number; savingsUSD: number }
+}
+
+// Minimal structural shape a SessionSummary satisfies, so the state machine is
+// unit-testable without constructing a full session fixture.
+type AttributableSession = {
+  turns: Array<{ prRefs?: string[]; assistantCalls: Array<{ costUSD: number; savingsUSD?: number }> }>
+  prLinks?: string[]
+  totalCostUSD: number
+  apiCalls: number
+  totalSavingsUSD: number
+}
+
+function addContribution(
+  map: Map<string, PrContribution>,
+  url: string, cost: number, calls: number, savingsUSD: number, approx: boolean,
+): void {
+  const e = map.get(url) ?? { cost: 0, calls: 0, savingsUSD: 0, approx: false }
+  e.cost += cost
+  e.calls += calls
+  e.savingsUSD += savingsUSD
+  if (approx) e.approx = true
+  map.set(url, e)
+}
+
+/// Attribute a session's spend to the PRs it referenced, at TURN granularity.
+///
+/// Walk the turns in order carrying `current` = the PR set of the most recent
+/// turn that referenced any PR. Each turn's cost/calls/savings are attributed to
+/// `current`, split evenly across a multi-PR set (a merge-sweep turn touching
+/// several PRs at once). Turns before the first reference land in `unattributed`
+/// (genuine session overhead: exploration, unrelated work).
+///
+/// Legacy fallback: a session whose transcript already expired keeps its
+/// session-level `prLinks` but has NO per-turn `prRefs`. With no turn boundaries
+/// to attribute by, split the whole session evenly across its prLinks and mark
+/// every portion `approx` so surfaces can flag it honestly.
+export function attributeSessionPrSpend(session: AttributableSession): SessionPrAttribution {
+  const perUrl = new Map<string, PrContribution>()
+  const unattributed = { cost: 0, calls: 0, savingsUSD: 0 }
+
+  const hasTurnRefs = session.turns.some(t => t.prRefs?.length)
+  if (!hasTurnRefs) {
+    const links = session.prLinks
+    if (links?.length) {
+      const share = 1 / links.length
+      for (const url of links) {
+        addContribution(perUrl, url, session.totalCostUSD * share, session.apiCalls * share, session.totalSavingsUSD * share, true)
+      }
+    }
+    return { perUrl, unattributed }
+  }
+
+  let current: string[] | null = null
+  for (const turn of session.turns) {
+    if (turn.prRefs?.length) current = turn.prRefs
+    const cost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
+    const calls = turn.assistantCalls.length
+    const savings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
+    if (cost === 0 && calls === 0 && savings === 0) continue
+    if (current === null) {
+      unattributed.cost += cost
+      unattributed.calls += calls
+      unattributed.savingsUSD += savings
+      continue
+    }
+    const share = 1 / current.length
+    for (const url of current) addContribution(perUrl, url, cost * share, calls * share, savings * share, false)
+  }
+  return { perUrl, unattributed }
+}
+
+/// Spend attributed to each pull request at turn granularity (see
+/// attributeSessionPrSpend). Rows carry ATTRIBUTED cost/calls and ARE summable;
+/// `sessions` counts the distinct sessions that contributed any spend to the PR;
+/// `approx` marks rows fed by the legacy even-split fallback. Sorted by cost, desc.
 export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
-  const byUrl = new Map<string, PrRow>()
+  const byUrl = new Map<string, {
+    cost: number; savingsUSD: number; calls: number; approx: boolean
+    sessions: Set<string>; firstStarted: string; lastEnded: string
+  }>()
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
-      for (const url of session.prLinks) {
+      const { perUrl } = attributeSessionPrSpend(session)
+      for (const [url, c] of perUrl) {
+        if (c.cost === 0 && c.calls === 0 && c.savingsUSD === 0) continue
         const row = byUrl.get(url) ?? {
-          url, label: shortenPrUrl(url),
-          cost: 0, savingsUSD: 0, sessions: 0, calls: 0,
-          firstStarted: session.firstTimestamp, lastEnded: session.lastTimestamp,
+          cost: 0, savingsUSD: 0, calls: 0, approx: false,
+          sessions: new Set<string>(), firstStarted: session.firstTimestamp, lastEnded: session.lastTimestamp,
         }
-        row.cost += session.totalCostUSD
-        row.savingsUSD += session.totalSavingsUSD
-        row.sessions += 1
-        row.calls += session.apiCalls
+        row.cost += c.cost
+        row.savingsUSD += c.savingsUSD
+        row.calls += c.calls
+        row.sessions.add(session.sessionId)
+        if (c.approx) row.approx = true
         if (session.firstTimestamp < row.firstStarted) row.firstStarted = session.firstTimestamp
         if (session.lastTimestamp > row.lastEnded) row.lastEnded = session.lastTimestamp
         byUrl.set(url, row)
       }
     }
   }
-  return [...byUrl.values()].sort((a, b) => b.cost - a.cost)
+  return [...byUrl.entries()]
+    .map(([url, r]) => ({
+      url, label: shortenPrUrl(url),
+      cost: r.cost, savingsUSD: r.savingsUSD,
+      sessions: r.sessions.size, calls: Math.round(r.calls),
+      firstStarted: r.firstStarted, lastEnded: r.lastEnded,
+      approx: r.approx,
+    }))
+    .sort((a, b) => b.cost - a.cost)
 }
 
-/// Distinct-session totals across every PR-linked session, safe to present as
-/// "spend that produced PRs" without the multi-link double count.
-export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sessions: number } {
-  let cost = 0
+/// Totals across every PR-linked session. `attributedCost` is the sum of the
+/// per-PR rows (a summable total, unlike the old by-reference rows);
+/// `unattributedCost` is the pre-reference overhead not tied to any specific PR.
+/// `cost` = attributed + unattributed = the distinct-session spend that produced
+/// PRs. `sessions` counts distinct PR-linked sessions.
+export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sessions: number; attributedCost: number; unattributedCost: number } {
+  let attributedCost = 0
+  let unattributedCost = 0
   let sessions = 0
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
-      cost += session.totalCostUSD
       sessions += 1
+      const { perUrl, unattributed } = attributeSessionPrSpend(session)
+      for (const c of perUrl.values()) attributedCost += c.cost
+      unattributedCost += unattributed.cost
     }
   }
-  return { cost, sessions }
+  return { cost: attributedCost + unattributedCost, sessions, attributedCost, unattributedCost }
 }
 
 export type BranchRow = {

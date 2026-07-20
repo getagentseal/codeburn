@@ -61,6 +61,10 @@ export type CachedTurn = {
   // previous turn's branch (a report carries the last stored value forward).
   // Rich-session-capture; optional, Claude only.
   gitBranch?: string
+  // Claude: GitHub PR URLs referenced during this turn, sorted and deduplicated.
+  // Stored per-turn directly (unlike gitBranch, no change-detection), so a turn's
+  // own refs are self-contained. Drives turn-level PR spend attribution. Optional.
+  prRefs?: string[]
 }
 
 export type FileFingerprint = {
@@ -123,7 +127,10 @@ export type SessionCache = {
 // Cached kiro entries from v4 carry costUSD: undefined and would keep being
 // re-priced from estimated tokens forever, since historical session files
 // never change. Bump forces a one-time re-parse so metered credit costs land.
-export const CACHE_VERSION = 5
+// v6: per-turn `prRefs` capture for turn-level PR spend attribution. Existing
+// cache turns carry no prRefs; bumping forces a one-time re-parse so surviving
+// transcripts populate the field. (Daily-cache versioning is untouched.)
+export const CACHE_VERSION = 6
 
 // The cache filename is version-suffixed so different binaries (e.g. an old
 // launchd menubar on a prior release and a newer desktop app) each own a
@@ -321,6 +328,7 @@ function validateTurn(t: unknown): t is CachedTurn {
     && typeof o['sessionId'] === 'string'
     && typeof o['userMessage'] === 'string'
     && isOptionalString(o['gitBranch'])
+    && (o['prRefs'] === undefined || isStringArray(o['prRefs']))
     && Array.isArray(o['calls'])
     && (o['calls'] as unknown[]).every(validateCall)
 }

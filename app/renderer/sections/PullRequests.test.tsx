@@ -49,8 +49,10 @@ const SAMPLE: PrPayload = {
     { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 240.5, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z' },
     { url: 'https://github.com/getagentseal/codeburn/pull/781', label: 'getagentseal/codeburn#781', cost: 90.25, savingsUSD: 0, sessions: 1, calls: 120, firstStarted: '2026-07-05T13:00:00Z', lastEnded: '2026-07-05T15:00:00Z' },
   ],
-  distinctCost: 300.75,
+  distinctCost: 376.05,
   distinctSessions: 3,
+  attributedCost: 330.75,
+  unattributedCost: 45.3,
 }
 
 describe('PullRequests', () => {
@@ -82,14 +84,34 @@ describe('PullRequests', () => {
     expect(openExternal).toHaveBeenCalledWith('https://github.com/getagentseal/codeburn/pull/780')
   })
 
-  it('states the distinct-total footer explaining by-reference attribution', async () => {
+  it('states the attributed-total footer and the summable framing', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    const note = await screen.findByText(/produced pull requests/)
-    expect(note.textContent).toContain('$300.75')
-    expect(note.textContent).toContain('3 distinct sessions')
-    expect(note.textContent).toContain('counts toward each')
+    const note = await screen.findByText(/attributed to the rows above/)
+    expect(note.textContent).toContain('$330.75')
+    expect(note.textContent).toContain('3 PR-linked sessions')
+    expect(note.textContent).toContain('summable')
+    expect(screen.getByText(/Not tied to a specific PR/).textContent).toContain('$45.30')
+  })
+
+  it('marks an approximate (legacy) row with a ~ prefix and a tooltip', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const cost = await screen.findByText('~$12.50')
+    expect(cost).toHaveAttribute('title')
+    // A zero unattributed remainder hides the muted line.
+    expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
   })
 
   it('shows the quiet empty state (never a fake table) when no PR links exist', async () => {
@@ -101,7 +123,7 @@ describe('PullRequests', () => {
   })
 
   it('shows the empty state when the PR array is present but empty', async () => {
-    getOverview.mockResolvedValue(makePayload({ rows: [], distinctCost: 0, distinctSessions: 0 }))
+    getOverview.mockResolvedValue(makePayload({ rows: [], distinctCost: 0, distinctSessions: 0, attributedCost: 0, unattributedCost: 0 }))
     render(<PullRequests period="lifetime" provider="all" />)
 
     expect(await screen.findByText(/PR links are captured as sessions are parsed/)).toBeInTheDocument()

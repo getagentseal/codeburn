@@ -584,6 +584,7 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .pr-link:hover { text-decoration: underline; }
 .pr-table td.pr-span { color: var(--mut2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pr-footnote { margin: 12px 2px 2px; color: var(--mut); font-size: var(--fs-meta); line-height: 1.55; }
+.pr-unattributed { margin: 4px 2px 2px; color: var(--mut2); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 .opt-waste { min-width: 0; }
 .opt-summary { padding: 0 0 10px; color: var(--mut); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .opt-findings { display: grid; min-width: 0; }

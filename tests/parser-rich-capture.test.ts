@@ -183,6 +183,43 @@ describe('gitBranch capture + dedup', () => {
   })
 })
 
+// ── per-turn PR references (prRefs) ────────────────────────────────────
+
+function prLink(url: string, sessionId = 's1'): JournalEntry {
+  return { type: 'pr-link', timestamp: '2026-07-01T10:00:03Z', sessionId, prUrl: url } as JournalEntry
+}
+
+describe('pr-link capture + per-turn prRefs', () => {
+  it('attaches a PR referenced during a turn to that turn, and it survives caching', () => {
+    const entries = [
+      userText('open a PR', 'main'), assistant('m1', 'main'),
+      prLink('https://github.com/o/r/pull/1'),
+      userText('next task', 'main'), assistant('m2', 'main'),
+    ]
+    const turns = groupIntoTurns(entries, new Set())
+    expect(turns[0]!.prRefs).toEqual(['https://github.com/o/r/pull/1'])
+    expect(turns[1]!.prRefs).toBeUndefined()
+    const cached = parsedTurnsToCachedTurns(turns)
+    // Stored per-turn directly (no change-detection dedup like gitBranch).
+    expect(cached[0]!.prRefs).toEqual(['https://github.com/o/r/pull/1'])
+    expect(cached[1]!.prRefs).toBeUndefined()
+  })
+
+  it('sorts and dedupes multiple refs within one merge-sweep turn', () => {
+    const entries = [
+      userText('merge sweep', 'main'), assistant('m1', 'main'),
+      prLink('https://github.com/o/r/pull/2'),
+      prLink('https://github.com/o/r/pull/1'),
+      prLink('https://github.com/o/r/pull/2'),
+    ]
+    const turns = groupIntoTurns(entries, new Set())
+    expect(turns[0]!.prRefs).toEqual([
+      'https://github.com/o/r/pull/1',
+      'https://github.com/o/r/pull/2',
+    ])
+  })
+})
+
 // ── session meta: ai-title last-wins, pr-link accumulation ─────────────
 
 describe('collectSessionMeta', () => {

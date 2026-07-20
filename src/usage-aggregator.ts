@@ -670,6 +670,8 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         rows: prRows.slice(0, TOP_PULL_REQUESTS),
         distinctCost: prTotals.cost,
         distinctSessions: prTotals.sessions,
+        attributedCost: prTotals.attributedCost,
+        unattributedCost: prTotals.unattributedCost,
       }
     }
     const branchRows = aggregateByBranch(scanProjects)

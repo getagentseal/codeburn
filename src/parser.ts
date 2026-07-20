@@ -912,6 +912,12 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
   if (raw.cwd !== undefined) entry.cwd = raw.cwd
   // Preserved so groupIntoTurns can stamp each turn's git branch (rich capture).
   if (typeof raw.gitBranch === 'string' && raw.gitBranch) entry.gitBranch = raw.gitBranch
+  // Preserved so groupIntoTurns can attribute each PR reference to its turn.
+  // Only `pr-link` entries carry `prUrl`; every other field of theirs is dropped.
+  if (raw.type === 'pr-link') {
+    const prUrl = (raw as Record<string, unknown>)['prUrl']
+    if (typeof prUrl === 'string' && prUrl) (entry as Record<string, unknown>)['prUrl'] = prUrl
+  }
 
   const att = (raw as Record<string, unknown>)['attachment']
   if (att && typeof att === 'object') {
@@ -1440,6 +1446,10 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   // from the user entry (gitBranch is on every user/assistant entry); a
   // continuation turn with no leading user text falls back to its first call.
   let currentBranch: string | undefined
+  // GitHub PR URLs referenced within the turn currently being accumulated. A
+  // `pr-link` entry is emitted after the assistant creates/references a PR, so it
+  // lands inside the same turn (before the next user message) and attaches here.
+  let currentPrRefs: string[] = []
 
   for (const entry of entries) {
     const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
@@ -1453,6 +1463,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
             timestamp: currentTimestamp,
             sessionId: currentSessionId,
             ...(currentBranch ? { gitBranch: currentBranch } : {}),
+            ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
           })
         }
         currentUserMessage = text
@@ -1460,6 +1471,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentTimestamp = entry.timestamp ?? ''
         currentSessionId = entry.sessionId ?? ''
         currentBranch = entryBranch
+        currentPrRefs = []
       }
     } else if (entry.type === 'assistant') {
       if (entryBranch && !currentBranch) currentBranch = entryBranch
@@ -1469,6 +1481,9 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       const call = parseApiCall(entry, toolResultMeta)
       if (call) currentCalls.push(call)
       for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
+    } else if (entry.type === 'pr-link') {
+      const url = (entry as Record<string, unknown>)['prUrl']
+      if (typeof url === 'string' && url && !currentPrRefs.includes(url)) currentPrRefs.push(url)
     }
   }
 
@@ -1479,6 +1494,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       timestamp: currentTimestamp,
       sessionId: currentSessionId,
       ...(currentBranch ? { gitBranch: currentBranch } : {}),
+      ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
     })
   }
 
@@ -1907,6 +1923,10 @@ async function scanProjectDirs(
             if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
               const last = mergedTurns[mergedTurns.length - 1]!
               last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
+              // A PR referenced in the appended continuation belongs to this same
+              // turn: union its refs in so the shortcut matches a full re-parse.
+              const refs = Array.from(new Set([...(last.prRefs ?? []), ...(newTurns[0]!.prRefs ?? [])])).sort()
+              if (refs.length > 0) last.prRefs = refs
               startIdx = 1
             }
             for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
@@ -2235,6 +2255,9 @@ function parsedTurnToCachedTurn(turn: ParsedTurn): CachedTurn {
     sessionId: turn.sessionId,
     userMessage: turn.userMessage.slice(0, 2000),
     calls: turn.assistantCalls.map(apiCallToCachedCall),
+    // Stored per-turn directly (already sorted/deduped in groupIntoTurns), unlike
+    // gitBranch's change-detection dedup, so each turn's refs are self-contained.
+    ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
   }
 }
 
@@ -2344,6 +2367,7 @@ function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): Clas
     timestamp: turn.timestamp,
     sessionId: turn.sessionId,
     ...(branch ? { gitBranch: branch } : {}),
+    ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
   }
   return classifyTurn(parsed)
 }

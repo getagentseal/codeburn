@@ -94,6 +94,11 @@ export type ParsedTurn = {
   // the turn's entries). Captured for cost-per-branch reporting; deduped at the
   // cache boundary (stored per-turn only when it changes). Optional; Claude only.
   gitBranch?: string
+  // Claude Code: GitHub PR URLs referenced during this turn (`pr-link` entries
+  // that landed inside the turn's span), sorted and deduplicated. Drives
+  // turn-level PR spend attribution; the session-level `prLinks` union is built
+  // separately. Absent when the turn referenced no PR. Optional; Claude only.
+  prRefs?: string[]
 }
 
 export type ParsedApiCall = {
