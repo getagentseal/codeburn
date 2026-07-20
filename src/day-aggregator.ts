@@ -1,4 +1,4 @@
-import type { DailyEntry } from './daily-cache.js'
+import type { DailyEntry, ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 
@@ -26,6 +26,14 @@ export function dateKey(iso: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function emptySlice(): ProviderDaySlice {
+  return {
+    calls: 0, cost: 0, savingsUSD: 0,
+    sessions: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+    editTurns: 0, oneShotTurns: 0, models: {}, categories: {},
+  }
+}
+
 export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntry[] {
   const byDate = new Map<string, DailyEntry>()
   const ensure = (date: string): DailyEntry => {
@@ -33,11 +41,20 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
     if (!d) { d = emptyEntry(date); byDate.set(date, d) }
     return d
   }
+  const ensureSlice = (day: DailyEntry, provider: string): ProviderDaySlice => {
+    let s = day.providers[provider]
+    if (!s) { s = emptySlice(); day.providers[provider] = s }
+    return s
+  }
 
   for (const project of projects) {
     for (const session of project.sessions) {
       const sessionDate = dateKey(session.firstTimestamp)
-      ensure(sessionDate).sessions += 1
+      const sessionDay = ensure(sessionDate)
+      sessionDay.sessions += 1
+      // A session belongs to exactly one provider; its calls all carry it.
+      const sessionProvider = session.turns.flatMap(t => t.assistantCalls)[0]?.provider
+      if (sessionProvider) ensureSlice(sessionDay, sessionProvider).sessions! += 1
 
       for (const turn of session.turns) {
         if (turn.assistantCalls.length === 0) continue
@@ -68,6 +85,30 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         cat.oneShotTurns += oneShotTurns
         turnDay.categories[turn.category] = cat
 
+        // Slice-level turn stats are attributed per provider actually present
+        // in the turn, each with only ITS calls' cost — a slice's category
+        // totals must never contain another provider's spend, or a later
+        // carry-forward of that slice would overstate the day.
+        const providersInTurn = new Map<string, { cost: number; savingsUSD: number }>()
+        for (const call of turn.assistantCalls) {
+          const acc = providersInTurn.get(call.provider) ?? { cost: 0, savingsUSD: 0 }
+          acc.cost += call.costUSD
+          acc.savingsUSD += call.savingsUSD ?? 0
+          providersInTurn.set(call.provider, acc)
+        }
+        for (const [prov, totals] of providersInTurn) {
+          const turnSlice = ensureSlice(turnDay, prov)
+          turnSlice.editTurns! += editTurns
+          turnSlice.oneShotTurns! += oneShotTurns
+          const sliceCat = turnSlice.categories![turn.category] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+          sliceCat.turns += 1
+          sliceCat.cost += totals.cost
+          sliceCat.savingsUSD += totals.savingsUSD
+          sliceCat.editTurns += editTurns
+          sliceCat.oneShotTurns += oneShotTurns
+          turnSlice.categories![turn.category] = sliceCat
+        }
+
         for (const call of turn.assistantCalls) {
           const callSavings = call.savingsUSD ?? 0
 
@@ -93,11 +134,28 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
           turnDay.models[call.model] = model
 
-          const provider = turnDay.providers[call.provider] ?? { calls: 0, cost: 0, savingsUSD: 0 }
-          provider.calls += 1
-          provider.cost += call.costUSD
-          provider.savingsUSD += callSavings
-          turnDay.providers[call.provider] = provider
+          const slice = ensureSlice(turnDay, call.provider)
+          slice.calls += 1
+          slice.cost += call.costUSD
+          slice.savingsUSD += callSavings
+          slice.inputTokens! += call.usage.inputTokens
+          slice.outputTokens! += call.usage.outputTokens
+          slice.cacheReadTokens! += call.usage.cacheReadInputTokens
+          slice.cacheWriteTokens! += call.usage.cacheCreationInputTokens
+
+          const sliceModel = slice.models![call.model] ?? {
+            calls: 0, cost: 0, savingsUSD: 0,
+            inputTokens: 0, outputTokens: 0,
+            cacheReadTokens: 0, cacheWriteTokens: 0,
+          }
+          sliceModel.calls += 1
+          sliceModel.cost += call.costUSD
+          sliceModel.savingsUSD += callSavings
+          sliceModel.inputTokens += call.usage.inputTokens
+          sliceModel.outputTokens += call.usage.outputTokens
+          sliceModel.cacheReadTokens += call.usage.cacheReadInputTokens
+          sliceModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
+          slice.models![call.model] = sliceModel
         }
       }
     }

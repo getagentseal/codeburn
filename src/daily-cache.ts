@@ -1,11 +1,27 @@
 import { randomBytes } from 'crypto'
 import { existsSync } from 'fs'
-import { mkdir, open, readFile, rename, unlink } from 'fs/promises'
+import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 13: day bucketing is now TURN-anchored (a turn's whole cost/calls
+// Bumped to 14: NEVER-LOSE history. Session files are ephemeral (Claude Code
+// deletes transcripts after ~30 days), so a day that can no longer be re-derived
+// from sources exists ONLY in this cache. Every earlier version treated the
+// cache as disposable — schema bumps, savings-config changes, timezone changes
+// and incomplete-hydration retries all dropped the days and re-derived from
+// whatever sources survived, silently truncating history to the source-retention
+// window (five bumps between 2026-06-22 and 2026-07-16 erased everything before
+// 2026-04-24 on a machine with usage since March). From v14 on, invalidation
+// re-derives what it can and CARRIES FORWARD every (day, provider) slice it
+// cannot, and loading a missing/unsupported cache file adopts days from every
+// older daily-cache file in the cache dir instead of starting empty. Bumping
+// the version now only forces re-derivation of days whose sources still exist;
+// it must never again lose the rest. DailyEntry.providers slices carry a full
+// per-provider breakdown (tokens, models, categories) so those carry-forwards
+// stay exact across rebuilds.
+//
+// v13: day bucketing is now TURN-anchored (a turn's whole cost/calls
 // land on the day of its user-message timestamp) to match the live headline/
 // report rollup. v12 bucketed each call by its own timestamp, so a midnight-
 // straddling turn split across two days and history.daily / the provider
@@ -33,15 +49,45 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 13
-const MIN_SUPPORTED_VERSION = 13
+export const DAILY_CACHE_VERSION = 14
+const MIN_SUPPORTED_VERSION = 14
 // Version-suffixed so different binaries each own a distinct file and never
-// clobber an incompatible schema. Bumping the version mints a fresh filename.
+// clobber an incompatible schema. Bumping the version mints a fresh filename;
+// adoptOlderDailyCaches then unions days out of every previous file (including
+// the pre-versioning `daily-cache.json`, which old binaries still own and we
+// never write or delete).
 const DAILY_CACHE_FILENAME = `daily-cache.v${DAILY_CACHE_VERSION}.json`
-// The pre-versioning filename. Never written or deleted anymore (old binaries
-// own it). Adopt-copied once on first load when the versioned file is absent and
-// the legacy file's version matches ours; a different version is ignored.
-const LEGACY_DAILY_CACHE_FILENAME = 'daily-cache.json'
+
+export type ModelDayStats = {
+  calls: number
+  cost: number
+  savingsUSD: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }
+
+export type ProviderDaySlice = {
+  calls: number
+  cost: number
+  savingsUSD: number
+  /// Full per-provider breakdown, written since v14. Slices adopted from older
+  /// caches carry only the three fields above; carrying such a slice forward
+  /// restores exact cost/calls/savings but not the day's token/model/category
+  /// split for that provider.
+  sessions?: number
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  editTurns?: number
+  oneShotTurns?: number
+  models?: Record<string, ModelDayStats>
+  categories?: Record<string, CategoryDayStats>
+}
 
 export type DailyEntry = {
   date: string
@@ -55,17 +101,14 @@ export type DailyEntry = {
   cacheWriteTokens: number
   editTurns: number
   oneShotTurns: number
-  models: Record<string, {
-    calls: number
-    cost: number
-    savingsUSD: number
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWriteTokens: number
-  }>
-  categories: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }>
-  providers: Record<string, { calls: number; cost: number; savingsUSD: number }>
+  models: Record<string, ModelDayStats>
+  categories: Record<string, CategoryDayStats>
+  providers: Record<string, ProviderDaySlice>
+  /// Present when some of this day's data was carried forward from an earlier
+  /// cache generation instead of re-derived from session files (the files no
+  /// longer exist). Carried values keep the accounting of the version that
+  /// recorded them — stale accounting beats a silent zero.
+  carried?: true
 }
 
 export type DailyCache = {
@@ -105,10 +148,6 @@ function getCachePath(): string {
   return join(getCacheDir(), DAILY_CACHE_FILENAME)
 }
 
-function getLegacyCachePath(): string {
-  return join(getCacheDir(), LEGACY_DAILY_CACHE_FILENAME)
-}
-
 /** Absolute path of the active (version-suffixed) daily cache file. */
 export function dailyCachePath(): string {
   return getCachePath()
@@ -126,23 +165,32 @@ function isMigratableCache(parsed: unknown): parsed is { version: number; lastCo
   return c.version >= MIN_SUPPORTED_VERSION && c.version <= DAILY_CACHE_VERSION
 }
 
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
+}
+
+const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
+
 function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
-  return days.map(d => ({
-    date: d.date as string,
-    cost: (d.cost as number) ?? 0,
-    savingsUSD: (d.savingsUSD as number) ?? 0,
-    calls: (d.calls as number) ?? 0,
-    sessions: (d.sessions as number) ?? 0,
-    inputTokens: (d.inputTokens as number) ?? 0,
-    outputTokens: (d.outputTokens as number) ?? 0,
-    cacheReadTokens: (d.cacheReadTokens as number) ?? 0,
-    cacheWriteTokens: (d.cacheWriteTokens as number) ?? 0,
-    editTurns: (d.editTurns as number) ?? 0,
-    oneShotTurns: (d.oneShotTurns as number) ?? 0,
-    models: (d.models as DailyEntry['models']) ?? {},
-    categories: (d.categories as DailyEntry['categories']) ?? {},
-    providers: (d.providers as DailyEntry['providers']) ?? {},
-  }))
+  return days
+    .filter(d => d && typeof d === 'object' && typeof d.date === 'string' && DATE_KEY_RE.test(d.date))
+    .map(d => ({
+      date: d.date as string,
+      cost: num(d.cost),
+      savingsUSD: num(d.savingsUSD),
+      calls: num(d.calls),
+      sessions: num(d.sessions),
+      inputTokens: num(d.inputTokens),
+      outputTokens: num(d.outputTokens),
+      cacheReadTokens: num(d.cacheReadTokens),
+      cacheWriteTokens: num(d.cacheWriteTokens),
+      editTurns: num(d.editTurns),
+      oneShotTurns: num(d.oneShotTurns),
+      models: (d.models as DailyEntry['models']) ?? {},
+      categories: (d.categories as DailyEntry['categories']) ?? {},
+      providers: (d.providers as DailyEntry['providers']) ?? {},
+      ...(d.carried === true ? { carried: true as const } : {}),
+    }))
 }
 
 function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean }): DailyCache {
@@ -168,31 +216,99 @@ export async function loadDailyCache(): Promise<DailyCache> {
         if (parsed.version < DAILY_CACHE_VERSION) await saveDailyCache(migrated).catch(() => {})
         return migrated
       }
-      return emptyCache()
     } catch {
-      return emptyCache()
+      // fall through to adoption — a corrupt current file must not cost history
+      // that older cache files still hold.
     }
+    return adoptOlderDailyCaches()
   }
-  // Versioned file absent: adopt the legacy unversioned file once, only when its
-  // version matches ours. A different-version legacy file is ignored and left
-  // intact — old binaries still own it, so we never write or delete it.
-  return adoptLegacyDailyCache()
+  return adoptOlderDailyCaches()
 }
 
-async function adoptLegacyDailyCache(): Promise<DailyCache> {
-  const legacy = getLegacyCachePath()
-  if (!existsSync(legacy)) return emptyCache()
+type AdoptableCache = { version: number; lastComputedDate?: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean }
+
+function isAdoptableCache(parsed: unknown): parsed is AdoptableCache {
+  if (!parsed || typeof parsed !== 'object') return false
+  const c = parsed as Partial<DailyCache>
+  return typeof c.version === 'number' && Array.isArray(c.days)
+}
+
+/// Versioned file absent (or unreadable): adopt days from EVERY other
+/// daily-cache file in the cache dir — the legacy unversioned file, older
+/// versioned files, and manual .bak copies. Files are read, never written or
+/// deleted (old binaries still own theirs). A candidate at exactly our version
+/// (the legacy file written by a same-version binary) is fully trusted and
+/// becomes the base; every other candidate contributes per-(day, provider)
+/// slices it alone still has, marked `carried`. This is what makes a schema
+/// bump lossless: the new version starts from the union of everything every
+/// previous version ever recorded, then re-derives what sources still support.
+async function adoptOlderDailyCaches(): Promise<DailyCache> {
+  const dir = getCacheDir()
+  let names: string[] = []
   try {
-    const parsed: unknown = JSON.parse(await readFile(legacy, 'utf-8'))
-    if (isMigratableCache(parsed) && parsed.version === DAILY_CACHE_VERSION) {
-      const adopted = migratedFrom(parsed)
-      await saveDailyCache(adopted).catch(() => {})
-      return adopted
-    }
-    return emptyCache()
+    names = await readdir(dir)
   } catch {
     return emptyCache()
   }
+  const candidates: { parsed: AdoptableCache; mtimeMs: number }[] = []
+  for (const name of names) {
+    if (!name.startsWith('daily-cache') || !name.includes('.json')) continue
+    if (name === DAILY_CACHE_FILENAME) continue
+    // .tmp files are included deliberately: a crash between the atomic write
+    // completing and the rename landing leaves the NEWEST state only in the
+    // .tmp. A truncated half-write fails JSON.parse below and is skipped.
+    const path = join(dir, name)
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'))
+      if (!isAdoptableCache(parsed)) continue
+      candidates.push({ parsed, mtimeMs: (await stat(path)).mtimeMs })
+    } catch {
+      continue
+    }
+  }
+  if (candidates.length === 0) return emptyCache()
+  // Priority: newer schema first, then most recently written. Higher priority
+  // wins per (day, provider); lower priority only fills what is missing.
+  candidates.sort((a, b) => (b.parsed.version - a.parsed.version) || (b.mtimeMs - a.mtimeMs))
+
+  let base: DailyCache
+  let rest = candidates
+  if (candidates[0]!.parsed.version === DAILY_CACHE_VERSION && isMigratableCache(candidates[0]!.parsed)) {
+    base = migratedFrom(candidates[0]!.parsed as Parameters<typeof migratedFrom>[0])
+    rest = candidates.slice(1)
+  } else {
+    base = emptyCache()
+  }
+  let days = base.days
+  for (const { parsed } of rest) {
+    days = mergeDayEntries(days, migrateDays(parsed.days), true)
+  }
+  // loadDailyCache has standalone readers, so the adopted result must already
+  // satisfy the cache's own invariants: no today/future entries (they would be
+  // served frozen instead of recomputed live) and nothing past retention.
+  const now = new Date()
+  const todayStr = toDateString(now)
+  const yesterdayStr = toDateString(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
+  days = applyRetention(days.filter(d => d.date < todayStr), yesterdayStr)
+  // A trusted base can carry lastComputedDate >= today (clock skew wrote a
+  // frozen today entry that the purge above just removed). Left as-is it would
+  // make hydration skip the gap parse forever and the purged day would never
+  // be recomputed. Clamp back to the retained data.
+  let lastComputedDate = base.lastComputedDate
+  if (lastComputedDate && lastComputedDate > yesterdayStr) {
+    lastComputedDate = days.length > 0 ? days[days.length - 1]!.date : null
+  }
+  const adopted: DailyCache = {
+    ...base,
+    lastComputedDate,
+    days,
+    // An untrusted base means nothing here was derived under the current
+    // accounting: leave complete unset so the next hydration re-derives every
+    // day whose sources survive (the merge keeps the rest).
+    complete: rest.length === candidates.length ? false : base.complete,
+  }
+  await saveDailyCache(adopted).catch(() => {})
+  return adopted
 }
 
 export async function saveDailyCache(cache: DailyCache): Promise<void> {
@@ -222,20 +338,6 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
     byDate.set(day.date, day)
   }
   const merged = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
-  // Prune entries older than the BACKFILL window so the cache file does not
-  // grow unbounded over years of daily use. The "all time" / 6-month period
-  // and the BACKFILL_DAYS bootstrap both fit comfortably inside this cap.
-  // Anchor the cap on the newestDate boundary so a stale or stuck clock
-  // can't accidentally evict everything. Skip the prune entirely if
-  // newestDate is malformed — an invalid Date would produce a NaN cutoff
-  // and `d.date >= "Invalid Date"` would silently drop every entry.
-  const cutoffDate = new Date(`${newestDate}T00:00:00Z`)
-  let pruned = merged
-  if (!isNaN(cutoffDate.getTime())) {
-    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - DAILY_CACHE_RETENTION_DAYS)
-    const cutoff = toDateString(cutoffDate)
-    pruned = merged.filter(d => d.date >= cutoff)
-  }
   const nextLast = cache.lastComputedDate && cache.lastComputedDate > newestDate
     ? cache.lastComputedDate
     : newestDate
@@ -244,9 +346,124 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
     savingsConfigHash: cache.savingsConfigHash,
     tzKey: cache.tzKey,
     lastComputedDate: nextLast,
-    days: pruned,
+    days: applyRetention(merged, newestDate),
     complete: cache.complete,
   }
+}
+
+/// Prune entries older than the retention window so the cache file does not
+/// grow unbounded over years of daily use. Anchor the cutoff on newestDate so
+/// a stale or stuck clock can't accidentally evict everything. Skip the prune
+/// entirely if newestDate is malformed — an invalid Date would produce a NaN
+/// cutoff and `d.date >= "Invalid Date"` would silently drop every entry.
+function applyRetention(days: DailyEntry[], newestDate: string): DailyEntry[] {
+  const cutoffDate = new Date(`${newestDate}T00:00:00Z`)
+  if (isNaN(cutoffDate.getTime())) return days
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - DAILY_CACHE_RETENTION_DAYS)
+  const cutoff = toDateString(cutoffDate)
+  return days.filter(d => d.date >= cutoff)
+}
+
+function hasSliceData(slice: ProviderDaySlice): boolean {
+  return slice.cost > 0 || slice.calls > 0 || (slice.savingsUSD ?? 0) > 0
+}
+
+/// A day from a pre-v5-era cache: day-level totals exist but the providers map
+/// is empty, so nothing can be attributed per provider. Such a day merges
+/// all-or-nothing — filling slices into it would double-count whatever share
+/// of its totals the incoming provider already contributed.
+function isOpaqueDay(day: DailyEntry): boolean {
+  return (day.cost > 0 || day.calls > 0) && Object.keys(day.providers).length === 0
+}
+
+function emptyModelStats(): ModelDayStats {
+  return { calls: 0, cost: 0, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+}
+
+/// Fold one provider's day slice into a day: the providers map, the day-level
+/// totals, and (when the slice carries them — v14+ slices do) the model and
+/// category breakdowns. Skinny slices from pre-v14 caches restore only
+/// cost/calls/savings; the day's other totals simply don't grow. A zero-data
+/// placeholder already present for the provider (a session that started this
+/// day but whose turns all landed on another) only contributes its session
+/// count, deduplicated by max — the same real session may be counted on both
+/// sides.
+function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySlice): void {
+  const placeholder = day.providers[provider]
+  const placeholderSessions = placeholder?.sessions ?? 0
+  const merged = structuredClone(slice)
+  if (placeholderSessions > (merged.sessions ?? 0)) merged.sessions = placeholderSessions
+  day.providers[provider] = merged
+  day.cost += slice.cost
+  day.calls += slice.calls
+  day.savingsUSD += slice.savingsUSD ?? 0
+  day.sessions += Math.max(0, (slice.sessions ?? 0) - placeholderSessions)
+  day.inputTokens += slice.inputTokens ?? 0
+  day.outputTokens += slice.outputTokens ?? 0
+  day.cacheReadTokens += slice.cacheReadTokens ?? 0
+  day.cacheWriteTokens += slice.cacheWriteTokens ?? 0
+  day.editTurns += slice.editTurns ?? 0
+  day.oneShotTurns += slice.oneShotTurns ?? 0
+  for (const [name, m] of Object.entries(slice.models ?? {})) {
+    const acc = day.models[name] ?? emptyModelStats()
+    acc.calls += m.calls
+    acc.cost += m.cost
+    acc.savingsUSD += m.savingsUSD ?? 0
+    acc.inputTokens += m.inputTokens
+    acc.outputTokens += m.outputTokens
+    acc.cacheReadTokens += m.cacheReadTokens
+    acc.cacheWriteTokens += m.cacheWriteTokens
+    day.models[name] = acc
+  }
+  for (const [cat, c] of Object.entries(slice.categories ?? {})) {
+    const acc = day.categories[cat] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+    acc.turns += c.turns
+    acc.cost += c.cost
+    acc.savingsUSD += c.savingsUSD ?? 0
+    acc.editTurns += c.editTurns
+    acc.oneShotTurns += c.oneShotTurns
+    day.categories[cat] = acc
+  }
+}
+
+/// Merge two day lists per (date, provider): `primary` wins wherever both have
+/// data; `secondary` only fills dates primary lacks entirely and provider
+/// slices primary lacks on shared dates. Nothing in secondary can overwrite or
+/// double into primary. With markSecondaryCarried, every day that received a
+/// secondary contribution is flagged `carried`.
+///
+/// Days that cannot be attributed per provider merge all-or-nothing:
+///  - an OPAQUE primary day (pre-v5-era: totals but empty providers map) is
+///    never slice-filled — its totals may already contain the incoming
+///    provider's share, so adding would double-count;
+///  - an opaque secondary day on a date primary already has contributes
+///    nothing — its day-level totals cannot be attributed without slices.
+/// A primary slice blocks a secondary one only when it carries DATA; a
+/// zero-data placeholder (sessions only) is merged into, not treated as a
+/// re-derivation of the provider's day.
+export function mergeDayEntries(primary: DailyEntry[], secondary: DailyEntry[], markSecondaryCarried: boolean): DailyEntry[] {
+  const byDate = new Map<string, DailyEntry>()
+  for (const day of primary) byDate.set(day.date, structuredClone(day))
+  for (const day of secondary) {
+    const existing = byDate.get(day.date)
+    if (!existing) {
+      const copy = structuredClone(day)
+      if (markSecondaryCarried) copy.carried = true
+      byDate.set(day.date, copy)
+      continue
+    }
+    if (isOpaqueDay(existing)) continue
+    for (const [provider, slice] of Object.entries(day.providers)) {
+      // Sessions-only slices (a session whose calls all landed on another
+      // day) still carry a real session count — worth preserving.
+      if (!hasSliceData(slice) && !(slice.sessions ?? 0)) continue
+      const existingSlice = existing.providers[provider]
+      if (existingSlice && hasSliceData(existingSlice)) continue
+      addSliceIntoDay(existing, provider, slice)
+      if (markSecondaryCarried) existing.carried = true
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
 export function getDaysInRange(cache: DailyCache, start: string, end: string): DailyEntry[] {
@@ -295,45 +512,66 @@ export async function ensureCacheHydrated(
   return withDailyCacheLock(async () => {
     let c = await loadDailyCache()
 
-    // Three reasons to drop the cached days and re-hydrate the whole retention
-    // window:
-    //  1. Savings config changed — the cached `savingsUSD` totals are stale, and
-    //     we can't cheaply recompute them per historical day without re-parsing.
-    //  2. The cache was never finalized against a COMPLETE session parse (an old
-    //     pre-marker cache, or one frozen from a partial/interrupted hydration).
-    //     Its older days may be empty or partial; trusting `lastComputedDate`
-    //     would leave that gap forever (the "first ~20 days missing" bug).
-    //  3. The local timezone changed — days are bucketed by local midnight, so a
-    //     TZ change mis-buckets every cached day. Only invalidate when a tzKey is
-    //     present and differs (a cache written before this field, or a test
-    //     fixture, has none → left alone rather than force a spurious rebuild).
-    const tzKey = currentTzKey()
-    const tzChanged = c.tzKey !== undefined && c.tzKey !== tzKey
-    if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged) {
-      c = {
-        version: DAILY_CACHE_VERSION,
-        savingsConfigHash,
-        tzKey,
-        lastComputedDate: null,
-        days: [],
-        complete: false,
-      }
-    } else if (c.tzKey === undefined) {
-      // First write under the tzKey scheme: tag the cache so a later TZ change is
-      // detectable, without discarding the (still-valid, same-TZ) cached days.
-      c = { ...c, tzKey }
-    }
-
-    // Drop any cached entry dated today or later. The cache only ever stores
-    // complete past days (up to yesterday), so a >= today entry can only come
-    // from the clock moving backward or a stale older cache; left in place it
-    // would be served frozen instead of recomputed live. Yesterday and earlier
-    // stay cached, so this does not re-parse already-cached days.
+    // Drop any cached entry dated today or later BEFORE anything else can
+    // carry it forward. The cache only ever stores complete past days (up to
+    // yesterday), so a >= today entry can only come from the clock moving
+    // backward or a stale older cache; left in place it would be served frozen
+    // instead of recomputed live. Yesterday and earlier stay cached.
     const todayStr = toDateString(now)
     if (c.days.some(d => d.date >= todayStr)) {
       const freshDays = c.days.filter(d => d.date < todayStr)
       const latestFresh = freshDays.length > 0 ? freshDays[freshDays.length - 1].date : null
       c = { ...c, days: freshDays, lastComputedDate: latestFresh }
+    }
+
+    // Three reasons to re-derive the whole retention window:
+    //  1. Savings config changed — cached `savingsUSD` totals are stale.
+    //  2. The cache was never finalized against a COMPLETE session parse (an old
+    //     pre-marker cache, an adoption from older cache files, or one frozen
+    //     from a partial/interrupted hydration).
+    //  3. The local timezone changed — days are bucketed by local midnight, so a
+    //     TZ change mis-buckets every cached day. Only invalidate when a tzKey is
+    //     present and differs (a cache written before this field, or a test
+    //     fixture, has none → left alone rather than force a spurious rebuild).
+    //
+    // Re-derive, NOT discard. Session files are ephemeral; a cached day whose
+    // sources are gone exists nowhere else, so the old days stay as a baseline
+    // and the fresh parse overrides per (day, provider) wherever it actually
+    // produced data. What it could not re-derive is carried forward (marked
+    // `carried`) with its old accounting — every wipe here before v14 turned
+    // into permanently lost history.
+    const tzKey = currentTzKey()
+    const tzChanged = c.tzKey !== undefined && c.tzKey !== tzKey
+    if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged) {
+      const baseline = c.days
+      const backfillStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS)
+      let freshDays: DailyEntry[] = []
+      if (backfillStart.getTime() <= yesterdayEnd.getTime()) {
+        freshDays = aggregateDays(await parseSessions({ start: backfillStart, end: yesterdayEnd }))
+      }
+      const parseWasComplete = sessionComplete()
+      // A PARTIAL parse must not overwrite finalized baseline days with
+      // undercounts (if their sources die before the next complete parse, the
+      // undercount would be what survives). Partial fresh data only fills days
+      // and slices the baseline lacks; the next complete parse gets to win.
+      const merged = parseWasComplete
+        ? mergeDayEntries(freshDays, baseline, true)
+        : mergeDayEntries(baseline, freshDays, false)
+      c = {
+        version: DAILY_CACHE_VERSION,
+        savingsConfigHash,
+        tzKey,
+        lastComputedDate: yesterdayStr,
+        days: applyRetention(merged, yesterdayStr),
+        complete: parseWasComplete,
+      }
+      await saveDailyCache(c)
+      return c
+    }
+    if (c.tzKey === undefined) {
+      // First write under the tzKey scheme: tag the cache so a later TZ change is
+      // detectable, without discarding the (still-valid, same-TZ) cached days.
+      c = { ...c, tzKey }
     }
 
     const gapStart = c.lastComputedDate
