@@ -483,25 +483,6 @@ function emptyModelStats(): ModelDayStats {
   return { calls: 0, cost: 0, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
 }
 
-function emptyDay(date: string): DailyEntry {
-  return {
-    date,
-    cost: 0,
-    savingsUSD: 0,
-    calls: 0,
-    sessions: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    editTurns: 0,
-    oneShotTurns: 0,
-    models: {},
-    categories: {},
-    providers: {},
-  }
-}
-
 /// Fold one provider's day slice into a day: the providers map, the day-level
 /// totals, and (when the slice carries them — v14+ slices do) the model and
 /// category breakdowns. Skinny slices from pre-v14 caches restore only
@@ -527,10 +508,6 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   day.outputTokens += slice.outputTokens ?? 0
   day.cacheReadTokens += slice.cacheReadTokens ?? 0
   day.cacheWriteTokens += slice.cacheWriteTokens ?? 0
-  // Caches written before primary-provider turn attribution can contain the
-  // same turn counts in multiple provider slices. They remain valid and load
-  // unchanged; carrying those historical slices may therefore still overstate
-  // day/category counts. Repair is intentionally limited to newly built data.
   day.editTurns += slice.editTurns ?? 0
   day.oneShotTurns += slice.oneShotTurns ?? 0
   for (const [name, m] of Object.entries(slice.models ?? {})) {
@@ -607,84 +584,15 @@ function setOwn<T>(target: Record<string, T>, key: string, value: T): void {
 /// A primary slice blocks a secondary one only when it carries DATA; a
 /// zero-data placeholder (sessions only) is merged into, not treated as a
 /// re-derivation of the provider's day.
-///
-/// `secondaryCoverage` is opt-in for complete source re-derives. For each
-/// provider found in primary, secondary data is carried only before that
-/// provider's oldest fresh day (or the preceding day for timezone changes).
-export type SecondaryCoveragePolicy = {
-  /// A timezone change can move a turn to an adjacent calendar day, so the day
-  /// immediately before the fresh provider floor is covered as well. This
-  /// assumes the old/new timezone offset delta is at most 24 hours. Crossing
-  /// the date line can produce a 26-hour delta (UTC+14 to UTC-12) and move a
-  /// bucket by two calendar days; that rare case is a known, accepted limit.
-  widenByOneDay: boolean
-}
-
-function providerCarryBefore(primary: DailyEntry[], policy: SecondaryCoveragePolicy): Map<string, string> {
-  const floors = new Map<string, string>()
-  for (const day of primary) {
-    for (const [provider, slice] of Object.entries(day.providers)) {
-      if (!hasSliceData(slice)) continue
-      const floor = floors.get(provider)
-      if (floor === undefined || day.date < floor) floors.set(provider, day.date)
-    }
-  }
-  if (policy.widenByOneDay) {
-    for (const [provider, floor] of floors) {
-      const date = new Date(`${floor}T00:00:00Z`)
-      date.setUTCDate(date.getUTCDate() - 1)
-      floors.set(provider, date.toISOString().slice(0, 10))
-    }
-  }
-  return floors
-}
-
-export function mergeDayEntries(
-  primary: DailyEntry[],
-  secondary: DailyEntry[],
-  markSecondaryCarried: boolean,
-  secondaryCoverage?: SecondaryCoveragePolicy,
-): DailyEntry[] {
-  const carryBefore = secondaryCoverage ? providerCarryBefore(primary, secondaryCoverage) : undefined
-  const mayCarry = (date: string, provider: string, slice: ProviderDaySlice): boolean => {
-    // Sessions-only placeholders retain their existing carry behavior. They do
-    // not represent provider data coverage and cannot duplicate turn/cost data.
-    if (!hasSliceData(slice)) return true
-    const threshold = carryBefore?.get(provider)
-    // No fresh provider day means no known coverage: preserve all history.
-    return threshold === undefined || date < threshold
-  }
+export function mergeDayEntries(primary: DailyEntry[], secondary: DailyEntry[], markSecondaryCarried: boolean): DailyEntry[] {
   const byDate = new Map<string, DailyEntry>()
   for (const day of primary) byDate.set(day.date, structuredClone(day))
   for (const day of secondary) {
     const existing = byDate.get(day.date)
     if (!existing) {
-      const providerEntries = Object.entries(day.providers)
-      const hasCoveredSlice = carryBefore !== undefined
-        && providerEntries.some(([provider, slice]) => !mayCarry(day.date, provider, slice))
-      if (!hasCoveredSlice || isOpaqueDay(day) || providerEntries.length === 0) {
-        const copy = structuredClone(day)
-        if (markSecondaryCarried) copy.carried = true
-        byDate.set(day.date, copy)
-        continue
-      }
-
-      // Coverage can suppress one provider while another provider on the same
-      // secondary-only day still needs carrying. Rebuild that day exclusively
-      // from eligible slices so blocked totals cannot leak through day fields.
-      // Day-level projects cannot be attributed per provider: when a kept skinny
-      // slice has no slice.projects, its old day.projects entries are dropped.
-      // Copying them wholesale could restore the blocked provider's project
-      // totals, so this conservative loss is intentional.
-      const copy = emptyDay(day.date)
-      for (const [provider, slice] of providerEntries) {
-        if ((!hasSliceData(slice) && !(slice.sessions ?? 0)) || !mayCarry(day.date, provider, slice)) continue
-        addSliceIntoDay(copy, provider, slice)
-      }
-      if (Object.keys(copy.providers).length > 0) {
-        if (markSecondaryCarried || day.carried) copy.carried = true
-        byDate.set(day.date, copy)
-      }
+      const copy = structuredClone(day)
+      if (markSecondaryCarried) copy.carried = true
+      byDate.set(day.date, copy)
       continue
     }
     if (isOpaqueDay(existing)) continue
@@ -692,7 +600,6 @@ export function mergeDayEntries(
       // Sessions-only slices (a session whose calls all landed on another
       // day) still carry a real session count — worth preserving.
       if (!hasSliceData(slice) && !(slice.sessions ?? 0)) continue
-      if (!mayCarry(day.date, provider, slice)) continue
       const existingSlice = Object.hasOwn(existing.providers, provider) ? existing.providers[provider] : undefined
       if (existingSlice && hasSliceData(existingSlice)) continue
       addSliceIntoDay(existing, provider, slice)
@@ -716,10 +623,14 @@ export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
 
 export const MS_PER_DAY = 24 * 60 * 60 * 1000
 export const BACKFILL_DAYS = 365
-// Keep 2 years of history so the longest bounded UI period (6 months
-// via `all`) and the uncapped `lifetime` period both have headroom to
-// read from cache while old entries get pruned.
-export const DAILY_CACHE_RETENTION_DAYS = 730
+// Ten years. This cache is the ONLY durable record of carried days (their
+// session files are long deleted), and the uncapped `lifetime` period reads
+// from it via buildDurablePeriod, so pruning at the old 2-year mark would
+// have replayed the lost-history bug in slow motion at that horizon.
+// Measured envelope keeps this honest: ~2.3 MB / ~11 ms JSON parse per 730
+// days of fully dense data, so even a decade of daily use stays ~11 MB and
+// well under 100 ms on the polling path.
+export const DAILY_CACHE_RETENTION_DAYS = 3650
 
 export function toDateString(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -791,7 +702,7 @@ export async function ensureCacheHydrated(
       // undercount would be what survives). Partial fresh data only fills days
       // and slices the baseline lacks; the next complete parse gets to win.
       const merged = parseWasComplete
-        ? mergeDayEntries(freshDays, baseline, true, { widenByOneDay: tzChanged })
+        ? mergeDayEntries(freshDays, baseline, true)
         : mergeDayEntries(baseline, freshDays, false)
       c = {
         version: DAILY_CACHE_VERSION,

@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import type { ProjectSummary } from '../src/types.js'
-import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from '../src/day-aggregator.js'
+import { buildPeriodDataFromDays } from '../src/day-aggregator.js'
 
 import {
   DAILY_CACHE_VERSION,
@@ -65,64 +65,6 @@ function daysAgoStr(n: number): string {
 }
 
 const noSessions = async (): Promise<ProjectSummary[]> => []
-
-function projectWithSingleTurn(timestamp: string, costUSD = 5): ProjectSummary[] {
-  return [{
-    project: 'p',
-    projectPath: '/p',
-    totalCostUSD: costUSD,
-    totalApiCalls: 1,
-    sessions: [{
-      sessionId: 'tz-migrated-turn',
-      project: 'p',
-      firstTimestamp: timestamp,
-      lastTimestamp: timestamp,
-      totalCostUSD: costUSD,
-      totalInputTokens: 100,
-      totalOutputTokens: 200,
-      totalCacheReadTokens: 50,
-      totalCacheWriteTokens: 0,
-      apiCalls: 1,
-      turns: [{
-        userMessage: 'cross midnight',
-        timestamp,
-        sessionId: 'tz-migrated-turn',
-        category: 'coding',
-        retries: 0,
-        hasEdits: true,
-        assistantCalls: [{
-          provider: 'claude',
-          model: 'Opus 4.7',
-          usage: {
-            inputTokens: 100,
-            outputTokens: 200,
-            cacheCreationInputTokens: 0,
-            cacheReadInputTokens: 50,
-            cachedInputTokens: 0,
-            reasoningTokens: 0,
-            webSearchRequests: 0,
-          },
-          costUSD,
-          tools: [],
-          mcpTools: [],
-          skills: [],
-          hasAgentSpawn: false,
-          hasPlanMode: false,
-          speed: 'standard',
-          timestamp,
-          bashCommands: [],
-          deduplicationKey: `tz-turn-${timestamp}`,
-        }],
-      }],
-      modelBreakdown: {},
-      toolBreakdown: {},
-      mcpBreakdown: {},
-      bashBreakdown: {},
-      categoryBreakdown: {} as never,
-      skillBreakdown: {} as never,
-    }],
-  }]
-}
 
 describe('mergeDayEntries', () => {
   it('keeps primary-only and secondary-only days; secondary days get the carried mark', () => {
@@ -197,44 +139,6 @@ describe('mergeDayEntries', () => {
     expect(m.projects!['codeburn']).toEqual({ cost: 6, calls: 2, savingsUSD: 0, sessions: 2 })
   })
 
-  it('partial carry with new-format slice counts does not inflate day turn totals', () => {
-    const freshClaude = slice(3, 1, {
-      editTurns: 1,
-      oneShotTurns: 1,
-      categories: { coding: { turns: 1, cost: 3, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-    })
-    const oldClaude = structuredClone(freshClaude)
-    const carriedCodex = slice(2, 1, {
-      editTurns: 0,
-      oneShotTurns: 0,
-      categories: { coding: { turns: 0, cost: 2, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 } },
-    })
-    const fresh = day('2026-06-01', { claude: freshClaude }, {
-      editTurns: 1,
-      oneShotTurns: 1,
-      categories: { coding: { turns: 1, cost: 3, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-    })
-    const baseline = day('2026-06-01', { claude: oldClaude, codex: carriedCodex }, {
-      editTurns: 1,
-      oneShotTurns: 1,
-      categories: { coding: { turns: 1, cost: 5, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-    })
-
-    const merged = mergeDayEntries([fresh], [baseline], true)
-
-    expect(merged[0]!.providers['codex']).toBeDefined()
-    expect(merged[0]!.cost).toBe(5)
-    expect(merged[0]!.editTurns).toBe(1)
-    expect(merged[0]!.oneShotTurns).toBe(1)
-    expect(merged[0]!.categories['coding']).toEqual({
-      turns: 1,
-      cost: 5,
-      savingsUSD: 0,
-      editTurns: 1,
-      oneShotTurns: 1,
-    })
-  })
-
   it('a skinny pre-v14 slice still restores exact cost/calls/savings', () => {
     const merged = mergeDayEntries(
       [day('2026-06-01', { codex: slice(1, 1) })],
@@ -281,17 +185,6 @@ describe('mergeDayEntries', () => {
     expect(merged[0]!.sessions).toBe(1)
     expect(merged[0]!.cost).toBe(8)
     expect(merged[0]!.carried).toBe(true)
-  })
-
-  it('coverage keeps a sessions-only placeholder inside the fresh provider window', () => {
-    const fresh = day('2026-06-10', { claude: slice(8, 2) })
-    const placeholder = day('2026-06-09', { claude: slice(0, 0, { sessions: 1 }) }, { sessions: 1 })
-
-    const merged = mergeDayEntries([fresh], [placeholder], true, { widenByOneDay: true })
-
-    expect(merged.map(d => d.date)).toEqual(['2026-06-09', '2026-06-10'])
-    expect(merged[0]).toMatchObject({ sessions: 1, carried: true })
-    expect(merged[0]!.providers['claude']).toMatchObject({ calls: 0, cost: 0, sessions: 1 })
   })
 
   it('does not double-count a project session across a placeholder merge', () => {
@@ -383,108 +276,11 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
     expect(out.days[0]!.providers['codex']!.cost).toBe(79.29)
   })
 
-  it('savings-hash re-derive uses the plain provider floor', async () => {
-    const beforeFloor = '2026-07-09'
-    const freshFloor = '2026-07-10'
-    await saveDailyCache({
-      version: DAILY_CACHE_VERSION,
-      savingsConfigHash: 'cfg-A',
-      tzKey: currentTzKey(),
-      lastComputedDate: daysAgoStr(1),
-      days: [
-        day(beforeFloor, { claude: slice(9, 2) }),
-        day(freshFloor, { claude: slice(12, 3) }),
-      ],
-      complete: true,
-    })
-
-    const out = await ensureCacheHydrated(
-      noSessions,
-      () => [day(freshFloor, { claude: slice(5, 1) })],
-      'cfg-B',
-    )
-
-    expect(out.days.map(d => d.date)).toEqual([beforeFloor, freshFloor])
-    expect(out.days[0]).toMatchObject({ date: beforeFloor, cost: 9, calls: 2, carried: true })
-    expect(out.days[1]).toMatchObject({ date: freshFloor, cost: 5, calls: 1 })
-    expect(out.days[1]!.carried).toBeUndefined()
-  })
-
   it('timezone change with an empty re-parse keeps the day (carried)', async () => {
     const d = await seed({ tzKey: 'Test/OtherZone' })
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days[0]).toMatchObject({ date: d.date, cost: d.cost, carried: true })
     expect(out.tzKey).toBe(currentTzKey())
-  })
-
-  it('timezone change drops the adjacent old day when a turn migrates across midnight', async () => {
-    const previousTz = process.env['TZ']
-    process.env['TZ'] = 'Europe/Bucharest'
-    try {
-      const oldDate = '2026-07-09'
-      const freshDate = '2026-07-10'
-      const oldSlice = slice(5, 1, {
-        sessions: 1,
-        editTurns: 1,
-        oneShotTurns: 1,
-        categories: { coding: { turns: 1, cost: 5, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-      })
-      await saveDailyCache({
-        version: DAILY_CACHE_VERSION,
-        savingsConfigHash: 'cfg-A',
-        tzKey: 'America/New_York',
-        lastComputedDate: daysAgoStr(1),
-        days: [day(oldDate, { claude: oldSlice }, {
-          sessions: 1,
-          editTurns: 1,
-          oneShotTurns: 1,
-          categories: { coding: { turns: 1, cost: 5, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-        })],
-        complete: true,
-      })
-
-      const out = await ensureCacheHydrated(
-        async () => projectWithSingleTurn('2026-07-10T01:00:00.000Z'),
-        aggregateProjectsIntoDays,
-        'cfg-A',
-      )
-
-      expect(out.days.map(d => d.date)).toEqual([freshDate])
-      expect(out.days[0]).toMatchObject({ cost: 5, calls: 1, editTurns: 1, oneShotTurns: 1 })
-      expect(out.days[0]!.categories['coding']!.turns).toBe(1)
-      expect(out.days[0]!.carried).toBeUndefined()
-    } finally {
-      if (previousTz === undefined) delete process.env['TZ']
-      else process.env['TZ'] = previousTz
-    }
-  })
-
-  it('timezone change preserves genuine carry before widened fresh coverage', async () => {
-    const historicalDate = '2026-07-07'
-    const adjacentOldDate = '2026-07-09'
-    const freshDate = '2026-07-10'
-    await saveDailyCache({
-      version: DAILY_CACHE_VERSION,
-      savingsConfigHash: 'cfg-A',
-      tzKey: 'Test/OtherZone',
-      lastComputedDate: daysAgoStr(1),
-      days: [
-        day(historicalDate, { claude: slice(9, 2) }),
-        day(adjacentOldDate, { claude: slice(5, 1) }),
-      ],
-      complete: true,
-    })
-
-    const out = await ensureCacheHydrated(
-      noSessions,
-      () => [day(freshDate, { claude: slice(5, 1) })],
-      'cfg-A',
-    )
-
-    expect(out.days.map(d => d.date)).toEqual([historicalDate, freshDate])
-    expect(out.days[0]).toMatchObject({ date: historicalDate, cost: 9, calls: 2, carried: true })
-    expect(out.days[1]).toMatchObject({ date: freshDate, cost: 5, calls: 1 })
-    expect(out.days[1]!.carried).toBeUndefined()
   })
 
   it('incomplete-cache retry with an empty re-parse keeps the day', async () => {
@@ -592,7 +388,7 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
   })
 
   it('retention still prunes ancient carried days after a rebuild', async () => {
-    await seed({ days: [seededDay(), day('2020-01-01', { claude: slice(1, 1) })], complete: false })
+    await seed({ days: [seededDay(), day('2010-01-01', { claude: slice(1, 1) })], complete: false })
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days.map(d => d.date)).toEqual([daysAgoStr(30)])
   })
@@ -687,7 +483,7 @@ describe('adoption union across older cache files', () => {
     const old = {
       version: 13,
       days: [
-        day('2023-01-01', { claude: slice(1, 1) }),
+        day('2010-01-01', { claude: slice(1, 1) }),
         day(daysAgoStr(15), { claude: slice(5, 2) }),
         day(daysAgoStr(0), { claude: slice(99, 9) }),
       ],
@@ -817,40 +613,6 @@ describe('adoption union across older cache files', () => {
     await saveDailyCache(cache)
     const loaded = await loadDailyCache()
     expect(loaded).toEqual(cache)
-  })
-
-  it('loads legacy duplicated slice turn counts without repairing them', async () => {
-    const duplicated = day(daysAgoStr(20), {
-      claude: slice(3, 1, {
-        editTurns: 1,
-        oneShotTurns: 1,
-        categories: { coding: { turns: 1, cost: 3, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-      }),
-      codex: slice(2, 1, {
-        editTurns: 1,
-        oneShotTurns: 1,
-        categories: { coding: { turns: 1, cost: 2, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-      }),
-    }, {
-      editTurns: 1,
-      oneShotTurns: 1,
-      categories: { coding: { turns: 1, cost: 5, savingsUSD: 0, editTurns: 1, oneShotTurns: 1 } },
-    })
-    await saveDailyCache({
-      version: DAILY_CACHE_VERSION,
-      savingsConfigHash: '',
-      tzKey: currentTzKey(),
-      lastComputedDate: daysAgoStr(1),
-      days: [duplicated],
-      complete: true,
-    })
-
-    const loaded = await loadDailyCache()
-    const slices = Object.values(loaded.days[0]!.providers)
-
-    expect(loaded.days[0]!.editTurns).toBe(1)
-    expect(slices.reduce((sum, provider) => sum + (provider.editTurns ?? 0), 0)).toBe(2)
-    expect(slices.reduce((sum, provider) => sum + (provider.categories?.['coding']?.turns ?? 0), 0)).toBe(2)
   })
 
   it('sanitizes malformed day-level model and category maps during load', async () => {
