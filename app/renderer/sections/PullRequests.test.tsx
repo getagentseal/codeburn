@@ -142,6 +142,22 @@ describe('PullRequests', () => {
     expect(rowForLink(link2)).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('closes an open expansion on a period switch even when the PR set is identical', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    const { rerender } = render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'true')
+
+    // Same rows come back for the new period; the expansion must still reset,
+    // since the row's underlying numbers may differ across periods.
+    rerender(<PullRequests period="week" provider="all" />)
+    await waitFor(() => expect(screen.queryByText('Feature work')).toBeNull())
+    const link2 = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(rowForLink(link2)).toHaveAttribute('aria-expanded', 'false')
+  })
+
   it('toggles expansion from the keyboard with Enter', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)

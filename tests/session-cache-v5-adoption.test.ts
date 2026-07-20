@@ -133,4 +133,53 @@ describe('v5 -> v6 cache adoption of expired PR sessions', () => {
     expect(urls).toContain('https://github.com/o/r/pull/1') // valid entry survives
     expect(urls).not.toContain('https://github.com/o/r/pull/9') // corrupt entry skipped, not fatal
   })
+
+  it('skips a v5 entry whose optional agentType or failed field is malformed', async () => {
+    await loadPricing()
+    const badTypePath = join(configDir, 'projects', 'bad-type', 'bad-type.jsonl')
+    const badFailedPath = join(configDir, 'projects', 'bad-failed', 'bad-failed.jsonl')
+    const goodPath = join(configDir, 'projects', 'good-proj', 'good.jsonl')
+    const validTurn = { timestamp: '2026-07-20T10:00:00.000Z', sessionId: 's', userMessage: 'work', calls: [cachedCall('vk1', 40)] }
+    const v5 = {
+      version: 5,
+      complete: true,
+      providers: {
+        claude: {
+          envFingerprint: 'stale-v5',
+          files: {
+            [badTypePath]: {
+              fingerprint: { dev: 9, ino: 9, mtimeMs: 9, sizeBytes: 9 },
+              mcpInventory: [],
+              prLinks: ['https://github.com/o/r/pull/7'],
+              agentType: {},
+              turns: [validTurn],
+            },
+            [badFailedPath]: {
+              fingerprint: { dev: 8, ino: 8, mtimeMs: 8, sizeBytes: 8 },
+              mcpInventory: [],
+              prLinks: ['https://github.com/o/r/pull/8'],
+              failed: 'yes',
+              turns: [validTurn],
+            },
+            [goodPath]: {
+              fingerprint: { dev: 1, ino: 2, mtimeMs: 3, sizeBytes: 4 },
+              mcpInventory: [],
+              prLinks: ['https://github.com/o/r/pull/1'],
+              agentType: 'general-purpose',
+              failed: false,
+              turns: [validTurn],
+            },
+          },
+        },
+      },
+    }
+    await writeFile(join(cacheDir, 'session-cache.v5.json'), JSON.stringify(v5))
+
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
+    const rows = aggregateByPr(await parseAllSessions(range, 'claude'))
+    const urls = rows.map(r => r.url)
+    expect(urls).toContain('https://github.com/o/r/pull/1') // well-formed optionals adopt fine
+    expect(urls).not.toContain('https://github.com/o/r/pull/7') // agentType: {} is corrupt, skipped
+    expect(urls).not.toContain('https://github.com/o/r/pull/8') // failed: 'yes' is corrupt, skipped
+  })
 })

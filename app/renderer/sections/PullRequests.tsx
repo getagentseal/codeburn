@@ -56,7 +56,9 @@ export function PullRequests({ period, provider, range = null }: { period: Perio
     () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
     [period, provider, range?.from, range?.to],
   )
-  return <PullRequestsContent overview={overview} />
+  // The key remounts the content on a period/provider/range switch so row state
+  // (an open expansion) never survives onto the same PR rendered from new data.
+  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} />
 }
 
 export function PullRequestsContent({ overview }: { overview: Polled<MenubarPayload> }) {

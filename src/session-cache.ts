@@ -344,6 +344,8 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['title'])
     && (o['prLinks'] === undefined || isStringArray(o['prLinks']))
     && isOptionalBool(o['isSidechain'])
+    && isOptionalString(o['agentType'])
+    && isOptionalBool(o['failed'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }
