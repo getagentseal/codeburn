@@ -1,15 +1,16 @@
 import { homedir } from 'os'
 
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens, markEstimated } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI } from './parser.js'
-import { findUnpricedModels, loadPricing } from './models.js'
+import { findUnpricedModels, isExpectedFreeModel, loadPricing } from './models.js'
 import { buildDurablePeriod } from './usage-aggregator.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
+import { aggregateFileChurn, buildCoachingNotes, computePricingCoverage, medianTimeToFirstEditMs, scanUserCorrections, worstOneShotCategory, type ReworkedFile } from './workflow-insights.js'
 import { estimateContextBudget, type ContextBudget } from './context-budget.js'
 import { dateKey } from './day-aggregator.js'
 import { CompareView } from './compare.js'
@@ -72,6 +73,7 @@ const PANEL_COLORS = {
   mcp: '#F55BE0',
   bash: '#F5A05B',
   skills: '#7B68EE',
+  workflow: '#B39DFF',
 }
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -671,6 +673,140 @@ function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw
   )
 }
 
+/// Workflow-intelligence figures for the compact Workflow panel. Derived from
+/// the already-parsed projects the other panels render (no re-parse), mirroring
+/// the same helpers `optimize` and the report use so the numbers agree.
+export type WorkflowPanelData = {
+  correctionRate: number | null
+  corrections: number
+  userTurns: number
+  medianTimeToFirstEditMs: number | null
+  topReworkedFile: ReworkedFile | null
+  /// Share (0-1) of cost-bearing calls that resolved a price, or null when there
+  /// is nothing to price. Null omits the Coverage row entirely (never renders a
+  /// hollow 100%).
+  coverage: number | null
+}
+
+/// Pricing coverage over the shown projects, replicating usage-aggregator's
+/// cost-bearing/unpriced tally so the dashboard figure matches the report.
+/// Returns null when there are no cost-bearing calls (nothing to price).
+function workflowCoverage(projects: ProjectSummary[]): number | null {
+  const totals: Record<string, { calls: number; cost: number; tokens: number }> = {}
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const [model, d] of Object.entries(session.modelBreakdown)) {
+        const t = totals[model] ?? { calls: 0, cost: 0, tokens: 0 }
+        t.calls += d.calls
+        t.cost += d.costUSD
+        t.tokens += d.tokens.inputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
+        totals[model] = t
+      }
+    }
+  }
+  const costBearing = Object.entries(totals).reduce((s, [model, d]) => s + (model === '<synthetic>' || isExpectedFreeModel(model) ? 0 : d.calls), 0)
+  if (costBearing <= 0) return null
+  const unpricedCalls = findUnpricedModels(Object.entries(totals).map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens }))).reduce((s, m) => s + m.calls, 0)
+  return computePricingCoverage(costBearing, unpricedCalls)
+}
+
+export function computeWorkflowPanelData(projects: ProjectSummary[]): WorkflowPanelData {
+  const corrections = scanUserCorrections(projects)
+  const churn = aggregateFileChurn(projects)
+  return {
+    correctionRate: corrections.correctionRate,
+    corrections: corrections.corrections,
+    userTurns: corrections.userTurns,
+    medianTimeToFirstEditMs: medianTimeToFirstEditMs(projects),
+    topReworkedFile: churn[0] ?? null,
+    coverage: workflowCoverage(projects),
+  }
+}
+
+/// True when there is any workflow signal to show. Hidden otherwise: a brand-new
+/// user with no user prompts and no file churn gets no empty panel.
+export function hasWorkflowData(data: WorkflowPanelData): boolean {
+  return data.userTurns > 0 || data.topReworkedFile != null
+}
+
+function formatCorrectionsValue(rate: number | null, count: number): string {
+  if (rate == null) return '-'
+  return `${Math.round(rate * 100)}% (${count})`
+}
+
+// median time to first edit: seconds under a minute, whole minutes above.
+function formatFirstEditValue(ms: number | null): string {
+  if (ms == null) return '-'
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  return `${Math.round(ms / 60_000)}m`
+}
+
+function reworkBasename(path: string): string {
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
+
+function formatReworkValue(file: ReworkedFile | null): string {
+  if (!file) return '-'
+  return `${reworkBasename(file.path)} ×${file.sessions}`
+}
+
+function formatCoverageValue(coverage: number): string {
+  return `${Math.round(coverage * 100)}%`
+}
+
+export type WorkflowRow = { label: string; value: string }
+
+/// The Workflow panel's four label/value rows. Coverage is dropped when null so
+/// the panel never shows a placeholder 100%.
+export function buildWorkflowRows(data: WorkflowPanelData): WorkflowRow[] {
+  const rows: WorkflowRow[] = [
+    { label: 'Corrections', value: formatCorrectionsValue(data.correctionRate, data.corrections) },
+    { label: 'First edit', value: formatFirstEditValue(data.medianTimeToFirstEditMs) },
+    { label: 'Rework', value: formatReworkValue(data.topReworkedFile) },
+  ]
+  if (data.coverage != null) rows.push({ label: 'Coverage', value: formatCoverageValue(data.coverage) })
+  return rows
+}
+
+/// Coaching notes for the footer, over the same inputs as the report's workflow
+/// section. Empty when no signal crosses a threshold.
+export function computeCoachingNotes(projects: ProjectSummary[]): string[] {
+  const corrections = scanUserCorrections(projects)
+  const churn = aggregateFileChurn(projects)
+  return buildCoachingNotes({
+    worstOneShot: worstOneShotCategory(projects),
+    corrections: corrections.corrections,
+    correctionRate: corrections.correctionRate,
+    topReworkedFile: churn[0] ?? null,
+    medianTimeToFirstEditMs: medianTimeToFirstEditMs(projects),
+  })
+}
+
+/// Picks the note to show for a rotation tick. Null when there are no notes.
+export function selectRotatingNote(notes: string[], tick: number): string | null {
+  if (notes.length === 0) return null
+  return notes[((tick % notes.length) + notes.length) % notes.length] ?? null
+}
+
+const WORKFLOW_LABEL_WIDTH = 12
+
+function WorkflowInsights({ projects, pw }: { projects: ProjectSummary[]; pw: number }) {
+  const data = useMemo(() => computeWorkflowPanelData(projects), [projects])
+  if (!hasWorkflowData(data)) return null
+  const rows = buildWorkflowRows(data)
+  return (
+    <Panel title="Workflow" color={PANEL_COLORS.workflow} width={pw}>
+      {rows.map(row => (
+        <Text key={row.label} wrap="truncate-end">
+          <Text dimColor>{row.label.padEnd(WORKFLOW_LABEL_WIDTH)}</Text>
+          <Text>{row.value}</Text>
+        </Text>
+      ))}
+    </Panel>
+  )
+}
+
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   all: 'All',
   claude: 'Claude',
@@ -868,9 +1004,9 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
       <Row wide={wide} width={dashWidth}><DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={pw} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' || period === 'lifetime' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
-        <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
+        <><ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" /><Row wide={wide} width={dashWidth}><WorkflowInsights projects={projects} pw={pw} /></Row></>
       ) : (
-        <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><SkillsAndAgents projects={projects} pw={pw} bw={barWidth} /><McpBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><ClaudeAgentTypes projects={projects} pw={pw} bw={barWidth} /></Row></>
+        <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><SkillsAndAgents projects={projects} pw={pw} bw={barWidth} /><McpBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><Row wide={wide} width={dashWidth}><WorkflowInsights projects={projects} pw={pw} /><ClaudeAgentTypes projects={projects} pw={pw} bw={barWidth} /></Row></>
       )}
     </Box>
   )
@@ -909,6 +1045,9 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
   // leaves the optimize view OR the underlying findings change so a long
   // findings list never strands the user past the new array length.
   const [findingsCursor, setFindingsCursor] = useState(0)
+  // Which coaching note the footer shows; advanced on a slow interval so the
+  // whole set rotates through without demanding attention.
+  const [noteTick, setNoteTick] = useState(0)
   const isDayMode = dayDate != null
   const isCustomRange = customRange != null && !isDayMode
   const scrollableDailyHistory = !isCustomRange && !isDayMode
@@ -929,6 +1068,13 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
   const currentReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
   const pendingReloadRef = useRef<{ period: Period; provider: string; day: string | null } | null>(null)
   const findingCount = optimizeResult?.findings.length ?? 0
+  const coachingNotes = useMemo(() => computeCoachingNotes(projects), [projects])
+
+  useEffect(() => {
+    if (coachingNotes.length <= 1) return
+    const id = setInterval(() => setNoteTick(t => t + 1), 12000)
+    return () => clearInterval(id)
+  }, [coachingNotes.length])
 
   useEffect(() => {
     let cancelled = false
@@ -1165,6 +1311,7 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
   })
 
   const headerLabel = dayDate ? formatDayRangeLabel(dayDate) : customRangeLabel ?? PERIOD_LABELS[period]
+  const coachingNote = view === 'dashboard' ? selectRotatingNote(coachingNotes, noteTick) : null
 
   if (loading || optimizeLoading) {
     return (
@@ -1198,6 +1345,11 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
           : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
+      {coachingNote && (
+        <Box width={dashWidth} paddingX={1}>
+          <Text wrap="truncate-end"><Text color={ORANGE} bold>tip </Text><Text dimColor>{coachingNote}</Text></Text>
+        </Box>
+      )}
       {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
     </Box>
   )
