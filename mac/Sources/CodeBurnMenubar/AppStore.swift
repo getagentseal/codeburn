@@ -1502,12 +1502,15 @@ enum InsightMode: String, CaseIterable, Identifiable {
 }
 
 enum Period: String, CaseIterable, Identifiable {
+    // Compact labels: six segments plus the calendar button share one narrow
+    // popover row, so the longer names ("6 Months", "Lifetime") wrapped.
+    // Matches the desktop app's strip (Today / 7D / 30D / Month / 6M / Life).
     case today = "Today"
-    case sevenDays = "7 Days"
-    case thirtyDays = "30 Days"
+    case sevenDays = "7D"
+    case thirtyDays = "30D"
     case month = "Month"
-    case all = "6 Months"
-    case lifetime = "Lifetime"
+    case all = "6M"
+    case lifetime = "Life"
 
     var id: String { rawValue }
 
