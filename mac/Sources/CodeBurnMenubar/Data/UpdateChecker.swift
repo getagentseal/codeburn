@@ -165,6 +165,101 @@ final class UpdateChecker {
         return AppVersion.normalize(minCliVersionForUpdate).compare(normalizedInstalled, options: .numeric) == .orderedDescending
     }
 
+    /// The package-manager invocation that updates the CLI in place, derived
+    /// from where the running CLI binary actually lives. Returns nil when no
+    /// known manager is recognizable; callers fall back to showing the manual
+    /// command rather than guessing at a mutation.
+    nonisolated static func cliUpdateInvocation(cliPath: String, fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String]? {
+        let dir = (cliPath as NSString).deletingLastPathComponent
+        if cliPath.contains("/homebrew/") || cliPath.contains("/Cellar/") {
+            for brew in ["\(dir)/brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"] where fileExists(brew) {
+                return [brew, "upgrade", "codeburn"]
+            }
+            return nil
+        }
+        // npm-managed installs (plain npm -g, nvm, volta, asdf shims) keep npm
+        // in the same bin directory as the codeburn launcher.
+        for npm in ["\(dir)/npm", "/opt/homebrew/bin/npm", "/usr/local/bin/npm"] where fileExists(npm) {
+            return [npm, "install", "-g", "codeburn@latest", "--force"]
+        }
+        return nil
+    }
+
+    /// One click, both updates: the CLI first (so the new `menubar --force`
+    /// installer runs from the version it ships with), then the app itself.
+    /// Each stage surfaces its own error and stops the sequence.
+    func performFullUpdate() {
+        installedCliVersion = Self.queryInstalledCliVersion()
+        guard !isUpdating else { return }
+
+        if cliUpdateAvailable || cliTooOldForUpdate {
+            isUpdating = true
+            updateError = nil
+            let cliPath = CodeburnCLI.baseArgv().first ?? ""
+            guard let argv = Self.cliUpdateInvocation(cliPath: cliPath), let bin = argv.first else {
+                isUpdating = false
+                updateError = "Could not find the package manager for \(cliPath.isEmpty ? "the CLI" : cliPath). Run \u{201C}\(cliUpdateCommand)\u{201D} manually, then try again."
+                return
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: bin)
+            process.arguments = Array(argv.dropFirst())
+            runCaptured(process) { [weak self] status, stderr in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if status != 0 {
+                        self.isUpdating = false
+                        self.updateError = stderr.isEmpty ? "CLI update failed (exit \(status))" : stderr
+                        NSLog("CodeBurn: CLI update failed (exit \(status)): \(stderr)")
+                        return
+                    }
+                    self.installedCliVersion = Self.queryInstalledCliVersion()
+                    self.latestCliVersion = self.installedCliVersion ?? self.latestCliVersion
+                    self.isUpdating = false
+                    if self.updateAvailable {
+                        self.performUpdate()
+                    }
+                }
+            }
+            return
+        }
+
+        if updateAvailable { performUpdate() }
+    }
+
+    /// Shared spawn-with-timeout-and-stderr-capture used by both update stages.
+    nonisolated private func runCaptured(_ process: Process, onExit: @escaping @Sendable (Int32, String) -> Void) {
+        let errPipe = Pipe()
+        let errBuffer = LockedDataBuffer()
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = errPipe
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            errBuffer.append(chunk, limit: maxUpdateStderrBytes)
+        }
+        let timeoutTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: updateTimeoutSeconds * 1_000_000_000)
+            if process.isRunning {
+                NSLog("CodeBurn: update subprocess timed out after %llus - terminating", updateTimeoutSeconds)
+                process.terminate()
+            }
+        }
+        process.terminationHandler = { proc in
+            timeoutTask.cancel()
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            let stderr = Self.sanitizeForDisplay(String(data: errBuffer.snapshot(), encoding: .utf8) ?? "")
+            onExit(proc.terminationStatus, stderr)
+        }
+        do {
+            try process.run()
+        } catch {
+            timeoutTask.cancel()
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            onExit(-1, error.localizedDescription)
+        }
+    }
+
     func performUpdate() {
         installedCliVersion = Self.queryInstalledCliVersion()
         if cliTooOldForUpdate {
