@@ -119,8 +119,17 @@ describe('getShortModelName', () => {
   })
 
   it('shows the last path segment for an unmapped path-style raw id', () => {
-    expect(getShortModelName('fireworks/models/kimi-k2p7-code')).toBe('kimi-k2p7-code')
     expect(getShortModelName('fireworks/routers/glm-fast-latest')).toBe('glm-fast-latest')
+    expect(getShortModelName('accounts/fireworks/models/some-unlisted-slug')).toBe('some-unlisted-slug')
+  })
+
+  it('resolves Fireworks-hosted fleet models to friendly names via the path fallback', () => {
+    // Real ids are the full Fireworks path `accounts/fireworks/models/<slug>`.
+    expect(getShortModelName('accounts/fireworks/models/glm-5p2')).toBe('GLM-5.2')
+    expect(getShortModelName('accounts/fireworks/models/qwen3p7-plus')).toBe('Qwen 3.7 Plus')
+    expect(getShortModelName('accounts/fireworks/models/kimi-k2p7-code')).toBe('Kimi K2.7 Code')
+    expect(getShortModelName('accounts/fireworks/models/deepseek-v4-pro')).toBe('DeepSeek v4 Pro')
+    expect(getShortModelName('accounts/fireworks/models/deepseek-v4-flash')).toBe('DeepSeek v4 Flash')
   })
 })
 

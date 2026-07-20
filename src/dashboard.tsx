@@ -6,7 +6,7 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import { formatCost, formatTokens, markEstimated } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI } from './parser.js'
-import { findUnpricedModels, loadPricing } from './models.js'
+import { findUnpricedModels, getShortModelName, loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, type ContextBudget } from './context-budget.js'
@@ -437,7 +437,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
-            <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
+            <Text> {fit(getShortModelName(model), MODEL_NAME_WIDTH)}</Text>
             <Text color={GOLD}>{markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0).padStart(MODEL_COL_COST)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>

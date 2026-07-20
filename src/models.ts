@@ -891,6 +891,14 @@ const SHORT_NAMES: Record<string, string> = {
   'glm-5p1': 'GLM-5.2',                               // ZCode/Hermes run GLM-5.2 (priced as the GLM-5.1 sibling)
   'grok-build-0.1': 'Grok Build',                     // Grok Build prices through the 0.1 sibling
   'grok-composer-2.5-fast': 'Grok Composer 2.5 Fast',
+  // Fireworks-hosted fleet models arrive as `accounts/fireworks/models/<slug>`;
+  // getShortModelName's path fallback strips to the bare slug and re-resolves it
+  // through this table. Display-only — getModelCosts prices off the full path,
+  // so these entries do not move any dollar amounts. (deepseek-v4-pro/-flash
+  // already have entries above and resolve the same way.)
+  'glm-5p2': 'GLM-5.2',
+  'qwen3p7-plus': 'Qwen 3.7 Plus',
+  'kimi-k2p7-code': 'Kimi K2.7 Code',
 }
 
 // Sorted longest-first so more-specific prefixes match before shorter ones.
@@ -923,8 +931,14 @@ export function getShortModelName(model: string): string {
     if (canonical === key || canonical.startsWith(key + '-')) return name
   }
   // getCanonicalName only strips the leading provider prefix, so a raw
-  // path-style id (e.g. fireworks/routers/glm-fast-latest) still has slashes
-  // here. Fall back to the last path segment rather than showing the path.
-  if (canonical.includes('/')) return canonical.slice(canonical.lastIndexOf('/') + 1)
+  // path-style id (e.g. accounts/fireworks/models/glm-5p2) still has slashes
+  // here. Take the last path segment and re-resolve it: the segment may itself
+  // be a known model slug (Fireworks fleet ids), earning a friendly name; a
+  // genuinely unmapped slug resolves to itself, preserving the raw-segment
+  // fallback for everything else.
+  if (canonical.includes('/')) {
+    const segment = canonical.slice(canonical.lastIndexOf('/') + 1)
+    return segment ? getShortModelName(segment) : canonical
+  }
   return canonical
 }
