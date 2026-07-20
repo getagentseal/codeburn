@@ -592,6 +592,9 @@ export interface CodeburnBridge {
   getPlans(period: Period): Promise<StatusJson>
   getActReport(): Promise<ActReportJson>
   readonly platform: string
+  /** Node process.arch of the host ('arm64', 'x64', ...). Absent on preloads
+   *  that predate the direct-download update link. */
+  readonly arch?: string
   getModels(period: Period, provider: string, byTask: boolean, range?: DateRange): Promise<ModelReportRow[]>
   getSessions(period: Period, provider: string, range?: DateRange): Promise<SessionRow[]>
   getCompareModels(period: Period, provider: string): Promise<ModelStats[]>

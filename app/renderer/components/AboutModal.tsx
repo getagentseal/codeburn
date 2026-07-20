@@ -3,7 +3,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 import { version } from '../../package.json'
 import { FlameMark } from './FlameMark'
 import { BUILD_STAMP } from '../lib/build'
-import { releasePageUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
+import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { codeburn } from '../lib/ipc'
 
 export type SocialLink = {
@@ -81,7 +81,7 @@ export function AboutModal({ socials, onClose }: { socials: SocialLink[]; onClos
                       <button
                         type="button"
                         className="set-text-button"
-                        onClick={() => { void codeburn.openExternal(releasePageUrl(status.tag!)) }}
+                        onClick={() => { void codeburn.openExternal(updateDownloadUrl(status.tag!)) }}
                       >
                         Download
                       </button>
