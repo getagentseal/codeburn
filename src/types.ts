@@ -205,6 +205,13 @@ export type SessionSummary = {
   /// Human session title captured from the transcript (last ai-title entry).
   /// Absent when the transcript never produced one.
   title?: string
+  /// True when the session observed a git branch on ANY turn of its FULL
+  /// (pre-date-filter) transcript. Set before turns are sliced to a range so the
+  /// by-branch report can still tell a branch-bearing Claude session (whose
+  /// in-range turns may all predate its first branch → the `null` bucket) apart
+  /// from a provider that never captures branches (→ contributes nothing).
+  /// Claude only; absent otherwise.
+  everHadBranch?: boolean
   modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number; estimatedCostUSD?: number }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>

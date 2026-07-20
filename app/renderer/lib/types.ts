@@ -206,6 +206,25 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
+    // Spend by referenced pull request (top 20 by cost) plus the multi-link-safe
+    // distinct total. Optional: older CLIs omit it, and it is absent when no PR
+    // links were observed. Rows are by-reference — a session referencing several
+    // PRs counts toward each — so `rows[].cost` must never be summed; use
+    // `distinctCost`/`distinctSessions` for a total.
+    pullRequests?: {
+      rows: Array<{
+        url: string
+        label: string
+        cost: number
+        savingsUSD: number
+        sessions: number
+        calls: number
+        firstStarted: string
+        lastEnded: string
+      }>
+      distinctCost: number
+      distinctSessions: number
+    }
   }
   optimize: {
     findingCount: number

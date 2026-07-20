@@ -22,6 +22,7 @@ import { OverviewContent } from './sections/Overview'
 import { OptimizeContent } from './sections/Optimize'
 import { Models } from './sections/Models'
 import { Sessions } from './sections/Sessions'
+import { PullRequestsContent } from './sections/PullRequests'
 import { Compare } from './sections/Compare'
 import { Plans } from './sections/Plans'
 import { Settings, type SettingsPane } from './sections/Settings'
@@ -106,6 +107,7 @@ export function usageSnapshotProps(payload: MenubarPayload, modelCategories?: Ma
 const SECTION_TITLES: Record<Section, string> = {
   overview: 'Overview',
   sessions: 'Sessions',
+  pullRequests: 'Pull requests',
   spend: 'Spend',
   optimize: 'Optimize',
   models: 'Models',
@@ -424,11 +426,12 @@ function AppMain() {
       const key = event.key.toLowerCase()
       if (key === '1') navigate('overview')
       else if (key === '2') navigate('sessions')
-      else if (key === '3') navigate('spend')
-      else if (key === '4') navigate('optimize')
-      else if (key === '5') navigate('models')
-      else if (key === '6') navigate('compare')
-      else if (key === '7') navigate('plans')
+      else if (key === '3') navigate('pullRequests')
+      else if (key === '4') navigate('spend')
+      else if (key === '5') navigate('optimize')
+      else if (key === '6') navigate('models')
+      else if (key === '7') navigate('compare')
+      else if (key === '8') navigate('plans')
       else if (key === ',') navigate('settings')
       else if (key === 'r') refreshVisible()
       else return
@@ -514,6 +517,8 @@ function AppMain() {
                 <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} ready={ready} />
               ) : section === 'sessions' ? (
                 <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={detectedProviders} onProviderChange={onProviderSelect} ready={ready} />
+              ) : section === 'pullRequests' ? (
+                <PullRequestsContent overview={overview} />
               ) : section === 'spend' ? (
                 <SpendContent period={period} provider={provider} range={customRange} overview={overview} refreshToken={refreshToken} ready={ready} />
               ) : section === 'optimize' ? (
@@ -532,7 +537,7 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: '⌘1-7', label: 'Navigate' },
+              { k: '⌘1-8', label: 'Navigate' },
               { k: '⌘,', label: 'Settings' },
               { k: '⌘R', label: 'Refresh' },
             ]}

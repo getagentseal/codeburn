@@ -215,7 +215,7 @@ describe('App shortcuts', () => {
     render(<App />)
 
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
-    expect(screen.getByText('⌘1-7')).toBeInTheDocument()
+    expect(screen.getByText('⌘1-8')).toBeInTheDocument()
     expect(screen.getAllByText('⌘,').length).toBeGreaterThan(0)
     expect(screen.getByText('⌘R')).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
@@ -225,18 +225,21 @@ describe('App shortcuts', () => {
     expect(await screen.findByText('No sessions in this range yet.')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '3', metaKey: true })
-    expect(await screen.findByText('Cost flow · model → project')).toBeInTheDocument()
+    expect(await screen.findByText(/PR links are captured as sessions are parsed/)).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '4', metaKey: true })
-    expect(await screen.findByText('No waste findings in this range yet.')).toBeInTheDocument()
+    expect(await screen.findByText('Cost flow · model → project')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '5', metaKey: true })
-    expect(await screen.findByText('No model usage in this range yet.')).toBeInTheDocument()
+    expect(await screen.findByText('No waste findings in this range yet.')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '6', metaKey: true })
-    expect(await screen.findByText('Need at least two models with usage in this range to compare.')).toBeInTheDocument()
+    expect(await screen.findByText('No model usage in this range yet.')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: '7', metaKey: true })
+    expect(await screen.findByText('Need at least two models with usage in this range to compare.')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '8', metaKey: true })
     expect(await screen.findByText('Not connected. Log in with the Claude CLI.')).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: ',', metaKey: true })
@@ -251,7 +254,7 @@ describe('App shortcuts', () => {
   it('re-polls visible section data when period or provider changes', async () => {
     render(<App />)
 
-    fireEvent.keyDown(document, { key: '3', metaKey: true })
+    fireEvent.keyDown(document, { key: '4', metaKey: true })
     expect(await screen.findByText('Cost flow · model → project')).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Today'))
@@ -389,7 +392,7 @@ describe('App shortcuts', () => {
   it('applies a calendar range to overview and visible section polls', async () => {
     render(<App />)
 
-    fireEvent.keyDown(document, { key: '3', metaKey: true })
+    fireEvent.keyDown(document, { key: '4', metaKey: true })
     expect(await screen.findByText('Cost flow · model → project')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Choose date range' }))
 

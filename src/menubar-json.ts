@@ -42,6 +42,26 @@ export type PeriodData = {
   topReworkedFiles?: ReworkedFile[]
   /// Share (0-1) of cost-bearing calls that resolved a price.
   pricingCoverage?: number
+  /// Spend attributed by referenced pull request (from Claude session
+  /// transcripts). Rows are by-reference — a session referencing several PRs
+  /// counts toward EACH — so never sum them; `distinctCost`/`distinctSessions`
+  /// are the multi-link-safe total. Absent when no PR links were observed.
+  pullRequests?: PullRequestsPayload
+  /// Per-branch spend, last-seen branch carried forward across each session's
+  /// turns. A `null` branch is unbranched spend inside a branch-bearing session.
+  /// Rows are by-reference (a session that switched branches counts toward each),
+  /// so never sum them. Absent when no branch data was observed.
+  byBranch?: BranchRow[]
+}
+
+export type PullRequestsPayload = {
+  /// Per-PR rows, cost-descending, capped at the top 20 by the producer.
+  rows: PrRow[]
+  /// Distinct-session spend across every PR-linked session — the figure safe to
+  /// present as a total, since the per-PR rows double-count sessions that
+  /// reference more than one PR.
+  distinctCost: number
+  distinctSessions: number
 }
 
 export type ProviderCost = {
@@ -55,6 +75,7 @@ import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
 import type { ReworkedFile } from './workflow-insights.js'
+import type { PrRow, BranchRow } from './sessions-report.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
 const TOP_MODELS_LIMIT = 20
@@ -272,6 +293,17 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
+    /// Spend attributed by referenced pull request (top 20 by cost) plus the
+    /// multi-link-safe distinct total. Rows are by-reference (a session
+    /// referencing several PRs counts toward each), so never summed. Absent when
+    /// no PR links were observed, and on payloads produced before the field
+    /// existed — the client renders its empty state for both.
+    pullRequests?: PullRequestsPayload
+    /// Per-branch spend (top 15 by cost), last-seen branch carried forward across
+    /// each session's turns; a `null` branch is unbranched spend inside a
+    /// branch-bearing session. By-reference like the PR rows. Absent when no
+    /// branch data was observed, and on payloads produced before the field.
+    byBranch?: BranchRow[]
   }
   optimize: {
     findingCount: number
@@ -486,6 +518,11 @@ export function buildMenubarPayload(
       skills: breakdowns?.skills ?? [],
       subagents: breakdowns?.subagents ?? [],
       mcpServers: breakdowns?.mcpServers ?? [],
+      // Add-only: emitted only when the producer computed them (all-provider
+      // path), omitted otherwise so the schema stays stable for consumers that
+      // predate the fields.
+      ...(current.pullRequests ? { pullRequests: current.pullRequests } : {}),
+      ...(current.byBranch ? { byBranch: current.byBranch } : {}),
     },
     optimize: buildOptimize(optimize),
     history: buildHistory(dailyHistory, granularHistory),

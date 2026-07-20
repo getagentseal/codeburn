@@ -2026,7 +2026,19 @@ async function scanProjectDirs(
     const cachedFile = section.files[filePath]
     if (!cachedFile || cachedFile.turns.length === 0) continue
 
-    let classifiedTurns = cachedFile.turns.map(cachedTurnToClassified)
+    // Carry the git branch forward BEFORE the date filter below: the cache
+    // stores a turn's branch only when it changes, so resolving here (over the
+    // full ordered turn list) means a later date slice can drop the anchor turn
+    // without the surviving turns losing their branch.
+    let carriedBranch: string | undefined
+    let classifiedTurns = cachedFile.turns.map(turn => {
+      if (turn.gitBranch) carriedBranch = turn.gitBranch
+      return cachedTurnToClassified(turn, carriedBranch)
+    })
+    // Captured from the FULL turn list, before the date slice below can drop the
+    // turn a branch was first seen on. Lets the by-branch report keep this
+    // session's in-range unbranched spend as `null` instead of discarding it.
+    const everHadBranch = carriedBranch !== undefined
 
     if (dateRange) {
       classifiedTurns = classifiedTurns.filter(turn => {
@@ -2046,6 +2058,7 @@ async function scanProjectDirs(
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
+    if (everHadBranch) session.everHadBranch = true
     if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
     if (cachedFile.title) session.title = cachedFile.title
 
@@ -2318,12 +2331,19 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   })
 }
 
-function cachedTurnToClassified(turn: CachedTurn): ClassifiedTurn {
+// `resolvedBranch` restores the turn's git branch after the cache's per-turn
+// dedup (branch stored only when it changes). Callers that serve a full session's
+// turns in order carry the last stored value forward and pass it here, so each
+// reconstructed turn regains the "branch active for this turn" the cache elided —
+// and downstream date/day filtering can slice turns without losing the anchor.
+function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): ClassifiedTurn {
+  const branch = turn.gitBranch ?? resolvedBranch
   const parsed: ParsedTurn = {
     userMessage: turn.userMessage,
     assistantCalls: turn.calls.map(cachedCallToApiCall),
     timestamp: turn.timestamp,
     sessionId: turn.sessionId,
+    ...(branch ? { gitBranch: branch } : {}),
   }
   return classifyTurn(parsed)
 }
@@ -2938,7 +2958,9 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
         return ds !== null && days.has(ds)
       })
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
+      const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
+      if (session.everHadBranch) rebuilt.everHadBranch = true
+      sessions.push(rebuilt)
     }
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))
@@ -2995,7 +3017,9 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) continue
-      sessions.push(buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source))
+      const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
+      if (session.everHadBranch) rebuilt.everHadBranch = true
+      sessions.push(rebuilt)
     }
     if (sessions.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions))

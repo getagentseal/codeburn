@@ -10,9 +10,14 @@ import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggreg
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
+import { aggregateByPr, prLinkedTotals, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
 import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
+
+// Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
+const TOP_PULL_REQUESTS = 20
+const TOP_BRANCHES = 15
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
@@ -648,6 +653,28 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       date: s.firstTimestamp?.split('T')[0] ?? '',
     }))
   ).sort((a, b) => (b.cost + b.savingsUSD) - (a.cost + a.savingsUSD)).slice(0, 5)
+
+  // PULL REQUESTS + BRANCHES (all-provider path only). Both are session-layer
+  // aggregations over the surviving-session parse, so carried history cannot
+  // contribute — expected and fine. PR links and per-turn git branches are
+  // captured only from Claude transcripts today; other providers add nothing.
+  // Set only when non-empty so the payload omits them (and the app renders its
+  // quiet empty state) whenever there is nothing to show. Excluded on the
+  // Claude-config-scoped path (which replaces scanProjects with one config's
+  // sessions) so this stays the genuine unscoped all-provider aggregation.
+  if (isAllProviders && !effectivelyScoped) {
+    const prRows = aggregateByPr(scanProjects)
+    if (prRows.length > 0) {
+      const prTotals = prLinkedTotals(scanProjects)
+      currentData.pullRequests = {
+        rows: prRows.slice(0, TOP_PULL_REQUESTS),
+        distinctCost: prTotals.cost,
+        distinctSessions: prTotals.sessions,
+      }
+    }
+    const branchRows = aggregateByBranch(scanProjects)
+    if (branchRows.length > 0) currentData.byBranch = branchRows.slice(0, TOP_BRANCHES)
+  }
 
   // Routing waste: find cheapest reliable model (≥90% 1-shot, ≥5 edits),
   // then compute how much each pricier model overpaid.

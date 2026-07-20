@@ -146,3 +146,54 @@ export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sess
   }
   return { cost, sessions }
 }
+
+export type BranchRow = {
+  /// The git branch active for the attributed turns, or `null` for spend that
+  /// occurred before any branch was observed within a branch-bearing session.
+  branch: string | null
+  cost: number
+  calls: number
+  sessions: number
+}
+
+/// Per-branch spend, carrying each session's last-seen git branch forward across
+/// its turns. The cache stores a turn's branch only when it CHANGES, so a report
+/// must reconstruct each turn's branch from the last stored value — this walks a
+/// session's turns in order and does exactly that.
+///
+/// Only sessions that EVER observed a branch participate: a provider that never
+/// captures branch data (only Claude does today) would otherwise pile all of its
+/// spend into one `null` bucket that dwarfs every real branch. Within a
+/// participating session, turns before the first observed branch are attributed
+/// to a single explicit `null` row the caller can label honestly.
+///
+/// A session that switches branches counts toward EACH branch it touched (like
+/// the by-PR by-reference attribution), so rows must never be summed into a grand
+/// total. Sorted by cost, descending.
+export function aggregateByBranch(projects: ProjectSummary[]): BranchRow[] {
+  const byBranch = new Map<string | null, { cost: number; calls: number; sessions: Set<string> }>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      // Participate when the session observed a branch anywhere in its full
+      // transcript (`everHadBranch`, set pre-date-filter) — falling back to the
+      // turns in hand for producers/fixtures that don't set the flag. A session
+      // that never observed a branch (every non-Claude provider) is skipped so
+      // it can't pile into the null bucket.
+      if (!session.everHadBranch && !session.turns.some(turn => turn.gitBranch)) continue
+      let current: string | null = null
+      for (const turn of session.turns) {
+        if (turn.gitBranch) current = turn.gitBranch
+        if (turn.assistantCalls.length === 0) continue
+        const turnCost = turn.assistantCalls.reduce((sum, call) => sum + call.costUSD, 0)
+        const row = byBranch.get(current) ?? { cost: 0, calls: 0, sessions: new Set<string>() }
+        row.cost += turnCost
+        row.calls += turn.assistantCalls.length
+        row.sessions.add(session.sessionId)
+        byBranch.set(current, row)
+      }
+    }
+  }
+  return [...byBranch.entries()]
+    .map(([branch, d]) => ({ branch, cost: d.cost, calls: d.calls, sessions: d.sessions.size }))
+    .sort((a, b) => b.cost - a.cost)
+}

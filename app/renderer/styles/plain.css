@@ -580,6 +580,10 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .ov-models th:first-child, .ov-models td:first-child { width: 100%; text-align: left; }
 .ov-models .ov-model-name { overflow: hidden; color: var(--ink); font-weight: var(--fw-medium); text-overflow: ellipsis; }
 .ov-models td.mono { font-family: var(--mono); color: var(--ink); }
+.pr-link { color: var(--accent-text); font-weight: var(--fw-medium); text-decoration: none; cursor: pointer; }
+.pr-link:hover { text-decoration: underline; }
+.pr-table td.pr-span { color: var(--mut2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-footnote { margin: 12px 2px 2px; color: var(--mut); font-size: var(--fs-meta); line-height: 1.55; }
 .opt-waste { min-width: 0; }
 .opt-summary { padding: 0 0 10px; color: var(--mut); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .opt-findings { display: grid; min-width: 0; }
