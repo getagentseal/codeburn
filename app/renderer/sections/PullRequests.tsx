@@ -1,5 +1,5 @@
 import type { KeyboardEvent, MouseEvent } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
@@ -83,6 +83,11 @@ function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullReq
 function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
   const { rows, distinctCost, distinctSessions, attributedCost, unattributedCost, otherPrCount, otherPrCost } = pullRequests
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
+  // Reset any open expansion when the PR set changes (a period/provider switch or
+  // a refresh that alters the list): a stale expandedUrl would otherwise linger
+  // pointing at a row that is no longer present.
+  const rowKey = rows.map(row => row.url).join('|')
+  useEffect(() => { setExpandedUrl(null) }, [rowKey])
 
   // A new-attribution payload carries `attributedCost`; an older by-reference
   // payload omits it, so the rows are not summable and the footer must differ.
@@ -118,7 +123,11 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
                 onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
               />
             ))}
-            {otherCount > 0 && (
+          </tbody>
+          {otherCount > 0 && (
+            // A muted summary line, kept out of the sorted rows: its cost is an
+            // aggregate of the capped-away PRs and can exceed a visible row.
+            <tfoot>
               <tr className="pr-other-row">
                 <td className="pr-other-label">Other ({otherCount.toLocaleString('en-US')} more PRs)</td>
                 <td className="pr-models"></td>
@@ -128,8 +137,8 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
                 <td className="num pr-span"></td>
                 <td className="pr-chevron-cell"></td>
               </tr>
-            )}
-          </tbody>
+            </tfoot>
+          )}
         </table>
       </div>
       {summable ? (

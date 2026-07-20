@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -123,6 +123,23 @@ describe('PullRequests', () => {
     await userEvent.click(row)
     expect(row).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('Feature work')).toBeNull()
+  })
+
+  it('closes an open expansion when the period changes the PR set', async () => {
+    const changed: PrPayload = { ...SAMPLE, rows: [SAMPLE.rows[0]!] } // #781 dropped
+    getOverview.mockImplementation((period: string) => Promise.resolve(makePayload(period === 'lifetime' ? SAMPLE : changed)))
+    const { rerender } = render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'true')
+
+    rerender(<PullRequests period="week" provider="all" />)
+    // The new period drops #781, so the PR set changes and the stale expansion
+    // resets once the new data lands (wait for the breakdown to disappear).
+    await waitFor(() => expect(screen.queryByText('Feature work')).toBeNull())
+    const link2 = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    expect(rowForLink(link2)).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('toggles expansion from the keyboard with Enter', async () => {

@@ -369,15 +369,14 @@ function validateCache(raw: unknown): raw is SessionCache {
 // file itself is never written or deleted (old binaries still own it).
 const V5_CACHE_FILE = 'session-cache.v5.json'
 
-// v5-shaped validation: identical to validateCache but pinned to version 5. The
-// per-turn schema is a superset (prRefs is optional), so a v5 file passes the
-// section/file/turn validators unchanged.
-function validateV5Cache(raw: unknown): raw is SessionCache {
+// Lightweight top-level check: a version-5 cache with a providers object. The
+// individual files are validated per-entry in adoptV5Cache so one corrupt entry
+// cannot drop every valid expired-transcript PR session along with it.
+function isV5CacheEnvelope(raw: unknown): raw is { version: number; providers: Record<string, unknown> } {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
-  if (o['version'] !== 5) return false
-  if (!o['providers'] || typeof o['providers'] !== 'object' || Array.isArray(o['providers'])) return false
-  return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
+  return o['version'] === 5
+    && !!o['providers'] && typeof o['providers'] === 'object' && !Array.isArray(o['providers'])
 }
 
 // One-time migration for the 5 -> 6 bump (per-turn prRefs capture). A fresh v6
@@ -386,24 +385,31 @@ function validateV5Cache(raw: unknown): raw is SessionCache {
 // Carry forward exactly the v5 entries whose source no longer exists AND that
 // carry prLinks (they can never re-parse, but they hold attributable PR spend);
 // present sources are intentionally dropped so they re-parse fresh under v6 and
-// gain per-turn refs. Each carried section takes the CURRENT envFingerprint so
-// the scan reuses it and appends the freshly-parsed present sources. The daily
-// cache, which owns durable cost history, is not touched.
+// gain per-turn refs. Each file is validated individually, so a single corrupt
+// entry is skipped rather than discarding the whole cache. Each carried section
+// takes the CURRENT envFingerprint so the scan reuses it and appends the
+// freshly-parsed present sources. The daily cache (durable cost history) is not
+// touched.
 async function adoptV5Cache(): Promise<SessionCache | null> {
   try {
     const raw = await readFile(join(getCacheDir(), V5_CACHE_FILE), 'utf-8')
     const parsed = JSON.parse(raw)
-    if (!validateV5Cache(parsed)) return null
+    if (!isV5CacheEnvelope(parsed)) return null
     const migrated: SessionCache = { version: CACHE_VERSION, providers: {}, complete: false }
     for (const [provider, section] of Object.entries(parsed.providers)) {
+      if (!section || typeof section !== 'object') continue
+      const rawFiles = (section as Record<string, unknown>)['files']
       const files: Record<string, CachedFile> = {}
-      for (const [path, file] of Object.entries(section.files)) {
-        if (!existsSync(path) && file.prLinks?.length) files[path] = file
+      if (rawFiles && typeof rawFiles === 'object' && !Array.isArray(rawFiles)) {
+        for (const [path, file] of Object.entries(rawFiles as Record<string, unknown>)) {
+          if (!validateCachedFile(file)) continue
+          if (!existsSync(path) && file.prLinks?.length) files[path] = file
+        }
       }
       migrated.providers[provider] = {
         envFingerprint: computeEnvFingerprint(provider),
         files,
-        ...(section.durable ? { durable: true } : {}),
+        ...((section as Record<string, unknown>)['durable'] ? { durable: true } : {}),
       }
     }
     return migrated

@@ -601,7 +601,8 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .pr-cat-name { overflow: hidden; color: var(--ink); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .pr-cat-main strong { flex: 0 0 auto; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .pr-cat-empty { margin: 0; color: var(--mut2); font-size: var(--fs-meta); }
-.pr-table td.pr-other-label { color: var(--mut2); font-weight: var(--fw-medium); text-align: left; }
+.pr-table tfoot .pr-other-row td { border-top: 1px solid var(--line); color: var(--mut2); font-style: italic; }
+.pr-table td.pr-other-label { color: var(--mut2); font-weight: var(--fw-medium); font-style: italic; text-align: left; }
 .pr-footnote { margin: 12px 2px 2px; color: var(--mut); font-size: var(--fs-meta); line-height: 1.55; }
 .pr-unattributed { margin: 4px 2px 2px; color: var(--mut2); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 .opt-waste { min-width: 0; }

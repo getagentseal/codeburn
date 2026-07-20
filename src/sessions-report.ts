@@ -255,6 +255,7 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
 export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
   const byUrl = new Map<string, {
     cost: number; savingsUSD: number; calls: number; approx: boolean
+    legacyCost: number
     sessions: Set<string>; firstStarted: string; lastEnded: string
     models: Map<string, number>; categories: Map<string, number>
   }>()
@@ -268,7 +269,7 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
       for (const [url, c] of perUrl) {
         if (c.cost === 0 && c.calls === 0 && c.savingsUSD === 0) continue
         const row = byUrl.get(url) ?? {
-          cost: 0, savingsUSD: 0, calls: 0, approx: false,
+          cost: 0, savingsUSD: 0, calls: 0, approx: false, legacyCost: 0,
           sessions: new Set<string>(), firstStarted: session.firstTimestamp, lastEnded: session.lastTimestamp,
           models: new Map<string, number>(), categories: new Map<string, number>(),
         }
@@ -276,7 +277,9 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
         row.savingsUSD += c.savingsUSD
         row.calls += c.calls
         row.sessions.add(sessionKey)
-        if (c.approx) row.approx = true
+        // A legacy (approx) contribution carries no per-turn categories; track its
+        // cost so a mixed row can reconcile its category breakdown to the total.
+        if (c.approx) { row.approx = true; row.legacyCost += c.cost }
         for (const [m, mc] of c.models) addToMap(row.models, m, mc)
         for (const [cat, cc] of c.categories) addToMap(row.categories, cat, cc)
         if (session.firstTimestamp < row.firstStarted) row.firstStarted = session.firstTimestamp
@@ -288,13 +291,25 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
   return [...byUrl.entries()]
     .map(([url, r]) => {
       // Collapse raw model names to short display names, summing costs that map
-      // to the same short name, then order by attributed cost.
+      // to the same short name, then order by attributed cost (name asc breaks
+      // ties for a stable order) and cap at the top 4 to bound the payload.
       const shortCosts = new Map<string, number>()
       for (const [raw, mc] of r.models) addToMap(shortCosts, getShortModelName(raw), mc)
-      const models = [...shortCosts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name)
+      const models = [...shortCosts.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 4)
+        .map(([name]) => name)
       const categories = [...r.categories.entries()]
-        .sort((a, b) => b[1] - a[1])
         .map(([cat, cost]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, cost }))
+      // Mixed row: live per-turn categories exist AND part of the row came from a
+      // legacy even-split (no turn data). Add a synthetic line for the legacy
+      // share so the expansion reconciles with the row cost instead of silently
+      // dropping it. A legacy-only row keeps no categories (it surfaces as "no
+      // per-turn detail"), so there is nothing to reconcile there.
+      if (categories.length > 0 && r.legacyCost > 0) {
+        categories.push({ name: 'Legacy estimate (no per-turn detail)', cost: r.legacyCost })
+      }
+      categories.sort((a, b) => b.cost - a.cost || a.name.localeCompare(b.name))
       return {
         url, label: shortenPrUrl(url),
         cost: r.cost, savingsUSD: r.savingsUSD,

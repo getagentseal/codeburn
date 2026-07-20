@@ -55,6 +55,15 @@ function sessionWithTurns(id: string, prLinks: string[], turns: ClassifiedTurn[]
   return { ...session(id, 0, 0, prLinks, first, last), turns }
 }
 
+// A turn referencing `prRefs` whose calls each carry a [model, cost] pair.
+function turnModels(prRefs: string[], calls: Array<[string, number]>): ClassifiedTurn {
+  return {
+    userMessage: '', timestamp: '2026-07-01T10:00:00Z', sessionId: 's',
+    category: 'coding', retries: 0, hasEdits: false, prRefs,
+    assistantCalls: calls.map(([model, cost]) => ({ ...call(cost), model })),
+  }
+}
+
 function project(sessions: SessionSummary[]): ProjectSummary {
   return { project: 'p', projectPath: '/p', sessions, totalCostUSD: 0, totalSavingsUSD: 0, totalApiCalls: 0, totalProxiedCostUSD: 0 }
 }
@@ -301,6 +310,43 @@ describe('models + categories attribution', () => {
     ])])
     expect(rows[0]!.models.length).toBe(1)
     expect(rows[0]!.categories).toEqual([{ name: 'Coding', cost: 10 }])
+  })
+})
+
+describe('mixed live + legacy category reconciliation (round-3 finding 1)', () => {
+  it('adds a synthetic legacy line so a mixed row reconciles to its cost', () => {
+    const rows = aggregateByPr([project([
+      sessionWithTurns('live', [A], [cturn(10, 1, [A])]), // live: Coding $10
+      session('legacy', 90, 5, [A]),                       // legacy: $90, no turn data
+    ])])
+    const row = rows.find(r => r.url === A)!
+    expect(row.cost).toBeCloseTo(100, 6)
+    expect(row.approx).toBe(true)
+    const cats = row.categories!
+    expect(cats.reduce((s, c) => s + c.cost, 0)).toBeCloseTo(row.cost, 6) // reconciles
+    expect(cats.find(c => c.name === 'Coding')!.cost).toBeCloseTo(10, 6)
+    expect(cats.find(c => c.name === 'Legacy estimate (no per-turn detail)')!.cost).toBeCloseTo(90, 6)
+  })
+
+  it('a legacy-only row still omits categories (surfaces the no-detail note)', () => {
+    const rows = aggregateByPr([project([session('legacy', 90, 5, [A])])])
+    expect(rows[0]!.categories).toBeUndefined()
+  })
+})
+
+describe('model list bounds (round-3 finding 5)', () => {
+  it('caps a row to the top 4 models by attributed cost', () => {
+    const rows = aggregateByPr([project([
+      sessionWithTurns('s', [A], [turnModels([A], [['m-f', 60], ['m-e', 50], ['m-d', 40], ['m-c', 30], ['m-b', 20], ['m-a', 10]])]),
+    ])])
+    expect(rows[0]!.models).toEqual(['m-f', 'm-e', 'm-d', 'm-c'])
+  })
+
+  it('breaks model ties by name ascending for a stable order', () => {
+    const rows = aggregateByPr([project([
+      sessionWithTurns('s', [A], [turnModels([A], [['m-d', 10], ['m-a', 10], ['m-c', 10], ['m-b', 10]])]),
+    ])])
+    expect(rows[0]!.models).toEqual(['m-a', 'm-b', 'm-c', 'm-d'])
   })
 })
 
