@@ -101,7 +101,9 @@ describe('vercel-gateway end-to-end (parseAllSessions network path)', () => {
       ok: true,
       json: async () => ({
         results: [
-          { day: '2026-06-01', model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500, request_count: 3 },
+          // Relative so the rolling 6-month dashboard window always contains
+          // it; a fixed date here starts failing once the window moves past it.
+          { day: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10), model: 'openai/gpt-4o', total_cost: 12.34, input_tokens: 1000, output_tokens: 500, request_count: 3 },
         ],
       }),
     })) as typeof fetch

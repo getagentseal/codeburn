@@ -76,6 +76,10 @@ export function computePace(window: QuotaWindow, now: Date = new Date()): QuotaP
   const elapsedSeconds = windowSeconds - remainingSeconds
   const expectedFraction = elapsedSeconds / windowSeconds
   if (expectedFraction < QUOTA_PACE_MIN_ELAPSED_FRACTION) return undefined
+  // A NaN usedFraction (e.g. derived from used/limit with limit 0) would sail
+  // through the clamp below (min/max propagate NaN) and poison every pace
+  // field. Unknown usage means no pace, not a NaN pace.
+  if (!Number.isFinite(window.usedFraction)) return undefined
   const used = Math.min(Math.max(window.usedFraction, 0), 1)
   if (used >= 1) return undefined
 

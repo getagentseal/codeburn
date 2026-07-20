@@ -388,7 +388,7 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
   })
 
   it('retention still prunes ancient carried days after a rebuild', async () => {
-    await seed({ days: [seededDay(), day('2020-01-01', { claude: slice(1, 1) })], complete: false })
+    await seed({ days: [seededDay(), day('2010-01-01', { claude: slice(1, 1) })], complete: false })
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days.map(d => d.date)).toEqual([daysAgoStr(30)])
   })
@@ -483,7 +483,7 @@ describe('adoption union across older cache files', () => {
     const old = {
       version: 13,
       days: [
-        day('2023-01-01', { claude: slice(1, 1) }),
+        day('2010-01-01', { claude: slice(1, 1) }),
         day(daysAgoStr(15), { claude: slice(5, 2) }),
         day(daysAgoStr(0), { claude: slice(99, 9) }),
       ],
