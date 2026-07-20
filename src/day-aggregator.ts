@@ -102,27 +102,39 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         cat.oneShotTurns += oneShotTurns
         turnDay.categories[turn.category] = cat
 
-        // Slice-level turn stats are attributed per provider actually present
-        // in the turn, each with only ITS calls' cost — a slice's category
-        // totals must never contain another provider's spend, or a later
-        // carry-forward of that slice would overstate the day.
-        const providersInTurn = new Map<string, { cost: number; savingsUSD: number }>()
+        // Cost stays attributed to every provider actually present in the turn,
+        // but turn counts belong to exactly one slice. Otherwise carrying one
+        // missing provider later re-adds a turn already present in the fresh
+        // provider's slice. Highest call count wins; when the first call's
+        // provider is tied for highest, replacing only on a strict increase
+        // leaves that provider selected.
+        const providersInTurn = new Map<string, { calls: number; cost: number; savingsUSD: number }>()
         for (const call of turn.assistantCalls) {
-          const acc = providersInTurn.get(call.provider) ?? { cost: 0, savingsUSD: 0 }
+          const acc = providersInTurn.get(call.provider) ?? { calls: 0, cost: 0, savingsUSD: 0 }
+          acc.calls += 1
           acc.cost += call.costUSD
           acc.savingsUSD += call.savingsUSD ?? 0
           providersInTurn.set(call.provider, acc)
         }
+        let primaryProvider = turn.assistantCalls[0]!.provider
+        let primaryCalls = providersInTurn.get(primaryProvider)!.calls
+        for (const [provider, totals] of providersInTurn) {
+          if (totals.calls > primaryCalls) {
+            primaryProvider = provider
+            primaryCalls = totals.calls
+          }
+        }
         for (const [prov, totals] of providersInTurn) {
           const turnSlice = ensureSlice(turnDay, prov)
-          turnSlice.editTurns! += editTurns
-          turnSlice.oneShotTurns! += oneShotTurns
+          const ownsTurn = prov === primaryProvider
+          turnSlice.editTurns! += ownsTurn ? editTurns : 0
+          turnSlice.oneShotTurns! += ownsTurn ? oneShotTurns : 0
           const sliceCat = turnSlice.categories![turn.category] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
-          sliceCat.turns += 1
+          sliceCat.turns += ownsTurn ? 1 : 0
           sliceCat.cost += totals.cost
           sliceCat.savingsUSD += totals.savingsUSD
-          sliceCat.editTurns += editTurns
-          sliceCat.oneShotTurns += oneShotTurns
+          sliceCat.editTurns += ownsTurn ? editTurns : 0
+          sliceCat.oneShotTurns += ownsTurn ? oneShotTurns : 0
           turnSlice.categories![turn.category] = sliceCat
         }
 
