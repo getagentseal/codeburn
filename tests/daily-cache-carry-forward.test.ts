@@ -105,7 +105,7 @@ describe('mergeDayEntries', () => {
     expect(merged[0]!.carried).toBe(true)
   })
 
-  it('a rich v14 slice carries its tokens, models, and categories into the day', () => {
+  it('a rich slice carries its tokens, models, categories, and projects into the day', () => {
     const rich = slice(20, 3, {
       sessions: 2,
       inputTokens: 1000,
@@ -116,9 +116,10 @@ describe('mergeDayEntries', () => {
       oneShotTurns: 1,
       models: { 'opus-4-8': { calls: 3, cost: 20, savingsUSD: 0, inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100 } },
       categories: { coding: { turns: 3, cost: 20, savingsUSD: 0, editTurns: 2, oneShotTurns: 1 } },
+      projects: { eywa: { cost: 15, calls: 2, savingsUSD: 0, sessions: 1 }, codeburn: { cost: 5, calls: 1, savingsUSD: 0, sessions: 1 } },
     })
     const merged = mergeDayEntries(
-      [day('2026-06-01', { codex: slice(1, 1) })],
+      [day('2026-06-01', { codex: slice(1, 1, { projects: { codeburn: { cost: 1, calls: 1, savingsUSD: 0, sessions: 1 } } }) }, { projects: { codeburn: { cost: 1, calls: 1, savingsUSD: 0, sessions: 1 } } })],
       [day('2026-06-01', { claude: rich })],
       true,
     )
@@ -131,6 +132,10 @@ describe('mergeDayEntries', () => {
     expect(m.oneShotTurns).toBe(1)
     expect(m.models['opus-4-8']!.cost).toBe(20)
     expect(m.categories['coding']!.turns).toBe(3)
+    // Projects from the carried claude slice fold into the day's project map,
+    // summing with the fresh codex contribution on the shared project.
+    expect(m.projects!['eywa']).toEqual({ cost: 15, calls: 2, savingsUSD: 0, sessions: 1 })
+    expect(m.projects!['codeburn']).toEqual({ cost: 6, calls: 2, savingsUSD: 0, sessions: 2 })
   })
 
   it('a skinny pre-v14 slice still restores exact cost/calls/savings', () => {
@@ -179,6 +184,58 @@ describe('mergeDayEntries', () => {
     expect(merged[0]!.sessions).toBe(1)
     expect(merged[0]!.cost).toBe(8)
     expect(merged[0]!.carried).toBe(true)
+  })
+
+  it('does not double-count a project session across a placeholder merge', () => {
+    // v15-review finding: the placeholder's project sessions were already
+    // counted into the fresh day; folding the carried slice must only add the
+    // excess, and day/provider/project session totals must reconcile.
+    const placeholder = day('2026-06-01', {
+      claude: slice(0, 0, { sessions: 1, projects: { P: { cost: 0, calls: 0, savingsUSD: 0, sessions: 1 } } }),
+    }, { sessions: 1, projects: { P: { cost: 0, calls: 0, savingsUSD: 0, sessions: 1 } } })
+    const carried = day('2026-06-01', {
+      claude: slice(0, 0, { sessions: 1, projects: { P: { cost: 0, calls: 0, savingsUSD: 0, sessions: 1 } } }),
+    }, { sessions: 1, projects: { P: { cost: 0, calls: 0, savingsUSD: 0, sessions: 1 } } })
+    const merged = mergeDayEntries([placeholder], [carried], true)
+    expect(merged[0]!.sessions).toBe(1)
+    expect(merged[0]!.projects!['P']!.sessions).toBe(1)
+    expect(merged[0]!.providers['claude']!.sessions).toBe(1)
+  })
+
+  it('survives junk project data from foreign caches without crashing or corrupting', () => {
+    const junkSlice = slice(5, 2, {
+      projects: { good: { cost: 5, calls: 2, savingsUSD: 0, sessions: 1 }, bad: null, worse: [1, 2], strings: { cost: 'x', calls: 2 } } as never,
+    })
+    const merged = mergeDayEntries([day('2026-06-01', { codex: slice(1, 1) })], [day('2026-06-01', { claude: junkSlice })], true)
+    expect(merged[0]!.projects!['good']).toEqual({ cost: 5, calls: 2, savingsUSD: 0, sessions: 1 })
+    expect(merged[0]!.projects!['bad']).toBeUndefined()
+    expect(merged[0]!.projects!['worse']).toBeUndefined()
+    expect(merged[0]!.projects!['strings']).toEqual({ cost: 0, calls: 2, savingsUSD: 0, sessions: 0 })
+  })
+
+  it('a project named __proto__ becomes an own key, never prototype pollution', () => {
+    const evil = slice(3, 1, { projects: { ['__proto__']: { cost: 3, calls: 1, savingsUSD: 0, sessions: 1 } } })
+    const merged = mergeDayEntries([day('2026-06-01', { codex: slice(1, 1) })], [day('2026-06-01', { claude: evil })], true)
+    expect(Object.hasOwn(merged[0]!.projects!, '__proto__')).toBe(true)
+    expect(merged[0]!.projects!['__proto__' as string]).toMatchObject({ cost: 3 })
+    expect(({} as Record<string, unknown>)['cost']).toBeUndefined()
+  })
+
+  it('a hostile __proto__ provider/model/category key becomes an own key on merge', () => {
+    const hostile = day('2026-06-01', Object.defineProperty({}, '__proto__', {
+      value: slice(4, 2, {
+        models: { ['__proto__']: { calls: 2, cost: 4, savingsUSD: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } as never,
+        categories: { ['__proto__']: { turns: 1, cost: 4, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 } } as never,
+      }),
+      enumerable: true, writable: true, configurable: true,
+    }) as Record<string, ProviderDaySlice>)
+    const merged = mergeDayEntries([day('2026-06-01', { codex: slice(1, 1) })], [hostile], true)
+    expect(Object.hasOwn(merged[0]!.providers, '__proto__')).toBe(true)
+    expect(Object.hasOwn(merged[0]!.models, '__proto__')).toBe(true)
+    expect(Object.hasOwn(merged[0]!.categories, '__proto__')).toBe(true)
+    expect(merged[0]!.cost).toBe(5)
+    expect(({} as Record<string, unknown>)['cost']).toBeUndefined()
+    expect(({} as Record<string, unknown>)['calls']).toBeUndefined()
   })
 
   it('does not mutate its inputs', () => {
@@ -450,6 +507,27 @@ describe('adoption union across older cache files', () => {
     expect(cache.days.map(d => d.date)).toEqual(['2026-06-01', '2026-06-02'])
     expect(cache.days[0]!.cost).toBe(10)
     expect(cache.days[1]!.cost).toBe(0)
+  })
+
+  it('sanitizes junk inside provider slices at migration, not just at fold time', async () => {
+    // v15-closure finding: slice-level junk survived structuredClone into the
+    // next cache generation. Migration must scrub it.
+    const dirty = {
+      version: 13,
+      days: [{
+        date: daysAgoStr(20), cost: 5, calls: 2,
+        providers: {
+          claude: { calls: 2, cost: '5', savingsUSD: null, projects: { good: { cost: 5, calls: 2 }, bad: [1] } },
+          junk: [1, 2],
+        },
+      }],
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v13.json'), JSON.stringify(dirty), 'utf-8')
+    const cache = await loadDailyCache()
+    const claude = cache.days[0]!.providers['claude']!
+    expect(claude).toMatchObject({ calls: 2, cost: 0, savingsUSD: 0 })
+    expect(claude.projects).toEqual({ good: { cost: 5, calls: 2, savingsUSD: 0, sessions: 0 } })
+    expect(cache.days[0]!.providers['junk']).toBeUndefined()
   })
 
   it('rescues older files even when the current versioned file is corrupt', async () => {

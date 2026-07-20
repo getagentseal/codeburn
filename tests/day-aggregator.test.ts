@@ -219,6 +219,10 @@ describe('aggregateProjectsIntoDays', () => {
     expect(day.providers['codex']!.categories!['coding']).toMatchObject({ turns: 1, cost: 3 })
     // Day-level category still counts the whole turn once.
     expect(day.categories['coding']).toMatchObject({ turns: 1, cost: 10 })
+    // Per-project rollup at day level and inside each provider slice.
+    expect(day.projects!['p']).toEqual({ cost: 10, calls: 2, savingsUSD: 0, sessions: 1 })
+    expect(day.providers['claude']!.projects!['p']).toMatchObject({ cost: 7, calls: 1 })
+    expect(day.providers['codex']!.projects!['p']).toMatchObject({ cost: 3, calls: 1 })
   })
 })
 

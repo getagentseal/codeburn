@@ -5,7 +5,15 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 14: NEVER-LOSE history. Session files are ephemeral (Claude Code
+// Bumped to 15: per-project daily rollups. Days and provider slices now carry
+// a `projects` breakdown (cost/calls/savings/sessions per project) so project
+// history outlives the session files, like models and categories already do.
+// This bump is the first to ride the v14 carry-forward: the old cache is
+// adopted losslessly and only days whose sources survive are re-derived (now
+// with projects); days already sourceless keep their totals and simply have
+// no project split.
+//
+// v14: NEVER-LOSE history. Session files are ephemeral (Claude Code
 // deletes transcripts after ~30 days), so a day that can no longer be re-derived
 // from sources exists ONLY in this cache. Every earlier version treated the
 // cache as disposable — schema bumps, savings-config changes, timezone changes
@@ -49,8 +57,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 14
-const MIN_SUPPORTED_VERSION = 14
+export const DAILY_CACHE_VERSION = 15
+const MIN_SUPPORTED_VERSION = 15
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including
@@ -70,6 +78,8 @@ export type ModelDayStats = {
 
 export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }
 
+export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number }
+
 export type ProviderDaySlice = {
   calls: number
   cost: number
@@ -87,6 +97,7 @@ export type ProviderDaySlice = {
   oneShotTurns?: number
   models?: Record<string, ModelDayStats>
   categories?: Record<string, CategoryDayStats>
+  projects?: Record<string, ProjectDayStats>
 }
 
 export type DailyEntry = {
@@ -104,6 +115,10 @@ export type DailyEntry = {
   models: Record<string, ModelDayStats>
   categories: Record<string, CategoryDayStats>
   providers: Record<string, ProviderDaySlice>
+  /// Per-project rollup (session-level project attribution). Absent on days
+  /// recorded before v15 — those days keep their totals but have no project
+  /// split, and nothing can reconstruct one once the sources are gone.
+  projects?: Record<string, ProjectDayStats>
   /// Present when some of this day's data was carried forward from an earlier
   /// cache generation instead of re-derived from session files (the files no
   /// longer exist). Carried values keep the accounting of the version that
@@ -169,6 +184,49 @@ function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
+const OPTIONAL_SLICE_NUMERICS = ['sessions', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'editTurns', 'oneShotTurns'] as const
+
+/// Same junk-tolerance as sanitizeProjects, one level up: a foreign cache can
+/// hold anything under a provider slice, and structuredClone in the merge
+/// would faithfully preserve that junk into the next cache generation. Numeric
+/// fields are coerced, nested projects sanitized, models/categories kept only
+/// when object-shaped.
+function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: DailyEntry['providers'] = {}
+  for (const [name, s] of Object.entries(raw)) {
+    if (!s || typeof s !== 'object' || Array.isArray(s)) continue
+    const slice = s as Record<string, unknown>
+    const clean: ProviderDaySlice = { calls: num(slice.calls), cost: num(slice.cost), savingsUSD: num(slice.savingsUSD) }
+    for (const key of OPTIONAL_SLICE_NUMERICS) {
+      if (slice[key] !== undefined) clean[key] = num(slice[key])
+    }
+    if (slice.models && typeof slice.models === 'object' && !Array.isArray(slice.models)) clean.models = slice.models as ProviderDaySlice['models']
+    if (slice.categories && typeof slice.categories === 'object' && !Array.isArray(slice.categories)) clean.categories = slice.categories as ProviderDaySlice['categories']
+    const projects = sanitizeProjects(slice.projects).projects
+    if (projects) clean.projects = projects
+    setOwn(out, name, clean)
+  }
+  return out
+}
+
+/// Foreign or hand-edited caches can hold anything under `projects`; keep only
+/// a plain record of finite numeric stats (arrays and null entries dropped) so
+/// later carry merges can't crash on junk.
+function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: NonNullable<DailyEntry['projects']> = {}
+  for (const [name, p] of Object.entries(raw)) {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) continue
+    const stats = p as Record<string, unknown>
+    Object.defineProperty(out, name, {
+      value: { cost: num(stats.cost), calls: num(stats.calls), savingsUSD: num(stats.savingsUSD), sessions: num(stats.sessions) },
+      enumerable: true, writable: true, configurable: true,
+    })
+  }
+  return Object.keys(out).length > 0 ? { projects: out } : {}
+}
+
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/
 
 function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
@@ -188,7 +246,8 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
       oneShotTurns: num(d.oneShotTurns),
       models: (d.models as DailyEntry['models']) ?? {},
       categories: (d.categories as DailyEntry['categories']) ?? {},
-      providers: (d.providers as DailyEntry['providers']) ?? {},
+      providers: sanitizeProviders(d.providers),
+      ...(sanitizeProjects(d.projects)),
       ...(d.carried === true ? { carried: true as const } : {}),
     }))
 }
@@ -389,11 +448,14 @@ function emptyModelStats(): ModelDayStats {
 /// count, deduplicated by max — the same real session may be counted on both
 /// sides.
 function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySlice): void {
-  const placeholder = day.providers[provider]
+  // Reads keyed by names from foreign caches use hasOwn throughout: a plain
+  // lookup of "__proto__" returns the prototype object, and accumulating into
+  // it pollutes every object in the process.
+  const placeholder = Object.hasOwn(day.providers, provider) ? day.providers[provider] : undefined
   const placeholderSessions = placeholder?.sessions ?? 0
   const merged = structuredClone(slice)
   if (placeholderSessions > (merged.sessions ?? 0)) merged.sessions = placeholderSessions
-  day.providers[provider] = merged
+  setOwn(day.providers, provider, merged)
   day.cost += slice.cost
   day.calls += slice.calls
   day.savingsUSD += slice.savingsUSD ?? 0
@@ -405,7 +467,7 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   day.editTurns += slice.editTurns ?? 0
   day.oneShotTurns += slice.oneShotTurns ?? 0
   for (const [name, m] of Object.entries(slice.models ?? {})) {
-    const acc = day.models[name] ?? emptyModelStats()
+    const acc = Object.hasOwn(day.models, name) ? day.models[name]! : emptyModelStats()
     acc.calls += m.calls
     acc.cost += m.cost
     acc.savingsUSD += m.savingsUSD ?? 0
@@ -413,17 +475,53 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
     acc.outputTokens += m.outputTokens
     acc.cacheReadTokens += m.cacheReadTokens
     acc.cacheWriteTokens += m.cacheWriteTokens
-    day.models[name] = acc
+    setOwn(day.models, name, acc)
   }
   for (const [cat, c] of Object.entries(slice.categories ?? {})) {
-    const acc = day.categories[cat] ?? { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
+    const acc = Object.hasOwn(day.categories, cat) ? day.categories[cat]! : { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
     acc.turns += c.turns
     acc.cost += c.cost
     acc.savingsUSD += c.savingsUSD ?? 0
     acc.editTurns += c.editTurns
     acc.oneShotTurns += c.oneShotTurns
-    day.categories[cat] = acc
+    setOwn(day.categories, cat, acc)
   }
+  const placeholderProjects = placeholder?.projects ?? {}
+  for (const [name, p] of Object.entries(slice.projects ?? {})) {
+    if (!p || typeof p !== 'object' || Array.isArray(p)) continue
+    const dayProjects = (day.projects ??= {})
+    const acc = Object.hasOwn(dayProjects, name) ? dayProjects[name]! : { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
+    acc.cost += num(p.cost)
+    acc.calls += num(p.calls)
+    acc.savingsUSD += num(p.savingsUSD)
+    // Same session dedup as the slice-level sessions above: a placeholder's
+    // project sessions were already counted into the day when the fresh day
+    // was built, so only the excess is added.
+    const placeholderProjectSessions = Object.hasOwn(placeholderProjects, name) ? num(placeholderProjects[name]?.sessions) : 0
+    acc.sessions += Math.max(0, num(p.sessions) - placeholderProjectSessions)
+    setOwn(dayProjects, name, acc)
+  }
+  // Placeholder-only projects (session counted fresh, calls landed elsewhere)
+  // survive on the merged slice rather than being dropped by the clone above.
+  const mergedProjects = merged.projects
+  if (mergedProjects) {
+    for (const [name, p] of Object.entries(placeholderProjects)) {
+      if (!p || typeof p !== 'object') continue
+      if (Object.hasOwn(mergedProjects, name)) {
+        if (num(p.sessions) > num(mergedProjects[name]!.sessions)) mergedProjects[name]!.sessions = num(p.sessions)
+      } else {
+        setOwn(mergedProjects, name, { cost: 0, calls: 0, savingsUSD: 0, sessions: num(p.sessions) })
+      }
+    }
+  } else if (placeholder?.projects) {
+    merged.projects = structuredClone(placeholder.projects)
+  }
+}
+
+/// Assign via defineProperty so filesystem-derived keys like "__proto__" become
+/// ordinary own properties instead of mutating the prototype link.
+function setOwn<T>(target: Record<string, T>, key: string, value: T): void {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
 }
 
 /// Merge two day lists per (date, provider): `primary` wins wherever both have
@@ -457,7 +555,7 @@ export function mergeDayEntries(primary: DailyEntry[], secondary: DailyEntry[], 
       // Sessions-only slices (a session whose calls all landed on another
       // day) still carry a real session count — worth preserving.
       if (!hasSliceData(slice) && !(slice.sessions ?? 0)) continue
-      const existingSlice = existing.providers[provider]
+      const existingSlice = Object.hasOwn(existing.providers, provider) ? existing.providers[provider] : undefined
       if (existingSlice && hasSliceData(existingSlice)) continue
       addSliceIntoDay(existing, provider, slice)
       if (markSecondaryCarried) existing.carried = true
