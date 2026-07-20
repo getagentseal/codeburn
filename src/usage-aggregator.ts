@@ -319,6 +319,14 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       // detection, both derivable solely from surviving sessions.
       currentData.estimatedCostUSD = scanData.estimatedCostUSD
       currentData.unpricedModels = scanData.unpricedModels
+      // Workflow-intelligence metrics are session-derived by nature (they need
+      // turn text, timestamps, and tool sequences that day entries don't
+      // carry), so like the fields above they come from the scan. Note
+      // pricingCoverage therefore describes surviving-session calls, a smaller
+      // population than the carried headline cost.
+      currentData.workflow = scanData.workflow
+      currentData.topReworkedFiles = scanData.topReworkedFiles
+      currentData.pricingCoverage = scanData.pricingCoverage
       // Sessions: the cache buckets a session on its START day, the scan
       // counts it on any day it was ACTIVE. Each undercounts differently
       // (day-filtered views miss midnight-spanners; the scan misses expired

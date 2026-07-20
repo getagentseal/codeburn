@@ -103,6 +103,15 @@ describe('carried history reaches the user-visible headline', () => {
     expect(payload.current.topModels.some(m => m.name === 'Opus 4.8' && m.cost === 100)).toBe(true)
     const projects = payload.current.topProjects
     expect(projects.some(p => p.name === 'proj-x' && p.cost === 100 && p.sessions === 3)).toBe(true)
+
+    // Scan-derived workflow-intelligence fields must be PROPAGATED onto the
+    // cache-authoritative headline, not silently dropped by the selective
+    // merge (the regression that made them dead on the default path). With no
+    // surviving sessions they are the empty-scan values, but they must exist.
+    expect(payload.current.workflow).toBeDefined()
+    expect(payload.current.workflow?.corrections).toBe(0)
+    expect(Array.isArray(payload.current.topReworkedFiles)).toBe(true)
+    expect(typeof payload.current.pricingCoverage).toBe('number')
   })
 
   it('merges live today data on top of carried history without double counting', async () => {
