@@ -90,6 +90,10 @@ export type ParsedTurn = {
   assistantCalls: ParsedApiCall[]
   timestamp: string
   sessionId: string
+  // Claude Code: the git branch active for this turn (top-level `gitBranch` on
+  // the turn's entries). Captured for cost-per-branch reporting; deduped at the
+  // cache boundary (stored per-turn only when it changes). Optional; Claude only.
+  gitBranch?: string
 }
 
 export type ParsedApiCall = {
@@ -122,6 +126,19 @@ export type ParsedApiCall = {
   /// across the parser/cache boundary. Aggregates roll the estimated portion up
   /// as `estimatedCostUSD`; it is display/metadata only and never changes totals.
   isEstimated?: boolean
+  /// Lines added/removed by this call's edits, counted from tool-result diffs
+  /// (Claude: `toolUseResult.structuredPatch`). Numbers only, never patch text;
+  /// omitted when zero. Rich-session-capture (capture-only; no report yet).
+  locAdded?: number
+  locRemoved?: number
+  /// True only when at least one of this call's tool results was interrupted or
+  /// had its edit modified by the user (Claude `toolUseResult.interrupted` /
+  /// `userModified`). Omitted when false.
+  interrupted?: boolean
+  userModified?: boolean
+  /// Count of this call's tool results flagged `is_error` (Claude tool_result
+  /// blocks). Bash stderr alone is NOT counted (warnings go there). Omitted at 0.
+  toolErrors?: number
 }
 
 export type ToolCall = {

@@ -524,7 +524,7 @@ function extractObjectFields(
   return captured
 }
 
-const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'attachment', 'message'] as const
+const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message'] as const
 const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content'] as const
 
 function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
@@ -541,9 +541,11 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   const timestamp = readJsonString(source, root['timestamp'])
   const sessionId = readJsonString(source, root['sessionId'])
   const cwd = readJsonString(source, root['cwd'])
+  const gitBranch = readJsonString(source, root['gitBranch'])
   if (timestamp !== undefined) entry.timestamp = timestamp
   if (sessionId !== undefined) entry.sessionId = sessionId
   if (cwd !== undefined) entry.cwd = cwd
+  if (gitBranch !== undefined) entry.gitBranch = gitBranch
   const addedNames = extractLargeAddedNames(source, root['attachment'])
   if (addedNames.length > 0) {
     ;(entry as Record<string, unknown>)['attachment'] = { type: 'deferred_tools_delta', addedNames }
@@ -907,6 +909,8 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
   if (raw.timestamp !== undefined) entry.timestamp = raw.timestamp
   if (raw.sessionId !== undefined) entry.sessionId = raw.sessionId
   if (raw.cwd !== undefined) entry.cwd = raw.cwd
+  // Preserved so groupIntoTurns can stamp each turn's git branch (rich capture).
+  if (typeof raw.gitBranch === 'string' && raw.gitBranch) entry.gitBranch = raw.gitBranch
 
   const att = (raw as Record<string, unknown>)['attachment']
   if (att && typeof att === 'object') {
@@ -1151,7 +1155,97 @@ function applyLocalModelSavings(call: ParsedApiCall): ParsedApiCall {
   }
 }
 
-export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
+// ── Rich Session Capture (Claude) ──────────────────────────────────────
+//
+// Parse-time extraction of edit sizes, interruptions, error counts, git branch,
+// and session titles/PR links from the raw JSONL. Capture-only: no report or
+// payload consumes these yet. Everything is optional and omitted at zero/false
+// to keep the cache cost minimal.
+
+// Per-call metadata keyed by tool_use_id, built from a session's user
+// (tool-result) entries before compaction discards `toolUseResult` and the
+// tool_result blocks' `is_error` flag.
+export type ToolResultMeta = {
+  locAdded: number
+  locRemoved: number
+  interrupted: boolean
+  userModified: boolean
+  isError: boolean
+}
+
+// Session-level accumulator: last `ai-title` wins, `pr-link` URLs accumulate,
+// and any sidechain entry flips `isSidechain`. parentUuid is deliberately not
+// captured as a session link — it references an intra-file entry uuid, not
+// another session's id, so it cannot reliably connect two sessions.
+export type SessionMeta = {
+  title?: string
+  prLinks: string[]
+  isSidechain: boolean
+}
+
+export function emptySessionMeta(): SessionMeta {
+  return { prLinks: [], isSidechain: false }
+}
+
+// Count added/removed lines from a Claude `toolUseResult.structuredPatch`. Each
+// hunk's `lines` array holds unified-diff content lines: a leading '+' is an
+// added line, '-' a removed line, ' ' context. Numbers only — patch text is
+// never stored. Missing/empty/non-array patches count as zero.
+export function countStructuredPatchLoc(patch: unknown): { added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  if (!Array.isArray(patch)) return { added, removed }
+  for (const hunk of patch) {
+    const lines = (hunk as { lines?: unknown } | null)?.lines
+    if (!Array.isArray(lines)) continue
+    for (const line of lines) {
+      if (typeof line !== 'string') continue
+      if (line.startsWith('+')) added++
+      else if (line.startsWith('-')) removed++
+    }
+  }
+  return { added, removed }
+}
+
+// Record tool-result metadata from a raw user entry into `map`, keyed by the
+// tool_result block's tool_use_id. Must run on the RAW entry (before
+// compactEntry drops toolUseResult / is_error). Large tool-result lines parsed
+// as buffers lose toolUseResult (the byte scanner does not extract it) — an
+// accepted gap for oversized outputs.
+export function collectToolResultMeta(entry: JournalEntry, map: Map<string, ToolResultMeta>): void {
+  if (entry.type !== 'user') return
+  const msg = entry.message
+  const content = msg && typeof msg === 'object' ? (msg as { content?: unknown }).content : undefined
+  if (!Array.isArray(content)) return
+  const tur = (entry as Record<string, unknown>)['toolUseResult']
+  const turObj = tur && typeof tur === 'object' ? tur as Record<string, unknown> : undefined
+  const loc = countStructuredPatchLoc(turObj?.['structuredPatch'])
+  const interrupted = turObj?.['interrupted'] === true
+  const userModified = turObj?.['userModified'] === true
+  for (const b of content) {
+    if (!b || typeof b !== 'object' || (b as { type?: unknown }).type !== 'tool_result') continue
+    const id = (b as { tool_use_id?: unknown }).tool_use_id
+    if (typeof id !== 'string' || !id) continue
+    const isError = (b as { is_error?: unknown }).is_error === true
+    map.set(id, { locAdded: loc.added, locRemoved: loc.removed, interrupted, userModified, isError })
+  }
+}
+
+// Accumulate session-level metadata from a raw entry. `ai-title` is last-wins
+// (Claude refines the title over the session); `pr-link` URLs union; any
+// sidechain entry marks the session.
+export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void {
+  if (entry.type === 'ai-title') {
+    const t = (entry as Record<string, unknown>)['aiTitle']
+    if (typeof t === 'string' && t.trim()) meta.title = t.trim().slice(0, 200)
+  } else if (entry.type === 'pr-link') {
+    const url = (entry as Record<string, unknown>)['prUrl']
+    if (typeof url === 'string' && url && !meta.prLinks.includes(url)) meta.prLinks.push(url)
+  }
+  if (entry.isSidechain === true) meta.isSidechain = true
+}
+
+export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, ToolResultMeta>): ParsedApiCall | null {
   if (entry.type !== 'assistant') return null
   const msg = entry.message as AssistantMessageContent | undefined
   if (!msg?.usage || !msg?.model) return null
@@ -1198,6 +1292,27 @@ export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
       return [call]
     })
 
+  // Attribute tool-result metadata (edit LOC, interruptions, errors) to this
+  // call by summing over the tool_use ids it issued. Omitted entirely when no
+  // meta map is supplied (e.g. the guard usage path) or nothing was recorded.
+  let locAdded = 0
+  let locRemoved = 0
+  let toolErrors = 0
+  let interrupted = false
+  let userModified = false
+  if (toolResultMeta && toolResultMeta.size > 0) {
+    for (const b of contentBlocks) {
+      if (b.type !== 'tool_use') continue
+      const m = toolResultMeta.get((b as ToolUseBlock).id)
+      if (!m) continue
+      locAdded += m.locAdded
+      locRemoved += m.locRemoved
+      if (m.isError) toolErrors++
+      if (m.interrupted) interrupted = true
+      if (m.userModified) userModified = true
+    }
+  }
+
   return applyLocalModelSavings({
     provider: 'claude',
     model: msg.model,
@@ -1215,6 +1330,11 @@ export function parseApiCall(entry: JournalEntry): ParsedApiCall | null {
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
     toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
+    ...(locAdded ? { locAdded } : {}),
+    ...(locRemoved ? { locRemoved } : {}),
+    ...(interrupted ? { interrupted: true } : {}),
+    ...(userModified ? { userModified: true } : {}),
+    ...(toolErrors ? { toolErrors } : {}),
   })
 }
 
@@ -1309,14 +1429,19 @@ export function dedupeStreamingMessageIds(entries: JournalEntry[]): JournalEntry
   return result
 }
 
-function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): ParsedTurn[] {
+export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>, toolResultMeta?: Map<string, ToolResultMeta>): ParsedTurn[] {
   const turns: ParsedTurn[] = []
   let currentUserMessage = ''
   let currentCalls: ParsedApiCall[] = []
   let currentTimestamp = ''
   let currentSessionId = ''
+  // Git branch of the turn currently being accumulated. Captured at turn start
+  // from the user entry (gitBranch is on every user/assistant entry); a
+  // continuation turn with no leading user text falls back to its first call.
+  let currentBranch: string | undefined
 
   for (const entry of entries) {
+    const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
     if (entry.type === 'user') {
       const text = getUserMessageText(entry)
       if (text.trim()) {
@@ -1326,18 +1451,21 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
             assistantCalls: currentCalls,
             timestamp: currentTimestamp,
             sessionId: currentSessionId,
+            ...(currentBranch ? { gitBranch: currentBranch } : {}),
           })
         }
         currentUserMessage = text
         currentCalls = []
         currentTimestamp = entry.timestamp ?? ''
         currentSessionId = entry.sessionId ?? ''
+        currentBranch = entryBranch
       }
     } else if (entry.type === 'assistant') {
+      if (entryBranch && !currentBranch) currentBranch = entryBranch
       const msgId = getMessageId(entry)
       if (msgId && seenMsgIds.has(msgId)) continue
       if (msgId) seenMsgIds.add(msgId)
-      const call = parseApiCall(entry)
+      const call = parseApiCall(entry, toolResultMeta)
       if (call) currentCalls.push(call)
       for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
     }
@@ -1349,6 +1477,7 @@ function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>): Parse
       assistantCalls: currentCalls,
       timestamp: currentTimestamp,
       sessionId: currentSessionId,
+      ...(currentBranch ? { gitBranch: currentBranch } : {}),
     })
   }
 
@@ -1731,11 +1860,13 @@ async function scanProjectDirs(
         // JSONL, this is the dominant warm-run cost. The merged result is
         // byte-for-byte identical to a full re-parse (see mergeBoundaryCalls).
         const tracker = { lastCompleteLineOffset: append.readFromOffset }
-        const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset)
+        const toolResultMeta = new Map<string, ToolResultMeta>()
+        const sessionMeta = emptySessionMeta()
+        const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset, { toolResultMeta, sessionMeta })
         const cached = append.cached
 
         const newTurns = newEntries
-          ? groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds).map(parsedTurnToCachedTurn)
+          ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
           : []
 
         const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
@@ -1773,6 +1904,12 @@ async function scanProjectDirs(
           ? Array.from(new Set([...cached.mcpInventory, ...extractMcpInventory(newEntries)])).sort()
           : cached.mcpInventory
 
+        // Session meta merges across the append boundary: title is last-wins
+        // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
+        const mergedTitle = sessionMeta.title ?? cached.title
+        const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
+        const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
+
         section.files[filePath] = {
           fingerprint: info.fp,
           lastCompleteLineOffset: tracker.lastCompleteLineOffset,
@@ -1781,6 +1918,9 @@ async function scanProjectDirs(
           mcpInventory,
           turns: mergedTurns,
           agentType: cached.agentType,
+          ...(mergedTitle ? { title: mergedTitle } : {}),
+          ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
+          ...(mergedSidechain ? { isSidechain: true } : {}),
         }
         ;(diskCache as { _dirty?: boolean })._dirty = true
         filesDone++
@@ -1793,10 +1933,12 @@ async function scanProjectDirs(
       }
 
       const tracker = { lastCompleteLineOffset: 0 }
-      const entries = await parseClaudeEntries(filePath, tracker)
+      const toolResultMeta = new Map<string, ToolResultMeta>()
+      const sessionMeta = emptySessionMeta()
+      const entries = await parseClaudeEntries(filePath, tracker, undefined, { toolResultMeta, sessionMeta })
       if (!entries) { filesDone++; await parseProgress.tick(filesDone); continue }
 
-      const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds)
+      const turns = groupIntoTurns(dedupeStreamingMessageIds(entries), seenMsgIds, toolResultMeta)
       const cwd = extractCanonicalCwd(entries)
       const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
       section.files[filePath] = {
@@ -1805,8 +1947,11 @@ async function scanProjectDirs(
         canonicalCwd: canonical?.path,
         canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
         mcpInventory: extractMcpInventory(entries),
-        turns: turns.map(parsedTurnToCachedTurn),
+        turns: parsedTurnsToCachedTurns(turns),
         agentType: await readAgentType(filePath),
+        ...(sessionMeta.title ? { title: sessionMeta.title } : {}),
+        ...(sessionMeta.prLinks.length > 0 ? { prLinks: sessionMeta.prLinks } : {}),
+        ...(sessionMeta.isSidechain ? { isSidechain: true } : {}),
       }
       ;(diskCache as { _dirty?: boolean })._dirty = true
     } catch (err) {
@@ -1997,6 +2142,9 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     project: call.project,
     projectPath: call.projectPath,
     toolSequence: call.toolSequence,
+    ...(call.locAdded ? { locAdded: call.locAdded } : {}),
+    ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
+    ...(call.editFailed ? { editFailed: call.editFailed } : {}),
   }
 }
 
@@ -2027,6 +2175,11 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     subagentTypes: call.subagentTypes,
     deduplicationKey: call.deduplicationKey,
     toolSequence: call.toolSequence,
+    ...(call.locAdded ? { locAdded: call.locAdded } : {}),
+    ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
+    ...(call.interrupted ? { interrupted: true } : {}),
+    ...(call.userModified ? { userModified: true } : {}),
+    ...(call.toolErrors ? { toolErrors: call.toolErrors } : {}),
   }
 }
 
@@ -2037,6 +2190,23 @@ function parsedTurnToCachedTurn(turn: ParsedTurn): CachedTurn {
     userMessage: turn.userMessage.slice(0, 2000),
     calls: turn.assistantCalls.map(apiCallToCachedCall),
   }
+}
+
+// Convert a batch of parsed turns to cached turns, storing each turn's gitBranch
+// only when it differs from the previous turn's branch in this batch. A report
+// reconstructs a turn's branch by carrying the last stored value forward. The
+// dedup is per-batch, so the first turn of an appended region always restates
+// its branch (harmless: a redundant restatement, never a wrong value).
+export function parsedTurnsToCachedTurns(turns: ParsedTurn[]): CachedTurn[] {
+  const out: CachedTurn[] = []
+  let prevBranch: string | undefined
+  for (const turn of turns) {
+    const cached = parsedTurnToCachedTurn(turn)
+    if (turn.gitBranch && turn.gitBranch !== prevBranch) cached.gitBranch = turn.gitBranch
+    if (turn.gitBranch) prevBranch = turn.gitBranch
+    out.push(cached)
+  }
+  return out
 }
 
 function providerCallToCachedTurn(call: ParsedProviderCall): CachedTurn {
@@ -2166,6 +2336,9 @@ async function parseClaudeEntries(
   filePath: string,
   tracker: { lastCompleteLineOffset: number },
   startByteOffset?: number,
+  // Rich-capture collectors, populated from the RAW entry before compaction
+  // strips toolUseResult / ai-title / pr-link / isSidechain.
+  collectors?: { toolResultMeta?: Map<string, ToolResultMeta>; sessionMeta?: SessionMeta },
 ): Promise<JournalEntry[] | null> {
   const entries: JournalEntry[] = []
   let hasLines = false
@@ -2176,7 +2349,10 @@ async function parseClaudeEntries(
   })) {
     hasLines = true
     const entry = parseJsonlLine(line)
-    if (entry) entries.push(compactEntry(entry))
+    if (!entry) continue
+    if (collectors?.toolResultMeta) collectToolResultMeta(entry, collectors.toolResultMeta)
+    if (collectors?.sessionMeta) collectSessionMeta(entry, collectors.sessionMeta)
+    entries.push(compactEntry(entry))
   }
   if (!hasLines || entries.length === 0) return null
   return entries

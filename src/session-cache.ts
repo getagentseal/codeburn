@@ -37,6 +37,19 @@ export type CachedCall = {
   project?: string
   projectPath?: string
   toolSequence?: ToolCall[][]
+  // Rich-session-capture (capture-only; no report consumes these yet). All
+  // optional and omitted at zero/false to keep the per-call cache cost minimal.
+  // Lines added/removed by this call's edits, counted from tool-result diffs
+  // (Claude structuredPatch / Codex unified_diff). Numbers only, never patch text.
+  locAdded?: number
+  locRemoved?: number
+  // True only. Claude: a tool result was interrupted / user-modified its edit.
+  interrupted?: boolean
+  userModified?: boolean
+  // Claude: count of this call's tool results flagged is_error. Omitted at 0.
+  toolErrors?: number
+  // Codex: count of this call's patch applications with success === false.
+  editFailed?: number
 }
 
 export type CachedTurn = {
@@ -44,6 +57,10 @@ export type CachedTurn = {
   sessionId: string
   userMessage: string
   calls: CachedCall[]
+  // Claude: git branch for this turn, stored only when it differs from the
+  // previous turn's branch (a report carries the last stored value forward).
+  // Rich-session-capture; optional, Claude only.
+  gitBranch?: string
 }
 
 export type FileFingerprint = {
@@ -69,6 +86,14 @@ export type CachedFile = {
   // is re-parsed only when the file changes (fingerprint differs). Carries no
   // turns, so it contributes no usage. (issue #441 follow-up)
   failed?: boolean
+  // Rich-session-capture, Claude session-level (capture-only; no report yet).
+  // `title` is the LAST `ai-title` entry's text; `prLinks` accumulates every
+  // `pr-link` entry's URL. `isSidechain` is true when any entry is a sidechain:
+  // parentUuid references an intra-file entry uuid, not another session id, so it
+  // cannot link sessions — only the boolean marker is reliable. All optional.
+  title?: string
+  prLinks?: string[]
+  isSidechain?: boolean
 }
 
 export type ProviderSection = {
@@ -143,14 +168,21 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 // re-parse, which lands the flag too, and durable orphans now survive
 // fingerprint changes (the carry-forward in getOrCreateProviderSection).
 export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
-  claude: 'advisor-usage-v1-skills',
+  // rich-session-capture-v1: parse-time capture of per-turn gitBranch, per-call
+  // LOC deltas / interruptions / userModified / toolErrors, and session-level
+  // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain
+  // the new optional fields.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1',
   cline: 'worktree-project-grouping-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
   // provider parser otherwise). Covers native mcp_tool_call_end (#513) and
   // CLI-wrapped `mcp-cli call` (#478) MCP attribution.
-  codex: 'mcp-attribution-v2-est-cost',
+  // rich-session-capture-v1: per-call LOC deltas + editFailed from
+  // patch_apply_end. (The codex-results.json CODEX_CACHE_VERSION is bumped in
+  // lockstep so the pre-session-cache layer re-parses too.)
+  codex: 'mcp-attribution-v2-est-cost-rich-capture-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'cli-shutdown-cost-v1-skills',
@@ -273,6 +305,12 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalString(o['project'])
     && isOptionalString(o['projectPath'])
     && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isToolCallArray(s))))
+    && isOptionalNum(o['locAdded'])
+    && isOptionalNum(o['locRemoved'])
+    && isOptionalBool(o['interrupted'])
+    && isOptionalBool(o['userModified'])
+    && isOptionalNum(o['toolErrors'])
+    && isOptionalNum(o['editFailed'])
     && validateUsage(o['usage'])
 }
 
@@ -282,6 +320,7 @@ function validateTurn(t: unknown): t is CachedTurn {
   return typeof o['timestamp'] === 'string'
     && typeof o['sessionId'] === 'string'
     && typeof o['userMessage'] === 'string'
+    && isOptionalString(o['gitBranch'])
     && Array.isArray(o['calls'])
     && (o['calls'] as unknown[]).every(validateCall)
 }
@@ -294,6 +333,9 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['canonicalCwd'])
     && isOptionalString(o['canonicalProjectName'])
     && isStringArray(o['mcpInventory'])
+    && isOptionalString(o['title'])
+    && (o['prLinks'] === undefined || isStringArray(o['prLinks']))
+    && isOptionalBool(o['isSidechain'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

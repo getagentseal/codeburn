@@ -37,6 +37,13 @@ export type ParsedProviderCall = {
   timestamp: string
   speed: 'standard' | 'fast'
   deduplicationKey: string
+  // Lines added/removed by this call's edits, counted from the provider's diff
+  // records (Codex: `patch_apply_end.changes[*].unified_diff`). Numbers only;
+  // omitted when zero. `editFailed` counts patches with `success === false`.
+  // Rich-session-capture (capture-only; no report yet).
+  locAdded?: number
+  locRemoved?: number
+  editFailed?: number
   turnId?: string
   toolSequence?: ToolCall[][]
   userMessage: string

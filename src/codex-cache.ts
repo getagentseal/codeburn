@@ -11,7 +11,9 @@ import type { ParsedProviderCall } from './providers/types.js'
 // v5: also attribute CLI-wrapped MCP calls (`mcp-cli call server tool`) that
 // Codex logs as a plain exec_command (issue #478 follow-up). Force a re-parse
 // so sessions cached under v4 pick up the CLI-MCP attribution.
-const CODEX_CACHE_VERSION = 5
+// v6: rich-session-capture — per-call locAdded/locRemoved/editFailed from
+// patch_apply_end. Sessions cached under v5 lack these fields; re-parse to add.
+const CODEX_CACHE_VERSION = 6
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }
