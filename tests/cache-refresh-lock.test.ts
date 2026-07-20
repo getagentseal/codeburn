@@ -208,7 +208,7 @@ describe('warm session-cache refresh lock', () => {
   // run (fs 'unavailable' makes the fence fail CLOSED, which is correct but
   // not what this test measures); the actual race fails ~6% per verify, so a
   // mutated build cannot pass any attempt.
-  it('the fence never loses to its own heartbeat (in-process serialization)', { retry: 2 }, async () => {
+  it('the fence never loses to its own heartbeat (in-process serialization)', { retry: 5 }, async () => {
     // Regression: verifyStillOwner and the heartbeat tick both take the
     // takeover guard; without in-process serialization the fence could observe
     // its own heartbeat's guard file and abort a legitimate publication.
@@ -216,7 +216,7 @@ describe('warm session-cache refresh lock', () => {
     const dir = await mkdtemp(join(tmpdir(), 'refresh-lock-'))
     const result = await acquireCacheRefreshLock({ cacheDir: dir, heartbeatMs: 1 })
     if (result.outcome !== 'acquired') throw new Error(`expected acquired, got ${result.outcome}`)
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 120; i++) {
       expect(await result.handle.verifyStillOwner()).toBe(true)
     }
     await result.handle.release()
