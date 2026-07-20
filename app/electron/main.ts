@@ -133,7 +133,7 @@ function configSourceArgs(source: string | null): string[] {
 // Renderer-supplied strings become argv, so reject anything that could smuggle a
 // flag or shell metacharacter before it reaches the CLI. Thrown from the argv
 // builders, these surface through the same error envelope as any CliError.
-const PERIODS = new Set(['today', 'week', '30days', 'month', 'all'])
+const PERIODS = new Set(['today', 'week', '30days', 'month', 'all', 'lifetime'])
 function vPeriod(period: string): string {
   if (!PERIODS.has(period)) throw new CliError('bad-args', 'invalid period')
   return period
