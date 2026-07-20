@@ -31,12 +31,24 @@ export function periodWindowStart(period: Period, now = new Date()): string {
   }
 }
 
+/** The payload's history.daily is capped to this many most-recent active days
+ * (menubar-json HISTORY_DAYS_LIMIT). At the cap the array's oldest entry is no
+ * longer the true data start, so no-data classification must switch off rather
+ * than mislabel real (aged-out) history on long custom ranges. */
+const HISTORY_DAYS_CAP = 365
+
 /**
- * Earliest recorded day in the sparse `history.daily`, or null when it is empty.
- * Days before this key predate CodeBurn's history: their absence is "no data
- * recorded", not a real zero, so charts must not paint them as a currency zero.
+ * Earliest recorded day in the sparse `history.daily`, or null when it is
+ * empty or at the server-side cap (at the cap the true start is unknowable
+ * from the payload, and null disables no-data classification entirely rather
+ * than mislabeling aged-out history).
+ *
+ * Days before this key render as "no data recorded". That label is literally
+ * true even for the edge where CodeBurn was installed earlier but idle until
+ * its first recorded activity: nothing was recorded those days either.
  */
 export function dataStartKey(daily: DailyHistoryEntry[]): string | null {
+  if (daily.length >= HISTORY_DAYS_CAP) return null
   let earliest: string | null = null
   for (const day of daily) {
     if (earliest === null || day.date < earliest) earliest = day.date

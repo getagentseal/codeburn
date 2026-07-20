@@ -48,6 +48,8 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
               key={day.date}
               data-date={day.date}
               data-nodata={noData ? 'true' : 'false'}
+              role="img"
+              aria-label={noData ? `${day.date}, no data recorded` : `${day.date}, ${formatUsd(day.cost)}`}
               title={noData ? `${day.date} · No data recorded` : `${day.date} · ${formatUsd(day.cost)}`}
             >
               {noData ? (
