@@ -1,8 +1,10 @@
 import { existsSync } from 'fs'
-import { dirname } from 'path'
+import { readFile } from 'fs/promises'
+import { dirname, join } from 'path'
 
 import { Chalk } from 'chalk'
 
+import { getClaudeConfigDirs } from './providers/claude.js'
 import { getAllProviders } from './providers/index.js'
 import type { Provider } from './providers/types.js'
 import {
@@ -56,9 +58,23 @@ export type DoctorProviderReport = {
   error?: string
 }
 
+export type ClaudeRetentionNote = {
+  /// Effective transcript retention in days. Claude Code deletes session
+  /// files older than cleanupPeriodDays at startup; 30 is its default when
+  /// the setting is absent.
+  effectiveDays: number
+  /// True when cleanupPeriodDays is explicitly set in settings.json.
+  configured: boolean
+  settingsPath: string
+}
+
 export type DoctorReport = {
   generatedAt: string
   providers: DoctorProviderReport[]
+  /// Present when the Claude provider is in the report and a config dir was
+  /// found. Surfaced because deleted transcripts are unrecoverable: daily
+  /// totals survive in CodeBurn's cache, but per-session detail does not.
+  claudeRetention?: ClaudeRetentionNote
 }
 
 export type CollectDoctorOptions = {
@@ -283,11 +299,46 @@ export async function collectDoctorReport(
     }
     providers.sort((a, b) => (a.displayName < b.displayName ? -1 : a.displayName > b.displayName ? 1 : 0))
 
-    return { generatedAt: new Date().toISOString(), providers }
+    const report: DoctorReport = { generatedAt: new Date().toISOString(), providers }
+    if (providers.some(p => p.provider === 'claude')) {
+      const retention = await collectClaudeRetention()
+      if (retention) report.claudeRetention = retention
+    }
+    return report
   } finally {
     if (prevSuppress === undefined) delete process.env['CODEBURN_SUPPRESS_CACHE_WRITES']
     else process.env['CODEBURN_SUPPRESS_CACHE_WRITES'] = prevSuppress
   }
+}
+
+// Claude Code's documented default when cleanupPeriodDays is absent.
+const CLAUDE_DEFAULT_CLEANUP_DAYS = 30
+// Below this, long-horizon views depend entirely on CodeBurn's daily cache;
+// the doctor line turns into a warning.
+const CLAUDE_RETENTION_WARN_DAYS = 365
+
+async function collectClaudeRetention(): Promise<ClaudeRetentionNote | undefined> {
+  for (const dir of await getClaudeConfigDirs()) {
+    const settingsPath = join(dir, 'settings.json')
+    let raw: string
+    try {
+      raw = await readFile(settingsPath, 'utf-8')
+    } catch {
+      continue
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      const days = (parsed as Record<string, unknown> | null)?.['cleanupPeriodDays']
+      if (typeof days === 'number' && Number.isFinite(days)) {
+        return { effectiveDays: days, configured: true, settingsPath }
+      }
+      return { effectiveDays: CLAUDE_DEFAULT_CLEANUP_DAYS, configured: false, settingsPath }
+    } catch {
+      // Unparseable settings: report the default; Claude Code would apply it too.
+      return { effectiveDays: CLAUDE_DEFAULT_CLEANUP_DAYS, configured: false, settingsPath }
+    }
+  }
+  return undefined
 }
 
 // ── Render ────────────────────────────────────────────────────────────────
@@ -361,6 +412,22 @@ export function renderDoctorTable(
       if (r.parseVersion) out.push('    ' + c.dim('parser: ') + r.parseVersion)
       if (r.cachedFailed > 0) out.push('    ' + c.dim('cached parse failures: ') + String(r.cachedFailed))
       if (r.error) out.push('    ' + c.red('error: ') + r.error)
+    }
+  }
+
+  if (report.claudeRetention) {
+    const r = report.claudeRetention
+    const source = r.configured ? 'cleanupPeriodDays' : 'cleanupPeriodDays not set; Claude Code default'
+    const line = `Claude Code deletes transcripts after ${r.effectiveDays} day${r.effectiveDays === 1 ? '' : 's'} (${source}).`
+    out.push('')
+    if (r.effectiveDays < CLAUDE_RETENTION_WARN_DAYS) {
+      out.push(
+        c.yellow(line) + ' ' +
+        `Daily totals survive in CodeBurn's cache, but per-session detail older than that is gone for good. ` +
+        `To keep it, set "cleanupPeriodDays": 3650 in ${r.settingsPath}.`,
+      )
+    } else {
+      out.push(c.dim(line + ' Long transcript retention: per-session detail is preserved.'))
     }
   }
 

@@ -328,3 +328,57 @@ describe('doctor is inert', () => {
     }
   })
 })
+
+// ── Claude transcript retention note ───────────────────────────────────────
+describe('collectDoctorReport - claude retention note', () => {
+  async function withClaudeConfig(settings: string | null, fn: () => Promise<void>): Promise<void> {
+    const prev = process.env['CLAUDE_CONFIG_DIR']
+    const prevMulti = process.env['CLAUDE_CONFIG_DIRS']
+    delete process.env['CLAUDE_CONFIG_DIRS']
+    const dir = join(tmpDir, 'claude-config')
+    await mkdir(dir, { recursive: true })
+    if (settings !== null) await writeFile(join(dir, 'settings.json'), settings)
+    process.env['CLAUDE_CONFIG_DIR'] = dir
+    try {
+      await fn()
+    } finally {
+      if (prev === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+      else process.env['CLAUDE_CONFIG_DIR'] = prev
+      if (prevMulti !== undefined) process.env['CLAUDE_CONFIG_DIRS'] = prevMulti
+    }
+  }
+
+  it('reports an explicit cleanupPeriodDays and renders it as preserved when long', async () => {
+    await withClaudeConfig(JSON.stringify({ cleanupPeriodDays: 3650 }), async () => {
+      const provider = fakeProvider({ name: 'claude' })
+      const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+      expect(report.claudeRetention).toMatchObject({ effectiveDays: 3650, configured: true })
+      const table = renderDoctorTable(report, { color: false })
+      expect(table).toContain('deletes transcripts after 3650 days')
+      expect(table).toContain('per-session detail is preserved')
+    })
+  })
+
+  it('reports the 30-day default and renders a warning with the settings path', async () => {
+    await withClaudeConfig(JSON.stringify({ theme: 'dark' }), async () => {
+      const provider = fakeProvider({ name: 'claude' })
+      const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+      expect(report.claudeRetention).toMatchObject({ effectiveDays: 30, configured: false })
+      const table = renderDoctorTable(report, { color: false })
+      expect(table).toContain('deletes transcripts after 30 days')
+      expect(table).toContain('cleanupPeriodDays not set')
+      expect(table).toContain('"cleanupPeriodDays": 3650')
+      expect(table).toContain(report.claudeRetention!.settingsPath)
+    })
+  })
+
+  it('emits no note when claude is not in the report or has no settings file', async () => {
+    await withClaudeConfig(null, async () => {
+      const claudeless = await collectDoctorReport('all', { providers: [fakeProvider({ name: 'codex' })], cache: emptyCache() })
+      expect(claudeless.claudeRetention).toBeUndefined()
+      const noSettings = await collectDoctorReport('all', { providers: [fakeProvider({ name: 'claude' })], cache: emptyCache() })
+      expect(noSettings.claudeRetention).toBeUndefined()
+      expect(renderDoctorTable(noSettings, { color: false })).not.toContain('deletes transcripts')
+    })
+  })
+})
