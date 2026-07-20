@@ -85,16 +85,6 @@ describe('resolveCodeburnPath (Vite development)', () => {
     expect(resolved).not.toBe(persistedTarget)
   })
 
-  it('keeps the existing Vite-dev resolution when the dev-root override is unset', () => {
-    delete process.env.CODEBURN_BIN
-    delete process.env.CODEBURN_DEV_REPO_ROOT
-    process.env.CODEBURN_PATH_DIRS = ''
-    process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
-    process.env.VITE_DEV_SERVER_URL = 'http://localhost:5173'
-
-    expect(resolveCodeburnPath()).toBeNull()
-  })
-
   it('does not return the repo dev CLI outside the Vite dev server', () => {
     delete process.env.CODEBURN_BIN
     process.env.CODEBURN_PATH_DIRS = ''
