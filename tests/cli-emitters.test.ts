@@ -87,7 +87,7 @@ describe('CLI JSON emitters', () => {
       const rows = JSON.parse(result.stdout) as Array<Record<string, unknown>>
       expect(rows).toHaveLength(2)
       expect(Object.keys(rows[0]!)).toEqual([
-        'sessionId', 'project', 'provider', 'models', 'cost', 'savingsUSD', 'calls', 'turns',
+        'sessionId', 'title', 'project', 'provider', 'models', 'cost', 'savingsUSD', 'calls', 'turns',
         'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens',
         'startedAt', 'endedAt', 'durationMs',
       ])
