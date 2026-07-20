@@ -46,6 +46,29 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.outputTokens).toBe(675600)
   })
 
+  it('passes the pull-requests payload (models, categories, cap remainder) through verbatim', () => {
+    const period: PeriodData = {
+      ...emptyPeriod('7 Days'),
+      pullRequests: {
+        rows: [
+          { url: 'https://github.com/o/r/pull/1', label: 'o/r#1', cost: 40, savingsUSD: 0, sessions: 1, calls: 12, firstStarted: '2026-07-20T10:00:00Z', lastEnded: '2026-07-20T11:00:00Z', approx: false, models: ['fable', 'opus'], categories: [{ name: 'Coding', cost: 30 }, { name: 'Debugging', cost: 10 }] },
+        ],
+        distinctCost: 45,
+        distinctSessions: 1,
+        attributedCost: 40,
+        unattributedCost: 5,
+        otherPrCount: 3,
+        otherPrCost: 12.5,
+      },
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    expect(payload.current.pullRequests).toEqual(period.pullRequests)
+    expect(payload.current.pullRequests!.rows[0]!.models).toEqual(['fable', 'opus'])
+    expect(payload.current.pullRequests!.rows[0]!.categories).toEqual([{ name: 'Coding', cost: 30 }, { name: 'Debugging', cost: 10 }])
+    expect(payload.current.pullRequests!.otherPrCount).toBe(3)
+    expect(payload.current.pullRequests!.otherPrCost).toBe(12.5)
+  })
+
   it('exposes period-scoped cache tokens on current, decoupled from the 365-day history backfill (#583)', () => {
     const period: PeriodData = {
       label: '30 Days',

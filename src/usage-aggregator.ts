@@ -666,12 +666,16 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     const prRows = aggregateByPr(scanProjects)
     if (prRows.length > 0) {
       const prTotals = prLinkedTotals(scanProjects)
+      const shownRows = prRows.slice(0, TOP_PULL_REQUESTS)
+      const otherRows = prRows.slice(TOP_PULL_REQUESTS)
       currentData.pullRequests = {
-        rows: prRows.slice(0, TOP_PULL_REQUESTS),
+        rows: shownRows,
         distinctCost: prTotals.cost,
         distinctSessions: prTotals.sessions,
         attributedCost: prTotals.attributedCost,
         unattributedCost: prTotals.unattributedCost,
+        otherPrCount: otherRows.length,
+        otherPrCost: otherRows.reduce((sum, r) => sum + r.cost, 0),
       }
     }
     const branchRows = aggregateByBranch(scanProjects)

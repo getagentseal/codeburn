@@ -61,11 +61,17 @@ export type PullRequestsPayload = {
   /// `attributedCost + unattributedCost`; kept for backward compatibility.
   distinctCost: number
   distinctSessions: number
-  /// Sum of the per-PR rows' attributed cost (the rows ARE summable now).
+  /// Sum of EVERY PR's attributed cost (all rows, not just the sent top 20).
   attributedCost: number
   /// PR-linked spend not tied to any specific PR (pre-reference session
   /// overhead). `attributedCost + unattributedCost === distinctCost`.
   unattributedCost: number
+  /// Count of PRs beyond the sent `rows` (0 when nothing was capped). The app
+  /// renders an "Other (N more PRs)" summary row so the visible table still
+  /// reconciles to `attributedCost`.
+  otherPrCount: number
+  /// Attributed cost of those capped-away PRs (0 when nothing was capped).
+  otherPrCost: number
 }
 
 export type ProviderCost = {

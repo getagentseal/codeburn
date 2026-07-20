@@ -207,6 +207,12 @@ export type SessionSummary = {
   /// GitHub PR URLs captured from the session transcript (session-level,
   /// deduplicated). Absent when none were observed.
   prLinks?: string[]
+  /// The PR set active at the start of the in-range turn slice: the refs of the
+  /// last turn BEFORE the report's range start that referenced any PR. Captured
+  /// pre-filter (like `everHadBranch`) so per-turn PR attribution can carry a
+  /// reference made before the window into its later, in-range, ref-less turns.
+  /// Absent when no PR was referenced before the range (or no range filter).
+  prRefsAtRangeStart?: string[]
   /// Human session title captured from the transcript (last ai-title entry).
   /// Absent when the transcript never produced one.
   title?: string

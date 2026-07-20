@@ -1,4 +1,6 @@
-import type { ProjectSummary, SessionSummary } from './types.js'
+import { getShortModelName } from './models.js'
+import { CATEGORY_LABELS } from './types.js'
+import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
 
 export type SessionRow = {
   sessionId: string
@@ -99,6 +101,13 @@ export type PrRow = {
   /// (session-level prLinks but no surviving per-turn refs), so this row's share
   /// is an approximation rather than genuine turn-level attribution.
   approx: boolean
+  /// Short model names that processed this PR's attributed calls, ordered by
+  /// attributed cost descending, deduplicated.
+  models: string[]
+  /// Attributed cost per task category (from the turns' classification), ordered
+  /// by cost descending. Omitted for legacy approx rows: with no turn-level
+  /// attribution there is no honest per-category split.
+  categories?: Array<{ name: string; cost: number }>
 }
 
 const GITHUB_PR_RE = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/
@@ -108,8 +117,13 @@ export function shortenPrUrl(url: string): string {
   return m ? `${m[1]}/${m[2]}#${m[3]}` : url
 }
 
-/// One PR's slice of a session's spend.
-export type PrContribution = { cost: number; calls: number; savingsUSD: number; approx: boolean }
+/// One PR's slice of a session's spend. `models`/`categories` map a key (raw
+/// model name / task category) to the attributed cost carried under it.
+export type PrContribution = {
+  cost: number; calls: number; savingsUSD: number; approx: boolean
+  models: Map<string, number>
+  categories: Map<string, number>
+}
 
 /// A single session's PR-attributed spend: `perUrl` is the turn-level split
 /// across the PRs it referenced; `unattributed` is the spend that belongs to no
@@ -122,54 +136,87 @@ export type SessionPrAttribution = {
 // Minimal structural shape a SessionSummary satisfies, so the state machine is
 // unit-testable without constructing a full session fixture.
 type AttributableSession = {
-  turns: Array<{ prRefs?: string[]; assistantCalls: Array<{ costUSD: number; savingsUSD?: number }> }>
+  turns: Array<{ prRefs?: string[]; category?: string; assistantCalls: Array<{ costUSD: number; savingsUSD?: number; model?: string }> }>
   prLinks?: string[]
   totalCostUSD: number
   apiCalls: number
   totalSavingsUSD: number
+  /// The PR set carried into the in-range turn slice: the refs of the last turn
+  /// BEFORE the report's range start that referenced any PR. Seeds `current` so a
+  /// PR referenced before the range still owns its later, in-range, ref-less turns
+  /// (mirrors the branch carry-forward). Set by the parser; absent in unit tests.
+  prRefsAtRangeStart?: string[]
 }
 
-function addContribution(
-  map: Map<string, PrContribution>,
-  url: string, cost: number, calls: number, savingsUSD: number, approx: boolean,
-): void {
-  const e = map.get(url) ?? { cost: 0, calls: 0, savingsUSD: 0, approx: false }
-  e.cost += cost
-  e.calls += calls
-  e.savingsUSD += savingsUSD
-  if (approx) e.approx = true
-  map.set(url, e)
+function addToMap(m: Map<string, number>, key: string, value: number): void {
+  m.set(key, (m.get(key) ?? 0) + value)
+}
+
+function ensureContribution(map: Map<string, PrContribution>, url: string): PrContribution {
+  let e = map.get(url)
+  if (!e) {
+    e = { cost: 0, calls: 0, savingsUSD: 0, approx: false, models: new Map(), categories: new Map() }
+    map.set(url, e)
+  }
+  return e
+}
+
+// Split an integer `total` across `n` buckets as evenly as possible, giving the
+// first `total % n` buckets the extra unit (largest-remainder, deterministic by
+// bucket order). Keeps per-PR call counts integral so aggregated rows never
+// over- or under-count from independent per-row rounding (a 1-call, 2-PR turn
+// allocates [1, 0], not [0.5, 0.5] that would each round up to 1).
+export function allocateEven(total: number, n: number): number[] {
+  const base = Math.floor(total / n)
+  const extra = total - base * n
+  return Array.from({ length: n }, (_, i) => base + (i < extra ? 1 : 0))
 }
 
 /// Attribute a session's spend to the PRs it referenced, at TURN granularity.
 ///
 /// Walk the turns in order carrying `current` = the PR set of the most recent
-/// turn that referenced any PR. Each turn's cost/calls/savings are attributed to
-/// `current`, split evenly across a multi-PR set (a merge-sweep turn touching
-/// several PRs at once). Turns before the first reference land in `unattributed`
-/// (genuine session overhead: exploration, unrelated work).
+/// turn that referenced any PR (seeded from `prRefsAtRangeStart` so a reference
+/// made before the report window still owns its in-range follow-up turns). Each
+/// turn's cost/savings are split evenly across a multi-PR set (a merge-sweep turn
+/// touching several PRs); calls are split by largest-remainder so they stay whole.
+/// Each contribution also records the models of its calls and the turn's task
+/// category, both weighted by the same split share. Turns before the first
+/// reference land in `unattributed` (genuine session overhead).
 ///
 /// Legacy fallback: a session whose transcript already expired keeps its
 /// session-level `prLinks` but has NO per-turn `prRefs`. With no turn boundaries
-/// to attribute by, split the whole session evenly across its prLinks and mark
-/// every portion `approx` so surfaces can flag it honestly.
+/// to attribute by, split the whole session evenly across its prLinks, mark every
+/// portion `approx`, and carry the session's model union (its calls still name
+/// their models) but NO category breakdown, since none can be honestly assigned.
 export function attributeSessionPrSpend(session: AttributableSession): SessionPrAttribution {
   const perUrl = new Map<string, PrContribution>()
   const unattributed = { cost: 0, calls: 0, savingsUSD: 0 }
 
-  const hasTurnRefs = session.turns.some(t => t.prRefs?.length)
+  const hasTurnRefs = session.turns.some(t => t.prRefs?.length) || !!session.prRefsAtRangeStart?.length
   if (!hasTurnRefs) {
     const links = session.prLinks
     if (links?.length) {
-      const share = 1 / links.length
-      for (const url of links) {
-        addContribution(perUrl, url, session.totalCostUSD * share, session.apiCalls * share, session.totalSavingsUSD * share, true)
+      const legacyModels = new Map<string, number>()
+      for (const turn of session.turns) {
+        for (const call of turn.assistantCalls) {
+          if (call.model) addToMap(legacyModels, call.model, call.costUSD)
+        }
       }
+      const share = 1 / links.length
+      const callAlloc = allocateEven(session.apiCalls, links.length)
+      links.forEach((url, i) => {
+        const e = ensureContribution(perUrl, url)
+        e.cost += session.totalCostUSD * share
+        e.calls += callAlloc[i]!
+        e.savingsUSD += session.totalSavingsUSD * share
+        e.approx = true
+        for (const [m, mc] of legacyModels) addToMap(e.models, m, mc * share)
+      })
     }
     return { perUrl, unattributed }
   }
 
-  let current: string[] | null = null
+  let current: string[] | null = session.prRefsAtRangeStart?.length ? session.prRefsAtRangeStart : null
   for (const turn of session.turns) {
     if (turn.prRefs?.length) current = turn.prRefs
     const cost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
@@ -182,8 +229,20 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
       unattributed.savingsUSD += savings
       continue
     }
+    const modelCostInTurn = new Map<string, number>()
+    for (const call of turn.assistantCalls) {
+      if (call.model) addToMap(modelCostInTurn, call.model, call.costUSD)
+    }
     const share = 1 / current.length
-    for (const url of current) addContribution(perUrl, url, cost * share, calls * share, savings * share, false)
+    const callAlloc = allocateEven(calls, current.length)
+    current.forEach((url, i) => {
+      const e = ensureContribution(perUrl, url)
+      e.cost += cost * share
+      e.calls += callAlloc[i]!
+      e.savingsUSD += savings * share
+      if (turn.category) addToMap(e.categories, turn.category, cost * share)
+      for (const [m, mc] of modelCostInTurn) addToMap(e.models, m, mc * share)
+    })
   }
   return { perUrl, unattributed }
 }
@@ -191,27 +250,35 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
 /// Spend attributed to each pull request at turn granularity (see
 /// attributeSessionPrSpend). Rows carry ATTRIBUTED cost/calls and ARE summable;
 /// `sessions` counts the distinct sessions that contributed any spend to the PR;
-/// `approx` marks rows fed by the legacy even-split fallback. Sorted by cost, desc.
+/// `approx` marks rows fed by the legacy even-split fallback; `models` and
+/// `categories` are the attributed model/category breakdowns. Sorted by cost, desc.
 export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
   const byUrl = new Map<string, {
     cost: number; savingsUSD: number; calls: number; approx: boolean
     sessions: Set<string>; firstStarted: string; lastEnded: string
+    models: Map<string, number>; categories: Map<string, number>
   }>()
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
+      // Key on project + sessionId: a transcript basename (sessionId) can repeat
+      // across projects, so sessionId alone would undercount distinct sessions.
+      const sessionKey = `${session.project} ${session.sessionId}`
       const { perUrl } = attributeSessionPrSpend(session)
       for (const [url, c] of perUrl) {
         if (c.cost === 0 && c.calls === 0 && c.savingsUSD === 0) continue
         const row = byUrl.get(url) ?? {
           cost: 0, savingsUSD: 0, calls: 0, approx: false,
           sessions: new Set<string>(), firstStarted: session.firstTimestamp, lastEnded: session.lastTimestamp,
+          models: new Map<string, number>(), categories: new Map<string, number>(),
         }
         row.cost += c.cost
         row.savingsUSD += c.savingsUSD
         row.calls += c.calls
-        row.sessions.add(session.sessionId)
+        row.sessions.add(sessionKey)
         if (c.approx) row.approx = true
+        for (const [m, mc] of c.models) addToMap(row.models, m, mc)
+        for (const [cat, cc] of c.categories) addToMap(row.categories, cat, cc)
         if (session.firstTimestamp < row.firstStarted) row.firstStarted = session.firstTimestamp
         if (session.lastTimestamp > row.lastEnded) row.lastEnded = session.lastTimestamp
         byUrl.set(url, row)
@@ -219,13 +286,25 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
     }
   }
   return [...byUrl.entries()]
-    .map(([url, r]) => ({
-      url, label: shortenPrUrl(url),
-      cost: r.cost, savingsUSD: r.savingsUSD,
-      sessions: r.sessions.size, calls: Math.round(r.calls),
-      firstStarted: r.firstStarted, lastEnded: r.lastEnded,
-      approx: r.approx,
-    }))
+    .map(([url, r]) => {
+      // Collapse raw model names to short display names, summing costs that map
+      // to the same short name, then order by attributed cost.
+      const shortCosts = new Map<string, number>()
+      for (const [raw, mc] of r.models) addToMap(shortCosts, getShortModelName(raw), mc)
+      const models = [...shortCosts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name)
+      const categories = [...r.categories.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([cat, cost]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, cost }))
+      return {
+        url, label: shortenPrUrl(url),
+        cost: r.cost, savingsUSD: r.savingsUSD,
+        sessions: r.sessions.size, calls: r.calls,
+        firstStarted: r.firstStarted, lastEnded: r.lastEnded,
+        approx: r.approx,
+        models,
+        ...(categories.length ? { categories } : {}),
+      }
+    })
     .sort((a, b) => b.cost - a.cost)
 }
 

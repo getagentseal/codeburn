@@ -224,7 +224,11 @@ export type MenubarPayload = {
     // granularity. Optional: older CLIs omit it, and it is absent when no PR links
     // were observed. Rows carry attributed cost/calls and ARE summable;
     // `attributedCost + unattributedCost === distinctCost`. `approx` marks a row
-    // fed by the legacy whole-session even split (transcript expired).
+    // fed by the legacy whole-session even split (transcript expired). `models` is
+    // the short model names that processed the PR (cost-desc); `categories` is the
+    // per-task-category attributed cost (cost-desc), omitted for legacy rows.
+    // `attributedCost`/`unattributedCost` are optional so a payload from an older
+    // CLI (by-reference rows, not summable) still type-checks and can be detected.
     pullRequests?: {
       rows: Array<{
         url: string
@@ -236,11 +240,15 @@ export type MenubarPayload = {
         firstStarted: string
         lastEnded: string
         approx?: boolean
+        models?: string[]
+        categories?: Array<{ name: string; cost: number }>
       }>
       distinctCost: number
       distinctSessions: number
-      attributedCost: number
-      unattributedCost: number
+      attributedCost?: number
+      unattributedCost?: number
+      otherPrCount?: number
+      otherPrCost?: number
     }
   }
   optimize: {

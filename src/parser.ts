@@ -1857,14 +1857,19 @@ async function scanProjectDirs(
   }
   discoverProgress.finish()
 
-  if (readOnly) {
-    for (const [filePath, cached] of Object.entries(section.files)) {
-      if (allDiscoveredFiles.has(filePath)) continue
-      const dirName = cached.canonicalProjectName
-        ?? cached.turns[0]?.calls[0]?.project
-        ?? basename(dirname(filePath))
-      unchangedFiles.push({ filePath, dirName, cached })
-    }
+  // Orphans: cached sessions whose source file is no longer discovered. In
+  // read-only mode surface them all (the snapshot is authoritative, nothing is
+  // being pruned). In write mode surface only PR-bearing orphans: their transcript
+  // is gone and can never re-parse, but they carry attributable PR spend the by-PR
+  // report must keep (as a legacy even-split); the eviction below preserves the
+  // same set so `section.files` still holds them when summaries are built.
+  for (const [filePath, cached] of Object.entries(section.files)) {
+    if (allDiscoveredFiles.has(filePath)) continue
+    if (!readOnly && !cached.prLinks?.length) continue
+    const dirName = cached.canonicalProjectName
+      ?? cached.turns[0]?.calls[0]?.project
+      ?? basename(dirname(filePath))
+    unchangedFiles.push({ filePath, dirName, cached })
   }
 
   // Pre-seed dedup set from cached (unchanged) files
@@ -2028,10 +2033,12 @@ async function scanProjectDirs(
 
   if (!readOnly && dirs.length > 0) {
     for (const cachedPath of Object.keys(section.files)) {
-      if (!allDiscoveredFiles.has(cachedPath)) {
-        delete section.files[cachedPath]
-        ;(diskCache as { _dirty?: boolean })._dirty = true
-      }
+      if (allDiscoveredFiles.has(cachedPath)) continue
+      // Keep PR-bearing orphans: their transcript is gone and can never re-parse,
+      // but they carry attributable PR spend (surfaced above as a legacy split).
+      if (section.files[cachedPath]?.prLinks?.length) continue
+      delete section.files[cachedPath]
+      ;(diskCache as { _dirty?: boolean })._dirty = true
     }
   }
 
@@ -2051,8 +2058,23 @@ async function scanProjectDirs(
     // full ordered turn list) means a later date slice can drop the anchor turn
     // without the surviving turns losing their branch.
     let carriedBranch: string | undefined
+    // The PR set active going into the report range: carried across the FULL turn
+    // list, frozen the moment the first in-range turn is reached. Lets per-turn PR
+    // attribution seed from a reference made before the window (see
+    // attributeSessionPrSpend); the branch carry above solves the same problem.
+    let carriedPrRefs: string[] | undefined
+    let prRefsAtRangeStart: string[] | undefined
+    let frozePrRefs = !dateRange
     let classifiedTurns = cachedFile.turns.map(turn => {
       if (turn.gitBranch) carriedBranch = turn.gitBranch
+      if (dateRange && !frozePrRefs) {
+        const firstTs = turn.calls[0]?.timestamp
+        if (firstTs && new Date(firstTs) >= dateRange.start) {
+          prRefsAtRangeStart = carriedPrRefs
+          frozePrRefs = true
+        }
+      }
+      if (turn.prRefs?.length) carriedPrRefs = turn.prRefs
       return cachedTurnToClassified(turn, carriedBranch)
     })
     // Captured from the FULL turn list, before the date slice below can drop the
@@ -2080,6 +2102,7 @@ async function scanProjectDirs(
     session.agentType = cachedFile.agentType
     if (everHadBranch) session.everHadBranch = true
     if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
+    if (prRefsAtRangeStart?.length) session.prRefsAtRangeStart = prRefsAtRangeStart
     if (cachedFile.title) session.title = cachedFile.title
 
     if (session.apiCalls > 0) {

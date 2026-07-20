@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { aggregateByPr, attributeSessionPrSpend, prLinkedTotals, shortenPrUrl } from '../src/sessions-report.js'
+import { aggregateByPr, allocateEven, attributeSessionPrSpend, prLinkedTotals, shortenPrUrl } from '../src/sessions-report.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
 
 const A = 'https://github.com/o/r/pull/1'
@@ -206,6 +206,110 @@ describe('aggregateByPr (turn-level attribution)', () => {
 
   it('sessions without links contribute nothing', () => {
     expect(aggregateByPr([project([session('a', 100, 40)])])).toEqual([])
+  })
+})
+
+describe('range-carry seed (finding 2)', () => {
+  it('seeds current from a PR referenced before the range, not a legacy split', () => {
+    // turn1 ref A, turn2 ref B are both before the range; the parser passes B as
+    // the seed. The 8 in-range ref-less turns ($100) must all go to B, not split
+    // $50/$50 approx across A and B.
+    const { perUrl, unattributed } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 100, apiCalls: 8, totalSavingsUSD: 0,
+      prRefsAtRangeStart: [B],
+      turns: Array.from({ length: 8 }, () => ({ category: 'coding', assistantCalls: [{ costUSD: 12.5, model: 'm' }] })),
+    })
+    expect(perUrl.get(B)!.cost).toBeCloseTo(100, 6)
+    expect(perUrl.get(B)!.approx).toBe(false)
+    expect(perUrl.has(A)).toBe(false)
+    expect(unattributed.cost).toBe(0)
+  })
+
+  it('lets an in-range reference override the seed', () => {
+    const { perUrl } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 0, apiCalls: 0, totalSavingsUSD: 0,
+      prRefsAtRangeStart: [A],
+      turns: [
+        { assistantCalls: [{ costUSD: 10 }] },            // seeded -> A
+        { prRefs: [B], assistantCalls: [{ costUSD: 20 }] }, // switch -> B
+        { assistantCalls: [{ costUSD: 5 }] },              // carries B
+      ],
+    })
+    expect(perUrl.get(A)!.cost).toBeCloseTo(10, 6)
+    expect(perUrl.get(B)!.cost).toBeCloseTo(25, 6)
+  })
+})
+
+describe('call allocation (finding 5)', () => {
+  it('allocateEven gives the remainder to the first buckets and sums to total', () => {
+    expect(allocateEven(1, 2)).toEqual([1, 0])
+    expect(allocateEven(5, 2)).toEqual([3, 2])
+    expect(allocateEven(4, 2)).toEqual([2, 2])
+    expect(allocateEven(0, 3)).toEqual([0, 0, 0])
+    expect(allocateEven(7, 3)).toEqual([3, 2, 2])
+  })
+
+  it('a 1-call, 2-PR turn stays whole (no 0.5 that rounds up to 1 on each row)', () => {
+    const { perUrl } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 0, apiCalls: 0, totalSavingsUSD: 0,
+      turns: [{ prRefs: [A, B], category: 'coding', assistantCalls: [{ costUSD: 4 }] }],
+    })
+    expect(perUrl.get(A)!.calls + perUrl.get(B)!.calls).toBe(1)
+    expect(perUrl.get(A)!.calls).toBe(1)
+    expect(perUrl.get(B)!.calls).toBe(0)
+  })
+})
+
+describe('models + categories attribution', () => {
+  it('records per-model attributed cost and spreads a multi-PR turn to each PR', () => {
+    const { perUrl } = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 0, apiCalls: 0, totalSavingsUSD: 0,
+      turns: [
+        { prRefs: [A], category: 'coding', assistantCalls: [{ costUSD: 10, model: 'claude-opus-4-6' }, { costUSD: 5, model: 'claude-haiku-4' }] },
+        { prRefs: [A, B], category: 'coding', assistantCalls: [{ costUSD: 20, model: 'claude-opus-4-6' }] },
+      ],
+    })
+    // A: opus 10 + haiku 5 + half of turn2 opus (10) = opus 20, haiku 5
+    expect(perUrl.get(A)!.models.get('claude-opus-4-6')).toBeCloseTo(20, 6)
+    expect(perUrl.get(A)!.models.get('claude-haiku-4')).toBeCloseTo(5, 6)
+    // B: half of turn2 opus = 10
+    expect(perUrl.get(B)!.models.get('claude-opus-4-6')).toBeCloseTo(10, 6)
+  })
+
+  it('accumulates category cost per PR (turn-level) and omits categories for legacy', () => {
+    const { perUrl } = attributeSessionPrSpend({
+      prLinks: [A], totalCostUSD: 0, apiCalls: 0, totalSavingsUSD: 0,
+      turns: [
+        { prRefs: [A], category: 'coding', assistantCalls: [{ costUSD: 10 }] },
+        { category: 'debugging', assistantCalls: [{ costUSD: 6 }] },
+      ],
+    })
+    expect(perUrl.get(A)!.categories.get('coding')).toBeCloseTo(10, 6)
+    expect(perUrl.get(A)!.categories.get('debugging')).toBeCloseTo(6, 6)
+
+    const legacy = attributeSessionPrSpend({
+      prLinks: [A, B], totalCostUSD: 100, apiCalls: 8, totalSavingsUSD: 0,
+      turns: [{ assistantCalls: [{ costUSD: 100, model: 'claude-opus-4-6' }] }],
+    })
+    expect(legacy.perUrl.get(A)!.categories.size).toBe(0)          // no faked categories
+    expect(legacy.perUrl.get(A)!.models.get('claude-opus-4-6')).toBeCloseTo(50, 6) // model union still split
+  })
+
+  it('exposes short model names and display category labels on aggregated rows', () => {
+    const rows = aggregateByPr([project([
+      sessionWithTurns('s', [A], [cturn(10, 1, [A])]),
+    ])])
+    expect(rows[0]!.models.length).toBe(1)
+    expect(rows[0]!.categories).toEqual([{ name: 'Coding', cost: 10 }])
+  })
+})
+
+describe('distinct-session keying (finding 7)', () => {
+  it('counts two same-sessionId sessions in different projects as two', () => {
+    const s1 = sessionWithTurns('same-id', [A], [cturn(10, 1, [A])])
+    const s2 = { ...sessionWithTurns('same-id', [A], [cturn(10, 1, [A])]), project: 'other' }
+    const rows = aggregateByPr([project([s1, s2])])
+    expect(rows[0]!.sessions).toBe(2)
   })
 })
 

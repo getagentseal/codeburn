@@ -46,13 +46,22 @@ function makePayload(pullRequests?: PrPayload): MenubarPayload {
 
 const SAMPLE: PrPayload = {
   rows: [
-    { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 240.5, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z' },
-    { url: 'https://github.com/getagentseal/codeburn/pull/781', label: 'getagentseal/codeburn#781', cost: 90.25, savingsUSD: 0, sessions: 1, calls: 120, firstStarted: '2026-07-05T13:00:00Z', lastEnded: '2026-07-05T15:00:00Z' },
+    { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 240.5, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z', models: ['fable', 'opus', 'haiku'], categories: [{ name: 'Feature work', cost: 180.25 }, { name: 'Debugging', cost: 60.25 }] },
+    { url: 'https://github.com/getagentseal/codeburn/pull/781', label: 'getagentseal/codeburn#781', cost: 90.25, savingsUSD: 0, sessions: 1, calls: 120, firstStarted: '2026-07-05T13:00:00Z', lastEnded: '2026-07-05T15:00:00Z', models: ['sonnet'], categories: [{ name: 'Refactoring', cost: 90.25 }] },
   ],
   distinctCost: 376.05,
   distinctSessions: 3,
   attributedCost: 330.75,
   unattributedCost: 45.3,
+  otherPrCount: 0,
+  otherPrCost: 0,
+}
+
+// Get the button-role row wrapping a given PR link, for click/keyboard toggling.
+function rowForLink(link: HTMLElement): HTMLElement {
+  const row = link.closest('[role="button"]')
+  if (!row) throw new Error('expected a button-role row around the PR link')
+  return row as HTMLElement
 }
 
 describe('PullRequests', () => {
@@ -75,13 +84,61 @@ describe('PullRequests', () => {
     expect(screen.getByText(expectedSpan(SAMPLE.rows[1]!.firstStarted, SAMPLE.rows[1]!.lastEnded))).toBeInTheDocument()
   })
 
-  it('opens the PR URL externally instead of navigating', async () => {
+  it('renders the Models column with a "+N" overflow tag', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    // Three models collapse to the first two plus a count of the rest.
+    expect(await screen.findByText('fable, opus +1')).toBeInTheDocument()
+    // A single model renders as-is, with no overflow tag.
+    expect(screen.getByText('sonnet')).toBeInTheDocument()
+  })
+
+  it('opens the PR URL externally without navigating or toggling the row', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
     const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
     await userEvent.click(link)
     expect(openExternal).toHaveBeenCalledWith('https://github.com/getagentseal/codeburn/pull/780')
+    // Clicking the link must not expand its row.
+    expect(rowForLink(link)).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Feature work')).toBeNull()
+  })
+
+  it('expands a row to its category breakdown on click, then collapses', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+    expect(screen.getByText('$180.25')).toBeInTheDocument()
+    expect(screen.getByText('Debugging')).toBeInTheDocument()
+
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('Feature work')).toBeNull()
+  })
+
+  it('toggles expansion from the keyboard with Enter', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    row.focus()
+
+    await userEvent.keyboard('{Enter}')
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+
+    await userEvent.keyboard('{Enter}')
+    expect(row).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('states the attributed-total footer and the summable framing', async () => {
@@ -112,6 +169,64 @@ describe('PullRequests', () => {
     expect(cost).toHaveAttribute('title')
     // A zero unattributed remainder hides the muted line.
     expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
+  })
+
+  it('expands a category-less (legacy) row to a muted note, not an empty box', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#900' })
+    await userEvent.click(rowForLink(link))
+    expect(screen.getByText(/No per-turn detail/)).toBeInTheDocument()
+  })
+
+  it('renders the old-CLI by-reference footer without NaN and never claims summable', async () => {
+    const oldPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/500', label: 'getagentseal/codeburn#500', cost: 120.4, savingsUSD: 0, sessions: 2, calls: 300, firstStarted: '2026-06-01T10:00:00Z', lastEnded: '2026-06-02T12:00:00Z' },
+      ],
+      distinctCost: 120.4,
+      distinctSessions: 2,
+    }
+    getOverview.mockResolvedValue(makePayload(oldPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const note = await screen.findByText(/produced pull requests/)
+    expect(note.textContent).toContain('$120.40')
+    expect(note.textContent).toContain('by reference')
+    expect(note.textContent).toContain('not summed')
+    expect(note.textContent).not.toContain('summable')
+    // No optional field renders as NaN and no unattributed line appears.
+    expect(screen.queryByText(/NaN/)).toBeNull()
+    expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
+  })
+
+  it('renders an Other (N more PRs) reconciliation row when PRs are capped', async () => {
+    const cappedPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 200, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z', models: ['fable'], categories: [{ name: 'Feature work', cost: 200 }] },
+      ],
+      distinctCost: 288.4,
+      distinctSessions: 4,
+      attributedCost: 288.4,
+      unattributedCost: 0,
+      otherPrCount: 5,
+      otherPrCost: 88.4,
+    }
+    getOverview.mockResolvedValue(makePayload(cappedPayload))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    expect(await screen.findByText('Other (5 more PRs)')).toBeInTheDocument()
+    expect(screen.getByText('$88.40')).toBeInTheDocument()
   })
 
   it('shows the quiet empty state (never a fake table) when no PR links exist', async () => {

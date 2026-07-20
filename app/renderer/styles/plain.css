@@ -580,9 +580,28 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .ov-models th:first-child, .ov-models td:first-child { width: 100%; text-align: left; }
 .ov-models .ov-model-name { overflow: hidden; color: var(--ink); font-weight: var(--fw-medium); text-overflow: ellipsis; }
 .ov-models td.mono { font-family: var(--mono); color: var(--ink); }
+.pr-scroll { overflow-x: auto; }
+.pr-table { min-width: 640px; }
 .pr-link { color: var(--accent-text); font-weight: var(--fw-medium); text-decoration: none; cursor: pointer; }
 .pr-link:hover { text-decoration: underline; }
+.pr-table th.pr-models, .pr-table td.pr-models { overflow: hidden; max-width: 180px; color: var(--mut); text-align: left; text-overflow: ellipsis; }
 .pr-table td.pr-span { color: var(--mut2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-table th.pr-chevron-cell, .pr-table td.pr-chevron-cell { width: 26px; padding: 0 8px; text-align: center; }
+.pr-chevron { display: inline-block; color: var(--mut2); font-family: system-ui, sans-serif; font-size: 17px; line-height: 1; transition: transform 140ms ease; }
+.pr-row { cursor: pointer; }
+.pr-row:hover { background: var(--hover); }
+.pr-row:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+.pr-row[aria-expanded="true"] .pr-chevron { transform: rotate(90deg); }
+.pr-table td.pr-detail-cell { height: auto; padding: 11px 14px; background: color-mix(in srgb, var(--panel) 84%, var(--hover)); text-align: left; white-space: normal; }
+.pr-cats { display: flex; flex-direction: column; gap: 9px; max-width: 520px; }
+.pr-cat { display: flex; flex-direction: column; gap: 5px; }
+.pr-cat-bar { height: 3px; overflow: hidden; border-radius: 2px; background: var(--fill); }
+.pr-cat-bar span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.pr-cat-main { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12px; }
+.pr-cat-name { overflow: hidden; color: var(--ink); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.pr-cat-main strong { flex: 0 0 auto; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.pr-cat-empty { margin: 0; color: var(--mut2); font-size: var(--fs-meta); }
+.pr-table td.pr-other-label { color: var(--mut2); font-weight: var(--fw-medium); text-align: left; }
 .pr-footnote { margin: 12px 2px 2px; color: var(--mut); font-size: var(--fs-meta); line-height: 1.55; }
 .pr-unattributed { margin: 4px 2px 2px; color: var(--mut2); font-size: var(--fs-meta); font-variant-numeric: tabular-nums; }
 .opt-waste { min-width: 0; }

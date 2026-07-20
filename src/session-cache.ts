@@ -364,19 +364,75 @@ function validateCache(raw: unknown): raw is SessionCache {
   return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
 }
 
+// The immediately-prior versioned file. On the 5 -> 6 bump we adopt its
+// still-relevant entries (see adoptV5Cache) rather than abandoning them; the
+// file itself is never written or deleted (old binaries still own it).
+const V5_CACHE_FILE = 'session-cache.v5.json'
+
+// v5-shaped validation: identical to validateCache but pinned to version 5. The
+// per-turn schema is a superset (prRefs is optional), so a v5 file passes the
+// section/file/turn validators unchanged.
+function validateV5Cache(raw: unknown): raw is SessionCache {
+  if (!raw || typeof raw !== 'object') return false
+  const o = raw as Record<string, unknown>
+  if (o['version'] !== 5) return false
+  if (!o['providers'] || typeof o['providers'] !== 'object' || Array.isArray(o['providers'])) return false
+  return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
+}
+
+// One-time migration for the 5 -> 6 bump (per-turn prRefs capture). A fresh v6
+// cache would abandon v5 wholesale, so any PR-linked session whose transcript was
+// since deleted would vanish instead of taking the by-PR legacy even-split path.
+// Carry forward exactly the v5 entries whose source no longer exists AND that
+// carry prLinks (they can never re-parse, but they hold attributable PR spend);
+// present sources are intentionally dropped so they re-parse fresh under v6 and
+// gain per-turn refs. Each carried section takes the CURRENT envFingerprint so
+// the scan reuses it and appends the freshly-parsed present sources. The daily
+// cache, which owns durable cost history, is not touched.
+async function adoptV5Cache(): Promise<SessionCache | null> {
+  try {
+    const raw = await readFile(join(getCacheDir(), V5_CACHE_FILE), 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (!validateV5Cache(parsed)) return null
+    const migrated: SessionCache = { version: CACHE_VERSION, providers: {}, complete: false }
+    for (const [provider, section] of Object.entries(parsed.providers)) {
+      const files: Record<string, CachedFile> = {}
+      for (const [path, file] of Object.entries(section.files)) {
+        if (!existsSync(path) && file.prLinks?.length) files[path] = file
+      }
+      migrated.providers[provider] = {
+        envFingerprint: computeEnvFingerprint(provider),
+        files,
+        ...(section.durable ? { durable: true } : {}),
+      }
+    }
+    return migrated
+  } catch {
+    return null
+  }
+}
+
 export async function loadCache(): Promise<SessionCache> {
   try {
     const raw = await readFile(getCachePath(), 'utf-8')
     const parsed = JSON.parse(raw)
-    if (!validateCache(parsed)) return emptyCache()
+    if (!validateCache(parsed)) return afterMissingVersionedCache()
     return parsed
   } catch {
-    // Versioned file absent/unreadable: try a one-time adoption of the legacy
-    // unversioned file. validateCache requires version === CACHE_VERSION, so a
-    // different-version legacy file is ignored (left intact). We copy it into the
-    // versioned file once via saveCache; the legacy file is never modified.
-    return adoptLegacyCache()
+    return afterMissingVersionedCache()
   }
+}
+
+// The versioned (v6) file is absent/unreadable. Prefer adopting the prior v5
+// file's expired-source PR orphans; failing that, fall back to the legacy
+// unversioned file. Either way the versioned file is minted on the next save.
+async function afterMissingVersionedCache(): Promise<SessionCache> {
+  const v5 = await adoptV5Cache()
+  if (v5) return v5
+  // validateCache requires version === CACHE_VERSION, so a different-version
+  // legacy file is ignored (left intact). We copy it into the versioned file once
+  // via saveCache; the legacy file is never modified.
+  return adoptLegacyCache()
 }
 
 async function adoptLegacyCache(): Promise<SessionCache> {
