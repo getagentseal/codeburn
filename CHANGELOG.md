@@ -9,6 +9,11 @@ One version across every surface again: CLI, macOS menubar, and the desktop app 
 - **Never lose history again.** The daily cache carries forward every (day, provider) slice a re-parse can no longer derive, and adopts days from older cache generations instead of wiping them on schema changes. (#755)
 - **True Lifetime period** on the CLI, dashboard, desktop app, and menubar. The desktop tab formerly labeled "All time" showed a 6-month window; it now says "Last 6 months", and Lifetime is the real all-time view. (#753, #759)
 - Yield repo grouping is case-correct on macOS/Windows; skills usage is attributed regardless of turn category; daily-activity history scans are bounded. (#751, #745, #727)
+- **Days before recorded history render as "No data recorded"**, never as a currency zero, in the desktop heatmap, daily charts, and web dashboard. Genuinely idle days keep their true zeros. (#765)
+- Incremental append parsing falls back to a full re-parse when a streamed assistant message restates across the append boundary, fixing a rare over-count on image-heavy sessions. (#772)
+- Turn-level stats (edit turns, one-shot, category counts) attribute to exactly one provider slice, so per-provider sums always equal day totals. (#762, thanks @ozymandiashh)
+- Workflow-intelligence accuracy pass from review: corrections count only follow-up prompts, file-churn paths are separator-normalized so the payload's basename privacy redaction works on Windows, pricing coverage excludes deliberately-free local models and reports null (never a fabricated 100%) when not computable, and time-to-first-edit is null rather than mismeasured on unparseable timestamps. (#763, review by @ozymandiashh)
+- Daily-history retention extended from 2 to 10 years so carried days can never age out of the durable record; quota pace guards non-finite inputs; the exchange-rate cache honors CODEBURN_CACHE_DIR. (#764, #766)
 
 ### Added (CLI)
 - **Quick Desktop provider** — Amazon Quick Desktop usage from `~/.quickwork`, with real metered costs and multi-profile discovery. (#735, thanks @gjmveloso, @Enclavet)
@@ -19,6 +24,7 @@ One version across every surface again: CLI, macOS menubar, and the desktop app 
 
 ### Performance
 - Large-line session parsing is ~2x faster (single-pass field extraction), and files that grew by append are parsed incrementally from the cached offset instead of from byte 0. (#752, #749)
+- **Concurrent CLI, menubar, and MCP processes can no longer clobber each other's cache work**: the warm session-cache refresh runs under a strict cross-process gate with heartbeat, staleness takeover, and a publication fence; a timed-out waiter serves the prior complete snapshot read-only instead of racing. (#743, thanks @avs-io)
 
 ### Desktop app
 - **Windows fixed**: the CLI is now found on every Windows install (path handling was POSIX-only, breaking 100% of Windows installs). (#733)
