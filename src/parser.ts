@@ -1880,71 +1880,87 @@ async function scanProjectDirs(
         const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset, { toolResultMeta, sessionMeta })
         const cached = append.cached
 
-        const newTurns = newEntries
-          ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
-          : []
+        // Straddle guard: a streamed assistant message id that first appeared in
+        // the committed prefix can be restated inside the appended region
+        // (image-heavy turns stream one id across several records over seconds).
+        // The appended region is grouped before this file's cached keys join
+        // seenMsgIds, so the restated id would count twice; suppressing it
+        // instead would freeze the stale first emission. Neither matches a full
+        // re-parse, so on any id overlap the shortcut is abandoned and the file
+        // re-parses from byte 0 (rare: ~0.3% of real files).
+        const cachedIds = new Set(cached.turns.flatMap(t => t.calls.map(c => c.deduplicationKey)))
+        const straddles = newEntries !== null && newEntries.some(e => {
+          const id = getMessageId(e)
+          return id !== null && cachedIds.has(id)
+        })
+        if (!straddles) {
+          const newTurns = newEntries
+            ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
+            : []
 
-        const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
-        if (newTurns.length > 0) {
-          let startIdx = 0
-          // A first new turn with no leading user message is a continuation of
-          // the last cached turn — merge its calls in (a full re-parse would put
-          // them in that same turn), then append the remaining new turns.
-          if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
-            const last = mergedTurns[mergedTurns.length - 1]!
-            last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
-            startIdx = 1
+          const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
+          if (newTurns.length > 0) {
+            let startIdx = 0
+            // A first new turn with no leading user message is a continuation of
+            // the last cached turn — merge its calls in (a full re-parse would put
+            // them in that same turn), then append the remaining new turns.
+            if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
+              const last = mergedTurns[mergedTurns.length - 1]!
+              last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
+              startIdx = 1
+            }
+            for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
           }
-          for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
+
+          // The cached region's dedup keys were not added to seenMsgIds (only
+          // unchanged files pre-seed it), so add them now — a full re-parse would
+          // have, and later files dedup cross-file against them.
+          for (const t of cached.turns) for (const c of t.calls) seenMsgIds.add(c.deduplicationKey)
+
+          // First-cwd wins, and the first cwd lives in the cached region whenever
+          // one was resolved there; only re-derive if the cached region had none.
+          let canonicalCwd = cached.canonicalCwd
+          let canonicalProjectName = cached.canonicalProjectName
+          if (canonicalCwd === undefined && newEntries) {
+            const cwd = extractCanonicalCwd(newEntries)
+            const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
+            canonicalCwd = canonical?.path
+            canonicalProjectName = canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined
+          }
+
+          // Inventory is a sorted set union; cached (older entries) ∪ new = full.
+          const mcpInventory = newEntries
+            ? Array.from(new Set([...cached.mcpInventory, ...extractMcpInventory(newEntries)])).sort()
+            : cached.mcpInventory
+
+          // Session meta merges across the append boundary: title is last-wins
+          // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
+          const mergedTitle = sessionMeta.title ?? cached.title
+          const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
+          const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
+
+          section.files[filePath] = {
+            fingerprint: info.fp,
+            lastCompleteLineOffset: tracker.lastCompleteLineOffset,
+            canonicalCwd,
+            canonicalProjectName,
+            mcpInventory,
+            turns: mergedTurns,
+            agentType: cached.agentType,
+            ...(mergedTitle ? { title: mergedTitle } : {}),
+            ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
+            ...(mergedSidechain ? { isSidechain: true } : {}),
+          }
+          ;(diskCache as { _dirty?: boolean })._dirty = true
+          filesDone++
+          await parseProgress.tick(filesDone)
+          if (filesDone % 50 === 0 || filesDone === progressTotal) {
+            emitScanProgress({ kind: 'tick', provider: 'claude', done: filesDone, total: progressTotal })
+          }
+          if (onFileParsed) await onFileParsed()
+          continue
         }
-
-        // The cached region's dedup keys were not added to seenMsgIds (only
-        // unchanged files pre-seed it), so add them now — a full re-parse would
-        // have, and later files dedup cross-file against them.
-        for (const t of cached.turns) for (const c of t.calls) seenMsgIds.add(c.deduplicationKey)
-
-        // First-cwd wins, and the first cwd lives in the cached region whenever
-        // one was resolved there; only re-derive if the cached region had none.
-        let canonicalCwd = cached.canonicalCwd
-        let canonicalProjectName = cached.canonicalProjectName
-        if (canonicalCwd === undefined && newEntries) {
-          const cwd = extractCanonicalCwd(newEntries)
-          const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
-          canonicalCwd = canonical?.path
-          canonicalProjectName = canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined
-        }
-
-        // Inventory is a sorted set union; cached (older entries) ∪ new = full.
-        const mcpInventory = newEntries
-          ? Array.from(new Set([...cached.mcpInventory, ...extractMcpInventory(newEntries)])).sort()
-          : cached.mcpInventory
-
-        // Session meta merges across the append boundary: title is last-wins
-        // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
-        const mergedTitle = sessionMeta.title ?? cached.title
-        const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
-        const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
-
-        section.files[filePath] = {
-          fingerprint: info.fp,
-          lastCompleteLineOffset: tracker.lastCompleteLineOffset,
-          canonicalCwd,
-          canonicalProjectName,
-          mcpInventory,
-          turns: mergedTurns,
-          agentType: cached.agentType,
-          ...(mergedTitle ? { title: mergedTitle } : {}),
-          ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
-          ...(mergedSidechain ? { isSidechain: true } : {}),
-        }
-        ;(diskCache as { _dirty?: boolean })._dirty = true
-        filesDone++
-        await parseProgress.tick(filesDone)
-        if (filesDone % 50 === 0 || filesDone === progressTotal) {
-          emitScanProgress({ kind: 'tick', provider: 'claude', done: filesDone, total: progressTotal })
-        }
-        if (onFileParsed) await onFileParsed()
-        continue
+        // Straddled: fall through to the full re-parse below.
       }
 
       const tracker = { lastCompleteLineOffset: 0 }
