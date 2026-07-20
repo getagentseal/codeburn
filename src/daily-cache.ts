@@ -133,8 +133,8 @@ export type DailyCache = {
   version: number
   /// Hash of the active `localModelSavings` config at the time the cache
   /// was last written. When the user changes their baseline mapping the
-  /// hash mismatches and `ensureCacheHydrated` discards the cached days
-  /// so historical savings are recomputed against the current mapping.
+  /// hash mismatches and `ensureCacheHydrated` re-derives available history,
+  /// then carries forward slices whose sources are gone.
   savingsConfigHash: string
   /// IANA local timezone the days were bucketed under (day boundaries are
   /// local-time). If the machine's timezone changes, previously-cached days are
@@ -187,25 +187,62 @@ function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function sanitizeModels(raw: unknown): DailyEntry['models'] {
+  if (!isRecord(raw)) return {}
+  const out: DailyEntry['models'] = {}
+  for (const [name, m] of Object.entries(raw)) {
+    if (name in Object.prototype || !isRecord(m)) continue
+    setOwn(out, name, {
+      calls: num(m.calls),
+      cost: num(m.cost),
+      savingsUSD: num(m.savingsUSD),
+      inputTokens: num(m.inputTokens),
+      outputTokens: num(m.outputTokens),
+      cacheReadTokens: num(m.cacheReadTokens),
+      cacheWriteTokens: num(m.cacheWriteTokens),
+    })
+  }
+  return out
+}
+
+function sanitizeCategories(raw: unknown): DailyEntry['categories'] {
+  if (!isRecord(raw)) return {}
+  const out: DailyEntry['categories'] = {}
+  for (const [name, c] of Object.entries(raw)) {
+    if (name in Object.prototype || !isRecord(c)) continue
+    setOwn(out, name, {
+      turns: num(c.turns),
+      cost: num(c.cost),
+      savingsUSD: num(c.savingsUSD),
+      editTurns: num(c.editTurns),
+      oneShotTurns: num(c.oneShotTurns),
+    })
+  }
+  return out
+}
+
 const OPTIONAL_SLICE_NUMERICS = ['sessions', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'editTurns', 'oneShotTurns'] as const
 
 /// Same junk-tolerance as sanitizeProjects, one level up: a foreign cache can
 /// hold anything under a provider slice, and structuredClone in the merge
 /// would faithfully preserve that junk into the next cache generation. Numeric
-/// fields are coerced, nested projects sanitized, models/categories kept only
-/// when object-shaped.
+/// fields and nested maps are sanitized before the slice enters the cache.
 function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  if (!isRecord(raw)) return {}
   const out: DailyEntry['providers'] = {}
   for (const [name, s] of Object.entries(raw)) {
-    if (!s || typeof s !== 'object' || Array.isArray(s)) continue
-    const slice = s as Record<string, unknown>
+    if (name in Object.prototype || !isRecord(s)) continue
+    const slice = s
     const clean: ProviderDaySlice = { calls: num(slice.calls), cost: num(slice.cost), savingsUSD: num(slice.savingsUSD) }
     for (const key of OPTIONAL_SLICE_NUMERICS) {
       if (slice[key] !== undefined) clean[key] = num(slice[key])
     }
-    if (slice.models && typeof slice.models === 'object' && !Array.isArray(slice.models)) clean.models = slice.models as ProviderDaySlice['models']
-    if (slice.categories && typeof slice.categories === 'object' && !Array.isArray(slice.categories)) clean.categories = slice.categories as ProviderDaySlice['categories']
+    if (isRecord(slice.models)) clean.models = sanitizeModels(slice.models)
+    if (isRecord(slice.categories)) clean.categories = sanitizeCategories(slice.categories)
     const projects = sanitizeProjects(slice.projects).projects
     if (projects) clean.projects = projects
     setOwn(out, name, clean)
@@ -217,17 +254,16 @@ function sanitizeProviders(raw: unknown): DailyEntry['providers'] {
 /// a plain record of finite numeric stats (arrays and null entries dropped) so
 /// later carry merges can't crash on junk.
 function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  if (!isRecord(raw)) return {}
   const out: NonNullable<DailyEntry['projects']> = {}
   for (const [name, p] of Object.entries(raw)) {
-    if (!p || typeof p !== 'object' || Array.isArray(p)) continue
-    const stats = p as Record<string, unknown>
-    Object.defineProperty(out, name, {
-      value: {
-        cost: num(stats.cost), calls: num(stats.calls), savingsUSD: num(stats.savingsUSD), sessions: num(stats.sessions),
-        ...(typeof stats.path === 'string' && stats.path.length > 0 ? { path: stats.path } : {}),
-      },
-      enumerable: true, writable: true, configurable: true,
+    if (name in Object.prototype || !isRecord(p)) continue
+    setOwn(out, name, {
+      cost: num(p.cost),
+      calls: num(p.calls),
+      savingsUSD: num(p.savingsUSD),
+      sessions: num(p.sessions),
+      ...(typeof p.path === 'string' && p.path.length > 0 ? { path: p.path } : {}),
     })
   }
   return Object.keys(out).length > 0 ? { projects: out } : {}
@@ -250,8 +286,8 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
       cacheWriteTokens: num(d.cacheWriteTokens),
       editTurns: num(d.editTurns),
       oneShotTurns: num(d.oneShotTurns),
-      models: (d.models as DailyEntry['models']) ?? {},
-      categories: (d.categories as DailyEntry['categories']) ?? {},
+      models: sanitizeModels(d.models),
+      categories: sanitizeCategories(d.categories),
       providers: sanitizeProviders(d.providers),
       ...(sanitizeProjects(d.projects)),
       ...(d.carried === true ? { carried: true as const } : {}),
@@ -263,7 +299,9 @@ function migratedFrom(parsed: { version: number; lastComputedDate: string | null
     version: DAILY_CACHE_VERSION,
     savingsConfigHash: parsed.savingsConfigHash ?? '',
     tzKey: parsed.tzKey,
-    lastComputedDate: parsed.lastComputedDate,
+    lastComputedDate: typeof parsed.lastComputedDate === 'string' && DATE_KEY_RE.test(parsed.lastComputedDate)
+      ? parsed.lastComputedDate
+      : null,
     days: migrateDays(parsed.days),
     // Only a cache explicitly marked complete stays trusted; one written before
     // the marker existed reads false and is re-backfilled once.

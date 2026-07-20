@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import type { ProjectSummary } from '../src/types.js'
+import { buildPeriodDataFromDays } from '../src/day-aggregator.js'
 
 import {
   DAILY_CACHE_VERSION,
@@ -612,5 +613,101 @@ describe('adoption union across older cache files', () => {
     await saveDailyCache(cache)
     const loaded = await loadDailyCache()
     expect(loaded).toEqual(cache)
+  })
+
+  it('sanitizes malformed day-level model and category maps during load', async () => {
+    const target = daysAgoStr(20)
+    const dirty = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      complete: true,
+      days: [{
+        ...day(target, { claude: slice(5, 2) }),
+        models: 'bad',
+        categories: 9,
+      }],
+    }
+    await writeFile(dailyCachePath(), JSON.stringify(dirty), 'utf-8')
+
+    const loaded = await loadDailyCache()
+
+    expect(loaded.days[0]!.models).toEqual({})
+    expect(loaded.days[0]!.categories).toEqual({})
+  })
+
+  it('drops inherited provider and model keys before period aggregation', async () => {
+    const target = daysAgoStr(20)
+    const modelStats = {
+      calls: 1,
+      cost: 2,
+      savingsUSD: 0,
+      inputTokens: 3,
+      outputTokens: 4,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 6,
+    }
+    const dirty = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      complete: true,
+      days: [{
+        ...day(target, {
+          toString: slice(2, 1),
+          safeProvider: slice(3, 1),
+        }),
+        models: {
+          constructor: modelStats,
+          safeModel: modelStats,
+        },
+      }],
+    }
+    await writeFile(dailyCachePath(), JSON.stringify(dirty), 'utf-8')
+
+    const loaded = await loadDailyCache()
+    const loadedDay = loaded.days[0]!
+    let period: ReturnType<typeof buildPeriodDataFromDays>
+    try {
+      period = buildPeriodDataFromDays(loaded.days, 'loaded')
+    } finally {
+      const objectConstructor = Object as typeof Object & Record<string, unknown>
+      delete objectConstructor.calls
+      delete objectConstructor.cost
+      delete objectConstructor.savingsUSD
+    }
+
+    expect(Object.hasOwn(loadedDay.providers, 'toString')).toBe(false)
+    expect(Object.hasOwn(loadedDay.models, 'constructor')).toBe(false)
+    const assertFiniteNumbers = (value: unknown): void => {
+      if (typeof value === 'number') {
+        expect(Number.isFinite(value)).toBe(true)
+      } else if (value && typeof value === 'object') {
+        for (const child of Object.values(value)) assertFiniteNumbers(child)
+      }
+    }
+    assertFiniteNumbers(period)
+  })
+
+  it('sanitizes a non-string lastComputedDate before hydration parses it', async () => {
+    const dirty = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: 42,
+      complete: true,
+      days: [],
+    }
+    await writeFile(dailyCachePath(), JSON.stringify(dirty), 'utf-8')
+
+    const loaded = await loadDailyCache()
+    expect(loaded.days).toEqual([])
+
+    const hydrated = await ensureCacheHydrated(noSessions, () => [], '')
+
+    expect(loaded.lastComputedDate).toBeNull()
+    expect(hydrated.complete).toBe(true)
   })
 })
