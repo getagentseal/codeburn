@@ -11,7 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
-import { contiguousDailyWindow, localDateKey } from '../lib/period'
+import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import type { CliError, DateRange, MenubarPayload, Period, SpendFlow } from '../lib/types'
 
 type Project = MenubarPayload['current']['topProjects'][number]
@@ -100,6 +100,7 @@ function SpendPage({
         localDateKey(now),
       )
   const chartHasSpend = chartDaily.some(day => day.cost > 0)
+  const dataStart = dataStartKey(data.history.daily)
   const projects = data.current.topProjects
   const breakdowns = [
     {
@@ -153,7 +154,7 @@ function SpendPage({
       {staleError && <StaleBanner error={staleError} />}
       <div className="spend-top-row">
         <Panel title="Daily spend by model" className="spend-chart-panel">
-          {chartHasSpend ? <StackedBars daily={chartDaily} fallbackLabel={providerLabel(provider)} animateKey={animateKey} /> : <EmptyNote>No model spend in this range yet.</EmptyNote>}
+          {chartHasSpend ? <StackedBars daily={chartDaily} fallbackLabel={providerLabel(provider)} animateKey={animateKey} dataStart={dataStart} /> : <EmptyNote>No model spend in this range yet.</EmptyNote>}
         </Panel>
         <ProjectBreakdown projects={projects} />
       </div>

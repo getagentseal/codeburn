@@ -12,7 +12,7 @@ import { motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
-import { contiguousDailyWindow, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
+import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import type {
   ActReportJson,
   DailyHistoryEntry,
@@ -443,7 +443,8 @@ function ModelsTable({ models }: { models: AggregatedModel[] }) {
   )
 }
 
-function DailyChart({ daily, animateKey = '' }: { daily: DailyHistoryEntry[]; animateKey?: string }) {
+function DailyChart({ daily, dataStart = null, animateKey = '' }: { daily: DailyHistoryEntry[]; dataStart?: string | null; animateKey?: string }) {
+  const isNoData = (day: DailyHistoryEntry) => dataStart !== null && day.date < dataStart
   const max = Math.max(...daily.map(day => day.cost), 0)
   const peakIndex = daily.reduce((peak, day, index) => day.cost > (daily[peak]?.cost ?? -1) ? index : peak, 0)
   const peak = daily[peakIndex]
@@ -477,22 +478,26 @@ function DailyChart({ daily, animateKey = '' }: { daily: DailyHistoryEntry[]; an
   return (
     <>
       <div className="chart" ref={chartRef}>
-        {daily.map((day, index) => (
-          <button
-            type="button"
-            aria-label={`${day.date}: ${formatUsd(day.cost)}`}
-            className={`col${index === peakIndex ? ' hi' : ''}`}
-            key={day.date}
-            style={{ height: `${max > 0 ? Math.max(2, day.cost / max * 100) : 2}%` }}
-            data-date={day.date}
-            data-cost={day.cost}
-            data-calls={day.calls}
-            data-led={day.topModels[0]?.name ?? ''}
-            onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
-            onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
-            onMouseLeave={() => setTip(null)}
-          />
-        ))}
+        {daily.map((day, index) => {
+          const noData = isNoData(day)
+          return (
+            <button
+              type="button"
+              aria-label={`${day.date}: ${noData ? 'no data recorded' : formatUsd(day.cost)}`}
+              className={`col${index === peakIndex && !noData ? ' hi' : ''}${noData ? ' nodata' : ''}`}
+              key={day.date}
+              style={{ height: `${max > 0 ? Math.max(2, day.cost / max * 100) : 2}%` }}
+              data-date={day.date}
+              data-cost={day.cost}
+              data-calls={day.calls}
+              data-led={day.topModels[0]?.name ?? ''}
+              data-nodata={noData ? 'true' : 'false'}
+              onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseLeave={() => setTip(null)}
+            />
+          )
+        })}
       </div>
       <div className="ov-xax">
         {ticks.map(day => {
@@ -513,8 +518,14 @@ function DailyChart({ daily, animateKey = '' }: { daily: DailyHistoryEntry[]; an
           role="tooltip"
         >
           <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
-          <div className="chart-tip-v">{formatUsd(tip.day.cost)}</div>
-          <div className="chart-tip-s">{tip.day.calls} calls · {tip.day.topModels[0]?.name ?? 'No model'} led</div>
+          {isNoData(tip.day) ? (
+            <div className="chart-tip-s">No data recorded</div>
+          ) : (
+            <>
+              <div className="chart-tip-v">{formatUsd(tip.day.cost)}</div>
+              <div className="chart-tip-s">{tip.day.calls} calls · {tip.day.topModels[0]?.name ?? 'No model'} led</div>
+            </>
+          )}
         </div>,
         document.body,
       )}
@@ -645,7 +656,7 @@ export function OverviewContent({
 
       <div className="ov-card ov-panel ov-chart-widget">
         <div className="ov-panel-head"><h3>Daily spend</h3><span className="r">{topModel ? `Biggest driver: ${topModel.name}` : 'No model driver yet'}</span></div>
-        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} animateKey={animateKey} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
+        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
       </div>
 
       <div className="ov-insight-band">

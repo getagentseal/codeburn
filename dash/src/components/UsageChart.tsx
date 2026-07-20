@@ -12,6 +12,14 @@ function fmtDay(d: string): string {
   return m && day ? `${Number(day)} ${MONTHS[Number(m)]}` : d
 }
 
+// Local "YYYY-MM-DD" for a bucket timestamp, matching history.daily date keys so
+// pre-history buckets can be compared against the first recorded day.
+function tsDateKey(ts: string): string {
+  const d = new Date(ts)
+  if (!Number.isFinite(d.getTime())) return ts
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const TOP_N = 6
 
 type Series = { key: string; label: string; color: string }
@@ -92,10 +100,12 @@ function GranularLines({
   timeline,
   breakdown,
   unit,
+  dataStart,
 }: {
   timeline: GranularHistory
   breakdown: Breakdown
   unit: Unit
+  dataStart: string | null
 }) {
   const { rows, series, labels } = useMemo(() => {
     const metadata = breakdown === 'sessions' ? timeline.sessionSeries : timeline.modelSeries
@@ -141,12 +151,19 @@ function GranularLines({
           : metadataById.get(key) ?? key,
       color: CHART_COLORS[index % CHART_COLORS.length]!,
     }))
+    // Drop buckets that predate the first recorded day: they are zero only because
+    // no data was ever recorded, so plotting them would draw a flat line asserting
+    // a real spend of zero before CodeBurn had any history. Idle days within
+    // recorded history (>= dataStart) stay.
+    const rows = dataStart
+      ? rowData.filter(row => tsDateKey(String(row.period)) >= dataStart)
+      : rowData
     return {
-      rows: rowData,
+      rows,
       series: chartSeries,
       labels: Object.fromEntries(chartSeries.map(item => [item.key, item.label])),
     }
-  }, [timeline, breakdown, unit])
+  }, [timeline, breakdown, unit, dataStart])
 
   if (series.length === 0) {
     return <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-tertiary-foreground">No timestamped usage in this period.</div>
@@ -303,6 +320,8 @@ export function GranularUsageChart({
   const [selectedBreakdown, setSelectedBreakdown] = useState<Breakdown>('sessions')
   if (!timeline) return <LegacyUsageChart daily={daily} unit={unit} />
 
+  // Earliest recorded day: buckets before it are unknown, not zero (see GranularLines).
+  const dataStart = daily.length ? daily.reduce((min, d) => (d.date < min ? d.date : min), daily[0]!.date) : null
   const hasSessions = timeline.sessionSeries.length > 0
   const hasModels = timeline.modelSeries.length > 0
   const breakdown = selectedBreakdown === 'sessions' && !hasSessions && hasModels ? 'models' : selectedBreakdown
@@ -334,7 +353,7 @@ export function GranularUsageChart({
           })}
         </div>
       </div>
-      <GranularLines timeline={timeline} breakdown={breakdown} unit={unit} />
+      <GranularLines timeline={timeline} breakdown={breakdown} unit={unit} dataStart={dataStart} />
     </div>
   )
 }

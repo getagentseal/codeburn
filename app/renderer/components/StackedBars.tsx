@@ -12,7 +12,7 @@ function modelSpend(day: DailyHistoryEntry): number {
   return day.topModels.reduce((sum, model) => sum + Math.max(0, model.cost), 0)
 }
 
-export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = '' }: { daily: DailyHistoryEntry[]; fallbackLabel?: string; animateKey?: string }) {
+export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = '', dataStart = null }: { daily: DailyHistoryEntry[]; fallbackLabel?: string; animateKey?: string; dataStart?: string | null }) {
   const barsRef = useRef<HTMLDivElement>(null)
   useBarGrowIn(barsRef, '.c', [animateKey])
   const presentSeries = new Set<SeriesKey>()
@@ -38,31 +38,44 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
   return (
     <div className="sbars-wrap">
       <div className="sbars" aria-label="Daily spend by model" ref={barsRef}>
-        {daily.map(day => (
-          <div className="c" key={day.date} data-date={day.date} title={`${day.date} · ${formatUsd(day.cost)}`}>
-            {modelSpend(day) > 0 ? (
-              [...day.topModels].sort(
-                (a, b) => SERIES_ORDER.indexOf(seriesKeyForModel(a.name)) - SERIES_ORDER.indexOf(seriesKeyForModel(b.name)),
-              ).map(model => {
-                const pct = Math.max(1, (Math.max(0, model.cost) / maxTotal) * 100)
-                return (
-                  <span
-                    key={`${day.date}-${model.name}`}
-                    className={`s ${seriesClassForModel(model.name)}`}
-                    style={{ height: `${pct}%` }}
-                    title={`${model.name} · ${formatUsd(model.cost)}`}
-                  />
-                )
-              })
-            ) : day.cost > 0 ? (
-              <span
-                className={`s ${seriesClassForKey('other')}`}
-                style={{ height: `${Math.max(1, (day.cost / maxTotal) * 100)}%` }}
-                title={`${fallbackLabel} · ${formatUsd(day.cost)}`}
-              />
-            ) : null}
-          </div>
-        ))}
+        {daily.map(day => {
+          // Days before the first recorded day are unknown, not zero: no bar, and
+          // an honest "No data recorded" hover instead of a "$0.00" claim.
+          const noData = dataStart !== null && day.date < dataStart
+          return (
+            <div
+              className={`c${noData ? ' nodata' : ''}`}
+              key={day.date}
+              data-date={day.date}
+              data-nodata={noData ? 'true' : 'false'}
+              title={noData ? `${day.date} · No data recorded` : `${day.date} · ${formatUsd(day.cost)}`}
+            >
+              {noData ? (
+                <span className="nodata-mark" aria-hidden="true" />
+              ) : modelSpend(day) > 0 ? (
+                [...day.topModels].sort(
+                  (a, b) => SERIES_ORDER.indexOf(seriesKeyForModel(a.name)) - SERIES_ORDER.indexOf(seriesKeyForModel(b.name)),
+                ).map(model => {
+                  const pct = Math.max(1, (Math.max(0, model.cost) / maxTotal) * 100)
+                  return (
+                    <span
+                      key={`${day.date}-${model.name}`}
+                      className={`s ${seriesClassForModel(model.name)}`}
+                      style={{ height: `${pct}%` }}
+                      title={`${model.name} · ${formatUsd(model.cost)}`}
+                    />
+                  )
+                })
+              ) : day.cost > 0 ? (
+                <span
+                  className={`s ${seriesClassForKey('other')}`}
+                  style={{ height: `${Math.max(1, (day.cost / maxTotal) * 100)}%` }}
+                  title={`${fallbackLabel} · ${formatUsd(day.cost)}`}
+                />
+              ) : null}
+            </div>
+          )
+        })}
       </div>
       <div className="ov-xax">
         {ticks.map(day => {

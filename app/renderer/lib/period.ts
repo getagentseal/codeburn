@@ -31,6 +31,19 @@ export function periodWindowStart(period: Period, now = new Date()): string {
   }
 }
 
+/**
+ * Earliest recorded day in the sparse `history.daily`, or null when it is empty.
+ * Days before this key predate CodeBurn's history: their absence is "no data
+ * recorded", not a real zero, so charts must not paint them as a currency zero.
+ */
+export function dataStartKey(daily: DailyHistoryEntry[]): string | null {
+  let earliest: string | null = null
+  for (const day of daily) {
+    if (earliest === null || day.date < earliest) earliest = day.date
+  }
+  return earliest
+}
+
 /** `history.daily` entries within the selected period's date window. */
 export function sliceDailyToPeriod(daily: DailyHistoryEntry[], period: Period, now = new Date()): DailyHistoryEntry[] {
   const start = periodWindowStart(period, now)
