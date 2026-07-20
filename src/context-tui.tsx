@@ -28,6 +28,14 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
+/// The primary label for a session row: its AI-generated title when present,
+/// else a clear placeholder. The short id is demoted to the dim metadata
+/// cluster, so a titled session reads by what it was about, not its hash.
+export function sessionPrimaryLabel(title: string | undefined): string {
+  const trimmed = (title ?? '').trim()
+  return trimmed || 'untitled session'
+}
+
 async function loadSessions(provider: Provider): Promise<TitledSessionRef[]> {
   return provider === 'codex' ? listRecentCodexSessions(15) : listRecentTitledSessions(15)
 }
@@ -164,14 +172,12 @@ function ContextTuiApp({ initialScope }: { initialScope: Scope }) {
           <Box key={s.filePath} flexDirection="column">
             <Text>
               <Text color={ORANGE}>{selected ? '❯ ' : '  '}</Text>
-              <Text color={selected ? ORANGE : undefined}>{s.sessionId.slice(0, 8)}</Text>
-              <Text color={expanded || selected ? undefined : DIM}>
-                {'  '}
-                {truncate(s.title || 'untitled session', titleWidth).padEnd(titleWidth)}
+              <Text bold={selected} color={selected ? ORANGE : undefined}>
+                {truncate(sessionPrimaryLabel(s.title), titleWidth).padEnd(titleWidth)}
               </Text>
               <Text color={DIM}>
                 {'  '}
-                {truncate(s.project, 12).padEnd(12)} {relativeAge(s.mtimeMs).padStart(8)} {`${(s.sizeBytes / 1024 / 1024).toFixed(1)}MB`.padStart(8)}
+                {s.sessionId.slice(0, 8)}  {truncate(s.project, 12).padEnd(12)} {relativeAge(s.mtimeMs).padStart(8)} {`${(s.sizeBytes / 1024 / 1024).toFixed(1)}MB`.padStart(8)}
               </Text>
             </Text>
             {expanded && error && (
