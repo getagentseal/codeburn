@@ -236,3 +236,44 @@ describe('incremental append parsing', () => {
     await rm(warmCache, { recursive: true, force: true })
   })
 })
+
+describe('straddle guard (streamed id restated across the append boundary)', () => {
+  // A streamed assistant id whose first emission sits in the committed prefix
+  // (and NOT in the last cached turn) can be restated in the appended region.
+  // The boundary merge would splice it into the wrong turn and count it twice;
+  // the guard must abandon the shortcut and re-parse the file from byte 0,
+  // matching the cold-parse oracle exactly.
+  it('falls back to a full re-parse when an appended id already exists in the cached turns', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'incr-straddle-'))
+    try {
+      await writeFile(sessionPath, baseLines().join('\n') + '\n')
+      await parseWith(cacheDir)
+
+      // Restatement of msg-a (first turn's id, grown usage) followed by a new
+      // turn — the shape image-heavy sessions produce while streaming.
+      const appended = [
+        asstLine('msg-a', '2026-05-01T10:06:00.000Z', { input_tokens: 100, output_tokens: 90, cache_read_input_tokens: 300 }, [readBlock('/a.ts')]),
+        userLine('2026-05-01T10:07:00.000Z', 'third task please'),
+        asstLine('msg-c', '2026-05-01T10:07:02.000Z', { input_tokens: 50, output_tokens: 10 }, []),
+      ]
+      await appendFile(sessionPath, appended.join('\n') + '\n')
+
+      readLineCalls.length = 0
+      const incremental = await parseWith(cacheDir)
+      const oracle = await coldFullReparse()
+
+      const sum = (ps: ProjectSummary[]) => ({
+        calls: ps.reduce((s, p) => s + p.totalApiCalls, 0),
+        cost: ps.reduce((s, p) => s + p.totalCostUSD, 0),
+        turns: ps.flatMap(p => p.sessions).reduce((s, x) => s + x.turns.length, 0),
+      })
+      expect(sum(incremental)).toEqual(sum(oracle))
+
+      // The guard must have re-read the file from byte 0, not the append offset.
+      const offsets = offsetsFor(sessionPath)
+      expect(offsets.some(o => o === undefined || o === 0)).toBe(true)
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true })
+    }
+  })
+})

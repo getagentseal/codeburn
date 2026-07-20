@@ -8,7 +8,7 @@ import { Panel } from '../components/Panel'
 import { ProviderLogo } from '../components/ProviderLogo'
 import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
-import { releasePageUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
+import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { version as appVersion } from '../../package.json'
 import { readDailyBudget } from '../lib/budget'
 import { formatConverted, formatUsd } from '../lib/format'
@@ -208,7 +208,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
         </div>
         <div className="about-sec set-last-sec">
           <div className="about-sec-h">About</div>
-          <div className="about-row"><span className="tx">Version {version}{updateNote && <small>{updateNote}</small>}</span><span className="r">{update?.updateAvailable && update.tag ? <button className="set-text-button" onClick={() => { void codeburn.openExternal(releasePageUrl(update.tag!)) }}>Download</button> : null}</span></div>
+          <div className="about-row"><span className="tx">Version {version}{updateNote && <small>{updateNote}</small>}</span><span className="r">{update?.updateAvailable && update.tag ? <button className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(update.tag!)) }}>Download</button> : null}</span></div>
         </div>
       </div>
     </section>

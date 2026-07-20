@@ -640,6 +640,9 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .chart { position: relative; height: 150px; display: flex; align-items: flex-end; gap: 4px; padding-top: 8px; border-bottom: 1px solid var(--line2); }
 .chart .col { flex: 1; background: var(--bar); border-radius: 3px 3px 0 0; min-height: 3px; transition: background .14s ease; border: 0; padding: 0; }
 .chart .col.hi { background: var(--bar-hi); } .chart .col:hover { background: var(--accent); }
+/* Days before recorded history: a faint dashed stub, never a solid zero-height bar reading as real spend. */
+.chart .col.nodata { background: transparent; border-top: 1px dashed var(--line); opacity: .6; }
+.chart .col.nodata:hover { background: transparent; }
 .chart .col:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .chart-tip { position: fixed; pointer-events: none; max-width: calc(100vw - 16px); opacity: 0; background: var(--tip-bg); color: var(--tip-ink); border: 1px solid color-mix(in srgb, var(--tip-ink) 14%, transparent); border-radius: 7px; padding: 7px 10px; line-height: 1.35; white-space: nowrap; box-shadow: 0 6px 20px rgba(0,0,0,.22); transition: opacity .1s ease; z-index: 1000; }
 .chart-tip.on { opacity: 1; }
@@ -666,6 +669,8 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .ov-heat-cell.heat-level-3 { background: color-mix(in srgb, var(--accent) 64%, var(--fill)); }
 .ov-heat-cell.heat-level-4 { background: var(--accent); }
 .ov-heat-cell.future { opacity: .42; }
+/* Days before recorded history: an empty outlined slot, distinct from a filled zero-spend day. */
+.ov-heat-cell.nodata { background: transparent; box-shadow: inset 0 0 0 1px var(--line); opacity: .5; }
 .ov-heat-cell:hover, .ov-heat-cell:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 @media (max-width: 900px) {

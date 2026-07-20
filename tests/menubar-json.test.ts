@@ -38,6 +38,9 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.label).toBe('7 Days')
     expect(payload.current.cost).toBe(1248.01)
     expect(payload.current.calls).toBe(11231)
+    // An absent pricingCoverage is UNKNOWN and must render as null, never as
+    // a fabricated 100% coverage (post-#756 review finding).
+    expect(payload.current.pricingCoverage).toBeNull()
     expect(payload.current.sessions).toBe(97)
     expect(payload.current.inputTokens).toBe(19100)
     expect(payload.current.outputTokens).toBe(675600)

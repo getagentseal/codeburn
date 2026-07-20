@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { formatUsd } from '../lib/format'
-import { localDateKey } from '../lib/period'
+import { dataStartKey, localDateKey } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
 
 type HeatmapDay = {
@@ -11,6 +11,9 @@ type HeatmapDay = {
   calls: number
   level: number
   isFuture: boolean
+  // True for days that predate the first recorded day: a zero here is unknown,
+  // not a real zero, so it renders as "no data" rather than a currency zero.
+  noData: boolean
 }
 
 const WEEK_COUNT = 26
@@ -45,6 +48,7 @@ function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date): HeatmapDay[] {
   const firstDay = new Date(startOfWeek)
   firstDay.setDate(startOfWeek.getDate() - (WEEK_COUNT - 1) * 7)
   const byDate = new Map(daily.map(day => [day.date, day]))
+  const dataStart = dataStartKey(daily)
   const visibleCosts: number[] = []
 
   for (let offset = 0; offset < WEEK_COUNT * 7; offset++) {
@@ -57,15 +61,18 @@ function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date): HeatmapDay[] {
   return Array.from({ length: WEEK_COUNT * 7 }, (_, offset) => {
     const date = new Date(firstDay)
     date.setDate(firstDay.getDate() + offset)
+    const key = localDateKey(date)
     const isFuture = date > today
-    const entry = byDate.get(localDateKey(date))
-    const cost = isFuture ? 0 : (entry?.cost ?? 0)
+    const noData = !isFuture && (dataStart === null || key < dataStart)
+    const entry = byDate.get(key)
+    const cost = isFuture || noData ? 0 : (entry?.cost ?? 0)
     return {
-      date: localDateKey(date),
+      date: key,
       cost,
-      calls: isFuture ? 0 : (entry?.calls ?? 0),
+      calls: isFuture || noData ? 0 : (entry?.calls ?? 0),
       level: intensityLevel(cost, maxCost),
       isFuture,
+      noData,
     }
   })
 }
@@ -115,11 +122,11 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
               type="button"
               role="gridcell"
               key={day.date}
-              className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}`}
-              aria-label={`${formatDate(day.date)}: ${day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${day.calls} calls`}`}
+              className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}${day.noData ? ' nodata' : ''}`}
+              aria-label={`${formatDate(day.date)}: ${day.noData ? 'no data recorded' : day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${day.calls} calls`}`}
               data-date={day.date}
               data-cost={day.cost}
-              data-active={!day.isFuture && day.cost > 0 ? 'true' : 'false'}
+              data-active={!day.isFuture && !day.noData && day.cost > 0 ? 'true' : 'false'}
               onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseLeave={() => setTip(null)}
@@ -138,8 +145,14 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
           role="tooltip"
         >
           <div className="chart-tip-d">{formatDate(tip.day.date)}</div>
-          <div className="chart-tip-v">{tip.day.isFuture ? 'Future day' : formatUsd(tip.day.cost)}</div>
-          <div className="chart-tip-s">{tip.day.isFuture ? 'No activity yet' : `${tip.day.calls} calls`}</div>
+          {tip.day.noData ? (
+            <div className="chart-tip-s">No data recorded</div>
+          ) : (
+            <>
+              <div className="chart-tip-v">{tip.day.isFuture ? 'Future day' : formatUsd(tip.day.cost)}</div>
+              <div className="chart-tip-s">{tip.day.isFuture ? 'No activity yet' : `${tip.day.calls} calls`}</div>
+            </>
+          )}
         </div>,
         document.body,
       )

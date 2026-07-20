@@ -135,7 +135,7 @@ private struct TrendInsight: View {
         case .today, .sevenDays: return 19
         case .thirtyDays: return 30
         case .month: return 31
-        case .all: return min(days.count, 90)
+        case .all, .lifetime: return min(days.count, 90)
         }
     }
 

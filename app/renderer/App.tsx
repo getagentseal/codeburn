@@ -119,10 +119,11 @@ const PERIOD_LABELS: Record<Period, string> = {
   week: 'Last 7 days',
   month: 'This month',
   '30days': 'Last 30 days',
-  all: 'All time',
+  all: 'Last 6 months',
+  lifetime: 'Lifetime',
 }
 
-const STANDARD_PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
+const STANDARD_PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
 
 // Instant-switch memo key for an overview result. Shared by the overview poll
 // and the provider prefetcher so the two never drift out of sync. Exported so

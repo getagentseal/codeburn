@@ -25,6 +25,7 @@ import {
   reconcileFile,
   saveCache,
 } from './session-cache.js'
+import { acquireCacheRefreshLock, type RefreshLockHandle } from './cache-refresh-lock.js'
 import type { ParsedProviderCall, SessionSource } from './providers/types.js'
 import type {
   ApiUsageIteration,
@@ -1801,6 +1802,7 @@ async function scanProjectDirs(
   // caller (parseAllSessions) can persist partial progress. A run killed
   // mid-scan then resumes from a warm cache instead of re-parsing from zero.
   onFileParsed?: () => Promise<void>,
+  readOnly = false,
 ): Promise<ProjectSummary[]> {
   const section = getOrCreateProviderSection(diskCache, 'claude')
   const allDiscoveredFiles = new Set<string>()
@@ -1818,16 +1820,19 @@ async function scanProjectDirs(
       const fp = await fingerprintFile(filePath)
       if (!fp) continue
 
-      const action = reconcileFile(fp, section.files[filePath])
-      if (action.action === 'unchanged') {
+      const cached = section.files[filePath]
+      const action = reconcileFile(fp, cached)
+      if (cached && (readOnly || action.action === 'unchanged')) {
         unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
-      } else if (action.action === 'appended') {
-        changedFiles.push({
-          filePath,
-          info: { dirName, fp, source },
-          append: { cached: section.files[filePath]!, readFromOffset: action.readFromOffset },
-        })
-      } else {
+      } else if (!readOnly) {
+        if (action.action === 'appended') {
+          changedFiles.push({
+            filePath,
+            info: { dirName, fp, source },
+            append: { cached: section.files[filePath]!, readFromOffset: action.readFromOffset },
+          })
+          continue
+        }
         changedFiles.push({ filePath, info: { dirName, fp, source } })
       }
     }
@@ -1835,6 +1840,16 @@ async function scanProjectDirs(
     await discoverProgress.tick(dirsDone)
   }
   discoverProgress.finish()
+
+  if (readOnly) {
+    for (const [filePath, cached] of Object.entries(section.files)) {
+      if (allDiscoveredFiles.has(filePath)) continue
+      const dirName = cached.canonicalProjectName
+        ?? cached.turns[0]?.calls[0]?.project
+        ?? basename(dirname(filePath))
+      unchangedFiles.push({ filePath, dirName, cached })
+    }
+  }
 
   // Pre-seed dedup set from cached (unchanged) files
   for (const { cached } of unchangedFiles) {
@@ -1865,71 +1880,87 @@ async function scanProjectDirs(
         const newEntries = await parseClaudeEntries(filePath, tracker, append.readFromOffset, { toolResultMeta, sessionMeta })
         const cached = append.cached
 
-        const newTurns = newEntries
-          ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
-          : []
+        // Straddle guard: a streamed assistant message id that first appeared in
+        // the committed prefix can be restated inside the appended region
+        // (image-heavy turns stream one id across several records over seconds).
+        // The appended region is grouped before this file's cached keys join
+        // seenMsgIds, so the restated id would count twice; suppressing it
+        // instead would freeze the stale first emission. Neither matches a full
+        // re-parse, so on any id overlap the shortcut is abandoned and the file
+        // re-parses from byte 0 (rare: ~0.3% of real files).
+        const cachedIds = new Set(cached.turns.flatMap(t => t.calls.map(c => c.deduplicationKey)))
+        const straddles = newEntries !== null && newEntries.some(e => {
+          const id = getMessageId(e)
+          return id !== null && cachedIds.has(id)
+        })
+        if (!straddles) {
+          const newTurns = newEntries
+            ? parsedTurnsToCachedTurns(groupIntoTurns(dedupeStreamingMessageIds(newEntries), seenMsgIds, toolResultMeta))
+            : []
 
-        const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
-        if (newTurns.length > 0) {
-          let startIdx = 0
-          // A first new turn with no leading user message is a continuation of
-          // the last cached turn — merge its calls in (a full re-parse would put
-          // them in that same turn), then append the remaining new turns.
-          if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
-            const last = mergedTurns[mergedTurns.length - 1]!
-            last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
-            startIdx = 1
+          const mergedTurns: CachedTurn[] = cached.turns.map(t => ({ ...t, calls: [...t.calls] }))
+          if (newTurns.length > 0) {
+            let startIdx = 0
+            // A first new turn with no leading user message is a continuation of
+            // the last cached turn — merge its calls in (a full re-parse would put
+            // them in that same turn), then append the remaining new turns.
+            if (!newTurns[0]!.userMessage.trim() && mergedTurns.length > 0) {
+              const last = mergedTurns[mergedTurns.length - 1]!
+              last.calls = mergeBoundaryCalls(last.calls, newTurns[0]!.calls)
+              startIdx = 1
+            }
+            for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
           }
-          for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
+
+          // The cached region's dedup keys were not added to seenMsgIds (only
+          // unchanged files pre-seed it), so add them now — a full re-parse would
+          // have, and later files dedup cross-file against them.
+          for (const t of cached.turns) for (const c of t.calls) seenMsgIds.add(c.deduplicationKey)
+
+          // First-cwd wins, and the first cwd lives in the cached region whenever
+          // one was resolved there; only re-derive if the cached region had none.
+          let canonicalCwd = cached.canonicalCwd
+          let canonicalProjectName = cached.canonicalProjectName
+          if (canonicalCwd === undefined && newEntries) {
+            const cwd = extractCanonicalCwd(newEntries)
+            const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
+            canonicalCwd = canonical?.path
+            canonicalProjectName = canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined
+          }
+
+          // Inventory is a sorted set union; cached (older entries) ∪ new = full.
+          const mcpInventory = newEntries
+            ? Array.from(new Set([...cached.mcpInventory, ...extractMcpInventory(newEntries)])).sort()
+            : cached.mcpInventory
+
+          // Session meta merges across the append boundary: title is last-wins
+          // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
+          const mergedTitle = sessionMeta.title ?? cached.title
+          const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
+          const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
+
+          section.files[filePath] = {
+            fingerprint: info.fp,
+            lastCompleteLineOffset: tracker.lastCompleteLineOffset,
+            canonicalCwd,
+            canonicalProjectName,
+            mcpInventory,
+            turns: mergedTurns,
+            agentType: cached.agentType,
+            ...(mergedTitle ? { title: mergedTitle } : {}),
+            ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
+            ...(mergedSidechain ? { isSidechain: true } : {}),
+          }
+          ;(diskCache as { _dirty?: boolean })._dirty = true
+          filesDone++
+          await parseProgress.tick(filesDone)
+          if (filesDone % 50 === 0 || filesDone === progressTotal) {
+            emitScanProgress({ kind: 'tick', provider: 'claude', done: filesDone, total: progressTotal })
+          }
+          if (onFileParsed) await onFileParsed()
+          continue
         }
-
-        // The cached region's dedup keys were not added to seenMsgIds (only
-        // unchanged files pre-seed it), so add them now — a full re-parse would
-        // have, and later files dedup cross-file against them.
-        for (const t of cached.turns) for (const c of t.calls) seenMsgIds.add(c.deduplicationKey)
-
-        // First-cwd wins, and the first cwd lives in the cached region whenever
-        // one was resolved there; only re-derive if the cached region had none.
-        let canonicalCwd = cached.canonicalCwd
-        let canonicalProjectName = cached.canonicalProjectName
-        if (canonicalCwd === undefined && newEntries) {
-          const cwd = extractCanonicalCwd(newEntries)
-          const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
-          canonicalCwd = canonical?.path
-          canonicalProjectName = canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined
-        }
-
-        // Inventory is a sorted set union; cached (older entries) ∪ new = full.
-        const mcpInventory = newEntries
-          ? Array.from(new Set([...cached.mcpInventory, ...extractMcpInventory(newEntries)])).sort()
-          : cached.mcpInventory
-
-        // Session meta merges across the append boundary: title is last-wins
-        // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
-        const mergedTitle = sessionMeta.title ?? cached.title
-        const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
-        const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
-
-        section.files[filePath] = {
-          fingerprint: info.fp,
-          lastCompleteLineOffset: tracker.lastCompleteLineOffset,
-          canonicalCwd,
-          canonicalProjectName,
-          mcpInventory,
-          turns: mergedTurns,
-          agentType: cached.agentType,
-          ...(mergedTitle ? { title: mergedTitle } : {}),
-          ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
-          ...(mergedSidechain ? { isSidechain: true } : {}),
-        }
-        ;(diskCache as { _dirty?: boolean })._dirty = true
-        filesDone++
-        await parseProgress.tick(filesDone)
-        if (filesDone % 50 === 0 || filesDone === progressTotal) {
-          emitScanProgress({ kind: 'tick', provider: 'claude', done: filesDone, total: progressTotal })
-        }
-        if (onFileParsed) await onFileParsed()
-        continue
+        // Straddled: fall through to the full re-parse below.
       }
 
       const tracker = { lastCompleteLineOffset: 0 }
@@ -1975,7 +2006,7 @@ async function scanProjectDirs(
   }
   parseProgress.finish()
 
-  if (dirs.length > 0) {
+  if (!readOnly && dirs.length > 0) {
     for (const cachedPath of Object.keys(section.files)) {
       if (!allDiscoveredFiles.has(cachedPath)) {
         delete section.files[cachedPath]
@@ -2015,6 +2046,8 @@ async function scanProjectDirs(
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
+    if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
+    if (cachedFile.title) session.title = cachedFile.title
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
@@ -2523,12 +2556,14 @@ async function parseProviderSources(
   seenKeys: Set<string>,
   diskCache: SessionCache,
   dateRange?: DateRange,
+  readOnly = false,
 ): Promise<ProjectSummary[]> {
   const provider = await getProvider(providerName)
   if (!provider) return []
 
   const section = getOrCreateProviderSection(diskCache, providerName)
   const allDiscoveredFiles = new Set<string>()
+  const servedSources = [...sources]
 
   type SourceInfo = { source: SessionSource; fp: NonNullable<Awaited<ReturnType<typeof fingerprintFile>>> }
   const unchangedSources: Array<{ source: SessionSource; cached: CachedFile }> = []
@@ -2541,7 +2576,7 @@ async function parseProviderSources(
     // comes from a live API fetch in createSessionParser. There's nothing to
     // fingerprint or incrementally cache, so re-fetch every run with a synthetic
     // fingerprint (mtime=now so the date-range filter below never excludes it).
-    if (provider.network) {
+    if (provider.network && !readOnly) {
       changedSources.push({ source, fp: { dev: 0, ino: 0, mtimeMs: Date.now(), sizeBytes: 0 } })
       continue
     }
@@ -2554,10 +2589,23 @@ async function parseProviderSources(
     // A cached parse failure at this same fingerprint stays skipped — don't
     // re-read a file that already threw and hasn't changed. It re-parses only
     // when the file changes (then `reconcileFile` reports non-'unchanged').
-    if (action.action === 'unchanged' && cached && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))) {
+    if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
       unchangedSources.push({ source, cached })
-    } else {
+    } else if (!readOnly) {
       changedSources.push({ source, fp })
+    }
+  }
+
+  if (readOnly) {
+    for (const [path, cached] of Object.entries(section.files)) {
+      if (allDiscoveredFiles.has(path)) continue
+      servedSources.push({
+        provider: providerName,
+        path,
+        project: cached.turns[0]?.calls[0]?.project ?? providerName,
+      })
+      allDiscoveredFiles.add(path)
+      unchangedSources.push({ source: servedSources[servedSources.length - 1]!, cached })
     }
   }
 
@@ -2664,12 +2712,12 @@ async function parseProviderSources(
 
   // Stamp the durable flag into the cache section so the orphan-bootstrap in
   // parseAllSessions can fast-check without a getProvider() round-trip.
-  if (provider.durableSources && !section.durable) {
+  if (!readOnly && provider.durableSources && !section.durable) {
     section.durable = true
     ;(diskCache as { _dirty?: boolean })._dirty = true
   }
 
-  if (sources.length > 0 && !provider.durableSources) {
+  if (!readOnly && sources.length > 0 && !provider.durableSources) {
     for (const cachedPath of Object.keys(section.files)) {
       if (!allDiscoveredFiles.has(cachedPath)) {
         delete section.files[cachedPath]
@@ -2680,7 +2728,7 @@ async function parseProviderSources(
 
   // 90-day age-out for durable providers: remove entries whose newest call is
   // older than 90 days so the cache doesn't grow unboundedly over time.
-  if (provider.durableSources) {
+  if (!readOnly && provider.durableSources) {
     const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
       const newestTs = cachedFile.turns
@@ -2697,9 +2745,9 @@ async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[] }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
 
-  for (const source of sources) {
+  for (const source of servedSources) {
     const cachedFile = section.files[source.path]
     if (!cachedFile) continue
 
@@ -2726,8 +2774,19 @@ async function parseProviderSources(
         if (!existing.projectPath && turn.calls[0]?.projectPath) {
           existing.projectPath = turn.calls[0]!.projectPath
         }
+        if (cachedFile.prLinks?.length) {
+          const links = (existing.prLinks ??= new Set())
+          for (const link of cachedFile.prLinks) links.add(link)
+        }
+        if (!existing.title && cachedFile.title) existing.title = cachedFile.title
       } else {
-        sessionMap.set(key, { project, projectPath: turn.calls[0]?.projectPath, turns: [classified] })
+        sessionMap.set(key, {
+          project,
+          projectPath: turn.calls[0]?.projectPath,
+          turns: [classified],
+          ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
+          ...(cachedFile.title ? { title: cachedFile.title } : {}),
+        })
       }
     }
   }
@@ -2770,9 +2829,11 @@ async function parseProviderSources(
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, turns }] of sessionMap) {
+  for (const [key, { project, projectPath, turns, prLinks, title }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
+    if (prLinks?.size) session.prLinks = [...prLinks].sort()
+    if (title) session.title = title
     if (session.apiCalls > 0) {
       const existing = projectMap.get(project)
       if (existing) {
@@ -2967,21 +3028,59 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   // If another live process is already hydrating, wait for it, then reload the
   // now-warm cache instead of double-parsing. Never a correctness gate: on any
   // doubt it proceeds unlocked.
-  const hydration = await beginColdHydration(!isCacheComplete(diskCache))
-  if (hydration.waited) diskCache = await loadCache()
+  if (!isCacheComplete(diskCache)) {
+    const hydration = await beginColdHydration(true)
+    if (hydration.waited) diskCache = await loadCache()
+    const isCold = !isCacheComplete(diskCache)
+    try {
+      return await runParse(key, diskCache, dateRange, providerFilter, { isCold })
+    } finally {
+      await hydration.release()
+    }
+  }
 
-  // Cold = this run finishes a genuine (possibly resumed) full parse. A warm run
-  // reconciles an already-complete corpus. Drives the splash's cold-only reveal
-  // and the daily backfill's "don't finalize partial history" guard.
-  const isCold = !isCacheComplete(diskCache)
+  // A complete cache refresh is a strict read/reconcile/parse/save transaction.
+  // Keep the snapshot loaded before acquisition: timeout/unavailable paths serve
+  // exactly this complete snapshot and never mutate or invalidate the holder.
+  const priorSnapshot = diskCache
+  const refresh = await acquireCacheRefreshLock()
+  if (refresh.outcome === 'timed-out' || refresh.outcome === 'unavailable') {
+    return runParse(key, priorSnapshot, dateRange, providerFilter, { readOnly: true })
+  }
+  if (refresh.outcome === 'completed-by-other') {
+    return runParse(key, await loadCache(), dateRange, providerFilter, { readOnly: true })
+  }
+
   try {
-    return await runParse(key, diskCache, dateRange, providerFilter, isCold)
+    // Reload only after ownership is canonical; this closes the lost-update
+    // window between the pre-gate read and the holder's completed publication.
+    diskCache = await loadCache()
+    return await runParse(key, diskCache, dateRange, providerFilter, { refreshLock: refresh.handle })
+  } catch (err) {
+    if (!(err instanceof RefreshFenceLostError) && !(err instanceof RefreshPublicationUnavailableError)) throw err
+    return runParse(key, await loadCache(), dateRange, providerFilter, { readOnly: true })
   } finally {
-    await hydration.release()
+    await refresh.handle.release()
   }
 }
 
-async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRange, providerFilter?: string, isCold = false): Promise<ProjectSummary[]> {
+class RefreshFenceLostError extends Error {}
+class RefreshPublicationUnavailableError extends Error {}
+
+type RunParseOptions = {
+  isCold?: boolean
+  readOnly?: boolean
+  refreshLock?: RefreshLockHandle
+}
+
+async function runParse(
+  key: string,
+  diskCache: SessionCache,
+  dateRange?: DateRange,
+  providerFilter?: string,
+  options: RunParseOptions = {},
+): Promise<ProjectSummary[]> {
+  const { isCold = false, readOnly = false, refreshLock } = options
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(providerFilter)
@@ -3002,6 +3101,7 @@ async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRa
   // never races the final save below.
   let lastSaveAt = Date.now()
   const saveProgress = async (): Promise<void> => {
+    if (!isCold || readOnly) return
     if (!(diskCache as { _dirty?: boolean })._dirty) return
     if (Date.now() - lastSaveAt < PROGRESS_SAVE_THROTTLE_MS) return
     lastSaveAt = Date.now()
@@ -3023,7 +3123,7 @@ async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRa
   if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'start' })
   let claudeProjects: ProjectSummary[] = []
   try {
-    claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress)
+    claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
     if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
   } catch (err) {
     if (!isPermissionError(err)) throw err
@@ -3035,7 +3135,7 @@ async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRa
   for (const [providerName, sources] of providerGroups) {
     emitScanProgress({ kind: 'provider', provider: providerName, state: 'start' })
     try {
-      const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange)
+      const projects = await parseProviderSources(providerName, sources, seenKeys, diskCache, dateRange, readOnly)
       emitScanProgress({ kind: 'provider', provider: providerName, state: 'done', files: sources.length })
       otherProjects.push(...projects)
     } catch (err) {
@@ -3064,7 +3164,7 @@ async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRa
     // constant — both checks are O(1) and avoid a getProvider() dynamic-import
     // round-trip for every unprocessed provider in the disk cache.
     if (!section.durable && !DURABLE_PROVIDER_NAMES.has(providerName)) continue
-    const projects = await parseProviderSources(providerName, [], seenKeys, diskCache, dateRange)
+    const projects = await parseProviderSources(providerName, [], seenKeys, diskCache, dateRange, readOnly)
     otherProjects.push(...projects)
   }
 
@@ -3075,9 +3175,15 @@ async function runParse(key: string, diskCache: SessionCache, dateRange?: DateRa
   // on is durable. A run killed before here never reaches this, so its throttled
   // partial saves keep `complete: false` and the next launch resumes cold.
   const wasComplete = isCacheComplete(diskCache)
-  if (!wasComplete) diskCache.complete = true
-  if ((diskCache as { _dirty?: boolean })._dirty || !wasComplete) {
-    try { await saveCache(diskCache) } catch {}
+  if (!readOnly && !wasComplete) diskCache.complete = true
+  if (!readOnly && ((diskCache as { _dirty?: boolean })._dirty || !wasComplete)) {
+    try {
+      const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
+      if (!published) throw new RefreshFenceLostError()
+    } catch (err) {
+      if (err instanceof RefreshFenceLostError) throw err
+      if (refreshLock) throw new RefreshPublicationUnavailableError()
+    }
   }
   sessionHydrationComplete = true
 

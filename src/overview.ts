@@ -7,6 +7,7 @@ import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, getShortModelName } from './models.js'
 import { markEstimated } from './format.js'
 import { dateKey } from './day-aggregator.js'
+import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
@@ -83,18 +84,34 @@ function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
   ].join('\n')
 }
 
+/// The durable slice renderOverview needs: headline totals + the day set behind
+/// them + how much of the total came from carried (expired-source) days.
+export type OverviewDurable = {
+  cost: number
+  savingsUSD: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  days: DailyEntry[]
+  carriedCostUSD: number
+}
+
 export function renderOverview(
   projects: ProjectSummary[],
-  opts: { label: string; color: boolean; budget?: OverviewBudget },
+  opts: { label: string; color: boolean; budget?: OverviewBudget; durable?: OverviewDurable },
 ): string {
   const c = new Chalk(opts.color ? {} : { level: 0 })
   const heading = (text: string): string => c.cyan.bold(text)
   const out: string[] = []
+  const durable = opts.durable
 
   out.push(c.bold('CodeBurn') + c.dim('  ' + opts.label))
   out.push('')
 
-  if (projects.length === 0) {
+  if (projects.length === 0 && !(durable && durable.cost > 0)) {
     out.push(c.dim(`No usage found for ${opts.label}.`))
     return out.join('\n') + '\n'
   }
@@ -157,6 +174,29 @@ export function renderOverview(
           }
         }
       }
+    }
+  }
+
+  // Headline totals and the day-resolved views (Daily, Highest-value days) come
+  // from the durable daily cache so they match the menubar exactly, carried
+  // (expired-source) days included. The per-tool / per-model / per-project
+  // breakdowns above stay live: they need surviving session detail.
+  if (durable) {
+    cost = durable.cost
+    savings = durable.savingsUSD
+    calls = durable.calls
+    sessions = durable.sessions
+    inTok = durable.inputTokens
+    outTok = durable.outputTokens
+    cacheR = durable.cacheReadTokens
+    cacheW = durable.cacheWriteTokens
+    byDay.clear()
+    for (const d of durable.days) {
+      byDay.set(d.date, {
+        cost: d.cost,
+        tokens: d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheWriteTokens,
+        providers: new Set(Object.keys(d.providers)),
+      })
     }
   }
 
@@ -302,6 +342,13 @@ export function renderOverview(
   const topModel = modelRows[0] ? getShortModelName(modelRows[0][0]) : ''
   const mostly = topTool ? `, mostly ${topTool}${topModel ? ` / ${topModel}` : ''}` : ''
   out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatCost(cost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
+
+  // When some of the period's total came from days whose session logs have since
+  // expired, say so once. The figure is real (preserved in the durable daily
+  // cache); it just can't be re-derived from surviving files anymore.
+  if (durable && durable.carriedCostUSD > 0) {
+    out.push(c.dim(`  includes ${formatCost(durable.carriedCostUSD)} preserved from expired session logs`))
+  }
 
   return out.join('\n') + '\n'
 }

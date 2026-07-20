@@ -199,6 +199,12 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   apiCalls: number
   turns: ClassifiedTurn[]
+  /// GitHub PR URLs captured from the session transcript (session-level,
+  /// deduplicated). Absent when none were observed.
+  prLinks?: string[]
+  /// Human session title captured from the transcript (last ai-title entry).
+  /// Absent when the transcript never produced one.
+  title?: string
   modelBreakdown: Record<string, { calls: number; costUSD: number; tokens: TokenUsage; savingsUSD: number; estimatedCostUSD?: number }>
   toolBreakdown: Record<string, { calls: number }>
   mcpBreakdown: Record<string, { calls: number }>

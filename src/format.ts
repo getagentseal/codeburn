@@ -36,12 +36,28 @@ function localDateString(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
-export function renderStatusBar(projects: ProjectSummary[]): string {
+/// Precomputed today/month totals from the durable daily cache. When supplied,
+/// the status bar renders these instead of bucketing the live parse, so the
+/// figures match the menubar exactly (carried, expired-source days included).
+export type StatusBarTotals = {
+  today: { cost: number; calls: number }
+  month: { cost: number; calls: number }
+}
+
+export function renderStatusBar(projects: ProjectSummary[], totals?: StatusBarTotals): string {
   const now = new Date()
   const today = localDateString(now)
   const monthStart = `${today.slice(0, 7)}-01`
 
   let todayCost = 0, todayCalls = 0, monthCost = 0, monthCalls = 0
+  if (totals) {
+    todayCost = totals.today.cost; todayCalls = totals.today.calls
+    monthCost = totals.month.cost; monthCalls = totals.month.calls
+    const lines: string[] = ['']
+    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(`${monthCalls} calls`)}`)
+    lines.push('')
+    return lines.join('\n')
+  }
 
   for (const project of projects) {
     for (const session of project.sessions) {

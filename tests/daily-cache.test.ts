@@ -260,7 +260,7 @@ describe('addNewDays', () => {
   })
 
   it('still prunes when newestDate is valid', () => {
-    const old = '2020-01-01'
+    const old = '2010-01-01'
     const recent = '2026-04-10'
     const base: DailyCache = {
       version: DAILY_CACHE_VERSION,
@@ -269,7 +269,7 @@ describe('addNewDays', () => {
       days: [emptyDay(old, 1), emptyDay(recent, 2)],
     }
     const updated = addNewDays(base, [], recent)
-    // 730-day retention from 2026-04-10 → cutoff ~2024-04-11; 2020-01-01 must be gone.
+    // 3650-day retention from 2026-04-10 puts the cutoff in 2016; 2010-01-01 must be gone.
     expect(updated.days.find(d => d.date === old)).toBeUndefined()
     expect(updated.days.find(d => d.date === recent)).toBeDefined()
   })

@@ -8,6 +8,7 @@ import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI } from './parser.js'
 import { findUnpricedModels, loadPricing } from './models.js'
 import { aggregateModelTotals } from './model-breakdown.js'
+import { buildDurablePeriod } from './usage-aggregator.js'
 import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, type ContextBudget } from './context-budget.js'
@@ -128,6 +129,46 @@ function getPeriodRange(period: Period): { start: Date; end: Date } {
   return getDateRange(period).range
 }
 
+/// The durable headline totals the Overview panel renders. Sourced from the
+/// carry-forward daily cache (via buildDurablePeriod) so the dashboard's top-
+/// line cost/calls/tokens match the menubar and report exactly, including days
+/// whose session files have expired.
+export type DurableOverview = {
+  cost: number
+  savingsUSD: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+async function computeDurableOverview(
+  period: Period,
+  provider: string,
+  projectFilter: string[] | undefined,
+  excludeFilter: string[] | undefined,
+  customRange: DateRange | null | undefined,
+  day: string | null,
+): Promise<DurableOverview> {
+  const range = day ? getDayRange(day) : customRange ?? getPeriodRange(period)
+  const { data } = await buildDurablePeriod(
+    { range, label: PERIOD_LABELS[period] },
+    { provider, project: projectFilter ?? [], exclude: excludeFilter ?? [] },
+  )
+  return {
+    cost: data.cost,
+    savingsUSD: data.savingsUSD,
+    calls: data.calls,
+    sessions: data.sessions,
+    inputTokens: data.inputTokens,
+    outputTokens: data.outputTokens,
+    cacheReadTokens: data.cacheReadTokens,
+    cacheWriteTokens: data.cacheWriteTokens,
+  }
+}
+
 function getDayRange(day: string): DateRange {
   return parseDayFlag(day)!.range
 }
@@ -230,16 +271,19 @@ function planStatusText(planUsage: PlanUsage): string {
   return `${(planUsage.spentApiEquivalentUsd / Math.max(planUsage.budgetUsd, 1)).toFixed(1)}x your subscription value. Projected month: ${formatCost(planUsage.projectedMonthUsd)} (reset in ${planUsage.daysUntilReset} days).`
 }
 
-function Overview({ projects, label, width, planUsages }: { projects: ProjectSummary[]; label: string; width: number; planUsages?: PlanUsage[] }) {
-  const totalCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
-  const totalSavings = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
-  const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
+function Overview({ projects, label, width, planUsages, durable }: { projects: ProjectSummary[]; label: string; width: number; planUsages?: PlanUsage[]; durable?: DurableOverview }) {
+  // Headline totals prefer the durable daily cache (carried, expired-source days
+  // included) so they match the menubar and report; the live parse is the
+  // fallback until the durable figures land / for panels below.
+  const totalCost = durable ? durable.cost : projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalSavings = durable ? durable.savingsUSD : projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
+  const totalCalls = durable ? durable.calls : projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  const totalSessions = durable ? durable.sessions : projects.reduce((s, p) => s + p.sessions.length, 0)
   const allSessions = projects.flatMap(p => p.sessions)
-  const totalInput = allSessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
-  const totalOutput = allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
-  const totalCacheRead = allSessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
-  const totalCacheWrite = allSessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
+  const totalInput = durable ? durable.inputTokens : allSessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
+  const totalOutput = durable ? durable.outputTokens : allSessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
+  const totalCacheRead = durable ? durable.cacheReadTokens : allSessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
+  const totalCacheWrite = durable ? durable.cacheWriteTokens : allSessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
   const allInputTokens = totalInput + totalCacheRead + totalCacheWrite
   const cacheHit = allInputTokens > 0
     ? (totalCacheRead / allInputTokens) * 100 : 0
@@ -796,7 +840,7 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages, label, dayMode, dailyHistoryProjects, scrollableDailyHistory = false, dailyHistoryCursor = 0, dailyHistoryLoading = false }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; dailyHistoryProjects?: ProjectSummary[]; scrollableDailyHistory?: boolean; dailyHistoryCursor?: number; dailyHistoryLoading?: boolean }) {
+function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsages, label, dayMode, dailyHistoryProjects, scrollableDailyHistory = false, dailyHistoryCursor = 0, dailyHistoryLoading = false, durable }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; dailyHistoryProjects?: ProjectSummary[]; scrollableDailyHistory?: boolean; dailyHistoryCursor?: number; dailyHistoryLoading?: boolean; durable?: DurableOverview }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
   const activeLabel = label ?? PERIOD_LABELS[period]
@@ -810,7 +854,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   const visiblePlanUsages = (planUsages ?? []).filter(p => p.plan.provider === (activeProvider ?? 'all'))
   return (
     <Box flexDirection="column" width={dashWidth}>
-      <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} />
+      <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} durable={durable} />
       <Row wide={wide} width={dashWidth}><DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={pw} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' || period === 'lifetime' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
@@ -822,12 +866,13 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
 }
 
-function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay }: {
+function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, initialDurable, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay }: {
   initialProjects: ProjectSummary[]
   initialDailyHistoryProjects?: ProjectSummary[]
   initialPeriod: Period
   initialProvider: string
   initialPlanUsages?: PlanUsage[]
+  initialDurable?: DurableOverview
   refreshSeconds?: number
   projectFilter?: string[]
   excludeFilter?: string[]
@@ -838,6 +883,7 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
   const [projects, setProjects] = useState<ProjectSummary[]>(initialProjects)
+  const [durable, setDurable] = useState<DurableOverview | undefined>(initialDurable)
   const [loading, setLoading] = useState(false)
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
@@ -922,6 +968,9 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
       if (!day && isHeavyPeriod(p)) {
         setProjects([])
         setProjectBudgets(new Map())
+        // Drop the previous period's durable headline so it can't flash on the
+        // new tab before the fresh figure lands.
+        setDurable(undefined)
         await nextTick()
         if (reloadGenerationRef.current !== generation) return
       }
@@ -934,6 +983,12 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
 
       if (shouldLoadHistory) setDailyHistoryProjects(filteredProjects)
       setProjects(selectDashboardPeriodProjects(filteredProjects, p, shouldLoadHistory))
+      // Durable headline totals (carry-forward cache + today), matching the
+      // menubar/report. Computed after the live parse so the panel paints
+      // immediately; the durable figure replaces the live one when it resolves.
+      const durableTotals = await computeDurableOverview(p, prov, projectFilter, excludeFilter, customRange, day)
+      if (reloadGenerationRef.current !== generation) return
+      setDurable(durableTotals)
       const usage = await getPlanUsages()
       if (reloadGenerationRef.current !== generation) return
       setPlanUsages(usage)
@@ -1132,7 +1187,7 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
         ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} />}
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
       {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
     </Box>
   )
@@ -1155,13 +1210,13 @@ function CustomRangeBanner({ label, width }: { label: string; width: number }) {
   )
 }
 
-function StaticDashboard({ projects, period, activeProvider, planUsages, label, dayMode }: { projects: ProjectSummary[]; period: Period; activeProvider?: string; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean }) {
+function StaticDashboard({ projects, period, activeProvider, planUsages, label, dayMode, durable }: { projects: ProjectSummary[]; period: Period; activeProvider?: string; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; durable?: DurableOverview }) {
   const { columns } = useWindowSize()
   const { dashWidth } = getLayout(columns)
   return (
     <Box flexDirection="column" width={dashWidth}>
       {dayMode ? <DayBanner label={label ?? PERIOD_LABELS[period]} width={dashWidth} /> : <PeriodTabs active={period} />}
-      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} planUsages={planUsages} label={label} dayMode={dayMode} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} planUsages={planUsages} label={label} dayMode={dayMode} durable={durable} />
     </Box>
   )
 }
@@ -1180,15 +1235,19 @@ export async function renderDashboard(period: Period = 'week', provider: string 
   const scannedProjects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
   const filteredProjects = selectDashboardPeriodProjects(scannedProjects, period, scrollableDailyHistory)
   const planUsages = await getPlanUsages()
+  // Durable headline totals for the initial paint (carry-forward cache + today),
+  // matching the menubar/report. The interactive tree recomputes this on every
+  // period/provider/refresh change; the static one-shot render uses just this.
+  const initialDurable = await computeDurableOverview(period, provider, projectFilter, excludeFilter, customRange, initialDay ?? null)
   const label = initialDay ? formatDayRangeLabel(initialDay) : customRangeLabel
   patchStdoutForWindows()
   if (isTTY) {
     const { waitUntilExit } = render(
-      <InteractiveDashboard initialProjects={filteredProjects} initialDailyHistoryProjects={scrollableDailyHistory ? scannedProjects : undefined} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} />
+      <InteractiveDashboard initialProjects={filteredProjects} initialDailyHistoryProjects={scrollableDailyHistory ? scannedProjects : undefined} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} initialDurable={initialDurable} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} />
     )
     await waitUntilExit()
   } else {
-    const { unmount } = render(<StaticDashboard projects={filteredProjects} period={period} activeProvider={provider} planUsages={planUsages} label={label} dayMode={initialDay != null} />, { patchConsole: false })
+    const { unmount } = render(<StaticDashboard projects={filteredProjects} period={period} activeProvider={provider} planUsages={planUsages} label={label} dayMode={initialDay != null} durable={initialDurable} />, { patchConsole: false })
     // Non-interactive one-shot output: ink schedules the frame through a
     // throttled render, so yield a tick to let it flush to stdout before
     // unmounting. Unmounting synchronously can race the flush and drop output.

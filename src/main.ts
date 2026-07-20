@@ -11,7 +11,7 @@ import { toDateString } from './daily-cache.js'
 import { dateKey } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange } from './usage-aggregator.js'
+import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, type DurablePeriod } from './usage-aggregator.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
@@ -413,8 +413,8 @@ function assertScope(value: string, allowed: readonly string[], command: string)
 async function runJsonReport(period: Period, provider: string, project: string[], exclude: string[]): Promise<void> {
   await loadPricing()
   const { range, label } = getDateRange(period)
-  const projects = filterProjectsByName(await parseAllSessions(range, provider), project, exclude)
-  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(projects, label, period))
+  const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude })
+  const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable))
   console.log(JSON.stringify(report, null, 2))
 }
 
@@ -447,23 +447,27 @@ program.hook('preAction', async (thisCommand) => {
   await loadCurrency()
 })
 
-function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string) {
+function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: string, durable?: DurablePeriod) {
   const sessions = projects.flatMap(p => p.sessions)
   const { code } = getCurrency()
 
-  const totalCostUSD = projects.reduce((s, p) => s + p.totalCostUSD, 0)
-  const totalSavingsUSD = projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
-  const totalEstimatedUSD = projects.reduce((s, p) => s + (p.totalEstimatedCostUSD ?? 0), 0)
+  // Headline totals come from the durable daily cache (carry-forward days whose
+  // session files have expired still count), matching the menubar exactly. The
+  // proxied/net split is a surviving-session concept (subscription attribution
+  // isn't stored per day), so it stays live; net is taken off the durable total.
+  const totalCostUSD = durable ? durable.data.cost : projects.reduce((s, p) => s + p.totalCostUSD, 0)
+  const totalSavingsUSD = durable ? durable.data.savingsUSD : projects.reduce((s, p) => s + p.totalSavingsUSD, 0)
+  const totalEstimatedUSD = durable ? (durable.data.estimatedCostUSD ?? 0) : projects.reduce((s, p) => s + (p.totalEstimatedCostUSD ?? 0), 0)
   // Subscription-covered (proxied) portion of totalCostUSD, and the resulting
   // out-of-pocket figure. `cost` stays the full billable/would-be amount.
   const totalProxiedUSD = projects.reduce((s, p) => s + p.totalProxiedCostUSD, 0)
   const netCostUSD = totalCostUSD - totalProxiedUSD
-  const totalCalls = projects.reduce((s, p) => s + p.totalApiCalls, 0)
-  const totalSessions = projects.reduce((s, p) => s + p.sessions.length, 0)
-  const totalInput = sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
-  const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
-  const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
-  const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
+  const totalCalls = durable ? durable.data.calls : projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  const totalSessions = durable ? durable.data.sessions : projects.reduce((s, p) => s + p.sessions.length, 0)
+  const totalInput = durable ? durable.data.inputTokens : sessions.reduce((s, sess) => s + sess.totalInputTokens, 0)
+  const totalOutput = durable ? durable.data.outputTokens : sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
+  const totalCacheRead = durable ? durable.data.cacheReadTokens : sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
+  const totalCacheWrite = durable ? durable.data.cacheWriteTokens : sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
   // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
   // counts tokens being stored, not served, so it doesn't belong in the denominator.
   const cacheHitDenom = totalInput + totalCacheRead
@@ -499,21 +503,40 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
       }
     }
   }
-  const daily = Object.entries(dailyMap).sort().map(([date, d]) => ({
-    date,
-    cost: convertCost(d.cost),
-    savings: convertCost(d.savings),
-    calls: d.calls,
-    turns: d.turns,
-    editTurns: d.editTurns,
-    oneShotTurns: d.oneShotTurns,
-    // Pre-computed convenience for dashboards that don't want to do the math.
-    // null when there are no edit turns (the rate is undefined, not zero —
-    // a day where the user only had Q&A turns shouldn't read as 0% one-shot).
-    oneShotRate: d.editTurns > 0
-      ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10
-      : null,
-  }))
+  // Daily rows come from the same durable day set as the headline so they sum
+  // to it, carried days included. The live per-turn rollup (dailyMap) is only
+  // the fallback for callers that pass no durable period.
+  const daily = durable
+    ? durable.days.map(d => {
+        const turns = Object.values(d.categories).reduce((s, c) => s + c.turns, 0)
+        return {
+          date: d.date,
+          cost: convertCost(d.cost),
+          savings: convertCost(d.savingsUSD),
+          calls: d.calls,
+          turns,
+          editTurns: d.editTurns,
+          oneShotTurns: d.oneShotTurns,
+          oneShotRate: d.editTurns > 0
+            ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10
+            : null,
+        }
+      })
+    : Object.entries(dailyMap).sort().map(([date, d]) => ({
+        date,
+        cost: convertCost(d.cost),
+        savings: convertCost(d.savings),
+        calls: d.calls,
+        turns: d.turns,
+        editTurns: d.editTurns,
+        oneShotTurns: d.oneShotTurns,
+        // Pre-computed convenience for dashboards that don't want to do the math.
+        // null when there are no edit turns (the rate is undefined, not zero —
+        // a day where the user only had Q&A turns shouldn't read as 0% one-shot).
+        oneShotRate: d.editTurns > 0
+          ? Math.round((d.oneShotTurns / d.editTurns) * 1000) / 10
+          : null,
+      }))
 
   const projectList = projects.map(p => ({
     name: p.project,
@@ -748,12 +771,8 @@ program
         const range = daySelection?.range ?? customRange!
         const label = daySelection?.label ?? formatDateRangeLabel(opts.from, opts.to)
         const periodKey = daySelection ? 'day' : 'custom'
-        const projects = filterProjectsByName(
-          await parseAllSessions(range, opts.provider),
-          opts.project,
-          opts.exclude,
-        )
-        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(projects, label, periodKey)), null, 2))
+        const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+        console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable)), null, 2))
       } else {
         await runJsonReport(period, opts.provider, opts.project, opts.exclude)
       }
@@ -926,12 +945,29 @@ program
     const { range, label } = customRange
       ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
       : getDateRange(period!)
-    const projects = filterProjectsByName(await parseAllSessions(range, opts.provider), opts.project, opts.exclude)
+    const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+    const projects = durable.liveProjects
     const config = await readConfig()
     const budget = isOverviewBudgetFilterActive(opts)
       ? undefined
       : buildOverviewBudget(projects, config.budget, budgetTierForOverview(period, customRange), range)
-    process.stdout.write(renderOverview(projects, { label, color: opts.color, budget }))
+    process.stdout.write(renderOverview(projects, {
+      label,
+      color: opts.color,
+      budget,
+      durable: {
+        cost: durable.data.cost,
+        savingsUSD: durable.data.savingsUSD,
+        calls: durable.data.calls,
+        sessions: durable.data.sessions,
+        inputTokens: durable.data.inputTokens,
+        outputTokens: durable.data.outputTokens,
+        cacheReadTokens: durable.data.cacheReadTokens,
+        cacheWriteTokens: durable.data.cacheWriteTokens,
+        days: durable.days,
+        carriedCostUSD: durable.carriedCostUSD,
+      },
+    }))
   })
 
 program
@@ -1091,12 +1127,13 @@ program
     }
 
     if (opts.format === 'json') {
-      const todayProjects = fp(await parseAllSessions(getDateRange('today').range, pf))
-      const todayData = buildPeriodData('today', todayProjects)
-      clearSessionCache()
-      const monthProjects = fp(await parseAllSessions(getDateRange('month').range, pf))
-      const monthData = buildPeriodData('month', monthProjects)
-      clearSessionCache()
+      // Durable totals so the compact status matches the menubar / report.
+      const todayDurable = await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude })
+      const todayData = todayDurable.data
+      const todayProjects = todayDurable.liveProjects
+      const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
+      const monthData = monthDurable.data
+      const monthProjects = monthDurable.liveProjects
       const { code, rate } = getCurrency()
       const payload: {
         currency: string
@@ -1124,9 +1161,12 @@ program
       return
     }
 
-    const monthProjects2 = fp(await parseAllSessions(getDateRange('month').range, pf))
-    clearSessionCache()
-    console.log(renderStatusBar(monthProjects2))
+    const todayDurable = await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude })
+    const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
+    console.log(renderStatusBar([], {
+      today: { cost: todayDurable.data.cost, calls: todayDurable.data.calls },
+      month: { cost: monthDurable.data.cost, calls: monthDurable.data.calls },
+    }))
   })
 
 program
@@ -1967,10 +2007,11 @@ program
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
-    const { aggregateSessions, renderJson, renderTable } = await import('./sessions-report.js')
+    const { aggregateSessions, aggregateByPr, prLinkedTotals, renderJson, renderTable } = await import('./sessions-report.js')
     await loadPricing()
 
     let range
@@ -1985,7 +2026,43 @@ program
       range = getDateRange(opts.period).range
     }
 
-    const rows = aggregateSessions(await parseAllSessions(range, opts.provider))
+    const projects = await parseAllSessions(range, opts.provider)
+    if (opts.byPr) {
+      const prRows = aggregateByPr(projects)
+      if (opts.format === 'json') {
+        process.stdout.write(JSON.stringify({ prs: prRows, distinct: prLinkedTotals(projects) }, null, 2) + '\n')
+        return
+      }
+      if (prRows.length === 0) {
+        process.stdout.write('No sessions with captured PR links in this period. Links are captured as sessions are parsed; older transcripts gain them on their next re-parse.\n')
+        return
+      }
+      const { cost, sessions } = prLinkedTotals(projects)
+      const { renderTable: renderTextTable } = await import('./text-table.js')
+      const table = renderTextTable(
+        [
+          { header: 'PR' },
+          { header: 'Cost', right: true },
+          { header: 'Saved', right: true },
+          { header: 'Sessions', right: true },
+          { header: 'Calls', right: true },
+          { header: 'First' },
+          { header: 'Last' },
+        ],
+        prRows.map(r => [
+          r.label,
+          `$${r.cost.toFixed(2)}`,
+          `$${r.savingsUSD.toFixed(2)}`,
+          String(r.sessions),
+          String(r.calls),
+          r.firstStarted.slice(0, 10),
+          r.lastEnded.slice(0, 10),
+        ]),
+      )
+      process.stdout.write(table + `\nDistinct PR-linked spend: $${cost.toFixed(2)} across ${sessions} session${sessions === 1 ? '' : 's'}. A session referencing several PRs counts toward each, so rows exceed this total when links overlap.\n`)
+      return
+    }
+    const rows = aggregateSessions(projects)
     const output = opts.format === 'json' ? renderJson(rows) : renderTable(rows)
     process.stdout.write(output + '\n')
   })

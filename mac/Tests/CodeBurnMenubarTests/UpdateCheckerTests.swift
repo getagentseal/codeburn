@@ -58,3 +58,45 @@ struct UpdateCheckerTests {
         #expect(!UpdateChecker.isCliTooOld(installed: ""))
     }
 }
+
+
+// MARK: - one-click full update: package-manager resolution
+
+@Suite("cliUpdateInvocation")
+struct CliUpdateInvocationTests {
+    @Test("homebrew path resolves brew upgrade")
+    func homebrewPath() {
+        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0 == "/opt/homebrew/bin/brew" })
+        #expect(argv == ["/opt/homebrew/bin/brew", "upgrade", "codeburn"])
+    }
+
+    @Test("Cellar path resolves brew upgrade")
+    func cellarPath() {
+        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/usr/local/Cellar/codeburn/0.9.18/bin/codeburn", fileExists: { $0 == "/usr/local/bin/brew" })
+        #expect(argv == ["/usr/local/bin/brew", "upgrade", "codeburn"])
+    }
+
+    @Test("sibling npm wins over global npm so the update lands in the same toolchain")
+    func siblingNpmWins() {
+        let exists: (String) -> Bool = { $0 == "/Users/u/.nvm/versions/node/v22.1.0/bin/npm" || $0 == "/opt/homebrew/bin/npm" }
+        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/Users/u/.nvm/versions/node/v22.1.0/bin/codeburn", fileExists: exists)
+        #expect(argv == ["/Users/u/.nvm/versions/node/v22.1.0/bin/npm", "install", "-g", "codeburn@latest", "--force"])
+    }
+
+    @Test("falls back to well-known npm locations")
+    func fallbackNpm() {
+        let argv = UpdateChecker.cliUpdateInvocation(cliPath: "/some/odd/place/codeburn", fileExists: { $0 == "/usr/local/bin/npm" })
+        #expect(argv == ["/usr/local/bin/npm", "install", "-g", "codeburn@latest", "--force"])
+    }
+
+    @Test("no known manager returns nil instead of guessing")
+    func unknownManager() {
+        #expect(UpdateChecker.cliUpdateInvocation(cliPath: "/some/odd/place/codeburn", fileExists: { _ in false }) == nil)
+    }
+
+    @Test("homebrew CLI without a findable brew never falls through to npm")
+    func brewMissingStaysNil() {
+        // Falling through to npm --force would create a second, conflicting install.
+        #expect(UpdateChecker.cliUpdateInvocation(cliPath: "/opt/homebrew/bin/codeburn", fileExists: { $0.hasSuffix("/npm") }) == nil)
+    }
+}

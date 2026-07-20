@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { releasePageUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
+import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { codeburn } from '../lib/ipc'
 
 const DISMISS_KEY = 'codeburn.updateDismissed'
@@ -32,7 +32,7 @@ export function UpdateBanner() {
     <div role="status" className="update-banner">
       <span>
         Update available: CodeBurn {status.latestVersion} ·{' '}
-        <button type="button" className="set-text-button" onClick={() => { void codeburn.openExternal(releasePageUrl(tag)) }}>Download</button>
+        <button type="button" className="set-text-button" onClick={() => { void codeburn.openExternal(updateDownloadUrl(tag)) }}>Download</button>
       </span>
       <button type="button" className="set-text-button" onClick={dismiss}>Dismiss</button>
     </div>

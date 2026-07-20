@@ -141,8 +141,18 @@ function GranularLines({
           : metadataById.get(key) ?? key,
       color: CHART_COLORS[index % CHART_COLORS.length]!,
     }))
+    // Trim LEADING zero-only buckets: the server zero-fills the whole range, so
+    // a flat zero line before the first real value asserts spend that was never
+    // recorded. Trimming by value needs no date comparison, so producer/viewer
+    // timezone skew cannot drop a real first-day bucket, and an all-zero series
+    // trims to nothing, landing in the established empty state. Idle buckets
+    // after the first real value stay: those zeros are true.
+    const firstValueIdx = rowData.findIndex(row =>
+      chartSeries.some(item => Number(row[item.key] ?? 0) > 0),
+    )
+    const rows = firstValueIdx > 0 ? rowData.slice(firstValueIdx) : firstValueIdx === 0 ? rowData : []
     return {
-      rows: rowData,
+      rows,
       series: chartSeries,
       labels: Object.fromEntries(chartSeries.map(item => [item.key, item.label])),
     }

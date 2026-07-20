@@ -623,10 +623,14 @@ export function withDailyCacheLock<T>(fn: () => Promise<T>): Promise<T> {
 
 export const MS_PER_DAY = 24 * 60 * 60 * 1000
 export const BACKFILL_DAYS = 365
-// Keep 2 years of history so the longest bounded UI period (6 months
-// via `all`) and the uncapped `lifetime` period both have headroom to
-// read from cache while old entries get pruned.
-export const DAILY_CACHE_RETENTION_DAYS = 730
+// Ten years. This cache is the ONLY durable record of carried days (their
+// session files are long deleted), and the uncapped `lifetime` period reads
+// from it via buildDurablePeriod, so pruning at the old 2-year mark would
+// have replayed the lost-history bug in slow motion at that horizon.
+// Measured envelope keeps this honest: ~2.3 MB / ~11 ms JSON parse per 730
+// days of fully dense data, so even a decade of daily use stays ~11 MB and
+// well under 100 ms on the polling path.
+export const DAILY_CACHE_RETENTION_DAYS = 3650
 
 export function toDateString(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`

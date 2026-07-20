@@ -9,13 +9,14 @@ import { SegTabs, type SegOption } from './SegTabs'
 /** Sentinel option value: no --claude-config-source flag (aggregate all configs). */
 const ALL_CONFIGS = ''
 
-/** The real CLI period vocabulary (`codeburn ... --period`). */
+/** The real CLI period vocabulary (`codeburn ... --period`, src/cli-date.ts). */
 export const PERIOD_OPTIONS: SegOption[] = [
   { value: 'today', label: 'Today' },
   { value: 'week', label: '7D' },
   { value: '30days', label: '30D' },
   { value: 'month', label: 'Month' },
   { value: 'all', label: '6M' },
+  { value: 'lifetime', label: 'Life' },
 ]
 
 /** The `.bar` top bar: title, scope caption, period SegTabs, provider ProviderPop. */

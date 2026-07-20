@@ -383,7 +383,7 @@ async function adoptLegacyCache(): Promise<SessionCache> {
   }
 }
 
-export async function saveCache(cache: SessionCache): Promise<void> {
+export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Promise<boolean>): Promise<boolean> {
   const dir = getCacheDir()
   if (!existsSync(dir)) await mkdir(dir, { recursive: true })
 
@@ -401,11 +401,46 @@ export async function saveCache(cache: SessionCache): Promise<void> {
   }
 
   try {
-    await rename(tempPath, finalPath)
+    // The warm refresh transaction passes an ownership fence. It must be the
+    // final operation before publication so a displaced writer cannot replace
+    // the canonical cache with its stale snapshot.
+    if (verifyStillOwner && !await verifyStillOwner()) {
+      await retryCacheFileMutation(() => unlink(tempPath))
+      return false
+    }
+    let renamed = false
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await rename(tempPath, finalPath)
+        renamed = true
+        break
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if ((code !== 'EPERM' && code !== 'EBUSY') || attempt === 2) throw err
+        await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
+      }
+    }
+    if (!renamed) throw new Error('session cache rename failed')
+    return true
   } catch (err) {
-    try { await unlink(tempPath) } catch {}
+    await retryCacheFileMutation(() => unlink(tempPath))
     throw err
   }
+}
+
+async function retryCacheFileMutation(operation: () => Promise<void>): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await operation()
+      return true
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return true
+      if ((code !== 'EPERM' && code !== 'EBUSY') || attempt === 2) return false
+      await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
+    }
+  }
+  return false
 }
 
 // ── File Fingerprinting ────────────────────────────────────────────────

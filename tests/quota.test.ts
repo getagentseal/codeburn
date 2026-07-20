@@ -179,3 +179,18 @@ describe('buildPlanQuota', () => {
     expect(quota.windows[0].pace).toBeUndefined()
   })
 })
+
+describe('computePace NaN guard', () => {
+  it('returns undefined for a non-finite usedFraction instead of a NaN pace', () => {
+    const now = new Date('2026-07-15T00:00:00Z')
+    const win = {
+      kind: 'weekly' as const,
+      usedFraction: NaN,
+      resetsAt: new Date('2026-07-18T12:00:00Z'),
+      windowSeconds: 7 * 24 * 3600,
+      source: 'live' as const,
+    }
+    expect(computePace(win, now)).toBeUndefined()
+    expect(computePace({ ...win, usedFraction: Infinity }, now)).toBeUndefined()
+  })
+})

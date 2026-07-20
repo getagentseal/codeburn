@@ -1,4 +1,4 @@
-export type Period = 'today' | 'week' | '30days' | 'month' | 'all'
+export type Period = 'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime'
 
 export type ModelDay = {
   name: string
@@ -171,12 +171,16 @@ export async function fetchDevices(period: Period, provider: string): Promise<{ 
   return { devices: (data.devices ?? []).map((d) => ({ ...d, payload: normalizePayload(d.payload) })) }
 }
 
+// Keys map 1:1 to the CLI's --period values (src/cli-date.ts). Period windows
+// are computed server-side by the CLI; the dashboard only forwards the key, so
+// these can never drift from the CLI's totals.
 export const PERIODS: Array<{ key: Period; label: string }> = [
   { key: 'today', label: 'Today' },
   { key: 'week', label: '7 days' },
   { key: '30days', label: '30 days' },
   { key: 'month', label: 'Month' },
-  { key: 'all', label: 'All' },
+  { key: 'all', label: '6 months' },
+  { key: 'lifetime', label: 'Lifetime' },
 ]
 
 export type DiscoveredDevice = {

@@ -724,6 +724,20 @@ function exactPriceOverrideFor(model: string): ModelCosts | null {
 // raw ids carries cost > 0 and is not flagged. Local-looking models and
 // models with a local-savings mapping are excluded because $0 is their
 // correct cost, as are zero-rate USER overrides (explicitly declared free).
+/// Models whose $0 cost is CORRECT rather than a pricing gap, mirroring the
+/// exclusions findUnpricedModels applies: local-looking models, models mapped
+/// to a local-savings baseline, and models an exact zero-rate user override
+/// declares free. Used to keep their calls out of the pricing-coverage
+/// denominator — otherwise a 95%-ollama user reads high coverage while every
+/// genuinely cost-bearing call is unpriced.
+export function isExpectedFreeModel(model: string): boolean {
+  if (looksLikeLocalModel(model)) return true
+  if (getLocalSavingsBaseline(model)) return true
+  const costs = getModelCosts(model)
+  if (costs && !hasBillableRate(costs) && exactPriceOverrideFor(model)) return true
+  return false
+}
+
 export function findUnpricedModels(
   rows: Iterable<{ model: string; calls: number; cost: number; tokens?: number }>,
 ): UnpricedModelUsage[] {

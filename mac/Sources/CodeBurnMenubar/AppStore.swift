@@ -1502,11 +1502,15 @@ enum InsightMode: String, CaseIterable, Identifiable {
 }
 
 enum Period: String, CaseIterable, Identifiable {
+    // Compact labels: six segments plus the calendar button share one narrow
+    // popover row, so the longer names ("6 Months", "Lifetime") wrapped.
+    // Matches the desktop app's strip (Today / 7D / 30D / Month / 6M / Life).
     case today = "Today"
-    case sevenDays = "7 Days"
-    case thirtyDays = "30 Days"
+    case sevenDays = "7D"
+    case thirtyDays = "30D"
     case month = "Month"
-    case all = "6 Months"
+    case all = "6M"
+    case lifetime = "Life"
 
     var id: String { rawValue }
 
@@ -1518,6 +1522,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "all"
+        case .lifetime: "lifetime"
         }
     }
 
@@ -1530,6 +1535,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30 Days"
         case .month: "Month"
         case .all: "6 Months"
+        case .lifetime: "Lifetime"
         }
     }
 
@@ -1540,6 +1546,7 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: "30days"
         case .month: "month"
         case .all: "sixMonths"
+        case .lifetime: "lifetime"
         }
     }
 
@@ -1549,6 +1556,7 @@ enum Period: String, CaseIterable, Identifiable {
         case "week", "sevenDays": self = .sevenDays
         case "month": self = .month
         case "sixMonths", "all": self = .all
+        case "lifetime": self = .lifetime
         default: self = .today
         }
     }
@@ -1569,6 +1577,9 @@ enum Period: String, CaseIterable, Identifiable {
         case .thirtyDays: compact ? "/30d" : " / 30d"
         case .month: compact ? "/mo" : " / mo"
         case .all: compact ? "/6mo" : " / 6mo"
+        // lifetime is a panel-only period (never a menubar metric, see
+        // menubarMetricCases), but the switch must stay exhaustive.
+        case .lifetime: compact ? "/life" : " / life"
         }
     }
 }

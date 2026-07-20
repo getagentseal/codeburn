@@ -91,6 +91,8 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 .sbars-wrap { display: flex; flex: 1; min-height: 0; flex-direction: column; height: 100%; }
 .sbars { position: relative; display: flex; flex: 0 0 150px; align-items: flex-end; gap: 4px; height: 150px; padding-top: 8px; border-bottom: 1px solid var(--line2); }
 .sbars .c { flex: 1; display: flex; flex-direction: column-reverse; height: 100%; justify-content: flex-start; gap: 1.5px; }
+/* Days before recorded history read as a faint dashed baseline, not an empty (zero-spend) column. */
+.sbars .c.nodata .nodata-mark { width: 100%; height: 0; border-bottom: 1px dashed var(--line2); opacity: .8; }
 .sbars .s { width: 100%; border-radius: 0; }
 .sbars .s:first-child { border-radius: 0 0 2px 2px; }
 .sbars .s:last-child { border-radius: 2px 2px 0 0; }

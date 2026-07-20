@@ -9,6 +9,24 @@ struct MenubarPeriodSettingsTests {
         #expect(Period.menubarMetricCases == [.today, .sevenDays, .month, .all])
     }
 
+    @Test("period picker exposes the lifetime window, matching the CLI period set")
+    func periodPickerExposesLifetime() {
+        // The panel period selector iterates Period.allCases, so lifetime must be
+        // present there while staying out of the menubar-metric subset.
+        #expect(Period.allCases == [.today, .sevenDays, .thirtyDays, .month, .all, .lifetime])
+        #expect(!Period.menubarMetricCases.contains(.lifetime))
+    }
+
+    @Test("period cliArg values match src/cli-date.ts --period values")
+    func cliArgsMatchCLIPeriods() {
+        #expect(Period.today.cliArg == "today")
+        #expect(Period.sevenDays.cliArg == "week")
+        #expect(Period.thirtyDays.cliArg == "30days")
+        #expect(Period.month.cliArg == "month")
+        #expect(Period.all.cliArg == "all")
+        #expect(Period.lifetime.cliArg == "lifetime")
+    }
+
     @Test("defaults values map to periods")
     func defaultsValuesMapToPeriods() {
         #expect(Period(menubarDefaultsValue: "today") == .today)
@@ -16,6 +34,7 @@ struct MenubarPeriodSettingsTests {
         #expect(Period(menubarDefaultsValue: "month") == .month)
         #expect(Period(menubarDefaultsValue: "sixMonths") == .all)
         #expect(Period(menubarDefaultsValue: "all") == .all)
+        #expect(Period(menubarDefaultsValue: "lifetime") == .lifetime)
         #expect(Period(menubarDefaultsValue: "30days") == .today)
         #expect(Period(menubarDefaultsValue: "bogus") == .today)
         #expect(Period(menubarDefaultsValue: nil) == .today)

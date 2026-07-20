@@ -73,7 +73,10 @@ export function roundForActiveCurrency(value: number): number {
 }
 
 function getCacheDir(): string {
-  return join(homedir(), '.cache', 'codeburn')
+  // Honor the same relocation override every other cache module uses
+  // (session-cache, daily-cache, codex-cache, models); this was the one
+  // straggler still hardcoding the default path.
+  return process.env['CODEBURN_CACHE_DIR'] ?? join(homedir(), '.cache', 'codeburn')
 }
 
 function getRateCachePath(): string {

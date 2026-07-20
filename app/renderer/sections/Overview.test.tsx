@@ -329,6 +329,27 @@ describe('Overview', () => {
     expect([...bars].slice(0, 25).every(bar => bar.getAttribute('data-cost') === '0')).toBe(true)
   })
 
+  it('renders days before recorded history as no data, not a $0.00 bar', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    payload.history.daily = payload.history.daily.slice(-5)
+    getOverview.mockResolvedValue(payload)
+
+    const { container } = render(<Overview period="week" provider="all" />)
+
+    expect(await screen.findByText('parser-service')).toBeInTheDocument()
+    const bars = container.querySelectorAll('.chart .col')
+    expect(bars).toHaveLength(30)
+    // The 25 leading days predate the first recorded day: no data, not zero spend.
+    expect([...bars].slice(0, 25).every(bar => bar.classList.contains('nodata'))).toBe(true)
+    expect(bars[0].getAttribute('aria-label')).toContain('no data recorded')
+    // The five recorded days stay real (idle or spend), never marked no data.
+    expect([...bars].slice(-5).some(bar => bar.classList.contains('nodata'))).toBe(false)
+
+    fireEvent.mouseEnter(bars[0], { clientX: 100, clientY: 80 })
+    expect(screen.getByText('No data recorded')).toBeInTheDocument()
+  })
+
   it('computes month-to-date, projection, and previous-month pace', async () => {
     const now = new Date(2026, 6, 15, 12, 0, 0) // Wed Jul 15 2026, local
     vi.useFakeTimers({ toFake: ['Date'] })

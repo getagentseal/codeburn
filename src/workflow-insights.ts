@@ -7,8 +7,10 @@ import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types
 // assistant's own apologies). These match a *user* follow-up telling the
 // assistant it got something wrong. Deliberately conservative: bare "wrong" or
 // "undo" are excluded because they show up in ordinary task requests ("fix the
-// wrong output", "undo the migration"). Every pattern requires a correction
-// context so praise like "you were right" or "that's right" never trips it.
+// wrong output", "undo the migration"), and "revert"/"undo" only match
+// demonstratives ("that", "this", "the last") so an opening request like
+// "revert the migration we shipped" never trips them. Every pattern requires a
+// correction context so praise like "you were right" never counts.
 export const USER_CORRECTION_PATTERNS: RegExp[] = [
   /\bthat'?s (?:not|n'?t) (?:what|right|correct|it)\b/i,
   /\bthat'?s (?:wrong|incorrect)\b/i,
@@ -16,7 +18,7 @@ export const USER_CORRECTION_PATTERNS: RegExp[] = [
   /\bnot what I (?:meant|wanted|asked|said)\b/i,
   /\bno,? I (?:meant|wanted|said|asked for)\b/i,
   /\byou (?:missed|forgot|misunderstood|broke)\b/i,
-  /\brevert (?:that|it|this|the|your)\b/i,
+  /\brevert (?:that|it|this|your|the last|the change)\b/i,
   /\bundo (?:that|it|this|your|the last|the change)\b/i,
   /\bwrong (?:file|approach|place|method|function|answer|way|direction)\b/i,
   /\bstill (?:wrong|broken|failing|not working)\b/i,
@@ -39,10 +41,20 @@ export function scanUserCorrections(projects: ProjectSummary[]): UserCorrectionS
   let userTurns = 0
   for (const project of projects) {
     for (const session of project.sessions) {
+      // A correction is a FOLLOW-UP by definition: the session's opening
+      // prompt cannot be correcting this assistant, however correction-shaped
+      // its task text reads ("revert the last release", "you broke it" pasted
+      // from a bug report). Skipping it trades a few missed corrections in
+      // resumed transcripts for never counting openers — the conservative side.
+      let sawPrompt = false
       for (const turn of session.turns) {
         const msg = turn.userMessage
         if (!msg || !msg.trim()) continue
         userTurns++
+        if (!sawPrompt) {
+          sawPrompt = true
+          continue
+        }
         if (matchesCorrection(msg)) corrections++
       }
     }
@@ -64,7 +76,10 @@ export function sessionTimeToFirstEditMs(session: ProjectSummary['sessions'][num
     for (const call of turn.assistantCalls) {
       if (!callHasEditTools(call.tools)) continue
       const editMs = Date.parse(call.timestamp)
-      if (Number.isNaN(editMs)) continue
+      // The FIRST edit is the measurement target; if its timestamp is
+      // unparseable the session's time-to-first-edit is unknown. Skipping to
+      // the next parseable edit would silently measure a later one.
+      if (Number.isNaN(editMs)) return null
       // Clamp: out-of-order timestamps across resumed transcripts would
       // otherwise pull the median negative.
       return Math.max(0, editMs - startMs)
@@ -93,11 +108,20 @@ export type ReworkedFile = {
   edits: number
 }
 
+/// Forward-slash normalization: tool calls carry model-emitted paths verbatim,
+/// so on Windows they arrive backslashed. Without this the relativize and
+/// basename passes (which split on '/') are no-ops there and the full absolute
+/// path, username included, would ship in a payload that can leave the machine.
+function normalizeSlashes(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
 function relativizePath(absPath: string, projectPath: string): string {
-  if (projectPath && (absPath === projectPath || absPath.startsWith(projectPath + '/'))) {
-    return absPath.slice(projectPath.length + 1) || absPath
+  const project = normalizeSlashes(projectPath)
+  if (project && (absPath === project || absPath.startsWith(project + '/'))) {
+    return absPath.slice(project.length + 1) || absPath
   }
-  const home = homedir()
+  const home = normalizeSlashes(homedir())
   if (absPath === home || absPath.startsWith(home + '/')) return '~' + absPath.slice(home.length)
   return absPath
 }
@@ -119,10 +143,13 @@ export function aggregateFileChurn(projects: ProjectSummary[], limit = 15): Rewo
           for (const step of call.toolSequence) {
             for (const tc of step) {
               if (!EDIT_TOOLS.has(tc.tool) || !tc.file) continue
-              let acc = byPath.get(tc.file)
+              // Key on the normalized path so the same file emitted with
+              // backslashes and forward slashes accumulates as one entry.
+              const file = normalizeSlashes(tc.file)
+              let acc = byPath.get(file)
               if (!acc) {
-                acc = { path: relativizePath(tc.file, project.projectPath), sessions: new Set(), edits: 0 }
-                byPath.set(tc.file, acc)
+                acc = { path: relativizePath(file, project.projectPath), sessions: new Set(), edits: 0 }
+                byPath.set(file, acc)
               }
               acc.sessions.add(session.sessionId)
               acc.edits++
@@ -150,10 +177,14 @@ export function computePricingCoverage(totalCostBearingCalls: number, unpricedCa
 
 export type CategoryOneShot = { category: string; rate: number; editTurns: number }
 
+/// Minimum edit turns before a category's one-shot rate is trusted (shared by
+/// worstOneShotCategory and the coaching gate so they can never disagree).
+export const MIN_ONE_SHOT_EDIT_TURNS = 5
+
 /// The task category with the weakest one-shot rate (over enough edit turns to
 /// trust), used by the coaching notes. Rate is a percentage (0-100), matching
 /// model-efficiency and the report's category one-shot figures.
-export function worstOneShotCategory(projects: ProjectSummary[], minEditTurns = 5): CategoryOneShot | null {
+export function worstOneShotCategory(projects: ProjectSummary[], minEditTurns = MIN_ONE_SHOT_EDIT_TURNS): CategoryOneShot | null {
   const acc = new Map<string, { editTurns: number; oneShotTurns: number }>()
   for (const project of projects) {
     for (const session of project.sessions) {
@@ -204,7 +235,7 @@ export function buildCoachingNotes(input: CoachingInput): string[] {
   const notes: string[] = []
 
   const ws = input.worstOneShot
-  if (ws && ws.editTurns >= 5 && ws.rate < ONE_SHOT_LOW_PERCENT) {
+  if (ws && ws.editTurns >= MIN_ONE_SHOT_EDIT_TURNS && ws.rate < ONE_SHOT_LOW_PERCENT) {
     notes.push(`One-shot rate on ${ws.category} is ${Math.round(ws.rate)}% over ${ws.editTurns} edit turns. Add the constraints up front or split the work into smaller edits.`)
   }
 

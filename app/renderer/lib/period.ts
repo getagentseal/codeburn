@@ -25,7 +25,35 @@ export function periodWindowStart(period: Period, now = new Date()): string {
       return localDateKey(new Date(now.getFullYear(), now.getMonth(), 1))
     case 'all':
       return localDateKey(new Date(now.getFullYear(), now.getMonth() - ALL_TIME_MONTHS, 1))
+    case 'lifetime':
+      // src/cli-date.ts anchors the unbounded window at 1970-01-01.
+      return localDateKey(new Date(1970, 0, 1))
   }
+}
+
+/** The payload's history.daily is capped to this many most-recent active days
+ * (menubar-json HISTORY_DAYS_LIMIT). At the cap the array's oldest entry is no
+ * longer the true data start, so no-data classification must switch off rather
+ * than mislabel real (aged-out) history on long custom ranges. */
+const HISTORY_DAYS_CAP = 365
+
+/**
+ * Earliest recorded day in the sparse `history.daily`, or null when it is
+ * empty or at the server-side cap (at the cap the true start is unknowable
+ * from the payload, and null disables no-data classification entirely rather
+ * than mislabeling aged-out history).
+ *
+ * Days before this key render as "no data recorded". That label is literally
+ * true even for the edge where CodeBurn was installed earlier but idle until
+ * its first recorded activity: nothing was recorded those days either.
+ */
+export function dataStartKey(daily: DailyHistoryEntry[]): string | null {
+  if (daily.length >= HISTORY_DAYS_CAP) return null
+  let earliest: string | null = null
+  for (const day of daily) {
+    if (earliest === null || day.date < earliest) earliest = day.date
+  }
+  return earliest
 }
 
 /** `history.daily` entries within the selected period's date window. */

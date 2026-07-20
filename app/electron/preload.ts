@@ -69,6 +69,7 @@ const bridge = {
     return () => { ipcRenderer.removeListener('codeburn:update', listener) }
   },
   platform: process.platform,
+  arch: process.arch,
 }
 
 contextBridge.exposeInMainWorld('codeburn', bridge)

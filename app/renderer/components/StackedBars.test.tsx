@@ -29,6 +29,34 @@ describe('StackedBars', () => {
     expect([...ticks].map(tick => tick.textContent)).toEqual(['Jul 1', 'Jul 5', 'Jul 9', 'Jul 13', 'Jul 16'])
   })
 
+  it('renders days before recorded history as no data, not a $0.00 column', () => {
+    // Zero-filled window spanning a pre-history day and the first recorded day.
+    const daily = [
+      { ...entry(23), cost: 0, calls: 0 },
+      entry(24),
+    ]
+    const { container } = render(<StackedBars daily={daily} dataStart="2026-07-24" />)
+
+    const columns = container.querySelectorAll('.sbars .c')
+    expect(columns[0]).toHaveClass('nodata')
+    expect(columns[0]).toHaveAttribute('title', '2026-07-23 · No data recorded')
+    expect(columns[0].querySelector('.nodata-mark')).toBeInTheDocument()
+    expect(columns[0].querySelectorAll('.s')).toHaveLength(0)
+
+    expect(columns[1]).not.toHaveClass('nodata')
+    expect(columns[1].getAttribute('title')).toContain('$24.00')
+  })
+
+  it('leaves a genuinely idle day within history as an empty column, not no data', () => {
+    const daily = [entry(24), { ...entry(25), cost: 0, calls: 0 }]
+    const { container } = render(<StackedBars daily={daily} dataStart="2026-07-24" />)
+
+    const columns = container.querySelectorAll('.sbars .c')
+    expect(columns[1]).not.toHaveClass('nodata')
+    expect(columns[1].getAttribute('title')).toBe('2026-07-25 · $0.00')
+    expect(columns[1].querySelector('.nodata-mark')).not.toBeInTheDocument()
+  })
+
   it('draws a single cost-only fallback bar and a provider legend when a day has cost but no model breakdown', () => {
     // Provider-filtered days: cost present, topModels empty (the Swift menubar
     // draws these from day.cost). A zero-cost day stays empty.

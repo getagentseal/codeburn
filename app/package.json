@@ -1,8 +1,8 @@
 {
   "name": "codeburn-desktop",
   "private": true,
-  "version": "0.9.17",
-  "description": "CodeBurn Desktop \u2014 Electron app fed by the codeburn CLI",
+  "version": "0.9.19",
+  "description": "CodeBurn Desktop — Electron app fed by the codeburn CLI",
   "main": "dist/electron/main.js",
   "scripts": {
     "build:electron": "tsc -p tsconfig.electron.json",
