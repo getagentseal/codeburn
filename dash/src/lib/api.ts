@@ -56,6 +56,14 @@ export type Current = {
   skills: Array<{ name: string; turns: number; cost: number }>
   mcpServers: Array<{ name: string; calls: number }>
   modelEfficiency: Array<{ name: string; costPerEdit: number; oneShotRate: number }>
+  // Workflow-intelligence rollup for the period. Optional: an older peer's
+  // payload predates the block, and the Workflow panel hides when it is absent.
+  workflow?: { corrections: number; correctionRate: number | null; medianTimeToFirstEditMs: number | null }
+  // Files most reworked by edit-family calls (top 8), basenames only.
+  topReworkedFiles?: Array<{ path: string; sessions: number; edits: number }>
+  // Share (0-1) of cost-bearing calls that resolved a price. null when not
+  // computable; "unknown" must never render as 100% coverage.
+  pricingCoverage?: number | null
   localModelSavings: { totalUSD: number }
   retryTax: { totalUSD: number; retries: number }
   routingWaste: { totalSavingsUSD: number }
@@ -138,6 +146,19 @@ function normalizePayload(p?: Payload): Payload | undefined {
       skills: c.skills ?? [],
       mcpServers: c.mcpServers ?? [],
       modelEfficiency: c.modelEfficiency ?? [],
+      workflow: c.workflow
+        ? {
+            corrections: c.workflow.corrections ?? 0,
+            correctionRate: c.workflow.correctionRate ?? null,
+            medianTimeToFirstEditMs: c.workflow.medianTimeToFirstEditMs ?? null,
+          }
+        : undefined,
+      topReworkedFiles: (c.topReworkedFiles ?? []).map((f) => ({
+        path: f.path,
+        sessions: f.sessions ?? 0,
+        edits: f.edits ?? 0,
+      })),
+      pricingCoverage: c.pricingCoverage ?? null,
       localModelSavings: c.localModelSavings ?? { totalUSD: 0 },
       retryTax: c.retryTax ?? { totalUSD: 0, retries: 0 },
       routingWaste: c.routingWaste ?? { totalSavingsUSD: 0 },
