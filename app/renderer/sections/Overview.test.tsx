@@ -700,3 +700,113 @@ describe('Overview', () => {
     expect(within(outcome).getByText('€36.00')).toBeInTheDocument()
   })
 })
+
+type WorkflowOverrides = {
+  workflow?: MenubarPayload['current']['workflow']
+  topReworkedFiles?: MenubarPayload['current']['topReworkedFiles']
+  pricingCoverage?: MenubarPayload['current']['pricingCoverage']
+}
+
+function workflowPayload(now: Date, over: WorkflowOverrides): MenubarPayload {
+  const base = makePayload(now)
+  return { ...base, current: { ...base.current, ...over } }
+}
+
+describe('Overview workflow card', () => {
+  beforeEach(() => {
+    setActiveCurrency({ code: 'USD', symbol: '$', rate: 1 })
+    getOverview.mockReset()
+    getActReport.mockReset()
+    getYield.mockReset()
+    getActReport.mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
+    getYield.mockResolvedValue(makeYieldReport())
+  })
+  afterEach(() => vi.useRealTimers())
+
+  function workflowRegion(): HTMLElement {
+    return screen.getByRole('heading', { name: 'Workflow' }).closest('.ov-workflow-widget') as HTMLElement
+  }
+
+  it('renders correction rate, time to first edit, top rework, coverage chip, and a coaching note', async () => {
+    const now = new Date()
+    getOverview.mockResolvedValue(workflowPayload(now, {
+      workflow: { corrections: 7, correctionRate: 0.2, medianTimeToFirstEditMs: 45_000 },
+      topReworkedFiles: [{ path: 'parser.ts', sessions: 4, edits: 12 }],
+      pricingCoverage: 0.92,
+    }))
+
+    render(<Overview period="30days" provider="all" />)
+
+    const card = await waitFor(() => workflowRegion())
+    expect(within(card).getByText('Correction rate')).toBeInTheDocument()
+    expect(within(card).getByText('20%')).toBeInTheDocument()
+    expect(within(card).getByText('7 corrections')).toBeInTheDocument()
+    expect(within(card).getByText('Time to first edit')).toBeInTheDocument()
+    // Under 60s renders as seconds, not minutes.
+    expect(within(card).getByText('45s')).toBeInTheDocument()
+    expect(within(card).getByText(/Top rework:/)).toHaveTextContent('Top rework: parser.ts · 4 sessions · 12 edits')
+    // pricingCoverage 0.92 → a "92% priced" caveat chip.
+    expect(within(card).getByText('92% priced')).toBeInTheDocument()
+    // Corrections clears its bar first, so its coaching line wins.
+    expect(within(card).getByText(/You corrected the assistant on 20% of prompts \(7 times\)/)).toBeInTheDocument()
+  })
+
+  it('does not render at all when the payload carries no workflow signal', async () => {
+    const now = new Date()
+    // makePayload omits workflow/topReworkedFiles/pricingCoverage entirely.
+    getOverview.mockResolvedValue(makePayload(now))
+
+    render(<Overview period="30days" provider="all" />)
+
+    await screen.findByText('$312.40')
+    expect(screen.queryByRole('heading', { name: 'Workflow' })).not.toBeInTheDocument()
+  })
+
+  it('stays hidden when workflow exists but every metric is empty', async () => {
+    const now = new Date()
+    getOverview.mockResolvedValue(workflowPayload(now, {
+      workflow: { corrections: 0, correctionRate: null, medianTimeToFirstEditMs: null },
+      topReworkedFiles: [],
+      pricingCoverage: 1,
+    }))
+
+    render(<Overview period="30days" provider="all" />)
+
+    await screen.findByText('$312.40')
+    expect(screen.queryByRole('heading', { name: 'Workflow' })).not.toBeInTheDocument()
+  })
+
+  it('picks the churn note and formats minutes when corrections are below the bar', async () => {
+    const now = new Date()
+    getOverview.mockResolvedValue(workflowPayload(now, {
+      workflow: { corrections: 1, correctionRate: 0.05, medianTimeToFirstEditMs: 8 * 60 * 1000 },
+      topReworkedFiles: [{ path: 'router.ts', sessions: 5, edits: 30 }],
+      pricingCoverage: null,
+    }))
+
+    render(<Overview period="30days" provider="all" />)
+
+    const card = await waitFor(() => workflowRegion())
+    // >= 60s renders as whole minutes.
+    expect(within(card).getByText('8m')).toBeInTheDocument()
+    // Corrections (5%) is below 0.15, so the churn note wins over TTFE.
+    expect(within(card).getByText(/router\.ts was reworked across 5 sessions \(30 edits\)/)).toBeInTheDocument()
+    // pricingCoverage null → no chip.
+    expect(within(card).queryByText(/priced/)).not.toBeInTheDocument()
+  })
+
+  it('falls back to a neutral caption and hides the chip at full coverage when no note fires', async () => {
+    const now = new Date()
+    getOverview.mockResolvedValue(workflowPayload(now, {
+      workflow: { corrections: 1, correctionRate: 0.05, medianTimeToFirstEditMs: 30_000 },
+      topReworkedFiles: [{ path: 'small.ts', sessions: 1, edits: 2 }],
+      pricingCoverage: 1,
+    }))
+
+    render(<Overview period="30days" provider="all" />)
+
+    const card = await waitFor(() => workflowRegion())
+    expect(within(card).getByText('Corrections, first-edit latency, and file churn across your sessions.')).toBeInTheDocument()
+    expect(within(card).queryByText(/priced/)).not.toBeInTheDocument()
+  })
+})

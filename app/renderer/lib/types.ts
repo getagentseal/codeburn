@@ -178,6 +178,20 @@ export type MenubarPayload = {
       calls: number
       date: string
     }>
+    // Workflow-intelligence rollups (src/menubar-json.ts buildWorkflow /
+    // buildTopReworkedFiles). Optional: older CLIs omit them, so the Overview
+    // workflow card renders only when they are present with real signal.
+    workflow?: {
+      corrections: number
+      correctionRate: number | null
+      medianTimeToFirstEditMs: number | null
+    }
+    // Files most reworked by edit-family calls, basename-only, ranked by
+    // distinct sessions then edits (src/menubar-json.ts buildTopReworkedFiles).
+    topReworkedFiles?: Array<{ path: string; sessions: number; edits: number }>
+    // Share (0-1) of cost-bearing calls that resolved a price. Below 1 means some
+    // usage priced against no table entry; null when not computable.
+    pricingCoverage?: number | null
     retryTax: {
       totalUSD: number
       retries: number
@@ -421,6 +435,10 @@ export type ActReportJson = {
 // ————— src/sessions-report.ts —————
 export type SessionRow = {
   sessionId: string
+  // Captured human title (src/sessions-report.ts). Empty string when the
+  // transcript produced none; optional so older CLIs that predate the field
+  // render unchanged (the row falls back to the project as its primary label).
+  title?: string
   project: string
   provider: string
   models: string[]

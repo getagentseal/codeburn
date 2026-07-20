@@ -129,6 +129,88 @@ function CostPerOutcome({ outcome }: { outcome: Polled<YieldJsonReport> }) {
   )
 }
 
+// Coaching-note thresholds, mirrored from the CLI so the card and the CLI never
+// disagree (src/workflow-insights.ts buildCoachingNotes).
+const WORKFLOW_CORRECTION_RATE = 0.15
+const WORKFLOW_CORRECTION_COUNT = 3
+const WORKFLOW_CHURN_SESSIONS = 3
+const WORKFLOW_TTFE_SLOW_MS = 5 * 60 * 1000
+
+/** Median time to first edit: `<60s → Ns`, else `Nm` (src/workflow-insights.ts formatDurationShort). */
+function formatWorkflowDuration(ms: number): string {
+  if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`
+  return `${Math.round(ms / 1000)}s`
+}
+
+type WorkflowRollup = NonNullable<MenubarPayload['current']['workflow']>
+type ReworkedFile = { path: string; sessions: number; edits: number }
+
+/**
+ * One coaching line derived with the CLI's thresholds and dry copy voice
+ * (src/workflow-insights.ts buildCoachingNotes): corrections, then file churn,
+ * then time-to-first-edit; the first that fires. Null when none clears its bar.
+ */
+function workflowCoachingNote(workflow: WorkflowRollup, topReworked?: ReworkedFile): string | null {
+  const { correctionRate, corrections, medianTimeToFirstEditMs } = workflow
+  if (correctionRate !== null && correctionRate >= WORKFLOW_CORRECTION_RATE && corrections >= WORKFLOW_CORRECTION_COUNT) {
+    return `You corrected the assistant on ${Math.round(correctionRate * 100)}% of prompts (${corrections} times). State the requirements in the first message to cut the back and forth.`
+  }
+  if (topReworked && topReworked.sessions >= WORKFLOW_CHURN_SESSIONS) {
+    return `${topReworked.path} was reworked across ${topReworked.sessions} sessions (${topReworked.edits} edits). A focused pass on it may cost less than the repeated churn.`
+  }
+  if (medianTimeToFirstEditMs !== null && medianTimeToFirstEditMs >= WORKFLOW_TTFE_SLOW_MS) {
+    return `Median time to first edit is ${formatWorkflowDuration(medianTimeToFirstEditMs)}. Point the assistant at the target file to cut the exploration before it starts editing.`
+  }
+  return null
+}
+
+function WorkflowCard({ current }: { current: MenubarPayload['current'] }) {
+  const workflow = current.workflow
+  const topReworked = current.topReworkedFiles?.[0]
+  // Hide when there is no real signal: never show a card of zeros.
+  const hasSignal = !!workflow && (
+    workflow.correctionRate !== null ||
+    workflow.medianTimeToFirstEditMs !== null ||
+    workflow.corrections > 0 ||
+    !!topReworked
+  )
+  if (!workflow || !hasSignal) return null
+
+  const coverage = current.pricingCoverage
+  const showCoverage = typeof coverage === 'number' && coverage < 1
+  const note = workflowCoachingNote(workflow, topReworked)
+  const { correctionRate, corrections, medianTimeToFirstEditMs } = workflow
+
+  return (
+    <div className="ov-card ov-panel ov-workflow-widget">
+      <div className="ov-panel-head">
+        <h3>Workflow</h3>
+        {showCoverage && <span className="ov-priced-chip">{Math.min(99, Math.round(coverage * 100))}% priced</span>}
+      </div>
+      <div className="ov-panel-body">
+        <div className="ov-outcome-metrics">
+          <div>
+            <span>Correction rate</span>
+            <strong>{correctionRate === null ? '—' : `${Math.round(correctionRate * 100)}%`}</strong>
+            {correctionRate !== null && <span>{corrections} {corrections === 1 ? 'correction' : 'corrections'}</span>}
+          </div>
+          <div>
+            <span>Time to first edit</span>
+            <strong>{medianTimeToFirstEditMs === null ? '—' : formatWorkflowDuration(medianTimeToFirstEditMs)}</strong>
+            <span>median</span>
+          </div>
+        </div>
+        {topReworked && (
+          <div className="ov-workflow-rework">
+            Top rework: <strong>{topReworked.path}</strong> · {topReworked.sessions} {topReworked.sessions === 1 ? 'session' : 'sessions'} · {topReworked.edits} {topReworked.edits === 1 ? 'edit' : 'edits'}
+          </div>
+        )}
+        <p className="ov-widget-caption">{note ?? 'Corrections, first-edit latency, and file churn across your sessions.'}</p>
+      </div>
+    </div>
+  )
+}
+
 export type Signal = { text: string; trailing?: string }
 export type SignalGroups = { wins: Signal[]; improvements: Signal[]; risks: Signal[] }
 
@@ -658,6 +740,8 @@ export function OverviewContent({
         <div className="ov-panel-head"><h3>Daily spend</h3><span className="r">{topModel ? `Biggest driver: ${topModel.name}` : 'No model driver yet'}</span></div>
         <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
       </div>
+
+      <WorkflowCard current={data.current} />
 
       <div className="ov-insight-band">
         <div className="ov-coach">

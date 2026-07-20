@@ -622,6 +622,9 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .ov-outcome-metrics span { color: var(--mut); font-size: 10px; line-height: 1.25; }
 .ov-outcome-metrics strong { overflow: hidden; color: var(--ink); font-family: var(--mono); font-size: var(--fs-kpi); font-weight: var(--fw-kpi); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .ov-outcome-split { margin-top: 9px; color: var(--mut); font-size: 10.5px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+.ov-priced-chip { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); font-size: 10px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.4; }
+.ov-workflow-rework { margin-top: 10px; color: var(--mut); font-size: 11.5px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+.ov-workflow-rework strong { color: var(--ink); font-family: var(--mono); font-weight: 600; }
 .ov-routing { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 13px; }
 .ov-routing p { margin: 4px 0 0; color: var(--mut); font-size: 11.5px; line-height: 1.4; }
 .ov-routing p strong { color: var(--ink); font-weight: 620; }

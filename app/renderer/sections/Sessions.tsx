@@ -125,6 +125,7 @@ export function Sessions({
   const rows = report.data ?? []
   const q = query.trim().toLowerCase()
   const filtered = rows.filter(row => q === '' || [
+    row.title ?? '',
     row.project,
     row.sessionId,
     row.models.join(' '),
@@ -251,7 +252,7 @@ export function Sessions({
                   <span className="session-primary">
                     <span className="session-chevron" aria-hidden="true">›</span>
                     <span className="session-project-copy">
-                      <span className="session-title">{shortenProjectPath(entry.row.project)}</span>
+                      <span className="session-title" title={entry.row.title || undefined}>{entry.row.title || shortenProjectPath(entry.row.project)}</span>
                       <span className="session-project">{entry.row.sessionId.slice(0, 18)}</span>
                     </span>
                   </span>

@@ -299,4 +299,36 @@ describe('Sessions', () => {
     expect(within(filter).getByRole('button', { name: 'Codex' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(filter).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false')
   })
+
+  it('headlines a captured title, demotes the id, and falls back to the project when untitled', async () => {
+    getSessions.mockResolvedValue([
+      session({ sessionId: 'claude-abc123456789xyz', project: 'codeburn', provider: 'claude', title: 'Fix lifetime period in menubar labels', cost: 5 }),
+      session({ sessionId: 'claude-untitled-000000', project: 'docs-site', provider: 'claude', title: '', cost: 3 }),
+    ])
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await screen.findByText('2 sessions · $8.00 · 2K tokens')
+
+    const titles = [...container.querySelectorAll('.session-row .session-title')]
+    const ids = [...container.querySelectorAll('.session-row .session-project')]
+    // Titled row (higher cost, first): the title is the headline, the id its mono secondary line.
+    expect(titles[0]).toHaveTextContent('Fix lifetime period in menubar labels')
+    expect(ids[0]).toHaveTextContent('claude-abc')
+    // Untitled row: unchanged behavior, the project (via shortenProjectPath) stays the headline.
+    expect(titles[1]).toHaveTextContent('docs/site')
+    expect(ids[1]).toHaveTextContent('claude-untitled')
+  })
+
+  it('matches sessions by their captured title', async () => {
+    const user = userEvent.setup()
+    getSessions.mockResolvedValue([
+      session({ sessionId: 'claude-1', project: 'codeburn', provider: 'claude', title: 'Refactor the parser cache', cost: 5 }),
+      session({ sessionId: 'codex-2', project: 'client-api', provider: 'codex', title: 'Add billing webhook', cost: 3 }),
+    ])
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    const search = await screen.findByRole('textbox', { name: 'Search sessions' })
+
+    await user.type(search, 'webhook')
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1)
+    expect(container.querySelector('.session-row .session-title')).toHaveTextContent('Add billing webhook')
+  })
 })
