@@ -25,12 +25,12 @@
     <td align="center" width="50%">
       <strong>Desktop</strong><br/>
       <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/desktop.jpg" alt="CodeBurn Desktop" /><br/>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/CodeBurn-0.9.18-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" /></a>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/CodeBurn-0.9.18.dmg"><img src="https://img.shields.io/badge/macOS-Intel-F97316?logo=apple&logoColor=white" alt="Download for macOS (Intel)" /></a>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/CodeBurn-Setup-0.9.18.exe"><img src="https://img.shields.io/badge/Windows-Setup-F97316?logoColor=white" alt="Download for Windows" /></a>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/codeburn-desktop_0.9.18_amd64.deb"><img src="https://img.shields.io/badge/Linux-.deb-F97316?logo=debian&logoColor=white" alt="Download for Linux (.deb)" /></a>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/codeburn-desktop-0.9.18.x86_64.rpm"><img src="https://img.shields.io/badge/Linux-.rpm-F97316?logo=redhat&logoColor=white" alt="Download for Linux (.rpm)" /></a>
-      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.18/CodeBurn-0.9.18.AppImage"><img src="https://img.shields.io/badge/Linux-AppImage-F97316?logo=linux&logoColor=white" alt="Download for Linux (AppImage)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/CodeBurn-0.9.19-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Apple_Silicon-F97316?logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/CodeBurn-0.9.19.dmg"><img src="https://img.shields.io/badge/macOS-Intel-F97316?logo=apple&logoColor=white" alt="Download for macOS (Intel)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/CodeBurn-Setup-0.9.19.exe"><img src="https://img.shields.io/badge/Windows-Setup-F97316?logoColor=white" alt="Download for Windows" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/codeburn-desktop_0.9.19_amd64.deb"><img src="https://img.shields.io/badge/Linux-.deb-F97316?logo=debian&logoColor=white" alt="Download for Linux (.deb)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/codeburn-desktop-0.9.19.x86_64.rpm"><img src="https://img.shields.io/badge/Linux-.rpm-F97316?logo=redhat&logoColor=white" alt="Download for Linux (.rpm)" /></a>
+      <a href="https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19/CodeBurn-0.9.19.AppImage"><img src="https://img.shields.io/badge/Linux-AppImage-F97316?logo=linux&logoColor=white" alt="Download for Linux (AppImage)" /></a>
     </td>
     <td align="center" width="50%">
       <strong>Web</strong><br/>

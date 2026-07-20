@@ -1,7 +1,7 @@
 {
   "name": "codeburn-desktop",
   "private": true,
-  "version": "0.9.18",
+  "version": "0.9.19",
   "description": "CodeBurn Desktop — Electron app fed by the codeburn CLI",
   "main": "dist/electron/main.js",
   "scripts": {
