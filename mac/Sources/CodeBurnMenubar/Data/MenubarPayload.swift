@@ -178,6 +178,24 @@ struct RoutingWaste: Codable, Sendable {
     let byModel: [RoutingWasteModelEntry]
 }
 
+/// Workflow-intelligence rollup for the period. `correctionRate` and
+/// `medianTimeToFirstEditMs` are null when not computable (no user turns / no
+/// session ever edited), so both are optional.
+struct WorkflowBlock: Codable, Sendable {
+    let corrections: Int
+    let correctionRate: Double?
+    let medianTimeToFirstEditMs: Double?
+}
+
+/// One entry of `topReworkedFiles`. `path` is basename-only (the CLI trims it
+/// for privacy before the payload can leave the machine); `sessions` is the
+/// distinct-session count and `edits` the total edit-family calls.
+struct ReworkedFileEntry: Codable, Sendable {
+    let path: String
+    let sessions: Int
+    let edits: Int
+}
+
 struct CurrentBlock: Codable, Sendable {
     let label: String
     let cost: Double
@@ -202,6 +220,13 @@ struct CurrentBlock: Codable, Sendable {
     let skills: [SkillEntry]
     let subagents: [SubagentEntry]
     let mcpServers: [McpServerEntry]
+    /// Workflow-intelligence rollup. Optional so payloads from older CLIs
+    /// (which never emit it) still decode; absent -> the Workflow strip hides.
+    /// Declared last with a default so the memberwise initializer stays
+    /// backward-compatible for existing construction sites.
+    var workflow: WorkflowBlock? = nil
+    /// Files most reworked by edit-family calls. Empty on older CLIs.
+    var topReworkedFiles: [ReworkedFileEntry] = []
 }
 
 extension CurrentBlock {
@@ -209,7 +234,8 @@ extension CurrentBlock {
         case label, cost, calls, sessions, oneShotRate, inputTokens, outputTokens,
              cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
-             tools, skills, subagents, mcpServers
+             tools, skills, subagents, mcpServers,
+             workflow, topReworkedFiles
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -235,6 +261,8 @@ extension CurrentBlock {
         skills = try c.decodeIfPresent([SkillEntry].self, forKey: .skills) ?? []
         subagents = try c.decodeIfPresent([SubagentEntry].self, forKey: .subagents) ?? []
         mcpServers = try c.decodeIfPresent([McpServerEntry].self, forKey: .mcpServers) ?? []
+        workflow = try c.decodeIfPresent(WorkflowBlock.self, forKey: .workflow)
+        topReworkedFiles = try c.decodeIfPresent([ReworkedFileEntry].self, forKey: .topReworkedFiles) ?? []
     }
 }
 
