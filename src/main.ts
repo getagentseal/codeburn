@@ -2007,10 +2007,11 @@ program
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
-    const { aggregateSessions, renderJson, renderTable } = await import('./sessions-report.js')
+    const { aggregateSessions, aggregateByPr, prLinkedTotals, renderJson, renderTable } = await import('./sessions-report.js')
     await loadPricing()
 
     let range
@@ -2025,7 +2026,43 @@ program
       range = getDateRange(opts.period).range
     }
 
-    const rows = aggregateSessions(await parseAllSessions(range, opts.provider))
+    const projects = await parseAllSessions(range, opts.provider)
+    if (opts.byPr) {
+      const prRows = aggregateByPr(projects)
+      if (opts.format === 'json') {
+        process.stdout.write(JSON.stringify({ prs: prRows, distinct: prLinkedTotals(projects) }, null, 2) + '\n')
+        return
+      }
+      if (prRows.length === 0) {
+        process.stdout.write('No sessions with captured PR links in this period. Links are captured as sessions are parsed; older transcripts gain them on their next re-parse.\n')
+        return
+      }
+      const { cost, sessions } = prLinkedTotals(projects)
+      const { renderTable: renderTextTable } = await import('./text-table.js')
+      const table = renderTextTable(
+        [
+          { header: 'PR' },
+          { header: 'Cost', right: true },
+          { header: 'Saved', right: true },
+          { header: 'Sessions', right: true },
+          { header: 'Calls', right: true },
+          { header: 'First' },
+          { header: 'Last' },
+        ],
+        prRows.map(r => [
+          r.label,
+          `$${r.cost.toFixed(2)}`,
+          `$${r.savingsUSD.toFixed(2)}`,
+          String(r.sessions),
+          String(r.calls),
+          r.firstStarted.slice(0, 10),
+          r.lastEnded.slice(0, 10),
+        ]),
+      )
+      process.stdout.write(table + `\nDistinct PR-linked spend: $${cost.toFixed(2)} across ${sessions} session${sessions === 1 ? '' : 's'}. A session referencing several PRs counts toward each, so rows exceed this total when links overlap.\n`)
+      return
+    }
+    const rows = aggregateSessions(projects)
     const output = opts.format === 'json' ? renderJson(rows) : renderTable(rows)
     process.stdout.write(output + '\n')
   })

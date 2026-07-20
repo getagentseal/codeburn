@@ -2046,6 +2046,7 @@ async function scanProjectDirs(
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
     session.agentType = cachedFile.agentType
+    if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
@@ -2743,7 +2744,7 @@ async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[] }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[]; prLinks?: Set<string> }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -2772,8 +2773,17 @@ async function parseProviderSources(
         if (!existing.projectPath && turn.calls[0]?.projectPath) {
           existing.projectPath = turn.calls[0]!.projectPath
         }
+        if (cachedFile.prLinks?.length) {
+          const links = (existing.prLinks ??= new Set())
+          for (const link of cachedFile.prLinks) links.add(link)
+        }
       } else {
-        sessionMap.set(key, { project, projectPath: turn.calls[0]?.projectPath, turns: [classified] })
+        sessionMap.set(key, {
+          project,
+          projectPath: turn.calls[0]?.projectPath,
+          turns: [classified],
+          ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
+        })
       }
     }
   }
@@ -2816,9 +2826,10 @@ async function parseProviderSources(
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, turns }] of sessionMap) {
+  for (const [key, { project, projectPath, turns, prLinks }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
+    if (prLinks?.size) session.prLinks = [...prLinks].sort()
     if (session.apiCalls > 0) {
       const existing = projectMap.get(project)
       if (existing) {
