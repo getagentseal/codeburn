@@ -49,7 +49,7 @@ const ORANGE = '#FF8C42'
 const DIM = '#555555'
 const GOLD = '#FFD700'
 const PLAN_BAR_WIDTH = 10
-const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all'])
+const HEAVY_PERIODS = new Set<Period>(['30days', 'month', 'all', 'lifetime'])
 
 const LANG_DISPLAY_NAMES: Record<string, string> = {
   javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python',
@@ -774,7 +774,8 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
             <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
             <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
             <Text color={ORANGE} bold>4</Text><Text dimColor> month   </Text>
-            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months</Text>
+            <Text color={ORANGE} bold>5</Text><Text dimColor> 6 months   </Text>
+            <Text color={ORANGE} bold>6</Text><Text dimColor> lifetime</Text>
           </>
         )}
         {!customRange && !isOptimize && (
@@ -820,7 +821,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} />
-      <Row wide={wide} width={dashWidth}><DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={pw} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
+      <Row wide={wide} width={dashWidth}><DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={pw} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' || period === 'lifetime' ? 14 : period === 'month' || period === '30days' ? 14 : 8} /></Row>
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
@@ -1084,7 +1085,7 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
     // Also disable while a custom --from/--to range is in effect. Switching
     // period would silently abandon the user's explicit range and reload
     // standard period data; the period tab strip is hidden in this mode so
-    // users have no expectation that 1-5 should do anything.
+    // users have no expectation that 1-6 should do anything.
     if (isCustomRange) return
     if (dayDate) {
       if (key.leftArrow) { void switchDay(shiftDay(dayDate, -1)); return }
@@ -1105,6 +1106,7 @@ function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, in
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
     else if (input === '5') switchPeriodImmediate('all')
+    else if (input === '6') switchPeriodImmediate('lifetime')
   })
 
   const headerLabel = dayDate ? formatDayRangeLabel(dayDate) : customRangeLabel ?? PERIOD_LABELS[period]

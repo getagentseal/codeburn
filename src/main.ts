@@ -715,7 +715,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
 program
   .command('report', { isDefault: true })
   .description('Interactive usage dashboard')
-  .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all', 'week')
+  .option('-p, --period <period>', 'Starting period: today, week, 30days, month, all, lifetime', 'week')
   .option('--day <date>', 'Single day to review (YYYY-MM-DD, today, or yesterday). Overrides --period when set')
   .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
   .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
@@ -797,7 +797,7 @@ program
   .command('devices [action] [target]')
   .description('Combined usage across your devices. Actions: scan | add (find nearby & pair) | add <host> --pin <pin> (manual) | rm <name>. Supports --format json for read-only output and scan.')
   .option('--pin <pin>', 'Pairing PIN shown on the device you are adding')
-  .option('-p, --period <period>', 'Period: today, week, 30days, month, all', 'month')
+  .option('-p, --period <period>', 'Period: today, week, 30days, month, all, lifetime', 'month')
   .option('--port <number>', 'Default port when adding a device', parseInteger, 7777)
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (action: string | undefined, target: string | undefined, opts) => {
@@ -905,7 +905,7 @@ program
 program
   .command('overview')
   .description('Plain-text usage overview, copy-pasteable (defaults to this month)')
-  .option('-p, --period <period>', 'Period: today, week, 30days, month, all', 'month')
+  .option('-p, --period <period>', 'Period: today, week, 30days, month, all, lifetime', 'month')
   .option('--from <date>', 'Start date (YYYY-MM-DD). Overrides --period when set')
   .option('--to <date>', 'End date (YYYY-MM-DD). Overrides --period when set')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, copilot)', 'all')
@@ -975,7 +975,7 @@ program
 program
   .command('web')
   .description('Open the local web dashboard in your browser')
-  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all', 'today')
+  .option('-p, --period <period>', 'Initial period: today, week, 30days, month, all, lifetime', 'today')
   .option('--from <date>', 'Start date (YYYY-MM-DD)')
   .option('--to <date>', 'End date (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, copilot)', 'all')
@@ -1005,7 +1005,7 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
+  .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all, lifetime', 'today')
   .option('--day <date>', 'Single day for menubar-json (YYYY-MM-DD, today, or yesterday). Overrides --period when set')
   .option('--from <date>', 'Start date (YYYY-MM-DD) for custom range')
   .option('--to <date>', 'End date (YYYY-MM-DD) for custom range')
@@ -1723,7 +1723,7 @@ program
 program
   .command('optimize')
   .description('Find token waste and get exact fixes')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
@@ -1806,7 +1806,7 @@ program
 program
   .command('compare')
   .description('Compare two AI models side-by-side')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', 'all')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--model-a <model>', 'First model to compare')
@@ -1859,7 +1859,7 @@ program
 program
   .command('audit')
   .description("Token audit: raw provider token fields vs codeburn's displayed totals and cost derivation")
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
@@ -1899,7 +1899,7 @@ program
 program
   .command('models')
   .description('Per-model token + cost table, optionally exploded by task type or agent')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
@@ -1962,7 +1962,7 @@ program
 program
   .command('sessions')
   .description('Full per-session usage report')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
@@ -1993,7 +1993,7 @@ program
 program
   .command('yield')
   .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'week')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', 'week')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (opts) => {
@@ -2016,7 +2016,7 @@ program
 program
   .command('spend')
   .description('Emit model x project spend flow data')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
+  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', '30days')
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
