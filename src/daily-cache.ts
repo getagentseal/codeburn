@@ -78,7 +78,10 @@ export type ModelDayStats = {
 
 export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }
 
-export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number }
+/// `path` is the project's filesystem path when known — it is what display
+/// layers derive a friendly name from once the sessions that carried the
+/// mapping are gone.
+export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string }
 
 export type ProviderDaySlice = {
   calls: number
@@ -220,7 +223,10 @@ function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
     if (!p || typeof p !== 'object' || Array.isArray(p)) continue
     const stats = p as Record<string, unknown>
     Object.defineProperty(out, name, {
-      value: { cost: num(stats.cost), calls: num(stats.calls), savingsUSD: num(stats.savingsUSD), sessions: num(stats.sessions) },
+      value: {
+        cost: num(stats.cost), calls: num(stats.calls), savingsUSD: num(stats.savingsUSD), sessions: num(stats.sessions),
+        ...(typeof stats.path === 'string' && stats.path.length > 0 ? { path: stats.path } : {}),
+      },
       enumerable: true, writable: true, configurable: true,
     })
   }
@@ -494,6 +500,7 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
     acc.cost += num(p.cost)
     acc.calls += num(p.calls)
     acc.savingsUSD += num(p.savingsUSD)
+    if (!acc.path && typeof p.path === 'string') acc.path = p.path
     // Same session dedup as the slice-level sessions above: a placeholder's
     // project sessions were already counted into the day when the fresh day
     // was built, so only the excess is added.

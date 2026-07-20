@@ -46,7 +46,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
     if (!s) { s = emptySlice(); day.providers[provider] = s }
     return s
   }
-  const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string): ProjectDayStats => {
+  const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string, path?: string): ProjectDayStats => {
     const projects = (holder.projects ??= {})
     // defineProperty so a project directory named "__proto__" becomes an own
     // key instead of mutating the prototype link.
@@ -55,6 +55,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
       p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
       Object.defineProperty(projects, project, { value: p, enumerable: true, writable: true, configurable: true })
     }
+    if (!p.path && path) p.path = path
     return p
   }
 
@@ -63,13 +64,13 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
       const sessionDate = dateKey(session.firstTimestamp)
       const sessionDay = ensure(sessionDate)
       sessionDay.sessions += 1
-      ensureProject(sessionDay, session.project).sessions += 1
+      ensureProject(sessionDay, session.project, project.projectPath).sessions += 1
       // A session belongs to exactly one provider; its calls all carry it.
       const sessionProvider = session.turns.flatMap(t => t.assistantCalls)[0]?.provider
       if (sessionProvider) {
         const slice = ensureSlice(sessionDay, sessionProvider)
         slice.sessions! += 1
-        ensureProject(slice, session.project).sessions += 1
+        ensureProject(slice, session.project, project.projectPath).sessions += 1
       }
 
       for (const turn of session.turns) {
@@ -136,7 +137,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           turnDay.cacheReadTokens += call.usage.cacheReadInputTokens
           turnDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
-          const dayProject = ensureProject(turnDay, session.project)
+          const dayProject = ensureProject(turnDay, session.project, project.projectPath)
           dayProject.cost += call.costUSD
           dayProject.calls += 1
           dayProject.savingsUSD += callSavings
@@ -164,7 +165,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           slice.cacheReadTokens! += call.usage.cacheReadInputTokens
           slice.cacheWriteTokens! += call.usage.cacheCreationInputTokens
 
-          const sliceProject = ensureProject(slice, session.project)
+          const sliceProject = ensureProject(slice, session.project, project.projectPath)
           sliceProject.cost += call.costUSD
           sliceProject.calls += 1
           sliceProject.savingsUSD += callSavings
