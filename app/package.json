@@ -16,6 +16,7 @@
     "package:arm64": "npm run stage-cli && npm run build && electron-builder --mac --arm64",
     "package:x64": "npm run stage-cli && npm run build && electron-builder --mac --x64",
     "package:win": "npm run stage-cli && npm run build && electron-builder --win",
+    "package:store": "npm run stage-cli && npm run build && electron-builder --win appx --x64",
     "package:linux": "npm run stage-cli && npm run build && electron-builder --linux"
   },
   "dependencies": {
@@ -99,6 +100,20 @@
       "oneClick": false,
       "perMachine": false,
       "artifactName": "CodeBurn-Setup-${version}.${ext}"
+    },
+    "appx": {
+      "applicationId": "CodeBurn",
+      "identityName": "Codeburn.CodeBurn",
+      "publisher": "CN=3EFA3336-87E1-46F2-9DFA-2EB5A7693F89",
+      "publisherDisplayName": "Codeburn",
+      "displayName": "CodeBurn",
+      "artifactName": "CodeBurn-Store-${version}-${arch}.${ext}",
+      "backgroundColor": "#15100D",
+      "languages": [
+        "en-US"
+      ],
+      "minVersion": "10.0.17763.0",
+      "maxVersionTested": "10.0.26100.0"
     },
     "linux": {
       "target": [

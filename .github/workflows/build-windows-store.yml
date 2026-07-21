@@ -1,0 +1,45 @@
+name: Build Windows Store package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/build-windows-store.yml
+      - app/**
+      - src/**
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+jobs:
+  appx:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      - name: Install CLI dependencies
+        run: npm ci
+
+      - name: Install desktop dependencies
+        run: npm ci --prefix app
+
+      - name: Build Microsoft Store package
+        run: npm --prefix app run package:store
+
+      - name: Upload Store package
+        uses: actions/upload-artifact@v6
+        with:
+          name: CodeBurn-Microsoft-Store
+          path: app/release/CodeBurn-Store-*.appx
+          if-no-files-found: error
+          retention-days: 14
