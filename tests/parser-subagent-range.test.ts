@@ -66,6 +66,12 @@ describe('subagent fold across a date-range boundary', () => {
     // The child session is present (its work is in range) as a standalone session.
     const childPresent = projects.some(p => p.sessions.some(s => s.sessionId === `agent-${AGENT}`))
     expect(childPresent).toBe(true)
+    // The anchor parent (0 in-range turns) must NOT contaminate the sessions list;
+    // it lives in subagentAnchors only.
+    const anchorInSessions = projects.some(p => p.sessions.some(s => s.sessionId === PARENT))
+    expect(anchorInSessions).toBe(false)
+    const anchorHeldSeparately = projects.some(p => (p.subagentAnchors ?? []).some(s => s.sessionId === PARENT))
+    expect(anchorHeldSeparately).toBe(true)
 
     const rows = aggregateByPr(projects)
     const row = rows.find(r => r.url === PR)

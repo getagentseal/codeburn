@@ -454,13 +454,28 @@ async function adoptPriorCache(version: number): Promise<SessionCache | null> {
   }
 }
 
-// Adopt the newest prior versioned cache present on disk (v6 before v5).
+// Adopt EVERY prior versioned cache present on disk, migrating OLDEST first and
+// merging per source path so a newer version wins per entry. Returning the newest
+// alone would be wrong: a sparse or partial newer file (e.g. v6 holding only some
+// orphans) would mask older-only orphans that still hold attributable spend. Newer
+// entries overwrite older ones for the same path; entries unique to an older
+// version survive.
 async function adoptNewestPriorCache(): Promise<SessionCache | null> {
-  for (const version of PRIOR_CACHE_VERSIONS) {
+  const oldestFirst = [...PRIOR_CACHE_VERSIONS].sort((a, b) => a - b)
+  let merged: SessionCache | null = null
+  for (const version of oldestFirst) {
     const adopted = await adoptPriorCache(version)
-    if (adopted) return adopted
+    if (!adopted) continue
+    if (!merged) { merged = adopted; continue }
+    for (const [provider, section] of Object.entries(adopted.providers)) {
+      const existing = merged.providers[provider]
+      if (!existing) { merged.providers[provider] = section; continue }
+      // Newer version's entries overwrite older ones for the same source path.
+      Object.assign(existing.files, section.files)
+      if (section.durable) existing.durable = true
+    }
   }
-  return null
+  return merged
 }
 
 export async function loadCache(): Promise<SessionCache> {

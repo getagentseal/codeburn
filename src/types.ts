@@ -285,6 +285,13 @@ export type ProjectSummary = {
   // net out-of-pocket for the project is `totalCostUSD - totalProxiedCostUSD`.
   // 0 when the project is not under a configured proxy path.
   totalProxiedCostUSD: number
+  /// Claude Code only: PR-linked parent sessions whose OWN turns all fell outside
+  /// the report range but which spawned an in-range subagent. Kept ONLY as fold
+  /// anchors for by-PR subagent attribution; they carry no in-range spend and are
+  /// deliberately NOT in `sessions`, so they never touch session counts, averages,
+  /// or any other per-session report. Consumed only by the by-PR resolver. Absent
+  /// when none.
+  subagentAnchors?: SessionSummary[]
 }
 
 export type DateRange = {

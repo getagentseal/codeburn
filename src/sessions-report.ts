@@ -179,13 +179,17 @@ export function allocateEven(total: number, n: number): number[] {
 /// three sum to `cost` (derived from the same sessions), so folding never adds a
 /// rounding gap. `foldedSessions` counts the subtree (self plus folded
 /// descendants); `spawnAtMs` is the TOP child's first-activity epoch (the whole
-/// subtree resolves against the top parent through the top child's spawn).
+/// subtree resolves against the top parent through the top child's spawn);
+/// `firstTs`/`lastTs` are the subtree's real activity span, used for the PR row's
+/// date range when the parent has no in-range turns of its own.
 export type ChildFold = {
   agentId: string
   cost: number
   calls: number
   savingsUSD: number
   spawnAtMs: number
+  firstTs: string
+  lastTs: string
   models: Map<string, number>
   categories: Map<string, number>
   foldedSessions: number
@@ -203,31 +207,50 @@ function selfLinks(session: { prLinks?: string[] }): boolean {
   return !!session.prLinks?.length
 }
 
+// A session id alone is NOT globally unique: imported or duplicated transcripts,
+// or two providers, can reuse one id, letting two parents claim one child and
+// corrupting the attribution map. Key parents (and a child's parent reference) by
+// provider + id so linkage stays one-to-one; the ambiguity skip in
+// resolveSubagentAttribution handles a genuine same-provider id collision.
+// Subagent linkage (parentSessionId / agentSpawnLinks / spawnPrSets) is Claude
+// only, and a fold ANCHOR has no in-range turns to infer a provider from, so a
+// linkage-bearing session is always attributed to 'claude'; this keeps a parent
+// and its child on the same key.
+function linkageProvider(session: SessionSummary): string {
+  if (session.parentSessionId || session.agentSpawnLinks || session.spawnPrSets) return 'claude'
+  return inferProvider(session)
+}
+function providerSessionKey(session: SessionSummary): string {
+  return `${linkageProvider(session)} ${session.sessionId}`
+}
+function providerParentKey(session: SessionSummary): string {
+  return `${linkageProvider(session)} ${session.parentSessionId ?? ''}`
+}
+
 /// Index every sidechain (subagent) session by the parent that spawned it, keyed
-/// by `parentSessionId` ALONE. Parent ids are UUIDs and subagent ids are
-/// `agent-<hex>`, both globally unique, so a composite project key is unnecessary
-/// and would drop a child whose worktree cwd resolves to a different
-/// ProjectSummary than its parent. (The base PR's project+sessionId composite key
-/// guards distinct-session COUNTING, a separate concern.) A child whose parent is
-/// absent from the scan is never looked up, so it stays a standalone orphan.
+/// by provider + `parentSessionId`. A child whose parent is absent from the scan
+/// is never looked up, so it stays a standalone orphan.
 export function buildSubagentIndex(projects: ProjectSummary[]): Map<string, SessionSummary[]> {
   const index = new Map<string, SessionSummary[]>()
   for (const project of projects)
     for (const session of project.sessions) {
       if (!session.parentSessionId) continue
-      const list = index.get(session.parentSessionId)
+      const key = providerParentKey(session)
+      const list = index.get(key)
       if (list) list.push(session)
-      else index.set(session.parentSessionId, [session])
+      else index.set(key, [session])
     }
   return index
 }
 
-// Aggregate a child session and its non-self-linking descendants, depth-first,
-// guarded by `visited` against cycles (and against a session being pulled twice).
-// A self-linking descendant is skipped: it attributes standalone. `spawnAtMs`
-// stays the TOP child's, since the whole subtree resolves against the top parent.
-function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, visited: Set<string>): ChildFold {
-  visited.add(child.sessionId)
+// Aggregate a child session and its non-self-linking descendants, depth-first.
+// `claimed` is ONE set per parent resolution (shared across all direct children),
+// so a descendant reachable through two paths (duplicate/diamond ids) folds
+// exactly once and a parent-link cycle terminates. A self-linking descendant is
+// skipped: it attributes standalone. `spawnAtMs` stays the TOP child's, since the
+// whole subtree resolves against the top parent.
+function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, claimed: Set<string>): ChildFold {
+  claimed.add(child.sessionId)
   const models = new Map<string, number>()
   const categories = new Map<string, number>()
   for (const turn of child.turns) {
@@ -241,15 +264,19 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
   const fold: ChildFold = {
     agentId: child.agentId ?? child.sessionId,
     cost: child.totalCostUSD, calls: child.apiCalls, savingsUSD: child.totalSavingsUSD,
-    spawnAtMs: parseMs(child.firstTimestamp), models, categories, foldedSessions: 1,
+    spawnAtMs: parseMs(child.firstTimestamp),
+    firstTs: child.firstTimestamp, lastTs: child.lastTimestamp,
+    models, categories, foldedSessions: 1,
   }
-  for (const gc of index.get(child.sessionId) ?? []) {
-    if (visited.has(gc.sessionId) || selfLinks(gc)) continue
-    const gcf = buildChildFold(gc, index, visited)
+  for (const gc of index.get(providerSessionKey(child)) ?? []) {
+    if (claimed.has(gc.sessionId) || selfLinks(gc)) continue
+    const gcf = buildChildFold(gc, index, claimed)
     fold.cost += gcf.cost; fold.calls += gcf.calls; fold.savingsUSD += gcf.savingsUSD
     fold.foldedSessions += gcf.foldedSessions
     for (const [m, c] of gcf.models) addToMap(fold.models, m, c)
     for (const [cat, c] of gcf.categories) addToMap(fold.categories, cat, c)
+    if (gcf.firstTs && (!fold.firstTs || gcf.firstTs < fold.firstTs)) fold.firstTs = gcf.firstTs
+    if (gcf.lastTs > fold.lastTs) fold.lastTs = gcf.lastTs
   }
   return fold
 }
@@ -293,38 +320,47 @@ function resolveChild(parent: SessionSummary, fold: ChildFold): ResolvedChild {
   return { fold, prSet: current, unlinked: false }
 }
 
-/// Resolve every folded child to its parent's PR set, ONCE. Both `aggregateByPr`
-/// and `prLinkedTotals` consume this instead of each rebuilding the index and
-/// re-resolving. Keyed by parent sessionId; only PR-bearing parents (the ones the
-/// consumers iterate) are resolved. A self-linking direct child is skipped (it
-/// attributes standalone); its own non-self-linking descendants fold into it when
-/// it is itself iterated as a PR-bearing parent.
+/// Resolve every folded child to its parent's PR set, once. Keyed by the parent's
+/// provider + sessionId. Parents come from each project's `sessions` AND its
+/// `subagentAnchors` (PR-linked parents kept only for folding). When two DISTINCT
+/// parents share a key (true duplicate data), the child is folded into NEITHER
+/// (deterministic skip, stays standalone): correctness over coverage.
 export type SubagentAttribution = Map<string, ResolvedChild[]>
 
-// Memoize by the `projects` array identity so `aggregateByPr` and `prLinkedTotals`
-// (called with the same array in one report render) resolve the subagent tree
-// once, not twice. Keyed weakly, so it is released with the array; a fresh report
-// builds a new array and recomputes. Public signature is unchanged.
-const attributionCache = new WeakMap<ProjectSummary[], SubagentAttribution>()
-
 export function resolveSubagentAttribution(projects: ProjectSummary[]): SubagentAttribution {
-  const memo = attributionCache.get(projects)
-  if (memo) return memo
   const index = buildSubagentIndex(projects)
+  // Count PR-bearing parents per key (real sessions AND anchors) to detect an
+  // ambiguous key claimed by more than one distinct parent.
+  const parentCount = new Map<string, number>()
+  const bump = (s: SessionSummary): void => {
+    if (!s.prLinks?.length) return
+    const k = providerSessionKey(s)
+    parentCount.set(k, (parentCount.get(k) ?? 0) + 1)
+  }
+  for (const project of projects) {
+    for (const s of project.sessions) bump(s)
+    for (const a of project.subagentAnchors ?? []) bump(a)
+  }
   const out: SubagentAttribution = new Map()
-  for (const project of projects)
-    for (const parent of project.sessions) {
-      if (!parent.prLinks?.length) continue
-      const direct = index.get(parent.sessionId)
-      if (!direct?.length) continue
-      const resolved: ResolvedChild[] = []
-      for (const child of direct) {
-        if (selfLinks(child)) continue
-        resolved.push(resolveChild(parent, buildChildFold(child, index, new Set<string>())))
-      }
-      if (resolved.length) out.set(parent.sessionId, resolved)
+  const resolveParent = (parent: SessionSummary): void => {
+    if (!parent.prLinks?.length) return
+    const k = providerSessionKey(parent)
+    if (out.has(k)) return                                    // already resolved for this key
+    if ((parentCount.get(k) ?? 0) > 1) { out.set(k, []); return } // ambiguous: fold nothing
+    const direct = index.get(k)
+    if (!direct?.length) return
+    const claimed = new Set<string>()                          // one claimed set across all direct children
+    const resolved: ResolvedChild[] = []
+    for (const child of direct) {
+      if (claimed.has(child.sessionId) || selfLinks(child)) continue
+      resolved.push(resolveChild(parent, buildChildFold(child, index, claimed)))
     }
-  attributionCache.set(projects, out)
+    if (resolved.length) out.set(k, resolved)
+  }
+  for (const project of projects) {
+    for (const parent of project.sessions) resolveParent(parent)
+    for (const anchor of project.subagentAnchors ?? []) resolveParent(anchor)
+  }
   return out
 }
 
@@ -403,12 +439,23 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
   return { perUrl, unattributed }
 }
 
-/// Spend attributed to each pull request at turn granularity (see
-/// attributeSessionPrSpend). Rows carry ATTRIBUTED cost/calls and ARE summable;
-/// `sessions` counts the distinct sessions that contributed any spend to the PR;
-/// `approx` marks rows fed by the legacy even-split fallback; `models` and
-/// `categories` are the attributed model/category breakdowns. Sorted by cost, desc.
-export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
+/// PR-attribution totals. `attributedCost` is the sum of the per-PR rows;
+/// `unattributedCost` is pre-reference overhead not tied to any specific PR;
+/// `cost` = attributed + unattributed = the PR-linked spend INCLUDING folded
+/// subagent runs, so it exceeds the parents' own spend. `sessions` counts distinct
+/// PR-linked PARENT sessions ONLY (0-cost fold anchors are excluded); it is
+/// `subagentSessions` (folded subtrees: children plus descendants) that explains
+/// the extra spend.
+export type PrTotals = { cost: number; sessions: number; subagentSessions: number; attributedCost: number; unattributedCost: number }
+export type PrAttribution = { rows: PrRow[]; totals: PrTotals }
+
+/// Spend by pull request, at turn granularity, with subagent runs folded into the
+/// PR each was working on. Computed in ONE pass so `aggregateByPr` (rows) and
+/// `prLinkedTotals` (totals) never disagree; the payload builder should call this
+/// once and read both. Rows carry ATTRIBUTED cost/calls and ARE summable; `approx`
+/// marks legacy even-split rows; `models`/`categories` are the attributed
+/// breakdowns. Sorted by cost, descending.
+export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
   const byUrl = new Map<string, {
     cost: number; savingsUSD: number; calls: number; approx: boolean
     legacyCost: number
@@ -416,9 +463,16 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
     models: Map<string, number>; categories: Map<string, number>
   }>()
   const attribution = resolveSubagentAttribution(projects)
+  let attributedCost = 0
+  let unattributedCost = 0
+  let sessions = 0
+  let subagentSessions = 0
+
   // Add one contribution (a parent turn's share, or a folded child's share) to a
-  // PR row. `sessionKey` is the PARENT session identity, so a folded child does
-  // not inflate the row's distinct-session count beyond its parent.
+  // PR row. `sessionKey` is the contributing PARENT's identity, so a folded child
+  // does not inflate the row's distinct-session count beyond its parent. Empty
+  // timestamps (a 0-turn anchor) never widen the span; folded children pass their
+  // OWN activity span, which is what dates an anchor-only row.
   const addTo = (
     url: string, sessionKey: string, firstTs: string, lastTs: string,
     cost: number, savings: number, calls: number, approx: boolean,
@@ -437,41 +491,56 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
     if (approx) { row.approx = true; row.legacyCost += cost }
     for (const [m, mc] of models) addToMap(row.models, m, mc)
     for (const [cat, cc] of categories) addToMap(row.categories, cat, cc)
-    if (firstTs < row.firstStarted) row.firstStarted = firstTs
-    if (lastTs > row.lastEnded) row.lastEnded = lastTs
+    if (firstTs && (!row.firstStarted || firstTs < row.firstStarted)) row.firstStarted = firstTs
+    if (lastTs && lastTs > row.lastEnded) row.lastEnded = lastTs
     byUrl.set(url, row)
   }
+
+  // Fold one parent's resolved children into rows + totals. An unlinked child
+  // contributes nothing; a child with no active PR goes to unattributed (no row).
+  const foldChildren = (parent: SessionSummary): void => {
+    const sessionKey = `${parent.project} ${parent.sessionId}`
+    for (const rc of attribution.get(providerSessionKey(parent)) ?? []) {
+      if (rc.unlinked) continue
+      subagentSessions += rc.fold.foldedSessions
+      if (!rc.prSet?.length) { unattributedCost += rc.fold.cost; continue }
+      attributedCost += rc.fold.cost
+      const prs = rc.prSet
+      const share = 1 / prs.length
+      const callAlloc = allocateEven(rc.fold.calls, prs.length)
+      prs.forEach((url, i) => {
+        const models = new Map<string, number>()
+        for (const [m, mc] of rc.fold.models) models.set(m, mc * share)
+        const categories = new Map<string, number>()
+        for (const [cat, cc] of rc.fold.categories) categories.set(cat, cc * share)
+        addTo(url, sessionKey, rc.fold.firstTs, rc.fold.lastTs,
+          rc.fold.cost * share, rc.fold.savingsUSD * share, callAlloc[i]!, false, models, categories)
+      })
+    }
+  }
+
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
-      // Key on project + sessionId: a transcript basename (sessionId) can repeat
-      // across projects, so sessionId alone would undercount distinct sessions.
-      const sessionKey = `${session.project} ${session.sessionId}`
-      const { perUrl } = attributeSessionPrSpend(session)
+      sessions += 1
+      const sessionKey = `${session.project} ${session.sessionId}`
+      const { perUrl, unattributed } = attributeSessionPrSpend(session)
       for (const [url, c] of perUrl) {
+        attributedCost += c.cost
         addTo(url, sessionKey, session.firstTimestamp, session.lastTimestamp, c.cost, c.savingsUSD, c.calls, c.approx, c.models, c.categories)
       }
-      // Fold this session's resolved subagent children into the PR each was
-      // working on. A child resolved to no PR (unattributed) or after the parent's
-      // last turn (unlinked) creates no row; it surfaces only in prLinkedTotals.
-      // Folded children carry no `approx` (they have genuine per-turn categories).
-      for (const rc of attribution.get(session.sessionId) ?? []) {
-        if (rc.unlinked || !rc.prSet?.length) continue
-        const prs = rc.prSet
-        const share = 1 / prs.length
-        const callAlloc = allocateEven(rc.fold.calls, prs.length)
-        prs.forEach((url, i) => {
-          const models = new Map<string, number>()
-          for (const [m, mc] of rc.fold.models) models.set(m, mc * share)
-          const categories = new Map<string, number>()
-          for (const [cat, cc] of rc.fold.categories) categories.set(cat, cc * share)
-          addTo(url, sessionKey, session.firstTimestamp, session.lastTimestamp,
-            rc.fold.cost * share, rc.fold.savingsUSD * share, callAlloc[i]!, false, models, categories)
-        })
-      }
+      unattributedCost += unattributed.cost
+      foldChildren(session)
+    }
+    // Anchor parents: fold their children only. NOT counted in `sessions`, and no
+    // own spend (they have no in-range turns).
+    for (const anchor of project.subagentAnchors ?? []) {
+      if (!anchor.prLinks?.length) continue
+      foldChildren(anchor)
     }
   }
-  return [...byUrl.entries()]
+
+  const rows = [...byUrl.entries()]
     .map(([url, r]) => {
       // Collapse raw model names to short display names, summing costs that map
       // to the same short name, then order by attributed cost (name asc breaks
@@ -504,41 +573,18 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
       }
     })
     .sort((a, b) => b.cost - a.cost)
+
+  return { rows, totals: { cost: attributedCost + unattributedCost, sessions, subagentSessions, attributedCost, unattributedCost } }
 }
 
-/// Totals across every PR-linked session. `attributedCost` is the sum of the
-/// per-PR rows (a summable total, unlike the old by-reference rows);
-/// `unattributedCost` is the pre-reference overhead not tied to any specific PR.
-/// `cost` = attributed + unattributed = the PR-linked spend, now INCLUDING the
-/// subagent runs folded into those sessions, so it exceeds the parents' own spend.
-/// `sessions` counts distinct PR-linked PARENT sessions; `subagentSessions` counts
-/// the child runs folded into them (each still a standalone row in the sessions
-/// list). Report both so the footer is honest about what the total covers.
-export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sessions: number; subagentSessions: number; attributedCost: number; unattributedCost: number } {
-  let attributedCost = 0
-  let unattributedCost = 0
-  let sessions = 0
-  let subagentSessions = 0
-  const attribution = resolveSubagentAttribution(projects)
-  for (const project of projects) {
-    for (const session of project.sessions) {
-      if (!session.prLinks?.length) continue
-      sessions += 1
-      const { perUrl, unattributed } = attributeSessionPrSpend(session)
-      for (const c of perUrl.values()) attributedCost += c.cost
-      unattributedCost += unattributed.cost
-      // Fold resolved children: an unlinked child contributes nothing; otherwise
-      // count its whole folded subtree and add its spend to attributed (resolved to
-      // a PR) or unattributed (no active PR at its spawn).
-      for (const rc of attribution.get(session.sessionId) ?? []) {
-        if (rc.unlinked) continue
-        subagentSessions += rc.fold.foldedSessions
-        if (rc.prSet?.length) attributedCost += rc.fold.cost
-        else unattributedCost += rc.fold.cost
-      }
-    }
-  }
-  return { cost: attributedCost + unattributedCost, sessions, subagentSessions, attributedCost, unattributedCost }
+/// Spend attributed to each pull request (thin wrapper over buildPrAttribution).
+export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
+  return buildPrAttribution(projects).rows
+}
+
+/// Totals across every PR-linked session (thin wrapper over buildPrAttribution).
+export function prLinkedTotals(projects: ProjectSummary[]): PrTotals {
+  return buildPrAttribution(projects).totals
 }
 
 export type BranchRow = {

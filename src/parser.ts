@@ -1284,7 +1284,10 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
         } else if (results.length > 1) {
           // Several batched tool results share one entry: pair the agentId with the
           // block whose `content` is the spawn result (equals `toolUseResult.content`),
-          // so an unrelated sibling block cannot capture the id. Skip if ambiguous.
+          // so an unrelated sibling block cannot capture the id. When the match is
+          // ambiguous (identical blocks, or none match) the spawn link is left
+          // unset ON PURPOSE: the child then folds via the timestamp-bucket fallback
+          // in resolveChild rather than risk pairing with the wrong id.
           const turContent = JSON.stringify((tur as Record<string, unknown>)['content'])
           const matches = results.filter(b => JSON.stringify(b['content']) === turContent)
           if (matches.length === 1) spawnId = matches[0]!['tool_use_id'] as string
@@ -2130,7 +2133,7 @@ async function scanProjectDirs(
     }
   }
 
-  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
+  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; anchors: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
     ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
@@ -2187,10 +2190,13 @@ async function scanProjectDirs(
     }
 
     // A PR-linked parent that spawned subagents is kept even when its OWN turns all
-    // fall out of range, as a 0-cost fold anchor: an in-range child (an async agent
+    // fall out of range, as a 0-cost fold ANCHOR: an in-range child (an async agent
     // that outlived the parent's last in-range turn) still needs the parent's
-    // `prLinks` / `spawnPrSets` to attribute. It contributes no spend of its own.
+    // `prLinks` / `spawnPrSets` to attribute. An anchor carries no in-range spend
+    // and is stored OUTSIDE `sessions` (see subagentAnchors) so it never
+    // contaminates session counts, averages, or any other per-session report.
     const isSpawnAnchor = Object.keys(spawnPrSets).length > 0 && cachedFile.isSidechain !== true
+    const anchorOnly = classifiedTurns.length === 0 && isSpawnAnchor
     if (classifiedTurns.length === 0 && !isSpawnAnchor) continue
 
     const sessionId = basename(filePath, '.jsonl')
@@ -2217,17 +2223,17 @@ async function scanProjectDirs(
     }
     if (Object.keys(spawnPrSets).length > 0) session.spawnPrSets = spawnPrSets
 
-    if (session.apiCalls > 0 || isSpawnAnchor) {
+    if (session.apiCalls > 0 || anchorOnly) {
       const projectKey = cachedFile.canonicalCwd
         ? normalizeProjectPathKey(cachedFile.canonicalCwd)
         : `slug:${dirName}`
       const existing = projectMap.get(projectKey)
-      if (existing) {
-        existing.sessions.push(session)
-        existing.dirNames.add(dirName)
-      } else {
-        projectMap.set(projectKey, { project: projectName, projectPath, sessions: [session], dirNames: new Set([dirName]) })
-      }
+      // An anchor (no in-range spend) goes into a separate bucket, never `sessions`.
+      const target = existing ?? { project: projectName, projectPath, sessions: [], anchors: [], dirNames: new Set([dirName]) }
+      if (anchorOnly) target.anchors.push(session)
+      else target.sessions.push(session)
+      target.dirNames.add(dirName)
+      if (!existing) projectMap.set(projectKey, target)
     }
   }
 
@@ -2245,12 +2251,13 @@ async function scanProjectDirs(
     if (!cwdKey) continue
     const target = projectMap.get(cwdKey)!
     target.sessions.push(...entry.sessions)
+    target.anchors.push(...entry.anchors)
     projectMap.delete(key)
   }
 
   const projects: ProjectSummary[] = []
-  for (const { project, projectPath, sessions } of projectMap.values()) {
-    projects.push(summarizeProject(project, projectPath, sessions))
+  for (const { project, projectPath, sessions, anchors } of projectMap.values()) {
+    projects.push(summarizeProject(project, projectPath, sessions, anchors))
   }
 
   return projects
@@ -2263,7 +2270,7 @@ async function scanProjectDirs(
 /// `totalProxiedCostUSD` (subscription-covered). All ProjectSummary callers go
 /// through here so the rule stays consistent across the fresh, cached, and
 /// date/day-filtered paths.
-function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[]): ProjectSummary {
+function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[], anchors: SessionSummary[] = []): ProjectSummary {
   const totalCostUSD = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
   return {
     project,
@@ -2274,6 +2281,8 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
     totalEstimatedCostUSD: sessions.reduce((s, sess) => s + (sess.totalEstimatedCostUSD ?? 0), 0),
     totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
+    // Fold anchors travel separately (0-cost, out of every per-session total).
+    ...(anchors.length > 0 ? { subagentAnchors: anchors } : {}),
   }
 }
 

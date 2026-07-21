@@ -10,7 +10,7 @@ import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggreg
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
-import { aggregateByPr, prLinkedTotals, aggregateByBranch } from './sessions-report.js'
+import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
 import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
@@ -663,9 +663,9 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // Claude-config-scoped path (which replaces scanProjects with one config's
   // sessions) so this stays the genuine unscoped all-provider aggregation.
   if (isAllProviders && !effectivelyScoped) {
-    const prRows = aggregateByPr(scanProjects)
+    // One pass yields both rows and totals, so they never disagree.
+    const { rows: prRows, totals: prTotals } = buildPrAttribution(scanProjects)
     if (prRows.length > 0) {
-      const prTotals = prLinkedTotals(scanProjects)
       const shownRows = prRows.slice(0, TOP_PULL_REQUESTS)
       const otherRows = prRows.slice(TOP_PULL_REQUESTS)
       currentData.pullRequests = {

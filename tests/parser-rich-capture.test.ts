@@ -296,6 +296,22 @@ describe('collectSessionMeta subagent linkage', () => {
     } as JournalEntry, meta)
     expect(meta.agentSpawnLinks).toEqual({ a999: 'toolu_spawn' })
   })
+
+  it('omits the spawn link (deferring to the timestamp fallback) when blocks are ambiguous', () => {
+    const meta = emptySessionMeta()
+    collectSessionMeta({
+      type: 'user',
+      // Two tool_result blocks with IDENTICAL content: the content match cannot
+      // pick one, so the link is omitted on purpose (resolveChild's timestamp
+      // fallback then folds the child rather than risking the wrong id).
+      message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_a', content: 'same' },
+        { type: 'tool_result', tool_use_id: 'toolu_b', content: 'same' },
+      ] },
+      toolUseResult: { status: 'completed', agentId: 'a777', content: 'same' },
+    } as JournalEntry, meta)
+    expect(meta.agentSpawnLinks).toEqual({}) // no guess
+  })
 })
 
 // ── per-turn subagent spawn ids (spawnToolUseIds) ──────────────────────

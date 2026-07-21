@@ -85,8 +85,8 @@ function child(opts: {
   }
 }
 
-function project(sessions: SessionSummary[], name = 'p'): ProjectSummary {
-  return { project: name, projectPath: `/${name}`, sessions, totalCostUSD: 0, totalSavingsUSD: 0, totalApiCalls: 0, totalProxiedCostUSD: 0 }
+function project(sessions: SessionSummary[], name = 'p', anchors?: SessionSummary[]): ProjectSummary {
+  return { project: name, projectPath: `/${name}`, sessions, totalCostUSD: 0, totalSavingsUSD: 0, totalApiCalls: 0, totalProxiedCostUSD: 0, ...(anchors ? { subagentAnchors: anchors } : {}) }
 }
 
 function rowFor(rows: ReturnType<typeof aggregateByPr>, url: string) {
@@ -107,7 +107,9 @@ describe('buildSubagentIndex', () => {
       // Child lives in a DIFFERENT project than its parent (worktree cwd resolved elsewhere).
       project([child({ agentId: 'c1', parentId: 'P', cost: 50, firstTs: '2026-07-01T10:05:00Z', project: 'projB' })], 'projB'),
     ])
-    expect(idx.get('P')?.map(s => s.agentId)).toEqual(['c1'])
+    // One key (parentSessionId, provider-prefixed), holding the single child.
+    expect(idx.size).toBe(1)
+    expect([...idx.values()].flat().map(s => s.agentId)).toEqual(['c1'])
   })
 })
 
@@ -248,16 +250,22 @@ describe('MAJOR: date-range correctness', () => {
     expect(rowFor(rows, B)!.cost).toBeCloseTo(10, 6)  // parent's in-range turn only
   })
 
-  it('(a) an in-range child of a parent with no in-range turns still folds', () => {
-    // The parent has zero in-range turns (a 0-cost fold anchor) but carries prLinks
-    // and spawnPrSets; its in-range child must still reach the PR.
+  it('(a) an in-range child of an anchor parent (no in-range turns) folds, anchor uncounted', () => {
+    // The parent is a 0-cost fold ANCHOR: it carries prLinks + spawnPrSets but has
+    // no in-range turns, so it lives in subagentAnchors, NOT sessions. Its in-range
+    // child must still reach the PR, and the anchor must not inflate session counts.
+    const anchor = parent({ id: 'P', prLinks: [A], turns: [], last: '', first: '', agentSpawnLinks: { c1: 'toolu_x' }, spawnPrSets: { toolu_x: [A] } })
     const projects = [project([
-      parent({ id: 'P', prLinks: [A], turns: [], last: '', agentSpawnLinks: { c1: 'toolu_x' }, spawnPrSets: { toolu_x: [A] } }),
-      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-20T10:05:00Z' }),
-    ])]
+      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-20T10:05:00Z', last: '2026-07-20T10:30:00Z' }),
+    ], 'p', [anchor])]
     const rows = aggregateByPr(projects)
     expect(rowFor(rows, A)!.cost).toBeCloseTo(100, 6)
-    expect(prLinkedTotals(projects).subagentSessions).toBe(1)
+    const totals = prLinkedTotals(projects)
+    expect(totals.subagentSessions).toBe(1)
+    expect(totals.sessions).toBe(0) // the anchor is NOT counted as a PR-linked session
+    // The PR row's date span comes from the CHILD, not the anchor's empty timestamps.
+    expect(rowFor(rows, A)!.firstStarted).toBe('2026-07-20T10:05:00Z')
+    expect(rowFor(rows, A)!.lastEnded).toBe('2026-07-20T10:30:00Z')
   })
 })
 
@@ -278,6 +286,19 @@ describe('MAJOR: timestamp fallback (epoch, end-bounded)', () => {
     const totals = prLinkedTotals(projects)
     expect(totals.attributedCost).toBeCloseTo(10, 6)
     expect(totals.unattributedCost).toBeCloseTo(40, 6) // child fell before the turn -> unattributed
+  })
+
+  it('a child whose spawn link was omitted (ambiguous pairing) still folds via timestamp', () => {
+    // The parent has NO agentSpawnLinks entry for this child (the spawn-result
+    // pairing was ambiguous and omitted). The child must still fold via the
+    // timestamp bucket, not disappear.
+    const projects = [project([
+      parent({ id: 'P', prLinks: [A], last: '2026-07-01T12:00:00Z', turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })] }),
+      child({ agentId: 'noLink', parentId: 'P', cost: 40, firstTs: '2026-07-01T10:30:00Z' }),
+    ])]
+    const rows = aggregateByPr(projects)
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(50, 6) // 10 parent + 40 child via timestamp bucket
+    expect(prLinkedTotals(projects).subagentSessions).toBe(1)
   })
 
   it('a child active after the parent last timestamp is UNLINKED (contributes nothing)', () => {
@@ -313,24 +334,54 @@ describe('orphans and non-PR parents contribute nothing', () => {
   })
 })
 
-describe('resolveSubagentAttribution is computed once and shared', () => {
+describe('resolveSubagentAttribution', () => {
   it('resolves each PR-bearing parent to its resolved children', () => {
     const projects = [project([
       parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'toolu_x' }, spawnPrSets: { toolu_x: [A] } }),
       child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
     ])]
-    const attribution = resolveSubagentAttribution(projects)
-    expect(attribution.get('P')).toHaveLength(1)
-    expect(attribution.get('P')![0]!.prSet).toEqual([A])
-    expect(attribution.get('P')![0]!.fold.cost).toBe(100)
+    const resolved = [...resolveSubagentAttribution(projects).values()]
+    expect(resolved).toHaveLength(1)
+    expect(resolved[0]!).toHaveLength(1)
+    expect(resolved[0]![0]!.prSet).toEqual([A])
+    expect(resolved[0]![0]!.fold.cost).toBe(100)
   })
+})
 
-  it('memoizes by projects identity so the tree is resolved once per render', () => {
+describe('MAJOR: id-collision contamination', () => {
+  it('folds a child into NEITHER of two distinct parents that share a session id', () => {
+    // Two DISTINCT parent sessions both have id "P" (duplicate/imported data). A
+    // child pointing at "P" is ambiguous: it must fold nowhere and stay standalone,
+    // while both parents attribute their OWN spend only.
     const projects = [project([
       parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'toolu_x' }, spawnPrSets: { toolu_x: [A] } }),
+      parent({ id: 'P', prLinks: [B], turns: [turn({ cost: 20, ts: '2026-07-01T11:00:00Z', prRefs: [B] })], agentSpawnLinks: { c1: 'toolu_y' }, spawnPrSets: { toolu_y: [B] } }),
       child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
     ])]
-    expect(resolveSubagentAttribution(projects)).toBe(resolveSubagentAttribution(projects)) // same array -> same object
-    expect(resolveSubagentAttribution(projects)).not.toBe(resolveSubagentAttribution([...projects])) // different array -> recomputed
+    const rows = aggregateByPr(projects)
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(10, 6)   // parent 1 own spend only
+    expect(rowFor(rows, B)!.cost).toBeCloseTo(20, 6)   // parent 2 own spend only
+    const totals = prLinkedTotals(projects)
+    expect(totals.subagentSessions).toBe(0)            // the ambiguous child folds nowhere
+    expect(totals.attributedCost).toBeCloseTo(30, 6)   // no child double-charge
+  })
+})
+
+describe('MAJOR: recursion dedup is global (diamond folds once)', () => {
+  it('a grandchild id reachable via two direct children folds exactly once', () => {
+    // Parent P has two direct children c1 and c2; both point (via duplicate data)
+    // at a grandchild with the SAME id "agent-gc". The shared claimed-set folds it
+    // once, not twice.
+    const projects = [project([
+      parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'x1', c2: 'x2' }, spawnPrSets: { x1: [A], x2: [A] } }),
+      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
+      child({ agentId: 'c2', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:06:00Z' }),
+      child({ agentId: 'gc', parentId: 'agent-c1', cost: 50, firstTs: '2026-07-01T10:07:00Z' }),
+      { ...child({ agentId: 'gc', parentId: 'agent-c2', cost: 50, firstTs: '2026-07-01T10:08:00Z' }) }, // duplicate gc id under c2
+    ])]
+    const rows = aggregateByPr(projects)
+    // 10 (parent) + 100 (c1) + 100 (c2) + 50 (gc, ONCE, not 100).
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(260, 6)
+    expect(prLinkedTotals(projects).subagentSessions).toBe(3) // c1, c2, gc once
   })
 })

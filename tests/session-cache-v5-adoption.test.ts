@@ -214,7 +214,7 @@ describe('newest-prior cache adoption (v6 then v5)', () => {
     expect(row!.cost).toBeCloseTo(40, 6)
   })
 
-  it('prefers the newest prior file: v6 orphan is adopted, v5-only orphan is not', async () => {
+  it('merges prior versions: a v6-only orphan AND a v5-only orphan both survive', async () => {
     await loadPricing()
     const v6Path = join(configDir, 'projects', 'in6', 'in6.jsonl')
     const v5Path = join(configDir, 'projects', 'in5', 'in5.jsonl')
@@ -229,7 +229,27 @@ describe('newest-prior cache adoption (v6 then v5)', () => {
 
     const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
     const urls = aggregateByPr(await parseAllSessions(range, 'claude')).map(r => r.url)
-    expect(urls).toContain('https://github.com/o/r/pull/60')      // v6 (newest) adopted
-    expect(urls).not.toContain('https://github.com/o/r/pull/50')  // v5 superseded by v6
+    // A sparse newer file must NOT mask older-only orphans: BOTH survive.
+    expect(urls).toContain('https://github.com/o/r/pull/60') // from v6
+    expect(urls).toContain('https://github.com/o/r/pull/50') // from v5, not masked
+  })
+
+  it('a newer version wins per source path when both hold the same path', async () => {
+    await loadPricing()
+    const samePath = join(configDir, 'projects', 'dup', 'dup.jsonl')
+    // v5 attributes this path to PR 500; v6 (newer) to PR 600 for the SAME path.
+    await writeFile(join(cacheDir, 'session-cache.v5.json'), JSON.stringify({
+      version: 5, complete: true,
+      providers: { claude: { envFingerprint: 'v5', files: { [samePath]: expiredPrEntry('/dup', 'dup', 'https://github.com/o/r/pull/500') } } },
+    }))
+    await writeFile(join(cacheDir, 'session-cache.v6.json'), JSON.stringify({
+      version: 6, complete: true,
+      providers: { claude: { envFingerprint: 'v6', files: { [samePath]: expiredPrEntry('/dup', 'dup', 'https://github.com/o/r/pull/600') } } },
+    }))
+
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
+    const urls = aggregateByPr(await parseAllSessions(range, 'claude')).map(r => r.url)
+    expect(urls).toContain('https://github.com/o/r/pull/600')     // newer v6 entry wins
+    expect(urls).not.toContain('https://github.com/o/r/pull/500')  // older v5 entry for same path superseded
   })
 })
