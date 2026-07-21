@@ -3,7 +3,7 @@ import { Command, Option } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { findUnpricedModels, loadPricing, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
-import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache } from './parser.js'
+import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { convertCost, formatCost } from './currency.js'
 import { renderStatusBar } from './format.js'
@@ -2008,10 +2008,13 @@ program
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: table, json', 'table')
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
+  .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
     const { aggregateSessions, buildPrAttribution, renderJson, renderTable } = await import('./sessions-report.js')
+    const wantsInteractive = opts.format === 'table' && !opts.byPr && opts.pager !== false && process.stdin.isTTY === true && process.stdout.isTTY === true
+    if (wantsInteractive) setInteractiveScanUI()
     await loadPricing()
 
     let range
@@ -2076,8 +2079,17 @@ program
       return
     }
     const rows = aggregateSessions(projects)
-    const output = opts.format === 'json' ? renderJson(rows) : renderTable(rows)
-    process.stdout.write(output + '\n')
+    if (opts.format === 'json') {
+      process.stdout.write(renderJson(rows) + '\n')
+      return
+    }
+
+    if (wantsInteractive) {
+      const { runSessionsTui } = await import('./sessions-tui.js')
+      await runSessionsTui(rows, { period: opts.from || opts.to ? formatDateRangeLabel(opts.from, opts.to) : opts.period, provider: opts.provider })
+      return
+    }
+    process.stdout.write(renderTable(rows) + '\n')
   })
 
 program

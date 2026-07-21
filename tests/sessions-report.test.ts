@@ -97,9 +97,49 @@ describe('sessions JSON emitter', () => {
   })
 
   it('renders a simple table', () => {
-    const output = renderTable(aggregateSessions([makeProject()]))
-    expect(output).toContain('SESSION')
+    const output = renderTable(aggregateSessions([makeProject()]), { terminalWidth: 120 })
+    expect(output).toContain('Session')
     expect(output).toContain('session-1')
-    expect(output).toContain('claude-sonnet-4-5')
+    expect(output).toContain('Sonnet 4.5')
+    expect(output).toContain('1 sessions')
+  })
+
+  it('hides home-directory slugs and renders compact agent/worktree names', () => {
+    const rows = aggregateSessions([makeProject()])
+    rows[0]!.sessionId = 'agent-a72cc958e305e4957'
+    rows[0]!.project = '-Users-torukmakto-Projects-eywa-eywa--claude-worktrees-issue-131'
+    const output = renderTable(rows, { terminalWidth: 160 })
+
+    expect(output).toContain('Agent a72cc958')
+    expect(output).toContain('eywa · issue-131')
+    expect(output).not.toContain('Users-torukmakto')
+  })
+
+  it('normalizes Claude dot-worktree slugs without exposing the home directory', () => {
+    const rows = aggregateSessions([makeProject()])
+    rows[0]!.project = 'Users-torukmakto-codeburn-.claude-worktrees-agent-a213f7c77871f483f'
+    const output = renderTable(rows, { terminalWidth: 120 })
+
+    expect(output).toContain('codeburn · agent a213f7c7')
+    expect(output).not.toContain('Users-torukmakto')
+    expect(output).not.toContain('.claude-worktrees')
+  })
+
+  it('uses captured titles, sorts newest first, and fits the requested width', () => {
+    const rows = aggregateSessions([makeProject()])
+    const older = { ...rows[0]!, sessionId: 'old', title: 'Older task', startedAt: '2026-07-01T10:00:00.000Z' }
+    const newer = {
+      ...rows[0]!,
+      sessionId: 'new',
+      title: 'Review the authentication migration without exposing filesystem details',
+      project: '-Users-private-Projects-codeburn',
+      startedAt: '2026-07-20T10:00:00.000Z',
+    }
+    const output = renderTable([older, newer], { terminalWidth: 80 })
+    const lines = output.split('\n')
+
+    expect(output.indexOf('Review the')).toBeLessThan(output.indexOf('Older task'))
+    expect(output).not.toContain('Users-private')
+    expect(Math.max(...lines.slice(0, -1).map(line => line.length))).toBeLessThanOrEqual(80)
   })
 })
