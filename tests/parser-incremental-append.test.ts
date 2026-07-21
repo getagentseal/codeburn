@@ -207,6 +207,44 @@ describe('incremental append parsing', () => {
     await rm(warmCache, { recursive: true, force: true })
   })
 
+  it('SUBAGENT-LINKS: spawnToolUseIds + agentSpawnLinks survive the incremental append path', async () => {
+    const warmCache = await mkdtemp(join(tmpdir(), 'incr-spawn-'))
+    const agentBlock = (id: string) => ({ type: 'tool_use', name: 'Agent', id, input: {} })
+    const spawnResultLine = (ts: string, toolUseId: string, agentId: string): string =>
+      JSON.stringify({
+        type: 'user', sessionId: 'sess-1', timestamp: ts, cwd: CWD,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'agent done' }] },
+        toolUseResult: { status: 'completed', agentId },
+      })
+    // Base: one turn spawns agent1; its result records the agentId->tool_use link.
+    await writeFile(sessionPath,
+      userLine('2026-05-01T10:00:01.000Z', 'launch a reviewer') + '\n' +
+      asstLine('msg-a', '2026-05-01T10:00:02.000Z', { input_tokens: 100, output_tokens: 20 }, [agentBlock('toolu_a1')]) + '\n' +
+      spawnResultLine('2026-05-01T10:00:03.000Z', 'toolu_a1', 'agent1') + '\n')
+    await parseWith(warmCache)
+
+    // Append: a continuation of that same turn spawns agent2 (merged into turn 0),
+    // then a fresh turn spawns agent3.
+    await appendFile(sessionPath,
+      asstLine('msg-b', '2026-05-01T10:00:04.000Z', { input_tokens: 50, output_tokens: 10 }, [agentBlock('toolu_a2')]) + '\n' +
+      spawnResultLine('2026-05-01T10:00:05.000Z', 'toolu_a2', 'agent2') + '\n' +
+      userLine('2026-05-01T10:10:00.000Z', 'launch another') + '\n' +
+      asstLine('msg-c', '2026-05-01T10:10:02.000Z', { input_tokens: 80, output_tokens: 20 }, [agentBlock('toolu_a3')]) + '\n' +
+      spawnResultLine('2026-05-01T10:10:03.000Z', 'toolu_a3', 'agent3') + '\n')
+
+    readLineCalls.length = 0
+    const warm = await parseWith(warmCache)
+    expect(offsetsFor(sessionPath).some(o => o !== undefined && o > 0)).toBe(true) // took the append path
+    const cold = await coldFullReparse()
+    expect(warm).toEqual(cold)
+
+    const session = warm[0]!.sessions[0]!
+    expect(session.turns[0]!.spawnToolUseIds).toEqual(['toolu_a1', 'toolu_a2'])
+    expect(session.turns[1]!.spawnToolUseIds).toEqual(['toolu_a3'])
+    expect(session.agentSpawnLinks).toEqual({ agent1: 'toolu_a1', agent2: 'toolu_a2', agent3: 'toolu_a3' })
+    await rm(warmCache, { recursive: true, force: true })
+  })
+
   it('EDGE: append after a previously-torn line completes still equals cold', async () => {
     const warmCache = await mkdtemp(join(tmpdir(), 'incr-warm2-'))
 

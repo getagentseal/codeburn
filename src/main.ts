@@ -2037,7 +2037,7 @@ program
         process.stdout.write('No sessions with captured PR links in this period. Links are captured as sessions are parsed; older transcripts gain them on their next re-parse.\n')
         return
       }
-      const { unattributedCost, sessions } = prLinkedTotals(projects)
+      const { unattributedCost, sessions, subagentSessions } = prLinkedTotals(projects)
       const { renderTable: renderTextTable } = await import('./text-table.js')
       const modelsCell = (models: string[]): string =>
         models.length === 0 ? '' : models.slice(0, 2).join(', ') + (models.length > 2 ? ` +${models.length - 2}` : '')
@@ -2069,7 +2069,10 @@ program
       const approxNote = prRows.some(r => r.approx)
         ? ' ~ marks rows estimated from a whole-session even split (transcript expired before per-turn capture).'
         : ''
-      process.stdout.write(table + `\nRows sum to $${shownAttributed.toFixed(2)} attributed across ${sessions} PR-linked session${sessions === 1 ? '' : 's'}. $${unattributedCost.toFixed(2)} of that spend was not tied to a specific PR.${approxNote}\n`)
+      const subagentNote = subagentSessions > 0
+        ? ` + ${subagentSessions} folded-in subagent run${subagentSessions === 1 ? '' : 's'}`
+        : ''
+      process.stdout.write(table + `\nRows sum to $${shownAttributed.toFixed(2)} attributed across ${sessions} PR-linked session${sessions === 1 ? '' : 's'}${subagentNote}. $${unattributedCost.toFixed(2)} of that spend was not tied to a specific PR.${approxNote}\n`)
       return
     }
     const rows = aggregateSessions(projects)

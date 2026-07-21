@@ -676,6 +676,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         unattributedCost: prTotals.unattributedCost,
         otherPrCount: otherRows.length,
         otherPrCost: otherRows.reduce((sum, r) => sum + r.cost, 0),
+        ...(prTotals.subagentSessions > 0 ? { subagentSessions: prTotals.subagentSessions } : {}),
       }
     }
     const branchRows = aggregateByBranch(scanProjects)

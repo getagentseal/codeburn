@@ -185,6 +185,23 @@ describe('PullRequests', () => {
     expect(screen.getByText(/Not tied to a specific PR/).textContent).toContain('$45.30')
   })
 
+  it('notes folded-in subagent runs in the footer when present', async () => {
+    getOverview.mockResolvedValue(makePayload({ ...SAMPLE, subagentSessions: 32 }))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const note = await screen.findByText(/attributed to the rows above/)
+    expect(note.textContent).toContain('3 PR-linked sessions')
+    expect(note.textContent).toContain('32 folded-in subagent runs')
+  })
+
+  it('omits the subagent note when none were folded', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const note = await screen.findByText(/attributed to the rows above/)
+    expect(note.textContent).not.toContain('subagent')
+  })
+
   it('marks an approximate (legacy) row with a ~ prefix and a tooltip', async () => {
     const approxPayload: PrPayload = {
       rows: [

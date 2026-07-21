@@ -99,6 +99,11 @@ export type ParsedTurn = {
   // turn-level PR spend attribution; the session-level `prLinks` union is built
   // separately. Absent when the turn referenced no PR. Optional; Claude only.
   prRefs?: string[]
+  // Claude Code: the `tool_use` ids of the `Agent`/`Task` subagent spawns emitted
+  // in this turn. A spawned sidechain session is folded back into the turn that
+  // launched it by matching its resolved spawn id against these. Absent when the
+  // turn spawned no subagent. Optional; Claude only.
+  spawnToolUseIds?: string[]
 }
 
 export type ParsedApiCall = {
@@ -118,6 +123,10 @@ export type ParsedApiCall = {
   deduplicationKey: string
   cacheCreationOneHourTokens?: number
   toolSequence?: ToolCall[][]
+  /// Claude Code: `tool_use` ids of the `Agent`/`Task` subagent-spawn blocks in
+  /// this call's assistant message. Transient (built at parse time, aggregated
+  /// into the turn's `spawnToolUseIds`); never cached per-call.
+  spawnToolUseIds?: string[]
   /// When set, `costUSD` is the actual local call (forced to 0) and
   /// `savingsUSD` is the counterfactual cost the same tokens would have
   /// incurred against `savingsBaselineModel`. Set by the savings
@@ -189,6 +198,21 @@ export type SessionSummary = {
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
   agentType?: string
+  /// Claude Code only: for a sidechain (subagent) transcript, the id of the
+  /// session that spawned it (the transcript's internal `sessionId`, which is the
+  /// parent, cross-checked against the owning directory). Lets by-PR attribution
+  /// fold this session's spend into the parent turn that launched it. Undefined
+  /// for ordinary (non-sidechain) sessions.
+  parentSessionId?: string
+  /// Claude Code only: the subagent id of a sidechain transcript (its filename
+  /// basename with the `agent-` prefix stripped), matching the parent's
+  /// `agentSpawnLinks` keys. Undefined for ordinary sessions.
+  agentId?: string
+  /// Claude Code only: on a PARENT session, maps each spawned subagent's id to the
+  /// `tool_use` id of the `Agent`/`Task` block that launched it (from the spawn's
+  /// `toolUseResult.agentId`). Resolves a child to the exact parent turn. Absent
+  /// when the session spawned no subagent that recorded a result.
+  agentSpawnLinks?: Record<string, string>
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number

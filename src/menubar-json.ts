@@ -57,10 +57,16 @@ export type PeriodData = {
 export type PullRequestsPayload = {
   /// Per-PR rows, cost-descending, capped at the top 20 by the producer.
   rows: PrRow[]
-  /// Distinct-session spend across every PR-linked session. Equals
-  /// `attributedCost + unattributedCost`; kept for backward compatibility.
+  /// PR-linked spend, now INCLUDING the subagent runs folded into those sessions
+  /// (so it can exceed the parents' own spend). Equals `attributedCost +
+  /// unattributedCost`; kept for backward compatibility.
   distinctCost: number
+  /// Count of distinct PR-linked PARENT sessions.
   distinctSessions: number
+  /// Count of subagent (sidechain) runs whose spend was folded into those parent
+  /// sessions. Each remains a standalone row in the sessions list; here it only
+  /// explains why the totals exceed the parents' own spend. 0 when none folded.
+  subagentSessions?: number
   /// Sum of EVERY PR's attributed cost (all rows, not just the sent top 20).
   attributedCost: number
   /// PR-linked spend not tied to any specific PR (pre-reference session

@@ -65,6 +65,10 @@ export type CachedTurn = {
   // Stored per-turn directly (unlike gitBranch, no change-detection), so a turn's
   // own refs are self-contained. Drives turn-level PR spend attribution. Optional.
   prRefs?: string[]
+  // Claude: `tool_use` ids of the `Agent`/`Task` subagent spawns in this turn.
+  // A spawned sidechain session is folded into the launching turn by matching its
+  // resolved spawn id against these. Stored per-turn directly. Optional.
+  spawnToolUseIds?: string[]
 }
 
 export type FileFingerprint = {
@@ -98,6 +102,13 @@ export type CachedFile = {
   title?: string
   prLinks?: string[]
   isSidechain?: boolean
+  // Subagent-attribution linkage (Claude only). On a SIDECHAIN file,
+  // `parentSessionId` is the spawning session's id (the transcript's internal
+  // `sessionId`). On a PARENT file, `agentSpawnLinks` maps each spawned subagent
+  // id to the `tool_use` id of the `Agent`/`Task` block that launched it. Both
+  // optional; a file is typically one or the other (a nested agent can be both).
+  parentSessionId?: string
+  agentSpawnLinks?: Record<string, string>
 }
 
 export type ProviderSection = {
@@ -130,7 +141,11 @@ export type SessionCache = {
 // v6: per-turn `prRefs` capture for turn-level PR spend attribution. Existing
 // cache turns carry no prRefs; bumping forces a one-time re-parse so surviving
 // transcripts populate the field. (Daily-cache versioning is untouched.)
-export const CACHE_VERSION = 6
+// v7: sidechain->parent linkage — per-turn `spawnToolUseIds`, per-file
+// `parentSessionId` / `agentSpawnLinks` — so subagent spend folds into the parent
+// turn's PR set. v6 never shipped, so users cross v5->v7 in a single combined
+// bump; the v5 adoption path below still rescues expired-PR orphans.
+export const CACHE_VERSION = 7
 
 // The cache filename is version-suffixed so different binaries (e.g. an old
 // launchd menubar on a prior release and a newer desktop app) each own a
@@ -268,6 +283,14 @@ function isOptionalBool(v: unknown): boolean {
   return v === undefined || typeof v === 'boolean'
 }
 
+// A plain object whose every value is a string (or undefined). Used for the
+// sidechain `agentSpawnLinks` map (agentId -> spawn tool_use id).
+function isOptionalStringRecord(v: unknown): boolean {
+  if (v === undefined) return true
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  return Object.values(v as Record<string, unknown>).every(e => typeof e === 'string')
+}
+
 function isToolCall(v: unknown): boolean {
   if (!v || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
@@ -329,6 +352,7 @@ function validateTurn(t: unknown): t is CachedTurn {
     && typeof o['userMessage'] === 'string'
     && isOptionalString(o['gitBranch'])
     && (o['prRefs'] === undefined || isStringArray(o['prRefs']))
+    && (o['spawnToolUseIds'] === undefined || isStringArray(o['spawnToolUseIds']))
     && Array.isArray(o['calls'])
     && (o['calls'] as unknown[]).every(validateCall)
 }
@@ -346,6 +370,8 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalBool(o['isSidechain'])
     && isOptionalString(o['agentType'])
     && isOptionalBool(o['failed'])
+    && isOptionalString(o['parentSessionId'])
+    && isOptionalStringRecord(o['agentSpawnLinks'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

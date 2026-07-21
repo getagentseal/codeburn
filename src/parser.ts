@@ -1188,10 +1188,17 @@ export type SessionMeta = {
   title?: string
   prLinks: string[]
   isSidechain: boolean
+  // Sidechain side: the parent session id (a sidechain entry's internal
+  // `sessionId`, which is the spawning session). First non-empty value wins.
+  parentSessionId?: string
+  // Parent side: agentId -> the `tool_use` id of the `Agent`/`Task` block that
+  // spawned it, read from the spawn result's `toolUseResult.agentId`. First value
+  // per agentId wins. Empty for sessions that spawned no completed subagent.
+  agentSpawnLinks: Record<string, string>
 }
 
 export function emptySessionMeta(): SessionMeta {
-  return { prLinks: [], isSidechain: false }
+  return { prLinks: [], isSidechain: false, agentSpawnLinks: {} }
 }
 
 // Count added/removed lines from a Claude `toolUseResult.structuredPatch`. Each
@@ -1249,7 +1256,33 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
     const url = (entry as Record<string, unknown>)['prUrl']
     if (typeof url === 'string' && url && !meta.prLinks.includes(url)) meta.prLinks.push(url)
   }
-  if (entry.isSidechain === true) meta.isSidechain = true
+  if (entry.isSidechain === true) {
+    meta.isSidechain = true
+    // A sidechain entry's own `sessionId` is the id of the session that spawned
+    // it (32/32 on real data; cross-checked against the owning directory at
+    // stamp time). First value wins; every entry in the file carries the same id.
+    const sid = (entry as Record<string, unknown>)['sessionId']
+    if (!meta.parentSessionId && typeof sid === 'string' && sid) meta.parentSessionId = sid
+  }
+  // Parent side: the `Agent`/`Task` spawn result records the spawned agent's id in
+  // `toolUseResult.agentId`; pair it with the `tool_result` block's `tool_use_id`
+  // (the spawn's `tool_use` id) so a child can be folded into the launching turn.
+  // Read from the RAW entry (compaction strips `toolUseResult`).
+  const tur = (entry as Record<string, unknown>)['toolUseResult']
+  if (tur && typeof tur === 'object') {
+    const agentId = (tur as Record<string, unknown>)['agentId']
+    if (typeof agentId === 'string' && agentId && !(agentId in meta.agentSpawnLinks)) {
+      const msg = entry.message
+      const content = msg && typeof msg === 'object' ? (msg as { content?: unknown }).content : undefined
+      if (Array.isArray(content)) {
+        for (const b of content) {
+          if (!b || typeof b !== 'object' || (b as { type?: unknown }).type !== 'tool_result') continue
+          const id = (b as { tool_use_id?: unknown }).tool_use_id
+          if (typeof id === 'string' && id) { meta.agentSpawnLinks[agentId] = id; break }
+        }
+      }
+    }
+  }
 }
 
 export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, ToolResultMeta>): ParsedApiCall | null {
@@ -1288,6 +1321,13 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
   )
 
   const bashCmds = extractBashCommandsFromContent(contentBlocks)
+
+  // Subagent-spawn `tool_use` ids in this message (`Agent`/`Task` blocks). Kept so
+  // groupIntoTurns can attach them to the turn and by-PR attribution can fold each
+  // spawned sidechain back into the turn that launched it.
+  const spawnIds = contentBlocks
+    .filter((b): b is ToolUseBlock => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task') && !!b.id)
+    .map(b => b.id)
 
   const toolSeq: ToolCall[][] = contentBlocks
     .filter((b): b is ToolUseBlock => b.type === 'tool_use')
@@ -1337,6 +1377,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
     toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
+    ...(spawnIds.length > 0 ? { spawnToolUseIds: spawnIds } : {}),
     ...(locAdded ? { locAdded } : {}),
     ...(locRemoved ? { locRemoved } : {}),
     ...(interrupted ? { interrupted: true } : {}),
@@ -1450,6 +1491,9 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   // `pr-link` entry is emitted after the assistant creates/references a PR, so it
   // lands inside the same turn (before the next user message) and attaches here.
   let currentPrRefs: string[] = []
+  // Subagent-spawn `tool_use` ids emitted within the current turn (deduped),
+  // carried from each call's `spawnToolUseIds`.
+  let currentSpawnIds: string[] = []
 
   for (const entry of entries) {
     const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
@@ -1464,6 +1508,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
             sessionId: currentSessionId,
             ...(currentBranch ? { gitBranch: currentBranch } : {}),
             ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
+            ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
           })
         }
         currentUserMessage = text
@@ -1472,6 +1517,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentSessionId = entry.sessionId ?? ''
         currentBranch = entryBranch
         currentPrRefs = []
+        currentSpawnIds = []
       }
     } else if (entry.type === 'assistant') {
       if (entryBranch && !currentBranch) currentBranch = entryBranch
@@ -1479,7 +1525,10 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       if (msgId && seenMsgIds.has(msgId)) continue
       if (msgId) seenMsgIds.add(msgId)
       const call = parseApiCall(entry, toolResultMeta)
-      if (call) currentCalls.push(call)
+      if (call) {
+        currentCalls.push(call)
+        if (call.spawnToolUseIds) for (const id of call.spawnToolUseIds) if (!currentSpawnIds.includes(id)) currentSpawnIds.push(id)
+      }
       for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
     } else if (entry.type === 'pr-link') {
       const url = (entry as Record<string, unknown>)['prUrl']
@@ -1495,6 +1544,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       sessionId: currentSessionId,
       ...(currentBranch ? { gitBranch: currentBranch } : {}),
       ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
+      ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
     })
   }
 
@@ -1932,6 +1982,10 @@ async function scanProjectDirs(
               // turn: union its refs in so the shortcut matches a full re-parse.
               const refs = Array.from(new Set([...(last.prRefs ?? []), ...(newTurns[0]!.prRefs ?? [])])).sort()
               if (refs.length > 0) last.prRefs = refs
+              // A subagent spawned in the appended continuation belongs to this
+              // same turn: union its spawn ids in for the same reason.
+              const spawnIds = Array.from(new Set([...(last.spawnToolUseIds ?? []), ...(newTurns[0]!.spawnToolUseIds ?? [])]))
+              if (spawnIds.length > 0) last.spawnToolUseIds = spawnIds
               startIdx = 1
             }
             for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
@@ -1960,9 +2014,13 @@ async function scanProjectDirs(
 
           // Session meta merges across the append boundary: title is last-wins
           // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
+          // parentSessionId is sticky (cached-first, it is the earliest region);
+          // agentSpawnLinks union (cached-first, first-seen spawn id per agent wins).
           const mergedTitle = sessionMeta.title ?? cached.title
           const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
           const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
+          const mergedParentSessionId = cached.parentSessionId ?? sessionMeta.parentSessionId
+          const mergedSpawnLinks = { ...sessionMeta.agentSpawnLinks, ...cached.agentSpawnLinks }
 
           section.files[filePath] = {
             fingerprint: info.fp,
@@ -1975,6 +2033,8 @@ async function scanProjectDirs(
             ...(mergedTitle ? { title: mergedTitle } : {}),
             ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
             ...(mergedSidechain ? { isSidechain: true } : {}),
+            ...(mergedParentSessionId ? { parentSessionId: mergedParentSessionId } : {}),
+            ...(Object.keys(mergedSpawnLinks).length > 0 ? { agentSpawnLinks: mergedSpawnLinks } : {}),
           }
           ;(diskCache as { _dirty?: boolean })._dirty = true
           filesDone++
@@ -2008,6 +2068,8 @@ async function scanProjectDirs(
         ...(sessionMeta.title ? { title: sessionMeta.title } : {}),
         ...(sessionMeta.prLinks.length > 0 ? { prLinks: sessionMeta.prLinks } : {}),
         ...(sessionMeta.isSidechain ? { isSidechain: true } : {}),
+        ...(sessionMeta.parentSessionId ? { parentSessionId: sessionMeta.parentSessionId } : {}),
+        ...(Object.keys(sessionMeta.agentSpawnLinks).length > 0 ? { agentSpawnLinks: sessionMeta.agentSpawnLinks } : {}),
       }
       ;(diskCache as { _dirty?: boolean })._dirty = true
     } catch (err) {
@@ -2104,6 +2166,18 @@ async function scanProjectDirs(
     if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
     if (prRefsAtRangeStart?.length) session.prRefsAtRangeStart = prRefsAtRangeStart
     if (cachedFile.title) session.title = cachedFile.title
+    // Sidechain linkage: carry the parent id (the transcript's internal
+    // `sessionId`, authoritative even when it disagrees with the owning directory
+    // on a resumed session) and derive the agent id from the `agent-<agentId>`
+    // filename. A sidechain whose parent id was never captured stays standalone.
+    if (cachedFile.isSidechain) {
+      if (cachedFile.parentSessionId) session.parentSessionId = cachedFile.parentSessionId
+      session.agentId = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
+    }
+    // Parent linkage map (only present on sessions that spawned subagents).
+    if (cachedFile.agentSpawnLinks && Object.keys(cachedFile.agentSpawnLinks).length > 0) {
+      session.agentSpawnLinks = cachedFile.agentSpawnLinks
+    }
 
     if (session.apiCalls > 0) {
       const projectKey = cachedFile.canonicalCwd
@@ -2281,6 +2355,7 @@ function parsedTurnToCachedTurn(turn: ParsedTurn): CachedTurn {
     // Stored per-turn directly (already sorted/deduped in groupIntoTurns), unlike
     // gitBranch's change-detection dedup, so each turn's refs are self-contained.
     ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
+    ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
   }
 }
 
@@ -2391,6 +2466,7 @@ function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): Clas
     sessionId: turn.sessionId,
     ...(branch ? { gitBranch: branch } : {}),
     ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
+    ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
   }
   return classifyTurn(parsed)
 }

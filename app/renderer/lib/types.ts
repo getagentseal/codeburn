@@ -245,6 +245,9 @@ export type MenubarPayload = {
       }>
       distinctCost: number
       distinctSessions: number
+      // Count of subagent (sidechain) runs folded into the PR-linked parent
+      // sessions. Optional (absent when none folded, or from an older producer).
+      subagentSessions?: number
       attributedCost?: number
       unattributedCost?: number
       otherPrCount?: number

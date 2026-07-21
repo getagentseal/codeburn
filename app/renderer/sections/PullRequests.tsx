@@ -83,7 +83,7 @@ function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullReq
 }
 
 function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
-  const { rows, distinctCost, distinctSessions, attributedCost, unattributedCost, otherPrCount, otherPrCost } = pullRequests
+  const { rows, distinctCost, distinctSessions, subagentSessions, attributedCost, unattributedCost, otherPrCount, otherPrCost } = pullRequests
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
   // Reset any open expansion when the PR set changes (a period/provider switch or
   // a refresh that alters the list): a stale expandedUrl would otherwise linger
@@ -145,7 +145,8 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
       </div>
       {summable ? (
         <p className="pr-footnote">
-          {formatUsd(displayedAttributed)} attributed to the rows above, across {distinctSessions.toLocaleString('en-US')} PR-linked {sessionWord(distinctSessions)}.
+          {formatUsd(displayedAttributed)} attributed to the rows above, across {distinctSessions.toLocaleString('en-US')} PR-linked {sessionWord(distinctSessions)}
+          {subagentSessions ? ` + ${subagentSessions.toLocaleString('en-US')} folded-in subagent ${subagentSessions === 1 ? 'run' : 'runs'}` : ''}.
           {' '}Each turn's cost goes to the PR it was working on, so the rows are summable.
         </p>
       ) : (

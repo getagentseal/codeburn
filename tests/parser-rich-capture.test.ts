@@ -246,5 +246,71 @@ describe('collectSessionMeta', () => {
     expect(meta.title).toBeUndefined()
     expect(meta.prLinks).toEqual([])
     expect(meta.isSidechain).toBe(false)
+    expect(meta.parentSessionId).toBeUndefined()
+    expect(meta.agentSpawnLinks).toEqual({})
+  })
+})
+
+// ── subagent linkage: parentSessionId + agentSpawnLinks ────────────────
+
+describe('collectSessionMeta subagent linkage', () => {
+  it("captures a sidechain's parent id from its internal sessionId (first wins)", () => {
+    const meta = emptySessionMeta()
+    collectSessionMeta({ type: 'user', isSidechain: true, sessionId: 'parent-1' } as JournalEntry, meta)
+    // A later entry restating a different id must not override the first capture.
+    collectSessionMeta({ type: 'assistant', isSidechain: true, sessionId: 'parent-2' } as JournalEntry, meta)
+    expect(meta.isSidechain).toBe(true)
+    expect(meta.parentSessionId).toBe('parent-1')
+  })
+
+  it('maps agentId -> spawn tool_use id from a spawn result (toolUseResult.agentId)', () => {
+    const meta = emptySessionMeta()
+    const spawnResult = {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_spawn1', content: 'agent output' }] },
+      toolUseResult: { status: 'completed', agentId: 'a17e80ec626c9de38' },
+    } as JournalEntry
+    collectSessionMeta(spawnResult, meta)
+    expect(meta.agentSpawnLinks).toEqual({ a17e80ec626c9de38: 'toolu_spawn1' })
+    // A non-agent tool_result (no toolUseResult.agentId) adds nothing.
+    collectSessionMeta({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_edit', content: 'x' }] },
+      toolUseResult: { structuredPatch: [] },
+    } as JournalEntry, meta)
+    expect(meta.agentSpawnLinks).toEqual({ a17e80ec626c9de38: 'toolu_spawn1' })
+  })
+})
+
+// ── per-turn subagent spawn ids (spawnToolUseIds) ──────────────────────
+
+function spawnAssistant(id: string, blocks: Array<{ id: string; name: string }>): JournalEntry {
+  return {
+    type: 'assistant', timestamp: '2026-07-01T10:00:02Z', sessionId: 's1', gitBranch: 'main',
+    message: {
+      type: 'message', role: 'assistant', model: 'claude-sonnet-4-20250514', id,
+      content: blocks.map(b => ({ type: 'tool_use' as const, id: b.id, name: b.name, input: {} })),
+      usage: { input_tokens: 5, output_tokens: 5 },
+    },
+  }
+}
+
+describe('per-turn spawnToolUseIds capture', () => {
+  it('records only Agent/Task spawn ids per turn and survives caching', () => {
+    const entries = [
+      userText('launch reviewers', 'main'),
+      spawnAssistant('m1', [
+        { id: 'toolu_agent', name: 'Agent' },
+        { id: 'toolu_task', name: 'Task' },
+        { id: 'toolu_edit', name: 'Edit' }, // not a spawn -> excluded
+      ]),
+      userText('unrelated turn', 'main'), assistant('m2', 'main'),
+    ]
+    const turns = groupIntoTurns(entries, new Set())
+    expect(turns[0]!.spawnToolUseIds).toEqual(['toolu_agent', 'toolu_task'])
+    expect(turns[1]!.spawnToolUseIds).toBeUndefined()
+    const cached = parsedTurnsToCachedTurns(turns)
+    expect(cached[0]!.spawnToolUseIds).toEqual(['toolu_agent', 'toolu_task'])
+    expect(cached[1]!.spawnToolUseIds).toBeUndefined()
   })
 })

@@ -172,6 +172,126 @@ export function allocateEven(total: number, n: number): number[] {
   return Array.from({ length: n }, (_, i) => base + (i < extra ? 1 : 0))
 }
 
+/// A subagent (sidechain) session's spend, pre-aggregated for folding into the
+/// parent turn that launched it. `models` is keyed by RAW model name (the row
+/// builder collapses it to short names, exactly like a turn's own calls);
+/// `categories` by TaskCategory. Both maps sum to `cost` (all three derive from
+/// the same child turns), so folding a child in never introduces a rounding gap.
+export type ChildFold = {
+  agentId: string
+  cost: number
+  calls: number
+  savingsUSD: number
+  /// The child's first-activity timestamp, used by the timestamp-bucket fallback.
+  spawnAt: string
+  models: Map<string, number>
+  categories: Map<string, number>
+}
+
+function childFoldFromSession(child: SessionSummary): ChildFold {
+  const models = new Map<string, number>()
+  const categories = new Map<string, number>()
+  for (const turn of child.turns) {
+    let turnCost = 0
+    for (const call of turn.assistantCalls) {
+      turnCost += call.costUSD
+      if (call.model) addToMap(models, call.model, call.costUSD)
+    }
+    if (turn.category) addToMap(categories, turn.category, turnCost)
+  }
+  return {
+    agentId: child.agentId ?? child.sessionId,
+    cost: child.totalCostUSD,
+    calls: child.apiCalls,
+    savingsUSD: child.totalSavingsUSD,
+    spawnAt: child.firstTimestamp,
+    models,
+    categories,
+  }
+}
+
+// A sessionId can repeat across projects, so the parent index is keyed on
+// project + parentSessionId (a child and its parent share a project).
+function subagentKey(project: string, parentSessionId: string): string {
+  return `${project} ${parentSessionId}`
+}
+
+/// Index every sidechain (subagent) session by the parent that spawned it. Keyed
+/// on project + `parentSessionId`. Children whose parent id was never captured
+/// (or is absent from the scan) are simply never looked up, so they stay
+/// standalone sessions contributing nothing to by-PR — the orphan behavior.
+export function buildSubagentIndex(projects: ProjectSummary[]): Map<string, ChildFold[]> {
+  const index = new Map<string, ChildFold[]>()
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      if (!session.parentSessionId) continue
+      const key = subagentKey(session.project, session.parentSessionId)
+      const list = index.get(key)
+      if (list) list.push(childFoldFromSession(session))
+      else index.set(key, [childFoldFromSession(session)])
+    }
+  }
+  return index
+}
+
+/// Children of one parent, resolved to the turn that launched each. `byTurnIndex`
+/// keys align with the parent's `turns` array indices; `unlinked` children
+/// resolved to no turn and fold into the parent's unattributed spend.
+export type TurnFolds = { byTurnIndex: Map<number, ChildFold[]>; unlinked: ChildFold[] }
+
+function turnStartTs(turn: { timestamp?: string; assistantCalls: Array<{ timestamp?: string }> }): string {
+  return turn.assistantCalls[0]?.timestamp || turn.timestamp || ''
+}
+
+/// Resolve each of a parent's children to the turn that launched it:
+///   (a) the child's spawn `tool_use` id (`parent.agentSpawnLinks[agentId]`)
+///       matched against a turn's `spawnToolUseIds` — the true launch point, so
+///       it WINS even when the child's first activity landed during a later turn
+///       (an async/background agent whose result returned under a different PR);
+///   (b) else the turn whose [start, next-start) span contains the child's first
+///       timestamp;
+///   (c) else unlinked (folded into the parent's unattributed spend).
+export function resolveChildFolds(
+  parent: { turns: Array<{ spawnToolUseIds?: string[]; timestamp?: string; assistantCalls: Array<{ timestamp?: string }> }>; agentSpawnLinks?: Record<string, string> },
+  children: ChildFold[],
+): TurnFolds {
+  const byTurnIndex = new Map<number, ChildFold[]>()
+  const unlinked: ChildFold[] = []
+  const turns = parent.turns
+  const spawnTurn = new Map<string, number>()
+  turns.forEach((turn, i) => {
+    for (const id of turn.spawnToolUseIds ?? []) if (!spawnTurn.has(id)) spawnTurn.set(id, i)
+  })
+  const push = (i: number, child: ChildFold): void => {
+    const list = byTurnIndex.get(i)
+    if (list) list.push(child)
+    else byTurnIndex.set(i, [child])
+  }
+  for (const child of children) {
+    const spawnId = parent.agentSpawnLinks?.[child.agentId]
+    if (spawnId !== undefined && spawnTurn.has(spawnId)) { push(spawnTurn.get(spawnId)!, child); continue }
+    const ts = child.spawnAt
+    let idx = -1
+    if (ts) {
+      for (let i = 0; i < turns.length; i++) {
+        const start = turnStartTs(turns[i]!)
+        if (!start) continue
+        if (start <= ts) idx = i
+        else break
+      }
+    }
+    if (idx >= 0) push(idx, child)
+    else unlinked.push(child)
+  }
+  return { byTurnIndex, unlinked }
+}
+
+function* allFolds(folds?: TurnFolds): Iterable<ChildFold> {
+  if (!folds) return
+  for (const list of folds.byTurnIndex.values()) yield* list
+  yield* folds.unlinked
+}
+
 /// Attribute a session's spend to the PRs it referenced, at TURN granularity.
 ///
 /// Walk the turns in order carrying `current` = the PR set of the most recent
@@ -188,7 +308,15 @@ export function allocateEven(total: number, n: number): number[] {
 /// to attribute by, split the whole session evenly across its prLinks, mark every
 /// portion `approx`, and carry the session's model union (its calls still name
 /// their models) but NO category breakdown, since none can be honestly assigned.
-export function attributeSessionPrSpend(session: AttributableSession): SessionPrAttribution {
+///
+/// Subagent folding: `folds` carries the spend of the sidechain sessions this one
+/// spawned, resolved to the launching turn (see resolveChildFolds). Each child's
+/// cost/calls/savings/models/categories are added into that turn BEFORE the PR
+/// split, so the child inherits the turn's PR set; a child on a pre-reference turn
+/// (or resolved to no turn) folds into `unattributed`. Children are folded exactly
+/// once here and never self-attribute (their own `prLinks` is empty), so no spend
+/// is double-counted.
+export function attributeSessionPrSpend(session: AttributableSession, folds?: TurnFolds): SessionPrAttribution {
   const perUrl = new Map<string, PrContribution>()
   const unattributed = { cost: 0, calls: 0, savingsUSD: 0 }
 
@@ -202,13 +330,21 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
           if (call.model) addToMap(legacyModels, call.model, call.costUSD)
         }
       }
+      // Fold subagent spend into the same even split so it is not dropped. Rare:
+      // a legacy (expired-transcript) parent almost never has live children, but
+      // if it does their spend must still land somewhere honest.
+      let extraCost = 0, extraCalls = 0, extraSavings = 0
+      for (const child of allFolds(folds)) {
+        extraCost += child.cost; extraCalls += child.calls; extraSavings += child.savingsUSD
+        for (const [m, mc] of child.models) addToMap(legacyModels, m, mc)
+      }
       const share = 1 / links.length
-      const callAlloc = allocateEven(session.apiCalls, links.length)
+      const callAlloc = allocateEven(session.apiCalls + extraCalls, links.length)
       links.forEach((url, i) => {
         const e = ensureContribution(perUrl, url)
-        e.cost += session.totalCostUSD * share
+        e.cost += (session.totalCostUSD + extraCost) * share
         e.calls += callAlloc[i]!
-        e.savingsUSD += session.totalSavingsUSD * share
+        e.savingsUSD += (session.totalSavingsUSD + extraSavings) * share
         e.approx = true
         for (const [m, mc] of legacyModels) addToMap(e.models, m, mc * share)
       })
@@ -217,21 +353,33 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
   }
 
   let current: string[] | null = session.prRefsAtRangeStart?.length ? session.prRefsAtRangeStart : null
-  for (const turn of session.turns) {
+  for (let index = 0; index < session.turns.length; index++) {
+    const turn = session.turns[index]!
     if (turn.prRefs?.length) current = turn.prRefs
-    const cost = turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
-    const calls = turn.assistantCalls.length
-    const savings = turn.assistantCalls.reduce((s, c) => s + (c.savingsUSD ?? 0), 0)
+    let cost = 0, calls = 0, savings = 0
+    let ownCost = 0
+    const modelCostInTurn = new Map<string, number>()
+    const categoryCostInTurn = new Map<string, number>()
+    for (const call of turn.assistantCalls) {
+      cost += call.costUSD; ownCost += call.costUSD; calls += 1; savings += call.savingsUSD ?? 0
+      if (call.model) addToMap(modelCostInTurn, call.model, call.costUSD)
+    }
+    // The turn's own spend lands under its single classified category; each folded
+    // child contributes its OWN per-turn category breakdown (cheaply available
+    // from the child's turns), so opus/haiku work shows under the categories the
+    // subagent actually did rather than the parent turn's label.
+    if (turn.category) addToMap(categoryCostInTurn, turn.category, ownCost)
+    for (const child of folds?.byTurnIndex.get(index) ?? []) {
+      cost += child.cost; calls += child.calls; savings += child.savingsUSD
+      for (const [m, mc] of child.models) addToMap(modelCostInTurn, m, mc)
+      for (const [cat, cc] of child.categories) addToMap(categoryCostInTurn, cat, cc)
+    }
     if (cost === 0 && calls === 0 && savings === 0) continue
     if (current === null) {
       unattributed.cost += cost
       unattributed.calls += calls
       unattributed.savingsUSD += savings
       continue
-    }
-    const modelCostInTurn = new Map<string, number>()
-    for (const call of turn.assistantCalls) {
-      if (call.model) addToMap(modelCostInTurn, call.model, call.costUSD)
     }
     const share = 1 / current.length
     const callAlloc = allocateEven(calls, current.length)
@@ -240,9 +388,16 @@ export function attributeSessionPrSpend(session: AttributableSession): SessionPr
       e.cost += cost * share
       e.calls += callAlloc[i]!
       e.savingsUSD += savings * share
-      if (turn.category) addToMap(e.categories, turn.category, cost * share)
+      for (const [cat, cc] of categoryCostInTurn) addToMap(e.categories, cat, cc * share)
       for (const [m, mc] of modelCostInTurn) addToMap(e.models, m, mc * share)
     })
+  }
+  // A child that resolved to no turn (no spawn link and its first activity fell
+  // outside every turn span) is genuine parent-session overhead: unattributed.
+  for (const child of folds?.unlinked ?? []) {
+    unattributed.cost += child.cost
+    unattributed.calls += child.calls
+    unattributed.savingsUSD += child.savingsUSD
   }
   return { perUrl, unattributed }
 }
@@ -259,13 +414,16 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
     sessions: Set<string>; firstStarted: string; lastEnded: string
     models: Map<string, number>; categories: Map<string, number>
   }>()
+  const subagentIndex = buildSubagentIndex(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
       // Key on project + sessionId: a transcript basename (sessionId) can repeat
       // across projects, so sessionId alone would undercount distinct sessions.
       const sessionKey = `${session.project} ${session.sessionId}`
-      const { perUrl } = attributeSessionPrSpend(session)
+      const children = subagentIndex.get(subagentKey(session.project, session.sessionId))
+      const folds = children?.length ? resolveChildFolds(session, children) : undefined
+      const { perUrl } = attributeSessionPrSpend(session, folds)
       for (const [url, c] of perUrl) {
         if (c.cost === 0 && c.calls === 0 && c.savingsUSD === 0) continue
         const row = byUrl.get(url) ?? {
@@ -326,22 +484,30 @@ export function aggregateByPr(projects: ProjectSummary[]): PrRow[] {
 /// Totals across every PR-linked session. `attributedCost` is the sum of the
 /// per-PR rows (a summable total, unlike the old by-reference rows);
 /// `unattributedCost` is the pre-reference overhead not tied to any specific PR.
-/// `cost` = attributed + unattributed = the distinct-session spend that produced
-/// PRs. `sessions` counts distinct PR-linked sessions.
-export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sessions: number; attributedCost: number; unattributedCost: number } {
+/// `cost` = attributed + unattributed = the PR-linked spend, now INCLUDING the
+/// subagent runs folded into those sessions, so it exceeds the parents' own spend.
+/// `sessions` counts distinct PR-linked PARENT sessions; `subagentSessions` counts
+/// the child runs folded into them (each still a standalone row in the sessions
+/// list). Report both so the footer is honest about what the total covers.
+export function prLinkedTotals(projects: ProjectSummary[]): { cost: number; sessions: number; subagentSessions: number; attributedCost: number; unattributedCost: number } {
   let attributedCost = 0
   let unattributedCost = 0
   let sessions = 0
+  let subagentSessions = 0
+  const subagentIndex = buildSubagentIndex(projects)
   for (const project of projects) {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
       sessions += 1
-      const { perUrl, unattributed } = attributeSessionPrSpend(session)
+      const children = subagentIndex.get(subagentKey(session.project, session.sessionId))
+      const folds = children?.length ? resolveChildFolds(session, children) : undefined
+      if (children?.length) subagentSessions += children.length
+      const { perUrl, unattributed } = attributeSessionPrSpend(session, folds)
       for (const c of perUrl.values()) attributedCost += c.cost
       unattributedCost += unattributed.cost
     }
   }
-  return { cost: attributedCost + unattributedCost, sessions, attributedCost, unattributedCost }
+  return { cost: attributedCost + unattributedCost, sessions, subagentSessions, attributedCost, unattributedCost }
 }
 
 export type BranchRow = {
