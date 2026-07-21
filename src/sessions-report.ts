@@ -239,36 +239,73 @@ function rowSessionKey(session: SessionSummary): string {
   return `${linkageProvider(session)}${KEY_SEP}${session.project}${KEY_SEP}${session.sessionId}`
 }
 
-// Sorted-key canonical serialization of a Record, so two records that map the same
-// entries fingerprint EQUAL regardless of insertion order.
-function canonicalRecord(rec: Record<string, string | string[]> | undefined): string {
-  if (!rec) return ''
-  return Object.keys(rec).sort().map(k => {
-    const v = rec[k]!
-    return `${k}=${Array.isArray(v) ? v.join(',') : v}`
-  }).join(';')
+// Recursive canonical normalizer: sorts every OBJECT's keys so serialization is
+// order-independent, and preserves ARRAY order (the caller pre-sorts arrays whose
+// semantics are set-like). Emitting the normalized structure through JSON.stringify
+// (rather than delimiter concatenation) means no separator can collide across
+// distinct inputs.
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      out[k] = canonicalize((value as Record<string, unknown>)[k])
+    }
+    return out
+  }
+  return value
+}
+
+const sortedCopy = (a: readonly string[] | undefined): string[] => [...(a ?? [])].sort()
+
+// A record whose value arrays are SET-semantic (sorted), for spawnPrSets.
+function sortedRecord(rec: Record<string, string[]> | undefined): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const k of Object.keys(rec ?? {})) out[k] = sortedCopy(rec![k])
+  return out
 }
 
 // Distinguishes two DIFFERENT records that happen to share a session id (duplicate
 // or imported data): identical copies produce the same fingerprint and fold once,
 // any difference marks the key ambiguous so it folds into NEITHER parent/subtree.
-// The fingerprint covers EVERY field that changes fold behavior, not just headline
-// stats: two parents mapping the same child to different spawns/PRs (agentSpawnLinks
-// / spawnPrSets) must differ here, or the ambiguity rule never fires and a stale
-// first-wins returns an order-dependent result.
+// The fingerprint serializes the COMPLETE fold-determining state, canonically:
+// session-level linkage AND the per-turn sequence (timestamp, prRefs, cost, calls,
+// savings, per-model cost). Set-semantic fields (PR-ref lists, ambiguous ids,
+// spawnPrSets values) are sorted; the turn list keeps its order (sequence-semantic).
 function sessionFingerprint(s: SessionSummary): string {
-  return JSON.stringify([
-    s.totalCostUSD, s.apiCalls, s.firstTimestamp, s.lastTimestamp,
-    s.parentSessionId ?? '', s.agentId ?? '',
-    (s.prLinks ?? []),
-    (s.prRefsAtRangeStart ?? []),
-    [...(s.ambiguousSpawnAgentIds ?? [])].sort(),
-    canonicalRecord(s.agentSpawnLinks),
-    canonicalRecord(s.spawnPrSets),
-    // The per-turn PR-ref timeline: the launch turn's PR is what a child inherits,
-    // so two records with different prRefs sequences are distinct folds.
-    s.turns.map(t => (t.prRefs ?? []).join('|')).join('>'),
-  ])
+  return JSON.stringify(canonicalize({
+    cost: s.totalCostUSD,
+    calls: s.apiCalls,
+    first: s.firstTimestamp,
+    last: s.lastTimestamp,
+    parent: s.parentSessionId ?? '',
+    agent: s.agentId ?? '',
+    prLinks: sortedCopy(s.prLinks),
+    rangeStart: sortedCopy(s.prRefsAtRangeStart),
+    ambiguous: sortedCopy(s.ambiguousSpawnAgentIds),
+    spawnLinks: s.agentSpawnLinks ?? {},
+    spawnPrSets: sortedRecord(s.spawnPrSets),
+    turns: s.turns.map(t => {
+      const modelCost: Record<string, number> = {}
+      for (const c of t.assistantCalls) if (c.model) modelCost[c.model] = (modelCost[c.model] ?? 0) + c.costUSD
+      return {
+        ts: t.assistantCalls[0]?.timestamp ?? t.timestamp ?? '',
+        prRefs: sortedCopy(t.prRefs),
+        cost: t.assistantCalls.reduce((n, c) => n + c.costUSD, 0),
+        calls: t.assistantCalls.length,
+        savings: t.assistantCalls.reduce((n, c) => n + (c.savingsUSD ?? 0), 0),
+        models: modelCost,
+      }
+    }),
+  }))
+}
+
+/// Provider-aware, fingerprint-qualified identity of a session: two sessions share
+/// it ONLY when they are the same provider+id AND a proven-identical record. Used to
+/// dedupe a fold anchor against a genuinely-identical surviving session without
+/// dropping a different-provider or different-record session that shares a raw id.
+export function sessionIdentity(session: SessionSummary): string {
+  return `${providerSessionKey(session)}${KEY_SEP}${sessionFingerprint(session)}`
 }
 
 /// Index every sidechain (subagent) session by the parent that spawned it, keyed
@@ -570,11 +607,17 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
     byUrl.set(url, row)
   }
 
-  // Fold one parent's resolved children into rows + totals. An unlinked child
-  // contributes nothing; a child with no active PR goes to unattributed (no row).
+  // Fold one parent's resolved children into rows + totals, ONCE per parent key: two
+  // duplicate parent sessions share a provider+sessionId key and the SAME resolved
+  // children, so folding for each would double-count. An unlinked child contributes
+  // nothing; a child with no active PR goes to unattributed (no row).
+  const foldedKeys = new Set<string>()
   const foldChildren = (parent: SessionSummary): void => {
+    const key = providerSessionKey(parent)
+    if (foldedKeys.has(key)) return
+    foldedKeys.add(key)
     const sessionKey = rowSessionKey(parent)
-    for (const rc of attribution.get(providerSessionKey(parent)) ?? []) {
+    for (const rc of attribution.get(key) ?? []) {
       if (rc.unlinked) continue
       subagentSessions += rc.fold.foldedSessions
       if (!rc.prSet?.length) { unattributedCost += rc.fold.cost; continue }

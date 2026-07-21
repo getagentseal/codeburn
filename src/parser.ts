@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
 import { calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash } from './models.js'
+import { sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
@@ -3166,17 +3167,22 @@ function recomputeRangeStartPrRefs(original: SessionSummary, sliceStartMs: numbe
   // The carried PR is the refs of the LATEST turn (by timestamp) strictly before the
   // slice that referenced any PR; a turn exactly on the boundary is inside the slice
   // and applies its own refs there. Selected by timestamp, not array position, so
-  // the result does not depend on turn ordering. Falls back to the original
-  // range-start state when nothing referenced a PR before the slice.
+  // the result does not depend on turn ordering. When two PR-bearing turns share the
+  // exact same millisecond (a degenerate case), break the tie deterministically by
+  // the lexicographically-LAST sorted-join of their refs, so the seed is stable
+  // regardless of input order (arbitrary but stable, not order-dependent). Falls back
+  // to the original range-start state when nothing referenced a PR before the slice.
   let current = original.prRefsAtRangeStart
   let bestMs = -Infinity
+  let bestKey = ''
   for (const turn of original.turns) {
     if (!turn.prRefs?.length) continue
     const ts = turn.assistantCalls[0]?.timestamp
     if (!ts) continue
     const tMs = new Date(ts).getTime()
     if (Number.isNaN(tMs) || tMs >= sliceStartMs) continue
-    if (tMs >= bestMs) { bestMs = tMs; current = turn.prRefs }
+    const key = [...turn.prRefs].sort().join(',')
+    if (tMs > bestMs || (tMs === bestMs && key > bestKey)) { bestMs = tMs; bestKey = key; current = turn.prRefs }
   }
   return current
 }
@@ -3188,15 +3194,44 @@ function applyRecomputedRangeStart(rebuilt: SessionSummary, original: SessionSum
   else delete rebuilt.prRefsAtRangeStart
 }
 
-// Local-midnight epoch of the EARLIEST selected day. Range-start PR state is
-// recomputed at this boundary. Non-contiguous day selections are treated as
-// CONTIGUOUS from the earliest day: a PR switch inside an unselected gap between two
-// selected days is not reflected in the carried state (a single session-level seed
-// cannot represent multiple segments). The menubar day selection is a single day or
-// a contiguous run, so this is exact in practice.
+// Local-midnight epoch of the EARLIEST selected day, used to seed the very-first
+// turn and the pre-first-turn grace fallback. Per-day seeding (below) handles every
+// later day, so non-contiguous selections are also correct.
 function earliestDayStartMs(days: Set<string>): number {
   const earliest = [...days].sort()[0]
   return earliest ? new Date(`${earliest}T00:00:00`).getTime() : NaN
+}
+
+// Per-day seeding for a (possibly non-contiguous) day selection. For the FIRST
+// in-slice turn of each selected day that does not already reference a PR, inject the
+// PR carried into that day, recomputed from the ORIGINAL full turn sequence up to the
+// day's local-midnight start. A PR switch on an UNSELECTED day between two selected
+// days is thus captured for the later day; a contiguous run is the special case and
+// stays correct. Turn order is preserved.
+function seedFilteredTurnsPerDay(original: SessionSummary, filteredTurns: ClassifiedTurn[]): ClassifiedTurn[] {
+  const out: ClassifiedTurn[] = []
+  let lastDay: string | null = null
+  for (const turn of filteredTurns) {
+    const day = turnDayString(turn)
+    if (day !== null && day !== lastDay) {
+      lastDay = day
+      if (!turn.prRefs?.length) {
+        const carried = recomputeRangeStartPrRefs(original, new Date(`${day}T00:00:00`).getTime())
+        if (carried?.length) { out.push({ ...turn, prRefs: carried }); continue }
+      }
+    }
+    out.push(turn)
+  }
+  return out
+}
+
+// An anchor is a duplicate of a surviving session ONLY when they share the full
+// provider-aware, fingerprint-qualified identity (a proven-identical record). A
+// different-provider session that shares a raw id, or a same-id/different-record
+// collision that SHOULD stay to trigger the neither-fold guard, is not dropped.
+function dedupeAnchors(anchors: SessionSummary[], survivingIdentities: Set<string>): SessionSummary[] {
+  if (survivingIdentities.size === 0) return anchors
+  return anchors.filter(a => !survivingIdentities.has(sessionIdentity(a)))
 }
 
 export function filterProjectsByDays(projects: ProjectSummary[], days: Set<string>): ProjectSummary[] {
@@ -3209,7 +3244,7 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
     // so its surviving in-range child still resolves. The anchor contributes no
     // own spend either way.
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
-    const survivingIds = new Set<string>()
+    const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => {
         const ds = turnDayString(turn)
@@ -3219,15 +3254,16 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
         if (isSpawnParent(session)) anchors.push(session)
         continue
       }
-      const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
+      const seeded = seedFilteredTurnsPerDay(session, turns)
+      const rebuilt = buildSessionSummary(session.sessionId, session.project, seeded, session.mcpInventory, session.source)
       carryLinkageFields(rebuilt, session)
       if (!Number.isNaN(sliceStartMs)) applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
-      survivingIds.add(session.sessionId)
+      // Identity of the ORIGINAL (pre-filter) session: a duplicate anchor matches the
+      // session as it appeared in the input, not the narrowed rebuild.
+      survivingIdentities.add(sessionIdentity(session))
       sessions.push(rebuilt)
     }
-    // A surviving session (real, in-range spend) supersedes any anchor with the same
-    // id: keep the session, drop the duplicate anchor (guards malformed merged input).
-    const dedupedAnchors = survivingIds.size ? anchors.filter(a => !survivingIds.has(a.sessionId)) : anchors
+    const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
     if (sessions.length === 0 && dedupedAnchors.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
@@ -3289,7 +3325,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     // Carry existing anchors and convert a spawn parent whose in-range turns are all
     // filtered out into one (see filterProjectsByDays).
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
-    const survivingIds = new Set<string>()
+    const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) {
@@ -3299,10 +3335,10 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
       carryLinkageFields(rebuilt, session)
       applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
-      survivingIds.add(session.sessionId)
+      survivingIdentities.add(sessionIdentity(session))
       sessions.push(rebuilt)
     }
-    const dedupedAnchors = survivingIds.size ? anchors.filter(a => !survivingIds.has(a.sessionId)) : anchors
+    const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
     if (sessions.length === 0 && dedupedAnchors.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }

@@ -398,6 +398,39 @@ describe('MAJOR: id-collision contamination', () => {
     expect(rowFor(rows, A)!.cost).toBeCloseTo(10, 6)   // parent own spend; child NOT folded
     expect(prLinkedTotals(projects).subagentSessions).toBe(0)
   })
+
+  it('distinguishes records whose only difference is a per-turn TIMESTAMP', () => {
+    // Same PR-ref sequence [A then B] and same linkage, but P2 switches to B at a
+    // different time. A fingerprint over the ref SEQUENCE alone would miss this; the
+    // complete per-turn (timestamp/cost/...) fingerprint makes them ambiguous.
+    const mk = (order: 'p1' | 'p2') => {
+      const p1 = parent({ id: 'P', prLinks: [A, B], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [A] }, turns: [turn({ cost: 5, ts: '2026-07-01T10:00:00Z', prRefs: [A] }), turn({ cost: 5, ts: '2026-07-01T10:05:00Z', prRefs: [B] })] })
+      const p2 = parent({ id: 'P', prLinks: [A, B], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [A] }, turns: [turn({ cost: 5, ts: '2026-07-01T10:00:00Z', prRefs: [A] }), turn({ cost: 5, ts: '2026-07-01T10:15:00Z', prRefs: [B] })] })
+      const c = child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:20:00Z' })
+      return [project(order === 'p1' ? [p1, p2, c] : [p2, p1, c])]
+    }
+    for (const order of ['p1', 'p2'] as const) {
+      expect(prLinkedTotals(mk(order)).subagentSessions).toBe(0) // ambiguous -> child folds nowhere
+    }
+  })
+
+  it('does NOT create false ambiguity from set-array ORDER (spawnPrSets / prRefs)', () => {
+    // Two records identical up to array ORDER of set-semantic fields fingerprint EQUAL
+    // (canonical sort), so they are one logical parent and the child folds once (not
+    // dropped as falsely-ambiguous). Cost-0 parent turns isolate the child fold.
+    const mk = (order: 'q1' | 'q2') => {
+      const q1 = parent({ id: 'Q', prLinks: [A, B], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [A, B] }, turns: [turn({ cost: 0, ts: '2026-07-01T10:00:00Z', prRefs: [A, B] })] })
+      const q2 = parent({ id: 'Q', prLinks: [B, A], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [B, A] }, turns: [turn({ cost: 0, ts: '2026-07-01T10:00:00Z', prRefs: [B, A] })] })
+      const c = child({ agentId: 'c1', parentId: 'Q', cost: 100, firstTs: '2026-07-01T10:05:00Z' })
+      return [project(order === 'q1' ? [q1, q2, c] : [q2, q1, c])]
+    }
+    for (const order of ['q1', 'q2'] as const) {
+      expect(prLinkedTotals(mk(order)).subagentSessions).toBe(1) // NOT ambiguous: folds once
+      const rows = aggregateByPr(mk(order))
+      expect(rowFor(rows, A)!.cost).toBeCloseTo(50, 6)           // child $100 split A/B
+      expect(rowFor(rows, B)!.cost).toBeCloseTo(50, 6)
+    }
+  })
 })
 
 describe('MAJOR: ambiguous pairing + late child grace window', () => {
@@ -469,14 +502,70 @@ describe('MAJOR: range-start PR state is recomputed at a filter boundary', () =>
     expect(rowFor(rows, A)).toBeUndefined()
   })
 
-  it('drops an anchor that duplicates a surviving session id (malformed merged input)', () => {
-    // A surviving in-range session and a stray anchor carry the SAME id: the real
-    // session wins, the duplicate anchor is dropped.
-    const surviving = parent({ id: 'dup', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-20T10:00:00Z', prRefs: [A] })], spawnPrSets: { x: [A] } })
-    const strayAnchor = parent({ id: 'dup', prLinks: [A], turns: [], spawnPrSets: { x: [A] } })
-    const proj = { ...project([surviving]), subagentAnchors: [strayAnchor] }
-    const filtered = filterProjectsByDays([proj], new Set(['2026-07-20']))
-    expect(filtered.flatMap(p => p.subagentAnchors ?? []).some(a => a.sessionId === 'dup')).toBe(false)
+  it('breaks an exact-timestamp seed tie deterministically across both turn orders', () => {
+    // Two PR-bearing turns at the SAME pre-slice millisecond (A and B). The seed must
+    // be the same regardless of array order (lexicographically-last ref key wins -> B).
+    const sameMsA = turn({ cost: 5, ts: '2026-07-10T10:00:00Z', prRefs: [A] })
+    const sameMsB = turn({ cost: 5, ts: '2026-07-10T10:00:00Z', prRefs: [B] })
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-21T23:59:59Z') }
+    for (const turns of [[sameMsA, sameMsB, LATE_TURN()], [sameMsB, sameMsA, LATE_TURN()]]) {
+      const rows = aggregateByPr(filterProjectsByDateRange(build(turns), range))
+      expect(rowFor(rows, B)?.cost ?? 0).toBeCloseTo(10, 6) // ref-less July 20 -> B (stable tie-break)
+      expect(rowFor(rows, A)).toBeUndefined()
+    }
+  })
+
+  it('per-day seeding handles a NON-CONTIGUOUS selection: a switch on an unselected day carries', () => {
+    // July 1 A (selected), July 2 B (UNSELECTED gap), July 3 ref-less (selected). The
+    // July 3 turn must carry B (the switch on the skipped July 2), not the stale A.
+    const jul1 = turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })
+    const jul2 = turn({ cost: 10, ts: '2026-07-02T10:00:00Z', prRefs: [B] })
+    const jul3 = turn({ cost: 10, ts: '2026-07-03T10:00:00Z' }) // ref-less
+    const projects = [project([parent({ id: 'S', prLinks: [A, B], turns: [jul1, jul2, jul3] })])]
+    const rows = aggregateByPr(filterProjectsByDays(projects, new Set(['2026-07-01', '2026-07-03'])))
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(10, 6) // July 1 -> A
+    expect(rowFor(rows, B)!.cost).toBeCloseTo(10, 6) // July 3 -> B (carried across the gap)
+  })
+
+  it('contiguous control: the same three days selected still attribute July 3 to B', () => {
+    const jul1 = turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })
+    const jul2 = turn({ cost: 10, ts: '2026-07-02T10:00:00Z', prRefs: [B] })
+    const jul3 = turn({ cost: 10, ts: '2026-07-03T10:00:00Z' })
+    const projects = [project([parent({ id: 'S', prLinks: [A, B], turns: [jul1, jul2, jul3] })])]
+    const rows = aggregateByPr(filterProjectsByDays(projects, new Set(['2026-07-01', '2026-07-02', '2026-07-03'])))
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(10, 6) // July 1
+    expect(rowFor(rows, B)!.cost).toBeCloseTo(20, 6) // July 2 (B) + July 3 (carried B)
+  })
+
+  it('does NOT drop a same-id anchor of a DIFFERENT provider (fold preserved)', () => {
+    // A surviving Codex session shares the raw id "X" with a Claude fold anchor;
+    // provider-aware identity keeps them distinct, so the anchor and its fold survive.
+    const codexX = parent({ id: 'X', prLinks: [], turns: [turn({ cost: 10, ts: '2026-07-20T10:00:00Z' })] })
+    codexX.turns[0]!.assistantCalls[0]!.provider = 'codex'
+    const anchorX = parent({ id: 'X', prLinks: [A], turns: [], agentSpawnLinks: { c1: 'sx' }, spawnPrSets: { sx: [A] } })
+    const childC1 = child({ agentId: 'c1', parentId: 'X', cost: 100, firstTs: '2026-07-20T10:05:00Z' })
+    const filtered = filterProjectsByDays([project([codexX, childC1], 'p', [anchorX])], new Set(['2026-07-20']))
+    expect(filtered.some(p => (p.subagentAnchors ?? []).some(a => a.sessionId === 'X'))).toBe(true) // Claude anchor kept
+    expect(prLinkedTotals(filtered).subagentSessions).toBe(1)                                       // its child still folds
+  })
+
+  it('drops a genuinely identical same-provider duplicate anchor', () => {
+    // The surviving session and the anchor are the SAME provider AND record (identical
+    // fingerprint): a proven duplicate, so the anchor is dropped.
+    const make = () => parent({ id: 'Y', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-20T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'sx' }, spawnPrSets: { sx: [A] } })
+    const filtered = filterProjectsByDays([project([make()], 'p', [make()])], new Set(['2026-07-20']))
+    expect(filtered.flatMap(p => p.subagentAnchors ?? []).some(a => a.sessionId === 'Y')).toBe(false)
+  })
+
+  it('keeps a same-id/different-record anchor so the ambiguity guard folds neither', () => {
+    // Same provider + id "Z" but a DIFFERENT record: not a proven duplicate, so the
+    // anchor is kept; both records then make the key ambiguous and a child folds nowhere.
+    const surviving = parent({ id: 'Z', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-20T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'sx' }, spawnPrSets: { sx: [A] } })
+    const anchorZ = parent({ id: 'Z', prLinks: [B], turns: [], agentSpawnLinks: { c1: 'sy' }, spawnPrSets: { sy: [B] } }) // different record
+    const childC1 = child({ agentId: 'c1', parentId: 'Z', cost: 100, firstTs: '2026-07-20T10:05:00Z' })
+    const filtered = filterProjectsByDays([project([surviving, childC1], 'p', [anchorZ])], new Set(['2026-07-20']))
+    expect(filtered.flatMap(p => p.subagentAnchors ?? []).some(a => a.sessionId === 'Z')).toBe(true) // anchor NOT dropped
+    expect(prLinkedTotals(filtered).subagentSessions).toBe(0)                                        // ambiguous -> child folds nowhere
   })
 })
 
