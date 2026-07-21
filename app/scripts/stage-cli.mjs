@@ -68,10 +68,11 @@ writeFileSync(
 // extraneous warnings, so capture stdout regardless of exit code.
 let listed = ''
 try {
-  // npm is a .cmd shim on Windows; child_process does not resolve that shim
-  // through a shell the way an interactive PowerShell/npm step does.
-  const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  listed = execFileSync(npmExecutable, ['ls', '--omit=dev', '--all', '--parseable'], {
+  // Execute npm's JavaScript entry point with the current Node binary. Windows
+  // exposes npm as a .cmd shim, which execFile cannot launch without a shell.
+  const npmCli = process.env.npm_execpath
+  if (!npmCli) throw new Error('npm_execpath is unavailable')
+  listed = execFileSync(process.execPath, [npmCli, 'ls', '--omit=dev', '--all', '--parseable'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -88,10 +89,12 @@ try {
 // before extracting the package name so Store builds do not treat a populated
 // node_modules tree as empty merely because it uses `\\` instead of `/`.
 const prefix = rootModules.replaceAll('\\', '/') + '/'
+const comparisonPrefix = process.platform === 'win32' ? prefix.toLowerCase() : prefix
 const topLevel = new Set()
 for (const line of listed.split('\n')) {
   const normalizedLine = line.trim().replaceAll('\\', '/')
-  if (!normalizedLine.startsWith(prefix)) continue
+  const comparisonLine = process.platform === 'win32' ? normalizedLine.toLowerCase() : normalizedLine
+  if (!comparisonLine.startsWith(comparisonPrefix)) continue
   const rest = normalizedLine.slice(prefix.length)
   const match = rest.match(/^(@[^/]+\/[^/]+|[^/]+)/)
   if (match) topLevel.add(match[1])
