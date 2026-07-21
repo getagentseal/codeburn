@@ -66,6 +66,7 @@ npm --prefix app run package          # macOS, both arm64 and x64
 npm --prefix app run package:arm64    # macOS arm64 only (faster on Apple Silicon)
 npm --prefix app run package:x64      # macOS x64 only
 npm --prefix app run package:win      # Windows NSIS installer, x64
+npm --prefix app run package:store    # Microsoft Store AppX, x64 (Windows host only)
 npm --prefix app run package:linux    # Linux AppImage, x64
 ```
 
@@ -183,6 +184,27 @@ no-op — the `.exe` ships without a signature. On first run, Windows SmartScree
 shows **"Windows protected your PC"**. Users click **"More info" → "Run
 anyway"** to launch it. This is expected for an unsigned build; the only fix is
 a purchased code-signing (Authenticode/EV) certificate.
+
+### Microsoft Store (`package:store`)
+
+The Store build is a separate AppX target so the GitHub NSIS installer remains
+unchanged. AppX packaging requires Windows 10 or newer and is built by the
+manual `Build Windows Store package` GitHub Actions workflow on
+`windows-latest`. Download its `CodeBurn-Microsoft-Store` workflow artifact and
+upload the contained `CodeBurn-Store-<version>-x64.appx` file in Partner Center.
+
+The manifest identity must exactly match the reserved Partner Center product:
+
+- Identity name: `Codeburn.CodeBurn`
+- Publisher: `CN=3EFA3336-87E1-46F2-9DFA-2EB5A7693F89`
+- Publisher display name: `Codeburn`
+- Store ID: `9P0R4ZL5XMB8`
+
+The Store package is intentionally unsigned: Microsoft signs it during Store
+submission. Direct sideloading requires a separate trusted or development
+certificate. The AppX declares `runFullTrust` (electron-builder's required
+default for Electron apps), so CodeBurn retains access to the user's local
+provider session files rather than running in a UWP application sandbox.
 
 ### Linux (`package:linux`)
 
