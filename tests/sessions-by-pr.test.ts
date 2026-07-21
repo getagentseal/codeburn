@@ -366,7 +366,7 @@ describe('prLinkedTotals', () => {
       session('b', 50, 10, [A]),       // legacy: 50 attributed
       session('c', 999, 1),            // no links → excluded
     ])])
-    expect(totals).toEqual({ cost: 150, sessions: 2, attributedCost: 150, unattributedCost: 0 })
+    expect(totals).toEqual({ cost: 150, sessions: 2, subagentSessions: 0, attributedCost: 150, unattributedCost: 0 })
   })
 
   it('captures the unattributed remainder from pre-reference overhead', () => {

@@ -183,3 +183,73 @@ describe('v5 -> v6 cache adoption of expired PR sessions', () => {
     expect(urls).not.toContain('https://github.com/o/r/pull/8') // failed: 'yes' is corrupt, skipped
   })
 })
+
+function expiredPrEntry(cwd: string, name: string, prUrl: string): Record<string, unknown> {
+  return {
+    fingerprint: { dev: 1, ino: 2, mtimeMs: 3, sizeBytes: 4 },
+    mcpInventory: [], canonicalCwd: cwd, canonicalProjectName: name,
+    prLinks: [prUrl],
+    turns: [{ timestamp: '2026-07-20T10:00:00.000Z', sessionId: 'gone', userMessage: 'shipped', calls: [cachedCall('kk', 40)] }],
+  }
+}
+
+// The immediately-preceding versioned cache (v6) must also be adopted on the v7
+// bump, or the last build's expired-PR history vanishes (the same bug class that
+// dropped v5 on the 5->6 bump).
+describe('newest-prior cache adoption (v6 then v5)', () => {
+  it('adopts an expired PR entry from a v6-only file into v7 as legacy attribution', async () => {
+    await loadPricing()
+    const gonePath = join(configDir, 'projects', 'gone6', 'gone6.jsonl')
+    const v6 = {
+      version: 6, complete: true,
+      providers: { claude: { envFingerprint: 'stale-v6', files: { [gonePath]: expiredPrEntry('/gone6', 'gone6', 'https://github.com/o/r/pull/6') } } },
+    }
+    await writeFile(join(cacheDir, 'session-cache.v6.json'), JSON.stringify(v6))
+
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
+    const rows = aggregateByPr(await parseAllSessions(range, 'claude'))
+    const row = rows.find(r => r.url === 'https://github.com/o/r/pull/6')
+    expect(row).toBeDefined()
+    expect(row!.approx).toBe(true)
+    expect(row!.cost).toBeCloseTo(40, 6)
+  })
+
+  it('merges prior versions: a v6-only orphan AND a v5-only orphan both survive', async () => {
+    await loadPricing()
+    const v6Path = join(configDir, 'projects', 'in6', 'in6.jsonl')
+    const v5Path = join(configDir, 'projects', 'in5', 'in5.jsonl')
+    await writeFile(join(cacheDir, 'session-cache.v6.json'), JSON.stringify({
+      version: 6, complete: true,
+      providers: { claude: { envFingerprint: 'v6', files: { [v6Path]: expiredPrEntry('/in6', 'in6', 'https://github.com/o/r/pull/60') } } },
+    }))
+    await writeFile(join(cacheDir, 'session-cache.v5.json'), JSON.stringify({
+      version: 5, complete: true,
+      providers: { claude: { envFingerprint: 'v5', files: { [v5Path]: expiredPrEntry('/in5', 'in5', 'https://github.com/o/r/pull/50') } } },
+    }))
+
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
+    const urls = aggregateByPr(await parseAllSessions(range, 'claude')).map(r => r.url)
+    // A sparse newer file must NOT mask older-only orphans: BOTH survive.
+    expect(urls).toContain('https://github.com/o/r/pull/60') // from v6
+    expect(urls).toContain('https://github.com/o/r/pull/50') // from v5, not masked
+  })
+
+  it('a newer version wins per source path when both hold the same path', async () => {
+    await loadPricing()
+    const samePath = join(configDir, 'projects', 'dup', 'dup.jsonl')
+    // v5 attributes this path to PR 500; v6 (newer) to PR 600 for the SAME path.
+    await writeFile(join(cacheDir, 'session-cache.v5.json'), JSON.stringify({
+      version: 5, complete: true,
+      providers: { claude: { envFingerprint: 'v5', files: { [samePath]: expiredPrEntry('/dup', 'dup', 'https://github.com/o/r/pull/500') } } },
+    }))
+    await writeFile(join(cacheDir, 'session-cache.v6.json'), JSON.stringify({
+      version: 6, complete: true,
+      providers: { claude: { envFingerprint: 'v6', files: { [samePath]: expiredPrEntry('/dup', 'dup', 'https://github.com/o/r/pull/600') } } },
+    }))
+
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-20T23:59:59Z') }
+    const urls = aggregateByPr(await parseAllSessions(range, 'claude')).map(r => r.url)
+    expect(urls).toContain('https://github.com/o/r/pull/600')     // newer v6 entry wins
+    expect(urls).not.toContain('https://github.com/o/r/pull/500')  // older v5 entry for same path superseded
+  })
+})

@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
 import { calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash } from './models.js'
+import { sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
@@ -1188,10 +1189,21 @@ export type SessionMeta = {
   title?: string
   prLinks: string[]
   isSidechain: boolean
+  // Sidechain side: the parent session id (a sidechain entry's internal
+  // `sessionId`, which is the spawning session). First non-empty value wins.
+  parentSessionId?: string
+  // Parent side: agentId -> the `tool_use` id of the `Agent`/`Task` block that
+  // spawned it, read from the spawn result's `toolUseResult.agentId`. First value
+  // per agentId wins. Empty for sessions that spawned no completed subagent.
+  agentSpawnLinks: Record<string, string>
+  // Parent side: agent ids whose spawn result named them but whose exact launching
+  // tool_use could not be paired (an ambiguous multi-result record). Drives the
+  // grace-window fallback for a late child. Deduped.
+  ambiguousSpawnAgentIds: string[]
 }
 
 export function emptySessionMeta(): SessionMeta {
-  return { prLinks: [], isSidechain: false }
+  return { prLinks: [], isSidechain: false, agentSpawnLinks: {}, ambiguousSpawnAgentIds: [] }
 }
 
 // Count added/removed lines from a Claude `toolUseResult.structuredPatch`. Each
@@ -1249,7 +1261,50 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
     const url = (entry as Record<string, unknown>)['prUrl']
     if (typeof url === 'string' && url && !meta.prLinks.includes(url)) meta.prLinks.push(url)
   }
-  if (entry.isSidechain === true) meta.isSidechain = true
+  if (entry.isSidechain === true) {
+    meta.isSidechain = true
+    // A sidechain entry's own `sessionId` is the id of the session that spawned
+    // it (32/32 on real data; cross-checked against the owning directory at
+    // stamp time). First value wins; every entry in the file carries the same id.
+    const sid = (entry as Record<string, unknown>)['sessionId']
+    if (!meta.parentSessionId && typeof sid === 'string' && sid) meta.parentSessionId = sid
+  }
+  // Parent side: the `Agent`/`Task` spawn result records the spawned agent's id in
+  // `toolUseResult.agentId`; pair it with the `tool_result` block's `tool_use_id`
+  // (the spawn's `tool_use` id) so a child can be folded into the launching turn.
+  // Read from the RAW entry (compaction strips `toolUseResult`).
+  const tur = (entry as Record<string, unknown>)['toolUseResult']
+  if (tur && typeof tur === 'object') {
+    const agentId = (tur as Record<string, unknown>)['agentId']
+    if (typeof agentId === 'string' && agentId && !(agentId in meta.agentSpawnLinks)) {
+      const msg = entry.message
+      const content = msg && typeof msg === 'object' ? (msg as { content?: unknown }).content : undefined
+      if (Array.isArray(content)) {
+        const results = content.filter((b): b is Record<string, unknown> =>
+          !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_result'
+          && typeof (b as { tool_use_id?: unknown }).tool_use_id === 'string' && !!(b as { tool_use_id?: unknown }).tool_use_id)
+        let spawnId: string | undefined
+        if (results.length === 1) {
+          spawnId = results[0]!['tool_use_id'] as string
+        } else if (results.length > 1) {
+          // Several batched tool results share one entry: pair the agentId with the
+          // block whose `content` is the spawn result (equals `toolUseResult.content`),
+          // so an unrelated sibling block cannot capture the id. When the match is
+          // ambiguous (identical blocks, or none match) the spawn link is left
+          // unset ON PURPOSE: the child then folds via the timestamp-bucket fallback
+          // in resolveChild rather than risk pairing with the wrong id.
+          const turContent = JSON.stringify((tur as Record<string, unknown>)['content'])
+          const matches = results.filter(b => JSON.stringify(b['content']) === turContent)
+          if (matches.length === 1) spawnId = matches[0]!['tool_use_id'] as string
+        }
+        if (spawnId) meta.agentSpawnLinks[agentId] = spawnId
+        // We know this parent spawned `agentId` (its result named it) but could not
+        // pair the exact tool_use: record it as an AMBIGUOUS pairing so a late child
+        // can still fold via the grace window. Not the same as an absent spawn.
+        else if (!meta.ambiguousSpawnAgentIds.includes(agentId)) meta.ambiguousSpawnAgentIds.push(agentId)
+      }
+    }
+  }
 }
 
 export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, ToolResultMeta>): ParsedApiCall | null {
@@ -1288,6 +1343,13 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
   )
 
   const bashCmds = extractBashCommandsFromContent(contentBlocks)
+
+  // Subagent-spawn `tool_use` ids in this message (`Agent`/`Task` blocks). Kept so
+  // groupIntoTurns can attach them to the turn and by-PR attribution can fold each
+  // spawned sidechain back into the turn that launched it.
+  const spawnIds = contentBlocks
+    .filter((b): b is ToolUseBlock => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Task') && !!b.id)
+    .map(b => b.id)
 
   const toolSeq: ToolCall[][] = contentBlocks
     .filter((b): b is ToolUseBlock => b.type === 'tool_use')
@@ -1337,6 +1399,7 @@ export function parseApiCall(entry: JournalEntry, toolResultMeta?: Map<string, T
     deduplicationKey: msg.id ?? `claude:${entry.timestamp}`,
     cacheCreationOneHourTokens: cacheCreation.oneHourTokens || undefined,
     toolSequence: toolSeq.length > 0 ? toolSeq : undefined,
+    ...(spawnIds.length > 0 ? { spawnToolUseIds: spawnIds } : {}),
     ...(locAdded ? { locAdded } : {}),
     ...(locRemoved ? { locRemoved } : {}),
     ...(interrupted ? { interrupted: true } : {}),
@@ -1450,6 +1513,9 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   // `pr-link` entry is emitted after the assistant creates/references a PR, so it
   // lands inside the same turn (before the next user message) and attaches here.
   let currentPrRefs: string[] = []
+  // Subagent-spawn `tool_use` ids emitted within the current turn (deduped),
+  // carried from each call's `spawnToolUseIds`.
+  let currentSpawnIds: string[] = []
 
   for (const entry of entries) {
     const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
@@ -1464,6 +1530,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
             sessionId: currentSessionId,
             ...(currentBranch ? { gitBranch: currentBranch } : {}),
             ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
+            ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
           })
         }
         currentUserMessage = text
@@ -1472,6 +1539,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentSessionId = entry.sessionId ?? ''
         currentBranch = entryBranch
         currentPrRefs = []
+        currentSpawnIds = []
       }
     } else if (entry.type === 'assistant') {
       if (entryBranch && !currentBranch) currentBranch = entryBranch
@@ -1479,7 +1547,10 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       if (msgId && seenMsgIds.has(msgId)) continue
       if (msgId) seenMsgIds.add(msgId)
       const call = parseApiCall(entry, toolResultMeta)
-      if (call) currentCalls.push(call)
+      if (call) {
+        currentCalls.push(call)
+        if (call.spawnToolUseIds) for (const id of call.spawnToolUseIds) if (!currentSpawnIds.includes(id)) currentSpawnIds.push(id)
+      }
       for (const advisorCall of parseAdvisorCalls(entry)) currentCalls.push(advisorCall)
     } else if (entry.type === 'pr-link') {
       const url = (entry as Record<string, unknown>)['prUrl']
@@ -1495,10 +1566,27 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
       sessionId: currentSessionId,
       ...(currentBranch ? { gitBranch: currentBranch } : {}),
       ...(currentPrRefs.length > 0 ? { prRefs: [...currentPrRefs].sort() } : {}),
+      ...(currentSpawnIds.length > 0 ? { spawnToolUseIds: currentSpawnIds } : {}),
     })
   }
 
   return turns
+}
+
+// Map each subagent-spawn `tool_use` id to the PR set active at the turn that
+// emitted it, walking the FULL turn list in order. A turn's own `prRefs` apply to
+// spawns within it; otherwise the carried set does. First occurrence of a spawn id
+// wins deterministically (tool_use ids are unique in practice; this only guards a
+// pathological restatement). Drives cross-range subagent PR attribution.
+export function buildSpawnPrSets(turns: Array<{ prRefs?: string[]; spawnToolUseIds?: string[] }>): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  let cur: string[] = []
+  for (const turn of turns) {
+    const active = turn.prRefs?.length ? turn.prRefs : cur
+    for (const id of turn.spawnToolUseIds ?? []) if (!(id in out)) out[id] = active
+    if (turn.prRefs?.length) cur = turn.prRefs
+  }
+  return out
 }
 
 /**
@@ -1932,6 +2020,10 @@ async function scanProjectDirs(
               // turn: union its refs in so the shortcut matches a full re-parse.
               const refs = Array.from(new Set([...(last.prRefs ?? []), ...(newTurns[0]!.prRefs ?? [])])).sort()
               if (refs.length > 0) last.prRefs = refs
+              // A subagent spawned in the appended continuation belongs to this
+              // same turn: union its spawn ids in for the same reason.
+              const spawnIds = Array.from(new Set([...(last.spawnToolUseIds ?? []), ...(newTurns[0]!.spawnToolUseIds ?? [])]))
+              if (spawnIds.length > 0) last.spawnToolUseIds = spawnIds
               startIdx = 1
             }
             for (let i = startIdx; i < newTurns.length; i++) mergedTurns.push(newTurns[i]!)
@@ -1960,9 +2052,14 @@ async function scanProjectDirs(
 
           // Session meta merges across the append boundary: title is last-wins
           // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
+          // parentSessionId is sticky (cached-first, it is the earliest region);
+          // agentSpawnLinks union (cached-first, first-seen spawn id per agent wins).
           const mergedTitle = sessionMeta.title ?? cached.title
           const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
           const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
+          const mergedParentSessionId = cached.parentSessionId ?? sessionMeta.parentSessionId
+          const mergedSpawnLinks = { ...sessionMeta.agentSpawnLinks, ...cached.agentSpawnLinks }
+          const mergedAmbiguousIds = Array.from(new Set([...(cached.ambiguousSpawnAgentIds ?? []), ...sessionMeta.ambiguousSpawnAgentIds]))
 
           section.files[filePath] = {
             fingerprint: info.fp,
@@ -1975,6 +2072,9 @@ async function scanProjectDirs(
             ...(mergedTitle ? { title: mergedTitle } : {}),
             ...(mergedPrLinks.length > 0 ? { prLinks: mergedPrLinks } : {}),
             ...(mergedSidechain ? { isSidechain: true } : {}),
+            ...(mergedParentSessionId ? { parentSessionId: mergedParentSessionId } : {}),
+            ...(Object.keys(mergedSpawnLinks).length > 0 ? { agentSpawnLinks: mergedSpawnLinks } : {}),
+            ...(mergedAmbiguousIds.length > 0 ? { ambiguousSpawnAgentIds: mergedAmbiguousIds } : {}),
           }
           ;(diskCache as { _dirty?: boolean })._dirty = true
           filesDone++
@@ -2008,6 +2108,9 @@ async function scanProjectDirs(
         ...(sessionMeta.title ? { title: sessionMeta.title } : {}),
         ...(sessionMeta.prLinks.length > 0 ? { prLinks: sessionMeta.prLinks } : {}),
         ...(sessionMeta.isSidechain ? { isSidechain: true } : {}),
+        ...(sessionMeta.parentSessionId ? { parentSessionId: sessionMeta.parentSessionId } : {}),
+        ...(Object.keys(sessionMeta.agentSpawnLinks).length > 0 ? { agentSpawnLinks: sessionMeta.agentSpawnLinks } : {}),
+        ...(sessionMeta.ambiguousSpawnAgentIds.length > 0 ? { ambiguousSpawnAgentIds: sessionMeta.ambiguousSpawnAgentIds } : {}),
       }
       ;(diskCache as { _dirty?: boolean })._dirty = true
     } catch (err) {
@@ -2042,7 +2145,7 @@ async function scanProjectDirs(
     }
   }
 
-  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; dirNames: Set<string> }>()
+  const projectMap = new Map<string, { project: string; projectPath: string; sessions: SessionSummary[]; anchors: SessionSummary[]; dirNames: Set<string> }>()
 
   const allFiles = [
     ...unchangedFiles.map(f => ({ filePath: f.filePath, dirName: f.dirName, source: f.source })),
@@ -2082,6 +2185,12 @@ async function scanProjectDirs(
     // session's in-range unbranched spend as `null` instead of discarding it.
     const everHadBranch = carriedBranch !== undefined
 
+    // Built from the FULL (pre-slice) turn list: each subagent-spawn tool_use id ->
+    // the PR set active at the turn that emitted it. Lets a subagent fold into the
+    // right PR even when its launching turn is later sliced out of range. Only for
+    // sessions that both spawned subagents and referenced a PR.
+    const spawnPrSets = cachedFile.prLinks?.length ? buildSpawnPrSets(cachedFile.turns) : {}
+
     if (dateRange) {
       classifiedTurns = classifiedTurns.filter(turn => {
         if (turn.assistantCalls.length === 0) return false
@@ -2092,7 +2201,15 @@ async function scanProjectDirs(
       })
     }
 
-    if (classifiedTurns.length === 0) continue
+    // A PR-linked parent that spawned subagents is kept even when its OWN turns all
+    // fall out of range, as a 0-cost fold ANCHOR: an in-range child (an async agent
+    // that outlived the parent's last in-range turn) still needs the parent's
+    // `prLinks` / `spawnPrSets` to attribute. An anchor carries no in-range spend
+    // and is stored OUTSIDE `sessions` (see subagentAnchors) so it never
+    // contaminates session counts, averages, or any other per-session report.
+    const isSpawnAnchor = Object.keys(spawnPrSets).length > 0 && cachedFile.isSidechain !== true
+    const anchorOnly = classifiedTurns.length === 0 && isSpawnAnchor
+    if (classifiedTurns.length === 0 && !isSpawnAnchor) continue
 
     const sessionId = basename(filePath, '.jsonl')
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
@@ -2104,18 +2221,32 @@ async function scanProjectDirs(
     if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
     if (prRefsAtRangeStart?.length) session.prRefsAtRangeStart = prRefsAtRangeStart
     if (cachedFile.title) session.title = cachedFile.title
+    // Sidechain linkage: carry the parent id (the transcript's internal
+    // `sessionId`, authoritative even when it disagrees with the owning directory
+    // on a resumed session) and derive the agent id from the `agent-<agentId>`
+    // filename. A sidechain whose parent id was never captured stays standalone.
+    if (cachedFile.isSidechain) {
+      if (cachedFile.parentSessionId) session.parentSessionId = cachedFile.parentSessionId
+      session.agentId = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
+    }
+    // Parent linkage maps (only present on sessions that spawned subagents).
+    if (cachedFile.agentSpawnLinks && Object.keys(cachedFile.agentSpawnLinks).length > 0) {
+      session.agentSpawnLinks = cachedFile.agentSpawnLinks
+    }
+    if (cachedFile.ambiguousSpawnAgentIds?.length) session.ambiguousSpawnAgentIds = cachedFile.ambiguousSpawnAgentIds
+    if (Object.keys(spawnPrSets).length > 0) session.spawnPrSets = spawnPrSets
 
-    if (session.apiCalls > 0) {
+    if (session.apiCalls > 0 || anchorOnly) {
       const projectKey = cachedFile.canonicalCwd
         ? normalizeProjectPathKey(cachedFile.canonicalCwd)
         : `slug:${dirName}`
       const existing = projectMap.get(projectKey)
-      if (existing) {
-        existing.sessions.push(session)
-        existing.dirNames.add(dirName)
-      } else {
-        projectMap.set(projectKey, { project: projectName, projectPath, sessions: [session], dirNames: new Set([dirName]) })
-      }
+      // An anchor (no in-range spend) goes into a separate bucket, never `sessions`.
+      const target = existing ?? { project: projectName, projectPath, sessions: [], anchors: [], dirNames: new Set([dirName]) }
+      if (anchorOnly) target.anchors.push(session)
+      else target.sessions.push(session)
+      target.dirNames.add(dirName)
+      if (!existing) projectMap.set(projectKey, target)
     }
   }
 
@@ -2133,12 +2264,13 @@ async function scanProjectDirs(
     if (!cwdKey) continue
     const target = projectMap.get(cwdKey)!
     target.sessions.push(...entry.sessions)
+    target.anchors.push(...entry.anchors)
     projectMap.delete(key)
   }
 
   const projects: ProjectSummary[] = []
-  for (const { project, projectPath, sessions } of projectMap.values()) {
-    projects.push(summarizeProject(project, projectPath, sessions))
+  for (const { project, projectPath, sessions, anchors } of projectMap.values()) {
+    projects.push(summarizeProject(project, projectPath, sessions, anchors))
   }
 
   return projects
@@ -2151,7 +2283,7 @@ async function scanProjectDirs(
 /// `totalProxiedCostUSD` (subscription-covered). All ProjectSummary callers go
 /// through here so the rule stays consistent across the fresh, cached, and
 /// date/day-filtered paths.
-function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[]): ProjectSummary {
+function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[], anchors: SessionSummary[] = []): ProjectSummary {
   const totalCostUSD = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
   return {
     project,
@@ -2162,6 +2294,8 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
     totalEstimatedCostUSD: sessions.reduce((s, sess) => s + (sess.totalEstimatedCostUSD ?? 0), 0),
     totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
     totalProxiedCostUSD: isProxiedPath(projectPath) ? totalCostUSD : 0,
+    // Fold anchors travel separately (0-cost, out of every per-session total).
+    ...(anchors.length > 0 ? { subagentAnchors: anchors } : {}),
   }
 }
 
@@ -2281,6 +2415,7 @@ function parsedTurnToCachedTurn(turn: ParsedTurn): CachedTurn {
     // Stored per-turn directly (already sorted/deduped in groupIntoTurns), unlike
     // gitBranch's change-detection dedup, so each turn's refs are self-contained.
     ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
+    ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
   }
 }
 
@@ -2391,6 +2526,7 @@ function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): Clas
     sessionId: turn.sessionId,
     ...(branch ? { gitBranch: branch } : {}),
     ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
+    ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
   }
   return classifyTurn(parsed)
 }
@@ -2995,22 +3131,141 @@ function turnDayString(turn: ClassifiedTurn): string | null {
   return `${y}-${m}-${day}`
 }
 
+// A spawn parent (has spawnPrSets + prLinks) counts as a fold ANCHOR. Kept
+// verbatim (not rebuilt) so its spawnPrSets / prLinks / agentSpawnLinks survive.
+function isSpawnParent(session: SessionSummary): boolean {
+  return !!session.spawnPrSets && !!session.prLinks?.length
+}
+
+// buildSessionSummary rolls up ONLY turn-derived fields, so a rebuilt (date/day/
+// source-filtered) session loses its session-level PR + subagent-linkage metadata.
+// Carry those across so by-PR attribution and subagent folding still work on a
+// filtered slice (without this, a filtered CHILD loses its parentSessionId and can
+// never be linked, and a filtered parent loses its prLinks).
+function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): void {
+  if (original.everHadBranch) rebuilt.everHadBranch = true
+  if (original.prLinks?.length) rebuilt.prLinks = original.prLinks
+  // prRefsAtRangeStart is NOT copied here: a narrower slice needs it recomputed at
+  // the new boundary (see recomputeRangeStartPrRefs), not the wide range's value.
+  if (original.parentSessionId) rebuilt.parentSessionId = original.parentSessionId
+  if (original.agentId) rebuilt.agentId = original.agentId
+  if (original.agentSpawnLinks) rebuilt.agentSpawnLinks = original.agentSpawnLinks
+  if (original.spawnPrSets) rebuilt.spawnPrSets = original.spawnPrSets
+  if (original.ambiguousSpawnAgentIds?.length) rebuilt.ambiguousSpawnAgentIds = original.ambiguousSpawnAgentIds
+  if (original.title) rebuilt.title = original.title
+  if (original.agentType) rebuilt.agentType = original.agentType
+}
+
+// The "PR active entering this slice", recomputed by replaying the ORIGINAL full
+// turn sequence up to `sliceStartMs`, seeded from the original range-start state.
+// A narrower filter must NOT reuse the wide range's range-start PR: a PR switch
+// between the wide start and the slice start would otherwise be lost, mis-seeding
+// both spend attribution and the subagent grace fallback. A turn exactly ON the
+// boundary stays in the slice and applies its own prRefs there, so the walk stops
+// strictly before it.
+function recomputeRangeStartPrRefs(original: SessionSummary, sliceStartMs: number): string[] | undefined {
+  // The carried PR is the refs of the LATEST turn (by timestamp) strictly before the
+  // slice that referenced any PR; a turn exactly on the boundary is inside the slice
+  // and applies its own refs there. Selected by timestamp, not array position, so
+  // the result does not depend on turn ordering. When two PR-bearing turns share the
+  // exact same millisecond (a degenerate case), break the tie deterministically by
+  // the lexicographically-LAST sorted-join of their refs, so the seed is stable
+  // regardless of input order (arbitrary but stable, not order-dependent). Falls back
+  // to the original range-start state when nothing referenced a PR before the slice.
+  let current = original.prRefsAtRangeStart
+  let bestMs = -Infinity
+  let bestKey = ''
+  for (const turn of original.turns) {
+    if (!turn.prRefs?.length) continue
+    const ts = turn.assistantCalls[0]?.timestamp
+    if (!ts) continue
+    const tMs = new Date(ts).getTime()
+    if (Number.isNaN(tMs) || tMs >= sliceStartMs) continue
+    const key = [...turn.prRefs].sort().join(',')
+    if (tMs > bestMs || (tMs === bestMs && key > bestKey)) { bestMs = tMs; bestKey = key; current = turn.prRefs }
+  }
+  return current
+}
+
+// Apply a recomputed range-start PR state to a rebuilt session (or clear it).
+function applyRecomputedRangeStart(rebuilt: SessionSummary, original: SessionSummary, sliceStartMs: number): void {
+  const rs = recomputeRangeStartPrRefs(original, sliceStartMs)
+  if (rs?.length) rebuilt.prRefsAtRangeStart = rs
+  else delete rebuilt.prRefsAtRangeStart
+}
+
+// Local-midnight epoch of the EARLIEST selected day, used to seed the very-first
+// turn and the pre-first-turn grace fallback. Per-day seeding (below) handles every
+// later day, so non-contiguous selections are also correct.
+function earliestDayStartMs(days: Set<string>): number {
+  const earliest = [...days].sort()[0]
+  return earliest ? new Date(`${earliest}T00:00:00`).getTime() : NaN
+}
+
+// Per-day seeding for a (possibly non-contiguous) day selection. For the FIRST
+// in-slice turn of each selected day that does not already reference a PR, inject the
+// PR carried into that day, recomputed from the ORIGINAL full turn sequence up to the
+// day's local-midnight start. A PR switch on an UNSELECTED day between two selected
+// days is thus captured for the later day; a contiguous run is the special case and
+// stays correct. Turn order is preserved.
+function seedFilteredTurnsPerDay(original: SessionSummary, filteredTurns: ClassifiedTurn[]): ClassifiedTurn[] {
+  const out: ClassifiedTurn[] = []
+  let lastDay: string | null = null
+  for (const turn of filteredTurns) {
+    const day = turnDayString(turn)
+    if (day !== null && day !== lastDay) {
+      lastDay = day
+      if (!turn.prRefs?.length) {
+        const carried = recomputeRangeStartPrRefs(original, new Date(`${day}T00:00:00`).getTime())
+        if (carried?.length) { out.push({ ...turn, prRefs: carried }); continue }
+      }
+    }
+    out.push(turn)
+  }
+  return out
+}
+
+// An anchor is a duplicate of a surviving session ONLY when they share the full
+// provider-aware, fingerprint-qualified identity (a proven-identical record). A
+// different-provider session that shares a raw id, or a same-id/different-record
+// collision that SHOULD stay to trigger the neither-fold guard, is not dropped.
+function dedupeAnchors(anchors: SessionSummary[], survivingIdentities: Set<string>): SessionSummary[] {
+  if (survivingIdentities.size === 0) return anchors
+  return anchors.filter(a => !survivingIdentities.has(sessionIdentity(a)))
+}
+
 export function filterProjectsByDays(projects: ProjectSummary[], days: Set<string>): ProjectSummary[] {
+  const sliceStartMs = earliestDayStartMs(days)
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
+    // Existing anchors are date-EXEMPT (carried unchanged); a spawn parent whose
+    // OWN in-range turns all fall outside the day subset is CONVERTED to an anchor
+    // so its surviving in-range child still resolves. The anchor contributes no
+    // own spend either way.
+    const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
+    const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => {
         const ds = turnDayString(turn)
         return ds !== null && days.has(ds)
       })
-      if (turns.length === 0) continue
-      const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
-      if (session.everHadBranch) rebuilt.everHadBranch = true
+      if (turns.length === 0) {
+        if (isSpawnParent(session)) anchors.push(session)
+        continue
+      }
+      const seeded = seedFilteredTurnsPerDay(session, turns)
+      const rebuilt = buildSessionSummary(session.sessionId, session.project, seeded, session.mcpInventory, session.source)
+      carryLinkageFields(rebuilt, session)
+      if (!Number.isNaN(sliceStartMs)) applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
+      // Identity of the ORIGINAL (pre-filter) session: a duplicate anchor matches the
+      // session as it appeared in the input, not the narrowed rebuild.
+      survivingIdentities.add(sessionIdentity(session))
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
+    if (sessions.length === 0 && dedupedAnchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3033,6 +3288,7 @@ export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map
     const existing = mergedMap.get(key)
     if (existing) {
       existing.sessions.push(...p.sessions)
+      if (p.subagentAnchors?.length) existing.subagentAnchors = [...(existing.subagentAnchors ?? []), ...p.subagentAnchors]
       existing.totalCostUSD += p.totalCostUSD
       existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
       existing.totalApiCalls += p.totalApiCalls
@@ -3051,25 +3307,40 @@ export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], s
     const sessions = project.sessions.filter(session =>
       session.source?.id === sourceId
     )
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    // Anchors get the SAME source scoping as sessions (a config-source filter is a
+    // provenance filter, not a date filter), so an anchor stays only with its own
+    // config's children.
+    const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.source?.id === sourceId)
+    if (sessions.length === 0 && anchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
 
 export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange: DateRange): ProjectSummary[] {
+  const sliceStartMs = dateRange.start.getTime()
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
+    // Carry existing anchors and convert a spawn parent whose in-range turns are all
+    // filtered out into one (see filterProjectsByDays).
+    const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
+    const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
-      if (turns.length === 0) continue
+      if (turns.length === 0) {
+        if (isSpawnParent(session)) anchors.push(session)
+        continue
+      }
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
-      if (session.everHadBranch) rebuilt.everHadBranch = true
+      carryLinkageFields(rebuilt, session)
+      applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
+      survivingIdentities.add(sessionIdentity(session))
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
+    if (sessions.length === 0 && dedupedAnchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
