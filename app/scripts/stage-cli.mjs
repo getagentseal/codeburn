@@ -68,7 +68,10 @@ writeFileSync(
 // extraneous warnings, so capture stdout regardless of exit code.
 let listed = ''
 try {
-  listed = execFileSync('npm', ['ls', '--omit=dev', '--all', '--parseable'], {
+  // npm is a .cmd shim on Windows; child_process does not resolve that shim
+  // through a shell the way an interactive PowerShell/npm step does.
+  const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  listed = execFileSync(npmExecutable, ['ls', '--omit=dev', '--all', '--parseable'], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
