@@ -644,13 +644,13 @@ export interface CodeburnBridge {
   /** Node process.arch of the host ('arm64', 'x64', ...). Absent on preloads
    *  that predate the direct-download update link. */
   readonly arch?: string
-  getModels(period: Period, provider: string, byTask: boolean, range?: DateRange): Promise<ModelReportRow[]>
-  getSessions(period: Period, provider: string, range?: DateRange): Promise<SessionRow[]>
-  getCompareModels(period: Period, provider: string): Promise<ModelStats[]>
+  getModels(period: Period, provider: string, byTask: boolean, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
+  getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
+  getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   getYield(period: Period, provider: string, range?: DateRange): Promise<YieldJsonReport>
-  getSpendFlow(period: Period, provider: string, range?: DateRange): Promise<SpendFlow>
-  getOptimizeReport(period: Period, provider: string, range?: DateRange): Promise<OptimizeJsonReport>
+  getSpendFlow(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpendFlow>
+  getOptimizeReport(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<OptimizeJsonReport>
   getDevices(period: Period): Promise<CombinedUsage>
   getDevicesScan(): Promise<DeviceScanResult>
   getShareStatus(): Promise<ShareStatus>

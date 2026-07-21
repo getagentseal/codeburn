@@ -72,8 +72,8 @@ const CHANNELS = [
 ] as const
 
 const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = [
-  { channel: 'codeburn:getOverview', args: ['30days', 'claude'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--provider', 'claude'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline'] },
+  { channel: 'codeburn:getOverview', args: ['30days', 'claude'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--provider', 'claude'] },
+  { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'] },
   { channel: 'codeburn:getPlans', args: ['week'], argv: ['status', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getActReport', args: [], argv: ['act', 'report', '--json'] },
   { channel: 'codeburn:getModels', args: ['week', 'claude', true], argv: ['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task'] },
@@ -86,9 +86,9 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getYield', args: ['today', 'claude'], argv: ['yield', '--format', 'json', '--period', 'today', '--provider', 'claude'] },
   { channel: 'codeburn:getSpendFlow', args: ['month', 'openai'], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--provider', 'openai'] },
   { channel: 'codeburn:getOptimizeReport', args: ['month', 'openai'], argv: ['optimize', '--format', 'json', '--period', 'month', '--provider', 'openai'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, 'claude-config:91dda17e8cf35193'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--claude-config-source', 'claude-config:91dda17e8cf35193'] },
-  { channel: 'codeburn:getOverview', args: ['month', 'claude', { from: '2026-07-01', to: '2026-07-11' }, 'claude-desktop:980e1e488a654830'], argv: ['status', '--format', 'menubar-json', '--period', 'month', '--no-timeline', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11', '--claude-config-source', 'claude-desktop:980e1e488a654830'] },
+  { channel: 'codeburn:getOverview', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, 'claude-config:91dda17e8cf35193'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize', '--claude-config-source', 'claude-config:91dda17e8cf35193'] },
+  { channel: 'codeburn:getOverview', args: ['month', 'claude', { from: '2026-07-01', to: '2026-07-11' }, 'claude-desktop:980e1e488a654830'], argv: ['status', '--format', 'menubar-json', '--period', 'month', '--no-timeline', '--no-optimize', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11', '--claude-config-source', 'claude-desktop:980e1e488a654830'] },
   { channel: 'codeburn:getModels', args: ['week', 'claude', true, { from: '2026-07-01', to: '2026-07-11' }], argv: ['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getYield', args: ['today', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['yield', '--format', 'json', '--period', 'today', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSpendFlow', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
@@ -163,7 +163,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
     const { spawnCli, spawnCliAction, calls } = fakeSpawn()
     const handlers = createBridgeHandlers(withQuota({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
     const res = await handlers['codeburn:getOverview']!('30days', 'all')
-    expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline'])
+    expect(calls[0]).toEqual(['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--no-optimize'])
     expect(res).toEqual({ ok: true, value: { current: { cost: 12.34 } } })
   })
 
@@ -441,6 +441,21 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
     expect(opts[0]?.priority).toBeUndefined()
     expect(opts[1]?.priority).toBeUndefined()
     expect(opts[2]?.priority).toBe('background')
+  })
+
+  it('runs section prefetch reads at background priority without changing argv', async () => {
+    const opts: Array<Record<string, unknown> | undefined> = []
+    const spawnCli = vi.fn(async (_args: string[], o?: Record<string, unknown>) => { opts.push(o); return [] })
+    const handlers = createBridgeHandlers(base({ spawnCli }))
+
+    await handlers['codeburn:getSessions']!('30days', 'all', undefined, true)
+    await handlers['codeburn:getModels']!('30days', 'all', false, undefined, true)
+    await handlers['codeburn:getCompareModels']!('30days', 'all', true)
+
+    expect(spawnCli.mock.calls[0]?.[0]).toEqual(['sessions', '--format', 'json', '--period', '30days'])
+    expect(spawnCli.mock.calls[1]?.[0]).toEqual(['models', '--format', 'json', '--period', '30days'])
+    expect(spawnCli.mock.calls[2]?.[0]).toEqual(['compare', '--format', 'json', '--period', '30days'])
+    expect(opts.map(o => o?.priority)).toEqual(['background', 'background', 'background'])
   })
 
   it('re-arms the long timeout when the first overview fails (cache is still cold)', async () => {

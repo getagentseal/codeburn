@@ -456,9 +456,9 @@ describe('spawnCli concurrency scheduler', () => {
     const releaseDir = join(dir, 'release'); mkdirSync(releaseDir)
     schedulerBin(startedFile, releaseDir)
 
-    // Fill both slots so the next two calls must queue.
-    const p1 = spawnCli(['fill1'], { priority: 'background' })
-    const p2 = spawnCli(['fill2'], { priority: 'background' })
+    // Fill both slots with real interactive work so the next two calls queue.
+    const p1 = spawnCli(['fill1'], { priority: 'interactive' })
+    const p2 = spawnCli(['fill2'], { priority: 'interactive' })
     await waitUntil(() => startedList(startedFile).length === 2)
 
     // Queue a background first, then an interactive.
@@ -476,6 +476,27 @@ describe('spawnCli concurrency scheduler', () => {
 
     release(releaseDir, 'fill2'); release(releaseDir, 'inter'); release(releaseDir, 'bg')
     await Promise.all([p1, p2, pbg, pint])
+  })
+
+  it('reserves one CLI lane while background prefetch is running', async () => {
+    const startedFile = join(dir, 'started')
+    const releaseDir = join(dir, 'release'); mkdirSync(releaseDir)
+    schedulerBin(startedFile, releaseDir)
+
+    const bg1 = spawnCli(['bg1'], { priority: 'background' })
+    const bg2 = spawnCli(['bg2'], { priority: 'background' })
+    await waitUntil(() => startedList(startedFile).includes('bg1'))
+    await delay(50)
+    expect(startedList(startedFile)).toEqual(['bg1'])
+
+    const interactive = spawnCli(['clicked'], { priority: 'interactive' })
+    await waitUntil(() => startedList(startedFile).includes('clicked'))
+    expect(startedList(startedFile)).not.toContain('bg2')
+
+    release(releaseDir, 'bg1'); release(releaseDir, 'clicked')
+    await waitUntil(() => startedList(startedFile).includes('bg2'))
+    release(releaseDir, 'bg2')
+    await Promise.all([bg1, bg2, interactive])
   })
 
   it('does not spend a slot on a coalesced (same-argv) call', async () => {

@@ -17,6 +17,7 @@ import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import { motionClass } from './lib/motion'
 import { codeburn } from './lib/ipc'
 import { localDateKey } from './lib/period'
+import { compareModelsReportKey, modelsReportKey, optimizeReportKey, sessionsReportKey, spendFlowReportKey } from './lib/reportKeys'
 import { persistRefreshValue, readRefreshValue, refreshValueToMs, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent } from './sections/Overview'
 import { OptimizeContent } from './sections/Optimize'
@@ -141,13 +142,15 @@ const PREFETCH_START_DELAY_MS = 1500
 // A warm spawn takes seconds, so a 400ms stagger let the loop fire the whole set
 // almost at once; pace it wide enough that each warm genuinely trails the last.
 const PREFETCH_STAGGER_MS = 2000
+const SECTION_PREFETCH_START_DELAY_MS = 500
+const SECTION_PREFETCH_STAGGER_MS = 100
 // Base instant-switch memo keys live during overview polling besides the per-
-// provider prefetch entries: `overview|all`, `overview-act`, `overview-yield`,
-// plus one slot of headroom for section navigation. The memo cap is sized to
+// provider prefetch entries plus the active provider's sessions, models, spend,
+// optimize, yield, and compare-picker reports. The memo cap is sized to
 // (detected providers + this) so warmed entries — and the base overview key —
 // never LRU-evict between polls (which would blank the overview and re-arm the
 // prefetch every cycle).
-const BASE_MEMO_KEYS = 4
+const BASE_MEMO_KEYS = 12
 
 function isPeriod(value: string): value is Period {
   return (STANDARD_PERIODS as string[]).includes(value)
@@ -281,7 +284,9 @@ function AppMain() {
     void (async () => {
       let modelCategories: Map<string, string> | undefined
       try {
-        modelCategories = topCategoryByModel(await codeburn.getModels(period, 'all', false))
+        const rows = await codeburn.getModels(period, 'all', false)
+        primePolledMemo(modelsReportKey(period, 'all', false), rows)
+        modelCategories = topCategoryByModel(rows)
       } catch { /* degrade: emit the snapshot without per-model topCategory */ }
       trackEvent('usage_snapshot', usageSnapshotProps(payload, modelCategories))
     })()
@@ -393,6 +398,58 @@ function AppMain() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, period, provider, customRange, claudeConfigSource, detectedProviders, overview.data == null])
 
+  // Warm the first view of each heavyweight section after the overview paints.
+  // These run one at a time at background priority; the main-process scheduler
+  // reserves the second CLI lane for a real click. Results seed the same memo
+  // keys usePolled reads, so the first navigation paints immediately instead of
+  // showing a skeleton while a fresh process starts.
+  const warmedSectionKeys = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!ready || overview.data == null || customRange || claudeConfigSource) return
+    const tasks: Array<{ key: string; fetch: () => Promise<unknown> }> = [
+      {
+        key: sessionsReportKey(period, provider),
+        fetch: () => codeburn.getSessions(period, provider, undefined, true),
+      },
+      {
+        key: modelsReportKey(period, provider, false),
+        fetch: () => codeburn.getModels(period, provider, false, undefined, true),
+      },
+      {
+        key: spendFlowReportKey(period, provider),
+        fetch: () => codeburn.getSpendFlow(period, provider, undefined, true),
+      },
+      {
+        key: optimizeReportKey(period, provider),
+        fetch: () => codeburn.getOptimizeReport(period, provider, undefined, true),
+      },
+      {
+        key: compareModelsReportKey(period, provider),
+        fetch: () => codeburn.getCompareModels(period, provider, true),
+      },
+    ]
+
+    let cancelled = false
+    const warm = async () => {
+      for (const task of tasks) {
+        if (cancelled) return
+        if (warmedSectionKeys.current.has(task.key) || hasPolledMemo(task.key)) continue
+        warmedSectionKeys.current.add(task.key)
+        try {
+          const value = await task.fetch()
+          if (!cancelled) primePolledMemo(task.key, value)
+        } catch {
+          // Best effort. Remove the guard so a later dependency change can retry;
+          // a real navigation still fetches and surfaces the structured error.
+          warmedSectionKeys.current.delete(task.key)
+        }
+        if (!cancelled) await new Promise(resolve => setTimeout(resolve, SECTION_PREFETCH_STAGGER_MS))
+      }
+    }
+    const start = setTimeout(() => { void warm() }, SECTION_PREFETCH_START_DELAY_MS)
+    return () => { cancelled = true; clearTimeout(start) }
+  }, [ready, period, provider, customRange, claudeConfigSource, overview.data == null])
+
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(id)
@@ -411,6 +468,8 @@ function AppMain() {
   // couple seconds (quick like the menubar) instead of at the next poll.
   const onConfigMutated = useCallback(() => {
     clearPolledMemo()
+    warmedKeys.current.clear()
+    warmedSectionKeys.current.clear()
     refreshVisible()
   }, [refreshVisible])
 

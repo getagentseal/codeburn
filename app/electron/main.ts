@@ -253,12 +253,15 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     telemetry?.track('cold_start', { ms: Date.now() - (coldStartBegan ?? Date.now()), timedOut })
   }
 
-  const run = (build: (...args: any[]) => string[]): Handler => async (...args: any[]) => {
+  const run = (build: (...args: any[]) => string[], backgroundArg?: number): Handler => async (...args: any[]) => {
     let cmd: string | undefined
     try {
       const argv = build(...args)
       cmd = argv[0]
-      return { ok: true, value: await deps.spawnCli(argv) }
+      const priority: SpawnPriority | undefined = backgroundArg !== undefined && args[backgroundArg] === true
+        ? 'background'
+        : undefined
+      return { ok: true, value: await deps.spawnCli(argv, priority ? { priority } : undefined) }
     } catch (err) {
       const error = toEnvelopeError(err)
       telemetry?.track('cli_error', cliErrorProps(err, cmd))
@@ -270,7 +273,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // --no-timeline (skips buildGranularHistory on every poll). The Swift menubar
   // omits the flag and keeps the timeline unchanged.
   const buildOverviewArgs = (period: string, provider: string, range?: DateRange, configSource?: string | null): string[] => [
-    'status', '--format', 'menubar-json', '--period', vPeriod(period), '--no-timeline',
+    'status', '--format', 'menubar-json', '--period', vPeriod(period), '--no-timeline', '--no-optimize',
     ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)), ...configSourceArgs(vConfigSource(configSource)),
   ]
 
@@ -319,13 +322,13 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getActReport': run(() => ['act', 'report', '--json']),
     'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
       'models', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...(byTask ? ['--by-task'] : []), ...rangeArgs(vRange(range)),
-    ]),
+    ], 4),
     'codeburn:getSessions': run((period: string, provider: string, range?: DateRange) => [
       'sessions', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
-    ]),
+    ], 3),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
-    ]),
+    ], 2),
     'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), '--model-a', vToken(modelA), '--model-b', vToken(modelB),
     ]),
@@ -334,10 +337,10 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     ]),
     'codeburn:getSpendFlow': run((period: string, provider: string, range?: DateRange) => [
       'spend', '--format', 'flow-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
-    ]),
+    ], 3),
     'codeburn:getOptimizeReport': run((period: string, provider: string, range?: DateRange) => [
       'optimize', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
-    ]),
+    ], 3),
     'codeburn:getDevices': run((period: string) => ['devices', '--format', 'json', '--period', vPeriod(period)]),
     'codeburn:getDevicesScan': run(() => ['devices', 'scan', '--format', 'json']),
     'codeburn:getShareStatus': run(() => ['share', 'status', '--format', 'json']),

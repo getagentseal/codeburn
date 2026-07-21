@@ -11,6 +11,7 @@ import { Stat } from '../components/Stat'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatDayLong, formatDayShort, formatDuration, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { sessionsReportKey } from '../lib/reportKeys'
 import type { DateRange, Period, SessionRow } from '../lib/types'
 
 export const INITIAL_VISIBLE = 120
@@ -120,7 +121,7 @@ export function Sessions({
   const report = usePolled<SessionRow[]>(
     () => range ? codeburn.getSessions(period, provider, range) : codeburn.getSessions(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: `sessions|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
+    { enabled: ready, memoKey: sessionsReportKey(period, provider, range) },
   )
   const rows = report.data ?? []
   const q = query.trim().toLowerCase()

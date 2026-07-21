@@ -12,12 +12,14 @@ import { motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { optimizeReportKey, yieldReportKey } from '../lib/reportKeys'
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import type {
   ActReportJson,
   DailyHistoryEntry,
   DateRange,
   MenubarPayload,
+  OptimizeJsonReport,
   Period,
   YieldJsonReport,
 } from '../lib/types'
@@ -669,8 +671,40 @@ export function OverviewContent({
   // so the cold hydration runs once (via overview) rather than 3 parses at once
   // on boot. Defaults true so standalone renders/tests poll normally.
   const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [], { enabled: ready, memoKey: 'overview-act' })
-  const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period, provider), [period, provider], { enabled: ready, memoKey: `overview-yield|${period}|${provider}` })
-  const { data, error } = overview
+  const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period, provider), [period, provider], { enabled: ready, memoKey: yieldReportKey(period, provider) })
+  const optimizeReport = usePolled<OptimizeJsonReport | null>(
+    async () => {
+      if (typeof codeburn.getOptimizeReport !== 'function') return null
+      const report = range
+        ? await codeburn.getOptimizeReport(period, provider, range)
+        : await codeburn.getOptimizeReport(period, provider)
+      // Some older preload/test bridges expose the method but return no value.
+      // Treat that as unavailable enrichment; the lightweight overview remains
+      // fully usable with the optimize fields already present in its payload.
+      return report ?? null
+    },
+    [period, provider, range?.from, range?.to],
+    { enabled: ready, memoKey: optimizeReportKey(period, provider, range) },
+  )
+  const error = overview.error
+  // The headline status call intentionally skips optimize work so the first
+  // frame arrives quickly. Enrich that payload when the independently-cached
+  // optimize report resolves; until then the rest of Overview remains usable.
+  const data = useMemo<MenubarPayload | null>(() => {
+    if (!overview.data || !optimizeReport.data) return overview.data
+    return {
+      ...overview.data,
+      optimize: {
+        findingCount: optimizeReport.data.summary.findingCount,
+        savingsUSD: optimizeReport.data.summary.potentialSavingsCostUSD,
+        topFindings: optimizeReport.data.findings.slice(0, 5).map(finding => ({
+          title: finding.title,
+          impact: finding.severity,
+          savingsUSD: finding.estimatedSavingsUSD,
+        })),
+      },
+    }
+  }, [overview.data, optimizeReport.data])
   const modelIndex = useMemo(() => data ? buildModelIndex(data) : new Map<string, string>(), [data])
 
   if (!data) {

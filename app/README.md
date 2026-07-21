@@ -32,7 +32,7 @@ This follows the menubar pattern:
 
 Current bridge calls:
 
-- Overview: `codeburn status --format menubar-json --period <period> [--provider <provider>]`
+- Overview: `codeburn status --format menubar-json --period <period> --no-timeline --no-optimize [--provider <provider>]`
 - Plans: `codeburn status --format json --period <period>`
 - Models: `codeburn models --format json --period <period> [--provider <provider>] [--by-task]`
 - Optimize: `codeburn yield --format json --period <period>`

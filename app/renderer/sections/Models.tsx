@@ -11,6 +11,7 @@ import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { modelsReportKey } from '../lib/reportKeys'
 import type { AuditRow, DateRange, ModelReportRow, Period } from '../lib/types'
 import type { SettingsPane } from './Settings'
 
@@ -95,7 +96,7 @@ function ModelsUsage({
   const report = usePolled<ModelReportRow[]>(
     () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
     [period, provider, byTask, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: `models|${period}|${provider}|${byTask}|${range?.from ?? ''}-${range?.to ?? ''}` },
+    { enabled: ready, memoKey: modelsReportKey(period, provider, byTask, range) },
   )
 
   if (!report.data) {

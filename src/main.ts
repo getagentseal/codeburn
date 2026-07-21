@@ -1861,6 +1861,20 @@ program
       const projects = await parseAllSessions(range, opts.provider)
       const models = aggregateModelStats(projects)
 
+      // The desktop uses the no-pair form only to populate its model pickers.
+      // Self-correction counts require a separate raw JSONL scan and are not
+      // displayed in that picker, so return the lightweight aggregate before
+      // doing that work. The selected pair path below still enriches both
+      // models with the full metric.
+      if (!opts.modelA && !opts.modelB) {
+        process.stdout.write(JSON.stringify(models, null, 2) + '\n')
+        return
+      }
+      if (!opts.modelA || !opts.modelB) {
+        process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
+        process.exit(1)
+      }
+
       const providers = await getAllProviders()
       const dirs: string[] = []
       for (const provider of providers) {
@@ -1872,14 +1886,6 @@ program
         model.selfCorrections = corrections.get(model.model) ?? 0
       }
 
-      if (!opts.modelA && !opts.modelB) {
-        process.stdout.write(JSON.stringify(models, null, 2) + '\n')
-        return
-      }
-      if (!opts.modelA || !opts.modelB) {
-        process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
-        process.exit(1)
-      }
       const modelA = models.find(model => model.model === opts.modelA)
       const modelB = models.find(model => model.model === opts.modelB)
       if (!modelA) {

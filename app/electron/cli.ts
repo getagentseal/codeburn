@@ -77,10 +77,13 @@ let running = 0
 const interactiveQueue: SlotWaiter[] = []
 const backgroundQueue: SlotWaiter[] = []
 
-/** Grant free slots to queued waiters, interactive first, up to the cap. */
+/** Grant free slots to queued waiters, interactive first, up to the cap.
+ * Background warmups intentionally use at most MAX-1 slots so speculative tab
+ * prefetch can never occupy every CLI lane; a click always has one lane ready. */
 function pumpSlots(): void {
   while (running < MAX_CONCURRENT_CLI) {
-    const waiter = interactiveQueue.shift() ?? backgroundQueue.shift()
+    const interactive = interactiveQueue.shift()
+    const waiter = interactive ?? (running < MAX_CONCURRENT_CLI - 1 ? backgroundQueue.shift() : undefined)
     if (!waiter) return
     running += 1
     waiter.resolve()

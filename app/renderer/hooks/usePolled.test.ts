@@ -101,7 +101,7 @@ describe('usePolled', () => {
 
     // Mount on key kA, resolve to A0 → memoized under kA.
     const { result, rerender } = renderHook(
-      ({ k }: { k: string }) => usePolled(fetcher, [k], { memoKey: k }),
+      ({ k }: { k: string }) => usePolled(fetcher, [k], { memoKey: k, intervalMs: null }),
       { initialProps: { k: 'kA' } },
     )
     await act(async () => { resolvers[0]!('A0') })
@@ -124,6 +124,21 @@ describe('usePolled', () => {
     await act(async () => { resolvers[2]!('A1') })
     expect(result.current.data).toBe('A1')
     expect(result.current.switching).toBe(false)
+  })
+
+  it('does not refetch a fresh memoized result on remount, but manual refresh bypasses freshness', async () => {
+    primePolledMemo('fresh-tab', 'cached')
+    const fetcher = vi.fn().mockResolvedValue('fresh')
+    const { result } = renderHook(() => usePolled(fetcher, [], { memoKey: 'fresh-tab', intervalMs: 60_000 }))
+
+    await act(async () => {})
+    expect(result.current.data).toBe('cached')
+    expect(result.current.loading).toBe(false)
+    expect(fetcher).not.toHaveBeenCalled()
+
+    await act(async () => { result.current.refresh() })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(result.current.data).toBe('fresh')
   })
 
   it('clears stale data on a switch to an unmemoized key (skeleton, never the prior filter)', async () => {

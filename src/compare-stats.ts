@@ -1,4 +1,5 @@
-import { readdir, readFile } from 'fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'fs/promises'
+import { homedir } from 'os'
 import { join } from 'path'
 
 import type { ProjectSummary } from './types.js'
@@ -342,6 +343,64 @@ function isCompactFile(name: string): boolean {
   return name.includes('compact')
 }
 
+const SELF_CORRECTION_CACHE_VERSION = 1
+const SELF_CORRECTION_CACHE_FILE = `compare-self-corrections.v${SELF_CORRECTION_CACHE_VERSION}.json`
+
+type CorrectionEvent = { key: string; model: string; correction: boolean }
+type CorrectionFileCache = {
+  mtimeMs: number
+  sizeBytes: number
+  events: CorrectionEvent[]
+}
+type CorrectionCache = {
+  version: number
+  files: Record<string, CorrectionFileCache>
+}
+
+function correctionCacheDir(): string {
+  return process.env['CODEBURN_CACHE_DIR'] ?? join(homedir(), '.cache', 'codeburn')
+}
+
+function correctionCachePath(): string {
+  return join(correctionCacheDir(), SELF_CORRECTION_CACHE_FILE)
+}
+
+async function loadCorrectionCache(): Promise<CorrectionCache> {
+  try {
+    const parsed = JSON.parse(await readFile(correctionCachePath(), 'utf8')) as Partial<CorrectionCache>
+    if (parsed.version !== SELF_CORRECTION_CACHE_VERSION || !parsed.files || typeof parsed.files !== 'object') {
+      return { version: SELF_CORRECTION_CACHE_VERSION, files: {} }
+    }
+    return { version: SELF_CORRECTION_CACHE_VERSION, files: parsed.files }
+  } catch {
+    return { version: SELF_CORRECTION_CACHE_VERSION, files: {} }
+  }
+}
+
+function isCorrectionFileCache(value: unknown): value is CorrectionFileCache {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<CorrectionFileCache>
+  return typeof entry.mtimeMs === 'number'
+    && typeof entry.sizeBytes === 'number'
+    && Array.isArray(entry.events)
+    && entry.events.every(event => !!event
+      && typeof event === 'object'
+      && typeof event.key === 'string'
+      && typeof event.model === 'string'
+      && typeof event.correction === 'boolean')
+}
+
+async function saveCorrectionCache(cache: CorrectionCache): Promise<void> {
+  try {
+    await mkdir(correctionCacheDir(), { recursive: true })
+    // This is a performance-only cache. A partial write is harmless: the next
+    // run fails validation/JSON parsing and rebuilds it from the transcripts.
+    await writeFile(correctionCachePath(), JSON.stringify(cache), { encoding: 'utf8', mode: 0o600 })
+  } catch {
+    // Read-only homes and transient antivirus locks must never break compare.
+  }
+}
+
 async function collectJsonlFiles(sessionDir: string): Promise<string[]> {
   const entries = await readdir(sessionDir, { withFileTypes: true })
   const files: string[] = []
@@ -363,6 +422,10 @@ async function collectJsonlFiles(sessionDir: string): Promise<string[]> {
 export async function scanSelfCorrections(projectDirs: string[]): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const seen = new Set<string>()
+  const cache = await loadCorrectionCache()
+  let cacheChanged = false
+  const allFiles: string[] = []
+  const discovered = new Set<string>()
 
   for (const dir of projectDirs) {
     let entries
@@ -372,28 +435,45 @@ export async function scanSelfCorrections(projectDirs: string[]): Promise<Map<st
       continue
     }
 
-    const allFiles: string[] = []
-
     for (const entry of entries) {
       if (entry.isFile() && entry.name.endsWith('.jsonl') && !isCompactFile(entry.name)) {
-        allFiles.push(join(dir, entry.name))
+        const file = join(dir, entry.name)
+        if (!discovered.has(file)) { discovered.add(file); allFiles.push(file) }
       } else if (entry.isDirectory()) {
         try {
           const sessionFiles = await collectJsonlFiles(join(dir, entry.name))
-          allFiles.push(...sessionFiles)
+          for (const file of sessionFiles) {
+            if (!discovered.has(file)) { discovered.add(file); allFiles.push(file) }
+          }
         } catch {
           continue
         }
       }
     }
+  }
 
-    for (const file of allFiles) {
+  for (const file of allFiles) {
+    let events: CorrectionEvent[]
+    let fingerprint: { mtimeMs: number; sizeBytes: number }
+    try {
+      const info = await stat(file)
+      fingerprint = { mtimeMs: info.mtimeMs, sizeBytes: info.size }
+    } catch {
+      continue
+    }
+
+    const cached = cache.files[file]
+    if (isCorrectionFileCache(cached) && cached.mtimeMs === fingerprint.mtimeMs && cached.sizeBytes === fingerprint.sizeBytes) {
+      events = cached.events
+    } else {
       let raw: string
       try {
         raw = await readFile(file, 'utf8')
       } catch {
         continue
       }
+
+      events = []
 
       for (const line of raw.split('\n')) {
         const trimmed = line.trim()
@@ -418,16 +498,24 @@ export async function scanSelfCorrections(projectDirs: string[]): Promise<Map<st
         if (typeof model !== 'string' || model === '<synthetic>') continue
 
         const dedupeKey = `${model}:${ts}`
-        if (seen.has(dedupeKey)) continue
-        seen.add(dedupeKey)
-
         const text = extractText(msgRec['content'])
-        if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
-          counts.set(model, (counts.get(model) ?? 0) + 1)
-        }
+        events.push({ key: dedupeKey, model, correction: SELF_CORRECTION_PATTERNS.some(p => p.test(text)) })
       }
+
+      cache.files[file] = { ...fingerprint, events }
+      cacheChanged = true
+    }
+
+    // Keep the original global model+timestamp deduplication semantics even
+    // when events came from different cached files.
+    for (const event of events) {
+      if (seen.has(event.key)) continue
+      seen.add(event.key)
+      if (event.correction) counts.set(event.model, (counts.get(event.model) ?? 0) + 1)
     }
   }
+
+  if (cacheChanged) await saveCorrectionCache(cache)
 
   return counts
 }

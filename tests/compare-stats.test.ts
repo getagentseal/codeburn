@@ -278,12 +278,17 @@ function jsonlLine(type: string, model: string, text: string, timestamp = '2026-
 
 describe('scanSelfCorrections', () => {
   let tmpDir: string
+  let previousCacheDir: string | undefined
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'codeburn-test-'))
+    previousCacheDir = process.env['CODEBURN_CACHE_DIR']
+    process.env['CODEBURN_CACHE_DIR'] = join(tmpDir, 'cache')
   })
 
   afterEach(async () => {
+    if (previousCacheDir === undefined) delete process.env['CODEBURN_CACHE_DIR']
+    else process.env['CODEBURN_CACHE_DIR'] = previousCacheDir
     await rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -405,6 +410,22 @@ describe('scanSelfCorrections', () => {
     } finally {
       await rm(dir2, { recursive: true, force: true })
     }
+  })
+
+  it('invalidates only a changed file fingerprint and includes appended corrections', async () => {
+    const sessionDir = join(tmpDir, 'session-growing')
+    await mkdir(sessionDir)
+    const file = join(sessionDir, 'session.jsonl')
+    await writeFile(file, jsonlLine('assistant', 'opus-4-6', 'I was wrong.', '2026-04-15T10:00:00Z') + '\n')
+
+    expect((await scanSelfCorrections([tmpDir])).get('opus-4-6')).toBe(1)
+
+    await writeFile(file, [
+      jsonlLine('assistant', 'opus-4-6', 'I was wrong.', '2026-04-15T10:00:00Z'),
+      jsonlLine('assistant', 'opus-4-6', 'My mistake.', '2026-04-15T10:01:00Z'),
+    ].join('\n') + '\n')
+
+    expect((await scanSelfCorrections([tmpDir])).get('opus-4-6')).toBe(2)
   })
 })
 

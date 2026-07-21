@@ -9,6 +9,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { optimizeReportKey, yieldReportKey } from '../lib/reportKeys'
 import type { DateRange, MenubarPayload, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
 
 type OptimizeTab = 'waste' | 'reverts' | 'abandoned' | 'fixes'
@@ -41,12 +42,12 @@ export function OptimizeContent({
   const optimizeReport = usePolled<OptimizeJsonReport>(
     () => range ? codeburn.getOptimizeReport(period, provider, range) : codeburn.getOptimizeReport(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: `optimize|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
+    { enabled: ready, memoKey: optimizeReportKey(period, provider, range) },
   )
   const yieldReport = usePolled<YieldJsonReport>(
     () => range ? codeburn.getYield(period, provider, range) : codeburn.getYield(period, provider),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: `optyield|${period}|${provider}|${range?.from ?? ''}-${range?.to ?? ''}` },
+    { enabled: ready, memoKey: yieldReportKey(period, provider, range) },
   )
   const [tab, setTab] = useState<OptimizeTab>('waste')
 
@@ -59,11 +60,11 @@ export function OptimizeContent({
   const revertedTotal = yieldData ? formatUsd(yieldData.summary.reverted.costUSD) : '—'
   const abandonedTotal = yieldData ? formatUsd(yieldData.summary.abandoned.costUSD) : '—'
   const options = [
-    { value: 'waste', label: `Waste ${formatUsd(overview.data.optimize.savingsUSD)}` },
+    { value: 'waste', label: `Waste ${formatUsd(optimizeReport.data?.summary.potentialSavingsCostUSD ?? 0)}` },
     { value: 'reverts', label: `Reverts ${revertedTotal}` },
     { value: 'abandoned', label: `Abandoned ${abandonedTotal}` },
-    // The Fixes tab renders topFindings (capped list), so label the count that shows.
-    { value: 'fixes', label: `Fixes ${overview.data.optimize.topFindings.length.toLocaleString('en-US')}` },
+    // The Fixes tab renders the complete optimize report, so use its full count.
+    { value: 'fixes', label: `Fixes ${(optimizeReport.data?.summary.findingCount ?? 0).toLocaleString('en-US')}` },
   ]
 
   return (
@@ -83,7 +84,7 @@ export function OptimizeContent({
         ) : tab === 'abandoned' ? (
           <YieldRows report={yieldReport} category="abandoned" empty="No abandoned sessions in this range yet." />
         ) : (
-          <FixesRows data={overview.data} />
+          <FixesRows report={optimizeReport} />
         )}
       </Panel>
     </>
@@ -234,6 +235,15 @@ function YieldRows({
   )
 }
 
-function FixesRows({ data }: { data: MenubarPayload }) {
-  return <FindingRows findings={data.optimize.topFindings} empty="No fixes in this range yet." />
+function FixesRows({ report }: { report: Polled<OptimizeJsonReport> }) {
+  if (!report.data) {
+    if (report.error) return <CliErrorPanel error={report.error} subject="optimize findings" />
+    return <EmptyNote>Scanning optimize findings…</EmptyNote>
+  }
+  const findings: Finding[] = report.data.findings.map(finding => ({
+    title: finding.title,
+    impact: finding.severity,
+    savingsUSD: finding.estimatedSavingsUSD,
+  }))
+  return <FindingRows findings={findings} empty="No fixes in this range yet." />
 }

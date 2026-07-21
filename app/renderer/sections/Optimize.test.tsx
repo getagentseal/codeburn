@@ -208,7 +208,7 @@ describe('Optimize', () => {
     expect(screen.getByText('No abandoned sessions in this range yet.')).toBeInTheDocument()
   })
 
-  it('labels the Fixes tab with the rendered list length, not the menubar-wide findingCount', async () => {
+  it('labels the Fixes tab from the full optimize report', async () => {
     const payload = makePayload()
     // The menubar counts 25 findings, but the Fixes tab only renders topFindings.
     payload.optimize = {
@@ -223,7 +223,7 @@ describe('Optimize', () => {
 
     render(<Optimize period="30days" provider="all" />)
 
-    expect(await screen.findByRole('tab', { name: 'Fixes 2' })).toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Fixes 3' })).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Fixes 25' })).not.toBeInTheDocument()
   })
 

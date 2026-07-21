@@ -29,9 +29,10 @@ export type Polled<T> = {
 // storm). The App raises it via setPolledMemoMax to (detected providers + base
 // keys); DEFAULT_MEMO_MAX is the floor for isolated hook/component tests.
 const DEFAULT_MEMO_MAX = 8
-const MEMO_MAX_CAP = 24
+const MEMO_MAX_CAP = 64
 let memoMax = DEFAULT_MEMO_MAX
-const memoStore = new Map<string, unknown>()
+type MemoEntry = { value: unknown; at: number }
+const memoStore = new Map<string, MemoEntry>()
 
 /** Raise (or lower) the instant-switch memo cap so warmed entries survive between
  *  polls. Clamped to [DEFAULT_MEMO_MAX, MEMO_MAX_CAP]; trims immediately if the
@@ -46,18 +47,18 @@ export function setPolledMemoMax(n: number): void {
   }
 }
 
-function memoGet<T>(key: string): T | undefined {
+function memoGet<T>(key: string): { value: T; at: number } | undefined {
   if (!memoStore.has(key)) return undefined
-  const value = memoStore.get(key) as T
+  const entry = memoStore.get(key) as MemoEntry
   // Touch recency.
   memoStore.delete(key)
-  memoStore.set(key, value)
-  return value
+  memoStore.set(key, entry)
+  return { value: entry.value as T, at: entry.at }
 }
 
-function memoSet(key: string, value: unknown): void {
+function memoSet(key: string, value: unknown, at = Date.now()): void {
   if (memoStore.has(key)) memoStore.delete(key)
-  memoStore.set(key, value)
+  memoStore.set(key, { value, at })
   while (memoStore.size > memoMax) {
     const oldest = memoStore.keys().next().value
     if (oldest === undefined) break
@@ -120,11 +121,15 @@ export function usePolled<T>(
   const intervalMs = opts.intervalMs !== undefined ? opts.intervalMs : cadence.intervalMs
   const enabled = opts.enabled ?? true
   const memoKey = opts.memoKey
-  const [data, setData] = useState<T | null>(() => (memoKey ? memoGet<T>(memoKey) ?? null : null))
+  const [data, setData] = useState<T | null>(() => (memoKey ? memoGet<T>(memoKey)?.value ?? null : null))
   const [error, setError] = useState<CliError | null>(null)
   const [loading, setLoading] = useState(true)
   const [switching, setSwitching] = useState(false)
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null)
+  // Fresh memo data suppresses only the first load after a component remount.
+  // Later dependency changes (provider/period/config/refreshToken) must still
+  // revalidate, even when they switch to a recently-prefetched key.
+  const initialLoadRef = useRef(true)
   // Generation counter: every load() (mount, deps change, interval, refresh)
   // claims the next epoch; a fetch applies its result only while its epoch is
   // still current. This is what keeps a slow fetch from an older deps/period
@@ -134,8 +139,10 @@ export function usePolled<T>(
   // visibilitychange catch-up can read it without re-subscribing on every poll.
   const lastSuccessRef = useRef<number | null>(null)
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     if (!enabled) return
+    const initialLoad = initialLoadRef.current
+    initialLoadRef.current = false
     const epoch = ++epochRef.current
     // Instant paint: on a deps/key change, if a last-good result for the new key
     // is cached, show it immediately and flag `switching` while the fresh fetch
@@ -144,10 +151,29 @@ export function usePolled<T>(
     // numbers. (An interval re-poll keeps the same key, whose last result is
     // always cached, so a background refresh never blanks.)
     let servedCached = false
+    let cachedAt: number | null = null
     if (memoKey) {
       const cached = memoGet<T>(memoKey)
-      if (cached !== undefined) { setData(cached); servedCached = true }
+      if (cached !== undefined) {
+        setData(cached.value)
+        servedCached = true
+        cachedAt = cached.at
+      }
       else setData(null)
+    }
+    // A tab remount or switch-back should not immediately launch an identical
+    // CLI process when its last-good result is still inside the configured
+    // refresh cadence. Manual cadence keeps memoized data until Refresh is
+    // explicitly clicked. Stale entries continue through the normal
+    // stale-while-revalidate path below.
+    const cachedIsFresh = cachedAt !== null && (intervalMs === null || Date.now() - cachedAt < intervalMs)
+    if (servedCached && initialLoad && !force && cachedIsFresh) {
+      setLoading(false)
+      setSwitching(false)
+      setError(null)
+      setLastSuccessAt(cachedAt)
+      lastSuccessRef.current = cachedAt
+      return
     }
     setLoading(true)
     setSwitching(servedCached)
@@ -177,7 +203,7 @@ export function usePolled<T>(
     // `memoKey` are prepended so flipping the gate / key re-creates load and
     // fires immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, memoKey, ...deps])
+  }, [enabled, memoKey, intervalMs, ...deps])
 
   useEffect(() => {
     load()
@@ -212,7 +238,7 @@ export function usePolled<T>(
   }, [load, intervalMs])
 
   const refresh = useCallback(() => {
-    load()
+    load(true)
   }, [load])
 
   return { data, error, loading, switching, lastSuccessAt, refresh }
