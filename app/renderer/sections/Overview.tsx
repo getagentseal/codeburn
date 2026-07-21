@@ -659,6 +659,7 @@ export function OverviewContent({
   overview,
   onNavigate,
   ready = true,
+  refreshToken = 0,
 }: {
   period: Period
   provider?: string
@@ -666,12 +667,17 @@ export function OverviewContent({
   overview: Polled<MenubarPayload>
   onNavigate?: (section: 'optimize' | 'sessions') => void
   ready?: boolean
+  refreshToken?: number
 }) {
   // Gate secondary spawns on the app-level readiness (first overview resolved),
   // so the cold hydration runs once (via overview) rather than 3 parses at once
   // on boot. Defaults true so standalone renders/tests poll normally.
   const actReport = usePolled<ActReportJson>(() => codeburn.getActReport(), [], { enabled: ready, memoKey: 'overview-act' })
-  const yieldReport = usePolled<YieldJsonReport>(() => codeburn.getYield(period, provider), [period, provider], { enabled: ready, memoKey: yieldReportKey(period, provider) })
+  const yieldReport = usePolled<YieldJsonReport>(
+    () => range ? codeburn.getYield(period, provider, range) : codeburn.getYield(period, provider),
+    [period, provider, range?.from, range?.to, refreshToken],
+    { enabled: ready, memoKey: yieldReportKey(period, provider, range) },
+  )
   const optimizeReport = usePolled<OptimizeJsonReport | null>(
     async () => {
       if (typeof codeburn.getOptimizeReport !== 'function') return null
@@ -683,7 +689,7 @@ export function OverviewContent({
       // fully usable with the optimize fields already present in its payload.
       return report ?? null
     },
-    [period, provider, range?.from, range?.to],
+    [period, provider, range?.from, range?.to, refreshToken],
     { enabled: ready, memoKey: optimizeReportKey(period, provider, range) },
   )
   const error = overview.error
@@ -697,7 +703,9 @@ export function OverviewContent({
       optimize: {
         findingCount: optimizeReport.data.summary.findingCount,
         savingsUSD: optimizeReport.data.summary.potentialSavingsCostUSD,
-        topFindings: optimizeReport.data.findings.slice(0, 5).map(finding => ({
+        // Match menubar-json's public cap so deferred enrichment is a strict
+        // replacement for the former inline optimize block.
+        topFindings: optimizeReport.data.findings.slice(0, 10).map(finding => ({
           title: finding.title,
           impact: finding.severity,
           savingsUSD: finding.estimatedSavingsUSD,
@@ -705,6 +713,9 @@ export function OverviewContent({
       },
     }
   }, [overview.data, optimizeReport.data])
+  const optimizeReady = optimizeReport.data !== null
+    || !!overview.data?.optimize.findingCount
+    || (overview.data?.optimize.savingsUSD ?? 0) > 0
   const modelIndex = useMemo(() => data ? buildModelIndex(data) : new Map<string, string>(), [data])
 
   if (!data) {
@@ -782,8 +793,13 @@ export function OverviewContent({
           <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
           <div className="ov-coach-tx">
             {rangeActive
-              ? <>{topModel ? <><span className="num">{topModel.name}</span> is the biggest driver in this range</> : 'No single model dominates this range'}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>
-              : <>{weeklyPct === null ? <>No prior-week pacing baseline yet</> : <>You're pacing <span className="num">{weeklyPct}% {weeklyDirection}</span> than last week</>}{topModel ? <>; <span className="num">{topModel.name}</span> is the biggest driver</> : ''}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>}
+              ? <>{topModel ? <><span className="num">{topModel.name}</span> is the biggest driver in this range</> : 'No single model dominates this range'}.</>
+              : <>{weeklyPct === null ? <>No prior-week pacing baseline yet</> : <>You're pacing <span className="num">{weeklyPct}% {weeklyDirection}</span> than last week</>}{topModel ? <>; <span className="num">{topModel.name}</span> is the biggest driver</> : ''}.</>}
+            {' '}{optimizeReport.error
+              ? 'Recoverable spend is unavailable.'
+              : optimizeReady
+                ? <><span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>
+                : 'Scanning recoverable spend…'}
           </div>
           <button className="ov-coach-cta" type="button" onClick={() => onNavigate?.('optimize')}>Review →</button>
         </div>

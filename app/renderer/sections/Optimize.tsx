@@ -60,11 +60,11 @@ export function OptimizeContent({
   const revertedTotal = yieldData ? formatUsd(yieldData.summary.reverted.costUSD) : '—'
   const abandonedTotal = yieldData ? formatUsd(yieldData.summary.abandoned.costUSD) : '—'
   const options = [
-    { value: 'waste', label: `Waste ${formatUsd(optimizeReport.data?.summary.potentialSavingsCostUSD ?? 0)}` },
+    { value: 'waste', label: `Waste ${optimizeReport.data ? formatUsd(optimizeReport.data.summary.potentialSavingsCostUSD) : '—'}` },
     { value: 'reverts', label: `Reverts ${revertedTotal}` },
     { value: 'abandoned', label: `Abandoned ${abandonedTotal}` },
     // The Fixes tab renders the complete optimize report, so use its full count.
-    { value: 'fixes', label: `Fixes ${(optimizeReport.data?.summary.findingCount ?? 0).toLocaleString('en-US')}` },
+    { value: 'fixes', label: `Fixes ${optimizeReport.data ? optimizeReport.data.summary.findingCount.toLocaleString('en-US') : '—'}` },
   ]
 
   return (

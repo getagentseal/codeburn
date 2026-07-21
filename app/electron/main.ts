@@ -327,7 +327,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       'sessions', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
-      'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
+      'compare', '--format', 'json', '--period', vPeriod(period), '--summary-only', ...providerArgs(vProvider(provider)),
     ], 2),
     'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), '--model-a', vToken(modelA), '--model-b', vToken(modelB),

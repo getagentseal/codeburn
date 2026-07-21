@@ -46,9 +46,10 @@ Supported M1 periods are `today`, `week`, `30days`, `month`, and `all`. Provider
 
 ## Sections
 
-- Overview: daily spend, spend stats, waste summary, and expensive sessions from `menubar-json`.
+- Overview: daily spend and expensive sessions from lightweight `menubar-json`; optimize/yield enrichment loads independently after first paint.
 - Spend: project/activity/tool/MCP/subagent lenses plus model-to-project flow.
-- Optimize: waste findings from `menubar-json` and reverted/abandoned yield data.
+- Optimize: full waste findings from `optimize --format json` and reverted/abandoned yield data.
+- Compare: lightweight model picker from `compare --format json --summary-only`, followed by an exact selected-pair report.
 - Models: model and task tables from `models --format json`.
 - Plans: plan pacing from `status --format json`.
 - Settings: device identity, nearby scan results, paired-device usage, and M2 visual affordances.

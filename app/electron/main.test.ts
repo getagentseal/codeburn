@@ -80,7 +80,7 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getModels', args: ['week', 'all', false], argv: ['models', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getSessions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
-  { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
+  { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--summary-only', '--provider', 'codex'] },
   { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
   { channel: 'codeburn:getYield', args: ['today', 'all'], argv: ['yield', '--format', 'json', '--period', 'today'] },
   { channel: 'codeburn:getYield', args: ['today', 'claude'], argv: ['yield', '--format', 'json', '--period', 'today', '--provider', 'claude'] },
@@ -454,7 +454,7 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
 
     expect(spawnCli.mock.calls[0]?.[0]).toEqual(['sessions', '--format', 'json', '--period', '30days'])
     expect(spawnCli.mock.calls[1]?.[0]).toEqual(['models', '--format', 'json', '--period', '30days'])
-    expect(spawnCli.mock.calls[2]?.[0]).toEqual(['compare', '--format', 'json', '--period', '30days'])
+    expect(spawnCli.mock.calls[2]?.[0]).toEqual(['compare', '--format', 'json', '--period', '30days', '--summary-only'])
     expect(opts.map(o => o?.priority)).toEqual(['background', 'background', 'background'])
   })
 

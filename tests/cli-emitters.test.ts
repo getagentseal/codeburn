@@ -23,7 +23,7 @@ function userLine(sessionId: string, timestamp: string): string {
   })
 }
 
-function assistantLine(sessionId: string, timestamp: string, messageId: string, model: string): string {
+function assistantLine(sessionId: string, timestamp: string, messageId: string, model: string, text = 'done'): string {
   return JSON.stringify({
     type: 'assistant',
     sessionId,
@@ -33,7 +33,7 @@ function assistantLine(sessionId: string, timestamp: string, messageId: string, 
       type: 'message',
       role: 'assistant',
       model,
-      content: [{ type: 'text', text: 'done' }],
+      content: [{ type: 'text', text }],
       usage: { input_tokens: 1000, output_tokens: 100 },
     },
   })
@@ -45,7 +45,7 @@ async function makeHome(): Promise<string> {
   await mkdir(projectDir, { recursive: true })
   await writeFile(join(projectDir, 'session-a.jsonl'), [
     userLine('session-a', '2026-04-10T09:00:00Z'),
-    assistantLine('session-a', '2026-04-10T09:01:00Z', 'msg-a', 'claude-sonnet-4-5'),
+    assistantLine('session-a', '2026-04-10T09:01:00Z', 'msg-a', 'claude-sonnet-4-5', 'I was wrong about that.'),
   ].join('\n'))
   await writeFile(join(projectDir, 'session-b.jsonl'), [
     userLine('session-b', '2026-04-10T10:00:00Z'),
@@ -63,6 +63,14 @@ describe('CLI JSON emitters', () => {
       const models = JSON.parse(listResult.stdout) as Array<{ model: string; selfCorrections: number }>
       expect(models.map(model => model.model)).toEqual(expect.arrayContaining(['claude-sonnet-4-5', 'claude-opus-4-5']))
       expect(models.every(model => typeof model.selfCorrections === 'number')).toBe(true)
+      expect(models.find(model => model.model === 'claude-sonnet-4-5')?.selfCorrections).toBe(1)
+
+      const summaryResult = runCli([
+        'compare', '--format', 'json', '--period', 'all', '--provider', 'claude', '--summary-only',
+      ], home)
+      expect(summaryResult.status, summaryResult.stderr).toBe(0)
+      const summaries = JSON.parse(summaryResult.stdout) as Array<{ model: string; selfCorrections: number }>
+      expect(summaries.every(model => model.selfCorrections === 0)).toBe(true)
 
       const fullResult = runCli([
         'compare', '--format', 'json', '--period', 'all', '--provider', 'claude',

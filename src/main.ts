@@ -1851,6 +1851,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--model-a <model>', 'First model to compare')
   .option('--model-b <model>', 'Second model to compare')
+  .option('--summary-only', 'List models without transcript-level self-correction metrics')
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare')
     assertFormat(opts.format, ['tui', 'json'], 'compare')
@@ -1861,17 +1862,18 @@ program
       const projects = await parseAllSessions(range, opts.provider)
       const models = aggregateModelStats(projects)
 
-      // The desktop uses the no-pair form only to populate its model pickers.
-      // Self-correction counts require a separate raw JSONL scan and are not
-      // displayed in that picker, so return the lightweight aggregate before
-      // doing that work. The selected pair path below still enriches both
-      // models with the full metric.
-      if (!opts.modelA && !opts.modelB) {
+      if (!opts.modelA && !opts.modelB && opts.summaryOnly) {
         process.stdout.write(JSON.stringify(models, null, 2) + '\n')
         return
       }
       if (!opts.modelA || !opts.modelB) {
-        process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
+        if (opts.modelA || opts.modelB) {
+          process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
+          process.exit(1)
+        }
+      }
+      if (opts.summaryOnly) {
+        process.stderr.write('codeburn compare: --summary-only cannot be combined with --model-a or --model-b.\n')
         process.exit(1)
       }
 
@@ -1884,6 +1886,14 @@ program
       const corrections = await scanSelfCorrections(dirs)
       for (const model of models) {
         model.selfCorrections = corrections.get(model.model) ?? 0
+      }
+
+      // Preserve the public no-pair JSON contract, including accurate
+      // self-correction counts. The desktop picker opts into --summary-only
+      // because it only displays calls/cost and can safely skip this scan.
+      if (!opts.modelA && !opts.modelB) {
+        process.stdout.write(JSON.stringify(models, null, 2) + '\n')
+        return
       }
 
       const modelA = models.find(model => model.model === opts.modelA)

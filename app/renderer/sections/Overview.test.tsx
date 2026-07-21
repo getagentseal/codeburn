@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Polled } from '../hooks/usePolled'
 import { setActiveCurrency } from '../lib/format'
-import type { ActReportJson, DailyHistoryEntry, MenubarPayload, YieldJsonReport } from '../lib/types'
+import type { ActReportJson, DailyHistoryEntry, MenubarPayload, OptimizeJsonReport, YieldJsonReport } from '../lib/types'
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
 function polled(data: MenubarPayload): Polled<MenubarPayload> {
@@ -14,14 +14,15 @@ function polled(data: MenubarPayload): Polled<MenubarPayload> {
 // Mock the typed bridge so the section fetches our payload instead of spawning
 // the CLI. `normalizeCliError` (used by usePolled) is kept from the real module.
 // `vi.hoisted` lets the hoisted `vi.mock` factory reference the spy safely.
-const { getOverview, getActReport, getYield } = vi.hoisted(() => ({
+const { getOverview, getActReport, getYield, getOptimizeReport } = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getActReport: vi.fn<() => Promise<ActReportJson>>(),
-  getYield: vi.fn<(period: string, provider: string) => Promise<YieldJsonReport>>(),
+  getYield: vi.fn<(period: string, provider: string, range?: { from: string; to: string }) => Promise<YieldJsonReport>>(),
+  getOptimizeReport: vi.fn<(period: string, provider: string, range?: { from: string; to: string }) => Promise<OptimizeJsonReport | undefined>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getOverview, getActReport, getYield } }
+  return { ...actual, codeburn: { getOverview, getActReport, getYield, getOptimizeReport } }
 })
 
 function makeYieldReport(): YieldJsonReport {
@@ -177,6 +178,7 @@ describe('Overview', () => {
     getOverview.mockReset()
     getActReport.mockReset()
     getYield.mockReset()
+    getOptimizeReport.mockReset()
     getActReport.mockResolvedValue({ totals: { realizedCostUSD: 84.2, measuredActions: 11 } })
     getYield.mockResolvedValue(makeYieldReport())
   })
@@ -507,6 +509,55 @@ describe('Overview', () => {
     expect(screen.getByText(/is the biggest driver in this range/)).toBeInTheDocument()
   })
 
+  it('applies a custom range to yield enrichment and refreshes it on manual refresh', async () => {
+    const overview = polled(makePayload(new Date()))
+    const range = { from: '2026-02-03', to: '2026-02-09' }
+    const { rerender } = render(
+      <OverviewContent period="30days" provider="all" range={range} overview={overview} refreshToken={1} />,
+    )
+
+    await waitFor(() => expect(getYield).toHaveBeenCalledWith('30days', 'all', range))
+    const callsBeforeRefresh = getYield.mock.calls.length
+
+    rerender(<OverviewContent period="30days" provider="all" range={range} overview={overview} refreshToken={2} />)
+    await waitFor(() => expect(getYield.mock.calls.length).toBeGreaterThan(callsBeforeRefresh))
+  })
+
+  it('replaces lightweight overview placeholders with the exact optimize report', async () => {
+    const payload = makePayload(new Date())
+    payload.optimize = { findingCount: 0, savingsUSD: 0, topFindings: [] }
+    getOptimizeReport.mockResolvedValue({
+      period: { label: 'Last 30 days', start: null, end: null },
+      summary: {
+        healthScore: 72,
+        healthGrade: 'B',
+        findingCount: 1,
+        periodCostUSD: 100,
+        sessions: 4,
+        calls: 20,
+        potentialSavingsTokens: 250_000,
+        potentialSavingsCostUSD: 17.25,
+        potentialSavingsPercent: 17.3,
+        costRateUSD: 0.000069,
+      },
+      findings: [{
+        id: 'cache-missed',
+        title: 'Unique deferred optimize finding',
+        explanation: 'Use prompt caching.',
+        severity: 'high',
+        trend: null,
+        tokensSaved: 250_000,
+        estimatedSavingsUSD: 17.25,
+        fix: { type: 'paste', label: 'Apply', text: 'cache this prompt' },
+      }],
+    })
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    expect(await screen.findByText('Unique deferred optimize finding')).toBeInTheDocument()
+    expect(screen.getAllByText('$17.25').length).toBeGreaterThan(0)
+  })
+
   it('renders local-model savings in the hero only when present', async () => {
     const now = new Date()
     const payload = makePayload(now)
@@ -718,6 +769,7 @@ describe('Overview workflow card', () => {
     getOverview.mockReset()
     getActReport.mockReset()
     getYield.mockReset()
+    getOptimizeReport.mockReset()
     getActReport.mockResolvedValue({ totals: { realizedCostUSD: 0, measuredActions: 0 } })
     getYield.mockResolvedValue(makeYieldReport())
   })
