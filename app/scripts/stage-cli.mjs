@@ -81,11 +81,15 @@ try {
 // Map each back to its top-level node_modules entry (`name` or `@scope/name`),
 // then copy those dirs whole — a package's own nested node_modules comes with
 // it, which is exactly the closure it needs at runtime.
-const prefix = rootModules + '/'
+// `npm ls --parseable` uses native separators on Windows. Normalize both sides
+// before extracting the package name so Store builds do not treat a populated
+// node_modules tree as empty merely because it uses `\\` instead of `/`.
+const prefix = rootModules.replaceAll('\\', '/') + '/'
 const topLevel = new Set()
 for (const line of listed.split('\n')) {
-  if (!line.startsWith(prefix)) continue
-  const rest = line.slice(prefix.length)
+  const normalizedLine = line.trim().replaceAll('\\', '/')
+  if (!normalizedLine.startsWith(prefix)) continue
+  const rest = normalizedLine.slice(prefix.length)
   const match = rest.match(/^(@[^/]+\/[^/]+|[^/]+)/)
   if (match) topLevel.add(match[1])
 }
