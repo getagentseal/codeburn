@@ -220,6 +220,12 @@ export type SessionSummary = {
   /// turn falls outside the report's range. Empty array = spawn had no active PR
   /// (the child is then unattributed). Absent when the session spawned no subagent.
   spawnPrSets?: Record<string, string[]>
+  /// Claude Code only: on a PARENT session, the agent ids whose spawn result named
+  /// them (so we KNOW they were spawned here) but whose exact launching `tool_use`
+  /// id could not be paired (an ambiguous multi-result record). Such a child that
+  /// then lands just after the parent's last turn is folded to that turn within a
+  /// grace window rather than lost. Absent when no pairing was ambiguous.
+  ambiguousSpawnAgentIds?: string[]
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number

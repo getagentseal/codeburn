@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-import { parseAllSessions, clearSessionCache } from '../src/parser.js'
+import { parseAllSessions, filterProjectsByDays, clearSessionCache } from '../src/parser.js'
 import { loadPricing } from '../src/models.js'
 import { aggregateByPr, prLinkedTotals } from '../src/sessions-report.js'
 
@@ -84,5 +84,28 @@ describe('subagent fold across a date-range boundary', () => {
     const totals = prLinkedTotals(projects)
     expect(totals.subagentSessions).toBe(1)
     expect(totals.attributedCost).toBeCloseTo(row!.cost, 6)
+  })
+
+  it('survives a day filter: a parent whose in-range turns are day-filtered out becomes an anchor (menubar flow)', async () => {
+    await loadPricing()
+    await writeTranscripts()
+
+    // Wide parse: BOTH the parent (2026-07-19) and child (2026-07-20) are in range,
+    // so the parent is a normal session (no anchor yet).
+    const wide = { start: new Date('2026-07-18T00:00:00Z'), end: new Date('2026-07-21T23:59:59Z') }
+    const projects = await parseAllSessions(wide, 'claude')
+    expect(projects.some(p => p.sessions.some(s => s.sessionId === PARENT))).toBe(true) // parent is a real session here
+
+    // Now narrow to the child's day only. The parent's 2026-07-19 turns are filtered
+    // out, so it must be CONVERTED to a fold anchor rather than dropped.
+    const dayFiltered = filterProjectsByDays(projects, new Set(['2026-07-20']))
+    expect(dayFiltered.some(p => p.sessions.some(s => s.sessionId === PARENT))).toBe(false) // parent no longer a session
+    expect(dayFiltered.some(p => (p.subagentAnchors ?? []).some(s => s.sessionId === PARENT))).toBe(true) // kept as anchor
+
+    // The child's spend still folds to the PR through the anchor.
+    const row = aggregateByPr(dayFiltered).find(r => r.url === PR)
+    expect(row).toBeDefined()
+    expect(row!.cost).toBeGreaterThan(0)
+    expect(prLinkedTotals(dayFiltered).subagentSessions).toBe(1)
   })
 })

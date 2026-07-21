@@ -53,6 +53,7 @@ function richFile(): CachedFile {
     isSidechain: true,
     parentSessionId: 'parent-uuid',
     agentSpawnLinks: { a17e80ec626c9de38: 'toolu_spawn1' },
+    ambiguousSpawnAgentIds: ['a999abcdef0123456'],
     turns: [
       { timestamp: '2026-07-01T10:00:00Z', sessionId: 's1', userMessage: 'hi', gitBranch: 'feature/x', prRefs: ['https://github.com/o/r/pull/1'], spawnToolUseIds: ['toolu_spawn1'], calls: [richCall()] },
     ],
@@ -74,6 +75,7 @@ describe('session cache round-trip for rich-capture fields', () => {
     expect(file.isSidechain).toBe(true)
     expect(file.parentSessionId).toBe('parent-uuid')
     expect(file.agentSpawnLinks).toEqual({ a17e80ec626c9de38: 'toolu_spawn1' })
+    expect(file.ambiguousSpawnAgentIds).toEqual(['a999abcdef0123456'])
 
     const turn = file.turns[0]!
     expect(turn.gitBranch).toBe('feature/x')

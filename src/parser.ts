@@ -1195,10 +1195,14 @@ export type SessionMeta = {
   // spawned it, read from the spawn result's `toolUseResult.agentId`. First value
   // per agentId wins. Empty for sessions that spawned no completed subagent.
   agentSpawnLinks: Record<string, string>
+  // Parent side: agent ids whose spawn result named them but whose exact launching
+  // tool_use could not be paired (an ambiguous multi-result record). Drives the
+  // grace-window fallback for a late child. Deduped.
+  ambiguousSpawnAgentIds: string[]
 }
 
 export function emptySessionMeta(): SessionMeta {
-  return { prLinks: [], isSidechain: false, agentSpawnLinks: {} }
+  return { prLinks: [], isSidechain: false, agentSpawnLinks: {}, ambiguousSpawnAgentIds: [] }
 }
 
 // Count added/removed lines from a Claude `toolUseResult.structuredPatch`. Each
@@ -1293,6 +1297,10 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
           if (matches.length === 1) spawnId = matches[0]!['tool_use_id'] as string
         }
         if (spawnId) meta.agentSpawnLinks[agentId] = spawnId
+        // We know this parent spawned `agentId` (its result named it) but could not
+        // pair the exact tool_use: record it as an AMBIGUOUS pairing so a late child
+        // can still fold via the grace window. Not the same as an absent spawn.
+        else if (!meta.ambiguousSpawnAgentIds.includes(agentId)) meta.ambiguousSpawnAgentIds.push(agentId)
       }
     }
   }
@@ -2050,6 +2058,7 @@ async function scanProjectDirs(
           const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
           const mergedParentSessionId = cached.parentSessionId ?? sessionMeta.parentSessionId
           const mergedSpawnLinks = { ...sessionMeta.agentSpawnLinks, ...cached.agentSpawnLinks }
+          const mergedAmbiguousIds = Array.from(new Set([...(cached.ambiguousSpawnAgentIds ?? []), ...sessionMeta.ambiguousSpawnAgentIds]))
 
           section.files[filePath] = {
             fingerprint: info.fp,
@@ -2064,6 +2073,7 @@ async function scanProjectDirs(
             ...(mergedSidechain ? { isSidechain: true } : {}),
             ...(mergedParentSessionId ? { parentSessionId: mergedParentSessionId } : {}),
             ...(Object.keys(mergedSpawnLinks).length > 0 ? { agentSpawnLinks: mergedSpawnLinks } : {}),
+            ...(mergedAmbiguousIds.length > 0 ? { ambiguousSpawnAgentIds: mergedAmbiguousIds } : {}),
           }
           ;(diskCache as { _dirty?: boolean })._dirty = true
           filesDone++
@@ -2099,6 +2109,7 @@ async function scanProjectDirs(
         ...(sessionMeta.isSidechain ? { isSidechain: true } : {}),
         ...(sessionMeta.parentSessionId ? { parentSessionId: sessionMeta.parentSessionId } : {}),
         ...(Object.keys(sessionMeta.agentSpawnLinks).length > 0 ? { agentSpawnLinks: sessionMeta.agentSpawnLinks } : {}),
+        ...(sessionMeta.ambiguousSpawnAgentIds.length > 0 ? { ambiguousSpawnAgentIds: sessionMeta.ambiguousSpawnAgentIds } : {}),
       }
       ;(diskCache as { _dirty?: boolean })._dirty = true
     } catch (err) {
@@ -2221,6 +2232,7 @@ async function scanProjectDirs(
     if (cachedFile.agentSpawnLinks && Object.keys(cachedFile.agentSpawnLinks).length > 0) {
       session.agentSpawnLinks = cachedFile.agentSpawnLinks
     }
+    if (cachedFile.ambiguousSpawnAgentIds?.length) session.ambiguousSpawnAgentIds = cachedFile.ambiguousSpawnAgentIds
     if (Object.keys(spawnPrSets).length > 0) session.spawnPrSets = spawnPrSets
 
     if (session.apiCalls > 0 || anchorOnly) {
@@ -3118,22 +3130,54 @@ function turnDayString(turn: ClassifiedTurn): string | null {
   return `${y}-${m}-${day}`
 }
 
+// A spawn parent (has spawnPrSets + prLinks) counts as a fold ANCHOR. Kept
+// verbatim (not rebuilt) so its spawnPrSets / prLinks / agentSpawnLinks survive.
+function isSpawnParent(session: SessionSummary): boolean {
+  return !!session.spawnPrSets && !!session.prLinks?.length
+}
+
+// buildSessionSummary rolls up ONLY turn-derived fields, so a rebuilt (date/day/
+// source-filtered) session loses its session-level PR + subagent-linkage metadata.
+// Carry those across so by-PR attribution and subagent folding still work on a
+// filtered slice (without this, a filtered CHILD loses its parentSessionId and can
+// never be linked, and a filtered parent loses its prLinks).
+function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): void {
+  if (original.everHadBranch) rebuilt.everHadBranch = true
+  if (original.prLinks?.length) rebuilt.prLinks = original.prLinks
+  if (original.prRefsAtRangeStart?.length) rebuilt.prRefsAtRangeStart = original.prRefsAtRangeStart
+  if (original.parentSessionId) rebuilt.parentSessionId = original.parentSessionId
+  if (original.agentId) rebuilt.agentId = original.agentId
+  if (original.agentSpawnLinks) rebuilt.agentSpawnLinks = original.agentSpawnLinks
+  if (original.spawnPrSets) rebuilt.spawnPrSets = original.spawnPrSets
+  if (original.ambiguousSpawnAgentIds?.length) rebuilt.ambiguousSpawnAgentIds = original.ambiguousSpawnAgentIds
+  if (original.title) rebuilt.title = original.title
+  if (original.agentType) rebuilt.agentType = original.agentType
+}
+
 export function filterProjectsByDays(projects: ProjectSummary[], days: Set<string>): ProjectSummary[] {
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
+    // Existing anchors are date-EXEMPT (carried unchanged); a spawn parent whose
+    // OWN in-range turns all fall outside the day subset is CONVERTED to an anchor
+    // so its surviving in-range child still resolves. The anchor contributes no
+    // own spend either way.
+    const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => {
         const ds = turnDayString(turn)
         return ds !== null && days.has(ds)
       })
-      if (turns.length === 0) continue
+      if (turns.length === 0) {
+        if (isSpawnParent(session)) anchors.push(session)
+        continue
+      }
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
-      if (session.everHadBranch) rebuilt.everHadBranch = true
+      carryLinkageFields(rebuilt, session)
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    if (sessions.length === 0 && anchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3156,6 +3200,7 @@ export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map
     const existing = mergedMap.get(key)
     if (existing) {
       existing.sessions.push(...p.sessions)
+      if (p.subagentAnchors?.length) existing.subagentAnchors = [...(existing.subagentAnchors ?? []), ...p.subagentAnchors]
       existing.totalCostUSD += p.totalCostUSD
       existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
       existing.totalApiCalls += p.totalApiCalls
@@ -3174,8 +3219,12 @@ export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], s
     const sessions = project.sessions.filter(session =>
       session.source?.id === sourceId
     )
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    // Anchors get the SAME source scoping as sessions (a config-source filter is a
+    // provenance filter, not a date filter), so an anchor stays only with its own
+    // config's children.
+    const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.source?.id === sourceId)
+    if (sessions.length === 0 && anchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3184,15 +3233,21 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
+    // Carry existing anchors and convert a spawn parent whose in-range turns are all
+    // filtered out into one (see filterProjectsByDays).
+    const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
-      if (turns.length === 0) continue
+      if (turns.length === 0) {
+        if (isSpawnParent(session)) anchors.push(session)
+        continue
+      }
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
-      if (session.everHadBranch) rebuilt.everHadBranch = true
+      carryLinkageFields(rebuilt, session)
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions))
+    if (sessions.length === 0 && anchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }

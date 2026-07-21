@@ -216,15 +216,35 @@ function selfLinks(session: { prLinks?: string[] }): boolean {
 // only, and a fold ANCHOR has no in-range turns to infer a provider from, so a
 // linkage-bearing session is always attributed to 'claude'; this keeps a parent
 // and its child on the same key.
+// NUL delimiter for composite keys: it cannot appear in a provider name, project
+// name, or session id, so keys never collide (a plain space collides for a name
+// or id that contains a space).
+const KEY_SEP = String.fromCharCode(0)
+
 function linkageProvider(session: SessionSummary): string {
   if (session.parentSessionId || session.agentSpawnLinks || session.spawnPrSets) return 'claude'
   return inferProvider(session)
 }
 function providerSessionKey(session: SessionSummary): string {
-  return `${linkageProvider(session)} ${session.sessionId}`
+  return `${linkageProvider(session)}${KEY_SEP}${session.sessionId}`
 }
 function providerParentKey(session: SessionSummary): string {
-  return `${linkageProvider(session)} ${session.parentSessionId ?? ''}`
+  return `${linkageProvider(session)}${KEY_SEP}${session.parentSessionId ?? ''}`
+}
+
+// Row-level distinct-session key: provider + project + sessionId, NUL-delimited so a
+// project name or session id containing a space never collides (undercounting
+// distinct sessions in a PR row).
+function rowSessionKey(session: SessionSummary): string {
+  return `${linkageProvider(session)}${KEY_SEP}${session.project}${KEY_SEP}${session.sessionId}`
+}
+
+// Distinguishes two DIFFERENT records that happen to share a session id (duplicate
+// or imported data): identical copies produce the same fingerprint and fold once,
+// any difference (cost, calls, span, PR links) marks the key ambiguous so it folds
+// into NEITHER parent/subtree.
+function sessionFingerprint(s: SessionSummary): string {
+  return [s.totalCostUSD, s.apiCalls, s.firstTimestamp, s.lastTimestamp, (s.prLinks ?? []).join(',')].join(KEY_SEP)
 }
 
 /// Index every sidechain (subagent) session by the parent that spawned it, keyed
@@ -249,7 +269,7 @@ export function buildSubagentIndex(projects: ProjectSummary[]): Map<string, Sess
 // exactly once and a parent-link cycle terminates. A self-linking descendant is
 // skipped: it attributes standalone. `spawnAtMs` stays the TOP child's, since the
 // whole subtree resolves against the top parent.
-function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, claimed: Set<string>): ChildFold {
+function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary[]>, claimed: Set<string>, ambiguous: Set<string>): ChildFold {
   claimed.add(child.sessionId)
   const models = new Map<string, number>()
   const categories = new Map<string, number>()
@@ -269,8 +289,10 @@ function buildChildFold(child: SessionSummary, index: Map<string, SessionSummary
     models, categories, foldedSessions: 1,
   }
   for (const gc of index.get(providerSessionKey(child)) ?? []) {
-    if (claimed.has(gc.sessionId) || selfLinks(gc)) continue
-    const gcf = buildChildFold(gc, index, claimed)
+    // Skip a descendant whose id is ambiguous (two conflicting records share it):
+    // fold neither, consistent with the parent-level rule.
+    if (claimed.has(gc.sessionId) || selfLinks(gc) || ambiguous.has(providerSessionKey(gc))) continue
+    const gcf = buildChildFold(gc, index, claimed, ambiguous)
     fold.cost += gcf.cost; fold.calls += gcf.calls; fold.savingsUSD += gcf.savingsUSD
     fold.foldedSessions += gcf.foldedSessions
     for (const [m, c] of gcf.models) addToMap(fold.models, m, c)
@@ -289,6 +311,14 @@ export type ResolvedChild = { fold: ChildFold; prSet: string[] | null; unlinked:
 function turnStartTs(turn: { timestamp?: string; assistantCalls: Array<{ timestamp?: string }> }): string {
   return turn.assistantCalls[0]?.timestamp || turn.timestamp || ''
 }
+
+// Grace window for a child whose spawn pairing was AMBIGUOUS (the parent recorded
+// its agentId, so we KNOW it spawned this child, but the exact launching turn could
+// not be pinned) and whose first activity lands just after the parent's last turn.
+// The repo has no session-idle gap constant to reuse, so 30 minutes is used as a
+// conservative window: within it the child folds to the parent's last turn rather
+// than vanish; beyond it, it stays unlinked.
+const AMBIGUOUS_SPAWN_GRACE_MS = 30 * 60 * 1000
 
 /// Resolve a fold to the PR its launching parent turn was working on, using the
 /// parent's UNFILTERED turn data so a date range cannot misattribute:
@@ -309,7 +339,19 @@ function resolveChild(parent: SessionSummary, fold: ChildFold): ResolvedChild {
   const ms = fold.spawnAtMs
   if (Number.isNaN(ms)) return { fold, prSet: null, unlinked: true }
   const lastMs = parseMs(parent.lastTimestamp)
-  if (!Number.isNaN(lastMs) && ms > lastMs) return { fold, prSet: null, unlinked: true }
+  if (!Number.isNaN(lastMs) && ms > lastMs) {
+    // After the parent's last turn: normally unlinked. But if the spawn pairing was
+    // AMBIGUOUS (we know it was spawned here, just not which turn) and the child
+    // started within the grace window, extend the fallback to the parent's LAST
+    // turn rather than lose it. A truly-absent pairing (no agentId at all) does not
+    // qualify: we cannot confirm this parent spawned it.
+    const ambiguousPairing = !!parent.ambiguousSpawnAgentIds?.includes(fold.agentId)
+    if (!(ambiguousPairing && ms - lastMs <= AMBIGUOUS_SPAWN_GRACE_MS)) {
+      return { fold, prSet: null, unlinked: true }
+    }
+    // Fall through: every turn has start <= lastMs <= ms, so the walk below carries
+    // `current` to the last turn's PR set.
+  }
   let current: string[] | null = parent.prRefsAtRangeStart?.length ? parent.prRefsAtRangeStart : null
   for (const turn of parent.turns) {
     const tMs = parseMs(turnStartTs(turn))
@@ -329,31 +371,39 @@ export type SubagentAttribution = Map<string, ResolvedChild[]>
 
 export function resolveSubagentAttribution(projects: ProjectSummary[]): SubagentAttribution {
   const index = buildSubagentIndex(projects)
-  // Count PR-bearing parents per key (real sessions AND anchors) to detect an
-  // ambiguous key claimed by more than one distinct parent.
-  const parentCount = new Map<string, number>()
-  const bump = (s: SessionSummary): void => {
-    if (!s.prLinks?.length) return
+  // A provider+sessionId key is AMBIGUOUS when it is carried by more than one
+  // DISTINCT record (different fingerprint) across ALL candidate sessions and
+  // anchors, regardless of whether each has prLinks: a child pointing at that id
+  // cannot tell which record spawned it. Such a key folds into NEITHER parent and
+  // its subtree is skipped (correctness over coverage). Identical duplicates share
+  // a fingerprint, so they are not ambiguous and fold once.
+  const fpByKey = new Map<string, Set<string>>()
+  const note = (s: SessionSummary): void => {
     const k = providerSessionKey(s)
-    parentCount.set(k, (parentCount.get(k) ?? 0) + 1)
+    const set = fpByKey.get(k)
+    if (set) set.add(sessionFingerprint(s))
+    else fpByKey.set(k, new Set([sessionFingerprint(s)]))
   }
   for (const project of projects) {
-    for (const s of project.sessions) bump(s)
-    for (const a of project.subagentAnchors ?? []) bump(a)
+    for (const s of project.sessions) note(s)
+    for (const a of project.subagentAnchors ?? []) note(a)
   }
+  const ambiguous = new Set<string>()
+  for (const [k, fps] of fpByKey) if (fps.size > 1) ambiguous.add(k)
+
   const out: SubagentAttribution = new Map()
   const resolveParent = (parent: SessionSummary): void => {
     if (!parent.prLinks?.length) return
     const k = providerSessionKey(parent)
-    if (out.has(k)) return                                    // already resolved for this key
-    if ((parentCount.get(k) ?? 0) > 1) { out.set(k, []); return } // ambiguous: fold nothing
+    if (out.has(k)) return                          // already resolved for this key
+    if (ambiguous.has(k)) { out.set(k, []); return } // ambiguous parent id: fold nothing
     const direct = index.get(k)
     if (!direct?.length) return
-    const claimed = new Set<string>()                          // one claimed set across all direct children
+    const claimed = new Set<string>()               // one claimed set across all direct children
     const resolved: ResolvedChild[] = []
     for (const child of direct) {
-      if (claimed.has(child.sessionId) || selfLinks(child)) continue
-      resolved.push(resolveChild(parent, buildChildFold(child, index, claimed)))
+      if (claimed.has(child.sessionId) || selfLinks(child) || ambiguous.has(providerSessionKey(child))) continue
+      resolved.push(resolveChild(parent, buildChildFold(child, index, claimed, ambiguous)))
     }
     if (resolved.length) out.set(k, resolved)
   }
@@ -499,7 +549,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
   // Fold one parent's resolved children into rows + totals. An unlinked child
   // contributes nothing; a child with no active PR goes to unattributed (no row).
   const foldChildren = (parent: SessionSummary): void => {
-    const sessionKey = `${parent.project} ${parent.sessionId}`
+    const sessionKey = rowSessionKey(parent)
     for (const rc of attribution.get(providerSessionKey(parent)) ?? []) {
       if (rc.unlinked) continue
       subagentSessions += rc.fold.foldedSessions
@@ -523,7 +573,7 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
     for (const session of project.sessions) {
       if (!session.prLinks?.length) continue
       sessions += 1
-      const sessionKey = `${session.project} ${session.sessionId}`
+      const sessionKey = rowSessionKey(session)
       const { perUrl, unattributed } = attributeSessionPrSpend(session)
       for (const [url, c] of perUrl) {
         attributedCost += c.cost

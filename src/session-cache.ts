@@ -109,6 +109,10 @@ export type CachedFile = {
   // optional; a file is typically one or the other (a nested agent can be both).
   parentSessionId?: string
   agentSpawnLinks?: Record<string, string>
+  // Parent file: agent ids whose spawn result named them but whose exact launching
+  // tool_use could not be paired (ambiguous multi-result record). Drives a
+  // grace-window fallback for a late child. Absent when no pairing was ambiguous.
+  ambiguousSpawnAgentIds?: string[]
 }
 
 export type ProviderSection = {
@@ -374,6 +378,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalBool(o['failed'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])
+    && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

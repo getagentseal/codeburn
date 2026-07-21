@@ -48,7 +48,7 @@ const BASE = {
 function parent(opts: {
   id: string; prLinks: string[]; turns: ClassifiedTurn[]; project?: string
   agentSpawnLinks?: Record<string, string>; spawnPrSets?: Record<string, string[]>
-  prRefsAtRangeStart?: string[]; first?: string; last?: string
+  prRefsAtRangeStart?: string[]; first?: string; last?: string; ambiguousSpawnAgentIds?: string[]
 }): SessionSummary {
   return {
     ...BASE,
@@ -60,6 +60,7 @@ function parent(opts: {
     ...(opts.agentSpawnLinks ? { agentSpawnLinks: opts.agentSpawnLinks } : {}),
     ...(opts.spawnPrSets ? { spawnPrSets: opts.spawnPrSets } : {}),
     ...(opts.prRefsAtRangeStart ? { prRefsAtRangeStart: opts.prRefsAtRangeStart } : {}),
+    ...(opts.ambiguousSpawnAgentIds ? { ambiguousSpawnAgentIds: opts.ambiguousSpawnAgentIds } : {}),
   }
 }
 
@@ -365,23 +366,95 @@ describe('MAJOR: id-collision contamination', () => {
     expect(totals.subagentSessions).toBe(0)            // the ambiguous child folds nowhere
     expect(totals.attributedCost).toBeCloseTo(30, 6)   // no child double-charge
   })
+
+  it('folds nowhere when a PR-bearing parent shares its id with a PR-LESS parent', () => {
+    // Only ONE of the two colliding parents has prLinks, but the identity is still
+    // ambiguous: count ALL candidates, not just PR-bearing ones.
+    const projects = [project([
+      parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'toolu_x' }, spawnPrSets: { toolu_x: [A] } }),
+      // A PR-less session that happens to share id "P" (imported/duplicate data).
+      parent({ id: 'P', prLinks: [], turns: [turn({ cost: 20, ts: '2026-07-01T11:00:00Z' })] }),
+      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
+    ])]
+    const rows = aggregateByPr(projects)
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(10, 6)   // parent own spend; child NOT folded
+    expect(prLinkedTotals(projects).subagentSessions).toBe(0)
+  })
 })
 
-describe('MAJOR: recursion dedup is global (diamond folds once)', () => {
-  it('a grandchild id reachable via two direct children folds exactly once', () => {
-    // Parent P has two direct children c1 and c2; both point (via duplicate data)
-    // at a grandchild with the SAME id "agent-gc". The shared claimed-set folds it
-    // once, not twice.
+describe('MAJOR: ambiguous pairing + late child grace window', () => {
+  const makeProjects = (childFirstTs: string) => [project([
+    // No spawn link for c1, but the parent recorded it as an AMBIGUOUS pairing.
+    parent({
+      id: 'P', prLinks: [A], last: '2026-07-01T11:00:00Z',
+      turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })],
+      ambiguousSpawnAgentIds: ['c1'],
+    }),
+    child({ agentId: 'c1', parentId: 'P', cost: 40, firstTs: childFirstTs }),
+  ])]
+
+  it('folds a within-grace late child to the last turn', () => {
+    // Child starts 20 min after the parent's last timestamp (11:00Z) -> within 30 min.
+    const rows = aggregateByPr(makeProjects('2026-07-01T11:20:00Z'))
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(50, 6) // 10 parent + 40 child, folded to last turn
+    expect(prLinkedTotals(makeProjects('2026-07-01T11:20:00Z')).subagentSessions).toBe(1)
+  })
+
+  it('leaves a beyond-grace late child unlinked', () => {
+    // Child starts 2 hours after the parent's last timestamp -> beyond the window.
+    const totals = prLinkedTotals(makeProjects('2026-07-01T13:00:00Z'))
+    expect(totals.subagentSessions).toBe(0)
+    expect(totals.attributedCost).toBeCloseTo(10, 6) // parent only; child unlinked
+    expect(totals.unattributedCost).toBeCloseTo(0, 6)
+  })
+
+  it('does NOT grace a late child whose pairing was merely ABSENT (not ambiguous)', () => {
+    // Same timing, but the parent never recorded this agent id -> no grace.
     const projects = [project([
+      parent({ id: 'P', prLinks: [A], last: '2026-07-01T11:00:00Z', turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })] }),
+      child({ agentId: 'c1', parentId: 'P', cost: 40, firstTs: '2026-07-01T11:20:00Z' }),
+    ])]
+    expect(prLinkedTotals(projects).subagentSessions).toBe(0)
+  })
+})
+
+describe('MINOR: row session-key delimiter does not collide on names with spaces', () => {
+  it('counts two sessions whose space-joined keys would collide as distinct', () => {
+    // "a b" + "c"  and  "a" + "b c"  both become "a b c" under a space delimiter,
+    // undercounting the PR row's session count. A NUL delimiter keeps them distinct.
+    const s1 = parent({ id: 'c', project: 'a b', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })] })
+    const s2 = parent({ id: 'b c', project: 'a', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })] })
+    const rows = aggregateByPr([project([s1], 'a b'), project([s2], 'a')])
+    expect(rowFor(rows, A)!.sessions).toBe(2)
+  })
+})
+
+describe('MAJOR: recursion dedup and conflicting duplicates', () => {
+  // Parent P > c1, c2; both reach a grandchild id "agent-gc" (duplicate data).
+  const diamond = (gc1Cost: number, gc2Cost: number, order: 'c1first' | 'c2first') => {
+    const base = [
       parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'x1', c2: 'x2' }, spawnPrSets: { x1: [A], x2: [A] } }),
       child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
       child({ agentId: 'c2', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:06:00Z' }),
-      child({ agentId: 'gc', parentId: 'agent-c1', cost: 50, firstTs: '2026-07-01T10:07:00Z' }),
-      { ...child({ agentId: 'gc', parentId: 'agent-c2', cost: 50, firstTs: '2026-07-01T10:08:00Z' }) }, // duplicate gc id under c2
-    ])]
-    const rows = aggregateByPr(projects)
-    // 10 (parent) + 100 (c1) + 100 (c2) + 50 (gc, ONCE, not 100).
-    expect(rowFor(rows, A)!.cost).toBeCloseTo(260, 6)
-    expect(prLinkedTotals(projects).subagentSessions).toBe(3) // c1, c2, gc once
+    ]
+    const gc1 = child({ agentId: 'gc', parentId: 'agent-c1', cost: gc1Cost, firstTs: '2026-07-01T10:07:00Z' })
+    const gc2 = child({ agentId: 'gc', parentId: 'agent-c2', cost: gc2Cost, firstTs: '2026-07-01T10:07:00Z' })
+    return [project([...base, ...(order === 'c1first' ? [gc1, gc2] : [gc2, gc1])])]
+  }
+
+  it('conflicting duplicate ids ($50 vs $500) fold into NEITHER, deterministic across input order', () => {
+    for (const order of ['c1first', 'c2first'] as const) {
+      const rows = aggregateByPr(diamond(50, 500, order))
+      // 10 (parent) + 100 (c1) + 100 (c2); the conflicting grandchild folds nowhere.
+      expect(rowFor(rows, A)!.cost).toBeCloseTo(210, 6)
+      expect(prLinkedTotals(diamond(50, 500, order)).subagentSessions).toBe(2) // c1, c2 only
+    }
+  })
+
+  it('identical duplicate ids fold exactly once', () => {
+    // Same id, same fingerprint (cost/span/links): one logical session, folds once.
+    const rows = aggregateByPr(diamond(50, 50, 'c1first'))
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(260, 6) // 10 + 100 + 100 + 50 (once)
+    expect(prLinkedTotals(diamond(50, 50, 'c1first')).subagentSessions).toBe(3)
   })
 })

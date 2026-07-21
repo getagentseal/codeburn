@@ -311,6 +311,8 @@ describe('collectSessionMeta subagent linkage', () => {
       toolUseResult: { status: 'completed', agentId: 'a777', content: 'same' },
     } as JournalEntry, meta)
     expect(meta.agentSpawnLinks).toEqual({}) // no guess
+    // But we KNOW a777 was spawned here, so it is recorded as an ambiguous pairing.
+    expect(meta.ambiguousSpawnAgentIds).toEqual(['a777'])
   })
 })
 
