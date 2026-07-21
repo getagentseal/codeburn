@@ -210,9 +210,16 @@ export type SessionSummary = {
   agentId?: string
   /// Claude Code only: on a PARENT session, maps each spawned subagent's id to the
   /// `tool_use` id of the `Agent`/`Task` block that launched it (from the spawn's
-  /// `toolUseResult.agentId`). Resolves a child to the exact parent turn. Absent
-  /// when the session spawned no subagent that recorded a result.
+  /// `toolUseResult.agentId`). Combined with `spawnPrSets` it resolves a child to
+  /// the PR the launching turn was working on. Absent when the session spawned no
+  /// subagent that recorded a result.
   agentSpawnLinks?: Record<string, string>
+  /// Claude Code only: on a PARENT session, maps each spawn `tool_use` id to the PR
+  /// set active at the turn that emitted it, computed from the FULL (pre-date-slice)
+  /// turn list. This lets a subagent fold into the right PR even when its launching
+  /// turn falls outside the report's range. Empty array = spawn had no active PR
+  /// (the child is then unattributed). Absent when the session spawned no subagent.
+  spawnPrSets?: Record<string, string[]>
   firstTimestamp: string
   lastTimestamp: string
   totalCostUSD: number

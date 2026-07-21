@@ -1275,11 +1275,21 @@ export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void
       const msg = entry.message
       const content = msg && typeof msg === 'object' ? (msg as { content?: unknown }).content : undefined
       if (Array.isArray(content)) {
-        for (const b of content) {
-          if (!b || typeof b !== 'object' || (b as { type?: unknown }).type !== 'tool_result') continue
-          const id = (b as { tool_use_id?: unknown }).tool_use_id
-          if (typeof id === 'string' && id) { meta.agentSpawnLinks[agentId] = id; break }
+        const results = content.filter((b): b is Record<string, unknown> =>
+          !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_result'
+          && typeof (b as { tool_use_id?: unknown }).tool_use_id === 'string' && !!(b as { tool_use_id?: unknown }).tool_use_id)
+        let spawnId: string | undefined
+        if (results.length === 1) {
+          spawnId = results[0]!['tool_use_id'] as string
+        } else if (results.length > 1) {
+          // Several batched tool results share one entry: pair the agentId with the
+          // block whose `content` is the spawn result (equals `toolUseResult.content`),
+          // so an unrelated sibling block cannot capture the id. Skip if ambiguous.
+          const turContent = JSON.stringify((tur as Record<string, unknown>)['content'])
+          const matches = results.filter(b => JSON.stringify(b['content']) === turContent)
+          if (matches.length === 1) spawnId = matches[0]!['tool_use_id'] as string
         }
+        if (spawnId) meta.agentSpawnLinks[agentId] = spawnId
       }
     }
   }
@@ -1549,6 +1559,22 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
   }
 
   return turns
+}
+
+// Map each subagent-spawn `tool_use` id to the PR set active at the turn that
+// emitted it, walking the FULL turn list in order. A turn's own `prRefs` apply to
+// spawns within it; otherwise the carried set does. First occurrence of a spawn id
+// wins deterministically (tool_use ids are unique in practice; this only guards a
+// pathological restatement). Drives cross-range subagent PR attribution.
+export function buildSpawnPrSets(turns: Array<{ prRefs?: string[]; spawnToolUseIds?: string[] }>): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  let cur: string[] = []
+  for (const turn of turns) {
+    const active = turn.prRefs?.length ? turn.prRefs : cur
+    for (const id of turn.spawnToolUseIds ?? []) if (!(id in out)) out[id] = active
+    if (turn.prRefs?.length) cur = turn.prRefs
+  }
+  return out
 }
 
 /**
@@ -2144,6 +2170,12 @@ async function scanProjectDirs(
     // session's in-range unbranched spend as `null` instead of discarding it.
     const everHadBranch = carriedBranch !== undefined
 
+    // Built from the FULL (pre-slice) turn list: each subagent-spawn tool_use id ->
+    // the PR set active at the turn that emitted it. Lets a subagent fold into the
+    // right PR even when its launching turn is later sliced out of range. Only for
+    // sessions that both spawned subagents and referenced a PR.
+    const spawnPrSets = cachedFile.prLinks?.length ? buildSpawnPrSets(cachedFile.turns) : {}
+
     if (dateRange) {
       classifiedTurns = classifiedTurns.filter(turn => {
         if (turn.assistantCalls.length === 0) return false
@@ -2154,7 +2186,12 @@ async function scanProjectDirs(
       })
     }
 
-    if (classifiedTurns.length === 0) continue
+    // A PR-linked parent that spawned subagents is kept even when its OWN turns all
+    // fall out of range, as a 0-cost fold anchor: an in-range child (an async agent
+    // that outlived the parent's last in-range turn) still needs the parent's
+    // `prLinks` / `spawnPrSets` to attribute. It contributes no spend of its own.
+    const isSpawnAnchor = Object.keys(spawnPrSets).length > 0 && cachedFile.isSidechain !== true
+    if (classifiedTurns.length === 0 && !isSpawnAnchor) continue
 
     const sessionId = basename(filePath, '.jsonl')
     const projectPath = cachedFile.canonicalCwd ?? claudeSlugFallbackPath(dirName)
@@ -2174,12 +2211,13 @@ async function scanProjectDirs(
       if (cachedFile.parentSessionId) session.parentSessionId = cachedFile.parentSessionId
       session.agentId = sessionId.startsWith('agent-') ? sessionId.slice('agent-'.length) : sessionId
     }
-    // Parent linkage map (only present on sessions that spawned subagents).
+    // Parent linkage maps (only present on sessions that spawned subagents).
     if (cachedFile.agentSpawnLinks && Object.keys(cachedFile.agentSpawnLinks).length > 0) {
       session.agentSpawnLinks = cachedFile.agentSpawnLinks
     }
+    if (Object.keys(spawnPrSets).length > 0) session.spawnPrSets = spawnPrSets
 
-    if (session.apiCalls > 0) {
+    if (session.apiCalls > 0 || isSpawnAnchor) {
       const projectKey = cachedFile.canonicalCwd
         ? normalizeProjectPathKey(cachedFile.canonicalCwd)
         : `slug:${dirName}`

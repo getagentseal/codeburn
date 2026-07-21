@@ -141,10 +141,12 @@ export type SessionCache = {
 // v6: per-turn `prRefs` capture for turn-level PR spend attribution. Existing
 // cache turns carry no prRefs; bumping forces a one-time re-parse so surviving
 // transcripts populate the field. (Daily-cache versioning is untouched.)
-// v7: sidechain->parent linkage — per-turn `spawnToolUseIds`, per-file
-// `parentSessionId` / `agentSpawnLinks` — so subagent spend folds into the parent
-// turn's PR set. v6 never shipped, so users cross v5->v7 in a single combined
-// bump; the v5 adoption path below still rescues expired-PR orphans.
+// v7: sidechain->parent linkage - per-turn `spawnToolUseIds`, per-file
+// `parentSessionId` / `agentSpawnLinks` - so subagent spend folds into the parent
+// turn's PR set. v6 never shipped, so users cross v5->v7 in a single combined bump.
+// INVARIANT: a version bump must extend `PRIOR_CACHE_VERSIONS` (the adoption path
+// below) to EVERY prior version that can still exist on disk, or expired-PR
+// history from the immediately preceding build silently vanishes.
 export const CACHE_VERSION = 7
 
 // The cache filename is version-suffixed so different binaries (e.g. an old
@@ -392,37 +394,43 @@ function validateCache(raw: unknown): raw is SessionCache {
   return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
 }
 
-// The immediately-prior versioned file. On the 5 -> 6 bump we adopt its
-// still-relevant entries (see adoptV5Cache) rather than abandoning them; the
-// file itself is never written or deleted (old binaries still own it).
-const V5_CACHE_FILE = 'session-cache.v5.json'
+// Every prior versioned cache file that can still exist on disk from a shipped or
+// dev build, NEWEST first. On a bump we adopt the newest one present: its
+// expired-source PR orphans (transcripts since deleted) hold attributable spend
+// that can never be re-parsed, and each newer version already carried the older
+// versions' orphans forward, so the newest is a superset. INVARIANT: a
+// CACHE_VERSION bump MUST extend this list to every prior version that can still
+// exist on disk, or that history silently vanishes. (v5 was missed on the 5->6
+// bump; v6 on the 6->7 bump; both are listed here.)
+const PRIOR_CACHE_VERSIONS = [6, 5] as const
 
-// Lightweight top-level check: a version-5 cache with a providers object. The
-// individual files are validated per-entry in adoptV5Cache so one corrupt entry
-// cannot drop every valid expired-transcript PR session along with it.
-function isV5CacheEnvelope(raw: unknown): raw is { version: number; providers: Record<string, unknown> } {
+function priorCacheFile(version: number): string {
+  return `session-cache.v${version}.json`
+}
+
+// Lightweight top-level check: a specific prior-version cache envelope with a
+// providers object. Files are validated per-entry in adoptPriorCache so one
+// corrupt entry cannot drop every valid expired-transcript PR session.
+function isCacheEnvelope(raw: unknown, version: number): raw is { version: number; providers: Record<string, unknown> } {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
-  return o['version'] === 5
+  return o['version'] === version
     && !!o['providers'] && typeof o['providers'] === 'object' && !Array.isArray(o['providers'])
 }
 
-// One-time migration for the 5 -> 6 bump (per-turn prRefs capture). A fresh v6
-// cache would abandon v5 wholesale, so any PR-linked session whose transcript was
-// since deleted would vanish instead of taking the by-PR legacy even-split path.
-// Carry forward exactly the v5 entries whose source no longer exists AND that
-// carry prLinks (they can never re-parse, but they hold attributable PR spend);
-// present sources are intentionally dropped so they re-parse fresh under v6 and
-// gain per-turn refs. Each file is validated individually, so a single corrupt
-// entry is skipped rather than discarding the whole cache. Each carried section
-// takes the CURRENT envFingerprint so the scan reuses it and appends the
-// freshly-parsed present sources. The daily cache (durable cost history) is not
-// touched.
-async function adoptV5Cache(): Promise<SessionCache | null> {
+// One-time migration on a version bump: carry forward exactly the prior-version
+// entries whose source no longer exists AND that carry prLinks (they can never
+// re-parse, but they hold attributable PR spend); present sources are dropped so
+// they re-parse fresh under the new version and gain the new fields. Each file is
+// validated individually, so a single corrupt entry is skipped rather than
+// discarding the whole cache. Each carried section takes the CURRENT
+// envFingerprint so the scan reuses it and appends the freshly-parsed present
+// sources. The daily cache (durable cost history) is not touched.
+async function adoptPriorCache(version: number): Promise<SessionCache | null> {
   try {
-    const raw = await readFile(join(getCacheDir(), V5_CACHE_FILE), 'utf-8')
+    const raw = await readFile(join(getCacheDir(), priorCacheFile(version)), 'utf-8')
     const parsed = JSON.parse(raw)
-    if (!isV5CacheEnvelope(parsed)) return null
+    if (!isCacheEnvelope(parsed, version)) return null
     const migrated: SessionCache = { version: CACHE_VERSION, providers: {}, complete: false }
     for (const [provider, section] of Object.entries(parsed.providers)) {
       if (!section || typeof section !== 'object') continue
@@ -446,6 +454,15 @@ async function adoptV5Cache(): Promise<SessionCache | null> {
   }
 }
 
+// Adopt the newest prior versioned cache present on disk (v6 before v5).
+async function adoptNewestPriorCache(): Promise<SessionCache | null> {
+  for (const version of PRIOR_CACHE_VERSIONS) {
+    const adopted = await adoptPriorCache(version)
+    if (adopted) return adopted
+  }
+  return null
+}
+
 export async function loadCache(): Promise<SessionCache> {
   try {
     const raw = await readFile(getCachePath(), 'utf-8')
@@ -457,12 +474,13 @@ export async function loadCache(): Promise<SessionCache> {
   }
 }
 
-// The versioned (v6) file is absent/unreadable. Prefer adopting the prior v5
-// file's expired-source PR orphans; failing that, fall back to the legacy
-// unversioned file. Either way the versioned file is minted on the next save.
+// The current versioned file is absent/unreadable. Prefer adopting the newest
+// prior versioned file's expired-source PR orphans (v6 before v5); failing that,
+// fall back to the legacy unversioned file. Either way the versioned file is
+// minted on the next save.
 async function afterMissingVersionedCache(): Promise<SessionCache> {
-  const v5 = await adoptV5Cache()
-  if (v5) return v5
+  const prior = await adoptNewestPriorCache()
+  if (prior) return prior
   // validateCache requires version === CACHE_VERSION, so a different-version
   // legacy file is ignored (left intact). We copy it into the versioned file once
   // via saveCache; the legacy file is never modified.

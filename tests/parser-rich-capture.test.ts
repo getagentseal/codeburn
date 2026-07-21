@@ -8,6 +8,7 @@ import {
   parseApiCall,
   groupIntoTurns,
   parsedTurnsToCachedTurns,
+  buildSpawnPrSets,
   type ToolResultMeta,
 } from '../src/parser.js'
 import type { JournalEntry } from '../src/types.js'
@@ -280,6 +281,21 @@ describe('collectSessionMeta subagent linkage', () => {
     } as JournalEntry, meta)
     expect(meta.agentSpawnLinks).toEqual({ a17e80ec626c9de38: 'toolu_spawn1' })
   })
+
+  it('pairs the agentId with the matching block when a record batches several results (unrelated block first)', () => {
+    const meta = emptySessionMeta()
+    collectSessionMeta({
+      type: 'user',
+      message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'toolu_unrelated', content: 'a bash result' },
+        { type: 'tool_result', tool_use_id: 'toolu_spawn', content: 'agent output' },
+      ] },
+      // The result's content identifies the spawn block, so the FIRST (unrelated)
+      // block must not capture the agentId.
+      toolUseResult: { status: 'completed', agentId: 'a999', content: 'agent output' },
+    } as JournalEntry, meta)
+    expect(meta.agentSpawnLinks).toEqual({ a999: 'toolu_spawn' })
+  })
 })
 
 // ── per-turn subagent spawn ids (spawnToolUseIds) ──────────────────────
@@ -312,5 +328,25 @@ describe('per-turn spawnToolUseIds capture', () => {
     const cached = parsedTurnsToCachedTurns(turns)
     expect(cached[0]!.spawnToolUseIds).toEqual(['toolu_agent', 'toolu_task'])
     expect(cached[1]!.spawnToolUseIds).toBeUndefined()
+  })
+})
+
+describe('buildSpawnPrSets', () => {
+  it('maps each spawn id to the PR set active at its turn, carrying refs forward', () => {
+    const sets = buildSpawnPrSets([
+      { spawnToolUseIds: ['s0'] },                       // before any PR -> empty
+      { prRefs: ['pr/A'], spawnToolUseIds: ['s1'] },     // spawn under A
+      { spawnToolUseIds: ['s2'] },                       // carries A
+      { prRefs: ['pr/B'], spawnToolUseIds: ['s3'] },     // spawn under B
+    ])
+    expect(sets).toEqual({ s0: [], s1: ['pr/A'], s2: ['pr/A'], s3: ['pr/B'] })
+  })
+
+  it('first occurrence of a spawn id wins deterministically', () => {
+    const sets = buildSpawnPrSets([
+      { prRefs: ['pr/A'], spawnToolUseIds: ['dup'] },
+      { prRefs: ['pr/B'], spawnToolUseIds: ['dup'] }, // restatement must not overwrite
+    ])
+    expect(sets['dup']).toEqual(['pr/A'])
   })
 })
