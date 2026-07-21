@@ -6,6 +6,7 @@ import {
   prLinkedTotals,
   resolveSubagentAttribution,
 } from '../src/sessions-report.js'
+import { filterProjectsByDateRange, filterProjectsByDays } from '../src/parser.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
 
 const A = 'https://github.com/o/r/pull/1'
@@ -367,6 +368,23 @@ describe('MAJOR: id-collision contamination', () => {
     expect(totals.attributedCost).toBeCloseTo(30, 6)   // no child double-charge
   })
 
+  it('folds nowhere when two parents share id + headline stats but map the child to different spawns/PRs', () => {
+    // Same cost/calls/prLinks/turn-refs, but P1 maps c1 -> spawn x (PR A) and P2 maps
+    // c1 -> spawn y (PR B). A fingerprint over headline stats alone would miss this
+    // and first-wins by input order; the full linkage fingerprint makes it ambiguous.
+    const mk = (order: 'p1' | 'p2') => {
+      const p1 = parent({ id: 'P', prLinks: [A, B], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [A] } })
+      const p2 = parent({ id: 'P', prLinks: [A, B], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'y' }, spawnPrSets: { y: [B] } })
+      const c = child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' })
+      return [project(order === 'p1' ? [p1, p2, c] : [p2, p1, c])]
+    }
+    for (const order of ['p1', 'p2'] as const) {
+      const totals = prLinkedTotals(mk(order))
+      expect(totals.subagentSessions).toBe(0)          // ambiguous identity -> child folds nowhere
+      expect(totals.attributedCost).toBeCloseTo(20, 6) // only the two parents own $10 turns
+    }
+  })
+
   it('folds nowhere when a PR-bearing parent shares its id with a PR-LESS parent', () => {
     // Only ONE of the two colliding parents has prLinks, but the identity is still
     // ambiguous: count ALL candidates, not just PR-bearing ones.
@@ -418,6 +436,50 @@ describe('MAJOR: ambiguous pairing + late child grace window', () => {
   })
 })
 
+describe('MAJOR: range-start PR state is recomputed at a filter boundary', () => {
+  const A_TURN = () => turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })
+  const B_TURN = () => turn({ cost: 10, ts: '2026-07-10T10:00:00Z', prRefs: [B] })
+  const LATE_TURN = () => turn({ cost: 10, ts: '2026-07-20T10:00:00Z' }) // no refs, carries the active PR
+  // The wide parse recorded PR A as active entering the range; a switch to B lands
+  // July 10. A slice starting July 20 must attribute the ref-less July 20 turn to B,
+  // NOT the stale A. Tested under both turn orderings.
+  const build = (turns: ClassifiedTurn[]) => [project([parent({ id: 'S', prLinks: [A, B], prRefsAtRangeStart: [A], turns })])]
+
+  it('recomputes to B (July 1 A -> July 10 B, slice July 20), both turn orders', () => {
+    const range = { start: new Date('2026-07-20T00:00:00Z'), end: new Date('2026-07-21T23:59:59Z') }
+    for (const turns of [[A_TURN(), B_TURN(), LATE_TURN()], [LATE_TURN(), B_TURN(), A_TURN()]]) {
+      const rows = aggregateByPr(filterProjectsByDateRange(build(turns), range))
+      expect(rowFor(rows, B)?.cost ?? 0).toBeCloseTo(10, 6) // ref-less July 20 turn -> B
+      expect(rowFor(rows, A)).toBeUndefined()               // NOT the stale range-start A
+    }
+  })
+
+  it('a slice starting exactly ON the switch turn attributes that turn to the new PR', () => {
+    // Switch to B lands July 10 10:00; slice starts July 10 00:00. The July 10 turn is
+    // inside the slice and applies B; the recomputed seed (from before) is A.
+    const range = { start: new Date('2026-07-10T00:00:00Z'), end: new Date('2026-07-21T23:59:59Z') }
+    const rows = aggregateByPr(filterProjectsByDateRange(build([A_TURN(), B_TURN(), LATE_TURN()]), range))
+    expect(rowFor(rows, B)!.cost).toBeCloseTo(20, 6) // July 10 (B) + July 20 (carried B)
+    expect(rowFor(rows, A)).toBeUndefined()          // July 1 A turn is out of slice
+  })
+
+  it('day filter recomputes the same way (menubar path)', () => {
+    const rows = aggregateByPr(filterProjectsByDays(build([A_TURN(), B_TURN(), LATE_TURN()]), new Set(['2026-07-20'])))
+    expect(rowFor(rows, B)?.cost ?? 0).toBeCloseTo(10, 6)
+    expect(rowFor(rows, A)).toBeUndefined()
+  })
+
+  it('drops an anchor that duplicates a surviving session id (malformed merged input)', () => {
+    // A surviving in-range session and a stray anchor carry the SAME id: the real
+    // session wins, the duplicate anchor is dropped.
+    const surviving = parent({ id: 'dup', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-20T10:00:00Z', prRefs: [A] })], spawnPrSets: { x: [A] } })
+    const strayAnchor = parent({ id: 'dup', prLinks: [A], turns: [], spawnPrSets: { x: [A] } })
+    const proj = { ...project([surviving]), subagentAnchors: [strayAnchor] }
+    const filtered = filterProjectsByDays([proj], new Set(['2026-07-20']))
+    expect(filtered.flatMap(p => p.subagentAnchors ?? []).some(a => a.sessionId === 'dup')).toBe(false)
+  })
+})
+
 describe('MINOR: row session-key delimiter does not collide on names with spaces', () => {
   it('counts two sessions whose space-joined keys would collide as distinct', () => {
     // "a b" + "c"  and  "a" + "b c"  both become "a b c" under a space delimiter,
@@ -451,10 +513,22 @@ describe('MAJOR: recursion dedup and conflicting duplicates', () => {
     }
   })
 
-  it('identical duplicate ids fold exactly once', () => {
-    // Same id, same fingerprint (cost/span/links): one logical session, folds once.
+  it('a truly identical duplicate child (same parent, same record) folds exactly once', () => {
+    // Two copies of the SAME child under the SAME parent, identical in every
+    // fingerprinted field: one logical session, folds once (not doubled).
+    const mk = () => [project([
+      parent({ id: 'P', prLinks: [A], turns: [turn({ cost: 10, ts: '2026-07-01T10:00:00Z', prRefs: [A] })], agentSpawnLinks: { c1: 'x' }, spawnPrSets: { x: [A] } }),
+      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }),
+      child({ agentId: 'c1', parentId: 'P', cost: 100, firstTs: '2026-07-01T10:05:00Z' }), // exact duplicate
+    ])]
+    expect(rowFor(aggregateByPr(mk()), A)!.cost).toBeCloseTo(110, 6) // 10 + 100 (once, not 210)
+    expect(prLinkedTotals(mk()).subagentSessions).toBe(1)
+  })
+
+  it('the SAME id under DIFFERENT parents is ambiguous even at equal cost (distinct identity)', () => {
+    // Different parentSessionId is part of the fingerprint, so these are NOT the
+    // same logical session: fold neither.
     const rows = aggregateByPr(diamond(50, 50, 'c1first'))
-    expect(rowFor(rows, A)!.cost).toBeCloseTo(260, 6) // 10 + 100 + 100 + 50 (once)
-    expect(prLinkedTotals(diamond(50, 50, 'c1first')).subagentSessions).toBe(3)
+    expect(rowFor(rows, A)!.cost).toBeCloseTo(210, 6) // grandchild folds nowhere
   })
 })

@@ -3144,7 +3144,8 @@ function isSpawnParent(session: SessionSummary): boolean {
 function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): void {
   if (original.everHadBranch) rebuilt.everHadBranch = true
   if (original.prLinks?.length) rebuilt.prLinks = original.prLinks
-  if (original.prRefsAtRangeStart?.length) rebuilt.prRefsAtRangeStart = original.prRefsAtRangeStart
+  // prRefsAtRangeStart is NOT copied here: a narrower slice needs it recomputed at
+  // the new boundary (see recomputeRangeStartPrRefs), not the wide range's value.
   if (original.parentSessionId) rebuilt.parentSessionId = original.parentSessionId
   if (original.agentId) rebuilt.agentId = original.agentId
   if (original.agentSpawnLinks) rebuilt.agentSpawnLinks = original.agentSpawnLinks
@@ -3154,7 +3155,52 @@ function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): 
   if (original.agentType) rebuilt.agentType = original.agentType
 }
 
+// The "PR active entering this slice", recomputed by replaying the ORIGINAL full
+// turn sequence up to `sliceStartMs`, seeded from the original range-start state.
+// A narrower filter must NOT reuse the wide range's range-start PR: a PR switch
+// between the wide start and the slice start would otherwise be lost, mis-seeding
+// both spend attribution and the subagent grace fallback. A turn exactly ON the
+// boundary stays in the slice and applies its own prRefs there, so the walk stops
+// strictly before it.
+function recomputeRangeStartPrRefs(original: SessionSummary, sliceStartMs: number): string[] | undefined {
+  // The carried PR is the refs of the LATEST turn (by timestamp) strictly before the
+  // slice that referenced any PR; a turn exactly on the boundary is inside the slice
+  // and applies its own refs there. Selected by timestamp, not array position, so
+  // the result does not depend on turn ordering. Falls back to the original
+  // range-start state when nothing referenced a PR before the slice.
+  let current = original.prRefsAtRangeStart
+  let bestMs = -Infinity
+  for (const turn of original.turns) {
+    if (!turn.prRefs?.length) continue
+    const ts = turn.assistantCalls[0]?.timestamp
+    if (!ts) continue
+    const tMs = new Date(ts).getTime()
+    if (Number.isNaN(tMs) || tMs >= sliceStartMs) continue
+    if (tMs >= bestMs) { bestMs = tMs; current = turn.prRefs }
+  }
+  return current
+}
+
+// Apply a recomputed range-start PR state to a rebuilt session (or clear it).
+function applyRecomputedRangeStart(rebuilt: SessionSummary, original: SessionSummary, sliceStartMs: number): void {
+  const rs = recomputeRangeStartPrRefs(original, sliceStartMs)
+  if (rs?.length) rebuilt.prRefsAtRangeStart = rs
+  else delete rebuilt.prRefsAtRangeStart
+}
+
+// Local-midnight epoch of the EARLIEST selected day. Range-start PR state is
+// recomputed at this boundary. Non-contiguous day selections are treated as
+// CONTIGUOUS from the earliest day: a PR switch inside an unselected gap between two
+// selected days is not reflected in the carried state (a single session-level seed
+// cannot represent multiple segments). The menubar day selection is a single day or
+// a contiguous run, so this is exact in practice.
+function earliestDayStartMs(days: Set<string>): number {
+  const earliest = [...days].sort()[0]
+  return earliest ? new Date(`${earliest}T00:00:00`).getTime() : NaN
+}
+
 export function filterProjectsByDays(projects: ProjectSummary[], days: Set<string>): ProjectSummary[] {
+  const sliceStartMs = earliestDayStartMs(days)
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
@@ -3163,6 +3209,7 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
     // so its surviving in-range child still resolves. The anchor contributes no
     // own spend either way.
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
+    const survivingIds = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => {
         const ds = turnDayString(turn)
@@ -3174,10 +3221,15 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
       }
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
       carryLinkageFields(rebuilt, session)
+      if (!Number.isNaN(sliceStartMs)) applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
+      survivingIds.add(session.sessionId)
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0 && anchors.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
+    // A surviving session (real, in-range spend) supersedes any anchor with the same
+    // id: keep the session, drop the duplicate anchor (guards malformed merged input).
+    const dedupedAnchors = survivingIds.size ? anchors.filter(a => !survivingIds.has(a.sessionId)) : anchors
+    if (sessions.length === 0 && dedupedAnchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3230,12 +3282,14 @@ export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], s
 }
 
 export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange: DateRange): ProjectSummary[] {
+  const sliceStartMs = dateRange.start.getTime()
   const filtered: ProjectSummary[] = []
   for (const project of projects) {
     const sessions: SessionSummary[] = []
     // Carry existing anchors and convert a spawn parent whose in-range turns are all
     // filtered out into one (see filterProjectsByDays).
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
+    const survivingIds = new Set<string>()
     for (const session of project.sessions) {
       const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
       if (turns.length === 0) {
@@ -3244,10 +3298,13 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
       }
       const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
       carryLinkageFields(rebuilt, session)
+      applyRecomputedRangeStart(rebuilt, session, sliceStartMs)
+      survivingIds.add(session.sessionId)
       sessions.push(rebuilt)
     }
-    if (sessions.length === 0 && anchors.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
+    const dedupedAnchors = survivingIds.size ? anchors.filter(a => !survivingIds.has(a.sessionId)) : anchors
+    if (sessions.length === 0 && dedupedAnchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }

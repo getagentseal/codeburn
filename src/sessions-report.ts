@@ -239,12 +239,36 @@ function rowSessionKey(session: SessionSummary): string {
   return `${linkageProvider(session)}${KEY_SEP}${session.project}${KEY_SEP}${session.sessionId}`
 }
 
+// Sorted-key canonical serialization of a Record, so two records that map the same
+// entries fingerprint EQUAL regardless of insertion order.
+function canonicalRecord(rec: Record<string, string | string[]> | undefined): string {
+  if (!rec) return ''
+  return Object.keys(rec).sort().map(k => {
+    const v = rec[k]!
+    return `${k}=${Array.isArray(v) ? v.join(',') : v}`
+  }).join(';')
+}
+
 // Distinguishes two DIFFERENT records that happen to share a session id (duplicate
 // or imported data): identical copies produce the same fingerprint and fold once,
-// any difference (cost, calls, span, PR links) marks the key ambiguous so it folds
-// into NEITHER parent/subtree.
+// any difference marks the key ambiguous so it folds into NEITHER parent/subtree.
+// The fingerprint covers EVERY field that changes fold behavior, not just headline
+// stats: two parents mapping the same child to different spawns/PRs (agentSpawnLinks
+// / spawnPrSets) must differ here, or the ambiguity rule never fires and a stale
+// first-wins returns an order-dependent result.
 function sessionFingerprint(s: SessionSummary): string {
-  return [s.totalCostUSD, s.apiCalls, s.firstTimestamp, s.lastTimestamp, (s.prLinks ?? []).join(',')].join(KEY_SEP)
+  return JSON.stringify([
+    s.totalCostUSD, s.apiCalls, s.firstTimestamp, s.lastTimestamp,
+    s.parentSessionId ?? '', s.agentId ?? '',
+    (s.prLinks ?? []),
+    (s.prRefsAtRangeStart ?? []),
+    [...(s.ambiguousSpawnAgentIds ?? [])].sort(),
+    canonicalRecord(s.agentSpawnLinks),
+    canonicalRecord(s.spawnPrSets),
+    // The per-turn PR-ref timeline: the launch turn's PR is what a child inherits,
+    // so two records with different prRefs sequences are distinct folds.
+    s.turns.map(t => (t.prRefs ?? []).join('|')).join('>'),
+  ])
 }
 
 /// Index every sidechain (subagent) session by the parent that spawned it, keyed
