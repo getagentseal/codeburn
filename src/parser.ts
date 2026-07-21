@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { readSessionLines } from './fs-utils.js'
 import { calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash } from './models.js'
-import { sessionIdentity } from './sessions-report.js'
+import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache } from './codex-cache.js'
@@ -1538,7 +1538,7 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
         currentTimestamp = entry.timestamp ?? ''
         currentSessionId = entry.sessionId ?? ''
         currentBranch = entryBranch
-        currentPrRefs = []
+        currentPrRefs = extractPrUrlsFromText(text)
         currentSpawnIds = []
       }
     } else if (entry.type === 'assistant') {
@@ -2038,8 +2038,10 @@ async function scanProjectDirs(
           // one was resolved there; only re-derive if the cached region had none.
           let canonicalCwd = cached.canonicalCwd
           let canonicalProjectName = cached.canonicalProjectName
+          let workingDirectory = cached.workingDirectory
           if (canonicalCwd === undefined && newEntries) {
             const cwd = extractCanonicalCwd(newEntries)
+            workingDirectory = workingDirectory ?? cwd
             const canonical = (cwd && !isCoworkSession(cwd, filePath)) ? await resolveCanonicalProjectPath(cwd) : undefined
             canonicalCwd = canonical?.path
             canonicalProjectName = canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined
@@ -2065,6 +2067,7 @@ async function scanProjectDirs(
             fingerprint: info.fp,
             lastCompleteLineOffset: tracker.lastCompleteLineOffset,
             canonicalCwd,
+            ...(workingDirectory ? { workingDirectory } : {}),
             canonicalProjectName,
             mcpInventory,
             turns: mergedTurns,
@@ -2101,6 +2104,7 @@ async function scanProjectDirs(
         fingerprint: info.fp,
         lastCompleteLineOffset: tracker.lastCompleteLineOffset,
         canonicalCwd: canonical?.path,
+        ...(cwd ? { workingDirectory: cwd } : {}),
         canonicalProjectName: canonical?.isWorktree ? projectNameFromPath(canonical.path, info.dirName) : undefined,
         mcpInventory: extractMcpInventory(entries),
         turns: parsedTurnsToCachedTurns(turns),
@@ -2216,9 +2220,15 @@ async function scanProjectDirs(
     const projectName = cachedFile.canonicalProjectName ?? dirName
     const mcpInv = cachedFile.mcpInventory.length > 0 ? cachedFile.mcpInventory : undefined
     const session = buildSessionSummary(sessionId, projectName, classifiedTurns, mcpInv, source)
+    if (cachedFile.workingDirectory) session.workingDirectory = cachedFile.workingDirectory
     session.agentType = cachedFile.agentType
     if (everHadBranch) session.everHadBranch = true
-    if (cachedFile.prLinks?.length) session.prLinks = [...new Set(cachedFile.prLinks)].sort()
+    const observedPrLinks = new Set(classifiedTurns.flatMap(turn => turn.prRefs ?? []))
+    for (const link of cachedFile.prLinks ?? []) observedPrLinks.add(link)
+    if (observedPrLinks.size) {
+      session.prLinks = [...observedPrLinks].sort()
+      session.prAttributionSource = cachedFile.prLinks?.length ? 'transcript' : 'explicit-reference'
+    }
     if (prRefsAtRangeStart?.length) session.prRefsAtRangeStart = prRefsAtRangeStart
     if (cachedFile.title) session.title = cachedFile.title
     // Sidechain linkage: carry the parent id (the transcript's internal
@@ -2299,6 +2309,14 @@ function summarizeProject(project: string, projectPath: string, sessions: Sessio
   }
 }
 
+// Provider-neutral explicit-reference capture. Every saved provider session
+// passes through this boundary. Full URLs only: a bare "#123" is repository-
+// ambiguous and must never silently move spend between repositories.
+const PR_URL_IN_TEXT_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+/g
+export function extractPrUrlsFromText(text: string): string[] {
+  return [...new Set(text.match(PR_URL_IN_TEXT_RE) ?? [])].sort()
+}
+
 function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
   const tools = call.tools
   const usage: TokenUsage = {
@@ -2329,11 +2347,13 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     isEstimated: call.costIsEstimated,
   })
 
+  const prRefs = extractPrUrlsFromText(call.userMessage)
   return {
     userMessage: call.userMessage,
     assistantCalls: [apiCall],
     timestamp: call.timestamp,
     sessionId: call.sessionId,
+    ...(prRefs.length ? { prRefs } : {}),
   }
 }
 
@@ -2364,6 +2384,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     deduplicationKey: call.deduplicationKey,
     project: call.project,
     projectPath: call.projectPath,
+    workingDirectory: call.workingDirectory,
     toolSequence: call.toolSequence,
     ...(call.locAdded ? { locAdded: call.locAdded } : {}),
     ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
@@ -2375,10 +2396,11 @@ async function canonicalizeProviderCallProject(call: ParsedProviderCall): Promis
   if (!call.projectPath) return call
 
   const canonical = await resolveCanonicalProjectPath(call.projectPath)
-  if (!canonical.isWorktree) return call
+  if (!canonical.isWorktree) return { ...call, workingDirectory: call.workingDirectory ?? call.projectPath }
 
   return {
     ...call,
+    workingDirectory: call.workingDirectory ?? call.projectPath,
     project: projectNameFromPath(canonical.path, call.project ?? canonical.path),
     projectPath: canonical.path,
   }
@@ -2437,11 +2459,13 @@ export function parsedTurnsToCachedTurns(turns: ParsedTurn[]): CachedTurn[] {
 }
 
 function providerCallToCachedTurn(call: ParsedProviderCall): CachedTurn {
+  const prRefs = extractPrUrlsFromText(call.userMessage)
   return {
     timestamp: call.timestamp,
     sessionId: call.sessionId,
     userMessage: call.userMessage.slice(0, 2000),
     calls: [providerCallToCachedCall(call)],
+    ...(prRefs.length ? { prRefs } : {}),
   }
 }
 
@@ -2458,16 +2482,20 @@ function providerCallsToCachedTurns(calls: ParsedProviderCall[]): CachedTurn[] {
     const key = `${call.sessionId}\0${call.turnId}`
     let turn = grouped.get(key)
     if (!turn) {
+      const prRefs = extractPrUrlsFromText(call.userMessage)
       turn = {
         timestamp: call.timestamp,
         sessionId: call.sessionId,
         userMessage: call.userMessage.slice(0, 2000),
         calls: [],
+        ...(prRefs.length ? { prRefs } : {}),
       }
       grouped.set(key, turn)
       turns.push(turn)
     }
     turn.calls.push(providerCallToCachedCall(call))
+    const refs = extractPrUrlsFromText(call.userMessage)
+    if (refs.length) turn.prRefs = [...new Set([...(turn.prRefs ?? []), ...refs])].sort()
   }
 
   return turns
@@ -2519,13 +2547,14 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
 // and downstream date/day filtering can slice turns without losing the anchor.
 function cachedTurnToClassified(turn: CachedTurn, resolvedBranch?: string): ClassifiedTurn {
   const branch = turn.gitBranch ?? resolvedBranch
+  const prRefs = turn.prRefs?.length ? turn.prRefs : extractPrUrlsFromText(turn.userMessage)
   const parsed: ParsedTurn = {
     userMessage: turn.userMessage,
     assistantCalls: turn.calls.map(cachedCallToApiCall),
     timestamp: turn.timestamp,
     sessionId: turn.sessionId,
     ...(branch ? { gitBranch: branch } : {}),
-    ...(turn.prRefs?.length ? { prRefs: turn.prRefs } : {}),
+    ...(prRefs.length ? { prRefs } : {}),
     ...(turn.spawnToolUseIds?.length ? { spawnToolUseIds: turn.spawnToolUseIds } : {}),
   }
   return classifyTurn(parsed)
@@ -2948,7 +2977,7 @@ async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -2977,6 +3006,7 @@ async function parseProviderSources(
         if (!existing.projectPath && turn.calls[0]?.projectPath) {
           existing.projectPath = turn.calls[0]!.projectPath
         }
+        if (!existing.workingDirectory && turn.calls[0]?.workingDirectory) existing.workingDirectory = turn.calls[0].workingDirectory
         if (cachedFile.prLinks?.length) {
           const links = (existing.prLinks ??= new Set())
           for (const link of cachedFile.prLinks) links.add(link)
@@ -2986,6 +3016,7 @@ async function parseProviderSources(
         sessionMap.set(key, {
           project,
           projectPath: turn.calls[0]?.projectPath,
+          workingDirectory: turn.calls[0]?.workingDirectory,
           turns: [classified],
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
           ...(cachedFile.title ? { title: cachedFile.title } : {}),
@@ -3025,17 +3056,23 @@ async function parseProviderSources(
             existingEntry.projectPath = turn.calls[0]!.projectPath
           }
         } else {
-          sessionMap.set(key, { project, projectPath: turn.calls[0]?.projectPath, turns: [classified] })
+          sessionMap.set(key, { project, projectPath: turn.calls[0]?.projectPath, workingDirectory: turn.calls[0]?.workingDirectory, turns: [classified] })
         }
       }
     }
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, turns, prLinks, title }] of sessionMap) {
+  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
-    if (prLinks?.size) session.prLinks = [...prLinks].sort()
+    const explicitLinks = new Set(turns.flatMap(turn => turn.prRefs ?? []))
+    for (const link of prLinks ?? []) explicitLinks.add(link)
+    if (explicitLinks.size) {
+      session.prLinks = [...explicitLinks].sort()
+      session.prAttributionSource = prLinks?.size ? 'transcript' : 'explicit-reference'
+    }
+    if (workingDirectory) session.workingDirectory = workingDirectory
     if (title) session.title = title
     if (session.apiCalls > 0) {
       const existing = projectMap.get(project)
@@ -3145,6 +3182,8 @@ function isSpawnParent(session: SessionSummary): boolean {
 function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): void {
   if (original.everHadBranch) rebuilt.everHadBranch = true
   if (original.prLinks?.length) rebuilt.prLinks = original.prLinks
+  if (original.prAttributionSource) rebuilt.prAttributionSource = original.prAttributionSource
+  if (original.workingDirectory) rebuilt.workingDirectory = original.workingDirectory
   // prRefsAtRangeStart is NOT copied here: a narrower slice needs it recomputed at
   // the new boundary (see recomputeRangeStartPrRefs), not the wide range's value.
   if (original.parentSessionId) rebuilt.parentSessionId = original.parentSessionId
@@ -3297,6 +3336,134 @@ export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map
     }
   }
   return mergedMap
+}
+
+function summaryProvider(session: SessionSummary): string {
+  return session.turns.flatMap(t => t.assistantCalls)[0]?.provider ?? 'unknown'
+}
+
+function normalizedWorkingDirectory(path: string | undefined): string | null {
+  if (!path?.trim()) return null
+  return path.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+function normalizedPrompt(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function assignCorrelatedPrs(
+  session: SessionSummary,
+  urls: readonly string[],
+  source: 'working-directory' | 'launcher-prompt',
+): void {
+  if (session.prLinks?.length || urls.length === 0) return
+  const refs = [...new Set(urls)].sort()
+  session.prLinks = refs
+  session.prAttributionSource = source
+  // Seed the first turn so the existing carry-forward state machine attributes
+  // every later turn precisely. This is not the legacy whole-session split.
+  if (session.turns[0] && !session.turns[0].prRefs?.length) session.turns[0].prRefs = refs
+}
+
+/**
+ * Correlate saved sessions across AI providers without timestamp guessing.
+ *
+ * Evidence, strongest first:
+ *  1. exact launch-prompt text embedded in a PR-linked session's shell command;
+ *  2. exact provider-recorded cwd shared with one unambiguous PR.
+ *
+ * Timestamps only narrow prompt comparisons for performance; they can never
+ * create attribution. Conflicting PR evidence is deliberately left unassigned.
+ */
+export function correlateCrossProviderPrSessions(projects: ProjectSummary[]): void {
+  const sessions = projects.flatMap(p => p.sessions)
+  const linked = sessions.filter(s => s.prLinks?.length)
+  // Claude sidechains retain their existing fold semantics. They may provide
+  // evidence for a tool they launched, but must not become standalone PR rows.
+  const candidates = sessions.filter(s => !s.prLinks?.length && !s.parentSessionId)
+  const evidence = new Map<SessionSummary, string[]>(linked.map(s => [s, s.prLinks!]))
+
+  // Resolve Claude's native parent->sidechain linkage as evidence without
+  // mutating the child. This lets a Codex/Gemini/etc. review launched inside a
+  // Claude subagent inherit the parent turn's PR while the subagent itself still
+  // folds exactly once under the existing accounting model.
+  for (const resolved of resolveSubagentAttribution(projects).values()) {
+    for (const child of resolved) {
+      // A multi-PR spawn set is valid for folding the child's own cost, but is
+      // too broad to identify which PR an independently saved nested review was
+      // about. Require one PR for cross-provider propagation.
+      if (child.unlinked || child.prSet?.length !== 1) continue
+      const matches = sessions.filter(s => !s.prLinks?.length && s.agentId === child.fold.agentId)
+      if (matches.length === 1) evidence.set(matches[0]!, child.prSet)
+    }
+  }
+
+  type Launch = { atMs: number; provider: string; refs: string[]; commands: string[] }
+  const launches: Launch[] = []
+  for (const [session, evidenceRefs] of evidence) {
+    // A native PR-linked session's session-level union is NOT the active PR at
+    // its beginning; only a range-start seed or a turn ref establishes that.
+    // Sidechain evidence has already been resolved to its launching parent turn,
+    // so it is safe to seed the otherwise ref-less child with that exact set.
+    let active = session.prLinks?.length ? (session.prRefsAtRangeStart ?? []) : evidenceRefs
+    for (const turn of session.turns) {
+      if (turn.prRefs?.length) active = turn.prRefs
+      if (active.length === 0) continue
+      for (const call of turn.assistantCalls) {
+        const commands = (call.toolSequence ?? [])
+          .flat()
+          .map(tool => typeof tool.command === 'string' ? normalizedPrompt(tool.command) : '')
+          .filter(command => command.length > 0)
+        if (commands.length === 0) continue
+        const atMs = Date.parse(call.timestamp || turn.timestamp)
+        if (Number.isFinite(atMs)) launches.push({ atMs, provider: call.provider, refs: active, commands })
+      }
+    }
+  }
+
+  const PROMPT_PREFIX = 160
+  const PROMPT_MIN = 80
+  const LAUNCH_WINDOW_MS = 15 * 60 * 1000
+  for (const session of candidates) {
+    const provider = summaryProvider(session)
+    const prompt = session.turns
+      .map(t => normalizedPrompt(t.userMessage))
+      .find(text => text.length >= PROMPT_MIN)
+    if (!prompt) continue
+    const prefix = prompt.slice(0, PROMPT_PREFIX)
+    const startedMs = Date.parse(session.firstTimestamp)
+    if (!Number.isFinite(startedMs)) continue
+    const matches = launches.filter(launch =>
+      launch.provider !== provider
+      && Math.abs(launch.atMs - startedMs) <= LAUNCH_WINDOW_MS
+      && launch.commands.some(command => command.includes(prefix))
+    )
+    const refSets = new Map(matches.map(m => [m.refs.slice().sort().join('\0'), m.refs]))
+    if (refSets.size === 1) {
+      assignCorrelatedPrs(session, [...refSets.values()][0]!, 'launcher-prompt')
+      if (session.prLinks?.length) evidence.set(session, session.prLinks)
+    }
+  }
+
+  // Prompt-linked sessions become valid cwd anchors too. Attribute only when an
+  // exact cwd maps to one PR set; a main checkout used for multiple PRs remains
+  // intentionally ambiguous.
+  const refsByCwd = new Map<string, Map<string, string[]>>()
+  for (const [session, evidenceRefs] of evidence) {
+    const cwd = normalizedWorkingDirectory(session.workingDirectory)
+    if (!cwd || evidenceRefs.length !== 1) continue
+    const refs = evidenceRefs.slice().sort()
+    const sets = refsByCwd.get(cwd) ?? new Map<string, string[]>()
+    sets.set(refs.join('\0'), refs)
+    refsByCwd.set(cwd, sets)
+  }
+  for (const session of sessions) {
+    if (session.prLinks?.length || session.parentSessionId) continue
+    const cwd = normalizedWorkingDirectory(session.workingDirectory)
+    if (!cwd) continue
+    const sets = refsByCwd.get(cwd)
+    if (sets?.size === 1) assignCorrelatedPrs(session, [...sets.values()][0]!, 'working-directory')
+  }
 }
 
 export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], sourceId: string): ProjectSummary[] {
@@ -3566,6 +3733,7 @@ async function runParse(
   }
 
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+  correlateCrossProviderPrSessions(result)
   cachePut(key, result)
   return result
 }

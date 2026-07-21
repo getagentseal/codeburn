@@ -50,6 +50,9 @@ export type ParsedProviderCall = {
   sessionId: string
   project?: string
   projectPath?: string
+  // Exact provider-recorded cwd, kept separately because projectPath may later
+  // canonicalize a linked worktree to its main repository.
+  workingDirectory?: string
 }
 
 // A directory or database file that a provider's discoverSessions() scans.

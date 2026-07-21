@@ -27,10 +27,12 @@ function sessionWord(n: number): string {
   return n === 1 ? 'session' : 'sessions'
 }
 
-// Up to two short model names, then a "+N" overflow tag; empty for no models.
-function modelsLabel(models: string[]): string {
-  if (models.length <= 2) return models.join(', ')
-  return `${models.slice(0, 2).join(', ')} +${models.length - 2}`
+function ModelChips({ models }: { models: string[] }) {
+  return (
+    <div className="pr-model-list" aria-label={models.length ? `Models used: ${models.join(', ')}` : 'No model data'}>
+      {models.map(model => <span className="pr-model-chip" key={model}>{model}</span>)}
+    </div>
+  )
 }
 
 function openPr(event: MouseEvent<HTMLAnchorElement>, url: string): void {
@@ -41,7 +43,7 @@ function openPr(event: MouseEvent<HTMLAnchorElement>, url: string): void {
 
 // Keyboard activation for the button-role row, guarded so Enter/Space fired on
 // the inner link (its own control) never doubles up as a row toggle.
-function rowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, toggle: () => void): void {
+function rowKeyDown(event: KeyboardEvent<HTMLDivElement>, toggle: () => void): void {
   if (event.target !== event.currentTarget) return
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault()
@@ -73,7 +75,7 @@ function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullReq
   return (
     <>
       {staleError && <StaleBanner error={staleError} />}
-      <Panel title="Spend by pull request">
+      <Panel title="Pull request spend">
         {pullRequests && pullRequests.rows.length > 0
           ? <PrTable pullRequests={pullRequests} />
           : <EmptyNote>PR links are captured as sessions are parsed. Once a session references a pull request, it appears here.</EmptyNote>}
@@ -83,7 +85,7 @@ function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullReq
 }
 
 function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
-  const { rows, distinctCost, distinctSessions, subagentSessions, attributedCost, unattributedCost, otherPrCount, otherPrCost } = pullRequests
+  const { rows, distinctCost, distinctSessions, subagentSessions, attributedCost, unattributedCost } = pullRequests
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
   // Reset any open expansion when the PR set changes (a period/provider switch or
   // a refresh that alters the list): a stale expandedUrl would otherwise linger
@@ -95,59 +97,51 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
   // payload omits it, so the rows are not summable and the footer must differ.
   const summable = attributedCost !== undefined
   const unattributed = unattributedCost ?? 0
-  const otherCount = otherPrCount ?? 0
-  const otherCost = otherPrCost ?? 0
-  // Reconcile to the visible numbers: sum the rounded row costs (plus any
-  // capped-away remainder) so the footer total equals what the eye adds up.
-  const displayedAttributed = rows.reduce((sum, row) => sum + Number(row.cost.toFixed(2)), 0) + otherCost
+  // Reconcile to the visible numbers: every PR is present, so the summary is
+  // exactly the sum of the rounded cards a person can inspect below.
+  const displayedAttributed = rows.reduce((sum, row) => sum + Number(row.cost.toFixed(2)), 0)
 
   return (
     <>
-      <div className="pr-scroll">
-        <table className="ov-models pr-table" aria-label="Spend by pull request">
-          <thead>
-            <tr>
-              <th>Pull request</th>
-              <th className="pr-models">Models</th>
-              <th className="num">Cost</th>
-              <th className="num">Sessions</th>
-              <th className="num">Calls</th>
-              <th className="num">Active</th>
-              <th className="pr-chevron-cell" aria-hidden="true"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(pr => (
-              <PrRowView
-                key={pr.url}
-                pr={pr}
-                expanded={expandedUrl === pr.url}
-                onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
-              />
-            ))}
-          </tbody>
-          {otherCount > 0 && (
-            // A muted summary line, kept out of the sorted rows: its cost is an
-            // aggregate of the capped-away PRs and can exceed a visible row.
-            <tfoot>
-              <tr className="pr-other-row">
-                <td className="pr-other-label">Other ({otherCount.toLocaleString('en-US')} more PRs)</td>
-                <td className="pr-models"></td>
-                <td className="num mono">{formatUsd(otherCost)}</td>
-                <td className="num"></td>
-                <td className="num"></td>
-                <td className="num pr-span"></td>
-                <td className="pr-chevron-cell"></td>
-              </tr>
-            </tfoot>
-          )}
-        </table>
+      <div className="pr-summary" aria-label="Pull request attribution summary">
+        <div className="pr-summary-item">
+          <span>Attributed spend</span>
+          <strong>{formatUsd(summable ? displayedAttributed : distinctCost)}</strong>
+        </div>
+        <div className="pr-summary-item">
+          <span>Pull requests</span>
+          <strong>{rows.length.toLocaleString('en-US')}</strong>
+        </div>
+        <div className="pr-summary-item">
+          <span>Linked sessions</span>
+          <strong>{distinctSessions.toLocaleString('en-US')}</strong>
+        </div>
+        <div className="pr-summary-item">
+          <span>Folded agent runs</span>
+          <strong>{(subagentSessions ?? 0).toLocaleString('en-US')}</strong>
+        </div>
+      </div>
+      <div className="pr-list-head">
+        <div>
+          <strong>Attributed pull requests</strong>
+          <span>Sorted by spend, highest first</span>
+        </div>
+        <span className="pr-list-count">{rows.length.toLocaleString('en-US')} total</span>
+      </div>
+      <div className="pr-list" aria-label="Spend by pull request">
+        {rows.map(pr => (
+          <PrRowView
+            key={pr.url}
+            pr={pr}
+            expanded={expandedUrl === pr.url}
+            onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
+          />
+        ))}
       </div>
       {summable ? (
         <p className="pr-footnote">
-          {formatUsd(displayedAttributed)} attributed to the rows above, across {distinctSessions.toLocaleString('en-US')} PR-linked {sessionWord(distinctSessions)}
-          {subagentSessions ? ` + ${subagentSessions.toLocaleString('en-US')} folded-in subagent ${subagentSessions === 1 ? 'run' : 'runs'}` : ''}.
-          {' '}Each turn's cost goes to the PR it was working on, so the rows are summable.
+          Costs are attributed turn by turn, so every row adds up without double counting.
+          {subagentSessions ? ` ${subagentSessions.toLocaleString('en-US')} subagent ${subagentSessions === 1 ? 'run is' : 'runs are'} included in the PR where the work happened.` : ''}
         </p>
       ) : (
         <p className="pr-footnote">
@@ -170,50 +164,63 @@ function PrRowView({ pr, expanded, onToggle }: { pr: PrRow; expanded: boolean; o
   const catMax = categories.length ? Math.max(...categories.map(cat => cat.cost)) : 0
 
   return (
-    <>
-      <tr
-        className="pr-row"
+    <article className={expanded ? 'pr-card is-open' : 'pr-card'}>
+      <div
+        className="pr-card-trigger"
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
         onClick={onToggle}
         onKeyDown={event => rowKeyDown(event, onToggle)}
       >
-        <td className="ov-model-name">
-          <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
-        </td>
-        <td className="pr-models">{models.length ? modelsLabel(models) : ''}</td>
-        <td className="num mono" {...(pr.approx ? { title: APPROX_TITLE } : {})}>
-          {pr.approx ? '~' : ''}{formatUsd(pr.cost)}
-        </td>
-        <td className="num">{pr.sessions.toLocaleString('en-US')}</td>
-        <td className="num">{pr.calls.toLocaleString('en-US')}</td>
-        <td className="num pr-span">{spanLabel(pr.firstStarted, pr.lastEnded)}</td>
-        <td className="pr-chevron-cell"><span className="pr-chevron" aria-hidden="true">›</span></td>
-      </tr>
+        <div className="pr-card-identity">
+          <span className="pr-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M6 7.5V19M11 5h4a3 3 0 0 1 3 3v8.5"/></svg>
+          </span>
+          <div>
+            <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
+            <div className="pr-card-meta">
+              <span>{spanLabel(pr.firstStarted, pr.lastEnded)}</span>
+              <span>{pr.sessions.toLocaleString('en-US')} {sessionWord(pr.sessions)}</span>
+              <span>{pr.calls.toLocaleString('en-US')} calls</span>
+            </div>
+          </div>
+        </div>
+        <div className="pr-card-models">
+          <span className="pr-card-label">Models</span>
+          <ModelChips models={models} />
+        </div>
+        <div className="pr-card-cost">
+          <span className="pr-card-label">Spend</span>
+          <strong {...(pr.approx ? { title: APPROX_TITLE } : {})}>{pr.approx ? '~' : ''}{formatUsd(pr.cost)}</strong>
+        </div>
+        <span className="pr-chevron" aria-hidden="true">›</span>
+      </div>
       {expanded && (
-        <tr className="pr-detail-row">
-          <td className="pr-detail-cell" colSpan={7}>
+        <div className="pr-detail-cell">
             {categories.length > 0 ? (
-              <div className="pr-cats" role="region" aria-label={`${pr.label} cost breakdown`}>
-                {categories.map(cat => (
-                  <div className="pr-cat" key={cat.name}>
-                    <div className="pr-cat-bar" aria-hidden="true">
-                      <span style={{ width: `${catMax > 0 ? cat.cost / catMax * 100 : 0}%` }} />
-                    </div>
-                    <div className="pr-cat-main">
+              <div className="pr-detail" role="region" aria-label={`${pr.label} cost breakdown`}>
+                <div className="pr-detail-head">
+                  <span>Work breakdown</span>
+                  <strong>{formatUsd(pr.cost)} total</strong>
+                </div>
+                <div className="pr-cats">
+                  {categories.map(cat => (
+                    <div className="pr-cat" key={cat.name}>
                       <span className="pr-cat-name">{cat.name}</span>
+                      <div className="pr-cat-bar" aria-hidden="true">
+                        <span style={{ width: `${catMax > 0 ? cat.cost / catMax * 100 : 0}%` }} />
+                      </div>
                       <strong>{formatUsd(cat.cost)}</strong>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             ) : (
               <p className="pr-cat-empty">No per-turn detail (estimated from a whole-session split).</p>
             )}
-          </td>
-        </tr>
+        </div>
       )}
-    </>
+    </article>
   )
 }

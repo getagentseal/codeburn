@@ -220,7 +220,7 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
-    // Spend by referenced pull request (top 20 by cost), attributed at turn
+    // Spend by referenced pull request (every PR, cost-descending), attributed at turn
     // granularity. Optional: older CLIs omit it, and it is absent when no PR links
     // were observed. Rows carry attributed cost/calls and ARE summable;
     // `attributedCost + unattributedCost === distinctCost`. `approx` marks a row
@@ -250,8 +250,6 @@ export type MenubarPayload = {
       subagentSessions?: number
       attributedCost?: number
       unattributedCost?: number
-      otherPrCount?: number
-      otherPrCost?: number
     }
   }
   optimize: {

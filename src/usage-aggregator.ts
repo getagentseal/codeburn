@@ -16,7 +16,6 @@ import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateS
 import { buildGranularHistory } from './granular-history.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
-const TOP_PULL_REQUESTS = 20
 const TOP_BRANCHES = 15
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
@@ -657,7 +656,8 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   // PULL REQUESTS + BRANCHES (all-provider path only). Both are session-layer
   // aggregations over the surviving-session parse, so carried history cannot
   // contribute — expected and fine. PR links and per-turn git branches are
-  // captured only from Claude transcripts today; other providers add nothing.
+  // captured natively by Claude or correlated from any provider's saved session
+  // through explicit references, exact launcher prompts, or unambiguous cwds.
   // Set only when non-empty so the payload omits them (and the app renders its
   // quiet empty state) whenever there is nothing to show. Excluded on the
   // Claude-config-scoped path (which replaces scanProjects with one config's
@@ -666,16 +666,14 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     // One pass yields both rows and totals, so they never disagree.
     const { rows: prRows, totals: prTotals } = buildPrAttribution(scanProjects)
     if (prRows.length > 0) {
-      const shownRows = prRows.slice(0, TOP_PULL_REQUESTS)
-      const otherRows = prRows.slice(TOP_PULL_REQUESTS)
       currentData.pullRequests = {
-        rows: shownRows,
+        // PRs are user-auditable spend records, so never collapse the tail into
+        // an opaque "Other" bucket. The desktop list scrolls with the page.
+        rows: prRows,
         distinctCost: prTotals.cost,
         distinctSessions: prTotals.sessions,
         attributedCost: prTotals.attributedCost,
         unattributedCost: prTotals.unattributedCost,
-        otherPrCount: otherRows.length,
-        otherPrCost: otherRows.reduce((sum, r) => sum + r.cost, 0),
         ...(prTotals.subagentSessions > 0 ? { subagentSessions: prTotals.subagentSessions } : {}),
       }
     }

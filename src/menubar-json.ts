@@ -55,7 +55,7 @@ export type PeriodData = {
 }
 
 export type PullRequestsPayload = {
-  /// Per-PR rows, cost-descending, capped at the top 20 by the producer.
+  /// Every attributed PR row, cost-descending.
   rows: PrRow[]
   /// PR-linked spend, now INCLUDING the subagent runs folded into those sessions
   /// (so it can exceed the parents' own spend). Equals `attributedCost +
@@ -67,17 +67,11 @@ export type PullRequestsPayload = {
   /// sessions. Each remains a standalone row in the sessions list; here it only
   /// explains why the totals exceed the parents' own spend. 0 when none folded.
   subagentSessions?: number
-  /// Sum of EVERY PR's attributed cost (all rows, not just the sent top 20).
+  /// Sum of every PR's attributed cost.
   attributedCost: number
   /// PR-linked spend not tied to any specific PR (pre-reference session
   /// overhead). `attributedCost + unattributedCost === distinctCost`.
   unattributedCost: number
-  /// Count of PRs beyond the sent `rows` (0 when nothing was capped). The app
-  /// renders an "Other (N more PRs)" summary row so the visible table still
-  /// reconciles to `attributedCost`.
-  otherPrCount: number
-  /// Attributed cost of those capped-away PRs (0 when nothing was capped).
-  otherPrCost: number
 }
 
 export type ProviderCost = {
@@ -309,11 +303,9 @@ export type MenubarPayload = {
     skills: Array<{ name: string; turns: number; cost: number }>
     subagents: Array<{ name: string; calls: number; cost: number }>
     mcpServers: Array<{ name: string; calls: number }>
-    /// Spend attributed by referenced pull request (top 20 by cost) plus the
-    /// multi-link-safe distinct total. Rows are by-reference (a session
-    /// referencing several PRs counts toward each), so never summed. Absent when
-    /// no PR links were observed, and on payloads produced before the field
-    /// existed — the client renders its empty state for both.
+    /// Every pull request with attributed spend, cost-descending, plus the
+    /// multi-link-safe distinct total. Absent when no PR links were observed and
+    /// on payloads produced before the field existed.
     pullRequests?: PullRequestsPayload
     /// Per-branch spend (top 15 by cost), last-seen branch carried forward across
     /// each session's turns; a `null` branch is unbranched spend inside a

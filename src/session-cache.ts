@@ -36,6 +36,7 @@ export type CachedCall = {
   deduplicationKey: string
   project?: string
   projectPath?: string
+  workingDirectory?: string
   toolSequence?: ToolCall[][]
   // Rich-session-capture (capture-only; no report consumes these yet). All
   // optional and omitted at zero/false to keep the per-call cache cost minimal.
@@ -61,9 +62,9 @@ export type CachedTurn = {
   // previous turn's branch (a report carries the last stored value forward).
   // Rich-session-capture; optional, Claude only.
   gitBranch?: string
-  // Claude: GitHub PR URLs referenced during this turn, sorted and deduplicated.
-  // Stored per-turn directly (unlike gitBranch, no change-detection), so a turn's
-  // own refs are self-contained. Drives turn-level PR spend attribution. Optional.
+  // GitHub PR URLs referenced during this turn, sorted and deduplicated. Claude
+  // can provide native links; all providers can provide explicit URLs from the
+  // saved user message. Stored directly so each turn's refs are self-contained.
   prRefs?: string[]
   // Claude: `tool_use` ids of the `Agent`/`Task` subagent spawns in this turn.
   // A spawned sidechain session is folded into the launching turn by matching its
@@ -82,6 +83,8 @@ export type CachedFile = {
   fingerprint: FileFingerprint
   lastCompleteLineOffset?: number
   canonicalCwd?: string
+  // Original cwd before linked-worktree canonicalization.
+  workingDirectory?: string
   canonicalProjectName?: string
   mcpInventory: string[]
   turns: CachedTurn[]
@@ -200,7 +203,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
   // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain
   // the new optional fields.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1',
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1',
   cline: 'worktree-project-grouping-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
@@ -210,7 +213,7 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rich-session-capture-v1: per-call LOC deltas + editFailed from
   // patch_apply_end. (The codex-results.json CODEX_CACHE_VERSION is bumped in
   // lockstep so the pre-session-cache layer re-parses too.)
-  codex: 'mcp-attribution-v2-est-cost-rich-capture-v1',
+  codex: 'mcp-attribution-v2-est-cost-rich-capture-v1-cross-provider-pr-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'cli-shutdown-cost-v1-skills',
@@ -340,6 +343,7 @@ function validateCall(c: unknown): c is CachedCall {
     && (o['subagentTypes'] === undefined || isStringArray(o['subagentTypes']))
     && isOptionalString(o['project'])
     && isOptionalString(o['projectPath'])
+    && isOptionalString(o['workingDirectory'])
     && (o['toolSequence'] === undefined || (Array.isArray(o['toolSequence']) && (o['toolSequence'] as unknown[]).every(s => isToolCallArray(s))))
     && isOptionalNum(o['locAdded'])
     && isOptionalNum(o['locRemoved'])
@@ -369,6 +373,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
   return validateFingerprint(o['fingerprint'])
     && isOptionalNum(o['lastCompleteLineOffset'])
     && isOptionalString(o['canonicalCwd'])
+    && isOptionalString(o['workingDirectory'])
     && isOptionalString(o['canonicalProjectName'])
     && isStringArray(o['mcpInventory'])
     && isOptionalString(o['title'])

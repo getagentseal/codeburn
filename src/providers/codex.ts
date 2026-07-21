@@ -382,6 +382,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       let sessionModel: string | undefined
       let sessionId = ''
+      let sessionCwd: string | undefined
       let forkedFromId = ''
       let forkCutoff = ''
       // Null sentinel rather than `0` so the FIRST event is never confused
@@ -422,6 +423,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         if (entry.type === 'session_meta') {
           sessionId = entry.payload?.session_id ?? basename(source.path, '.jsonl')
+          sessionCwd = entry.payload?.cwd ?? sessionCwd
           forkedFromId = entry.payload?.forked_from_id ?? ''
           if (forkedFromId && entry.timestamp) {
             forkCutoff = new Date(new Date(entry.timestamp).getTime() + 5000).toISOString()
@@ -561,6 +563,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
               toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
               userMessage: pendingUserMessage,
               sessionId,
+              ...(sessionCwd ? { projectPath: sessionCwd, workingDirectory: sessionCwd } : {}),
               ...(pendingLocAdded ? { locAdded: pendingLocAdded } : {}),
               ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
               ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),
@@ -677,6 +680,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             toolSequence: pendingToolSequence.length > 0 ? pendingToolSequence : undefined,
             userMessage: pendingUserMessage,
             sessionId,
+            ...(sessionCwd ? { projectPath: sessionCwd, workingDirectory: sessionCwd } : {}),
             ...(pendingLocAdded ? { locAdded: pendingLocAdded } : {}),
             ...(pendingLocRemoved ? { locRemoved: pendingLocRemoved } : {}),
             ...(pendingEditFailed ? { editFailed: pendingEditFailed } : {}),

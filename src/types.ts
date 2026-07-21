@@ -94,10 +94,10 @@ export type ParsedTurn = {
   // the turn's entries). Captured for cost-per-branch reporting; deduped at the
   // cache boundary (stored per-turn only when it changes). Optional; Claude only.
   gitBranch?: string
-  // Claude Code: GitHub PR URLs referenced during this turn (`pr-link` entries
-  // that landed inside the turn's span), sorted and deduplicated. Drives
-  // turn-level PR spend attribution; the session-level `prLinks` union is built
-  // separately. Absent when the turn referenced no PR. Optional; Claude only.
+  // GitHub PR URLs referenced during this turn, sorted and deduplicated. Claude
+  // supplies native `pr-link` entries; every provider can contribute explicit
+  // URLs from its saved user message, and correlated external sessions seed the
+  // field deterministically. Drives turn-level PR spend attribution.
   prRefs?: string[]
   // Claude Code: the `tool_use` ids of the `Agent`/`Task` subagent spawns emitted
   // in this turn. A spawned sidechain session is folded back into the turn that
@@ -193,6 +193,14 @@ export type SessionSourceMetadata = {
 export type SessionSummary = {
   sessionId: string
   project: string
+  /// Exact working directory recorded by the provider before git-worktree
+  /// canonicalization. Used to correlate sessions from different AI tools that
+  /// worked in the same checkout. Never synthesized from timestamps.
+  workingDirectory?: string
+  /// How this session became associated with its PR links. Native transcript
+  /// links are strongest; the other sources are deterministic cross-provider
+  /// correlations performed after all saved sessions have been parsed.
+  prAttributionSource?: 'transcript' | 'explicit-reference' | 'working-directory' | 'launcher-prompt'
   source?: SessionSourceMetadata
   // Claude Code only: agent type of a subagent transcript session
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
@@ -241,8 +249,8 @@ export type SessionSummary = {
   totalCacheWriteTokens: number
   apiCalls: number
   turns: ClassifiedTurn[]
-  /// GitHub PR URLs captured from the session transcript (session-level,
-  /// deduplicated). Absent when none were observed.
+  /// GitHub PR URLs captured or deterministically correlated for this session
+  /// (session-level, deduplicated). Absent when none were observed.
   prLinks?: string[]
   /// The PR set active at the start of the in-range turn slice: the refs of the
   /// last turn BEFORE the report's range start that referenced any PR. Captured

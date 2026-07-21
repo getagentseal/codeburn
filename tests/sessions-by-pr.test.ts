@@ -334,12 +334,12 @@ describe('mixed live + legacy category reconciliation (round-3 finding 1)', () =
   })
 })
 
-describe('model list bounds (round-3 finding 5)', () => {
-  it('caps a row to the top 4 models by attributed cost', () => {
+describe('model list ordering', () => {
+  it('keeps every model ordered by attributed cost', () => {
     const rows = aggregateByPr([project([
-      sessionWithTurns('s', [A], [turnModels([A], [['m-f', 60], ['m-e', 50], ['m-d', 40], ['m-c', 30], ['m-b', 20], ['m-a', 10]])]),
+      sessionWithTurns('s', [A], [turnModels([A], [['<synthetic>', 70], ['m-f', 60], ['m-e', 50], ['m-d', 40], ['m-c', 30], ['m-b', 20], ['m-a', 10]])]),
     ])])
-    expect(rows[0]!.models).toEqual(['m-f', 'm-e', 'm-d', 'm-c'])
+    expect(rows[0]!.models).toEqual(['m-f', 'm-e', 'm-d', 'm-c', 'm-b', 'm-a'])
   })
 
   it('breaks model ties by name ascending for a stable order', () => {

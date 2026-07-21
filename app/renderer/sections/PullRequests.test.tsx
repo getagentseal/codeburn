@@ -53,8 +53,6 @@ const SAMPLE: PrPayload = {
   distinctSessions: 3,
   attributedCost: 330.75,
   unattributedCost: 45.3,
-  otherPrCount: 0,
-  otherPrCost: 0,
 }
 
 // Get the button-role row wrapping a given PR link, for click/keyboard toggling.
@@ -71,26 +69,27 @@ describe('PullRequests', () => {
     openExternal.mockResolvedValue(undefined)
   })
 
-  it('renders PR rows as a table with linked labels, cost, and a date span', async () => {
+  it('renders PR cards with linked labels, cost, activity, and a date span', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
     const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
     expect(link).toHaveAttribute('href', 'https://github.com/getagentseal/codeburn/pull/780')
     expect(screen.getByText('$240.50')).toBeInTheDocument()
-    expect(screen.getByText('512')).toBeInTheDocument()
+    expect(screen.getByText('512 calls')).toBeInTheDocument()
     expect(screen.getByText(expectedSpan(SAMPLE.rows[0]!.firstStarted, SAMPLE.rows[0]!.lastEnded))).toBeInTheDocument()
     // A same-day PR collapses its span to a single label.
     expect(screen.getByText(expectedSpan(SAMPLE.rows[1]!.firstStarted, SAMPLE.rows[1]!.lastEnded))).toBeInTheDocument()
   })
 
-  it('renders the Models column with a "+N" overflow tag', async () => {
+  it('renders every model explicitly instead of hiding models behind an overflow count', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    // Three models collapse to the first two plus a count of the rest.
-    expect(await screen.findByText('fable, opus +1')).toBeInTheDocument()
-    // A single model renders as-is, with no overflow tag.
+    expect(await screen.findByText('fable')).toBeInTheDocument()
+    expect(screen.getByText('opus')).toBeInTheDocument()
+    expect(screen.getByText('haiku')).toBeInTheDocument()
+    expect(screen.queryByText('+1')).toBeNull()
     expect(screen.getByText('sonnet')).toBeInTheDocument()
   })
 
@@ -178,10 +177,11 @@ describe('PullRequests', () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    const note = await screen.findByText(/attributed to the rows above/)
-    expect(note.textContent).toContain('$330.75')
-    expect(note.textContent).toContain('3 PR-linked sessions')
-    expect(note.textContent).toContain('summable')
+    expect(await screen.findByText('Attributed spend')).toBeInTheDocument()
+    expect(screen.getByText('$330.75')).toBeInTheDocument()
+    expect(screen.getByLabelText('Pull request attribution summary')).toHaveTextContent('Linked sessions3')
+    const note = screen.getByText(/attributed turn by turn/)
+    expect(note.textContent).toContain('without double counting')
     expect(screen.getByText(/Not tied to a specific PR/).textContent).toContain('$45.30')
   })
 
@@ -189,16 +189,17 @@ describe('PullRequests', () => {
     getOverview.mockResolvedValue(makePayload({ ...SAMPLE, subagentSessions: 32 }))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    const note = await screen.findByText(/attributed to the rows above/)
-    expect(note.textContent).toContain('3 PR-linked sessions')
-    expect(note.textContent).toContain('32 folded-in subagent runs')
+    expect(await screen.findByText('Folded agent runs')).toBeInTheDocument()
+    expect(screen.getByText('32')).toBeInTheDocument()
+    const note = screen.getByText(/attributed turn by turn/)
+    expect(note.textContent).toContain('32 subagent runs are included')
   })
 
   it('omits the subagent note when none were folded', async () => {
     getOverview.mockResolvedValue(makePayload(SAMPLE))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    const note = await screen.findByText(/attributed to the rows above/)
+    const note = await screen.findByText(/attributed turn by turn/)
     expect(note.textContent).not.toContain('subagent')
   })
 
@@ -260,23 +261,23 @@ describe('PullRequests', () => {
     expect(screen.queryByText(/Not tied to a specific PR/)).toBeNull()
   })
 
-  it('renders an Other (N more PRs) reconciliation row when PRs are capped', async () => {
-    const cappedPayload: PrPayload = {
-      rows: [
-        { url: 'https://github.com/getagentseal/codeburn/pull/780', label: 'getagentseal/codeburn#780', cost: 200, savingsUSD: 0, sessions: 3, calls: 512, firstStarted: '2026-07-01T10:00:00Z', lastEnded: '2026-07-03T18:00:00Z', models: ['fable'], categories: [{ name: 'Feature work', cost: 200 }] },
-      ],
-      distinctCost: 288.4,
-      distinctSessions: 4,
-      attributedCost: 288.4,
-      unattributedCost: 0,
-      otherPrCount: 5,
-      otherPrCost: 88.4,
-    }
-    getOverview.mockResolvedValue(makePayload(cappedPayload))
+  it('renders the complete PR list without an opaque Other row', async () => {
+    const manyRows = Array.from({ length: 32 }, (_, index) => ({
+      ...SAMPLE.rows[0]!,
+      url: `https://github.com/getagentseal/codeburn/pull/${800 + index}`,
+      label: `getagentseal/codeburn#${800 + index}`,
+    }))
+    getOverview.mockResolvedValue(makePayload({
+      ...SAMPLE,
+      rows: manyRows,
+      attributedCost: manyRows.reduce((sum, row) => sum + row.cost, 0),
+    }))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    expect(await screen.findByText('Other (5 more PRs)')).toBeInTheDocument()
-    expect(screen.getByText('$88.40')).toBeInTheDocument()
+    expect(await screen.findByText('getagentseal/codeburn#800')).toBeInTheDocument()
+    expect(screen.getByText('getagentseal/codeburn#831')).toBeInTheDocument()
+    expect(screen.getByText('32 total')).toBeInTheDocument()
+    expect(screen.queryByText(/Other \(/)).toBeNull()
   })
 
   it('shows the quiet empty state (never a fake table) when no PR links exist', async () => {

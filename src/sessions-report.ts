@@ -661,12 +661,17 @@ export function buildPrAttribution(projects: ProjectSummary[]): PrAttribution {
     .map(([url, r]) => {
       // Collapse raw model names to short display names, summing costs that map
       // to the same short name, then order by attributed cost (name asc breaks
-      // ties for a stable order) and cap at the top 4 to bound the payload.
+      // ties for a stable order). Keep every real model: `<synthetic>` is an
+      // internal accounting bucket, not a model a person chose or can act on.
+      // The desktop renders the rest as wrapping chips, so an opaque "+N" never
+      // hides which model did the work.
       const shortCosts = new Map<string, number>()
-      for (const [raw, mc] of r.models) addToMap(shortCosts, getShortModelName(raw), mc)
+      for (const [raw, mc] of r.models) {
+        if (raw === '<synthetic>') continue
+        addToMap(shortCosts, getShortModelName(raw), mc)
+      }
       const models = [...shortCosts.entries()]
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 4)
         .map(([name]) => name)
       const categories = [...r.categories.entries()]
         .map(([cat, cost]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, cost }))
