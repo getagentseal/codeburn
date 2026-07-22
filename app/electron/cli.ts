@@ -400,7 +400,12 @@ export function spawnCli(
   const spec = spawnSpecFor(target, args)
   if (opts.extraEnv) spec.env = { ...spec.env, ...opts.extraEnv }
 
-  const key = JSON.stringify([spec.bin, ...spec.args])
+  // Environment can change command semantics even when argv is identical.
+  // In particular, the desktop's cold first paint sets CODEBURN_FAST_START,
+  // then immediately launches the same argv without it to finish full history.
+  // Treat those as distinct flights/cache entries or the background request
+  // would incorrectly reuse the partial first-paint payload and never run.
+  const key = JSON.stringify([spec.bin, ...spec.args, opts.extraEnv ?? null])
   const cached = readCache.get(key)
   if (cached && Date.now() - cached.at < COALESCE_TTL_MS) return Promise.resolve(cached.value)
   const existing = readInflight.get(key)

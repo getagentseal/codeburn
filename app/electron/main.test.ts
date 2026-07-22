@@ -420,13 +420,65 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
 
     await handlers['codeburn:getOverview']!('30days', 'all')
     expect(opts[0]?.timeoutMs).toBe(10 * 60_000)
-    expect((opts[0]?.extraEnv as Record<string, string> | undefined)?.CODEBURN_PROGRESS).toBe('1')
+    expect(opts[0]?.extraEnv).toEqual({ CODEBURN_PROGRESS: '1', CODEBURN_FAST_START: '1' })
     expect(typeof opts[0]?.onStderr).toBe('function')
     expect(emitProgress).toHaveBeenCalledWith({ kind: 'done' })
 
     await handlers['codeburn:getOverview']!('30days', 'all')
     expect(opts[1]?.timeoutMs).toBeUndefined()
     expect(opts[1]?.extraEnv).toBeUndefined()
+  })
+
+  it('returns a cold payload before progressively hydrating and unlocking larger periods', async () => {
+    const calls: Array<{ args: string[]; opts?: Record<string, unknown> }> = []
+    const spawnCli = vi.fn(async (args: string[], opts?: Record<string, unknown>) => {
+      calls.push({ args, opts })
+      return calls.length === 1
+        ? { indexing: true, current: { cost: 1 } }
+        : { current: { cost: 1 } }
+    })
+    const emitProgress = vi.fn()
+    const handlers = createBridgeHandlers(base({ spawnCli, emitProgress }))
+
+    const result = await handlers['codeburn:getOverview']!('today', 'all')
+    expect(result).toMatchObject({ ok: true, value: { indexing: true } })
+    await vi.waitFor(() => expect(spawnCli).toHaveBeenCalledTimes(9))
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(['--from', '--to']))
+    expect(calls[1]?.opts).toMatchObject({
+      timeoutMs: 10 * 60_000,
+      priority: 'background',
+      extraEnv: { CODEBURN_FAST_START: '1' },
+    })
+    expect(calls[3]?.args).toContain('week')
+    expect(calls[7]?.args).toContain('all')
+    expect(calls[8]?.args).toContain('lifetime')
+    expect(calls[8]?.opts?.extraEnv).toBeUndefined()
+    expect(emitProgress).toHaveBeenCalledWith({ kind: 'period-ready', period: 'today' })
+    expect(emitProgress).toHaveBeenCalledWith({ kind: 'period-ready', period: 'week' })
+    expect(emitProgress).toHaveBeenCalledWith({ kind: 'period-ready', period: '30days' })
+    await vi.waitFor(() => expect(emitProgress).toHaveBeenCalledWith({ kind: 'history-ready' }))
+  })
+
+  it('keeps overview polls range-limited while progressive history is running', async () => {
+    let releaseStage!: () => void
+    const stageGate = new Promise<void>(resolve => { releaseStage = resolve })
+    let call = 0
+    const opts: Array<Record<string, unknown> | undefined> = []
+    const spawnCli = vi.fn(async (_args: string[], options?: Record<string, unknown>) => {
+      opts.push(options)
+      call++
+      if (call === 1) return { indexing: true, current: { cost: 1 } }
+      if (call === 2) await stageGate
+      return { indexing: true, current: { cost: 1 } }
+    })
+    const handlers = createBridgeHandlers(base({ spawnCli, emitProgress: vi.fn() }))
+
+    await handlers['codeburn:getOverview']!('today', 'all')
+    await vi.waitFor(() => expect(spawnCli).toHaveBeenCalledTimes(2))
+    await handlers['codeburn:getOverview']!('today', 'all')
+    expect(opts[2]?.extraEnv).toEqual({ CODEBURN_FAST_START: '1' })
+    releaseStage()
+    await vi.waitFor(() => expect(spawnCli.mock.calls.length).toBeGreaterThanOrEqual(10))
   })
 
   it('drops a warmed overview to background priority only when the prefetch flag is set', async () => {

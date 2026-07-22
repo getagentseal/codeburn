@@ -89,8 +89,13 @@ async function seedLiveTodaySession(): Promise<void> {
   const projectDir = join(ROOT, 'home', '.claude', 'projects', 'p')
   await mkdir(projectDir, { recursive: true })
   const now = new Date()
-  const ts = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0).toISOString()
-  const ts2 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 30, 0).toISOString()
+  // Keep the fixture inside both "today through now" and "all through end of
+  // today" even when the suite runs before noon. Fixed midday timestamps made
+  // the provider-parity assertion depend on the local time of the test run.
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const elapsed = Math.max(0, now.getTime() - todayStart)
+  const ts = new Date(todayStart + Math.floor(elapsed / 3)).toISOString()
+  const ts2 = new Date(todayStart + Math.floor(elapsed * 2 / 3)).toISOString()
   const line = (id: string, t: string): string => JSON.stringify({
     type: 'assistant',
     timestamp: t,

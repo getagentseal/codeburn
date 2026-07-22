@@ -177,6 +177,9 @@ export type ClaudeConfigSelector = {
 
 export type MenubarPayload = {
   generated: string
+  /** True while a cold desktop install is serving an accurate range-limited
+   *  first paint and lifetime history continues indexing in the background. */
+  indexing?: boolean
   current: {
     label: string
     cost: number

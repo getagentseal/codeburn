@@ -118,6 +118,8 @@ export type ClaudeConfigSelector = {
 
 export type MenubarPayload = {
   generated: string
+  /** Cold first paint is ready while full history continues indexing. */
+  indexing?: boolean
   current: {
     label: string
     cost: number
@@ -618,6 +620,9 @@ export type ScanProgressEvent =
   | { kind: 'provider'; provider: string; state: 'start' | 'done' | 'skipped'; files?: number }
   | { kind: 'tick'; provider: string; done: number; total: number }
   | { kind: 'done' }
+  | { kind: 'history-stage'; id: string; label: string; state: 'start' | 'ready' | 'error' }
+  | { kind: 'period-ready'; period: Period }
+  | { kind: 'history-ready' }
 
 /** Update-availability status from the main process (app/electron/updates.ts). */
 export type UpdateStatus = {

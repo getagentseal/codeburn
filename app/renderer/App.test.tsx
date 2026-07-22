@@ -16,7 +16,9 @@ vi.stubGlobal('localStorage', {
   clear: () => stored.clear(),
 })
 
+const progress = vi.hoisted(() => ({ listeners: new Set<(event: any) => void>() }))
 const mocks = vi.hoisted(() => ({
+  onProgress: vi.fn(),
   getOverview: vi.fn<(period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean) => Promise<MenubarPayload>>(),
   getSpendFlow: vi.fn<(period: string, provider: string, range?: DateRange) => Promise<SpendFlow>>(),
   getOptimizeReport: vi.fn<(period: string, provider: string, range?: DateRange) => Promise<OptimizeJsonReport>>(),
@@ -119,6 +121,11 @@ function withConfigs(payload: MenubarPayload): MenubarPayload {
 
 function installDefaultMocks() {
   for (const mock of Object.values(mocks)) mock.mockReset()
+  progress.listeners.clear()
+  mocks.onProgress.mockImplementation((cb: (event: any) => void) => {
+    progress.listeners.add(cb)
+    return () => { progress.listeners.delete(cb) }
+  })
   mocks.getOverview.mockResolvedValue(overviewPayload())
   mocks.getSpendFlow.mockResolvedValue({ period: { label: 'Last 30 days', start: '', end: '' }, models: [], projects: [], links: [] })
   mocks.getOptimizeReport.mockResolvedValue({
@@ -173,6 +180,10 @@ function installDefaultMocks() {
   mocks.resetCurrency.mockResolvedValue({ ok: true, stdout: '', stderr: '' })
 }
 
+function emitProgress(event: any) {
+  for (const listener of progress.listeners) listener(event)
+}
+
 describe('App shortcuts', () => {
   beforeEach(() => {
     installDefaultMocks()
@@ -200,6 +211,28 @@ describe('App shortcuts', () => {
     localStorage.removeItem('codeburn.defaultPeriod')
     render(<App />)
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('today', 'all'))
+  })
+
+  it('disables unfinished periods and unlocks each tab when its history stage is ready', async () => {
+    localStorage.setItem('codeburn.defaultPeriod', 'today')
+    mocks.getOverview.mockResolvedValue({ ...overviewPayload(), indexing: true })
+    render(<App />)
+
+    const today = await screen.findByRole('tab', { name: 'Today' })
+    const week = screen.getByRole('tab', { name: '7D' })
+    const lifetime = screen.getByRole('tab', { name: 'Life' })
+    await waitFor(() => expect(today).not.toHaveAttribute('aria-disabled'))
+    expect(week).toHaveAttribute('aria-disabled', 'true')
+    expect(lifetime).toHaveAttribute('aria-disabled', 'true')
+    expect(mocks.getActReport).not.toHaveBeenCalled()
+
+    act(() => emitProgress({ kind: 'period-ready', period: 'week' }))
+    await waitFor(() => expect(week).not.toHaveAttribute('aria-disabled'))
+    fireEvent.click(week)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('week', 'all'))
+
+    act(() => emitProgress({ kind: 'history-ready' }))
+    await waitFor(() => expect(lifetime).not.toHaveAttribute('aria-disabled'))
   })
 
   it('switches sections with command-number shortcuts', async () => {

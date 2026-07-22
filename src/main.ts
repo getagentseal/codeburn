@@ -1100,6 +1100,7 @@ program
         optimize: opts.optimize !== false,
         timeline: opts.timeline !== false,
         claudeConfigSourceId: opts.claudeConfigSource,
+        fastStart: process.env['CODEBURN_FAST_START'] === '1',
       })
       if (opts.scope === 'combined') {
         // Combined multi-device usage is best-effort enrichment on the menubar's

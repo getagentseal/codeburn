@@ -217,9 +217,12 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .ni.on { background: var(--hover); color: var(--ink); box-shadow: none; }
 .ni.on::before { background: var(--accent); }
 .seg { background: var(--bg); border: 1px solid var(--line); }
-.seg span { cursor: pointer; }
+.seg span { cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .seg .on { background: var(--panel); box-shadow: inset 0 -2px 0 var(--accent); }
 .seg span:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.seg span.disabled { cursor: default; opacity: .52; }
+.seg-spinner { width: 8px; height: 8px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: seg-spin .8s linear infinite; }
+@keyframes seg-spin { to { transform: rotate(360deg); } }
 .pop-wrap, .calendar-wrap { position: relative; }
 .pop { background: var(--panel); color: var(--ink); cursor: pointer; user-select: none; }
 .pop-menu {

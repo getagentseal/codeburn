@@ -34,6 +34,8 @@ export function TopBar({
   claudeConfigs,
   configSource,
   onConfigSelect,
+  readyPeriods,
+  indexingPeriods = false,
 }: {
   title: ReactNode
   scope?: ReactNode
@@ -48,13 +50,21 @@ export function TopBar({
   claudeConfigs?: ClaudeConfigSelector
   configSource: string | null
   onConfigSelect: (id: string) => void
+  readyPeriods?: ReadonlySet<string>
+  indexingPeriods?: boolean
 }) {
+  const periodOptions = indexingPeriods
+    ? PERIOD_OPTIONS.map(option => {
+        const ready = readyPeriods?.has(option.value) === true
+        return { ...option, disabled: !ready, loading: !ready }
+      })
+    : PERIOD_OPTIONS
   return (
     <div className="bar">
       <div className="t">{title}</div>
       {scope !== undefined && <span className="scope">{scope}</span>}
       <div className="sp" />
-      <SegTabs options={PERIOD_OPTIONS} value={customRange ? '' : period} onChange={onPeriodChange} />
+      <SegTabs options={periodOptions} value={customRange ? '' : period} onChange={onPeriodChange} />
       <CalendarPop value={customRange} onSelect={onRangeSelect} />
       <ProviderPop value={provider} label={providerLabel} options={providerOptions} onSelect={onProviderSelect} />
       {claudeConfigs && <ConfigPicker configs={claudeConfigs} value={configSource} onSelect={onConfigSelect} />}

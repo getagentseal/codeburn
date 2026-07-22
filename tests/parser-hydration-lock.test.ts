@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, rm, unlink, writeFile, readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { clearSessionCache, parseAllSessions } from '../src/parser.js'
+import { clearSessionCache, isSessionHydrationComplete, parseAllSessions } from '../src/parser.js'
 import { sessionCachePath } from '../src/session-cache.js'
 
 let tmpHome: string
@@ -63,6 +63,52 @@ afterEach(async () => {
 })
 
 describe('parseAllSessions hydration lock', () => {
+  it('persists a range-limited first paint as partial, then an ordinary parse finalizes it', async () => {
+    await writeClaudeSession(50)
+    const range = { start: new Date('2026-05-15T00:00:00Z'), end: new Date('2026-05-15T23:59:59Z') }
+
+    expect(totalOutput(await parseAllSessions(range, 'claude', { partialHydration: true }))).toBe(50)
+    const partial = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
+    expect(partial.complete).not.toBe(true)
+    expect(partial.partialRange).toEqual({
+      startMs: range.start.getTime(),
+      endMs: range.end.getTime(),
+      providerFilter: 'claude',
+    })
+    expect(isSessionHydrationComplete()).toBe(false)
+
+    clearSessionCache()
+    expect(totalOutput(await parseAllSessions(range, 'claude'))).toBe(50)
+    const complete = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
+    expect(complete.complete).toBe(true)
+    expect(complete.partialRange).toBeUndefined()
+    expect(isSessionHydrationComplete()).toBe(true)
+  })
+
+  it('invalidates narrow non-durable provider snapshots when partial coverage expands', async () => {
+    await writeClaudeSession(50)
+    const narrow = { start: new Date('2026-05-15T00:00:00Z'), end: new Date('2026-05-15T23:59:59Z') }
+    await parseAllSessions(narrow, 'claude', { partialHydration: true })
+
+    const seeded = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
+    // A synthetic unchanged non-durable section represents the dangerous case:
+    // its files were parsed for only the narrow range and must not be reused as
+    // though they included older turns when the next stage grows backward.
+    seeded.providers['fixture-provider'] = { envFingerprint: 'fixture', files: {} }
+    await writeFile(sessionCachePath(), JSON.stringify(seeded))
+    clearSessionCache()
+
+    const expanded = { start: new Date('2026-05-01T00:00:00Z'), end: narrow.end }
+    await parseAllSessions(expanded, 'fixture-provider', { partialHydration: true })
+    const cache = JSON.parse(await readFile(sessionCachePath(), 'utf-8'))
+    expect(cache.providers['fixture-provider']).toBeUndefined()
+    // Claude is intentionally retained: its scanner always caches the full
+    // transcript before the result is range-sliced.
+    expect(cache.providers.claude).toBeDefined()
+    expect(cache.partialRange.startMs).toBe(expanded.start.getTime())
+    expect(cache.complete).not.toBe(true)
+  })
+
   it('waits for a live foreign lock, then serves the warm cache instead of re-parsing', async () => {
     // Warm the cache once from a real on-disk session (output 50), capture the
     // exact cache structure, then tamper the cached output to a sentinel (999)

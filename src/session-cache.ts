@@ -137,6 +137,15 @@ export type SessionCache = {
    *  can freeze a partial daily history. Absent on caches written before this
    *  field existed → read as incomplete (one self-healing re-hydration). */
   complete?: boolean
+  /** Coverage represented by range-filtered, non-durable provider entries while
+   * `complete !== true`. A wider partial request must invalidate those entries;
+   * otherwise an unchanged file would be reused as though its older turns had
+   * been parsed. Removed by the final ordinary full-history pass. */
+  partialRange?: {
+    startMs: number
+    endMs: number
+    providerFilter: string
+  }
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -401,6 +410,12 @@ function validateCache(raw: unknown): raw is SessionCache {
   const o = raw as Record<string, unknown>
   if (o['version'] !== CACHE_VERSION) return false
   if (!o['providers'] || typeof o['providers'] !== 'object' || Array.isArray(o['providers'])) return false
+  if (o['partialRange'] !== undefined) {
+    const range = o['partialRange']
+    if (!range || typeof range !== 'object' || Array.isArray(range)) return false
+    const r = range as Record<string, unknown>
+    if (!isNum(r['startMs']) || !isNum(r['endMs']) || typeof r['providerFilter'] !== 'string') return false
+  }
   return Object.values(o['providers'] as Record<string, unknown>).every(validateProviderSection)
 }
 

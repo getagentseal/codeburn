@@ -3097,7 +3097,7 @@ const CACHE_TTL_MS = 180_000
 const MAX_CACHE_ENTRIES = 10
 const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
 
-function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
+function cacheKey(dateRange?: DateRange, providerFilter?: string, partialHydration = false): string {
   const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
   // Include the Claude config-dir env so a config change in a long-lived
   // process (menubar / GNOME extension / test workers) does not return
@@ -3105,7 +3105,7 @@ function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
   const claudeEnv = (process.env['CLAUDE_CONFIG_DIRS'] ?? '') + '|' + (process.env['CLAUDE_CONFIG_DIR'] ?? '')
   // Proxy attribution (totalProxiedCostUSD) is computed live from proxyPaths and
   // then cached, so the key must change when that config changes.
-  return `${s}:${providerFilter ?? 'all'}:${claudeEnv}:${getProxyPathsConfigHash()}`
+  return `${s}:${providerFilter ?? 'all'}:${claudeEnv}:${getProxyPathsConfigHash()}:${partialHydration ? 'partial' : 'full'}`
 }
 
 export function clearSessionCache(): void {
@@ -3521,8 +3521,72 @@ export function isSessionHydrationComplete(): boolean {
   return sessionHydrationComplete
 }
 
-export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
-  const key = cacheKey(dateRange, providerFilter)
+export type ParseSessionsOptions = {
+  /**
+   * Parse only sources that can contribute to `dateRange` and persist the work
+   * as an INCOMPLETE cache. Used by the desktop's first paint so a cold install
+   * does not wait for lifetime history. A later ordinary parse resumes from the
+   * partial cache and is the only path allowed to mark it complete.
+   */
+  partialHydration?: boolean
+}
+
+function providerCoverageIncludes(cached: string, requested: string): boolean {
+  return cached === 'all' || cached === requested
+}
+
+/** Prepare an incomplete cache for a range-filtered parse without ever treating
+ * a narrow file snapshot as lifetime-complete. Claude cache files are retained
+ * because its scanner always captures the full transcript before slicing output;
+ * durable providers are retained because their cache is the historical source
+ * of truth. Other providers must reparse unchanged files when coverage expands. */
+function prepareIncompleteCache(
+  cache: SessionCache,
+  dateRange: DateRange | undefined,
+  providerFilter: string | undefined,
+  partialHydration: boolean,
+): void {
+  const previous = cache.partialRange
+  if (!partialHydration) {
+    if (!previous) return
+    for (const [provider, section] of Object.entries(cache.providers)) {
+      if (provider === 'claude' || section.durable || DURABLE_PROVIDER_NAMES.has(provider)) continue
+      delete cache.providers[provider]
+    }
+    delete cache.partialRange
+    ;(cache as { _dirty?: boolean })._dirty = true
+    return
+  }
+
+  if (!dateRange) return
+  const requested = {
+    startMs: dateRange.start.getTime(),
+    endMs: dateRange.end.getTime(),
+    providerFilter: providerFilter ?? 'all',
+  }
+  const covered = previous
+    && previous.startMs <= requested.startMs
+    && previous.endMs >= requested.endMs
+    && providerCoverageIncludes(previous.providerFilter, requested.providerFilter)
+  if (previous && !covered) {
+    for (const [provider, section] of Object.entries(cache.providers)) {
+      if (provider === 'claude' || section.durable || DURABLE_PROVIDER_NAMES.has(provider)) continue
+      delete cache.providers[provider]
+    }
+  }
+  if (!covered) {
+    cache.partialRange = requested
+    ;(cache as { _dirty?: boolean })._dirty = true
+  }
+}
+
+export async function parseAllSessions(
+  dateRange?: DateRange,
+  providerFilter?: string,
+  parseOptions: ParseSessionsOptions = {},
+): Promise<ProjectSummary[]> {
+  const partialHydration = parseOptions.partialHydration === true
+  const key = cacheKey(dateRange, providerFilter, partialHydration)
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
 
@@ -3542,7 +3606,8 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
     if (hydration.waited) diskCache = await loadCache()
     const isCold = !isCacheComplete(diskCache)
     try {
-      return await runParse(key, diskCache, dateRange, providerFilter, { isCold })
+      prepareIncompleteCache(diskCache, dateRange, providerFilter, partialHydration)
+      return await runParse(key, diskCache, dateRange, providerFilter, { isCold, partialHydration })
     } finally {
       await hydration.release()
     }
@@ -3580,6 +3645,7 @@ type RunParseOptions = {
   isCold?: boolean
   readOnly?: boolean
   refreshLock?: RefreshLockHandle
+  partialHydration?: boolean
 }
 
 async function runParse(
@@ -3589,7 +3655,7 @@ async function runParse(
   providerFilter?: string,
   options: RunParseOptions = {},
 ): Promise<ProjectSummary[]> {
-  const { isCold = false, readOnly = false, refreshLock } = options
+  const { isCold = false, readOnly = false, refreshLock, partialHydration = false } = options
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(providerFilter)
@@ -3684,8 +3750,14 @@ async function runParse(
   // on is durable. A run killed before here never reaches this, so its throttled
   // partial saves keep `complete: false` and the next launch resumes cold.
   const wasComplete = isCacheComplete(diskCache)
-  if (!readOnly && !wasComplete) diskCache.complete = true
-  if (!readOnly && ((diskCache as { _dirty?: boolean })._dirty || !wasComplete)) {
+  // A range-limited first-paint parse is intentionally not proof that older
+  // sources were indexed. Persist its useful recent rows, but leave the cache
+  // incomplete so the background full hydration resumes and finalizes it.
+  if (!readOnly && !wasComplete && !partialHydration) {
+    diskCache.complete = true
+    if (diskCache.partialRange) delete diskCache.partialRange
+  }
+  if (!readOnly && ((diskCache as { _dirty?: boolean })._dirty || (!wasComplete && !partialHydration))) {
     try {
       const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
       if (!published) throw new RefreshFenceLostError()
@@ -3694,7 +3766,11 @@ async function runParse(
       if (refreshLock) throw new RefreshPublicationUnavailableError()
     }
   }
-  sessionHydrationComplete = true
+  // Reaching the end of an ordinary parse is the same completion signal used
+  // before partial desktop hydration existed. Keep that behavior for normal
+  // and read-only refreshes; only the explicitly range-limited first-paint
+  // path must advertise that lifetime history is still incomplete.
+  sessionHydrationComplete = !partialHydration
 
   // Merge across providers by normalised project path so the same repository
   // is not double-counted when it was worked on with more than one tool

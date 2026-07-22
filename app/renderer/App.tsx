@@ -224,6 +224,7 @@ function AppMain() {
   const [refreshToken, setRefreshToken] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const [, setCurrencyTick] = useState(0)
+  const [readyPeriods, setReadyPeriods] = useState<Set<string>>(() => new Set())
 
   // Preserve the 2/3-arg call shapes when no config is scoped so the CLI argv
   // stays flag-free; only add --claude-config-source once a config is picked.
@@ -237,6 +238,40 @@ function AppMain() {
     { memoKey: overviewMemoKey(provider, period, customRange, claudeConfigSource) },
   )
   const refreshOverview = overview.refresh
+
+  // Cold history expands progressively. Unlock a range as soon as its stage is
+  // ready; after Lifetime finalizes, refresh once to replace the partial payload
+  // and remove the indexing marker without waiting for the polling cadence.
+  useEffect(() => {
+    if (!codeburn || typeof codeburn.onProgress !== 'function') return
+    return codeburn.onProgress(event => {
+      if (event.kind === 'period-ready') {
+        setReadyPeriods(current => {
+          if (current.has(event.period)) return current
+          const next = new Set(current)
+          next.add(event.period)
+          return next
+        })
+      } else if (event.kind === 'history-ready') {
+        setReadyPeriods(new Set(STANDARD_PERIODS))
+        refreshOverview()
+      }
+    })
+  }, [refreshOverview])
+
+  useEffect(() => {
+    if (!overview.data) return
+    if (!overview.data.indexing) {
+      setReadyPeriods(new Set(STANDARD_PERIODS))
+      return
+    }
+    setReadyPeriods(current => {
+      if (current.has(period)) return current
+      const next = new Set(current)
+      next.add(period)
+      return next
+    })
+  }, [overview.data, period])
 
   // Boot readiness: the overview poll is the single cold-cache warmer (long
   // timeout + progress). Other sections gate their first CLI spawn on this so a
@@ -276,7 +311,7 @@ function AppMain() {
   // fails we still emit the snapshot, just without the model x category cross.
   const snapshotDayRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!overview.data || provider !== 'all' || customRange || claudeConfigSource) return
+    if (!overview.data || overview.data.indexing || provider !== 'all' || customRange || claudeConfigSource) return
     const today = localDateKey(new Date())
     if (snapshotDayRef.current === today) return
     snapshotDayRef.current = today
@@ -365,7 +400,7 @@ function AppMain() {
   overviewBusyRef.current = overview.loading
   const warmedKeys = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (!ready || overview.data == null || customRange || claudeConfigSource) return
+    if (!ready || overview.data == null || overview.data.indexing || customRange || claudeConfigSource) return
     const targets = detectedProviders.map(entry => entry.id).filter(id => id !== provider)
     if (targets.length === 0) return
     let cancelled = false
@@ -393,10 +428,10 @@ function AppMain() {
     }
     const start = setTimeout(() => { void warm() }, PREFETCH_START_DELAY_MS)
     return () => { cancelled = true; clearTimeout(start) }
-    // `overview.data == null` (a boolean) gates on first-resolution without
-    // re-running every poll; the data content itself is intentionally not a dep.
+    // `overview.data == null` gates first-resolution; `indexing` re-arms exactly
+    // once when the background lifetime scan replaces the partial payload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, period, provider, customRange, claudeConfigSource, detectedProviders, overview.data == null])
+  }, [ready, period, provider, customRange, claudeConfigSource, detectedProviders, overview.data == null, overview.data?.indexing])
 
   // Warm the first view of each heavyweight section after the overview paints.
   // These run one at a time at background priority; the main-process scheduler
@@ -405,7 +440,7 @@ function AppMain() {
   // showing a skeleton while a fresh process starts.
   const warmedSectionKeys = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (!ready || overview.data == null || customRange || claudeConfigSource) return
+    if (!ready || overview.data == null || overview.data.indexing || customRange || claudeConfigSource) return
     const tasks: Array<{ key: string; fetch: () => Promise<unknown> }> = [
       {
         key: sessionsReportKey(period, provider),
@@ -448,7 +483,7 @@ function AppMain() {
     }
     const start = setTimeout(() => { void warm() }, SECTION_PREFETCH_START_DELAY_MS)
     return () => { cancelled = true; clearTimeout(start) }
-  }, [ready, period, provider, customRange, claudeConfigSource, overview.data == null])
+  }, [ready, period, provider, customRange, claudeConfigSource, overview.data == null, overview.data?.indexing])
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
@@ -502,7 +537,7 @@ function AppMain() {
   }, [refreshVisible, navigate])
 
   const onPeriodChange = (value: string) => {
-    if (isPeriod(value)) {
+    if (isPeriod(value) && (!overview.data?.indexing || readyPeriods.has(value))) {
       setCustomRange(null)
       setPeriod(value)
     }
@@ -570,10 +605,12 @@ function AppMain() {
               claudeConfigs={claudeConfigs}
               configSource={claudeConfigSource}
               onConfigSelect={onConfigSelect}
+              readyPeriods={readyPeriods}
+              indexingPeriods={overview.data?.indexing === true}
             />
             <div className={motionClass('body', 'section-fade')}>
               {section === 'overview' ? (
-                <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} ready={ready} refreshToken={refreshToken} />
+                <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} ready={ready && overview.data?.indexing !== true} refreshToken={refreshToken} />
               ) : section === 'sessions' ? (
                 <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={detectedProviders} onProviderChange={onProviderSelect} ready={ready} />
               ) : section === 'pullRequests' ? (
@@ -612,7 +649,7 @@ function StatusLine({ polled }: { polled: ReturnType<typeof usePolled<MenubarPay
   if (polled.data) {
     return (
       <>
-        {polled.data.current.label} <b>{formatUsd(polled.data.current.cost)}</b>
+        {polled.data.indexing ? 'Indexing history' : polled.data.current.label} <b>{formatUsd(polled.data.current.cost)}</b>
       </>
     )
   }

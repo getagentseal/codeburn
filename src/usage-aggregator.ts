@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory, type DateRange } from './types.js'
 import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarPayload, type ClaudeConfigSelector, buildMenubarPayload } from './menubar-json.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, isSessionHydrationComplete } from './parser.js'
+import { isCacheComplete as isSessionCacheComplete, loadCache as loadSessionCache } from './session-cache.js'
 import { findUnpricedModels, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { claude, getClaudeConfigDirs, getDesktopSessionsDir } from './providers/claude.js'
@@ -121,6 +122,9 @@ export type AggregateOpts = {
   /// true. The desktop app never renders it, so it passes `--no-timeline` to
   /// skip the buildGranularHistory pass on every menubar poll.
   timeline?: boolean
+  /** Desktop-only cold-start mode. When the session cache is incomplete, serve
+   *  the requested range first and let the app resume full indexing afterward. */
+  fastStart?: boolean
 }
 
 type ConfigOption = { id: string; label: string; path: string }
@@ -287,7 +291,10 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   const rangeEndStr = toDateString(periodInfo.range.end)
   const isTodayOnly = rangeStartStr === todayStr && rangeEndStr === todayStr
 
-  const cache = await hydrateCache()
+  const cache = opts.fastStart ? emptyCache(getDailyCacheConfigHash()) : await hydrateCache()
+  const parse = opts.fastStart
+    ? (range: DateRange, provider: string) => parseAllSessions(range, provider, { partialHydration: true })
+    : (range: DateRange, provider: string) => parseAllSessions(range, provider)
 
   // Today's live data always comes from an all-provider parse so the union (and
   // any per-provider slice of it) sees every provider's today. `todayAllDays` is
@@ -298,25 +305,25 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
   let scanRange: DateRange
   if (pf === 'all') {
     if (isTodayOnly) {
-      const raw = fp(await parseAllSessions(todayRange, 'all'))
+      const raw = fp(await parse(todayRange, 'all'))
       liveProjects = raw
       scanRange = todayRange
       todayAllDays = aggregateProjectsIntoDays(raw).filter(d => d.date === todayStr)
     } else {
-      const raw = fp(await parseAllSessions(periodInfo.range, 'all'))
+      const raw = fp(await parse(periodInfo.range, 'all'))
       liveProjects = daysSelection ? filterProjectsByDays(raw, daysSelection.days) : raw
       scanRange = periodInfo.range
       // A period that reaches today contains today's turns already, so derive the
       // today slice from the same parse instead of scanning today again.
       todayAllDays = rangeEndStr >= todayStr
         ? aggregateProjectsIntoDays(raw).filter(d => d.date === todayStr)
-        : aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all'))).filter(d => d.date === todayStr)
+        : aggregateProjectsIntoDays(fp(await parse(todayRange, 'all'))).filter(d => d.date === todayStr)
     }
   } else {
     // Provider-filtered: today's all-provider parse feeds the union (sliced
     // below); the provider-scoped parse feeds the detail/enrichment fields.
-    todayAllDays = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRange, 'all'))).filter(d => d.date === todayStr)
-    const rawProv = fp(await parseAllSessions(isTodayOnly ? todayRange : periodInfo.range, pf))
+    todayAllDays = aggregateProjectsIntoDays(fp(await parse(todayRange, 'all'))).filter(d => d.date === todayStr)
+    const rawProv = fp(await parse(isTodayOnly ? todayRange : periodInfo.range, pf))
     liveProjects = daysSelection && !isTodayOnly ? filterProjectsByDays(rawProv, daysSelection.days) : rawProv
     scanRange = isTodayOnly ? todayRange : periodInfo.range
   }
@@ -370,13 +377,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const rangeEndStr = toDateString(periodInfo.range.end)
   const historicalRangeEndStr = rangeEndStr < yesterdayStr ? rangeEndStr : yesterdayStr
   const isAllProviders = pf === 'all'
+  // The Electron app requests fast start only for its first overview. Honor it
+  // solely for a genuinely incomplete session cache; warm launches keep the
+  // durable history path and return the exact same payload as before.
+  const fastStart = opts.fastStart === true && !isSessionCacheComplete(await loadSessionCache())
+  const parse = fastStart
+    ? (range: DateRange, provider: string) => parseAllSessions(range, provider, { partialHydration: true })
+    : (range: DateRange, provider: string) => parseAllSessions(range, provider)
 
   let todayAllProjects: ProjectSummary[] | null = null
   let todayAllDays: ReturnType<typeof aggregateProjectsIntoDays> | null = null
 
   const getTodayAllProjects = async (): Promise<ProjectSummary[]> => {
     if (!todayAllProjects) {
-      todayAllProjects = fp(await parseAllSessions(todayRange, 'all'))
+      todayAllProjects = fp(await parse(todayRange, 'all'))
     }
     return todayAllProjects
   }
@@ -408,7 +422,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     // A config source scopes Claude usage only, so scan just Claude (main.ts
     // rejects a contradictory non-Claude --provider). This also avoids parsing
     // every other provider's corpus on each scoped refresh.
-    const rawProjects = fp(await parseAllSessions(periodInfo.range, 'claude'))
+    const rawProjects = fp(await parse(periodInfo.range, 'claude'))
     const fullProjects = daysSelection ? filterProjectsByDays(rawProjects, daysSelection.days) : rawProjects
     claudeConfigs = await claudeConfigSelector(fullProjects, requestedClaudeConfigSourceId)
     const selectedSourceId = claudeConfigs?.selectedId ?? null
@@ -434,6 +448,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       project: opts.project,
       exclude: opts.exclude,
       daysSelection,
+      fastStart,
     })
     currentData = durable.data
     scanProjects = durable.liveProjects
@@ -510,7 +525,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       end: now,
     }
     const historyProjects = filterProjectsByClaudeConfigSource(
-      fp(await parseAllSessions(historyRange, 'claude')),
+      fp(await parse(historyRange, 'claude')),
       claudeConfigs.selectedId,
     )
     dailyHistory = dailyEntriesToHistory(aggregateProjectsIntoDays(historyProjects))
@@ -766,5 +781,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
   const granularRange = opts.daysSelection?.range ?? scanRange
   const granularHistory = opts.timeline === false ? undefined : buildGranularHistory(scanProjects, granularRange)
-  return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory)
+  const payload = buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory)
+  if (fastStart) payload.indexing = true
+  return payload
 }

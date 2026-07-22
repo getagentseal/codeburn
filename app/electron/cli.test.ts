@@ -357,6 +357,14 @@ describe('spawnCli coalescing (read-only)', () => {
     expect(readFileSync(countFile, 'utf8')).toBe('x') // exactly one spawn
   })
 
+  it('does not reuse a result when the command-specific environment changes', async () => {
+    const countFile = join(dir, 'env-spawns')
+    fakeBin('env-counter.js', `require('fs').appendFileSync(${JSON.stringify(countFile)},'x'); process.stdout.write(JSON.stringify({fast:process.env.CODEBURN_FAST_START==='1'}))`)
+    await expect(spawnCli(['status'], { extraEnv: { CODEBURN_FAST_START: '1' } })).resolves.toEqual({ fast: true })
+    await expect(spawnCli(['status'])).resolves.toEqual({ fast: false })
+    expect(readFileSync(countFile, 'utf8')).toBe('xx')
+  })
+
   it('spawns again once the 5s result cache has expired', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {

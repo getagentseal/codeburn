@@ -51,6 +51,10 @@ function reduceProgress(state: Progress, event: ScanProgressEvent): Progress {
       for (const p of state.order) status[p] = 'done'
       return { ...state, status }
     }
+    case 'history-stage':
+    case 'period-ready':
+    case 'history-ready':
+      return state
   }
 }
 

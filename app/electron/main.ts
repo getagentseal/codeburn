@@ -71,12 +71,12 @@ export function createBeforeQuitHandler(deps: BeforeQuitDeps): (event: BeforeQui
 // `kind` survives contextBridge serialization. preload.ts unwraps it.
 export type Envelope<T = unknown> = { ok: true; value: T } | { ok: false; error: { kind: string; message: string } }
 
-// The first overview fetch after boot hydrates a cold cache from scratch (a full
-// history parse). That can far exceed the 45s read timeout, and killing it means
-// the cache never persists, so every later poll restarts the scan — perpetual
-// slowness. Give the first (cold) overview a long window; revert to the default
-// once it succeeds. Sections gate their own first poll on this one resolving so
-// the cold hydration runs ONCE, not once per section in parallel.
+// The first overview fetch asks the CLI for a range-limited fast start. On a
+// cold install it returns accurate data for the visible range, marked
+// `indexing`, then we expand the durable cache in progressive background stages.
+// Warm caches ignore the fast-start hint and take the normal path. Keep a long
+// timeout so unusually large individual stages can finish instead of being
+// killed and restarted.
 const WARMUP_TIMEOUT_MS = 10 * 60_000
 // Wire marker for CLI scan-progress lines (src/parser.ts: PROGRESS_LINE_PREFIX).
 const PROGRESS_LINE_PREFIX = 'CODEBURN_PROGRESS '
@@ -124,6 +124,43 @@ type DateRange = { from: string; to: string }
 
 function rangeArgs(range: DateRange | undefined): string[] {
   return range ? ['--from', range.from, '--to', range.to] : []
+}
+
+function localDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function trailingRange(days: number): DateRange {
+  const end = new Date()
+  end.setHours(12, 0, 0, 0)
+  const start = new Date(end)
+  start.setDate(start.getDate() - Math.max(0, days - 1))
+  return { from: localDateKey(start), to: localDateKey(end) }
+}
+
+type HydrationStage = {
+  id: string
+  label: string
+  period: string
+  range?: DateRange
+  unlock?: string
+  final?: boolean
+}
+
+/** Small-to-large cold-cache expansion. The first two hidden day stages make
+ * the later 7-day scan incremental; only periods represented by visible tabs
+ * emit `period-ready` and become interactive in the renderer. */
+export function progressiveHydrationStages(): HydrationStage[] {
+  return [
+    { id: 'yesterday', label: 'Today + yesterday', period: 'today', range: trailingRange(2) },
+    { id: 'day-before', label: 'Last 3 days', period: 'today', range: trailingRange(3) },
+    { id: 'week', label: 'Last 7 days', period: 'week', unlock: 'week' },
+    { id: '14days', label: 'Last 14 days', period: 'today', range: trailingRange(14) },
+    { id: '30days', label: 'Last 30 days', period: '30days', unlock: '30days' },
+    { id: 'month', label: 'This month', period: 'month', unlock: 'month' },
+    { id: 'all', label: 'Last 6 months', period: 'all', unlock: 'all' },
+    { id: 'lifetime', label: 'Lifetime', period: 'lifetime', unlock: 'lifetime', final: true },
+  ]
 }
 
 function configSourceArgs(source: string | null): string[] {
@@ -240,6 +277,11 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // overview fetch runs cold (long timeout + progress streaming); the shared
   // spawnCli coalescing means concurrent same-arg re-polls join one child.
   let overviewWarmed = false
+  // While a cold install expands from Today to Lifetime, ordinary overview
+  // polls must stay range-limited too. Otherwise the first 30-second poll would
+  // launch the old monolithic full-history scan alongside the staged worker.
+  let historyHydrating = false
+  let historyHydrationJob: Promise<void> | null = null
   // cold_start is a once-per-launch metric. Because coalesced re-polls each
   // re-enter the cold branch (and overviewWarmed only flips on success, so it
   // never guards a still-failing warmup), emitting inline would record one row
@@ -285,16 +327,58 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     const priority: SpawnPriority | undefined = background ? 'background' : undefined
     try {
       const args = buildOverviewArgs(period, provider, range, configSource)
-      if (overviewWarmed) return { ok: true, value: await deps.spawnCli(args, priority ? { priority } : undefined) }
+      if (overviewWarmed) {
+        const warmOpts = historyHydrating
+          ? { extraEnv: { CODEBURN_FAST_START: '1' }, ...(priority ? { priority } : {}) }
+          : (priority ? { priority } : undefined)
+        return { ok: true, value: await deps.spawnCli(args, warmOpts) }
+      }
       const value = await deps.spawnCli(args, {
         timeoutMs: WARMUP_TIMEOUT_MS,
-        extraEnv: { CODEBURN_PROGRESS: '1' },
+        extraEnv: { CODEBURN_PROGRESS: '1', CODEBURN_FAST_START: '1' },
         onStderr: makeProgressReader(emitProgress),
         ...(priority ? { priority } : {}),
       })
       overviewWarmed = true
       emitProgress({ kind: 'done' })
       emitColdStart(false)
+      // A cold fast-start deliberately leaves the session cache incomplete.
+      // Grow it from small ranges to large ones so Today remains responsive and
+      // each visible period can unlock as soon as its own stage is accurate.
+      if ((value as { indexing?: boolean } | null)?.indexing === true) {
+        emitProgress({ kind: 'period-ready', period })
+        if (!historyHydrationJob) {
+          historyHydrating = true
+          historyHydrationJob = (async () => {
+            let lifetimeReady = false
+            try {
+              for (const stage of progressiveHydrationStages()) {
+                emitProgress({ kind: 'history-stage', id: stage.id, label: stage.label, state: 'start' })
+                const stageArgs = buildOverviewArgs(stage.period, 'all', stage.range)
+                try {
+                  await deps.spawnCli(stageArgs, {
+                    timeoutMs: WARMUP_TIMEOUT_MS,
+                    priority: 'background',
+                    // Every intermediate stage must leave the cache incomplete;
+                    // Lifetime is the sole full-hydration/finalization pass.
+                    ...(stage.final ? {} : { extraEnv: { CODEBURN_FAST_START: '1' } }),
+                  })
+                  emitProgress({ kind: 'history-stage', id: stage.id, label: stage.label, state: 'ready' })
+                  if (stage.unlock) emitProgress({ kind: 'period-ready', period: stage.unlock })
+                  if (stage.final) lifetimeReady = true
+                } catch (err) {
+                  emitProgress({ kind: 'history-stage', id: stage.id, label: stage.label, state: 'error' })
+                  telemetry?.track('cli_error', cliErrorProps(err, 'status'))
+                }
+              }
+            } finally {
+              historyHydrating = false
+              historyHydrationJob = null
+              if (lifetimeReady) emitProgress({ kind: 'history-ready' })
+            }
+          })()
+        }
+      }
       return { ok: true, value }
     } catch (err) {
       const error = toEnvelopeError(err)

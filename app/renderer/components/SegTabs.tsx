@@ -1,4 +1,4 @@
-export type SegOption = { value: string; label: string }
+export type SegOption = { value: string; label: string; disabled?: boolean; loading?: boolean }
 
 /** The `.seg` segmented control used for period and lens switching. */
 export function SegTabs({
@@ -17,18 +17,20 @@ export function SegTabs({
       {options.map(opt => (
         <span
           key={opt.value}
-          className={opt.value === value ? 'on' : undefined}
+          className={[opt.value === value ? 'on' : '', opt.disabled ? 'disabled' : ''].filter(Boolean).join(' ') || undefined}
           role="tab"
           aria-selected={opt.value === value}
-          tabIndex={0}
-          onClick={() => onChange(opt.value)}
+          aria-disabled={opt.disabled || undefined}
+          tabIndex={opt.disabled ? -1 : 0}
+          onClick={() => { if (!opt.disabled) onChange(opt.value) }}
           onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') {
+            if (!opt.disabled && (e.key === 'Enter' || e.key === ' ')) {
               e.preventDefault()
               onChange(opt.value)
             }
           }}
         >
+          {opt.loading && <i className="seg-spinner" aria-hidden="true" />}
           {opt.label}
         </span>
       ))}
