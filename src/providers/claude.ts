@@ -1,3 +1,4 @@
+import { readdirSync, statSync } from 'fs'
 import { readFile, readdir, stat } from 'fs/promises'
 import { basename, delimiter as pathDelimiter, join, resolve } from 'path'
 import { homedir } from 'os'
@@ -101,15 +102,72 @@ export async function discoverClaudeConfigSources(): Promise<ClaudeConfigSource[
   })))
 }
 
-export function getDesktopSessionsDir(): string {
+// Filesystem changes under an unchanged input key intentionally do not invalidate this cache.
+const desktopSessionsDirsCache = new Map<string, string[]>()
+
+function cacheDesktopSessionsDirs(key: string, candidates: string[]): string[] {
+  const dirs = dedupeResolved(candidates.map(candidate => resolve(candidate)))
+  desktopSessionsDirsCache.set(key, dirs)
+  return [...dirs]
+}
+
+export function getDesktopSessionsDirs(): string[] {
   const override = process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
-  if (override) return override
-  if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')
-  if (process.platform === 'win32') {
-    const appData = process.env['APPDATA']?.trim()
-    return join(appData || join(homedir(), 'AppData', 'Roaming'), 'Claude', 'local-agent-mode-sessions')
+  const appDataInput = process.env['APPDATA']
+  const localAppDataInput = process.env['LOCALAPPDATA']
+  const platform = process.platform
+  const cacheKey = JSON.stringify([platform, override ?? null, appDataInput ?? null, localAppDataInput ?? null])
+  const cached = desktopSessionsDirsCache.get(cacheKey)
+  if (cached) return [...cached]
+
+  if (override) return cacheDesktopSessionsDirs(cacheKey, [override])
+  if (platform === 'darwin') {
+    return cacheDesktopSessionsDirs(
+      cacheKey,
+      [join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')],
+    )
   }
-  return join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')
+  if (platform === 'win32') {
+    const appData = appDataInput?.trim()
+    const candidates = [
+      join(appData || join(homedir(), 'AppData', 'Roaming'), 'Claude', 'local-agent-mode-sessions'),
+    ]
+
+    const localAppData = localAppDataInput?.trim()
+    const packagesDir = join(localAppData || join(homedir(), 'AppData', 'Local'), 'Packages')
+    try {
+      const entries = readdirSync(packagesDir, { withFileTypes: true })
+        .filter(entry =>
+          entry.isDirectory() &&
+          (entry.name.startsWith('Claude_') || entry.name.includes('.Claude_')),
+        )
+        .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+
+      for (const entry of entries) {
+        const sessionsDir = join(
+          packagesDir,
+          entry.name,
+          'LocalCache',
+          'Roaming',
+          'Claude',
+          'local-agent-mode-sessions',
+        )
+        try {
+          if (statSync(sessionsDir).isDirectory()) candidates.push(sessionsDir)
+        } catch {
+          // A package may disappear or be unreadable while Packages is scanned.
+        }
+      }
+    } catch {
+      // Missing or unreadable Packages is equivalent to no MSIX candidates.
+    }
+
+    return cacheDesktopSessionsDirs(cacheKey, candidates)
+  }
+  return cacheDesktopSessionsDirs(
+    cacheKey,
+    [join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')],
+  )
 }
 
 async function findDesktopProjectDirs(base: string): Promise<string[]> {
@@ -221,7 +279,7 @@ export const claude: Provider = {
   async probeRoots(): Promise<ProbeRoot[]> {
     const dirs = await getClaudeConfigDirs()
     const roots: ProbeRoot[] = dirs.map(dir => ({ path: join(dir, 'projects'), label: 'projects' }))
-    roots.push({ path: getDesktopSessionsDir(), label: 'desktop' })
+    roots.push(...getDesktopSessionsDirs().map(path => ({ path, label: 'desktop' })))
     return roots
   },
 
@@ -282,51 +340,52 @@ export const claude: Provider = {
       )
     }
 
-    const desktopBase = getDesktopSessionsDir()
-    const desktopDirs = await findDesktopProjectDirs(desktopBase)
-    const sep = desktopBase.includes('\\') ? '\\' : '/'
-    // Desktop / Cowork sessions belong to no CLAUDE_CONFIG_DIR. Tag them with a
-    // distinct source so a per-config view can account for them as their own
-    // "Claude Desktop" bucket instead of silently dropping them (which made
-    // sum-of-configs < All).
-    const desktopSourceId = 'claude-desktop:' + createHash('sha256').update(resolve(desktopBase)).digest('hex').slice(0, 16)
-    for (const dirPath of desktopDirs) {
-      const resolved = resolve(dirPath)
-      if (seenProjectDirs.has(resolved)) continue
-      seenProjectDirs.add(resolved)
+    for (const desktopBase of getDesktopSessionsDirs()) {
+      const desktopDirs = await findDesktopProjectDirs(desktopBase)
+      const sep = desktopBase.includes('\\') ? '\\' : '/'
+      // Desktop / Cowork sessions belong to no CLAUDE_CONFIG_DIR. Tag them with a
+      // distinct source so a per-config view can account for them as their own
+      // "Claude Desktop" bucket instead of silently dropping them (which made
+      // sum-of-configs < All).
+      const desktopSourceId = 'claude-desktop:' + createHash('sha256').update(resolve(desktopBase)).digest('hex').slice(0, 16)
+      for (const dirPath of desktopDirs) {
+        const resolved = resolve(dirPath)
+        if (seenProjectDirs.has(resolved)) continue
+        seenProjectDirs.add(resolved)
 
-      // For Claude Desktop local-agent-mode (Cowork) sessions, the project dir
-      // lives inside local_<sessionId>/.claude/projects/. We resolve the space
-      // name from the sibling .json and spaces.json so it groups correctly.
-      // Path structure: <desktopBase>/<appId>/<workspaceId>/local_<id>/.claude/projects/<slug>
-      let projectName = basename(dirPath)
-      const resolvedBase = resolve(desktopBase)
-      if (resolved.startsWith(resolvedBase + sep) || resolved.startsWith(resolvedBase + '/')) {
-        const rel = resolved.slice(resolvedBase.length + 1)
-        const parts = rel.split(/[/\\]/)
-        // parts = [appId, workspaceId, local_sessionId, .claude, projects, slug]
-        if (
-          parts.length >= 6 &&
-          parts[2]?.startsWith('local_') &&
-          parts[3] === '.claude' &&
-          parts[4] === 'projects'
-        ) {
-          const workspaceDir = join(resolvedBase, parts[0]!, parts[1]!)
-          const sessionId = parts[2]!
-          const spaceName = await resolveCoworkSpaceName(workspaceDir, sessionId)
-          if (spaceName) projectName = spaceName
+        // For Claude Desktop local-agent-mode (Cowork) sessions, the project dir
+        // lives inside local_<sessionId>/.claude/projects/. We resolve the space
+        // name from the sibling .json and spaces.json so it groups correctly.
+        // Path structure: <desktopBase>/<appId>/<workspaceId>/local_<id>/.claude/projects/<slug>
+        let projectName = basename(dirPath)
+        const resolvedBase = resolve(desktopBase)
+        if (resolved.startsWith(resolvedBase + sep) || resolved.startsWith(resolvedBase + '/')) {
+          const rel = resolved.slice(resolvedBase.length + 1)
+          const parts = rel.split(/[/\\]/)
+          // parts = [appId, workspaceId, local_sessionId, .claude, projects, slug]
+          if (
+            parts.length >= 6 &&
+            parts[2]?.startsWith('local_') &&
+            parts[3] === '.claude' &&
+            parts[4] === 'projects'
+          ) {
+            const workspaceDir = join(resolvedBase, parts[0]!, parts[1]!)
+            const sessionId = parts[2]!
+            const spaceName = await resolveCoworkSpaceName(workspaceDir, sessionId)
+            if (spaceName) projectName = spaceName
+          }
         }
-      }
 
-      sources.push({
-        path: dirPath,
-        project: projectName,
-        provider: 'claude',
-        sourceId: desktopSourceId,
-        sourceLabel: 'Claude Desktop',
-        sourcePath: desktopBase,
-        sourceKind: 'claude-desktop',
-      })
+        sources.push({
+          path: dirPath,
+          project: projectName,
+          provider: 'claude',
+          sourceId: desktopSourceId,
+          sourceLabel: 'Claude Desktop',
+          sourcePath: desktopBase,
+          sourceKind: 'claude-desktop',
+        })
+      }
     }
 
     return sources

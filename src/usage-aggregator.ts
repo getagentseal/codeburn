@@ -4,7 +4,7 @@ import { type PeriodData, type ProviderCost, type BreakdownArrays, type MenubarP
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, isSessionHydrationComplete } from './parser.js'
 import { findUnpricedModels, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
-import { claude, getClaudeConfigDirs, getDesktopSessionsDir } from './providers/claude.js'
+import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
 import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -149,7 +149,11 @@ async function claudeConfigSelector(projects: ProjectSummary[], selectedId?: str
   // idle config or Claude Desktop is still selectable). Only worth it when a
   // second source is possible: more than one config dir, or a Claude Desktop
   // sessions dir exists. A plain single-config user skips it entirely.
-  const desktopExists = await stat(getDesktopSessionsDir()).then(s => s.isDirectory()).catch(() => false)
+  const desktopExists = (
+    await Promise.all(
+      getDesktopSessionsDirs().map(dir => stat(dir).then(s => s.isDirectory()).catch(() => false)),
+    )
+  ).some(Boolean)
   if ((await getClaudeConfigDirs()).length > 1 || desktopExists) {
     for (const source of await claude.discoverSessions()) {
       if ((source.sourceKind !== 'claude-config' && source.sourceKind !== 'claude-desktop') || !source.sourceId || !source.sourceLabel || !source.sourcePath) continue
