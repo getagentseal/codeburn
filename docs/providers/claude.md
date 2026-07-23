@@ -12,10 +12,25 @@ Anthropic Claude Code CLI and Claude Desktop's local agent mode.
 |---|---|
 | Claude Code CLI | `$CLAUDE_CONFIG_DIR` if set, otherwise `~/.claude/projects/` |
 | Claude Desktop (macOS) | `~/Library/Application Support/Claude/local-agent-mode-sessions/` |
-| Claude Desktop (Windows) | `%APPDATA%/Claude/local-agent-mode-sessions/` |
+| Claude Desktop (Windows, classic) | `%APPDATA%/Claude/local-agent-mode-sessions/` |
+| Claude Desktop (Windows, MSIX) | `%LOCALAPPDATA%/Packages/<Claude package>/LocalCache/Roaming/Claude/local-agent-mode-sessions/` |
 | Claude Desktop (Linux) | `~/.config/Claude/local-agent-mode-sessions/` |
 
 For Desktop, `findDesktopProjectDirs` walks up to 8 levels deep looking for `projects/` subdirectories, skipping `node_modules` and `.git`.
+
+Desktop session roots are resolved in this order:
+
+1. A non-empty `CODEBURN_DESKTOP_SESSIONS_DIR` overrides discovery and is the
+   only returned root.
+2. macOS uses the single path shown above.
+3. Windows always includes the classic path first. It then scans
+   `%LOCALAPPDATA%/Packages` for package directories whose names start with
+   `Claude_` or contain `.Claude_`, sorted by package name, and includes only
+   packages whose full MSIX sessions path exists as a directory.
+4. Other platforms use the single Linux path shown above.
+
+All returned roots are absolute, resolved, and deduplicated. Missing or
+unreadable Windows package directories are ignored.
 
 ## Storage format
 

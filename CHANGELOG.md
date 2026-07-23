@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Claude Desktop and Cowork sessions are discovered for Windows Microsoft Store (MSIX) installs. (#611)
+
 ## 0.9.19 - 2026-07-20
 
 One version across every surface: CLI, macOS menubar, and the desktop app all ship as 0.9.19.

@@ -1,10 +1,10 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
-import { delimiter as pathDelimiter, join } from 'path'
+import { delimiter as pathDelimiter, join, resolve, sep } from 'path'
 import { homedir, tmpdir } from 'os'
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
-import { claude, getDesktopSessionsDir } from '../../src/providers/claude.js'
+import { claude, getDesktopSessionsDirs } from '../../src/providers/claude.js'
 import { clearSessionCache, filterProjectsByClaudeConfigSource, parseAllSessions } from '../../src/parser.js'
 
 let tmpRoot: string
@@ -13,6 +13,7 @@ const savedEnv = {
   CLAUDE_CONFIG_DIRS: process.env['CLAUDE_CONFIG_DIRS'],
   CODEBURN_DESKTOP_SESSIONS_DIR: process.env['CODEBURN_DESKTOP_SESSIONS_DIR'],
   APPDATA: process.env['APPDATA'],
+  LOCALAPPDATA: process.env['LOCALAPPDATA'],
   HOME: process.env['HOME'],
 }
 
@@ -39,6 +40,7 @@ beforeEach(async () => {
   delete process.env['CLAUDE_CONFIG_DIRS']
   delete process.env['CODEBURN_DESKTOP_SESSIONS_DIR']
   delete process.env['APPDATA']
+  delete process.env['LOCALAPPDATA']
 })
 
 afterEach(async () => {
@@ -218,30 +220,154 @@ describe('claude provider — CLAUDE_CONFIG_DIRS discovery', () => {
 })
 
 describe('claude provider — Desktop sessions dir', () => {
-  it('uses APPDATA as the Windows Claude Desktop sessions root', () => {
+  async function makeMsixSessionsDir(localAppData: string, packageName: string): Promise<string> {
+    const sessionsDir = join(
+      localAppData,
+      'Packages',
+      packageName,
+      'LocalCache',
+      'Roaming',
+      'Claude',
+      'local-agent-mode-sessions',
+    )
+    await mkdir(sessionsDir, { recursive: true })
+    return resolve(sessionsDir)
+  }
+
+  it('returns the classic Windows root first and discovers an MSIX sessions root', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const classic = join(appData, 'Claude', 'local-agent-mode-sessions')
+    const msix = await makeMsixSessionsDir(localAppData, 'Claude_fresh9k2m')
+    await mkdir(classic, { recursive: true })
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([resolve(classic), msix])
+    })
+  })
+
+  it('filters MSIX package names and keeps both supported Claude name shapes', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const classic = resolve(join(appData, 'Claude', 'local-agent-mode-sessions'))
+    const direct = await makeMsixSessionsDir(localAppData, 'Claude_new7v4p')
+    const publisher = await makeMsixSessionsDir(localAppData, 'SomePublisher.Claude_q8w3e')
+    await makeMsixSessionsDir(localAppData, 'ClaudeXtra_foo')
+    await makeMsixSessionsDir(localAppData, 'NotClaude_x')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([classic, direct, publisher])
+    })
+  })
+
+  it('returns only the classic root when LOCALAPPDATA is unset and Packages is missing', () => {
     const appData = join(tmpRoot, 'roaming-profile')
     process.env['APPDATA'] = appData
+    delete process.env['LOCALAPPDATA']
 
     withPlatform('win32', () => {
-      expect(getDesktopSessionsDir()).toBe(join(appData, 'Claude', 'local-agent-mode-sessions'))
+      expect(() => getDesktopSessionsDirs()).not.toThrow()
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+      ])
     })
   })
 
-  it('falls back to the legacy Windows roaming profile path when APPDATA is unset', () => {
+  it('falls back to the legacy Windows roaming path when APPDATA is unset or empty', () => {
+    const expected = resolve(join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions'))
     delete process.env['APPDATA']
+    delete process.env['LOCALAPPDATA']
 
     withPlatform('win32', () => {
-      expect(getDesktopSessionsDir()).toBe(join(homedir(), 'AppData', 'Roaming', 'Claude', 'local-agent-mode-sessions'))
+      expect(getDesktopSessionsDirs()).toEqual([expected])
+      process.env['APPDATA'] = ''
+      expect(getDesktopSessionsDirs()).toEqual([expected])
     })
   })
 
-  it('keeps CODEBURN_DESKTOP_SESSIONS_DIR ahead of Windows APPDATA discovery', () => {
+  it('excludes an MSIX package whose sessions subpath is missing', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    await mkdir(join(localAppData, 'Packages', 'Claude_empty6r1t', 'LocalCache'), { recursive: true })
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+      ])
+    })
+  })
+
+  it('returns exactly the resolved override without platform discovery', async () => {
     const override = join(tmpRoot, 'desktop-override')
+    const localAppData = join(tmpRoot, 'local-profile')
+    await makeMsixSessionsDir(localAppData, 'Claude_shouldnotappear5n8d')
     process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = override
     process.env['APPDATA'] = join(tmpRoot, 'roaming-profile')
+    process.env['LOCALAPPDATA'] = localAppData
 
     withPlatform('win32', () => {
-      expect(getDesktopSessionsDir()).toBe(override)
+      expect(getDesktopSessionsDirs()).toEqual([resolve(override)])
+    })
+  })
+
+  it('resolves an override containing a parent segment and trailing separator', () => {
+    const override = join(tmpRoot, 'desktop-parent', 'nested') + `${sep}..${sep}sessions${sep}`
+    process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = override
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([resolve(override)])
+    })
+  })
+
+  it('returns one platform root on darwin and linux without including MSIX packages', async () => {
+    const localAppData = join(tmpRoot, 'local-profile')
+    await makeMsixSessionsDir(localAppData, 'Claude_crossplatform3b7j')
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('darwin', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions')),
+      ])
+    })
+    withPlatform('linux', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(homedir(), '.config', 'Claude', 'local-agent-mode-sessions')),
+      ])
+    })
+  })
+
+  it('sorts two valid MSIX roots by package entry name', async () => {
+    const appData = join(tmpRoot, 'roaming-profile')
+    const localAppData = join(tmpRoot, 'local-profile')
+    const later = await makeMsixSessionsDir(localAppData, 'Claude_zulu4c9x')
+    const earlier = await makeMsixSessionsDir(localAppData, 'Alpha.Claude_alpha2m6v')
+    process.env['APPDATA'] = appData
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([
+        resolve(join(appData, 'Claude', 'local-agent-mode-sessions')),
+        earlier,
+        later,
+      ])
+    })
+  })
+
+  it('dedupes classic and MSIX candidates that resolve to the same path', async () => {
+    const localAppData = join(tmpRoot, 'local-profile')
+    const packageName = 'Claude_duplicate8h3s'
+    const sessionsDir = await makeMsixSessionsDir(localAppData, packageName)
+    process.env['APPDATA'] = join(localAppData, 'Packages', packageName, 'LocalCache', 'Roaming')
+    process.env['LOCALAPPDATA'] = localAppData
+
+    withPlatform('win32', () => {
+      expect(getDesktopSessionsDirs()).toEqual([sessionsDir])
     })
   })
 })
