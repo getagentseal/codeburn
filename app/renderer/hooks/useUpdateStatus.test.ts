@@ -4,7 +4,7 @@ vi.mock('../lib/ipc', () => ({
   codeburn: { platform: 'linux', arch: 'x64' },
 }))
 
-import { directDownloadUrl, releasePageUrl, updateDownloadUrl } from './useUpdateStatus'
+import { directDownloadUrl, MICROSOFT_STORE_URL, releasePageUrl, updateDownloadUrl } from './useUpdateStatus'
 
 const TAG = 'desktop-v0.9.19'
 const BASE = 'https://github.com/getagentseal/codeburn/releases/download/desktop-v0.9.19'
@@ -18,9 +18,9 @@ describe('directDownloadUrl', () => {
     expect(directDownloadUrl(TAG, 'darwin', 'x64')).toBe(`${BASE}/CodeBurn-0.9.19.dmg`)
   })
 
-  it('maps Windows to the Setup exe regardless of arch', () => {
-    expect(directDownloadUrl(TAG, 'win32', 'x64')).toBe(`${BASE}/CodeBurn-Setup-0.9.19.exe`)
-    expect(directDownloadUrl(TAG, 'win32', undefined)).toBe(`${BASE}/CodeBurn-Setup-0.9.19.exe`)
+  it('maps Windows to the official Microsoft Store regardless of arch', () => {
+    expect(directDownloadUrl(TAG, 'win32', 'x64')).toBe(MICROSOFT_STORE_URL)
+    expect(directDownloadUrl(TAG, 'win32', undefined)).toBe(MICROSOFT_STORE_URL)
   })
 
   it('returns null for Linux (three formats, the user picks on the page)', () => {

@@ -30,12 +30,16 @@ export function releasePageUrl(tag: string): string {
   return `https://github.com/getagentseal/codeburn/releases/tag/${tag}`
 }
 
+/** Official signed Windows distribution. The Store handles installation and
+ *  updates, avoiding the unsigned GitHub installer and SmartScreen warning. */
+export const MICROSOFT_STORE_URL = 'https://apps.microsoft.com/detail/9P0R4ZL5XMB8'
+
 /**
- * Direct asset download for the running platform, so Download saves the file
- * instead of landing on a GitHub page. Filenames mirror the electron-builder
- * output (app/DISTRIBUTION.md) and are version-derived from the tag. Returns
- * null (callers fall back to the release page) for Linux — three formats, the
- * user picks — and for unknown platforms or a preload without `arch`.
+ * Preferred install target for the running platform. macOS downloads the
+ * matching release asset; Windows opens the signed Microsoft Store listing.
+ * Returns null (callers fall back to the release page) for Linux — three
+ * formats, the user picks — and for unknown platforms or a preload without
+ * `arch`.
  */
 export function directDownloadUrl(tag: string, platform: string | undefined, arch: string | undefined): string | null {
   const version = tag.startsWith('desktop-v') ? tag.slice('desktop-v'.length) : null
@@ -45,7 +49,7 @@ export function directDownloadUrl(tag: string, platform: string | undefined, arc
     if (!arch) return null
     file = arch === 'arm64' ? `CodeBurn-${version}-arm64.dmg` : `CodeBurn-${version}.dmg`
   } else if (platform === 'win32') {
-    file = `CodeBurn-Setup-${version}.exe`
+    return MICROSOFT_STORE_URL
   }
   if (!file) return null
   return `https://github.com/getagentseal/codeburn/releases/download/${tag}/${file}`
