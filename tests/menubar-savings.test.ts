@@ -53,7 +53,7 @@ describe('buildMenubarPayload: local-model savings', () => {
     const local = payload.current.topModels.find(m => m.name === 'Local Model')!
     expect(local.savingsUSD).toBe(5)
     expect(local.cost).toBe(0)
-    const paid = payload.current.topModels.find(m => m.name === 'gpt-4o')!
+    const paid = payload.current.topModels.find(m => m.name === 'GPT-4o')!
     expect(paid.savingsUSD).toBe(0)
   })
 

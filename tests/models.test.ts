@@ -672,6 +672,9 @@ describe('observed provider model aliases', () => {
   const cases: Array<[string, string]> = [
     ['MiMo-V2-Flash', 'xiaomi/mimo-v2-flash'],
     ['KAT-Coder-Pro-V1', 'kwaipilot/kat-coder-pro'],
+    // Kimi Code wires report bare `k3` in llm.request.model; it must price
+    // through the kimi-k3 table entry, not fall through to $0.
+    ['k3', 'kimi-k3'],
   ]
 
   for (const [input, expectedModel] of cases) {
@@ -684,6 +687,10 @@ describe('observed provider model aliases', () => {
       expect(calculateCost(input, 1_000_000, 1_000_000, 0, 0, 0)).toBeGreaterThan(0)
     })
   }
+
+  it('k3 shows the Kimi K3 display name', () => {
+    expect(getShortModelName('k3')).toBe('Kimi K3')
+  })
 
   it('does not map dated Qwen3 Max to a reseller price without provider context', () => {
     expect(getModelCosts('qwen3-max-2026-01-23')).toBeNull()

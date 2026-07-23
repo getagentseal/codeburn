@@ -71,8 +71,18 @@ function timestampIso(value: unknown): string {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
 
-function kimicodeHome(override?: string): string {
-  return resolve(override || process.env['KIMI_CODE_HOME'] || join(homedir(), '.kimi-code'))
+function kimicodeHomes(override?: string): string[] {
+  const explicit = override || process.env['KIMI_CODE_HOME']
+  if (explicit) return [resolve(explicit)]
+  // Default stores. Beyond the CLI's own ~/.kimi-code, embedded runtimes keep
+  // the same wire layout under their own home (Kimi desktop app, Kimi Code
+  // IDE); each home is scanned so embedded-agent usage is not invisible.
+  const home = homedir()
+  const homes = [
+    join(home, '.kimi-code'),
+    join(home, 'Library', 'Application Support', 'kimi-desktop', 'daimon-share', 'daimon', 'runtime', 'kimi-code', 'home'),
+  ]
+  return [...new Set(homes.map(h => resolve(h)))]
 }
 
 async function directoryEntries(path: string) {
@@ -120,7 +130,10 @@ async function discoverSources(root: string): Promise<SessionSource[]> {
     const workDirPath = join(sessionsDir, workDirEntry.name)
 
     for (const sessionEntry of await directoryEntries(workDirPath)) {
-      if (!sessionEntry.isDirectory() || !sessionEntry.name.startsWith('session_')) continue
+      // Session dir naming differs by host product: the CLI uses session_*,
+      // embedded runtimes (desktop app, IDE) use conv-*/ctitle-*. Any directory
+      // is accepted; the agents/*/wire.jsonl probe below gates real sessions.
+      if (!sessionEntry.isDirectory()) continue
       const sessionDir = join(workDirPath, sessionEntry.name)
       const state = await readState(sessionDir)
       const project = projectFromWorkDir(state.workDir ?? '', workDirEntry.name)
@@ -344,11 +357,15 @@ export function createKimicodeProvider(homeOverride?: string): Provider {
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [{ path: kimicodeHome(homeOverride), label: 'Kimi Code home' }]
+      return kimicodeHomes(homeOverride).map(path => ({ path, label: 'Kimi Code home' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSources(kimicodeHome(homeOverride))
+      const all: SessionSource[] = []
+      for (const home of kimicodeHomes(homeOverride)) {
+        all.push(...await discoverSources(home))
+      }
+      return all.sort((a, b) => a.path.localeCompare(b.path))
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

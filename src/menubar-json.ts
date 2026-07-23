@@ -84,6 +84,7 @@ export type ProviderCost = {
 import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
+import { getShortModelName } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 
@@ -369,10 +370,24 @@ function buildTopActivities(categories: PeriodData['categories']): MenubarPayloa
 }
 
 function buildTopModels(models: PeriodData['models']): MenubarPayload['current']['topModels'] {
-  return models
-    .filter(m => m.name !== SYNTHETIC_MODEL_NAME)
+  // Day entries key models by the raw provider id (day-aggregator), so resolve
+  // display names here — the menubar shows "Kimi K3" rather than "k3". Ids that
+  // collapse to one display name (e.g. k3 and kimi-k3) merge into a single row.
+  const merged = new Map<string, { cost: number; calls: number; savingsUSD: number; estimatedCostUSD: number }>()
+  for (const m of models) {
+    if (m.name === SYNTHETIC_MODEL_NAME) continue
+    const name = getShortModelName(m.name)
+    const acc = merged.get(name) ?? { cost: 0, calls: 0, savingsUSD: 0, estimatedCostUSD: 0 }
+    acc.cost += m.cost
+    acc.calls += m.calls
+    acc.savingsUSD += m.savingsUSD ?? 0
+    acc.estimatedCostUSD += m.estimatedCostUSD ?? 0
+    merged.set(name, acc)
+  }
+  return [...merged.entries()]
+    .sort(([, a], [, b]) => b.cost - a.cost)
     .slice(0, TOP_MODELS_LIMIT)
-    .map(m => ({ name: m.name, cost: m.cost, calls: m.calls, savingsUSD: m.savingsUSD, savingsBaselineModel: '', estimatedCostUSD: m.estimatedCostUSD ?? 0 }))
+    .map(([name, d]) => ({ name, cost: d.cost, calls: d.calls, savingsUSD: d.savingsUSD, savingsBaselineModel: '', estimatedCostUSD: d.estimatedCostUSD }))
 }
 
 function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
