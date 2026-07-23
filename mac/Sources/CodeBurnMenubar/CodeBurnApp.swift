@@ -519,6 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     fileprivate var lastSubscriptionRefreshAt: Date?
     fileprivate var lastCodexRefreshAt: Date?
+    fileprivate var lastKimiRefreshAt: Date?
     private var claudeQuotaFailureCount = 0
     private var nextClaudeQuotaRefreshAt: Date?
 
@@ -614,8 +615,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if let task = codexQuotaRefreshTask {
             return await task.value
         }
-        let task = Task { [store] in
-            await store.refreshCodexReportingSuccess()
+        // Kimi Code rides the same tick, but with its own cadence anchor:
+        // when Codex is not connected its refresh returns false immediately,
+        // so lastCodexRefreshAt never advances — anchoring Kimi on it would
+        // poll api.kimi.com on every payload tick instead of the configured
+        // quota cadence. Anchor on attempt (not success) so a failing Kimi
+        // endpoint also respects the cadence.
+        let kimiDue: Bool = {
+            let cadence = SubscriptionRefreshCadence.current
+            guard cadence != .manual else { return false }
+            return Date().timeIntervalSince(lastKimiRefreshAt ?? .distantPast) >= TimeInterval(cadence.rawValue)
+        }()
+        if kimiDue { lastKimiRefreshAt = Date() }
+        let task = Task { [store, kimiDue] in
+            async let codex = store.refreshCodexReportingSuccess()
+            if kimiDue {
+                _ = await store.refreshKimiReportingSuccess()
+            }
+            return await codex
         }
         codexQuotaRefreshTask = task
         let result = await task.value
@@ -833,6 +850,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func resetSubscriptionCadenceAnchor() {
         lastSubscriptionRefreshAt = nil
         lastCodexRefreshAt = nil
+        lastKimiRefreshAt = nil
         claudeQuotaFailureCount = 0
         nextClaudeQuotaRefreshAt = nil
     }

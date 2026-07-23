@@ -8,13 +8,22 @@ MoonshotAI Kimi Code local session usage and tool activity.
 
 ## Where it reads from
 
-The provider reads `~/.kimi-code` by default and honors the Kimi Code CLI's `KIMI_CODE_HOME` environment variable. It scans:
+By default the provider scans every known Kimi Code runtime store:
 
 ```text
-$KIMI_CODE_HOME/sessions/wd_*/session_*/
+~/.kimi-code
+~/Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home   (Kimi desktop / IDE embedded runtime)
+```
+
+Setting `KIMI_CODE_HOME` (or passing a home override) narrows the scan to that single home. Inside each home it scans:
+
+```text
+$HOME/sessions/wd_*/<session-dir>/
 ├── state.json
 └── agents/<agent-id>/wire.jsonl
 ```
+
+Session directory naming depends on the host product: the CLI uses `session_*`, embedded runtimes use `conv-*` / `ctitle-*`. Any directory is accepted; the `agents/*/wire.jsonl` probe gates real sessions.
 
 Every agent wire is a cache source. Main-agent and subagent calls share the session ID from the `session_*` directory. `state.json.workDir` supplies the project name and path. `probeRoots()` reports the resolved Kimi Code home for `codeburn doctor` even when there are no sessions.
 

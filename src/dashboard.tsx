@@ -83,6 +83,7 @@ const PROVIDER_COLORS: Record<string, string> = {
   opencode: '#A78BFA',
   pi: '#F472B6',
   kimi: '#B6E34A',
+  kimicode: '#A3E635',
   all: '#FF8C42',
 }
 
@@ -670,6 +671,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   opencode: 'OpenCode',
   pi: 'Pi',
   kimi: 'Kimi',
+  kimicode: 'Kimi Code',
 }
 function getProviderDisplayName(name: string): string { return PROVIDER_DISPLAY_NAMES[name] ?? name }
 

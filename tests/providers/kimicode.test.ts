@@ -167,6 +167,40 @@ describe('Kimi Code provider', () => {
     expect(sources.every(source => source.sourcePath === '/workspace/neutral-project')).toBe(true)
   })
 
+  it('discovers embedded-runtime conv-* and ctitle-* session directories', async () => {
+    // Embedded runtimes (Kimi desktop app, Kimi Code IDE) name session dirs
+    // conv-*/ctitle-* instead of session_*; their wires carry the same event
+    // format and must be discovered and priced the same way.
+    for (const dirName of ['conv-abc123def456', 'ctitle-019f8f78-db81']) {
+      const agentDir = join(fixtureHome, 'sessions', 'wd_neutral-project_0123456789ab', dirName, 'agents', 'main')
+      await mkdir(agentDir, { recursive: true })
+      await writeFile(join(agentDir, '..', 'state.json'), JSON.stringify({
+        createdAt: '2026-07-01T10:00:00.000Z',
+        updatedAt: '2026-07-01T10:05:00.000Z',
+        workDir: '/workspace/neutral-project',
+      }))
+      await writeFile(join(agentDir, 'wire.jsonl'), [
+        JSON.stringify({ type: 'metadata', protocol_version: '1.4', created_at: 1782900000000 }),
+        JSON.stringify(prompt('hello from an embedded runtime', 1782900000000)),
+        JSON.stringify(request('0.1', 'k3-agent', 'k3-agent', 1782900001000)),
+        JSON.stringify(usage('k3-agent', 1782900002000, { input: 100, output: 50 })),
+        '',
+      ].join('\n'))
+    }
+
+    const provider = createKimicodeProvider(fixtureHome)
+    const sources = await provider.discoverSessions()
+    expect(sources).toHaveLength(2)
+    expect(sources.every(source => source.project === 'neutral-project')).toBe(true)
+
+    const seen = new Set<string>()
+    const calls = (await Promise.all(sources.map(source => collect(provider, source, seen)))).flat()
+    expect(calls).toHaveLength(2)
+    expect(calls.every(call => call.model === 'k3-agent')).toBe(true)
+    // k3-agent prices through the kimi-k3 alias, never $0.
+    expect(calls.every(call => call.costUSD > 0)).toBe(true)
+  })
+
   it('parses single-turn usage with the real model id and estimated token pricing', async () => {
     const [wirePath] = await writeSession('single-turn', [{ id: 'main', lines: [
       prompt('Summarize the neutral module.', 1782900000000),

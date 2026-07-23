@@ -290,6 +290,12 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'kimi-auto':                     'kimi-k2-thinking',
   'kimi-code':                     'kimi-k2-thinking',
   'kimi-for-coding':               'kimi-k2-thinking',
+  // Kimi Code wires report the bare `k3` id in llm.request.model; without an
+  // alias those calls priced at $0 and the provider looked absent in the UI.
+  'k3':                            'kimi-k3',
+  // Kimi desktop/IDE embedded runtime serves `k3-agent` / `k2d6-agent`.
+  'k3-agent':                      'kimi-k3',
+  'k2d6-agent':                    'kimi-k2p6',
   'mimo-v2-flash':                 'xiaomi/mimo-v2-flash',
   'kat-coder-pro-v1':              'kwaipilot/kat-coder-pro',
   // Cursor emits dot-version tier-last names plus tier/reasoning suffixes
@@ -879,6 +885,8 @@ const SHORT_NAMES: Record<string, string> = {
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   'kimi-k2-thinking-turbo': 'Kimi K2 Thinking Turbo',
   'kimi-k2-thinking': 'Kimi K2 Thinking',
+  'kimi-k3': 'Kimi K3',
+  'kimi-k2p6': 'Kimi K2.6',
   'kimi-thinking-preview': 'Kimi Thinking',
   'kimi-k2.6': 'Kimi K2.6',
   'kimi-k2.5': 'Kimi K2.5',

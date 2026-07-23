@@ -159,6 +159,31 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.topModels[0].name).toBe('Model0')
   })
 
+  it('resolves raw model ids to display names in topModels and merges rows that collapse', () => {
+    // Day entries key models by the raw wire id (day-aggregator); the menubar
+    // must show friendly names and merge ids that share one (k3 + kimi-k3).
+    const period: PeriodData = {
+      label: 'Today',
+      cost: 0, calls: 0, sessions: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      categories: [],
+      models: [
+        { name: 'k3', cost: 2.5, calls: 78 },
+        { name: 'kimi-k3', cost: 0.5, calls: 2 },
+        { name: 'kimi-for-coding', cost: 0.06, calls: 13 },
+        { name: 'k3-agent', cost: 1.2, calls: 40 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const kimiK3 = payload.current.topModels.find(m => m.name === 'Kimi K3')!
+    expect(kimiK3.cost).toBeCloseTo(2.5 + 0.5 + 1.2)
+    expect(kimiK3.calls).toBe(78 + 2 + 40)
+    const k2 = payload.current.topModels.find(m => m.name === 'Kimi K2 Thinking')!
+    expect(k2.cost).toBeCloseTo(0.06)
+    expect(payload.current.topModels.find(m => m.name === 'k3')).toBeUndefined()
+    expect(payload.current.topModels.find(m => m.name === 'k3-agent')).toBeUndefined()
+  })
+
   it('caps topActivities at 20 so all task categories can surface', () => {
     const period: PeriodData = {
       label: 'Today',
