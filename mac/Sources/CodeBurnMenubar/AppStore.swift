@@ -138,11 +138,19 @@ final class AppStore {
     var codexError: String?
     var codexLoadState: SubscriptionLoadState = CodexCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
 
+    var kimiUsage: KimiUsage?
+    var kimiError: String?
+    // No keychain dance for Kimi — "connected" just means the CLI's
+    // credential file exists, so we start dormant and auto-activate on the
+    // first refresh tick.
+    var kimiLoadState: SubscriptionLoadState = KimiSubscriptionService.hasCredential ? .dormant : .notBootstrapped
+
     /// Generation tokens for the in-flight refresh tasks. Incremented on every
     /// disconnect / reset so a fetch that started before the disconnect cannot
     /// resume after the await and re-populate the freshly-cleared state.
     private var claudeRefreshGen: Int = 0
     private var codexRefreshGen: Int = 0
+    private var kimiRefreshGen: Int = 0
 
     private var cache: [PayloadCacheKey: CachedPayload] = [:]
     private var cacheDate: String = ""
@@ -1104,6 +1112,90 @@ final class AppStore {
         }
     }
 
+    // MARK: - Kimi Code
+
+    /// Unlike Claude/Codex there is no keychain bootstrap: reading the CLI's
+    /// credential file is prompt-free, so the first refresh tick activates
+    /// the dormant state automatically.
+    func bootstrapKimi() async {
+        // Capture the generation before the await so a disconnect that lands
+        // mid-fetch cannot be resurrected into .loaded when the fetch returns.
+        let gen = kimiRefreshGen
+        kimiLoadState = .bootstrapping
+        do {
+            let usage = try await KimiSubscriptionService.refresh()
+            guard gen == kimiRefreshGen else { return }
+            kimiUsage = usage
+            kimiError = nil
+            kimiLoadState = .loaded
+        } catch let err as KimiSubscriptionService.FetchError {
+            guard gen == kimiRefreshGen else { return }
+            applyKimiFetchError(err)
+        } catch {
+            guard gen == kimiRefreshGen else { return }
+            kimiError = sanitizeForUI(String(describing: error))
+            kimiLoadState = .failed
+        }
+    }
+
+    func refreshKimi() async {
+        _ = await refreshKimiReportingSuccess()
+    }
+
+    @discardableResult
+    func refreshKimiReportingSuccess() async -> Bool {
+        if case .dormant = kimiLoadState {
+            await bootstrapKimi()
+            return kimiLoadState == .loaded
+        }
+        guard KimiSubscriptionService.hasCredential else {
+            if kimiLoadState != .notBootstrapped { kimiLoadState = .notBootstrapped }
+            return false
+        }
+        let gen = kimiRefreshGen
+        if kimiUsage == nil { kimiLoadState = .loading }
+        do {
+            let usage = try await KimiSubscriptionService.refresh()
+            guard gen == kimiRefreshGen else { return false }
+            kimiUsage = usage
+            kimiError = nil
+            kimiLoadState = .loaded
+            return true
+        } catch let err as KimiSubscriptionService.FetchError {
+            guard gen == kimiRefreshGen else { return false }
+            applyKimiFetchError(err)
+            return false
+        } catch {
+            guard gen == kimiRefreshGen else { return false }
+            kimiError = sanitizeForUI(String(describing: error))
+            kimiLoadState = .failed
+            return false
+        }
+    }
+
+    func disconnectKimi() {
+        KimiSubscriptionService.disconnect()
+        kimiRefreshGen &+= 1
+        kimiUsage = nil
+        kimiError = nil
+        kimiLoadState = .notBootstrapped
+        NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
+    }
+
+    private func applyKimiFetchError(_ err: KimiSubscriptionService.FetchError) {
+        let sanitized = sanitizeForUI(err.errorDescription)
+        kimiError = sanitized
+        if case .noCredentials = err {
+            kimiLoadState = .noCredentials
+        } else if err.isTerminal {
+            kimiLoadState = .terminalFailure(reason: sanitized)
+        } else if let retryAt = err.rateLimitRetryAt {
+            kimiLoadState = .transientFailure(retryAt: retryAt)
+        } else {
+            kimiLoadState = .failed
+        }
+    }
+
     private func applyFetchError(_ err: ClaudeSubscriptionService.FetchError) {
         let sanitized = sanitizeForUI(err.errorDescription)
         subscriptionError = sanitized
@@ -1172,6 +1264,10 @@ final class AppStore {
             let worst = max(usage.primary?.usedPercent ?? 0, usage.secondary?.usedPercent ?? 0)
             if worst > 0 { providers.append(("Codex", worst)) }
         }
+        if let usage = kimiUsage, shouldIncludeCachedQuota(loadState: kimiLoadState) {
+            let worst = max(usage.primary?.usedPercent ?? 0, usage.details.map(\.usedPercent).max() ?? 0)
+            if worst > 0 { providers.append(("Kimi Code", worst)) }
+        }
         let worst = providers.map(\.percent).max() ?? 0
         let severity = QuotaSummary.severity(for: worst / 100)
         let sorted = providers.sorted { $0.percent > $1.percent }
@@ -1192,6 +1288,7 @@ final class AppStore {
         switch filter {
         case .claude: return claudeQuotaSummary(filter: filter)
         case .codex:  return codexQuotaSummary(filter: filter)
+        case .kimiCode: return kimiQuotaSummary(filter: filter)
         default:      return nil
         }
     }
@@ -1297,6 +1394,39 @@ final class AppStore {
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: footerLines)
     }
 
+    private func kimiQuotaSummary(filter: ProviderFilter) -> QuotaSummary? {
+        if case .notBootstrapped = kimiLoadState { return nil }
+        if case .bootstrapping = kimiLoadState { return nil }
+        if case .noCredentials = kimiLoadState { return nil }
+
+        let connection: QuotaSummary.Connection = {
+            switch kimiLoadState {
+            case .notBootstrapped, .dormant, .bootstrapping, .noCredentials: return .disconnected
+            case .loading: return kimiUsage == nil ? .loading : .stale
+            case .loaded: return .connected
+            case .failed: return kimiUsage == nil ? .loading : .stale
+            case let .terminalFailure(reason): return .terminalFailure(reason: reason)
+            case .transientFailure: return .transientFailure
+            }
+        }()
+
+        var primary: QuotaSummary.Window?
+        var details: [QuotaSummary.Window] = []
+        if let usage = kimiUsage {
+            if let w = usage.primary {
+                let row = QuotaSummary.Window(label: w.label, percent: w.usedPercent / 100, resetsAt: w.resetsAt)
+                primary = row
+                details.append(row)
+            }
+            for w in usage.details {
+                let row = QuotaSummary.Window(label: w.label, percent: w.usedPercent / 100, resetsAt: w.resetsAt)
+                if primary == nil { primary = row }
+                details.append(row)
+            }
+        }
+        return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: kimiUsage?.plan ?? "Kimi Code", footerLines: [])
+    }
+
     /// Persist one snapshot per window so we can answer "what did the prior cycle end at?"
     /// when the current window has just reset and projection from current data isn't meaningful.
     /// Also computes the effective_tokens consumed inside each 7-day window from local history,
@@ -1400,6 +1530,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case ibmBob = "IBM Bob"
     case kiro = "Kiro"
     case kimi = "Kimi"
+    case kimiCode = "Kimi Code"
     case lingtaiTui = "LingTai TUI"
     case kiloCode = "KiloCode"
     case openclaw = "OpenClaw"
@@ -1432,6 +1563,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .grok: ["grok", "grok build"]
         case .hermes: ["hermes", "hermes agent"]
         case .lingtaiTui: ["lingtai-tui", "lingtai tui"]
+        case .kimiCode: ["kimicode", "kimi code"]
         default: [rawValue.lowercased()]
         }
     }
@@ -1453,6 +1585,7 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
         case .kiloCode: "kilo-code"
         case .kiro: "kiro"
         case .kimi: "kimi"
+        case .kimiCode: "kimicode"
         case .lingtaiTui: "lingtai-tui"
         case .openclaw: "openclaw"
         case .opencode: "opencode"

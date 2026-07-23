@@ -62,7 +62,7 @@ struct HeatmapSection: View {
         // their own quota data sources.
         InsightMode.allCases.filter { mode in
             if mode == .plan {
-                return store.selectedProvider == .claude || store.selectedProvider == .codex
+                return store.selectedProvider == .claude || store.selectedProvider == .codex || store.selectedProvider == .kimiCode
             }
             return true
         }
@@ -80,6 +80,8 @@ struct HeatmapSection: View {
         case .plan:
             if store.selectedProvider == .codex {
                 CodexPlanInsight()
+            } else if store.selectedProvider == .kimiCode {
+                KimiPlanInsight()
             } else {
                 PlanInsight(usage: store.subscription)
             }
@@ -2149,6 +2151,110 @@ private struct CodexPlanInsight: View {
         let count = "\(resets.availableCount) available"
         guard let next = resets.nextExpiresAt else { return count }
         return "\(count) · next expires \(relativeReset(next))"
+    }
+
+    private func relativeReset(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// Plan tab for Kimi Code. Reads the CLI credential file (no keychain, no
+/// OAuth refresh — tokens are short-lived and only the CLI renews them), so
+/// terminal failure means "run the CLI once to refresh your login".
+private struct KimiPlanInsight: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        Group {
+            switch store.kimiLoadState {
+            case .notBootstrapped, .noCredentials:
+                PlanNoCredentialsView(
+                    title: "No Kimi Code credentials found",
+                    message: "Sign in with the Kimi CLI first. Then click Try Again."
+                ) { Task { await store.bootstrapKimi() } }
+            case .dormant, .bootstrapping:
+                PlanLoadingView(message: "Reading Kimi Code credentials...")
+            case .loading:
+                if let usage = store.kimiUsage {
+                    loadedBody(usage: usage)
+                } else {
+                    PlanLoadingView(message: "Reading Kimi Code credentials...")
+                }
+            case .failed:
+                PlanFailedView(
+                    error: store.kimiError
+                ) { Task { await store.refreshKimi() } }
+            case .transientFailure:
+                if let usage = store.kimiUsage {
+                    loadedBody(usage: usage)
+                } else {
+                    PlanFailedView(
+                        error: store.kimiError ?? "Kimi temporarily unreachable — retrying."
+                    ) { Task { await store.refreshKimi() } }
+                }
+            case let .terminalFailure(reason):
+                PlanReconnectView(
+                    title: "Refresh Kimi Code login",
+                    reason: reason,
+                    fallback: "Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect."
+                ) { Task { await store.bootstrapKimi() } }
+            case .loaded:
+                if let usage = store.kimiUsage {
+                    loadedBody(usage: usage)
+                } else {
+                    PlanLoadingView(message: "Reading Kimi Code credentials...")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func loadedBody(usage: KimiUsage) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(usage.plan ?? "Kimi Code")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                if let resetsAt = usage.primary?.resetsAt {
+                    Text("Resets \(relativeReset(resetsAt))")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let primary = usage.primary {
+                UtilizationRow(
+                    label: "\(primary.label) window",
+                    percent: primary.usedPercent,
+                    resetsAt: primary.resetsAt,
+                    projection: nil
+                )
+            }
+            ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
+                UtilizationRow(
+                    label: "\(window.label) window",
+                    percent: window.usedPercent,
+                    resetsAt: window.resetsAt,
+                    projection: nil
+                )
+            }
+            if let parallel = usage.parallelLimit, parallel > 0 {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Parallel sessions")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(parallel)")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     private func relativeReset(_ date: Date) -> String {
