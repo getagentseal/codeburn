@@ -922,7 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         // Presenting on up (after the click completes) keeps it open. Harmless
         // on 15/26 too (the debounce in showContextMenu prevents a double-present
         // if the legacy path also fires).
-        rightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseUp]) { [weak self] _ in
+        rightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: StatusItemContextMenuPolicy.presentEventMask) { [weak self] _ in
             guard let self,
                   let button = self.statusItem.button,
                   let window = button.window,
@@ -1139,9 +1139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private func showContextMenu(from button: NSStatusBarButton) {
         // Debounce: on macOS <= 26 both the legacy action path and the global
         // monitor can fire for a single right-click. Present at most once per click.
-        let now = Date()
-        guard now.timeIntervalSince(lastContextMenuPresentedAt) > 0.3 else { return }
-        lastContextMenuPresentedAt = now
+        // Policy lives in StatusItemContextMenuPolicy so the gate is unit-tested (#802).
+        guard StatusItemContextMenuPolicy.acceptPresent(
+            now: Date(),
+            lastPresentedAt: &lastContextMenuPresentedAt
+        ) else { return }
 
         // Don't let an open popover steal the click / sit under the menu.
         if popover?.isShown == true {
