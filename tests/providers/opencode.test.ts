@@ -823,10 +823,15 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
       db.exec(`ALTER TABLE session ADD COLUMN tokens_reasoning INTEGER`)
       db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_read INTEGER`)
       db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_write INTEGER`)
-      db.exec(`ALTER TABLE session ADD COLUMN model_id TEXT`)
+      db.exec(`ALTER TABLE session ADD COLUMN model TEXT`)
 
       insertSession(db, 'sess-1')
-      db.prepare(`UPDATE session SET cost = 0.15, tokens_input = 5000, tokens_output = 2000, tokens_reasoning = 0, tokens_cache_read = 3000, tokens_cache_write = 1000, model_id = 'claude-sonnet-4-20250514' WHERE id = 'sess-1'`).run()
+      db.prepare(`UPDATE session SET cost = ?, tokens_input = ?, tokens_output = ?, tokens_reasoning = ?, tokens_cache_read = ?, tokens_cache_write = ?, model = ? WHERE id = ?`)
+        .run(0.15, 5000, 2000, 0, 3000, 1000, JSON.stringify({
+          providerID: 'anthropic',
+          id: 'claude-sonnet-4-20250514',
+          variant: 'high',
+        }), 'sess-1')
 
       insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
         role: 'assistant', modelID: 'claude-sonnet-4-20250514',
@@ -840,7 +845,7 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(calls[0]!.cacheReadInputTokens).toBe(3000)
     expect(calls[0]!.cacheCreationInputTokens).toBe(1000)
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
-    expect(calls[0]!.model).toBe('claude-sonnet-4-20250514')
+    expect(calls[0]!.model).toBe('anthropic/claude-sonnet-4-20250514')
     expect(calls[0]!.deduplicationKey).toBe('opencode:sess-1:session-level')
   })
 

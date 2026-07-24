@@ -36,7 +36,21 @@ type SessionTokenRow = {
   tokens_reasoning?: number
   tokens_cache_read?: number
   tokens_cache_write?: number
-  model_id?: string
+  model?: Uint8Array | string
+}
+
+function parseSessionModel(value: Uint8Array | string | undefined): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(blobToText(value))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+
+    const model = parsed as Record<string, unknown>
+    const id = typeof model['id'] === 'string' ? model['id'].trim() : ''
+    const providerID = typeof model['providerID'] === 'string' ? model['providerID'].trim() : ''
+    return id && providerID ? `${providerID}/${id}` : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string): {
@@ -45,7 +59,9 @@ function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string): {
 } | null {
   try {
     const rows = db.query<SessionTokenRow>(
-      `SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, model_id FROM session WHERE id = ?`,
+      `SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+              CAST(model AS BLOB) AS model
+       FROM session WHERE id = ?`,
       [sessionId],
     )
     if (rows.length === 0) return null
@@ -57,7 +73,7 @@ function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string): {
       reasoning: r.tokens_reasoning ?? 0,
       cacheRead: r.tokens_cache_read ?? 0,
       cacheWrite: r.tokens_cache_write ?? 0,
-      model: r.model_id ?? undefined,
+      model: parseSessionModel(r.model),
     }
   } catch {
     return null
@@ -324,4 +340,3 @@ export async function discoverSqliteSessions(
 
   return sessions
 }
-
