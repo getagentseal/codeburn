@@ -1,8 +1,12 @@
 import { homedir } from 'os'
+import { PassThrough } from 'stream'
 
-import { describe, it, expect } from 'vitest'
+import React from 'react'
+import { render } from 'ink'
+import stripAnsi from 'strip-ansi'
+import { describe, it, expect, onTestFinished, vi } from 'vitest'
 
-import { dailyActivityFooter, getDailyActivityRows, getDashboardScanRange, getLayout, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
+import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, shouldResetScreenOnResize, showEmptyState } from '../src/dashboard.js'
 import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
@@ -30,6 +34,7 @@ function makeSession(id: string, cost: number, timestamp = '2026-04-14T10:00:00Z
     firstTimestamp: timestamp,
     lastTimestamp: timestamp,
     totalCostUSD: cost,
+    totalSavingsUSD: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalCacheReadTokens: 0,
@@ -42,6 +47,7 @@ function makeSession(id: string, cost: number, timestamp = '2026-04-14T10:00:00Z
     bashBreakdown: {},
     categoryBreakdown: { ...EMPTY_CATEGORY_BREAKDOWN },
     skillBreakdown: {},
+    subagentBreakdown: {},
   }
 }
 
@@ -266,22 +272,214 @@ describe('dailyActivityFooter', () => {
 
 describe('getLayout - dashboard width breakpoints', () => {
   it('uses a single column at 89 columns or below', () => {
-    expect(getLayout(89)).toMatchObject({ dashWidth: 89, wide: false, halfWidth: 89 })
+    expect(getLayout(89)).toMatchObject({ dashWidth: 89, columnCount: 1, panelWidth: 89 })
   })
 
   it('switches to two columns at 90 columns', () => {
-    expect(getLayout(90)).toMatchObject({ dashWidth: 90, wide: true, halfWidth: 45 })
+    expect(getLayout(90)).toMatchObject({ dashWidth: 90, columnCount: 2, panelWidth: 45 })
   })
 
-  it('keeps two columns at 120 columns but the By-Model panel is too narrow for Tok/s', () => {
-    // Inner panel width is halfWidth - PANEL_CHROME (4). At 120 cols halfWidth=60,
-    // inner=56, below the 61-col threshold where Tok/s renders.
-    expect(getLayout(120)).toMatchObject({ dashWidth: 120, wide: true, halfWidth: 60 })
-    expect(getLayout(120).halfWidth - 4).toBeLessThan(61)
+  it('keeps two columns through 134 columns', () => {
+    expect(getLayout(134)).toMatchObject({ dashWidth: 134, columnCount: 2, panelWidth: 67 })
   })
 
-  it('keeps two columns and has enough room for Tok/s at 130 columns', () => {
-    expect(getLayout(130)).toMatchObject({ dashWidth: 130, wide: true, halfWidth: 65 })
-    expect(getLayout(130).halfWidth - 4).toBeGreaterThanOrEqual(61)
+  it('switches to three columns at 135 columns', () => {
+    expect(getLayout(135)).toMatchObject({ dashWidth: 135, columnCount: 3, panelWidth: 45 })
+  })
+
+  it('continues growing three equal panels by one for every three columns', () => {
+    expect(getLayout(160)).toMatchObject({ dashWidth: 160, columnCount: 3, panelWidth: 53 })
+    expect(getLayout(161)).toMatchObject({ dashWidth: 161, columnCount: 3, panelWidth: 53 })
+    expect(getLayout(162)).toMatchObject({ dashWidth: 162, columnCount: 3, panelWidth: 54 })
+    expect(getLayout(165)).toMatchObject({ dashWidth: 165, columnCount: 3, panelWidth: 55 })
+  })
+
+  it('stops at the lesser of 256 columns or the source-data width', () => {
+    expect(getLayout(300)).toMatchObject({ dashWidth: 256, columnCount: 3, panelWidth: 85 })
+    expect(getLayout(300, 213)).toMatchObject({ dashWidth: 213, columnCount: 3, panelWidth: 71 })
+  })
+
+  it('derives the wide-layout ceiling from renderable source labels', () => {
+    const short = makeProject('short', [makeSession('short', 1)])
+    const long = makeProject('x'.repeat(200), [makeSession('long', 1)])
+
+    expect(getDashboardMaxWidth([long])).toBe(256)
+    expect(getDashboardMaxWidth([short])).toBeLessThan(256)
+  })
+})
+
+describe('Daily Activity viewport', () => {
+  it('shows ten dates at a time', () => {
+    expect(DAILY_ACTIVITY_PAGE_SIZE).toBe(10)
+  })
+})
+
+describe('getRefreshIntervalMs', () => {
+  it('allows disabled refresh and clamps enabled refreshes to one minute', () => {
+    expect(getRefreshIntervalMs(0)).toBe(0)
+    expect(getRefreshIntervalMs(30)).toBe(60_000)
+    expect(getRefreshIntervalMs(60)).toBe(60_000)
+    expect(getRefreshIntervalMs(300)).toBe(300_000)
+  })
+})
+
+describe('interactive terminal rendering', () => {
+  it('isolates resize reflow from stale primary-screen frames', () => {
+    expect(INTERACTIVE_RENDER_OPTIONS).toMatchObject({ alternateScreen: true })
+  })
+
+  it('clears the alternate buffer before repainting a resized frame', () => {
+    expect(shouldResetScreenOnResize(160, 110)).toBe(true)
+  })
+
+  it('keeps the frame when the window grows beyond its content cap', () => {
+    expect(shouldResetScreenOnResize(256, 300)).toBe(false)
+  })
+
+  it('accepts the next width before Ink paints each breakpoint transition', async () => {
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = 135
+    stdout.rows = 50
+    const chunks: string[] = []
+    stdout.on('data', chunk => chunks.push(stripAnsi(String(chunk))))
+    const props = {
+      initialProjects: [makeProject('proj', [makeSession('s1', 1)])],
+      initialPeriod: 'today' as const,
+      initialProvider: 'all',
+      refreshSeconds: 0,
+    }
+    const app = render(React.createElement(InteractiveDashboard, { ...props, windowColumns: 135 }), {
+      stdin, stdout, interactive: true, patchConsole: false,
+    })
+    onTestFinished(() => app.unmount())
+
+    await new Promise(resolve => setTimeout(resolve, 20))
+    chunks.length = 0
+    app.rerender(React.createElement(InteractiveDashboard, { ...props, windowColumns: 134 }))
+    await app.waitUntilRenderFlush()
+
+    let panelTitleLine = (chunks.filter(chunk => chunk.trim()).at(-1) ?? '').split('\n').find(line => line.includes('Daily Activity')) ?? ''
+    expect(panelTitleLine).toContain('By Project')
+    expect(panelTitleLine).not.toContain('By Activity')
+
+    chunks.length = 0
+    app.rerender(React.createElement(InteractiveDashboard, { ...props, windowColumns: 89 }))
+    await app.waitUntilRenderFlush()
+
+    panelTitleLine = (chunks.filter(chunk => chunk.trim()).at(-1) ?? '').split('\n').find(line => line.includes('Daily Activity')) ?? ''
+    expect(panelTitleLine).not.toContain('By Project')
+  })
+})
+
+describe('InteractiveDashboard refresh', () => {
+  it('keeps project metric headings readable before long project paths', async () => {
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = 80
+    stdout.rows = 100
+    const frames: string[] = []
+    stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
+    const project = makeProject('long-project', [makeSession('s1', 19.43)])
+    project.projectPath = '/Users/jared/Documents/Codex/2026-07-30/global-agents-md-config-toml-codex'
+
+    const app = render(React.createElement(InteractiveDashboard, {
+      initialProjects: [project],
+      initialPeriod: 'today',
+      initialProvider: 'all',
+      refreshSeconds: 0,
+      windowColumns: 80,
+    }), { stdin, stdout, debug: true, interactive: true, patchConsole: false })
+    onTestFinished(() => app.unmount())
+
+    let frame = ''
+    for (let i = 0; i < 100 && !frame.includes('10.4K'); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      frame = frames.filter(value => value.trim()).at(-1) ?? ''
+    }
+
+    expect(frame).toContain('10.4K')
+    const projectHeader = frame.split('\n').find(line => line.includes('avg/s')) ?? ''
+    expect(projectHeader).toMatch(/cost\s+avg\/s\s+sess\s+overhead/)
+    expect(projectHeader).not.toContain('sessover')
+  })
+
+  it('keeps Optimize mounted without a loading frame when auto-refresh fires', async () => {
+    vi.useFakeTimers()
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = 160
+    stdout.rows = 50
+    const frames: string[] = []
+    stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
+    const session = makeSession('s1', 1)
+    session.turns = Array.from({ length: 11 }, (_, index) => makeTurn(`2026-07-${String(index + 1).padStart(2, '0')}T10:00:00Z`, [1]))
+    session.categoryBreakdown.coding = { turns: 12, costUSD: 1, retries: 0, editTurns: 10, oneShotTurns: 5 }
+
+    const app = render(React.createElement(InteractiveDashboard, {
+      initialProjects: [makeProject('proj', [session])],
+      initialPeriod: 'today',
+      initialProvider: 'all',
+      refreshSeconds: 60,
+      windowColumns: 160,
+    }), { stdin, stdout, debug: true, interactive: true, patchConsole: false })
+    onTestFinished(() => {
+      app.unmount()
+      vi.useRealTimers()
+    })
+
+    await vi.advanceTimersByTimeAsync(100)
+    const dashboardFrame = frames.filter(frame => frame.trim()).at(-1) ?? ''
+    const dashboardLines = dashboardFrame.split('\n')
+    expect(dashboardLines.find(line => line.includes('Daily Activity'))).toContain('By Project')
+    expect(dashboardLines.find(line => line.includes('Daily Activity'))).toContain('By Activity')
+    expect(dashboardLines.find(line => line.includes('By Model'))).toContain('MCP Servers')
+    expect(dashboardLines.find(line => line.includes('By Model'))).toContain('Core Tools')
+    expect(dashboardLines.find(line => line.includes('Shell Commands'))).toContain('Skills & Agents')
+    expect(dashboardFrame.match(/2026-07-/g)).toHaveLength(DAILY_ACTIVITY_PAGE_SIZE)
+    const dailyRow = dashboardLines.find(line => /2026-07-\d{2}/.test(line)) ?? ''
+    const dailyBarIndex = ['█', '░'].map(char => dailyRow.indexOf(char)).filter(index => index >= 0).sort((a, b) => a - b)[0] ?? -1
+    expect(dailyBarIndex).toBeGreaterThanOrEqual(0)
+    expect(dailyBarIndex).toBeLessThan(dailyRow.search(/2026-07-\d{2}/))
+    const activityHeader = dashboardLines.find(line => line.includes('turns'))?.slice(106, 159) ?? ''
+    const activityRow = dashboardLines.find(line => line.includes('Coding'))?.slice(106, 159) ?? ''
+    expect(activityHeader.indexOf('cost') + 'cost'.length).toBe(activityRow.indexOf('$1.00') + '$1.00'.length)
+    expect(activityHeader.indexOf('turns') + 'turns'.length).toBe(activityRow.indexOf('12') + '12'.length)
+    expect(activityHeader.indexOf('1-shot') + '1-shot'.length).toBe(activityRow.indexOf('50%') + '50%'.length)
+    stdin.write('o')
+    for (let i = 0; i < 20 && !frames.some(frame => frame.includes('Token estimates are approximate.')); i++) {
+      await vi.advanceTimersByTimeAsync(50)
+    }
+    const beforeRefresh = frames.filter(frame => frame.trim()).at(-1) ?? ''
+    expect(beforeRefresh).toContain('CodeBurn Optimize')
+    expect(beforeRefresh).toContain('Token estimates are approximate.')
+
+    frames.length = 0
+    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(100)
+
+    const frame = frames.filter(value => value.trim()).at(-1) ?? beforeRefresh
+    expect(frame).toBe(beforeRefresh)
+    expect(frame).toContain('CodeBurn Optimize')
+    expect(frame).toContain('Token estimates are approximate.')
+    expect(frame).toContain('b back')
+    expect(frame).not.toContain('Loading Today')
+    expect(frame).not.toContain('Scanning Today')
+
   })
 })

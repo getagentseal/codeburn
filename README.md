@@ -409,7 +409,7 @@ Run `codeburn` for the dashboard, or use a subcommand below. Most commands also 
 | `codeburn report -p all` | Every recorded session |
 | `codeburn report --from 2026-04-01 --to 2026-04-10` | An exact date range |
 | `codeburn report --format json` | Full dashboard data as JSON, printed to stdout |
-| `codeburn report --refresh 60` | Auto-refresh every 60s (default 30s; `--refresh 0` disables) |
+| `codeburn report --refresh 60` | Auto-refresh every 60s (the minimum and default; `--refresh 0` disables) |
 
 **Status & export**
 
@@ -481,7 +481,7 @@ Sync sends token counts, costs, models, and projects, never prompts or code. Thi
 | `codeburn models --task feature` | Filter to feature-development work |
 | `codeburn models --provider claude` | Filter to a single provider |
 
-Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, and Lifetime (use `--from` / `--to` for an exact historical window). The main Daily Activity panel always shows scrollable full history: use up/down to move one day, Page Up/Page Down (or Shift+Space/Space) to page, and `g`/`G` to jump to either end. These keys update the panel in place instead of moving terminal scrollback. Press `q` to quit, `1` `2` `3` `4` `5` `6` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). It also shows average cost per session and the five most expensive sessions across all projects.
+Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, and Lifetime (use `--from` / `--to` for an exact historical window). The main Daily Activity panel shows 10 dates from scrollable full history: use `j`/`k` to move one day, Page Up/Page Down (or Shift+Space/Space) to page, and `g`/`G` to jump to either end. Panels flow in the same order across three columns at maximum width, two at medium width, and one when narrow. In the three-column layout, all panels widen equally by one character for every three additional terminal columns until the dashboard reaches the lesser of 256 characters or the widest renderable source row. These keys update the panel in place instead of moving terminal scrollback. Press `q` to quit, `1` `2` `3` `4` `5` `6` as period shortcuts, `c` to open model comparison, or `o` to open optimize. The dashboard refreshes in place at most once per minute by default (`--refresh 0` to disable) without changing the active view or cursor. It also shows average cost per session and the five most expensive sessions across all projects.
 
 </details>
 

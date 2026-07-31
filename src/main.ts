@@ -772,7 +772,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 60)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'report')
     assertProvider(opts.provider, 'report')
@@ -1203,7 +1203,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 60)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'today')
     assertProvider(opts.provider, 'today')
@@ -1221,7 +1221,7 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 30)
+  .option('--refresh <seconds>', 'Auto-refresh interval in seconds (0 to disable)', parseInteger, 60)
   .action(async (opts) => {
     assertFormat(opts.format, ['tui', 'json'], 'month')
     assertProvider(opts.provider, 'month')
