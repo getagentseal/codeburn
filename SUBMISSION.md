@@ -2,23 +2,25 @@
 
 ## Proposed title
 
-Fix TUI refresh stability and responsive dashboard layout
+Fix TUI refresh stability, scrolling, and responsive dashboard layout
 
 ## Summary
 
 - Keep the active Optimize view mounted during background refreshes, prevent loading-frame flashes, and limit automatic data refreshes to no more than once per minute.
+- Pin the dashboard to the top of a terminal-sized viewport, support line and page scrolling across the full application, and preserve the scroll position through refreshes and resize rerenders.
 - Render dashboard panels in a stable 3/2/1-column order, with left-aligned bars, justified metric columns, readable headings, and ten visible Daily Activity rows.
+- Spell out the project `session` heading and render full model costs whenever the panel has enough space.
 - Reflow on the first resize frame at the 135/134 and 90/89 breakpoints, preserve the dashboard above 256 terminal columns, and cap its width at the lesser of 256 columns or the current data's renderable width.
 
 ## Testing
 
-- [x] Tested against real CodeBurn data in Ghostty at 135, 134, 90, 89, 256, 300, and 342 columns.
-- [x] `npm test -- --run tests/dashboard.test.ts`: 36 tests passed.
-- [x] `npx tsc --noEmit`
-- [x] `npm run build:cli`
-- [x] `git diff --check`
-- [ ] `npm test`: the affected dashboard suite passes, but the full run retains two unrelated Copilot parser failures and 26 missing-`jsdom` environment errors. Five full-run timeout failures passed when rerun individually.
-- [ ] `npm run build` was not run. The CLI production bundle succeeds with `npm run build:cli`.
+- Ghostty: tested real CodeBurn data at 135, 134, 90, 89, 256, 300, and 342 columns.
+- Dashboard suite: 39 tests passed, including one-, two-, and three-column viewport scrolling.
+- Typecheck: `npx tsc --noEmit` passed.
+- Production build: `npm run build` passed.
+- Live PTY: at 160 columns, Page Down revealed the lower panels and Page Up restored the pinned header.
+- Diff hygiene: `git diff --check` passed.
+- Full suite: 2,495 tests passed. The run retains two unrelated Copilot parser failures, one unrelated durable-total parity failure, and 26 missing-`jsdom` environment errors.
 
 ## Evidence
 

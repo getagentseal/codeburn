@@ -1,7 +1,7 @@
 import { homedir } from 'os'
 
-import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react'
-import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
+import React, { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { render, Box, Text, measureElement, useInput, useApp, useWindowSize, type DOMElement } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens, markEstimated, carriedCostNote } from './format.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
@@ -475,6 +475,9 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
   const rowWidth = (labels: string[], metricCount: number, metricWidth = 7) =>
     PANEL_CHROME + 10 + 1 + longest(labels) + metricCount * metricWidth
   const modelTotals = aggregateModelTotals(projects)
+  const modelMetricWidth = Math.max(7, ...Object.values(modelTotals).map(model =>
+    markEstimated(formatCost(model.costUSD), model.estimatedCostUSD > 0).length
+  ))
   const hasTiming = Object.values(modelTotals).some(model => model.activeDurationMs > 0 && model.activeGeneratedTokens > 0)
   const categoryLabels = sessions.flatMap(session => Object.keys(session.categoryBreakdown).map(category => CATEGORY_LABELS[category as TaskCategory] ?? category))
   const skillLabels = sessions.flatMap(session => Object.keys(session.skillBreakdown))
@@ -482,7 +485,7 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
   const widestPanel = Math.max(
     rowWidth(['2026-00-00'], 2),
     rowWidth(projects.map(project => shortProject(project.projectPath)), budgets?.size ? 4 : 3, budgets?.size ? 9 : 7),
-    rowWidth(Object.keys(modelTotals), hasTiming ? 5 : 4),
+    rowWidth(Object.keys(modelTotals), hasTiming ? 5 : 4, modelMetricWidth),
     rowWidth([...categoryLabels, ...skillLabels.map(skill => `  /${skill}`)], 3),
     rowWidth(sessions.flatMap(session => Object.keys(session.mcpBreakdown)), 1),
     rowWidth(sessions.flatMap(session => Object.keys(session.toolBreakdown).filter(tool => activeProvider === 'cursor' ? tool.startsWith('lang:') : !tool.startsWith('lang:'))), 1),
@@ -495,7 +498,7 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
 function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
   const hasBudgets = budgets && budgets.size > 0
-  const headers = ['cost', 'avg/s', 'sess', ...(hasBudgets ? ['overhead'] : [])]
+  const headers = ['cost', 'avg/s', 'session', ...(hasBudgets ? ['overhead'] : [])]
   const metricCellWidth = hasBudgets ? 9 : 7
   const projectBarWidth = hasBudgets
     ? Math.min(bw, Math.max(1, pw - PANEL_CHROME - 1 - headers.length * metricCellWidth - 10))
@@ -543,6 +546,8 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   // panels and when no model has timing data (non-Codex users get no dead column).
   const showTps = pw - PANEL_CHROME >= 61 && anyActiveTiming
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
+  const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0))
+  const metricCellWidth = Math.max(7, ...costLabels.map(label => label.length))
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
   const unpriced = findUnpricedModels(Object.entries(modelTotals).map(([model, d]) => ({
     model,
@@ -553,7 +558,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['cost', 'cache', 'calls', '1-shot', ...(showTps ? ['Tok/s'] : [])].map(text => ({ text, dimColor: true }))} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['cost', 'cache', 'calls', '1-shot', ...(showTps ? ['Tok/s'] : [])].map(text => ({ text, dimColor: true }))} metricCellWidth={metricCellWidth} />
       {sorted.map(([model, data], i) => {
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
@@ -573,12 +578,13 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
             label={model}
             bar={{ value: data.costUSD, max: maxCost }}
             metrics={[
-              { text: markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0), color: GOLD },
+              { text: costLabels[i]!, color: GOLD },
               { text: cacheLabel },
               { text: String(data.calls) },
               { text: oneShotLabel },
               ...(showTps ? [{ text: tpsLabel }] : []),
             ]}
+            metricCellWidth={metricCellWidth}
           />
         )
       })}
@@ -932,10 +938,12 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
         {!isOptimize && !customRange && !dayMode && view === 'dashboard' && (
           <>
             <Text dimColor>   </Text><Text color={PANEL_COLORS.daily} bold>j</Text><Text dimColor>/</Text><Text color={PANEL_COLORS.daily} bold>k</Text><Text dimColor> daily   </Text>
-            <Text color={PANEL_COLORS.daily} bold>PgUp</Text><Text dimColor>/</Text><Text color={PANEL_COLORS.daily} bold>PgDn</Text><Text dimColor> page</Text>
+            <Text color={PANEL_COLORS.daily} bold>Space</Text><Text dimColor> daily page</Text>
           </>
         )}
         {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
+        <Text dimColor>   </Text><Text color={ORANGE} bold>↑</Text><Text dimColor>/</Text><Text color={ORANGE} bold>↓</Text><Text dimColor> scroll   </Text>
+        <Text color={ORANGE} bold>PgUp</Text><Text dimColor>/</Text><Text color={ORANGE} bold>PgDn</Text><Text dimColor> page</Text>
       </Text>
     </Box>
   )
@@ -969,6 +977,38 @@ function DashboardContent({ projects, period, columns, maxContentWidth, activePr
               <SkillsAndAgents projects={projects} pw={panelWidth} bw={barWidth} />
               <ClaudeAgentTypes projects={projects} pw={panelWidth} bw={barWidth} />
             </>}
+      </Box>
+    </Box>
+  )
+}
+
+function ScrollableViewport({ children, width, lineScroll = true }: { children: React.ReactNode; width: number; lineScroll?: boolean }) {
+  const { rows } = useWindowSize()
+  const height = Math.max(1, rows - 1)
+  const contentRef = useRef<DOMElement>(null)
+  const [maxOffset, setMaxOffset] = useState(0)
+  const [offset, setOffset] = useState(0)
+
+  useLayoutEffect(() => {
+    if (!contentRef.current) return
+    const nextMaxOffset = Math.max(0, measureElement(contentRef.current).height - height)
+    setMaxOffset(current => current === nextMaxOffset ? current : nextMaxOffset)
+    setOffset(current => Math.min(current, nextMaxOffset))
+  })
+
+  useInput((_input, key) => {
+    if (lineScroll && key.downArrow) setOffset(current => Math.min(current + 1, maxOffset))
+    else if (lineScroll && key.upArrow) setOffset(current => Math.max(current - 1, 0))
+    else if (key.pageDown) setOffset(current => Math.min(current + height, maxOffset))
+    else if (key.pageUp) setOffset(current => Math.max(current - height, 0))
+    else if (key.home) setOffset(0)
+    else if (key.end) setOffset(maxOffset)
+  })
+
+  return (
+    <Box width={width} height={height} overflowY="hidden">
+      <Box ref={contentRef} flexDirection="column" position="absolute" top={-Math.min(offset, maxOffset)} left={0}>
+        {children}
       </Box>
     </Box>
   )
@@ -1212,15 +1252,15 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     if (view === 'optimize') {
       const total = optimizeResult?.findings.length ?? 0
       const maxStart = Math.max(0, total - FINDINGS_WINDOW_SIZE)
-      if (input === 'j' || key.downArrow) { setFindingsCursor(c => Math.min(c + 1, maxStart)); return }
-      if (input === 'k' || key.upArrow)   { setFindingsCursor(c => Math.max(c - 1, 0)); return }
+      if (input === 'j') { setFindingsCursor(c => Math.min(c + 1, maxStart)); return }
+      if (input === 'k') { setFindingsCursor(c => Math.max(c - 1, 0)); return }
       return
     }
     if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
     if ((input === 'b' || key.escape) && view === 'compare') { setView('dashboard'); return }
     if (view === 'dashboard' && scrollableDailyHistory) {
-      if (key.pageDown || (input === ' ' && !key.shift)) { setDailyHistoryCursor(c => pageHistoryCursor(c, 1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
-      if (key.pageUp || (input === ' ' && key.shift)) { setDailyHistoryCursor(c => pageHistoryCursor(c, -1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (input === ' ' && !key.shift) { setDailyHistoryCursor(c => pageHistoryCursor(c, 1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
+      if (input === ' ' && key.shift) { setDailyHistoryCursor(c => pageHistoryCursor(c, -1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
       if (input === 'j') { setDailyHistoryCursor(c => scrollHistoryCursor(c, 1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
       if (input === 'k') { setDailyHistoryCursor(c => scrollHistoryCursor(c, -1, dailyHistoryPageSize, dailyHistoryRowCount)); return }
       if (input === 'g') { setDailyHistoryCursor(0); return }
@@ -1279,8 +1319,8 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
 
   const headerLabel = dayDate ? formatDayRangeLabel(dayDate) : customRangeLabel ?? PERIOD_LABELS[period]
 
-  if (loading || optimizeLoading) {
-    return (
+  const content = loading || optimizeLoading
+    ? (
       <Box flexDirection="column" width={dashWidth}>
         {!isCustomRange && !isDayMode && <PeriodTabs active={period} providerName={activeProvider} showProvider={view !== 'compare' && multipleProviders} />}
         {isDayMode && <DayBanner label={headerLabel} width={dashWidth} />}
@@ -1299,20 +1339,28 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
         {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={0} optimizeAvailable={false} compareAvailable={false} customRange={isCustomRange} dayMode={isDayMode} />}
       </Box>
     )
-  }
+    : (
+      <Box flexDirection="column" width={dashWidth}>
+        {!isCustomRange && !isDayMode && <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />}
+        {isDayMode && <DayBanner label={headerLabel} width={dashWidth} />}
+        {isCustomRange && <CustomRangeBanner label={headerLabel} width={dashWidth} />}
+        {view === 'compare'
+          ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
+          : view === 'optimize' && optimizeResult
+            ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
+            : <DashboardContent projects={projects} period={period} columns={columns} maxContentWidth={maxContentWidth} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
+        {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
+      </Box>
+    )
 
   return (
-    <Box flexDirection="column" width={dashWidth}>
-      {!isCustomRange && !isDayMode && <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />}
-      {isDayMode && <DayBanner label={headerLabel} width={dashWidth} />}
-      {isCustomRange && <CustomRangeBanner label={headerLabel} width={dashWidth} />}
-      {view === 'compare'
-        ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
-        : view === 'optimize' && optimizeResult
-          ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-          : <DashboardContent projects={projects} period={period} columns={columns} maxContentWidth={maxContentWidth} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
-      {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
-    </Box>
+    <ScrollableViewport
+      key={`${view}:${period}:${activeProvider}:${dayDate ?? ''}:${customRangeLabel ?? ''}`}
+      width={dashWidth}
+      lineScroll={view !== 'compare'}
+    >
+      {content}
+    </ScrollableViewport>
   )
 }
 

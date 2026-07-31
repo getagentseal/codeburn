@@ -375,6 +375,53 @@ describe('interactive terminal rendering', () => {
     panelTitleLine = (chunks.filter(chunk => chunk.trim()).at(-1) ?? '').split('\n').find(line => line.includes('Daily Activity')) ?? ''
     expect(panelTitleLine).not.toContain('By Project')
   })
+
+  it.each([
+    { columns: 80, rows: 12 },
+    { columns: 100, rows: 18 },
+    { columns: 160, rows: 24 },
+  ])('pins and scrolls the full $columns-column dashboard without losing position', async ({ columns, rows }) => {
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = columns
+    stdout.rows = rows
+    const frames: string[] = []
+    stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
+    const props = {
+      initialProjects: [makeProject('proj', [makeSession('s1', 1)])],
+      initialPeriod: 'today' as const,
+      initialProvider: 'all',
+      refreshSeconds: 0,
+      windowColumns: columns,
+    }
+    const app = render(React.createElement(InteractiveDashboard, props), {
+      stdin, stdout, debug: true, interactive: true, patchConsole: false,
+    })
+    onTestFinished(() => app.unmount())
+
+    await app.waitUntilRenderFlush()
+    let frame = frames.filter(chunk => chunk.trim()).at(-1) ?? ''
+    expect(frame.split('\n')).toHaveLength(rows - 1)
+    expect(frame).toContain('[ Today ]')
+
+    stdin.write('\u001B[6~')
+    await app.waitUntilRenderFlush()
+    frame = frames.filter(chunk => chunk.trim()).at(-1) ?? ''
+    expect(frame).not.toContain('[ Today ]')
+
+    app.rerender(React.createElement(InteractiveDashboard, {
+      ...props,
+      windowColumns: columns + 1,
+    }))
+    await app.waitUntilRenderFlush()
+    frame = frames.filter(chunk => chunk.trim()).at(-1) ?? ''
+    expect(frame).not.toContain('[ Today ]')
+  })
 })
 
 describe('InteractiveDashboard refresh', () => {
@@ -392,6 +439,21 @@ describe('InteractiveDashboard refresh', () => {
     stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
     const project = makeProject('long-project', [makeSession('s1', 19.43)])
     project.projectPath = '/Users/jared/Documents/Codex/2026-07-30/global-agents-md-config-toml-codex'
+    project.sessions[0]!.modelBreakdown['gpt-5.6-sol'] = {
+      calls: 2303,
+      costUSD: 257.44,
+      savingsUSD: 0,
+      estimatedCostUSD: 257.44,
+      tokens: {
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 99,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+      },
+    }
 
     const app = render(React.createElement(InteractiveDashboard, {
       initialProjects: [project],
@@ -409,8 +471,9 @@ describe('InteractiveDashboard refresh', () => {
     }
 
     expect(frame).toContain('10.4K')
+    expect(frame).toContain('~$257.44')
     const projectHeader = frame.split('\n').find(line => line.includes('avg/s')) ?? ''
-    expect(projectHeader).toMatch(/cost\s+avg\/s\s+sess\s+overhead/)
+    expect(projectHeader).toMatch(/cost\s+avg\/s\s+session\s+overhead/)
     expect(projectHeader).not.toContain('sessover')
   })
 
