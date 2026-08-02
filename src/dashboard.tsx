@@ -30,6 +30,12 @@ export type DailyActivityRow = {
 export const DAILY_ACTIVITY_PAGE_SIZE = 10
 export const INTERACTIVE_RENDER_OPTIONS = { alternateScreen: true } as const
 
+export function getDailyActivityPageSize(columnCount: 1 | 2 | 3, projectRows: number, activityRows: number, dayMode = false): number {
+  if (dayMode) return 1
+  if (columnCount === 1) return DAILY_ACTIVITY_PAGE_SIZE
+  return Math.max(DAILY_ACTIVITY_PAGE_SIZE, projectRows, columnCount === 3 ? activityRows : 0)
+}
+
 export function pageHistoryCursor(cursor: number, direction: -1 | 1, pageSize: number, rowCount: number): number {
   const maxCursor = Math.max(0, rowCount - pageSize)
   return Math.max(0, Math.min(cursor + direction * pageSize, maxCursor))
@@ -59,7 +65,6 @@ export function showEmptyState(projectCount: number, scrollableHistory: boolean,
   return historyProjectCount === 0 && !historyLoading
 }
 
-// The By Model panel drops Tok/s when a responsive panel is too narrow.
 const MIN_WIDE = 90
 const MAX_DASHBOARD_WIDTH = 256
 const ORANGE = '#FF8C42'
@@ -269,29 +274,47 @@ function fit(s: string, n: number): string {
 
 type MetricCell = { text: string; color?: string; dimColor?: boolean }
 
-function DataRow({ panelWidth, barWidth, label, metrics, bar, labelColor, dimColor, metricCellWidth = 7 }: {
+function getMetricWidths(headers: string[], rows: string[][]): number[] {
+  return headers.map((header, index) => Math.max(header.length, ...rows.map(row => row[index]?.length ?? 0)))
+}
+
+function getMetricGroupWidth(metricWidths: number[]): number {
+  return metricWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, metricWidths.length - 1)
+}
+
+function getDataRowLayout(panelWidth: number, requestedBarWidth: number, metricWidths: number[]) {
+  const innerWidth = panelWidth - PANEL_CHROME
+  const metricsWidth = getMetricGroupWidth(metricWidths)
+  const barWidth = Math.max(1, Math.min(requestedBarWidth, innerWidth - metricsWidth - 3))
+  const labelWidth = Math.max(1, innerWidth - barWidth - metricsWidth - 2)
+  return { innerWidth, barWidth, labelWidth }
+}
+
+function DataRow({ panelWidth, barWidth: requestedBarWidth, label, metrics, metricWidths, bar, labelColor, dimColor }: {
   panelWidth: number
   barWidth: number
   label: string
   metrics: MetricCell[]
+  metricWidths: number[]
   bar?: { value: number; max: number }
   labelColor?: string
   dimColor?: boolean
-  metricCellWidth?: number
 }) {
-  const innerWidth = panelWidth - PANEL_CHROME
-  const metricsWidth = Math.min(metrics.length * metricCellWidth, innerWidth - barWidth - 2)
-  const labelWidth = Math.max(1, innerWidth - barWidth - 1 - metricsWidth)
+  const { innerWidth, barWidth, labelWidth } = getDataRowLayout(panelWidth, requestedBarWidth, metricWidths)
   const labelNode = <Text color={labelColor} dimColor={dimColor} wrap="truncate-end">{fit(label, labelWidth)}</Text>
   const barNode = bar ? <HBar value={bar.value} max={bar.max} width={barWidth} /> : <Text>{' '.repeat(barWidth)}</Text>
   return (
     <Box width={innerWidth}>
       {barNode}<Text> </Text>{labelNode}
-      <Box width={metricsWidth}>
+      <Text> </Text>
+      <Box>
         {metrics.map((metric, index) => (
-          <Box key={index} flexBasis={0} flexGrow={1} justifyContent="flex-end">
-            <Text color={metric.color} dimColor={metric.dimColor} wrap="truncate-end">{metric.text}</Text>
-          </Box>
+          <React.Fragment key={index}>
+            {index > 0 && <Text> </Text>}
+            <Box width={metricWidths[index]} justifyContent="flex-end" flexShrink={0}>
+              <Text color={metric.color} dimColor={metric.dimColor} wrap="truncate-end">{metric.text}</Text>
+            </Box>
+          </React.Fragment>
         ))}
       </Box>
     </Box>
@@ -426,14 +449,17 @@ function DailyActivity({ projects, days = 14, pw, bw, scrollable = false, cursor
   const orderedRows = scrollable ? [...allRows].reverse() : allRows
   const rows = scrollable ? orderedRows.slice(cursor, cursor + days) : orderedRows.slice(-days)
   const maxCost = Math.max(0, ...(scrollable ? orderedRows : rows).map(row => row.cost))
+  const headers = ['cost', 'calls']
+  const values = rows.map(row => [formatCost(row.cost), String(row.calls)])
+  const metricWidths = getMetricWidths(headers, values)
 
   return (
     <Panel title="Daily Activity" color={PANEL_COLORS.daily} width={pw}>
       {loading
         ? <Text dimColor>Loading daily history...</Text>
         : <>
-            <DataRow panelWidth={pw} barWidth={bw} label="" dimColor metrics={[{ text: 'cost', dimColor: true }, { text: 'calls', dimColor: true }]} />
-            {rows.map(row => (
+            <DataRow panelWidth={pw} barWidth={bw} label="" dimColor metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
+            {rows.map((row, index) => (
               <DataRow
                 key={row.day}
                 panelWidth={pw}
@@ -441,7 +467,8 @@ function DailyActivity({ projects, days = 14, pw, bw, scrollable = false, cursor
                 label={scrollable ? row.day : row.day.slice(5)}
                 labelColor={DIM}
                 bar={{ value: row.cost, max: maxCost }}
-                metrics={[{ text: formatCost(row.cost), color: GOLD }, { text: String(row.calls) }]}
+                metrics={[{ text: values[index]![0]!, color: GOLD }, { text: values[index]![1]! }]}
+                metricWidths={metricWidths}
               />
             ))}
             {scrollable && orderedRows.length > 0 && (
@@ -455,7 +482,14 @@ function DailyActivity({ projects, days = 14, pw, bw, scrollable = false, cursor
 const _home = homedir()
 const _homePrefix = _home.endsWith('/') ? _home : _home + '/'
 
-export function shortProject(absPath: string): string {
+function ellipsizeEnd(value: string, width: number): string {
+  if (value.length <= width) return value
+  if (width <= 0) return ''
+  if (width === 1) return '…'
+  return `${value.slice(0, width - 1)}…`
+}
+
+export function shortProject(absPath: string, width = Infinity): string {
   const normalized = absPath.replace(/\\/g, '/')
   let path: string
   if (normalized === _home) path = ''
@@ -465,8 +499,24 @@ export function shortProject(absPath: string): string {
   path = path.replace(/^private\/tmp\/[^/]+\/[^/]+\//, '').replace(/^private\/tmp\//, '').replace(/^tmp\//, '')
   if (!path) return 'home'
   const parts = path.split('/').filter(Boolean)
-  if (parts.length <= 3) return parts.join('/')
-  return parts.slice(-3).join('/')
+  const visible = parts.length <= 3 ? parts : parts.slice(-3)
+  const full = visible.join('/')
+  if (full.length <= width) return full
+
+  const title = visible.at(-1)!
+  const date = visible.slice(0, -1).find(part => /^\d{4}-\d{2}-\d{2}$/.test(part))
+  const folderElided = date ? `…/${date}/${title}` : `…/${title}`
+  if (folderElided.length <= width) return folderElided
+
+  const dateElided = date ? `…/…${date.slice(4)}/${title}` : folderElided
+  if (dateElided.length <= width) return dateElided
+
+  const prefix = date ? `…/…${date.slice(4)}/` : '…/'
+  if (width > prefix.length) return prefix + ellipsizeEnd(title, width - prefix.length)
+
+  const compactPrefix = '…/…/'
+  if (width > compactPrefix.length) return compactPrefix + ellipsizeEnd(title, width - compactPrefix.length)
+  return ellipsizeEnd(title, width)
 }
 
 export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<string, ContextBudget>, activeProvider?: string): number {
@@ -478,14 +528,13 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
   const modelMetricWidth = Math.max(7, ...Object.values(modelTotals).map(model =>
     markEstimated(formatCost(model.costUSD), model.estimatedCostUSD > 0).length
   ))
-  const hasTiming = Object.values(modelTotals).some(model => model.activeDurationMs > 0 && model.activeGeneratedTokens > 0)
   const categoryLabels = sessions.flatMap(session => Object.keys(session.categoryBreakdown).map(category => CATEGORY_LABELS[category as TaskCategory] ?? category))
   const skillLabels = sessions.flatMap(session => Object.keys(session.skillBreakdown))
   const agentLabels = sessions.flatMap(session => Object.keys(session.subagentBreakdown))
   const widestPanel = Math.max(
     rowWidth(['2026-00-00'], 2),
     rowWidth(projects.map(project => shortProject(project.projectPath)), budgets?.size ? 4 : 3, budgets?.size ? 9 : 7),
-    rowWidth(Object.keys(modelTotals), hasTiming ? 5 : 4, modelMetricWidth),
+    rowWidth(Object.keys(modelTotals), 5, modelMetricWidth),
     rowWidth([...categoryLabels, ...skillLabels.map(skill => `  /${skill}`)], 3),
     rowWidth(sessions.flatMap(session => Object.keys(session.mcpBreakdown)), 1),
     rowWidth(sessions.flatMap(session => Object.keys(session.toolBreakdown).filter(tool => activeProvider === 'cursor' ? tool.startsWith('lang:') : !tool.startsWith('lang:'))), 1),
@@ -495,37 +544,48 @@ export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<s
   return Math.min(MAX_DASHBOARD_WIDTH, Math.max(135, widestPanel * 3))
 }
 
+function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
+  return dayMode ? 8 : period === 'all' || period === 'lifetime' || period === 'month' || period === '30days' ? 14 : 8
+}
+
 function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
   const hasBudgets = budgets && budgets.size > 0
   const headers = ['cost', 'avg/s', 'session', ...(hasBudgets ? ['overhead'] : [])]
-  const metricCellWidth = hasBudgets ? 9 : 7
-  const projectBarWidth = hasBudgets
-    ? Math.min(bw, Math.max(1, pw - PANEL_CHROME - 1 - headers.length * metricCellWidth - 10))
-    : bw
+  const visibleProjects = projects.slice(0, rows)
+  const values = visibleProjects.map(project => {
+    const budget = budgets?.get(project.project)
+    return [
+      formatCost(project.totalCostUSD),
+      project.sessions.length > 0 ? formatCost(project.totalCostUSD / project.sessions.length) : '-',
+      String(project.sessions.length),
+      ...(hasBudgets ? [budget ? formatTokens(budget.total) : '-'] : []),
+    ]
+  })
+  const metricWidths = getMetricWidths(headers, values)
+  const desiredLabelWidth = 8
+  const projectBarWidth = Math.max(1, Math.min(bw, pw - PANEL_CHROME - getMetricGroupWidth(metricWidths) - 2 - desiredLabelWidth))
+  const { labelWidth } = getDataRowLayout(pw, projectBarWidth, metricWidths)
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
-      <DataRow panelWidth={pw} barWidth={projectBarWidth} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricCellWidth={metricCellWidth} />
-      {projects.slice(0, rows).map((project, i) => {
-        const budget = budgets?.get(project.project)
-        const avgCost = project.sessions.length > 0
-          ? formatCost(project.totalCostUSD / project.sessions.length)
-          : '-'
+      <DataRow panelWidth={pw} barWidth={projectBarWidth} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
+      {visibleProjects.map((project, i) => {
+        const row = values[i]!
         return (
           <DataRow
             key={`${project.project}-${i}`}
             panelWidth={pw}
             barWidth={projectBarWidth}
-            label={shortProject(project.projectPath)}
+            label={shortProject(project.projectPath, labelWidth)}
             labelColor={DIM}
             bar={{ value: project.totalCostUSD, max: maxCost }}
             metrics={[
-              { text: formatCost(project.totalCostUSD), color: GOLD },
-              { text: avgCost, color: GOLD },
-              { text: String(project.sessions.length) },
-              ...(hasBudgets ? [{ text: budget ? formatTokens(budget.total) : '-', color: '#7B9EF5' }] : []),
+              { text: row[0]!, color: GOLD },
+              { text: row[1]!, color: GOLD },
+              { text: row[2]! },
+              ...(hasBudgets ? [{ text: row[3]!, color: '#7B9EF5' }] : []),
             ]}
-            metricCellWidth={metricCellWidth}
+            metricWidths={metricWidths}
           />
         )
       })}
@@ -541,13 +601,27 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   const modelTotals = aggregateModelTotals(projects)
   const modelEfficiency = aggregateModelEfficiency(projects)
   const anyEstimated = Object.values(modelTotals).some(d => d.estimatedCostUSD > 0)
-  const anyActiveTiming = Object.values(modelTotals).some(d => d.activeDurationMs > 0 && d.activeGeneratedTokens > 0)
-  // The Tok/s column needs 61 inner columns for the full row; hide it on narrower
-  // panels and when no model has timing data (non-Codex users get no dead column).
-  const showTps = pw - PANEL_CHROME >= 61 && anyActiveTiming
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const costLabels = sorted.map(([, data]) => markEstimated(formatCost(data.costUSD), data.estimatedCostUSD > 0))
-  const metricCellWidth = Math.max(7, ...costLabels.map(label => label.length))
+  const headers = ['cost', 'cache', 'calls', '1-shot', 'Tok/s']
+  const values = sorted.map(([model, data], index) => {
+    const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
+    const efficiency = modelEfficiency.get(model)
+    return [
+      costLabels[index]!,
+      totalInput > 0 ? `${((data.cacheRead / totalInput) * 100).toFixed(1)}%` : '-',
+      String(data.calls),
+      efficiency && efficiency.editTurns >= MIN_EDIT_TURNS_FOR_RATE && efficiency.oneShotRate !== null
+        ? `${efficiency.oneShotRate.toFixed(1)}%`
+        : '-',
+      data.activeDurationMs > 0 && data.activeGeneratedTokens > 0
+        ? (data.activeGeneratedTokens / (data.activeDurationMs / 1000)).toFixed(1)
+        : '-',
+    ]
+  })
+  const metricWidths = getMetricWidths(headers, values)
+  const desiredLabelWidth = 5
+  const modelBarWidth = Math.max(1, Math.min(bw, pw - PANEL_CHROME - getMetricGroupWidth(metricWidths) - 2 - desiredLabelWidth))
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
   const unpriced = findUnpricedModels(Object.entries(modelTotals).map(([model, d]) => ({
     model,
@@ -558,33 +632,24 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['cost', 'cache', 'calls', '1-shot', ...(showTps ? ['Tok/s'] : [])].map(text => ({ text, dimColor: true }))} metricCellWidth={metricCellWidth} />
+      <DataRow panelWidth={pw} barWidth={modelBarWidth} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
       {sorted.map(([model, data], i) => {
-        const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
-        const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
-        const cacheLabel = totalInput > 0 ? `${cacheHit.toFixed(1)}%` : '-'
-        const efficiency = modelEfficiency.get(model)
-        const oneShotLabel = efficiency && efficiency.editTurns >= MIN_EDIT_TURNS_FOR_RATE && efficiency.oneShotRate !== null
-          ? `${efficiency.oneShotRate.toFixed(1)}%`
-          : '-'
-        const tpsLabel = data.activeDurationMs > 0 && data.activeGeneratedTokens > 0
-          ? (data.activeGeneratedTokens / (data.activeDurationMs / 1000)).toFixed(1)
-          : '-'
+        const row = values[i]!
         return (
           <DataRow
             key={`${model}-${i}`}
             panelWidth={pw}
-            barWidth={bw}
+            barWidth={modelBarWidth}
             label={model}
             bar={{ value: data.costUSD, max: maxCost }}
             metrics={[
-              { text: costLabels[i]!, color: GOLD },
-              { text: cacheLabel },
-              { text: String(data.calls) },
-              { text: oneShotLabel },
-              ...(showTps ? [{ text: tpsLabel }] : []),
+              { text: row[0]!, color: GOLD },
+              { text: row[1]! },
+              { text: row[2]! },
+              { text: row[3]! },
+              { text: row[4]! },
             ]}
-            metricCellWidth={metricCellWidth}
+            metricWidths={metricWidths}
           />
         )
       })}
@@ -596,16 +661,14 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
       {anyEstimated && (
         <Text dimColor wrap="truncate-end">~ estimated cost (priced from estimated tokens)</Text>
       )}
-      {showTps && (
-        <Text dimColor wrap="truncate-end">~ Tok/s: generated tokens / active time; tool wait excluded</Text>
-      )}
+      <Text dimColor wrap="truncate-end">~ Tok/s: generated tokens / active time; tool wait excluded</Text>
     </Panel>
   )
 }
 
 const SKILL_SUB_ROWS_LIMIT = 5
 
-function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+function aggregateActivityBreakdown(projects: ProjectSummary[]) {
   const categoryTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
   const skillTotals: Record<string, { turns: number; costUSD: number; editTurns: number; oneShotTurns: number }> = {}
   for (const project of projects) {
@@ -628,10 +691,26 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   }
   const sorted = Object.entries(categoryTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const sortedSkills = Object.entries(skillTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD).slice(0, SKILL_SUB_ROWS_LIMIT)
+  return { sorted, sortedSkills }
+}
+
+function getActivityBreakdownRowCount(projects: ProjectSummary[]): number {
+  const { sorted, sortedSkills } = aggregateActivityBreakdown(projects)
+  return sorted.length + (sorted.some(([category]) => category === 'general') ? sortedSkills.length : 0)
+}
+
+function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const { sorted, sortedSkills } = aggregateActivityBreakdown(projects)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
+  const headers = ['cost', 'turns', '1-shot']
+  const values = [
+    ...sorted.map(([, data]) => [formatCost(data.costUSD), String(data.turns), data.editTurns > 0 ? `${Math.round((data.oneShotTurns / data.editTurns) * 100)}%` : '-']),
+    ...sortedSkills.map(([, data]) => [formatCost(data.costUSD), String(data.turns), data.editTurns > 0 ? `${Math.round((data.oneShotTurns / data.editTurns) * 100)}%` : '-']),
+  ]
+  const metricWidths = getMetricWidths(headers, values)
   return (
     <Panel title="By Activity" color={PANEL_COLORS.activity} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['cost', 'turns', '1-shot'].map(text => ({ text, dimColor: true }))} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
       {sorted.flatMap(([cat, data]) => {
         const oneShotPct = data.editTurns > 0 ? Math.round((data.oneShotTurns / data.editTurns) * 100) + '%' : '-'
         const rows: React.ReactNode[] = [
@@ -647,6 +726,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
               { text: String(data.turns) },
               { text: oneShotPct, color: data.editTurns === 0 ? DIM : oneShotPct === '100%' ? '#5BF58C' : ORANGE },
             ]}
+            metricWidths={metricWidths}
           />,
         ]
         if (cat === 'general' && sortedSkills.length > 0) {
@@ -661,6 +741,7 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
                 dimColor
                 bar={{ value: sd.costUSD, max: maxCost }}
                 metrics={[{ text: formatCost(sd.costUSD), dimColor: true }, { text: String(sd.turns), dimColor: true }, { text: subPct, dimColor: true }]}
+                metricWidths={metricWidths}
               />,
             )
           }
@@ -683,14 +764,15 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
   }
   const sorted = Object.entries(toolTotals).sort(([, a], [, b]) => b - a)
   const maxCalls = sorted[0]?.[1] ?? 0
+  const metricWidths = getMetricWidths(['calls'], sorted.map(([, calls]) => [String(calls)]))
   return (
     <Panel title={title ?? 'Core Tools'} color={PANEL_COLORS.tools} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} metricWidths={metricWidths} />
       {sorted.slice(0, 10).map(([tool, calls]) => {
         const raw = filterPrefix ? tool.slice(filterPrefix.length) : tool
         const display = filterPrefix ? (LANG_DISPLAY_NAMES[raw] ?? raw) : raw
         return (
-          <DataRow key={tool} panelWidth={pw} barWidth={bw} label={display} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} />
+          <DataRow key={tool} panelWidth={pw} barWidth={bw} label={display} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} metricWidths={metricWidths} />
         )
       })}
     </Panel>
@@ -704,11 +786,12 @@ function McpBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: nu
   const sorted = Object.entries(mcpTotals).sort(([, a], [, b]) => b - a)
   if (sorted.length === 0) return <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}><Text dimColor>No MCP usage</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
+  const metricWidths = getMetricWidths(['calls'], sorted.map(([, calls]) => [String(calls)]))
   return (
     <Panel title="MCP Servers" color={PANEL_COLORS.mcp} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} metricWidths={metricWidths} />
       {sorted.slice(0, 8).map(([server, calls]) => (
-        <DataRow key={server} panelWidth={pw} barWidth={bw} label={server} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} />
+        <DataRow key={server} panelWidth={pw} barWidth={bw} label={server} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} metricWidths={metricWidths} />
       ))}
     </Panel>
   )
@@ -720,11 +803,12 @@ function BashBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: n
   const sorted = Object.entries(bashTotals).sort(([, a], [, b]) => b - a)
   if (sorted.length === 0) return <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}><Text dimColor>No shell commands</Text></Panel>
   const maxCalls = sorted[0]?.[1] ?? 0
+  const metricWidths = getMetricWidths(['calls'], sorted.map(([, calls]) => [String(calls)]))
   return (
     <Panel title="Shell Commands" color={PANEL_COLORS.bash} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={[{ text: 'calls', dimColor: true }]} metricWidths={metricWidths} />
       {sorted.slice(0, 10).map(([cmd, calls]) => (
-        <DataRow key={cmd} panelWidth={pw} barWidth={bw} label={cmd} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} />
+        <DataRow key={cmd} panelWidth={pw} barWidth={bw} label={cmd} bar={{ value: calls, max: maxCalls }} metrics={[{ text: String(calls) }]} metricWidths={metricWidths} />
       ))}
     </Panel>
   )
@@ -739,11 +823,13 @@ function SkillsAndAgents({ projects, pw, bw }: { projects: ProjectSummary[]; pw:
   const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
   if (sorted.length === 0) return <Panel title="Skills & Agents" color={PANEL_COLORS.skills} width={pw}><Text dimColor>No skill/agent usage</Text></Panel>
   const maxCost = sorted[0]?.[1]?.cost ?? 0
+  const headers = ['uses', 'cost']
+  const metricWidths = getMetricWidths(headers, sorted.map(([, data]) => [String(data.uses), formatCost(data.cost)]))
   return (
     <Panel title="Skills & Agents" color={PANEL_COLORS.skills} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['uses', 'cost'].map(text => ({ text, dimColor: true }))} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
       {sorted.slice(0, 10).map(([name, d]) => (
-        <DataRow key={name} panelWidth={pw} barWidth={bw} label={name} bar={{ value: d.cost, max: maxCost }} metrics={[{ text: String(d.uses) }, { text: formatCost(d.cost), color: GOLD }]} />
+        <DataRow key={name} panelWidth={pw} barWidth={bw} label={name} bar={{ value: d.cost, max: maxCost }} metrics={[{ text: String(d.uses) }, { text: formatCost(d.cost), color: GOLD }]} metricWidths={metricWidths} />
       ))}
     </Panel>
   )
@@ -762,11 +848,13 @@ function ClaudeAgentTypes({ projects, pw, bw }: { projects: ProjectSummary[]; pw
   const sorted = Object.entries(merged).sort(([, a], [, b]) => b.cost - a.cost)
   if (sorted.length === 0) return null
   const maxCost = sorted[0]?.[1]?.cost ?? 0
+  const headers = ['calls', 'cost']
+  const metricWidths = getMetricWidths(headers, sorted.map(([, data]) => [String(data.uses), formatCost(data.cost)]))
   return (
     <Panel title="Claude Agent Types" color={PANEL_COLORS.skills} width={pw}>
-      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={['calls', 'cost'].map(text => ({ text, dimColor: true }))} />
+      <DataRow panelWidth={pw} barWidth={bw} label="" metrics={headers.map(text => ({ text, dimColor: true }))} metricWidths={metricWidths} />
       {sorted.slice(0, 10).map(([name, d]) => (
-        <DataRow key={name} panelWidth={pw} barWidth={bw} label={name} bar={{ value: d.cost, max: maxCost }} metrics={[{ text: String(d.uses) }, { text: formatCost(d.cost), color: GOLD }]} />
+        <DataRow key={name} panelWidth={pw} barWidth={bw} label={name} bar={{ value: d.cost, max: maxCost }} metrics={[{ text: String(d.uses) }, { text: formatCost(d.cost), color: GOLD }]} metricWidths={metricWidths} />
       ))}
     </Panel>
   )
@@ -949,12 +1037,13 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
   )
 }
 
-function DashboardContent({ projects, period, columns, maxContentWidth, activeProvider, budgets, planUsages, label, dayMode, dailyHistoryProjects, scrollableDailyHistory = false, dailyHistoryCursor = 0, dailyHistoryLoading = false, durable }: { projects: ProjectSummary[]; period: Period; columns?: number; maxContentWidth: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; dailyHistoryProjects?: ProjectSummary[]; scrollableDailyHistory?: boolean; dailyHistoryCursor?: number; dailyHistoryLoading?: boolean; durable?: DurableOverview }) {
-  const { dashWidth, panelWidth, barWidth } = getLayout(columns, maxContentWidth)
+function DashboardContent({ projects, period, columns, maxContentWidth, activeProvider, budgets, planUsages, label, dayMode, dailyHistoryProjects, dailyHistoryPageSize, scrollableDailyHistory = false, dailyHistoryCursor = 0, dailyHistoryLoading = false, durable }: { projects: ProjectSummary[]; period: Period; columns?: number; maxContentWidth: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsages?: PlanUsage[]; label?: string; dayMode?: boolean; dailyHistoryProjects?: ProjectSummary[]; dailyHistoryPageSize?: number; scrollableDailyHistory?: boolean; dailyHistoryCursor?: number; dailyHistoryLoading?: boolean; durable?: DurableOverview }) {
+  const { dashWidth, columnCount, panelWidth, barWidth } = getLayout(columns, maxContentWidth)
   const isCursor = activeProvider === 'cursor'
   const activeLabel = label ?? PERIOD_LABELS[period]
   if (showEmptyState(projects.length, scrollableDailyHistory, (dailyHistoryProjects ?? []).length, dailyHistoryLoading)) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {activeLabel}.</Text></Panel>
-  const days = dayMode ? 1 : DAILY_ACTIVITY_PAGE_SIZE
+  const projectRows = Math.min(projects.length, getProjectBreakdownRowLimit(period, dayMode))
+  const days = dailyHistoryPageSize ?? getDailyActivityPageSize(columnCount, projectRows, getActivityBreakdownRowCount(projects), dayMode)
   // A provider-scoped plan (e.g. SuperGrok) only makes sense on its own
   // provider tab, where the shown cost matches the plan's spend. Hide it on
   // every other tab, including All, so its budget isn't compared to spend it
@@ -965,7 +1054,7 @@ function DashboardContent({ projects, period, columns, maxContentWidth, activePr
       <Overview projects={projects} label={activeLabel} width={dashWidth} planUsages={visiblePlanUsages} durable={durable} />
       <Box flexWrap="wrap" width={dashWidth}>
         <DailyActivity projects={scrollableDailyHistory ? (dailyHistoryProjects ?? []) : projects} days={days} pw={panelWidth} bw={barWidth} scrollable={scrollableDailyHistory} cursor={dailyHistoryCursor} loading={dailyHistoryLoading} />
-        <ProjectBreakdown projects={projects} pw={panelWidth} bw={barWidth} budgets={budgets} rows={dayMode ? 8 : period === 'all' || period === 'lifetime' ? 14 : period === 'month' || period === '30days' ? 14 : 8} />
+        <ProjectBreakdown projects={projects} pw={panelWidth} bw={barWidth} budgets={budgets} rows={getProjectBreakdownRowLimit(period, dayMode)} />
         <ActivityBreakdown projects={projects} pw={panelWidth} bw={barWidth} />
         <ModelBreakdown projects={projects} pw={panelWidth} bw={barWidth} />
         {isCursor
@@ -1057,9 +1146,14 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     () => getDashboardMaxWidth(projects, projectBudgets, activeProvider),
     [projects, projectBudgets, activeProvider],
   )
-  const { dashWidth } = getLayout(columns, maxContentWidth)
+  const { dashWidth, columnCount } = getLayout(columns, maxContentWidth)
   if (layoutMetricsRef) layoutMetricsRef.current = { dashWidth, maxContentWidth }
-  const dailyHistoryPageSize = isDayMode ? 1 : DAILY_ACTIVITY_PAGE_SIZE
+  const dailyHistoryPageSize = getDailyActivityPageSize(
+    columnCount,
+    Math.min(projects.length, getProjectBreakdownRowLimit(period, isDayMode)),
+    getActivityBreakdownRowCount(projects),
+    isDayMode,
+  )
   const dailyHistoryRowCount = getDailyActivityRows(dailyHistoryProjects).length
   const dailyHistoryMaxCursor = Math.max(0, dailyHistoryRowCount - dailyHistoryPageSize)
   const multipleProviders = detectedProviders.length > 1
@@ -1348,7 +1442,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
           ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
           : view === 'optimize' && optimizeResult
             ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={headerLabel} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} cursor={findingsCursor} />
-            : <DashboardContent projects={projects} period={period} columns={columns} maxContentWidth={maxContentWidth} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
+            : <DashboardContent projects={projects} period={period} columns={columns} maxContentWidth={maxContentWidth} activeProvider={activeProvider} budgets={projectBudgets} planUsages={planUsages} label={headerLabel} dayMode={isDayMode} dailyHistoryProjects={dailyHistoryProjects} dailyHistoryPageSize={dailyHistoryPageSize} scrollableDailyHistory={scrollableDailyHistory} dailyHistoryCursor={Math.min(dailyHistoryCursor, dailyHistoryMaxCursor)} durable={durable} />}
         {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} customRange={isCustomRange} dayMode={isDayMode} />}
       </Box>
     )

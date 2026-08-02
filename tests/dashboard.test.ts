@@ -6,7 +6,7 @@ import { render } from 'ink'
 import stripAnsi from 'strip-ansi'
 import { describe, it, expect, onTestFinished, vi } from 'vitest'
 
-import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, shouldResetScreenOnResize, showEmptyState } from '../src/dashboard.js'
+import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, shouldResetScreenOnResize, showEmptyState } from '../src/dashboard.js'
 import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
@@ -164,6 +164,14 @@ describe('shortProject - path shortening', () => {
   it('handles paths outside the home dir', () => {
     expect(shortProject('/opt/myproject')).toBe('opt/myproject')
   })
+
+  it('elides the parent folder and date year before the project title', () => {
+    const path = `${home}/Documents/Codex/2026-07-30/global-agents-md-config-toml-codex`
+    expect(shortProject(path, 51)).toBe('Codex/2026-07-30/global-agents-md-config-toml-codex')
+    expect(shortProject(path, 47)).toBe('…/2026-07-30/global-agents-md-config-toml-codex')
+    expect(shortProject(path, 44)).toBe('…/…-07-30/global-agents-md-config-toml-codex')
+    expect(shortProject(path, 34)).toBe('…/…-07-30/global-agents-md-config…')
+  })
 })
 
 describe('avg/s in ProjectBreakdown', () => {
@@ -312,6 +320,64 @@ describe('Daily Activity viewport', () => {
   it('shows ten dates at a time', () => {
     expect(DAILY_ACTIVITY_PAGE_SIZE).toBe(10)
   })
+
+  it.each([
+    { columns: 1 as const, projectRows: 14, activityRows: 17, expected: 10 },
+    { columns: 2 as const, projectRows: 8, activityRows: 17, expected: 10 },
+    { columns: 2 as const, projectRows: 14, activityRows: 17, expected: 14 },
+    { columns: 3 as const, projectRows: 8, activityRows: 7, expected: 10 },
+    { columns: 3 as const, projectRows: 14, activityRows: 17, expected: 17 },
+  ])('uses $expected rows for a $columns-column row with $projectRows project and $activityRows activity rows', ({ columns, projectRows, activityRows, expected }) => {
+    expect(getDailyActivityPageSize(columns, projectRows, activityRows)).toBe(expected)
+  })
+
+  it('keeps day mode to one date', () => {
+    expect(getDailyActivityPageSize(3, 14, 17, true)).toBe(1)
+  })
+
+  it('matches fourteen visible project rows in the two-column layout', async () => {
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = 100
+    stdout.rows = 80
+    const frames: string[] = []
+    stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
+
+    const historySession = makeSession('history', 20)
+    historySession.turns = Array.from({ length: 20 }, (_, index) =>
+      makeTurn(`2026-07-${String(index + 1).padStart(2, '0')}T10:00:00Z`, [1]))
+    const projects = [
+      makeProject('project-01', [historySession]),
+      ...Array.from({ length: 13 }, (_, index) =>
+        makeProject(`project-${String(index + 2).padStart(2, '0')}`, [makeSession(`s-${index}`, 1)])),
+    ]
+
+    const app = render(React.createElement(InteractiveDashboard, {
+      initialProjects: projects,
+      initialPeriod: 'all',
+      initialProvider: 'all',
+      refreshSeconds: 0,
+      windowColumns: 100,
+    }), { stdin, stdout, debug: true, interactive: true, patchConsole: false })
+    onTestFinished(() => app.unmount())
+    await app.waitUntilRenderFlush()
+
+    let frame = frames.filter(value => value.trim()).at(-1) ?? ''
+    expect(frame.match(/2026-07-\d{2}/g)).toHaveLength(14)
+    expect(frame).toContain('2026-07-20')
+
+    stdin.write(' ')
+    await app.waitUntilRenderFlush()
+    frame = frames.filter(value => value.trim()).at(-1) ?? ''
+    expect(frame.match(/2026-07-\d{2}/g)).toHaveLength(14)
+    expect(frame).toContain('2026-07-01')
+    expect(frame).not.toContain('2026-07-20')
+  })
 })
 
 describe('getRefreshIntervalMs', () => {
@@ -425,6 +491,87 @@ describe('interactive terminal rendering', () => {
 })
 
 describe('InteractiveDashboard refresh', () => {
+  it('keeps ten metric columns compact and visible before shortening project titles', async () => {
+    const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+    const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+    stdin.isTTY = true
+    stdin.setRawMode = () => stdin
+    stdin.ref = () => stdin
+    stdin.unref = () => stdin
+    stdout.isTTY = true
+    stdout.columns = 135
+    stdout.rows = 100
+    const frames: string[] = []
+    stdout.on('data', chunk => frames.push(stripAnsi(String(chunk))))
+
+    const session = makeSession('s1', 19.43)
+    session.apiCalls = 2303
+    session.categoryBreakdown.coding = { turns: 12, costUSD: 1, savingsUSD: 0, retries: 0, editTurns: 10, oneShotTurns: 5 }
+    session.skillBreakdown.ponytail = { turns: 3, costUSD: 0.25, savingsUSD: 0, editTurns: 2, oneShotTurns: 1 }
+    session.modelBreakdown['gpt-5.6-sol'] = {
+      calls: 2303,
+      costUSD: 257.44,
+      savingsUSD: 0,
+      estimatedCostUSD: 257.44,
+      activeDurationMs: 10_000,
+      activeGeneratedTokens: 539,
+      tokens: {
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 99,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+      },
+    }
+    session.modelBreakdown['gpt-5.6-terra'] = {
+      calls: 22,
+      costUSD: 0.63,
+      savingsUSD: 0,
+      tokens: {
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+      },
+    }
+    const project = makeProject('long-project', [session])
+    project.projectPath = '/Users/jared/Documents/Codex/2026-07-30/global-agents-md-config-toml-codex'
+
+    const app = render(React.createElement(InteractiveDashboard, {
+      initialProjects: [project],
+      initialPeriod: 'today',
+      initialProvider: 'all',
+      refreshSeconds: 0,
+      windowColumns: 135,
+    }), { stdin, stdout, debug: true, interactive: true, patchConsole: false })
+    onTestFinished(() => app.unmount())
+
+    let frame = ''
+    for (let i = 0; i < 100 && (!frame.includes('10.4K') || !frame.includes('By Model')); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      frame = frames.filter(value => value.trim()).at(-1) ?? ''
+    }
+
+    for (const metric of ['cost', 'avg/s', 'session', 'overhead', 'cache', 'calls', '1-shot', 'Tok/s', 'turns', 'uses']) {
+      expect(frame, `missing ${metric}`).toContain(metric)
+    }
+    for (const value of ['$19.43', '10.4K', '~$257.44', '99.0%', '2303', '53.9', '$1.00', '12', '50%', '$0.25']) {
+      expect(frame, `missing ${value}`).toContain(value)
+    }
+
+    const modelHeader = frame.split('\n').find(line => line.includes('cache') && line.includes('1-shot')) ?? ''
+    const projectHeader = frame.split('\n').find(line => line.includes('avg/s')) ?? ''
+    const projectCostIndex = projectHeader.lastIndexOf('cost', projectHeader.indexOf('avg/s'))
+    expect(modelHeader.indexOf('Tok/s') + 'Tok/s'.length - modelHeader.indexOf('cost')).toBeLessThanOrEqual(33)
+    expect(projectHeader.indexOf('overhead') + 'overhead'.length - projectCostIndex).toBeLessThanOrEqual(30)
+    expect(frame).toContain('…/')
+  })
+
   it('keeps project metric headings readable before long project paths', async () => {
     const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
     const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
@@ -514,7 +661,7 @@ describe('InteractiveDashboard refresh', () => {
     expect(dashboardLines.find(line => line.includes('By Model'))).toContain('MCP Servers')
     expect(dashboardLines.find(line => line.includes('By Model'))).toContain('Core Tools')
     expect(dashboardLines.find(line => line.includes('Shell Commands'))).toContain('Skills & Agents')
-    expect(dashboardFrame.match(/2026-07-/g)).toHaveLength(DAILY_ACTIVITY_PAGE_SIZE)
+    expect(dashboardFrame.match(/2026-07-/g)).toHaveLength(11)
     const dailyRow = dashboardLines.find(line => /2026-07-\d{2}/.test(line)) ?? ''
     const dailyBarIndex = ['█', '░'].map(char => dailyRow.indexOf(char)).filter(index => index >= 0).sort((a, b) => a - b)[0] ?? -1
     expect(dailyBarIndex).toBeGreaterThanOrEqual(0)
