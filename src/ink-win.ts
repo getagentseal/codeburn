@@ -1,5 +1,9 @@
-const BSU = '\x1b[?2026h'
-const ESU = '\x1b[?2026l'
+// Begin/End Synchronized Update (DEC private mode 2026). Exported so callers
+// emit them as standalone chunks the Windows filter below can match exactly;
+// concatenating them into a larger write would slip past the guard and hang
+// ConPTY, which buffers the unimplemented sequence indefinitely (#195).
+export const BSU = '\x1b[?2026h'
+export const ESU = '\x1b[?2026l'
 let patched = false
 
 export function patchStdoutForWindows(): void {

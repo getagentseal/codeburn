@@ -17,7 +17,7 @@ import { CompareView } from './compare.js'
 import { getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
-import { patchStdoutForWindows } from './ink-win.js'
+import { BSU, ESU, patchStdoutForWindows } from './ink-win.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -1520,7 +1520,15 @@ export async function renderDashboard(period: Period = 'week', provider: string 
     const resize = () => {
       const nextColumns = process.stdout.columns
       if (shouldResetScreenOnResize(layoutMetricsRef.current.dashWidth, nextColumns, layoutMetricsRef.current.maxContentWidth)) {
-        process.stdout.write('\u001B[?2026h\u001B[2J\u001B[H')
+        // The synchronized-update escapes must be standalone writes: the
+        // Windows filter in ink-win.ts compares chunks exactly, so a
+        // concatenated BSU+clear would pass through raw and hang ConPTY
+        // (#195). Standalone, they are swallowed there and honored elsewhere,
+        // and the update is now also properly ended rather than left open to
+        // the terminal's timeout.
+        process.stdout.write(BSU)
+        process.stdout.write('\u001B[2J\u001B[H')
+        process.stdout.write(ESU)
       }
       windowColumns = nextColumns
       app.rerender(dashboard())
