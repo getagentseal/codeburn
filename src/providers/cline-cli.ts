@@ -265,12 +265,17 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const messages = isRecord(doc) && Array.isArray(doc['messages']) ? doc['messages'] : []
       const userMessage = firstUserMessage(messages)
-      let emitted = 0
+      let hadMetrics = false
 
       for (const [index, message] of messages.entries()) {
         if (!isRecord(message) || message['role'] !== 'assistant') continue
         const metrics = parseMetrics(message['metrics'])
         if (!metrics) continue
+
+        // Track BEFORE the dedup check: the rollup gate must see metrics-bearing
+        // messages even when every one is later suppressed by the shared dedup,
+        // or a duplicated session_id double-counts through the rollup - #894.
+        hadMetrics = true
 
         const modelInfo = isRecord(message['modelInfo']) ? message['modelInfo'] : {}
         const model = nonEmptyString(modelInfo['id']) ?? sessionModel
@@ -282,7 +287,6 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const { tools, bashCommands, toolSequence, skills, subagentTypes, webSearchRequests }
           = collectTools(message['content'])
 
-        emitted++
         yield {
           provider: PROVIDER_NAME,
           model,
@@ -314,7 +318,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         }
       }
 
-      if (emitted > 0) return
+      // A session with per-message metrics never falls back to the rollup,
+      // even when every message was deduped away (#894): the calls were
+      // already accounted once under this session_id by an earlier directory.
+      if (hadMetrics) return
 
       // No per-message metrics: fall back to the session rollup so an
       // interrupted or older session still reports its spend. Deliberately

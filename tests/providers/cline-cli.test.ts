@@ -27,6 +27,10 @@ async function writeSession(sessionsDir: string, sessionId: string, opts?: {
   startedAt?: string
   endedAt?: string
   messagesPath?: string
+  // The on-disk directory keeps `sessionId`; the metadata file records this
+  // value instead - lets a test model a copied session directory whose
+  // internal id collides, #894.
+  sessionIdInMeta?: string
   omitMeta?: boolean
   omitMessagesFile?: boolean
 }): Promise<string> {
@@ -42,7 +46,7 @@ async function writeSession(sessionsDir: string, sessionId: string, opts?: {
 
     await writeFile(metaPath, JSON.stringify({
       version: 1,
-      session_id: sessionId,
+      session_id: opts?.sessionIdInMeta ?? sessionId,
       source: 'cli',
       status: 'completed',
       provider: 'cline-pass',
@@ -430,6 +434,37 @@ describe('cline-cli provider - rollup fallback', () => {
     expect(calls[0]?.cacheReadInputTokens).toBe(50)
     expect(calls[0]?.costUSD).toBeCloseTo(0.0081984, 7)
     expect(calls[0]?.costIsEstimated).toBe(false)
+  })
+
+  it('declines the rollup when every per-message metric was deduped away (#894)', async () => {
+    const dir = join(tmpDir, 'sessions')
+    // Two on-disk directories carrying the SAME internal session_id, as after
+    // a copied session directory: identical message ids, and the COPY (which
+    // discovery visits second) also holds a metadata.usage rollup. The first
+    // directory accounts the calls; the copy's messages are all suppressed by
+    // the shared dedup, and its rollup must NOT resurrect the same spend
+    // under `<id>:rollup`.
+    await writeSession(dir, 'sess-a', {
+      sessionIdInMeta: 'shared-id',
+      messages: [
+        { role: 'user', text: 'do the thing' },
+        { role: 'assistant', text: 'done', metrics: { inputTokens: 100, outputTokens: 20, cost: 0.01 } },
+      ],
+    })
+    await writeSession(dir, 'sess-b', {
+      sessionIdInMeta: 'shared-id',
+      usage: { inputTokens: 100, outputTokens: 20, totalCost: 0.01 },
+      messages: [
+        { role: 'user', text: 'do the thing' },
+        { role: 'assistant', text: 'done', metrics: { inputTokens: 100, outputTokens: 20, cost: 0.01 } },
+      ],
+    })
+
+    const calls = await collect(dir)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.deduplicationKey).toBe('cline-cli:shared-id:msg_1')
+    expect(calls.some(c => c.deduplicationKey.endsWith(':rollup'))).toBe(false)
+    expect(calls.reduce((s, c) => s + c.costUSD, 0)).toBeCloseTo(0.01, 10)
   })
 
   it('does not double count when per-message metrics already covered the session', async () => {
