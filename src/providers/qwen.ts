@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const toolNameMap: Record<string, string> = {
   read_file: 'Read',
@@ -160,6 +160,10 @@ export function createQwenProvider(overrideDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: projectsDir, label: 'projects' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

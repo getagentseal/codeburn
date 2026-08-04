@@ -8,7 +8,7 @@ import https from 'https'
 
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 type AntigravityConversationRoot = {
   dir: string
@@ -1426,6 +1426,13 @@ export function createAntigravityProvider(): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [
+        ...conversationRoots().map(root => ({ path: root.dir, label: 'conversations' })),
+        { path: getAntigravityStatusLineEventsPath(), label: 'statusline' },
+      ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

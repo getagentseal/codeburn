@@ -13,6 +13,7 @@ import type {
   SessionSource,
   SessionParser,
   ParsedProviderCall,
+  ProbeRoot,
 } from './types.js'
 
 type ConversationSummary = {
@@ -511,6 +512,13 @@ export function createCursorAgentProvider(baseDirOverride?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [
+        { path: projectsDir, label: 'projects' },
+        { path: dbPath, label: 'db' },
+      ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

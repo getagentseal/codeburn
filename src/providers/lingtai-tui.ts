@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -416,6 +416,24 @@ export function createLingTaiTuiProvider(options?: string | LingTaiProviderOptio
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      // Deliberately pre-existence-filter: doctor's job is to show where
+      // discovery looks, so a missing default home reads as "not installed
+      // here" instead of vanishing (getLingTaiHomes drops non-existent
+      // candidates, which is right for discovery and wrong for doctor).
+      const explicit = splitPathList(providerOptions.lingtaiHomeOverride ?? process.env['LINGTAI_HOME'] ?? process.env['LINGTAI_TUI_HOME'])
+      const roots: ProbeRoot[] = explicit.length
+        ? explicit.map(path => ({ path, label: 'sessions' }))
+        : [
+            { path: getDefaultLingTaiHome(providerOptions), label: 'sessions' },
+            { path: getLingTaiGlobalDir(providerOptions), label: 'registry' },
+          ]
+      for (const home of await getLingTaiHomes(providerOptions)) {
+        if (!roots.some(root => root.path === home.path)) roots.push({ path: home.path, label: 'sessions' })
+      }
+      return roots
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

@@ -3,7 +3,7 @@ import { homedir } from 'os'
 
 import { getShortModelName } from '../models.js'
 import { discoverClineTasksInBaseDirs, createClineParser } from './vscode-cline-parser.js'
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
 
 const PROVIDER_NAME = 'ibm-bob'
 const DISPLAY_NAME = 'IBM Bob'
@@ -43,6 +43,10 @@ export function createIBMBobProvider(overrideDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return (overrideDir ? [overrideDir] : getIBMBobGlobalStorageDirs()).map(path => ({ path, label: 'storage' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

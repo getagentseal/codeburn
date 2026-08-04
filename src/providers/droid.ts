@@ -11,6 +11,7 @@ import type {
   SessionSource,
   SessionParser,
   ParsedProviderCall,
+  ProbeRoot,
 } from './types.js'
 
 const toolNameMap: Record<string, string> = {
@@ -389,6 +390,10 @@ export function createDroidProvider(factoryDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: sessionsDir, label: 'sessions' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

@@ -6,7 +6,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import type { ToolCall } from '../types.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 const METADATA_PREFIX_BYTES = 64 * 1024
 
@@ -455,6 +455,10 @@ export function createCodeWhaleProvider(overrideDirs?: string | string[]): Provi
 
     toolDisplayName(rawTool: string): string {
       return mapToolName(rawTool)
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return (configuredDirs ?? defaultSessionDirs()).map(path => ({ path, label: 'sessions' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

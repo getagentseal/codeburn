@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 import { calculateCost, getShortModelName } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 import type { ToolCall } from '../types.js'
 
 type HermesSessionRow = {
@@ -460,6 +460,10 @@ export function createHermesProvider(hermesHomeOverride?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return mapToolName(rawTool)
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: hermesHome, label: 'home' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

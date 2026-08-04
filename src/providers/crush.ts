@@ -4,7 +4,7 @@ import { homedir, platform } from 'os'
 
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 /// Crush stores per-project SQLite databases discovered through a JSON registry.
 /// We only read both. Schema source: charmbracelet/crush
@@ -234,6 +234,10 @@ export function createCrushProvider(): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: getRegistryPath(), label: 'registry' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

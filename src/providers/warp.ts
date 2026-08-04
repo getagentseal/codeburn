@@ -5,7 +5,7 @@ import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { blobToText, getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 import { safeNumber } from '../parser.js'
 
 const WARP_GROUP_CONTAINER = '2BBY89MBSN.dev.warp'
@@ -477,6 +477,10 @@ export function createWarpProvider(dbPathOverride?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool === 'run_command' ? 'Bash' : rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return getDbCandidates(dbPathOverride).map(path => ({ path, label: 'db' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
