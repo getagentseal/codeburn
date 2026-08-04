@@ -14,6 +14,7 @@ import {
   setLocalModelSavings,
   getLocalModelSavingsConfigHash,
   getPriceOverridesConfigHash,
+  parseLiteLLMEntry,
 } from '../src/models.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
 
@@ -863,5 +864,20 @@ describe('findUnpricedModels', () => {
       { model: 'zz-big', calls: 1, cost: 0, tokens: 9999 },
     ])
     expect(unpriced.map(u => u.model)).toEqual(['zz-big', 'zz-small'])
+  })
+})
+
+describe('parseLiteLLMEntry hardening', () => {
+  it('returns null instead of throwing on a null or non-object entry', () => {
+    // The live LiteLLM map is remote JSON; a null value for a model used to
+    // throw on the field reads and abort the whole pricing load.
+    expect(parseLiteLLMEntry(null as unknown as Parameters<typeof parseLiteLLMEntry>[0])).toBeNull()
+    expect(parseLiteLLMEntry(undefined as unknown as Parameters<typeof parseLiteLLMEntry>[0])).toBeNull()
+    expect(parseLiteLLMEntry(42 as unknown as Parameters<typeof parseLiteLLMEntry>[0])).toBeNull()
+  })
+
+  it('still parses a valid entry', () => {
+    const costs = parseLiteLLMEntry({ input_cost_per_token: 0.000003, output_cost_per_token: 0.000015 } as Parameters<typeof parseLiteLLMEntry>[0])
+    expect(costs).not.toBeNull()
   })
 })

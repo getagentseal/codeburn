@@ -164,7 +164,11 @@ function safePerTokenRate(n: number | undefined): number | null {
   return n
 }
 
-function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
+export function parseLiteLLMEntry(entry: LiteLLMEntry): ModelCosts | null {
+  // The live LiteLLM map is remote JSON; a null (or non-object) value for a
+  // model would make the field reads below throw and abort the whole pricing
+  // load. Treat it as unparseable, like any other bad entry.
+  if (!entry || typeof entry !== 'object') return null
   const inputCost = safePerTokenRate(entry.input_cost_per_token)
   const outputCost = safePerTokenRate(entry.output_cost_per_token)
   if (inputCost === null || outputCost === null) return null

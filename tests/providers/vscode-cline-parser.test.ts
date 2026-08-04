@@ -56,3 +56,29 @@ describe('VS Code Cline-family storage discovery', () => {
     ].sort())
   })
 })
+
+import { createClineParser } from '../../src/providers/vscode-cline-parser.js'
+import type { ParsedProviderCall } from '../../src/providers/types.js'
+
+describe('VS Code Cline-family parse hardening', () => {
+  it('yields with an empty timestamp instead of throwing on a malformed ts', async () => {
+    // entry.ts is only truthy-checked; a garbage value made new Date(ts)
+    // .toISOString() throw RangeError and abort the whole session parse.
+    const taskDir = join(tmpDir, 'tasks', 'bad-ts')
+    await mkdir(taskDir, { recursive: true })
+    await writeFile(join(taskDir, 'ui_messages.json'), JSON.stringify([
+      { type: 'say', say: 'api_req_started', text: JSON.stringify({ tokensIn: 100, tokensOut: 50 }), ts: 'not-a-real-timestamp' },
+    ]))
+    await writeFile(join(taskDir, 'api_conversation_history.json'), JSON.stringify([
+      { role: 'user', content: [{ type: 'text', text: 'hi\n<environment_details>\n</environment_details>' }] },
+    ]))
+
+    const source = { path: taskDir, project: 'p', provider: 'cline' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of createClineParser(source, new Set(), 'cline').parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.timestamp).toBe('')
+    expect(calls[0]!.inputTokens).toBe(100)
+  })
+})

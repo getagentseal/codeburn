@@ -73,10 +73,21 @@ export class ShareServer {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? '/', 'https://localhost')
     const json = (code: number, body: unknown): void => {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(JSON.stringify(body))
+    }
+    // handle() is dispatched with `void` (see the createServer callback), so a
+    // throw here is an UNHANDLED rejection, not a caught 500. A request target
+    // the HTTP parser accepts but the WHATWG URL parser rejects - e.g. an
+    // unterminated IPv6 host like `//[::1` - would otherwise crash this
+    // LAN-facing server. Parse inside the guard and answer 400 instead.
+    let url: URL
+    try {
+      url = new URL(req.url ?? '/', 'https://localhost')
+    } catch {
+      json(400, { error: 'malformed request URL' })
+      return
     }
     try {
       await this.route(url, req, res, json)
