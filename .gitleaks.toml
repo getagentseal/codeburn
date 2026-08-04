@@ -1,0 +1,33 @@
+# gitleaks config for codeburn.
+#
+# Extends the default ruleset and allowlists the cases a full-history audit
+# (2026-08-04) confirmed are NOT secrets, so scans stay green and a real leak
+# is never buried under recurring false positives. See each entry for why the
+# match is safe; nothing here suppresses a live credential.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixtures: obviously-fake API keys used as parser/validator input."
+# sk-live-0123456789abcdef... and sk-live-AKIA1234567890SECRETKEY live in
+# packages/core and root test suites purely as decode/redaction fixtures.
+regexes = [
+  '''sk-live-0123456789abcdef''',
+  '''sk-live-AKIA1234567890SECRETKEY''',
+]
+paths = ['''(^|/)tests?/''']
+
+[[allowlists]]
+description = "Public OAuth client IDs (PKCE public-client flow, public by design, no client_secret)."
+# Claude Code and Codex OAuth client identifiers. Client IDs travel in the
+# authorization request and are not credentials; the flows carry no secret.
+regexes = [
+  '''9d1c250a-e61b-44d9-88ed-5944d1962f5e''',
+  '''app_EMoamEEZ73f0CkXaXp7hrann''',
+]
+
+[[allowlists]]
+description = "Non-secret identifiers the generic-api-key rule mis-fires on."
+# e.g. dedup keys like 'synth-retain-89d' in parser fixtures.
+regexes = ['''synth-[a-z0-9-]+''']
+paths = ['''(^|/)tests?/''']
