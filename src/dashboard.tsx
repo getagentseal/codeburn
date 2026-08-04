@@ -17,7 +17,7 @@ import { CompareView } from './compare.js'
 import { getPlanUsages, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
 import { formatDayRangeLabel, getDateRange, parseDayFlag, PERIODS, PERIOD_LABELS, shiftDay, type Period } from './cli-date.js'
-import { BSU, ESU, patchStdoutForWindows } from './ink-win.js'
+import { patchStdoutForWindows } from './ink-win.js'
 
 type View = 'dashboard' | 'optimize' | 'compare'
 
@@ -236,10 +236,6 @@ export function getLayout(columns?: number, maxContentWidth = MAX_DASHBOARD_WIDT
 
 export function getRefreshIntervalMs(seconds: number): number {
   return seconds <= 0 ? 0 : Math.max(60, seconds) * 1000
-}
-
-export function shouldResetScreenOnResize(currentDashWidth: number, columns: number, maxContentWidth = MAX_DASHBOARD_WIDTH): boolean {
-  return getLayout(columns, maxContentWidth).dashWidth !== currentDashWidth
 }
 
 function HBar({ value, max, width }: { value: number; max: number; width: number }) {
@@ -1103,7 +1099,7 @@ function ScrollableViewport({ children, width, lineScroll = true }: { children: 
   )
 }
 
-export function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, initialDurable, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay, windowColumns, layoutMetricsRef }: {
+export function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, initialDurable, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay, windowColumns }: {
   initialProjects: ProjectSummary[]
   initialDailyHistoryProjects?: ProjectSummary[]
   initialPeriod: Period
@@ -1117,7 +1113,6 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
   customRangeLabel?: string
   initialDay?: string
   windowColumns: number
-  layoutMetricsRef?: { current: { dashWidth: number; maxContentWidth: number } }
 }) {
   const { exit } = useApp()
   const [period, setPeriod] = useState<Period>(initialPeriod)
@@ -1147,7 +1142,6 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     [projects, projectBudgets, activeProvider],
   )
   const { dashWidth, columnCount } = getLayout(columns, maxContentWidth)
-  if (layoutMetricsRef) layoutMetricsRef.current = { dashWidth, maxContentWidth }
   const dailyHistoryPageSize = getDailyActivityPageSize(
     columnCount,
     Math.min(projects.length, getProjectBreakdownRowLimit(period, isDayMode)),
@@ -1290,6 +1284,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
     const refreshIntervalMs = getRefreshIntervalMs(refreshSeconds ?? 0)
     if (refreshIntervalMs === 0) return
     if (view !== 'dashboard') return
+    if (!dayDate && isHeavyPeriod(period)) return
     const id = setInterval(() => { void reloadData(period, activeProvider, dayDate, true) }, refreshIntervalMs)
     return () => clearInterval(id)
   }, [refreshSeconds, period, activeProvider, dayDate, reloadData, view])
@@ -1490,7 +1485,7 @@ function StaticDashboard({ projects, period, activeProvider, planUsages, label, 
 export async function renderDashboard(period: Period = 'week', provider: string = 'all', refreshSeconds?: number, projectFilter?: string[], excludeFilter?: string[], customRange?: DateRange | null, customRangeLabel?: string, initialDay?: string): Promise<void> {
   // Interactive Ink UI: it renders to the same terminal and has its own in-frame
   // loading state, so the CLI scan-progress line must stay silent for its whole
-  // lifetime (initial scan and every 30s auto-refresh, including the
+  // lifetime (initial scan and every enabled auto-refresh, including the
   // getPlanUsages → parseAllSessions path). Plain CLI commands are unaffected.
   setInteractiveScanUI()
   await loadPricing()
@@ -1509,28 +1504,15 @@ export async function renderDashboard(period: Period = 'week', provider: string 
   patchStdoutForWindows()
   if (isTTY) {
     let windowColumns = process.stdout.columns
-    const layoutMetricsRef = { current: { dashWidth: 0, maxContentWidth: MAX_DASHBOARD_WIDTH } }
     const dashboard = () => (
-      <InteractiveDashboard initialProjects={filteredProjects} initialDailyHistoryProjects={scrollableDailyHistory ? scannedProjects : undefined} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} initialDurable={initialDurable} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} windowColumns={windowColumns} layoutMetricsRef={layoutMetricsRef} />
+      <InteractiveDashboard initialProjects={filteredProjects} initialDailyHistoryProjects={scrollableDailyHistory ? scannedProjects : undefined} initialPeriod={period} initialProvider={provider} initialPlanUsages={planUsages} initialDurable={initialDurable} refreshSeconds={refreshSeconds} projectFilter={projectFilter} excludeFilter={excludeFilter} customRange={customRange} customRangeLabel={customRangeLabel} initialDay={initialDay} windowColumns={windowColumns} />
     )
     const app = render(
       dashboard(),
       INTERACTIVE_RENDER_OPTIONS,
     )
     const resize = () => {
-      const nextColumns = process.stdout.columns
-      if (shouldResetScreenOnResize(layoutMetricsRef.current.dashWidth, nextColumns, layoutMetricsRef.current.maxContentWidth)) {
-        // The synchronized-update escapes must be standalone writes: the
-        // Windows filter in ink-win.ts compares chunks exactly, so a
-        // concatenated BSU+clear would pass through raw and hang ConPTY
-        // (#195). Standalone, they are swallowed there and honored elsewhere,
-        // and the update is now also properly ended rather than left open to
-        // the terminal's timeout.
-        process.stdout.write(BSU)
-        process.stdout.write('\u001B[2J\u001B[H')
-        process.stdout.write(ESU)
-      }
-      windowColumns = nextColumns
+      windowColumns = process.stdout.columns
       app.rerender(dashboard())
     }
     process.stdout.prependListener('resize', resize)

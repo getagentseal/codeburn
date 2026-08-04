@@ -1,4 +1,5 @@
 import { homedir } from 'os'
+import { readFileSync } from 'node:fs'
 import { PassThrough } from 'stream'
 
 import React from 'react'
@@ -6,7 +7,7 @@ import { render } from 'ink'
 import stripAnsi from 'strip-ansi'
 import { describe, it, expect, onTestFinished, vi } from 'vitest'
 
-import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, shouldResetScreenOnResize, showEmptyState } from '../src/dashboard.js'
+import { DAILY_ACTIVITY_PAGE_SIZE, INTERACTIVE_RENDER_OPTIONS, dailyActivityFooter, getDailyActivityPageSize, getDailyActivityRows, getDashboardMaxWidth, getDashboardScanRange, getLayout, getRefreshIntervalMs, InteractiveDashboard, pageHistoryCursor, scrollHistoryCursor, selectDashboardPeriodProjects, shortProject, showEmptyState } from '../src/dashboard.js'
 import { getDateRange } from '../src/cli-date.js'
 import { formatCost } from '../src/format.js'
 import type { ProjectSummary, SessionSummary } from '../src/types.js'
@@ -394,13 +395,52 @@ describe('interactive terminal rendering', () => {
     expect(INTERACTIVE_RENDER_OPTIONS).toMatchObject({ alternateScreen: true })
   })
 
-  it('clears the alternate buffer before repainting a resized frame', () => {
-    expect(shouldResetScreenOnResize(160, 110)).toBe(true)
+  it('leaves resize frame synchronization entirely to Ink', () => {
+    const source = readFileSync(new URL('../src/dashboard.tsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('process.stdout.write(BSU)')
+    expect(source).not.toContain("process.stdout.write('\\u001B[2J\\u001B[H')")
+    expect(source).not.toContain('shouldResetScreenOnResize')
   })
 
-  it('keeps the frame when the window grows beyond its content cap', () => {
-    expect(shouldResetScreenOnResize(256, 300)).toBe(false)
-  })
+  it.each([
+    { label: 'today', period: 'today', expected: true },
+    { label: 'week', period: 'week', expected: true },
+    { label: 'a concrete day within a heavy period', period: 'all', initialDay: '2026-07-30', expected: true },
+    { label: '30days', period: '30days', expected: false },
+    { label: 'month', period: 'month', expected: false },
+    { label: 'all', period: 'all', expected: false },
+    { label: 'lifetime', period: 'lifetime', expected: false },
+  ] as const)(
+    'schedules periodic dashboard refresh for $label: $expected',
+    async ({ period, initialDay, expected }) => {
+      const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
+      const stdout = new PassThrough() as PassThrough & NodeJS.WriteStream
+      stdin.isTTY = true
+      stdin.setRawMode = () => stdin
+      stdin.ref = () => stdin
+      stdin.unref = () => stdin
+      stdout.isTTY = true
+      stdout.columns = 160
+      stdout.rows = 50
+      const setIntervalSpy = vi.spyOn(global, 'setInterval')
+      const app = render(React.createElement(InteractiveDashboard, {
+        initialProjects: [makeProject('proj', [makeSession('s1', 1)])],
+        initialPeriod: period,
+        initialProvider: 'all',
+        refreshSeconds: 60,
+        windowColumns: 160,
+        initialDay,
+      }), { stdin, stdout, interactive: true, patchConsole: false })
+      onTestFinished(() => {
+        app.unmount()
+        setIntervalSpy.mockRestore()
+      })
+
+      await app.waitUntilRenderFlush()
+
+      expect(setIntervalSpy.mock.calls.some(call => call[1] === 60_000)).toBe(expected)
+    },
+  )
 
   it('accepts the next width before Ink paints each breakpoint transition', async () => {
     const stdin = new PassThrough() as PassThrough & NodeJS.ReadStream
