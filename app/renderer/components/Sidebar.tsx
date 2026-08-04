@@ -1,37 +1,38 @@
 import { useState, type ReactNode } from 'react'
 
 import { codeburn } from '../lib/ipc'
+import { shortcutLabel } from '../lib/platform'
 import { AboutModal, type SocialLink } from './AboutModal'
 import { FlameMark } from './FlameMark'
 
 export type Section = 'overview' | 'sessions' | 'pullRequests' | 'spend' | 'optimize' | 'models' | 'compare' | 'plans' | 'settings'
 
 export const NAV_ITEMS: Array<{ id: Section; label: string; key: string; icon: ReactNode }> = [
-  { id: 'overview', label: 'Overview', key: '⌘1', icon: (
+  { id: 'overview', label: 'Overview', key: '1', icon: (
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="16" width="7" height="5" rx="1" /></svg>
   ) },
-  { id: 'sessions', label: 'Sessions', key: '⌘2', icon: (
+  { id: 'sessions', label: 'Sessions', key: '2', icon: (
     <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="4" rx="1"/><rect x="4" y="10" width="16" height="4" rx="1"/><rect x="4" y="16" width="16" height="4" rx="1"/></svg>
   ) },
-  { id: 'pullRequests', label: 'Pull requests', key: '⌘3', icon: (
+  { id: 'pullRequests', label: 'Pull requests', key: '3', icon: (
     <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
   ) },
-  { id: 'spend', label: 'Spend', key: '⌘4', icon: (
+  { id: 'spend', label: 'Spend', key: '4', icon: (
     <svg viewBox="0 0 24 24"><line x1="6" y1="20" x2="6" y2="13" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="18" y1="20" x2="18" y2="9" /></svg>
   ) },
-  { id: 'optimize', label: 'Optimize', key: '⌘5', icon: (
+  { id: 'optimize', label: 'Optimize', key: '5', icon: (
     <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="3.4"/><path d="M10.5 3v1.7M10.5 16.3V18M3 10.5h1.7M16.3 10.5H18M5.3 5.3l1.2 1.2M14.5 14.5l1.2 1.2M15.7 5.3l-1.2 1.2M6.5 14.5l-1.2 1.2"/><line x1="15.5" y1="15.5" x2="20" y2="20"/></svg>
   ) },
-  { id: 'models', label: 'Models', key: '⌘6', icon: (
+  { id: 'models', label: 'Models', key: '6', icon: (
     <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><path d="M3.3 7 12 12l8.7-5M12 22V12" /></svg>
   ) },
-  { id: 'compare', label: 'Compare', key: '⌘7', icon: (
+  { id: 'compare', label: 'Compare', key: '7', icon: (
     <svg viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>
   ) },
-  { id: 'plans', label: 'Plans', key: '⌘8', icon: (
+  { id: 'plans', label: 'Plans', key: '8', icon: (
     <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></svg>
   ) },
-  { id: 'settings', label: 'Settings', key: '⌘,', icon: (
+  { id: 'settings', label: 'Settings', key: ',', icon: (
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
   ) },
 ]
@@ -75,7 +76,7 @@ export function Sidebar({
           >
             {item.icon}
             {item.label}
-            <span className="k">{item.key}</span>
+            <span className="k">{shortcutLabel(item.key)}</span>
           </div>
         ))}
         <div className="push" />

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App, overviewMemoKey, topCategoryByModel, usageSnapshotProps } from './App'
 import { sanitizeProps } from '../electron/telemetry'
@@ -50,6 +50,16 @@ function dateKey(d: Date): string {
 function setVisibility(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' })
+}
+
+// The shortcut code (lib/platform.ts) reads `window.codeburn.platform` at call
+// time; stub it per test and always restore so no test leaks platform state.
+function setPlatform(platform: string): void {
+  ;(window as unknown as { codeburn?: { platform?: string } }).codeburn = { platform }
+}
+
+function clearPlatform(): void {
+  delete (window as unknown as { codeburn?: { platform?: string } }).codeburn
 }
 
 function overviewPayload(): MenubarPayload {
@@ -181,6 +191,11 @@ describe('App shortcuts', () => {
     // the app-wide default ('today'); tests that exercise the default set it.
     localStorage.setItem('codeburn.defaultPeriod', '30days')
     document.documentElement.removeAttribute('data-theme')
+    setPlatform('darwin')
+  })
+
+  afterEach(() => {
+    clearPlatform()
   })
 
   it('applies the persisted theme on app boot before Settings mounts', async () => {
@@ -211,44 +226,57 @@ describe('App shortcuts', () => {
     expect(await screen.findByText('No sessions in this range yet.')).toBeInTheDocument()
   })
 
-  it('keeps command navigation, settings, and refresh shortcuts active without stale hints', async () => {
+  it.each([
+    ['darwin', { metaKey: true }, '⌘'],
+    ['win32', { ctrlKey: true }, 'Ctrl+'],
+  ] as const)('keeps %s navigation, settings, and refresh shortcuts active without stale hints', async (platform, chord, mod) => {
+    setPlatform(platform)
     render(<App />)
 
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
-    expect(screen.getByText('⌘1-8')).toBeInTheDocument()
-    expect(screen.getAllByText('⌘,').length).toBeGreaterThan(0)
-    expect(screen.getByText('⌘R')).toBeInTheDocument()
+    expect(screen.getByText(`${mod}1-8`)).toBeInTheDocument()
+    expect(screen.getAllByText(`${mod},`).length).toBeGreaterThan(0)
+    expect(screen.getByText(`${mod}R`)).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
     expect(screen.queryByText('Export view')).not.toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    fireEvent.keyDown(document, { key: '2', ...chord })
     expect(await screen.findByText('No sessions in this range yet.')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '3', metaKey: true })
+    fireEvent.keyDown(document, { key: '3', ...chord })
     expect(await screen.findByText(/PR links are captured as sessions are parsed/)).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '4', metaKey: true })
+    fireEvent.keyDown(document, { key: '4', ...chord })
     expect(await screen.findByText('Cost flow · model → project')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '5', metaKey: true })
+    fireEvent.keyDown(document, { key: '5', ...chord })
     expect(await screen.findByText('No waste findings in this range yet.')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '6', metaKey: true })
+    fireEvent.keyDown(document, { key: '6', ...chord })
     expect(await screen.findByText('No model usage in this range yet.')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '7', metaKey: true })
+    fireEvent.keyDown(document, { key: '7', ...chord })
     expect(await screen.findByText('Need at least two models with usage in this range to compare.')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: '8', metaKey: true })
+    fireEvent.keyDown(document, { key: '8', ...chord })
     expect(await screen.findByText('Not connected. Log in with the Claude CLI.')).toBeInTheDocument()
 
-    fireEvent.keyDown(document, { key: ',', metaKey: true })
+    fireEvent.keyDown(document, { key: ',', ...chord })
     expect((await screen.findAllByText('Settings')).length).toBeGreaterThan(0)
     expect(screen.queryByText('Back')).not.toBeInTheDocument()
 
     const overviewCalls = mocks.getOverview.mock.calls.length
-    fireEvent.keyDown(document, { key: 'r', metaKey: true })
+    fireEvent.keyDown(document, { key: 'r', ...chord })
     await waitFor(() => expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(overviewCalls))
+  })
+
+  it('ignores Ctrl+2 on mac', async () => {
+    render(<App />)
+
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '2', ctrlKey: true })
+    expect(screen.queryByText('No sessions in this range yet.')).not.toBeInTheDocument()
   })
 
   it('re-polls visible section data when period or provider changes', async () => {
@@ -481,6 +509,48 @@ describe('App shortcuts', () => {
   })
 })
 
+describe('win32 shortcut chords', () => {
+  beforeEach(() => {
+    installDefaultMocks()
+    localStorage.clear()
+    localStorage.setItem('codeburn.defaultPeriod', '30days')
+    document.documentElement.removeAttribute('data-theme')
+    setPlatform('win32')
+  })
+
+  afterEach(() => {
+    clearPlatform()
+  })
+
+  it('navigates with Ctrl+2 and refreshes with Ctrl+R', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '2', ctrlKey: true })
+    expect(await screen.findByText('No sessions in this range yet.')).toBeInTheDocument()
+
+    const overviewCalls = mocks.getOverview.mock.calls.length
+    fireEvent.keyDown(document, { key: 'r', ctrlKey: true })
+    await waitFor(() => expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(overviewCalls))
+  })
+
+  it('ignores Meta+2 on win32', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    expect(screen.queryByText('No sessions in this range yet.')).not.toBeInTheDocument()
+  })
+
+  it('ignores Ctrl+Alt+2 (the AltGr shape) on win32', async () => {
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '2', ctrlKey: true, altKey: true })
+    expect(screen.queryByText('No sessions in this range yet.')).not.toBeInTheDocument()
+  })
+})
+
 describe('provider prefetch storm', () => {
   const PROVIDERS = [
     'claude', 'codex', 'gemini', 'grok', 'copilot', 'droid',
@@ -618,6 +688,11 @@ describe('currency correctness', () => {
     // independent of the app-wide default ('today').
     localStorage.setItem('codeburn.defaultPeriod', '30days')
     __resetPolledMemo()
+    setPlatform('darwin')
+  })
+
+  afterEach(() => {
+    clearPlatform()
   })
 
   it('never regresses the applied currency to a memo-served (stale) payload during a switch', async () => {

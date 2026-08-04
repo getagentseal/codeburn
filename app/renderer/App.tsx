@@ -16,6 +16,7 @@ import { readDailyBudget } from './lib/budget'
 import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import { motionClass } from './lib/motion'
 import { codeburn } from './lib/ipc'
+import { isModifierChord, shortcutLabel } from './lib/platform'
 import { localDateKey } from './lib/period'
 import { persistRefreshValue, readRefreshValue, refreshValueToMs, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent } from './sections/Overview'
@@ -440,7 +441,7 @@ function AppMain() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return
+      if (!isModifierChord(event)) return
       const key = event.key.toLowerCase()
       if (key === '1') navigate('overview')
       else if (key === '2') navigate('sessions')
@@ -577,9 +578,9 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: '⌘1-8', label: 'Navigate' },
-              { k: '⌘,', label: 'Settings' },
-              { k: '⌘R', label: 'Refresh' },
+              { k: shortcutLabel('1-8'), label: 'Navigate' },
+              { k: shortcutLabel(','), label: 'Settings' },
+              { k: shortcutLabel('R'), label: 'Refresh' },
             ]}
             right={refreshedLabel(overview.lastSuccessAt, overview.loading, now)}
           />
