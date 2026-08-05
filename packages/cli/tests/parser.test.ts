@@ -15,6 +15,7 @@ import { createRequire } from 'node:module'
 import { isSqliteAvailable } from '../src/sqlite.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { loadCache, saveCache, sessionCachePath } from '../src/session-cache.js'
+import type { DateRange } from '../src/types.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
 
 // ── Synthetic provider state ───────────────────────────────────────────────
@@ -486,5 +487,168 @@ describe('(g) skill attribution is independent of turn category', () => {
     expect(session!.turns[0]!.subCategory).toBe('telemetry-review')
     expect(session!.categoryBreakdown.coding.turns).toBe(1)
     expect(session!.skillBreakdown['telemetry-review']?.turns).toBe(1)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (h) Provider filter isolates claude: a --provider <other> run must not
+//     re-surface cached claude sessions through the orphan pass, while a run
+//     that DOES include claude still preserves PR-bearing orphans.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('(h) provider filter excludes claude from the orphan pass', () => {
+  const SYNTH_SOURCE = (path: string): SessionSource[] =>
+    [{ path, project: 'synth-proj', provider: 'test-synthetic' }]
+
+  // The provider lives on each parsed call, not on SessionSummary.
+  const providersOf = (projects: Awaited<ReturnType<typeof parseAllSessions>>): Set<string> =>
+    new Set(projects
+      .flatMap(p => p.sessions)
+      .flatMap(s => s.turns)
+      .flatMap(t => t.assistantCalls)
+      .map(c => c.provider))
+
+  const SYNTH_CALL: ParsedProviderCall = {
+    provider: 'test-synthetic', model: 'gpt-4o',
+    inputTokens: 10, outputTokens: 5,
+    cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+    cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0,
+    costUSD: 0.25, tools: [], bashCommands: [],
+    skills: [],
+    timestamp: '2026-07-18T12:00:00.000Z',
+    speed: 'standard',
+    deduplicationKey: 'synth-isolation-call',
+    userMessage: '', sessionId: 'synth-isolation-session',
+  }
+
+  // A claude transcript carrying a pr-link: `prLinks` is exactly what lets a
+  // cached entry survive the write-mode orphan gate, so it is the shape that
+  // leaks. Cost is deliberately far larger than the synthetic call's, so a leak
+  // is unmistakable rather than a rounding difference.
+  async function writeClaudeSessionWithPrLink(): Promise<string> {
+    const projectDir = join(tmpHome, '.claude', 'projects', 'leaky-app')
+    await mkdir(projectDir, { recursive: true })
+    const filePath = join(projectDir, 'session.jsonl')
+    await writeFile(filePath, [
+      JSON.stringify({
+        type: 'user', sessionId: 'claude-leak-1', timestamp: '2026-07-18T12:00:00.000Z',
+        message: { role: 'user', content: 'ship it' },
+      }),
+      JSON.stringify({
+        type: 'assistant', sessionId: 'claude-leak-1', timestamp: '2026-07-18T12:00:10.000Z',
+        message: {
+          id: 'msg-leak-1', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5',
+          content: [{ type: 'text', text: 'done' }],
+          usage: { input_tokens: 900_000, output_tokens: 90_000 },
+        },
+      }),
+      JSON.stringify({
+        type: 'pr-link', sessionId: 'claude-leak-1', timestamp: '2026-07-18T12:00:20.000Z',
+        prUrl: 'https://github.com/getagentseal/codeburn/pull/1',
+      }),
+    ].join('\n') + '\n')
+    return filePath
+  }
+
+  it('does not surface cached claude sessions when filtering to another provider', async () => {
+    const synthFile = join(tmpHome, 'synth-isolation.txt')
+    await writeFile(synthFile, 'placeholder')
+    await writeClaudeSessionWithPrLink()
+
+    _synthSources = SYNTH_SOURCE(synthFile)
+    _synthYields = [SYNTH_CALL]
+
+    // Baseline: what the synthetic provider costs on its own, before anything
+    // claude-shaped has ever entered the session cache. Self-calibrating, since
+    // cost is re-derived from tokens by the pricing engine.
+    const baseline = await parseAllSessions(undefined, 'test-synthetic')
+    const synthOnlyCost = totalCost(baseline)
+    expect([...providersOf(baseline)]).toEqual(['test-synthetic'])
+    clearSessionCache()
+
+    // Warm the session cache so the claude file is persisted WITH its prLinks.
+    const all = await parseAllSessions(undefined, 'all')
+    expect(providersOf(all)).toContain('claude')
+    expect(totalCost(all)).toBeGreaterThan(synthOnlyCost)
+
+    clearSessionCache()
+
+    // Filtering to the synthetic provider must yield ONLY its own spend. Before
+    // the fix, claudeDirs was empty yet scanProjectDirs still ran, so every
+    // cached PR-bearing claude file was treated as a pruned orphan and re-added.
+    const filtered = await parseAllSessions(undefined, 'test-synthetic')
+
+    expect([...providersOf(filtered)]).toEqual(['test-synthetic'])
+    expect(totalCost(filtered)).toBeCloseTo(synthOnlyCost, 10)
+  })
+
+  it('still preserves a PR-bearing claude orphan when claude IS in scope', async () => {
+    const filePath = await writeClaudeSessionWithPrLink()
+    _synthSources = []
+    _synthYields = []
+
+    const before = await parseAllSessions(undefined, 'all')
+    const costBefore = totalCost(before)
+    expect(costBefore).toBeGreaterThan(0)
+
+    // Every claude transcript disappears from disk. Claude is still in scope, so
+    // the orphan pass must keep the PR-attributed spend alive — this is the case
+    // a naive `claudeDirs.length > 0` guard would silently break.
+    await unlink(filePath)
+    clearSessionCache()
+
+    const after = await parseAllSessions(undefined, 'all')
+    expect(totalCost(after)).toBeCloseTo(costBefore, 10)
+  })
+})
+
+describe('(i) range slicing keeps unparseable-timestamp calls riding with the turn', () => {
+  const SYNTH_SOURCE = (path: string): SessionSource[] =>
+    [{ path, project: 'synth-proj', provider: 'test-synthetic' }]
+
+  it('retains an unparseable call beside an in-range call and re-anchors to the in-range one', async () => {
+    // Pinned policy, not an accident: a call whose timestamp cannot be parsed
+    // has no own day, so it cannot be placed in the range — but dropping it
+    // would silently lose its cost (the day aggregators anchor it to the
+    // turn's day). It rides with the turn whenever the turn has an in-range
+    // call, and the slice re-anchors to the first in-range call.
+    const synthFile = join(tmpHome, 'synth-unparseable.txt')
+    await writeFile(synthFile, 'placeholder')
+
+    const inRangeTs = new Date()
+    const range: DateRange = {
+      start: new Date(inRangeTs.getFullYear(), inRangeTs.getMonth(), inRangeTs.getDate() - 1),
+      end: inRangeTs,
+    }
+
+    const base: ParsedProviderCall = {
+      provider: 'test-synthetic', model: 'gpt-4o',
+      inputTokens: 10, outputTokens: 5,
+      cacheCreationInputTokens: 0, cacheReadInputTokens: 0,
+      cachedInputTokens: 0, reasoningTokens: 0, webSearchRequests: 0,
+      costUSD: 0.25, tools: [], bashCommands: [],
+      skills: [],
+      speed: 'standard',
+      timestamp: '', deduplicationKey: '',
+      userMessage: 'do the thing', sessionId: 'synth-unparseable-session', turnId: 't1',
+    }
+    _synthSources = SYNTH_SOURCE(synthFile)
+    _synthYields = [
+      // Grouped first, so the turn's anchor timestamp is the unparseable one.
+      { ...base, timestamp: 'not-a-timestamp', deduplicationKey: 'unparseable-call' },
+      { ...base, timestamp: inRangeTs.toISOString(), deduplicationKey: 'in-range-call' },
+    ]
+
+    const projects = await parseAllSessions(range, 'test-synthetic')
+    const session = projects.flatMap(p => p.sessions)[0]!
+    const calls = session.turns.flatMap(t => t.assistantCalls)
+
+    // The unparseable call survives the range filter alongside the in-range one.
+    expect(calls).toHaveLength(2)
+    expect(calls.some(c => c.deduplicationKey === 'unparseable-call')).toBe(true)
+    expect(calls.some(c => c.deduplicationKey === 'in-range-call')).toBe(true)
+
+    // The anchor was the unparseable first call; the slice re-anchors the turn
+    // to the first call that actually placed in the range.
+    expect(new Date(session.turns[0]!.timestamp).getTime()).toBe(new Date(inRangeTs.toISOString()).getTime())
   })
 })

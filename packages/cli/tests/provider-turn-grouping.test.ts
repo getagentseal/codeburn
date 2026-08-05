@@ -98,6 +98,47 @@ describe('provider turn grouping', () => {
     expect(session.categoryBreakdown[turn.category].oneShotTurns).toBe(0)
   })
 
+  it('classifies a range-sliced turn from the whole turn, not the surviving calls (#852)', async () => {
+    const chatsDir = join(home, '.gemini', 'tmp', 'project-b', 'chats')
+    await mkdir(chatsDir, { recursive: true })
+    await writeFile(join(chatsDir, 'session-slice.json'), JSON.stringify({
+      sessionId: 'gemini-slice-1',
+      startTime: '2026-05-16T10:00:00.000Z',
+      messages: [
+        { id: 'u1', timestamp: '2026-05-16T10:00:00.000Z', type: 'user', content: 'read then edit src/parser.ts' },
+        {
+          id: 'g1', timestamp: '2026-05-16T10:00:00.000Z', type: 'gemini', content: 'reading',
+          model: 'gemini-3.1-pro-preview', tokens: { input: 100, output: 30 },
+          toolCalls: [{ id: 't1', name: 'read_file', args: { path: 'src/parser.ts' } }],
+        },
+        {
+          id: 'g2', timestamp: '2026-05-16T11:00:00.000Z', type: 'gemini', content: 'editing',
+          model: 'gemini-3.1-pro-preview', tokens: { input: 90, output: 25 },
+          toolCalls: [{ id: 't2', name: 'edit_file', args: { path: 'src/parser.ts' } }],
+        },
+      ],
+    }))
+
+    const parseAllSessions = await loadParser()
+    // A range that keeps the 10:00 Read call but excludes the 11:00 Edit call,
+    // so the turn is sliced. `turnSlicedToRange`/`callsInRange` compare absolute
+    // times, so this is timezone-independent.
+    const sliceRange: DateRange = {
+      start: new Date('2026-05-16T10:00:00.000Z'),
+      end: new Date('2026-05-16T10:30:00.000Z'),
+    }
+    const projects = await parseAllSessions(sliceRange, 'gemini')
+    const turn = projects[0]!.sessions[0]!.turns[0]!
+
+    // Cost/calls are sliced to the range: only the Read call survives.
+    expect(turn.assistantCalls.map(c => c.deduplicationKey)).toEqual(['gemini:gemini-slice-1:g1'])
+    // But category/hasEdits are whole-turn judgments — the Edit is part of the
+    // exchange — so they stay classified from the FULL turn, matching the Claude
+    // path rather than being re-derived from the partial slice (which alone reads
+    // as a no-edit exploration turn).
+    expect(turn.hasEdits).toBe(true)
+  })
+
   it('groups Mistral Vibe assistant messages and uses Vibe session_cost when present', async () => {
     const sessionDir = join(vibeHome, 'logs', 'session', 'session_20260516_100000_vibe')
     await mkdir(sessionDir, { recursive: true })
@@ -194,6 +235,93 @@ describe('provider turn grouping', () => {
       expect(session.totalCostUSD).toBeCloseTo(2.5 * 0.04, 8)
     } finally {
       delete process.env['KIRO_HOME']
+    }
+  })
+})
+
+describe('provider turn range filtering', () => {
+  it('keeps the in-range calls of a codex turn that spans midnight instead of dropping the whole turn', async () => {
+    // Regression test for #852: the range filter keyed on the turn's FIRST
+    // call timestamp, so a long autonomous turn starting 23:59 the previous
+    // day was excluded from the next day's view entirely, losing every
+    // post-midnight call. One turn (t1) here has two token_count events
+    // straddling midnight; only the post-midnight call may survive.
+    const codexHome = join(home, 'codex')
+    const sessionDir = join(codexHome, 'sessions', '2026', '05', '15')
+    await mkdir(sessionDir, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-05-15T23:55:00Z', payload: { session_id: 'sess-span', model: 'gpt-5.5', cwd: '/Users/test/project-a', originator: 'codex_cli_rs' } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-15T23:57:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run the long task' }] } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-15T23:58:00Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command: 'npm test' }) } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-05-15T23:59:00Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 100, output_tokens: 30 }, total_token_usage: { total_tokens: 130 } } } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-16T00:10:00Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command: 'npm run build' }) } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-05-16T00:15:00Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 80, output_tokens: 20 }, total_token_usage: { total_tokens: 230 } } } }),
+    ]
+    await writeFile(join(sessionDir, 'rollout-span.jsonl'), lines.join('\n') + '\n')
+
+    process.env['CODEX_HOME'] = codexHome
+    try {
+      const parseAllSessions = await loadParser()
+      const projects = await parseAllSessions(dayRange(), 'codex')
+      const session = projects[0]!.sessions[0]!
+      const turn = session.turns[0]!
+
+      expect(session.turns).toHaveLength(1)
+      expect(turn.assistantCalls.map(call => new Date(call.timestamp).toISOString())).toEqual([
+        '2026-05-16T00:15:00.000Z',
+      ])
+      // The slice re-anchors the turn's timestamp from the user-message time
+      // (2026-05-15T23:57Z) to the first surviving call, so turn-anchored
+      // bucketing lands the slice on the day its calls actually fall in.
+      expect(new Date(turn.timestamp).toISOString()).toBe('2026-05-16T00:15:00.000Z')
+      expect(session.totalInputTokens).toBe(80)
+      expect(session.totalOutputTokens).toBe(20)
+    } finally {
+      delete process.env['CODEX_HOME']
+    }
+  })
+
+  it('re-anchors a turn whose calls ALL survive but whose anchor sits before the range', async () => {
+    // The removal-path test above exercises a turn whose pre-range call is
+    // dropped. This is the mirror case the first fix missed: a turn whose user
+    // message predates the range but whose calls ALL land inside it. The early
+    // return ("all calls survived") kept the pre-range anchor, so turn-anchored
+    // stats (category, editTurns, session day) bucketed to the OLD day while
+    // calls/cost landed on the new one. The slice must re-anchor to the first
+    // in-range call whenever the anchor is wrong, not only when calls were cut.
+    const codexHome = join(home, 'codex')
+    const sessionDir = join(codexHome, 'sessions', '2026', '05', '15')
+    await mkdir(sessionDir, { recursive: true })
+    const lines = [
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-05-15T23:55:00Z', payload: { session_id: 'sess-anchor', model: 'gpt-5.5', cwd: '/Users/test/project-a', originator: 'codex_cli_rs' } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-15T23:57:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'run the long task' }] } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-16T00:10:00Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command: 'npm test' }) } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-05-16T00:15:00Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 100, output_tokens: 30 }, total_token_usage: { total_tokens: 130 } } } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-05-16T00:20:00Z', payload: { type: 'function_call', name: 'exec_command', arguments: JSON.stringify({ command: 'npm run build' }) } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-05-16T00:25:00Z', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 80, output_tokens: 20 }, total_token_usage: { total_tokens: 230 } } } }),
+    ]
+    await writeFile(join(sessionDir, 'rollout-anchor.jsonl'), lines.join('\n') + '\n')
+
+    process.env['CODEX_HOME'] = codexHome
+    try {
+      const parseAllSessions = await loadParser()
+      const projects = await parseAllSessions(dayRange(), 'codex')
+      const session = projects[0]!.sessions[0]!
+      const turn = session.turns[0]!
+
+      // BOTH calls are inside the range — nothing was removed.
+      expect(turn.assistantCalls.map(call => new Date(call.timestamp).toISOString())).toEqual([
+        '2026-05-16T00:15:00.000Z',
+        '2026-05-16T00:25:00.000Z',
+      ])
+      // Yet the anchor (user-message time, 2026-05-15T23:57Z) must re-anchor to
+      // the first in-range call, or turn-anchored bucketing would land the
+      // turn's stats on the day BEFORE the window while its calls land inside.
+      expect(new Date(turn.timestamp).toISOString()).toBe('2026-05-16T00:15:00.000Z')
+      expect(session.totalInputTokens).toBe(180)
+      expect(session.totalOutputTokens).toBe(50)
+    } finally {
+      delete process.env['CODEX_HOME']
     }
   })
 })

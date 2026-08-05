@@ -497,9 +497,17 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
         if (turn.retries === 0) dailyMap[day].oneShotTurns += 1
       }
       for (const call of turn.assistantCalls) {
-        dailyMap[day].cost += call.costUSD
-        dailyMap[day].savings += call.savingsUSD ?? 0
-        dailyMap[day].calls += 1
+        // Cost/savings/calls bucket under each call's OWN day — the same
+        // per-call rule as the durable day set (day-aggregator.ts), so this
+        // fallback and durable.days never diverge on a midnight-straddling
+        // turn (issue #852). Turn counts/edit stats stay anchored on the
+        // turn's day above. An unparseable call timestamp falls back to the
+        // turn's day rather than producing a garbage date key.
+        const callDay = Number.isNaN(new Date(call.timestamp).getTime()) ? day : dateKey(call.timestamp)
+        if (!dailyMap[callDay]) { dailyMap[callDay] = { cost: 0, savings: 0, calls: 0, turns: 0, editTurns: 0, oneShotTurns: 0 } }
+        dailyMap[callDay].cost += call.costUSD
+        dailyMap[callDay].savings += call.savingsUSD ?? 0
+        dailyMap[callDay].calls += 1
       }
     }
   }

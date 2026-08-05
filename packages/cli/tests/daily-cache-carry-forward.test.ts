@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import type { ProjectSummary } from '../src/types.js'
+import type { ProjectSummary, DateRange } from '../src/types.js'
 import { buildPeriodDataFromDays } from '../src/day-aggregator.js'
 
 import {
@@ -391,6 +391,64 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
     await seed({ days: [seededDay(), day('2010-01-01', { claude: slice(1, 1) })], complete: false })
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days.map(d => d.date)).toEqual([daysAgoStr(30)])
+  })
+})
+
+describe('re-derive covers the retention window, not just the 365-day backfill', () => {
+  it('rebuilds a day OLDER than BACKFILL_DAYS whose sources survive', async () => {
+    // The version-bump re-derive must correct EVERY day within the ten-year
+    // retention whose sources still exist — not only the newest 365. A 400-day
+    // old day (beyond the product backfill horizon, well within retention) that
+    // the parse CAN re-derive must take the fresh value; carrying it forward
+    // would keep the pre-fix accounting (e.g. the v17 straddle double-count)
+    // alive for the rest of retention.
+    const old = daysAgoStr(400)
+    const cache: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-A',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      days: [day(old, { claude: slice(230.06, 400) })],
+      // Simulate the bump: incomplete, so the next hydration re-derives.
+      complete: false,
+    }
+    await saveDailyCache(cache)
+
+    let requestedStart: DateRange['start'] | null = null
+    const parseSessions = async (range: DateRange): Promise<ProjectSummary[]> => {
+      requestedStart = range.start
+      return []
+    }
+    const out = await ensureCacheHydrated(parseSessions, () => [day(old, { claude: slice(14.0, 400) })], 'cfg-A')
+
+    // The parse window must reach back past the 400-day-old day. Before the
+    // fix it started 365 days back, so this day was carried with its old value.
+    expect(requestedStart).not.toBeNull()
+    expect(requestedStart!.getTime()).toBeLessThanOrEqual(new Date(`${old}T00:00:00`).getTime())
+
+    // The re-derivable day takes the fresh value and is NOT marked carried.
+    expect(out.days).toHaveLength(1)
+    expect(out.days[0]!.providers['claude']!.cost).toBe(14.0)
+    expect(out.days[0]!.carried).toBeUndefined()
+  })
+
+  it('still carries a beyond-backfill day the parse cannot re-derive', async () => {
+    // The widened window must not change the never-lose invariant: a 400-day
+    // old day with NO surviving sources is carried forward, not dropped.
+    const old = daysAgoStr(400)
+    const cache: DailyCache = {
+      version: DAILY_CACHE_VERSION,
+      savingsConfigHash: 'cfg-A',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      days: [day(old, { claude: slice(230.06, 400) })],
+      complete: false,
+    }
+    await saveDailyCache(cache)
+
+    const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
+    expect(out.days).toHaveLength(1)
+    expect(out.days[0]).toMatchObject({ date: old, cost: 230.06, carried: true })
   })
 })
 

@@ -50,6 +50,7 @@ import {
   saveCache,
 } from './session-cache.js'
 import { acquireCacheRefreshLock, type RefreshLockHandle } from './cache-refresh-lock.js'
+import { dateKey } from './day-aggregator.js'
 import type { ParsedProviderCall, SessionSource } from './providers/types.js'
 import type {
   ClassifiedTurn,
@@ -821,17 +822,26 @@ async function scanProjectDirs(
     let carriedPrRefs: string[] | undefined
     let prRefsAtRangeStart: string[] | undefined
     let frozePrRefs = !dateRange
-    let classifiedTurns = cachedFile.turns.map(turn => {
+    let classifiedTurns = cachedFile.turns.flatMap(turn => {
       if (turn.gitBranch) carriedBranch = turn.gitBranch
-      if (dateRange && !frozePrRefs) {
-        const firstTs = turn.calls[0]?.timestamp
-        if (firstTs && new Date(firstTs) >= dateRange.start) {
-          prRefsAtRangeStart = carriedPrRefs
-          frozePrRefs = true
-        }
+      const classified = cachedTurnToClassified(turn, carriedBranch)
+      // Slice rather than drop: a turn spanning local midnight would otherwise
+      // lose every call that lands in the requested day (issue #852). Only
+      // `assistantCalls`/`timestamp` are touched — see classifiedTurnSlicedToRange.
+      const sliced = dateRange ? classifiedTurnSlicedToRange(classified, dateRange) : classified
+      // Freeze the PR set active at range start the moment the first turn that
+      // CONTRIBUTES in-range calls is reached. Keying the freeze on the
+      // unsliced first call missed a turn whose TAIL is the range's first
+      // content (its first call predates the range start): prRefsAtRangeStart
+      // was never set, and a by-PR report on the range lost the pre-range PR
+      // row entirely. A contributing turn's own refs are carried AFTER the
+      // freeze, so the seed is the state entering the range, not the turn's.
+      if (dateRange && !frozePrRefs && sliced) {
+        prRefsAtRangeStart = carriedPrRefs
+        frozePrRefs = true
       }
       if (turn.prRefs?.length) carriedPrRefs = turn.prRefs
-      return cachedTurnToClassified(turn, carriedBranch)
+      return sliced ? [sliced] : []
     })
     // Captured from the FULL turn list, before the date slice below can drop the
     // turn a branch was first seen on. Lets the by-branch report keep this
@@ -843,16 +853,6 @@ async function scanProjectDirs(
     // right PR even when its launching turn is later sliced out of range. Only for
     // sessions that both spawned subagents and referenced a PR.
     const spawnPrSets = cachedFile.prLinks?.length ? buildSpawnPrSets(cachedFile.turns) : {}
-
-    if (dateRange) {
-      classifiedTurns = classifiedTurns.filter(turn => {
-        if (turn.assistantCalls.length === 0) return false
-        const firstCallTs = turn.assistantCalls[0]!.timestamp
-        if (!firstCallTs) return false
-        const ts = new Date(firstCallTs)
-        return ts >= dateRange.start && ts <= dateRange.end
-      })
-    }
 
     // A PR-linked parent that spawned subagents is kept even when its OWN turns all
     // fall out of range, as a 0-cost fold ANCHOR: an in-range child (an async agent
@@ -874,6 +874,13 @@ async function scanProjectDirs(
     if (everHadBranch) session.everHadBranch = true
     const observedPrLinks = new Set(classifiedTurns.flatMap(turn => turn.prRefs ?? []))
     for (const link of cachedFile.prLinks ?? []) observedPrLinks.add(link)
+    // A reference made before the range is still a reference this session made:
+    // without it, a range that slices every PR-referencing turn away leaves the
+    // session with NO prLinks, and the by-PR report gates on prLinks
+    // (buildPrAttribution) — the session would be skipped and its in-range
+    // spend would never surface as a By-PR row, even though prRefsAtRangeStart
+    // holds exactly the PRs to attribute it to.
+    for (const link of prRefsAtRangeStart ?? []) observedPrLinks.add(link)
     if (observedPrLinks.size) {
       session.prLinks = [...observedPrLinks].sort()
       session.prAttributionSource = cachedFile.prLinks?.length ? 'transcript' : 'explicit-reference'
@@ -1426,6 +1433,101 @@ export function createScanProgress(label: string, total: number) {
   }
 }
 
+// Shared by the turn-range slicers below: which of a turn's calls are kept for
+// dateRange. Returns null when none are (the turn should be dropped entirely,
+// not kept with an empty call list). The kept list is the calls that actually
+// fall inside dateRange PLUS any call whose timestamp will not parse: such a
+// call has no own day, so it cannot be placed in the range, and it rides with
+// the turn whenever the turn has an in-range call — the old whole-turn filter
+// kept it, and the day aggregators anchor such a call to the turn's day
+// (day-aggregator.ts, main.ts), so dropping it here would silently lose its
+// cost and disagree with those fallbacks.
+function callsInRange<T extends { timestamp: string }>(calls: T[], dateRange: DateRange): T[] | null {
+  const placed = calls.filter(c => {
+    const ts = new Date(c.timestamp)
+    return !Number.isNaN(ts.getTime()) && ts >= dateRange.start && ts <= dateRange.end
+  })
+  if (placed.length === 0) return null
+  const unparseable = calls.filter(c => Number.isNaN(new Date(c.timestamp).getTime()))
+  if (placed.length + unparseable.length === calls.length) return calls
+  return [...placed, ...unparseable]
+}
+
+// A turn can span local midnight (e.g. a long-running autonomous Codex
+// session): dropping the whole turn because its FIRST call falls outside
+// dateRange discards every later call that lands in the requested day (issue
+// #852). Instead, keep the calls inside the range — plus any call whose
+// timestamp cannot be parsed, which rides with the turn (see callsInRange).
+// `timestamp` is re-anchored to the first surviving in-range call so
+// downstream turn-anchored bucketing (session day, report rollups) keys the
+// slice under the day its retained calls actually fall in, not the pre-slice
+// turn's original (possibly prior-day) start. Returns null when no call is in
+// range.
+function turnSlicedToRange(turn: CachedTurn, dateRange: DateRange): CachedTurn | null {
+  const inRangeCalls = callsInRange(turn.calls, dateRange)
+  if (!inRangeCalls) return null
+  // Re-anchor whenever the anchor is wrong, not only when calls were removed:
+  // when ALL calls survive the filter, an anchor (user-message time) that
+  // still sits outside the window would keep turn-anchored stats (category,
+  // editTurns) on the pre-range day while calls/cost land inside it.
+  const anchorTs = new Date(turn.timestamp)
+  const anchorInRange = !Number.isNaN(anchorTs.getTime()) && anchorTs >= dateRange.start && anchorTs <= dateRange.end
+  if (inRangeCalls.length === turn.calls.length && anchorInRange) return turn
+  // First call that actually placed in the range: when unparseable calls ride
+  // along, the head of `inRangeCalls` can be one of them, and re-anchoring to
+  // it would keep a garbage anchor.
+  const firstInRange = turn.calls.find(c => {
+    const ts = new Date(c.timestamp)
+    return !Number.isNaN(ts.getTime()) && ts >= dateRange.start && ts <= dateRange.end
+  })
+  return { ...turn, calls: inRangeCalls, timestamp: firstInRange!.timestamp }
+}
+
+// Same slice, applied post-classification (scanProjectDirs classifies every
+// turn from its FULL call list up front, before date filtering — see the
+// carriedBranch/carriedPrRefs comments in scanProjectDirs — so this only
+// trims `assistantCalls` and re-anchors `timestamp`; `category`/`subCategory`/
+// `retries`/`hasEdits` stay exactly as classified from the complete turn.
+// Those are turn-level judgments about the whole exchange, not a per-call
+// sum, so they aren't recomputed from the partial call list.
+function classifiedTurnSlicedToRange(turn: ClassifiedTurn, dateRange: DateRange): ClassifiedTurn | null {
+  const inRangeCalls = callsInRange(turn.assistantCalls, dateRange)
+  if (!inRangeCalls) return null
+  // Same re-anchor rule as turnSlicedToRange: all calls surviving does not
+  // make a pre-range anchor right — turn-anchored stats would bucket outside
+  // the window while calls/cost land inside it.
+  const anchorTs = new Date(turn.timestamp)
+  const anchorInRange = !Number.isNaN(anchorTs.getTime()) && anchorTs >= dateRange.start && anchorTs <= dateRange.end
+  if (inRangeCalls.length === turn.assistantCalls.length && anchorInRange) return turn
+  const firstInRange = turn.assistantCalls.find(c => {
+    const ts = new Date(c.timestamp)
+    return !Number.isNaN(ts.getTime()) && ts >= dateRange.start && ts <= dateRange.end
+  })
+  return { ...turn, assistantCalls: inRangeCalls, timestamp: firstInRange!.timestamp }
+}
+
+// Day-set variant of classifiedTurnSlicedToRange for the menubar/history day
+// selection: keep only the calls whose own local day is selected and
+// re-anchor `timestamp` to the first survivor — the same split rule. An
+// unparseable call timestamp has no own day and rides with the turn when it
+// has a call on a selected day, matching callsInRange and the aggregators'
+// turn-day fallback.
+function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): ClassifiedTurn | null {
+  const placed = turn.assistantCalls.filter(c => {
+    const ts = new Date(c.timestamp)
+    return !Number.isNaN(ts.getTime()) && days.has(dateKey(c.timestamp))
+  })
+  if (placed.length === 0) return null
+  const unparseable = turn.assistantCalls.filter(c => Number.isNaN(new Date(c.timestamp).getTime()))
+  // Same re-anchor rule as the range slicers: all calls surviving does not
+  // make an off-day anchor right — the anchor must land on a selected day too,
+  // or turn-anchored stats bucket off-selection while calls/cost land on it.
+  const anchorTs = new Date(turn.timestamp)
+  const anchorOnSelectedDay = !Number.isNaN(anchorTs.getTime()) && days.has(dateKey(turn.timestamp))
+  if (placed.length + unparseable.length === turn.assistantCalls.length && anchorOnSelectedDay) return turn
+  return { ...turn, assistantCalls: [...placed, ...unparseable], timestamp: placed[0]!.timestamp }
+}
+
 async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
@@ -1636,24 +1738,32 @@ async function parseProviderSources(
 
       for (const c of turn.calls) seenKeys.add(c.deduplicationKey)
 
+      let slicedTurn = turn
       if (dateRange) {
-        const callTs = turn.calls[0]?.timestamp
-        if (!callTs) continue
-        const ts = new Date(callTs)
-        if (ts < dateRange.start || ts > dateRange.end) continue
+        const sliced = turnSlicedToRange(turn, dateRange)
+        if (!sliced) continue
+        slicedTurn = sliced
       }
 
-      const classified = cachedTurnToClassified(turn)
-      const project = turn.calls[0]?.project ?? source.project
+      // Classify the FULL turn, then keep only the in-range calls: category /
+      // hasEdits / retries are whole-exchange judgments, not per-call sums, so a
+      // midnight-straddling turn is classified identically to the Claude path
+      // (scanProjectDirs) rather than being re-derived from a partial slice.
+      // Cost/calls come from the retained calls, unchanged.
+      const classifiedFull = cachedTurnToClassified(turn)
+      const classified = dateRange
+        ? (classifiedTurnSlicedToRange(classifiedFull, dateRange) ?? classifiedFull)
+        : classifiedFull
+      const project = slicedTurn.calls[0]?.project ?? source.project
       const key = `${providerName}:${turn.sessionId}:${project}`
 
       const existing = sessionMap.get(key)
       if (existing) {
         existing.turns.push(classified)
-        if (!existing.projectPath && turn.calls[0]?.projectPath) {
-          existing.projectPath = turn.calls[0]!.projectPath
+        if (!existing.projectPath && slicedTurn.calls[0]?.projectPath) {
+          existing.projectPath = slicedTurn.calls[0]!.projectPath
         }
-        if (!existing.workingDirectory && turn.calls[0]?.workingDirectory) existing.workingDirectory = turn.calls[0].workingDirectory
+        if (!existing.workingDirectory && slicedTurn.calls[0]?.workingDirectory) existing.workingDirectory = slicedTurn.calls[0].workingDirectory
         if (cachedFile.prLinks?.length) {
           const links = (existing.prLinks ??= new Set())
           for (const link of cachedFile.prLinks) links.add(link)
@@ -1662,8 +1772,8 @@ async function parseProviderSources(
       } else {
         sessionMap.set(key, {
           project,
-          projectPath: turn.calls[0]?.projectPath,
-          workingDirectory: turn.calls[0]?.workingDirectory,
+          projectPath: slicedTurn.calls[0]?.projectPath,
+          workingDirectory: slicedTurn.calls[0]?.workingDirectory,
           turns: [classified],
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
           ...(cachedFile.title ? { title: cachedFile.title } : {}),
@@ -1685,25 +1795,31 @@ async function parseProviderSources(
 
         for (const c of turn.calls) seenKeys.add(c.deduplicationKey)
 
+        let slicedTurn = turn
         if (dateRange) {
-          const callTs = turn.calls[0]?.timestamp
-          if (!callTs) continue
-          const ts = new Date(callTs)
-          if (ts < dateRange.start || ts > dateRange.end) continue
+          const sliced = turnSlicedToRange(turn, dateRange)
+          if (!sliced) continue
+          slicedTurn = sliced
         }
 
-        const classified = cachedTurnToClassified(turn)
-        const project = turn.calls[0]?.project ?? providerName
+        // Classify the FULL turn, then keep only the in-range calls (same rule
+        // as the loop above and the Claude path): whole-exchange judgments stay
+        // whole-turn; cost/calls come from the retained calls.
+        const classifiedFull = cachedTurnToClassified(turn)
+        const classified = dateRange
+          ? (classifiedTurnSlicedToRange(classifiedFull, dateRange) ?? classifiedFull)
+          : classifiedFull
+        const project = slicedTurn.calls[0]?.project ?? providerName
         const key = `${providerName}:${turn.sessionId}:${project}`
 
         const existingEntry = sessionMap.get(key)
         if (existingEntry) {
           existingEntry.turns.push(classified)
-          if (!existingEntry.projectPath && turn.calls[0]?.projectPath) {
-            existingEntry.projectPath = turn.calls[0]!.projectPath
+          if (!existingEntry.projectPath && slicedTurn.calls[0]?.projectPath) {
+            existingEntry.projectPath = slicedTurn.calls[0]!.projectPath
           }
         } else {
-          sessionMap.set(key, { project, projectPath: turn.calls[0]?.projectPath, workingDirectory: turn.calls[0]?.workingDirectory, turns: [classified] })
+          sessionMap.set(key, { project, projectPath: slicedTurn.calls[0]?.projectPath, workingDirectory: slicedTurn.calls[0]?.workingDirectory, turns: [classified] })
         }
       }
     }
@@ -1794,14 +1910,6 @@ export function filterProjectsByName(
     })
   }
   return result
-}
-
-function turnIsInDateRange(turn: ClassifiedTurn, dateRange: DateRange): boolean {
-  if (turn.assistantCalls.length === 0) return false
-  const firstCallTs = turn.assistantCalls[0]!.timestamp
-  if (!firstCallTs) return false
-  const ts = new Date(firstCallTs)
-  return ts >= dateRange.start && ts <= dateRange.end
 }
 
 function turnDayString(turn: ClassifiedTurn): string | null {
@@ -1932,9 +2040,13 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
     const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
-      const turns = session.turns.filter(turn => {
-        const ds = turnDayString(turn)
-        return ds !== null && days.has(ds)
+      // Slice turns per call by the selected days (not whole-turn keep/drop):
+      // a midnight-straddling turn contributes the calls that actually
+      // happened on each selected day (issue #852, same split rule as the
+      // range slicers — see classifiedTurnSlicedToDays).
+      const turns = session.turns.flatMap(turn => {
+        const sliced = classifiedTurnSlicedToDays(turn, days)
+        return sliced ? [sliced] : []
       })
       if (turns.length === 0) {
         if (isSpawnParent(session)) anchors.push(session)
@@ -2141,7 +2253,13 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
     const survivingIdentities = new Set<string>()
     for (const session of project.sessions) {
-      const turns = session.turns.filter(turn => turnIsInDateRange(turn, dateRange))
+      // Slice turns per call (not whole-turn keep/drop) so a midnight-
+      // straddling turn keeps the calls that landed inside the range — the
+      // same split rule as the parse-time slicers (issue #852).
+      const turns = session.turns.flatMap(turn => {
+        const sliced = classifiedTurnSlicedToRange(turn, dateRange)
+        return sliced ? [sliced] : []
+      })
       if (turns.length === 0) {
         if (isSpawnParent(session)) anchors.push(session)
         continue
@@ -2276,15 +2394,26 @@ async function runParse(
       ? { id: s.sourceId, label: s.sourceLabel, path: s.sourcePath, kind: s.sourceKind }
       : undefined,
   }))
+  // Claude is scanned through scanProjectDirs rather than parseProviderSources, so
+  // it needs the same provider-filter guard the durable-orphan loop below applies at
+  // its own level. Without it a --provider <other> run still enters scanProjectDirs
+  // with an empty dirs list, and the orphan pass there (which reads the whole cached
+  // claude section) treats every cached file as "no longer discovered" and re-injects
+  // it into the result. Note this is deliberately NOT a `claudeDirs.length > 0` check:
+  // when claude IS in scope but every transcript has been pruned from disk, that
+  // orphan pass is exactly what keeps PR-attributed spend from vanishing.
+  const claudeInScope = !providerFilter || providerFilter === 'all' || providerFilter === 'claude'
   if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'start' })
   let claudeProjects: ProjectSummary[] = []
-  try {
-    claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
-    if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
-  } catch (err) {
-    if (!isPermissionError(err)) throw err
-    process.stderr.write(`codeburn: skipped claude data (permission denied; grant Full Disk Access to include it)\n`)
-    emitScanProgress({ kind: 'provider', provider: 'claude', state: 'skipped' })
+  if (claudeInScope) {
+    try {
+      claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, diskCache, dateRange, saveProgress, readOnly)
+      if (claudeSources.length > 0) emitScanProgress({ kind: 'provider', provider: 'claude', state: 'done', files: claudeSources.length })
+    } catch (err) {
+      if (!isPermissionError(err)) throw err
+      process.stderr.write(`codeburn: skipped claude data (permission denied; grant Full Disk Access to include it)\n`)
+      emitScanProgress({ kind: 'provider', provider: 'claude', state: 'skipped' })
+    }
   }
 
   const otherProjects: ProjectSummary[] = []

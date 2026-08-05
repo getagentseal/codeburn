@@ -74,10 +74,12 @@ function makeSingleTurnProject(
 }
 
 describe('aggregateProjectsIntoDays', () => {
-  it('buckets a whole turn (all its calls) on the turn user-message date', () => {
-    // Turn-anchored bucketing: a turn whose calls straddle midnight lands wholly
-    // on the day of its user-message timestamp — matching the live headline/
-    // report rollup — instead of splitting per-call across two days.
+  it("buckets call-derived values under each call's own date when a turn straddles midnight", () => {
+    // Per-call bucketing (issue #852): a turn whose calls straddle midnight
+    // puts each call's cost/calls/tokens on the day the call happened, so
+    // day-N + day-N+1 reconcile with a range parse that sliced the turn at
+    // the same boundary. Turn-level judgments (editTurns, category turns)
+    // stay anchored on the turn's day.
     const projects: ProjectSummary[] = [
       makeProject({
         sessions: [{
@@ -116,9 +118,17 @@ describe('aggregateProjectsIntoDays', () => {
     ]
 
     const days = aggregateProjectsIntoDays(projects)
-    expect(days.map(d => d.date)).toEqual(['2026-04-09'])
-    expect(days[0]!.cost).toBe(10)
-    expect(days[0]!.calls).toBe(2)
+    expect(days.map(d => d.date)).toEqual(['2026-04-09', '2026-04-10'])
+    expect(days[0]!.cost).toBe(4)
+    expect(days[0]!.calls).toBe(1)
+    expect(days[1]!.cost).toBe(6)
+    expect(days[1]!.calls).toBe(1)
+    // Turn-level stats anchor on the turn's day only — they describe the
+    // whole exchange, not a per-call sum.
+    expect(days[0]!.editTurns).toBe(1)
+    expect(days[1]!.editTurns).toBe(0)
+    expect(days[0]!.categories['coding']?.turns).toBe(1)
+    expect(days[1]!.categories['coding']).toBeUndefined()
   })
 
   it('attributes category turns + editTurns + oneShotTurns to the first call date of the turn', () => {
@@ -406,17 +416,17 @@ describe('buildPeriodDataFromDays', () => {
     expect(pd.models).toEqual([])
   })
 
-  it('attributes a midnight-straddling turn to the user-message date, matching the live report', () => {
-    // A turn whose user message sits on one side of midnight and whose assistant
-    // response lands on the other must bucket by the USER-MESSAGE timestamp, so
-    // the daily cache (history.daily + provider breakdown) reconciles exactly to
-    // the live headline/report rollup (main.ts daily), which anchors on the same
-    // turn timestamp. The prior per-call bucketing split such turns and left a
-    // constant offset between the trend bars and current.cost.
+  it("attributes a midnight-straddling turn's cost to the call's own date", () => {
+    // A turn whose user message sits on one side of midnight and whose
+    // assistant response lands on the other buckets its cost under the CALL's
+    // day (issue #852's per-call rule), so the daily cache (history.daily +
+    // provider breakdown) reconciles exactly to a range parse that slices the
+    // same turn at the same boundary — and day-N + day-N+1 sum to the period
+    // total with nothing lost on either side.
     const userTs = '2026-04-20T23:58:00Z'
     const assistantTs = '2026-04-21T00:30:00Z'
-    const userLocal = new Date(userTs)
-    const expectedDate = `${userLocal.getFullYear()}-${String(userLocal.getMonth() + 1).padStart(2, '0')}-${String(userLocal.getDate()).padStart(2, '0')}`
+    const assistantLocal = new Date(assistantTs)
+    const expectedDate = `${assistantLocal.getFullYear()}-${String(assistantLocal.getMonth() + 1).padStart(2, '0')}-${String(assistantLocal.getDate()).padStart(2, '0')}`
 
     const projects: ProjectSummary[] = [
       makeProject({
@@ -457,21 +467,22 @@ describe('daily-cache ↔ report daily-bucket parity', () => {
   // headline (main.ts daily rollup) must bucket days by the SAME rule, or their
   // per-day totals drift and their period sums diverge from current.cost at
   // window boundaries — the V1 audit's constant -$3.45/-81-calls finding. Both
-  // are now TURN-anchored: this asserts per-day equality against a reference
-  // that mirrors main.ts:486-499 (turn.timestamp anchor), plus the invariant
-  // history.daily Σ == report.daily Σ == total call cost.
+  // are now PER-CALL for cost/savings/calls (issue #852) with turn-level stats
+  // still turn-anchored: this asserts per-day equality against a reference
+  // that mirrors main.ts buildJsonReport's dailyMap fallback (each call on its
+  // own date), plus the invariant history.daily Σ == report.daily Σ == total
+  // call cost.
 
-  // Mirrors the live report/headline daily rollup in src/main.ts (bucket the
-  // whole turn — all its calls — on the turn's user-message date).
+  // Mirrors the live report/headline daily rollup fallback in src/main.ts
+  // (cost/savings/calls bucket under each call's own date).
   function reportDailyByDate(projects: ProjectSummary[]): Record<string, number> {
     const byDate: Record<string, number> = {}
     for (const p of projects) {
       for (const sess of p.sessions) {
         for (const turn of sess.turns) {
-          if (turn.assistantCalls.length === 0) continue
-          const ts = turn.timestamp || turn.assistantCalls[0]!.timestamp
-          const day = dateKey(ts)
-          for (const call of turn.assistantCalls) byDate[day] = (byDate[day] ?? 0) + call.costUSD
+          for (const call of turn.assistantCalls) {
+            byDate[dateKey(call.timestamp)] = (byDate[dateKey(call.timestamp)] ?? 0) + call.costUSD
+          }
         }
       }
     }
@@ -492,8 +503,8 @@ describe('daily-cache ↔ report daily-bucket parity', () => {
     expect(dayA).not.toBe(dayB) // sanity: the fixture really straddles local midnight
 
     // A midnight-straddling turn (calls on both days) plus a same-day turn, so
-    // per-CALL bucketing would produce DIFFERENT per-day totals than the turn-
-    // anchored report — the case the old code got wrong.
+    // whole-TURN anchoring would produce DIFFERENT per-day totals than the
+    // per-call rule — the case the old code got wrong.
     const projects: ProjectSummary[] = [
       makeProject({
         sessions: [{
@@ -541,8 +552,10 @@ describe('daily-cache ↔ report daily-bucket parity', () => {
     const totalCallCost = 2 + 3 + 7
     expect(historySum).toBeCloseTo(totalCallCost, 10)
     expect(reportSum).toBeCloseTo(totalCallCost, 10)
-    // Day A owns the WHOLE straddling turn (2+3=5), not just its first call (2).
-    expect(historyByDate[dayA]).toBe(5)
-    expect(historyByDate[dayB]).toBe(7)
+    // Day A owns only the straddling turn's pre-midnight call (2); day B owns
+    // the post-midnight call plus the same-day turn (3+7=10). Both paths agree
+    // per day and the period total is conserved.
+    expect(historyByDate[dayA]).toBe(2)
+    expect(historyByDate[dayB]).toBe(10)
   })
 })
