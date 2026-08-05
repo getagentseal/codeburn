@@ -5,6 +5,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { sourceRefFingerprint } from '../../fingerprint.js'
 import type { GrokDecodedCall, GrokSessionRecords, GrokSignals, GrokSummary, GrokUpdate } from './types.js'
 
 // Grok Build tool ids mapped to the canonical vocabulary. Unknown ids pass
@@ -124,7 +125,7 @@ export type GrokDecodeResult = {
  * The host owns file I/O and the live cross-file dedup set; this function is
  * pure over the supplied record.
  */
-export function decodeGrok({ records, seenKeys: liveSeen }: GrokDecodeInput): GrokDecodeResult {
+export function decodeGrok({ records, context, seenKeys: liveSeen }: GrokDecodeInput): GrokDecodeResult {
   const seen = liveSeen ?? new Set<string>()
   const session = records.find(isGrokSessionRecords)
   if (!session) return { calls: [], diagnostics: [] }
@@ -142,7 +143,11 @@ export function decodeGrok({ records, seenKeys: liveSeen }: GrokDecodeInput): Gr
   const timestamp = summary.updated_at ?? summary.last_active_at ?? summary.created_at ?? ''
   const sessionId = summary.info?.id ?? sessionName
 
-  const dedupKey = `grok:${sourceDir}:${timestamp}:${sessionId}`
+  // The dedup key threads a FINGERPRINT of the session directory, never the raw
+  // path — dedupKey ships on the envelope, so the raw path must not cross into
+  // an observation output. (sessionName stays the basename-derived session
+  // identity; it is not a path.)
+  const dedupKey = `grok:${sourceRefFingerprint(context.privacyKey, sourceDir)}:${timestamp}:${sessionId}`
   if (seen.has(dedupKey)) return { calls: [], diagnostics: [] }
   seen.add(dedupKey)
 

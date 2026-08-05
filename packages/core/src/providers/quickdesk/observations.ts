@@ -7,6 +7,7 @@ import { projectRef, sessionRef } from '../../fingerprint.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import type { QuickdeskDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 /** One Quickdesk session's rich decode, as the host holds it before minimization. */
 export interface RichQuickdeskSessionDecode {
@@ -33,7 +34,7 @@ function toCallObservation(call: QuickdeskDecodedCall, turnIndex: number, privac
   const measured = call.recordedCost !== undefined
   return {
     provider: call.provider,
-    model: call.model,
+    model: normalizeModelIdentifier(call.model),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

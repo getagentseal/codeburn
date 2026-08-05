@@ -11,6 +11,7 @@ import type {
   CodexDecodedCall,
   CodexDecodeState,
   CodexEntry,
+  CodexTimingPatch,
   CodexToolCall,
   CodexTokenUsage,
 } from './types.js'
@@ -37,6 +38,9 @@ function normalizeContentBlocks<T extends { type?: string; text?: string }>(
 
 export const codexToolNameMap: Record<string, string> = {
   exec_command: 'Bash',
+  // Codex Desktop's custom-tool transport uses the shorter `exec` name for
+  // the same shell tool that CLI rollouts record as `exec_command`.
+  exec: 'Bash',
   read_file: 'Read',
   write_file: 'Edit',
   apply_diff: 'Edit',
@@ -98,6 +102,123 @@ function getRawJsonStringField(head: string, field: string): string | undefined 
 function payloadHead(head: string): string {
   const idx = head.indexOf('"payload"')
   return idx === -1 ? head : head.slice(idx)
+}
+
+function getRawJsonNumberField(head: string, field: string): number | undefined {
+  const match = new RegExp(`"${field}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`).exec(head)
+  if (!match) return undefined
+  const value = Number(match[1])
+  return Number.isFinite(value) ? value : undefined
+}
+
+function getRawPayloadFieldWindow(source: Buffer, field: string, windowBytes = 4096): string | undefined {
+  const payloadKey = Buffer.from('"payload"')
+  const payloadIndex = source.indexOf(payloadKey)
+  if (payloadIndex < 0) return undefined
+  let payloadStart = source.indexOf(0x7b, payloadIndex + payloadKey.length) // {
+  if (payloadStart < 0) return undefined
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = payloadStart; i < source.length; i++) {
+    const byte = source[i]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (byte === 0x5c) escaped = true // \
+      else if (byte === 0x22) inString = false // "
+      continue
+    }
+    if (byte === 0x22) {
+      const keyStart = i + 1
+      let keyEnd = keyStart
+      let keyEscaped = false
+      for (; keyEnd < source.length; keyEnd++) {
+        const keyByte = source[keyEnd]!
+        if (keyEscaped) { keyEscaped = false; continue }
+        if (keyByte === 0x5c) { keyEscaped = true; continue }
+        if (keyByte === 0x22) break
+      }
+      if (depth === 1 && keyEnd < source.length) {
+        const key = source.subarray(keyStart, keyEnd).toString('utf-8')
+        let valueStart = keyEnd + 1
+        while (valueStart < source.length && (source[valueStart] === 0x20 || source[valueStart] === 0x09 || source[valueStart] === 0x0a || source[valueStart] === 0x0d)) valueStart++
+        if (source[valueStart] === 0x3a && key === field) {
+          return source.subarray(i, Math.min(source.length, i + windowBytes)).toString('utf-8')
+        }
+      }
+      i = keyEnd
+      inString = false
+      continue
+    }
+    if (byte === 0x22) inString = true
+    else if (byte === 0x7b || byte === 0x5b) depth++ // { or [
+    else if (byte === 0x7d || byte === 0x5d) depth-- // } or ]
+    if (depth < 0) break
+  }
+  return undefined
+}
+
+function getRawDurationMs(head: string): number | undefined {
+  const objectMatch = /"duration"\s*:\s*\{\s*"secs"\s*:\s*(-?\d+(?:\.\d+)?)\s*,\s*"nanos"\s*:\s*(-?\d+(?:\.\d+)?)\s*\}/.exec(head)
+  if (objectMatch) {
+    const seconds = Number(objectMatch[1])
+    const nanos = Number(objectMatch[2])
+    if (Number.isFinite(seconds) && Number.isFinite(nanos)) return seconds * 1000 + nanos / 1e6
+  }
+  const text = getRawJsonStringField(head, 'duration')
+  if (text) {
+    const match = /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(text.trim())
+    if (match) {
+      const value = Number(match[1])
+      if (Number.isFinite(value)) return value * (match[2] === 's' ? 1000 : 1)
+    }
+  }
+  return undefined
+}
+
+function durationValueMs(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'object' && value) {
+    const record = value as Record<string, unknown>
+    const seconds = record['secs']
+    const nanos = record['nanos']
+    if (typeof seconds === 'number' && typeof nanos === 'number' && Number.isFinite(seconds) && Number.isFinite(nanos)) {
+      return seconds * 1000 + nanos / 1e6
+    }
+  }
+  if (typeof value === 'string') {
+    const match = /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(value.trim())
+    if (match) {
+      const parsed = Number(match[1])
+      if (Number.isFinite(parsed)) return parsed * (match[2] === 's' ? 1000 : 1)
+    }
+  }
+  return undefined
+}
+
+function getRawTokenUsage(head: string, field: 'last_token_usage' | 'total_token_usage'): CodexTokenUsage | undefined {
+  const match = new RegExp(`"${field}"\\s*:\\s*\\{([^}]*)\\}`).exec(head)
+  if (!match) return undefined
+  const body = match[1]!
+  return {
+    input_tokens: getRawJsonNumberField(body, 'input_tokens'),
+    cached_input_tokens: getRawJsonNumberField(body, 'cached_input_tokens'),
+    output_tokens: getRawJsonNumberField(body, 'output_tokens'),
+    reasoning_output_tokens: getRawJsonNumberField(body, 'reasoning_output_tokens'),
+    total_tokens: getRawJsonNumberField(body, 'total_tokens'),
+  }
+}
+
+function getRawInvocation(head: string): { server?: string; tool?: string } | undefined {
+  const idx = head.indexOf('"invocation"')
+  if (idx === -1) return undefined
+  // Server/tool are shallow fields and precede the potentially huge arguments
+  // object in Codex MCP records. Limit this scan to keep compact parsing cheap.
+  const invocationHead = head.slice(idx, idx + 8192)
+  const server = getRawJsonStringField(invocationHead, 'server')
+  const tool = getRawJsonStringField(invocationHead, 'tool')
+  return server || tool ? { server, tool } : undefined
 }
 
 function countJsonStringBytes(source: Buffer, valueStart: number): number {
@@ -172,6 +293,31 @@ export function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const pHead = payloadHead(head)
   const payloadType = getRawJsonStringField(pHead, 'type')
   const role = getRawJsonStringField(pHead, 'role')
+  // task_complete appends the potentially huge final assistant message before
+  // its duration fields. Fall back to the full Buffer only for this event so
+  // timing metadata is not lost when the compact head stops early.
+  const needsTimingTail = type === 'event_msg' && (payloadType === 'task_complete' || payloadType === 'mcp_tool_call_end')
+  const timingTail = needsTimingTail && line.length > RAW_HEAD_BYTES
+    ? line.subarray(Math.max(0, line.length - 16 * 1024)).toString('utf-8')
+    : pHead
+  const timingNumber = (field: string): number | undefined =>
+    getRawJsonNumberField(pHead, field) ?? getRawJsonNumberField(timingTail, field)
+  // MCP records can place a large invocation.arguments object before duration
+  // and a large result after it. Searching a small window around the field
+  // avoids materializing the middle of the Buffer while still preserving wait
+  // timing for those records.
+  const payloadDuration = payloadType === 'mcp_tool_call_end'
+    ? getRawDurationMs(getRawPayloadFieldWindow(line, 'duration') ?? '')
+    : undefined
+  const timingDuration = payloadDuration ?? getRawDurationMs(pHead) ?? getRawDurationMs(timingTail)
+  const compactModel = getRawJsonStringField(pHead, 'model')
+  const compactModelName = getRawJsonStringField(pHead, 'model_name')
+  const compactLastUsage = getRawTokenUsage(pHead, 'last_token_usage')
+  const compactTotalUsage = getRawTokenUsage(pHead, 'total_token_usage')
+  const compactInfo = compactModel || compactModelName || compactLastUsage || compactTotalUsage
+    ? { model: compactModel, model_name: compactModelName, last_token_usage: compactLastUsage, total_token_usage: compactTotalUsage }
+    : undefined
+  const invocation = getRawInvocation(pHead) ?? getRawInvocation(timingTail)
 
   const entry: CodexEntry = {
     type,
@@ -186,6 +332,12 @@ export function parseCodexLine(line: string | Buffer): CodexEntry | null {
       forked_from_id: getRawJsonStringField(pHead, 'forked_from_id'),
       model: getRawJsonStringField(pHead, 'model'),
       name: getRawJsonStringField(pHead, 'name'),
+      invocation,
+      call_id: getRawJsonStringField(pHead, 'call_id'),
+      turn_id: getRawJsonStringField(pHead, 'turn_id'),
+      duration_ms: timingNumber('duration_ms') ?? timingDuration,
+      started_at: timingNumber('started_at'),
+      info: compactInfo,
     },
   }
 
@@ -234,6 +386,13 @@ export function freshCodexState(): CodexDecodeState {
     // recomputes this, so a call before the first user message keeps ':t0'.
     currentTurnId: ':t0',
     seenKeys: [],
+    // Task-timing window: a fresh window starts at the first call of the pass
+    // (priorCallCount is 0 on a cold decode).
+    taskResultStart: 0,
+    taskGeneratedTokens: 0,
+    taskToolIntervals: [],
+    taskStartedAt: undefined,
+    openToolStarts: {},
   }
 }
 
@@ -243,6 +402,8 @@ function cloneState(prev: CodexDecodeState): CodexDecodeState {
     pendingTools: [...prev.pendingTools],
     pendingToolSequence: prev.pendingToolSequence.map(step => step.map(c => ({ ...c }))),
     seenKeys: [...prev.seenKeys],
+    taskToolIntervals: prev.taskToolIntervals ? prev.taskToolIntervals.map(i => [...i]) : [],
+    openToolStarts: { ...(prev.openToolStarts ?? {}) },
   }
 }
 
@@ -264,6 +425,12 @@ export type CodexDecodeInput = {
   // seenKeys). When provided it is canonical and `state.seenKeys` is left empty;
   // when absent the decoder threads dedup memory through `state.seenKeys`.
   seenKeys?: Set<string>
+  // Number of calls the host already emitted in EARLIER passes of this file
+  // (0 on a cold decode). The task-timing window's `taskResultStart` is an
+  // absolute index into the concatenated prior+current call list, so a resumed
+  // pass must know where its own calls begin. Also required for the absolute
+  // indices in the `timingPatches` it returns.
+  priorCallCount?: number
   // Session id to fall back to when a session_meta omits `session_id` (the CLI
   // passes the rollout file's basename; core never touches the path).
   sessionIdFallback?: string
@@ -273,6 +440,10 @@ export type CodexDecodeResult = {
   calls: CodexDecodedCall[]
   diagnostics: RecordDiagnostic[]
   state: CodexDecodeState
+  // Proportional active-timing attribution for the calls of a task that was
+  // OPEN when a prior decode pass ended and whose task_complete arrived in this
+  // pass (see CodexTimingPatch). Empty unless a task straddles the boundary.
+  timingPatches: CodexTimingPatch[]
 }
 
 /**
@@ -284,15 +455,50 @@ export type CodexDecodeResult = {
 // `context` is part of the Decoder contract but the rich layer never consumes it:
 // minimization / fingerprinting happens in toObservations, which takes the
 // privacy key directly. It stays in the input type for contract conformance.
-export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, sessionIdFallback = '' }: CodexDecodeInput): CodexDecodeResult {
+export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, sessionIdFallback = '', priorCallCount = 0 }: CodexDecodeInput): CodexDecodeResult {
   const s = prevState ? cloneState(prevState) : freshCodexState()
   const seen = liveSeen ?? new Set(s.seenKeys)
   const calls: CodexDecodedCall[] = []
   const diagnostics: RecordDiagnostic[] = []
+  const timingPatches: CodexTimingPatch[] = []
+
+  // Task-timing window (tool-excluded active throughput, issue a6bf81f).
+  // Seeded from the threaded state so a task whose task_started / token_counts
+  // landed in an earlier pass keeps its window when task_complete arrives here:
+  // `taskResultStart` is an ABSOLUTE index into the concatenated prior+current
+  // call list (priorCallCount offsets this pass's own calls). On a state that
+  // predates the fields (or a fresh decode) the window starts fresh.
+  let taskResultStart = s.taskResultStart ?? priorCallCount
+  let taskGeneratedTokens = s.taskGeneratedTokens ?? 0
+  let taskToolIntervals: Array<[number, number]> = s.taskToolIntervals ? s.taskToolIntervals.map(i => [...i]) : []
+  let taskStartedAt: number | undefined = s.taskStartedAt
+  const openToolStarts = new Map<string, number>(Object.entries(s.openToolStarts ?? {}))
 
   for (const rawLine of records) {
     const entry = parseCodexLine(rawLine as string | Buffer)
     if (!entry) continue
+
+    const isForkReplay = Boolean(s.forkCutoff && entry.timestamp && entry.timestamp < s.forkCutoff)
+    if (isForkReplay && (
+      entry.payload?.type === 'task_started' ||
+      entry.payload?.type === 'task_complete' ||
+      entry.payload?.type === 'function_call' ||
+      entry.payload?.type === 'function_call_output' ||
+      entry.payload?.type === 'custom_tool_call' ||
+      entry.payload?.type === 'custom_tool_call_output' ||
+      entry.payload?.type === 'mcp_tool_call_end' ||
+      entry.payload?.type === 'patch_apply_end'
+    )) continue
+
+    if (entry.type === 'event_msg' && entry.payload?.type === 'task_started') {
+      taskResultStart = priorCallCount + calls.length
+      taskGeneratedTokens = 0
+      taskToolIntervals = []
+      const startedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+      taskStartedAt = Number.isFinite(startedAt) ? startedAt : undefined
+      openToolStarts.clear()
+      continue
+    }
 
     if (entry.type === 'session_meta') {
       // Update in place — do NOT reset the running counters. A single rollout
@@ -317,7 +523,7 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
       continue
     }
 
-    if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
+    if (entry.type === 'response_item' && (entry.payload?.type === 'function_call' || entry.payload?.type === 'custom_tool_call')) {
       const rawName = entry.payload.name ?? ''
       const mapped = codexToolNameMap[rawName] ?? rawName
       s.pendingTools.push(mapped)
@@ -337,7 +543,19 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
           s.pendingToolSequence.push([{ tool: mcpTool }])
         }
       }
+      const callId = entry.payload.call_id
+      const started = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+      if (callId && Number.isFinite(started)) openToolStarts.set(callId, started)
       s.pendingToolSequence.push([call])
+      continue
+    }
+
+    if (entry.type === 'response_item' && (entry.payload?.type === 'function_call_output' || entry.payload?.type === 'custom_tool_call_output')) {
+      const callId = entry.payload.call_id
+      const ended = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+      const started = callId ? openToolStarts.get(callId) : undefined
+      if (started !== undefined && Number.isFinite(ended) && ended > started) taskToolIntervals.push([started, ended])
+      if (callId) openToolStarts.delete(callId)
       continue
     }
 
@@ -363,6 +581,11 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
     }
 
     if (entry.type === 'event_msg' && entry.payload?.type === 'mcp_tool_call_end') {
+      const endedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+      const durationMs = entry.payload.duration_ms ?? durationValueMs(entry.payload.duration)
+      if (typeof durationMs === 'number' && durationMs > 0 && Number.isFinite(endedAt)) {
+        taskToolIntervals.push([endedAt - durationMs, endedAt])
+      }
       const inv = (entry.payload as Record<string, unknown>)['invocation'] as Record<string, unknown> | undefined
       const server = typeof inv?.['server'] === 'string' ? inv['server'] as string : ''
       const tool = typeof inv?.['tool'] === 'string' ? inv['tool'] as string : ''
@@ -370,6 +593,46 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
         const name = `mcp__${server}__${tool}`
         s.pendingTools.push(name)
         s.pendingToolSequence.push([{ tool: name }])
+      }
+      continue
+    }
+
+    if (entry.type === 'event_msg' && entry.payload?.type === 'task_complete') {
+      const durationMs = entry.payload.duration_ms
+      const taskEnd = priorCallCount + calls.length
+      if (typeof durationMs === 'number' && durationMs > 0 && taskGeneratedTokens > 0 && taskResultStart < taskEnd) {
+        const completedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+        const windowStart = taskStartedAt ?? (Number.isFinite(completedAt) ? completedAt - durationMs : undefined)
+        const windowEnd = windowStart !== undefined ? windowStart + durationMs : undefined
+        const clipped = taskToolIntervals.map(([start, end]) => [
+          windowStart !== undefined ? Math.max(start, windowStart) : start,
+          windowEnd !== undefined ? Math.min(end, windowEnd) : end,
+        ] as [number, number]).filter(([start, end]) => end > start)
+        const merged = clipped.sort((a, b) => a[0] - b[0]).reduce<Array<[number, number]>>((acc, interval) => {
+          const previous = acc.at(-1)
+          if (previous && interval[0] <= previous[1]) previous[1] = Math.max(previous[1], interval[1])
+          else acc.push([...interval])
+          return acc
+        }, [])
+        const toolWaitMs = Math.min(durationMs, merged.reduce((sum, interval) => sum + interval[1] - interval[0], 0))
+        const activeMs = durationMs - toolWaitMs
+        if (activeMs > 0) {
+          // Attribute the in-pass calls directly; a task opened in an EARLIER
+          // pass additionally hands the host a patch so the earlier-pass calls
+          // (already returned to it) get the same proportional split.
+          const inPassStart = Math.max(taskResultStart, priorCallCount)
+          for (let i = inPassStart; i < taskEnd; i++) {
+            const call = calls[i - priorCallCount]!
+            const generated = call.outputTokens + call.reasoningTokens
+            if (generated <= 0) continue
+            call.activeGeneratedTokens = generated
+            call.activeDurationMs = activeMs * (generated / taskGeneratedTokens)
+            call.toolWaitMs = toolWaitMs * (generated / taskGeneratedTokens)
+          }
+          if (taskResultStart < priorCallCount) {
+            timingPatches.push({ resultStart: taskResultStart, resultEnd: taskEnd, activeDurationMs: activeMs, taskGeneratedTokens, toolWaitMs })
+          }
+        }
       }
       continue
     }
@@ -437,6 +700,7 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
           ...(s.pendingEditFailed ? { editFailed: s.pendingEditFailed } : {}),
         })
 
+        taskGeneratedTokens += estOutput
         clearPending(s)
         continue
       }
@@ -516,10 +780,48 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
         ...(s.pendingEditFailed ? { editFailed: s.pendingEditFailed } : {}),
       })
 
+      taskGeneratedTokens += outputTokens + reasoningTokens
       clearPending(s)
     }
   }
 
+  // Persist the task-timing window in the threaded state so a later
+  // (append-resume) pass can close a still-open task with attribution across
+  // the boundary.
+  s.taskResultStart = taskResultStart
+  s.taskGeneratedTokens = taskGeneratedTokens
+  s.taskToolIntervals = taskToolIntervals
+  s.taskStartedAt = taskStartedAt
+  s.openToolStarts = Object.fromEntries(openToolStarts)
+
   s.seenKeys = liveSeen ? [] : [...seen]
-  return { calls, diagnostics, state: s }
+  return { calls, diagnostics, state: s, timingPatches }
+}
+
+/**
+ * Apply the timing patches a resumed decode returned (see CodexTimingPatch) to
+ * the host's CONCATENATED prior+new call list. Indices are absolute into that
+ * list. Overwriting the in-pass portion is a harmless no-op: the formula below
+ * is exactly the decoder's, so it writes identical values.
+ */
+export function applyCodexTimingPatches(
+  calls: Array<{
+    outputTokens: number
+    reasoningTokens: number
+    activeDurationMs?: number
+    activeGeneratedTokens?: number
+    toolWaitMs?: number
+  }>,
+  patches: CodexTimingPatch[],
+): void {
+  for (const patch of patches) {
+    for (let i = patch.resultStart; i < Math.min(patch.resultEnd, calls.length); i++) {
+      const call = calls[i]!
+      const generated = call.outputTokens + call.reasoningTokens
+      if (generated <= 0) continue
+      call.activeGeneratedTokens = generated
+      call.activeDurationMs = patch.activeDurationMs * (generated / patch.taskGeneratedTokens)
+      call.toolWaitMs = patch.toolWaitMs * (generated / patch.taskGeneratedTokens)
+    }
+  }
 }

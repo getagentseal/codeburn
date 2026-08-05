@@ -6,6 +6,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 import type { ForgeConversationRow, ForgeContextMessage, ForgeDecodedCall } from './types.js'
 
 function sqliteTimestampToIso(value: string | null | undefined): string {
@@ -158,7 +159,11 @@ export function decodeForge({ records, seenKeys: liveSeen }: ForgeDecodeInput): 
       const model = typeof text?.model === 'string' ? text.model : 'unknown'
       const toolCalls = toolCallsOf(text?.tool_calls)
       const { tools, rawBashCommands, firstCallId } = extractToolsAndCommands(toolCalls)
-      const stableId = firstCallId ?? `${model}:${promptTokens}:${outputTokens}:${i}`
+      // The fallback stableId normalizes the model component exactly as the
+      // observation boundary does: this key ships on the envelope, so a
+      // display-name model must collapse to 'unknown' inside it, never ride
+      // it raw (the primary path uses the tool-call id, which is a machine id).
+      const stableId = firstCallId ?? `${normalizeModelIdentifier(model)}:${promptTokens}:${outputTokens}:${i}`
       const deduplicationKey = `forge:${row.conversation_id}:${stableId}`
       if (seen.has(deduplicationKey)) continue
       seen.add(deduplicationKey)

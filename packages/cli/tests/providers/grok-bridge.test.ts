@@ -5,6 +5,8 @@ import { describe, it, expect } from 'vitest'
 
 import { createGrokProvider } from '../../src/providers/grok.js'
 import { priceProviderCall } from '../../src/pricing-pass.js'
+import { getHostPrivacyKey } from '../../src/privacy-key.js'
+import { sourceRefFingerprint } from '@codeburn/core'
 import type { ParsedProviderCall, SessionSource } from '../../src/providers/types.js'
 
 // Byte-identical parity gate for the grok bridge migration (phase 8). The
@@ -12,6 +14,13 @@ import type { ParsedProviderCall, SessionSource } from '../../src/providers/type
 
 const here = dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = resolve(here, '../fixtures/grok-parity')
+// The dedup key threads a FINGERPRINT of the session dir — the raw path is the
+// defect and must never appear (dedupKey ships on the envelope), so the
+// expected value is DERIVED via the same sourceRefFingerprint the decoder
+// uses. The bridge threads the HOST privacy key (getHostPrivacyKey, per-install
+// stable), so the golden derives with the same key.
+const SESSION_DIR = resolve(FIXTURE_DIR, '%2FUsers%2Ftest/019edf9c-0000-7000-8000-000000000001')
+const SESSION_REF = sourceRefFingerprint(getHostPrivacyKey(), SESSION_DIR)
 
 const GOLDEN: ParsedProviderCall[] = [
   {
@@ -33,9 +42,10 @@ const GOLDEN: ParsedProviderCall[] = [
     subagentTypes: ['general-purpose'],
     timestamp: '2026-06-19T11:31:12.282793Z',
     speed: 'standard',
-    // The key embeds the session dir's absolute path — compute it from
-    // FIXTURE_DIR so the golden is portable across checkouts.
-    deduplicationKey: `grok:${resolve(FIXTURE_DIR, '%2FUsers%2Ftest/019edf9c-0000-7000-8000-000000000001')}:2026-06-19T11:31:12.282793Z:019edf9c-0000-7000-8000-000000000001`,
+    // The key embeds a fingerprint of the session dir's absolute path —
+    // derived from FIXTURE_DIR so the golden is portable across checkouts, and
+    // never the raw path itself.
+    deduplicationKey: `grok:${SESSION_REF}:2026-06-19T11:31:12.282793Z:019edf9c-0000-7000-8000-000000000001`,
     userMessage: 'User asks about the repo',
     sessionId: '019edf9c-0000-7000-8000-000000000001',
     project: 'myproject',

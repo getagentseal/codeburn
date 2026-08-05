@@ -5,6 +5,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { sourceRefFingerprint } from '../../fingerprint.js'
 import type { ZerostackDecodedCall, ZerostackMessage, ZerostackSession } from './types.js'
 
 // Zerostack tool ids mapped to the canonical vocabulary. An id with
@@ -48,8 +49,9 @@ export type ZerostackDecodeResult = {
 /**
  * Decode a Zerostack session file's record into a rich, cost-free call.
  * Zerostack has one record per session with cumulative token totals. The dedup
- * key threads the source ref (host path) exactly as the pre-migration decode did:
- * `zerostack:<sourceRef>:<timestamp>:<sessionId>`.
+ * key threads a FINGERPRINT of the source ref (host path), never the raw path:
+ * `zerostack:<sourceRefFingerprint>:<timestamp>:<sessionId>`. The raw path
+ * must not cross into an observation output (dedupKey ships on the envelope).
  */
 export function decodeZerostack({
   records,
@@ -72,7 +74,7 @@ export function decodeZerostack({
 
     const timestamp = session.updated_at ?? session.created_at ?? ''
     const sessionId = session.id ?? sessionIdFallback ?? ''
-    const dedupKey = `zerostack:${context.sourceRef}:${timestamp}:${sessionId}`
+    const dedupKey = `zerostack:${sourceRefFingerprint(context.privacyKey, context.sourceRef)}:${timestamp}:${sessionId}`
     if (seen.has(dedupKey)) continue
     seen.add(dedupKey)
 

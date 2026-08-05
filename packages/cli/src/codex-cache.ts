@@ -26,7 +26,18 @@ import type { ParsedProviderCall } from './providers/types.js'
 //     decodes only the new bytes instead of re-streaming the whole file.
 // This is lossless: Codex rollout files are durable (never auto-deleted), so the
 // one-time re-derive on first run under v8 rebuilds byte-identical data.
-const CODEX_CACHE_VERSION = 8
+// v9: tool-excluded active timing — per-call activeDurationMs /
+// activeGeneratedTokens / toolWaitMs (a6bf81f). Cached calls lack the fields;
+// bump once so unchanged sessions re-decode and pick them up.
+// v10: the threaded decoder state now carries the task-timing window
+// (taskResultStart / taskGeneratedTokens / taskToolIntervals / taskStartedAt /
+// openToolStarts), so a task whose task_complete lands in an appended region
+// attributes the three timing fields to the calls emitted in the earlier
+// region — a parse that ended mid-task no longer strands them unattributed.
+// v9 states lack the window; bump once so unchanged sessions re-decode with it.
+// (The session-cache PROVIDER_PARSE_VERSIONS marker is bumped in lockstep so
+// cached turns re-derive too.)
+const CODEX_CACHE_VERSION = 10
 const CACHE_FILE = 'codex-results.json'
 
 type FileFingerprint = { mtimeMs: number; sizeBytes: number }

@@ -286,6 +286,45 @@ describe('devin rich decode (moved to @codeburn/core)', () => {
     }
   })
 
+  it('acceptance: a display-name model name (e.g. "Gemini 3 Flash") is normalized at the observation boundary', () => {
+    // When no generation_model is recorded, devin falls back to the agent's
+    // model_name, which real databases carry as a display name ("Gemini 3
+    // Flash"). The observation boundary must normalize it to 'unknown'
+    // instead of rejecting the whole envelope.
+    const transcript: DevinAgentTrajectory = {
+      ...BASE_TRANSCRIPT,
+      agent: { name: 'devin', version: '2.0', model_name: 'Gemini 3 Flash' },
+      steps: [
+        {
+          step_id: 1,
+          source: 'assistant',
+          message: 'working',
+          metadata: {
+            created_at: '2027-01-15T08:00:01.000Z',
+            committed_acu_cost: 0.1,
+            metrics: { input_tokens: 100 },
+          },
+        },
+      ],
+    }
+    const { calls } = decodeDevin({ records: [makeRecord(transcript)], context })
+    expect(calls[0]!.generationModel).toBeUndefined()
+    expect(calls[0]!.modelName).toBe('Gemini 3 Flash')
+
+    const { sessions } = toObservations(
+      { sessionId: 'sess-a', projectPath: '/Users/me/projects/codeburn', calls },
+      { privacyKey: 'test-privacy-key', provider: 'devin' },
+    )
+    const envelope = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+    expect(sessions[0]!.calls[0]!.model).toBe('unknown')
+    expect(JSON.stringify(envelope)).not.toContain('Gemini 3 Flash')
+  })
+
   it('extracts user message from ContentPart[] messages', () => {
     const transcript: DevinAgentTrajectory = {
       ...BASE_TRANSCRIPT,
