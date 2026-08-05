@@ -244,6 +244,16 @@ const SCHEMA_FILES = ['observation-0.1.0', 'observation-0.2.0', 'finding-0.1.0']
 
 type StringField = { path: string; kind: string }
 
+/**
+ * A `type` may be a single string or a union array (e.g. `["string","null"]`).
+ * Either form that includes "string" is a string field; the union form must not
+ * escape the enumeration just because `type !== 'string'`.
+ */
+function isStringType(node: Record<string, unknown>): boolean {
+  if (node.type === 'string') return true
+  return Array.isArray(node.type) && node.type.includes('string')
+}
+
 /** Classify a `{type:'string'}` subschema by the constraint that bounds it. */
 function classifyStringNode(node: Record<string, unknown>): string {
   if ('const' in node) return `const:${JSON.stringify(node.const)}`
@@ -255,10 +265,19 @@ function classifyStringNode(node: Record<string, unknown>): string {
   return 'UNCONSTRAINED'
 }
 
+/**
+ * Descend every place a string subschema can hide. Beyond `properties` /
+ * `items` / `definitions`, JSON Schema puts alternatives under the combinator
+ * keys (`anyOf` / `oneOf` / `allOf` arrays), regex-keyed subschemas under
+ * `patternProperties`, and catch-all subschemas under `additionalProperties`
+ * (the boolean form `true`/`false` is not a subschema and is skipped). A
+ * `type: ["string","null"]` union is a string field and must be enumerated
+ * with the same bound checks as a bare `type: "string"`.
+ */
 function walkStringFields(node: unknown, path: string, out: StringField[]): void {
   if (!node || typeof node !== 'object') return
   const n = node as Record<string, unknown>
-  if (n.type === 'string') {
+  if (isStringType(n)) {
     out.push({ path, kind: classifyStringNode(n) })
     return
   }
@@ -273,6 +292,21 @@ function walkStringFields(node: unknown, path: string, out: StringField[]): void
       walkStringFields(v, `${path}#${k}`, out)
     }
   }
+  for (const key of ['anyOf', 'oneOf', 'allOf'] as const) {
+    if (Array.isArray(n[key])) {
+      for (const [i, sub] of (n[key] as unknown[]).entries()) {
+        walkStringFields(sub, `${path}/${key}[${i}]`, out)
+      }
+    }
+  }
+  if (n.patternProperties && typeof n.patternProperties === 'object') {
+    for (const [k, v] of Object.entries(n.patternProperties as Record<string, unknown>)) {
+      walkStringFields(v, `${path}/${k}`, out)
+    }
+  }
+  if (n.additionalProperties && typeof n.additionalProperties === 'object') {
+    walkStringFields(n.additionalProperties, `${path}/additionalProperties`, out)
+  }
 }
 
 function enumerateSchema(name: string): StringField[] {
@@ -284,17 +318,46 @@ function enumerateSchema(name: string): StringField[] {
 
 const allStringFields = SCHEMA_FILES.flatMap(enumerateSchema)
 
+/**
+ * A maxLength only counts as "bounded" when the cap is tight enough to rule
+ * out free text — an anti-free-text measure, not an anti-credential one. A
+ * GitHub PAT is ~93 chars and an sk- key ~51, both well under 256, so a
+ * 256-capped field could still carry a short token if a decoder were ever
+ * wired to put one there. What the cap does rule out is bulk free text:
+ * prompt lines, shell command fragments, and file dumps run to hundreds or
+ * thousands of characters, so they cannot hide in an identifier-shaped
+ * field. The guarantee that no credential reaches the envelope is not this
+ * cap — it is the content-smuggling guardrails (no user text is captured
+ * into these fields at all) plus the MACHINE_ID_ALLOWLIST entries below,
+ * which are host-emitted controlled vocabularies (model slugs, provider ids,
+ * generator version, hash-derived dedup keys). A cap of 100000, which merely
+ * exists, is not bounded at all.
+ */
+const MAX_BOUNDED_STRING_LENGTH = 256
+
+/**
+ * A format only counts as "bounded" when the runtime actually enforces it.
+ * draft-07 treats `format` as an annotation unless the validator opts in, and
+ * the zod runtime (src/schema.ts IsoTimestamp) validates exactly one format:
+ * `date-time`. Any other format string is decorative and does not bound the
+ * field, so the gate refuses to trust it.
+ */
+const ENFORCED_FORMATS = new Set(['date-time'])
+
 // A string field is "bounded" (cannot hold arbitrary free text) when it is a
 // fixed literal, a closed enum, pattern-constrained (16-hex fingerprint,
-// canonical tool-name charset, semver), a date-time, or length-capped.
+// canonical tool-name charset, semver), an actually-enforced date-time, or
+// length-capped within MAX_BOUNDED_STRING_LENGTH.
 function isBoundedKind(kind: string): boolean {
-  return (
-    kind.startsWith('const:') ||
-    kind.startsWith('enum[') ||
-    kind.startsWith('pattern:') ||
-    kind.startsWith('format:') ||
-    kind.startsWith('maxLength:')
-  )
+  if (kind.startsWith('const:') || kind.startsWith('enum[') || kind.startsWith('pattern:')) return true
+  if (kind.startsWith('format:')) {
+    return ENFORCED_FORMATS.has(kind.slice('format:'.length))
+  }
+  if (kind.startsWith('maxLength:')) {
+    const n = Number(kind.slice('maxLength:'.length))
+    return Number.isFinite(n) && n <= MAX_BOUNDED_STRING_LENGTH
+  }
+  return false
 }
 
 // The only string fields NOT length/charset-capped: machine-generated
@@ -385,6 +448,47 @@ describe('architecture gate: envelope schemas carry no free-text-capable field',
   it('no string field is a fully unconstrained bare string', () => {
     const bare = allStringFields.filter(f => f.kind === 'UNCONSTRAINED').map(f => f.path)
     expect(bare, `bare z.string() field(s) found:\n${bare.join('\n')}`).toEqual([])
+  })
+
+  it('the walker descends into every combinator form and union type (self-test)', () => {
+    // A synthetic schema proving the walker itself cannot be gamed by moving a
+    // string field under anyOf/oneOf/allOf/patternProperties/additionalProperties
+    // or into a ["string","null"] union. If a future schema version uses one of
+    // these forms, the field is enumerated and bound-checked like any other.
+    const synthetic = {
+      type: 'object',
+      properties: {
+        a: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+        b: { oneOf: [{ type: 'string', enum: ['x', 'y'] }, { type: 'null' }] },
+        c: { allOf: [{ type: 'string', maxLength: 300 }, { type: 'string', pattern: '^x' }] },
+        d: { type: ['string', 'null'] },
+      },
+      patternProperties: { '^tag_': { type: 'string', maxLength: 10 } },
+      additionalProperties: { type: 'string' },
+    }
+    const out: StringField[] = []
+    walkStringFields(synthetic, 'synthetic', out)
+    const byPath = new Map(out.map(f => [f.path, f.kind]))
+    expect(byPath.get('synthetic/a/anyOf[0]')).toBe('UNCONSTRAINED')
+    expect(byPath.get('synthetic/b/oneOf[0]')).toBe('enum[2]')
+    expect(byPath.get('synthetic/c/allOf[0]')).toBe('maxLength:300')
+    expect(byPath.get('synthetic/c/allOf[1]')).toBe('pattern:^x')
+    expect(byPath.get('synthetic/d')).toBe('UNCONSTRAINED')
+    expect(byPath.get('synthetic/^tag_')).toBe('maxLength:10')
+    expect(byPath.get('synthetic/additionalProperties')).toBe('UNCONSTRAINED')
+    // The union type node is a string field even though type !== 'string'.
+    expect(out.some(f => f.path === 'synthetic/d')).toBe(true)
+  })
+
+  it('"bounded" rejects a merely-present cap and a decorative format (self-test)', () => {
+    // A 100000-char cap is free text wearing a cap; a maxLength of 256 (the
+    // identifier ceiling) is bounded. `format: date-time` is enforced by the
+    // runtime; any other format string is an unenforced annotation.
+    expect(isBoundedKind('maxLength:100000')).toBe(false)
+    expect(isBoundedKind('maxLength:256')).toBe(true)
+    expect(isBoundedKind('maxLength:64')).toBe(true)
+    expect(isBoundedKind('format:uuid')).toBe(false)
+    expect(isBoundedKind('format:date-time')).toBe(true)
   })
 
   it('the string-field surface matches the frozen enumeration', () => {

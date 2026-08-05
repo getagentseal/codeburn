@@ -5,7 +5,7 @@
 import { basename } from 'node:path'
 
 import type { DecodeContext } from '../../contracts.js'
-import type { RecordDiagnostic } from '../../diagnostics.js'
+import { keyedDetail, type RecordDiagnostic } from '../../diagnostics.js'
 import type { ClineHistoryMessage, ClineRecordEnvelope, ClineUiMessage, VscodeClineDecodedCall } from './types.js'
 
 const MODEL_TAG_RE = /<model>([^<]+)<\/model>/
@@ -82,8 +82,12 @@ export function decodeVscodeCline(input: VscodeClineDecodeInput): VscodeClineDec
     let uiMessages: ClineUiMessage[]
     try {
       uiMessages = JSON.parse(envelope.uiRaw)
-    } catch {
-      diagnostics.push({ index, code: 'malformed-json' })
+    } catch (err) {
+      // Keyed fingerprint of the error, never its message: a hostile uiRaw
+      // could otherwise smuggle content through the parse failure. Without a
+      // privacy key the detail is omitted entirely (D1: no unkeyed digest).
+      const detail = keyedDetail(err, input.context.privacyKey)
+      diagnostics.push(detail ? { index, code: 'malformed-json', detail } : { index, code: 'malformed-json' })
       continue
     }
 

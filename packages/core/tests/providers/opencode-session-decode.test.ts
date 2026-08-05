@@ -338,7 +338,12 @@ describe('opencode-session rich decode: SQLite arm', () => {
       context,
     })
     expect(calls).toHaveLength(1)
-    expect(diagnostics).toEqual([{ index: 0, code: 'malformed-json' }])
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]!.code).toBe('malformed-json')
+    expect(diagnostics[0]!.index).toBe(0)
+    // The sanitiser is wired into the parse-failure path: detail is a keyed
+    // fingerprint of the error, never its message.
+    expect(diagnostics[0]!.detail).toMatch(/^[0-9a-f]{16}$/)
   })
 
   it('S4: corrupt part data is skipped silently', () => {

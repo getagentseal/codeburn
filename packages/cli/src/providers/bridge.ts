@@ -83,7 +83,8 @@ export function createBridgedProvider<TRich>(spec: BridgedProviderSpec<TRich>): 
           if (records === null) return
           // The CLI holds the rich decode only; minimization / fingerprinting
           // happens on the sync path, so an empty privacy key is correct here
-          // (the rich decoder never consumes it), matching claude/codex.
+          // (the rich decoder treats it as "no detail": diagnostics carry the
+          // code + index only, never an unkeyed digest), matching claude/codex.
           const context: DecodeContext = { privacyKey: '', providerId: spec.name, sourceRef: source.path }
           const { calls } = spec.decode({ records, context, seenKeys })
           for (const rich of calls) {

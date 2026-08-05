@@ -194,6 +194,25 @@ describe('vscode-cline rich decode (moved to @codeburn/core)', () => {
   it('returns no calls and a malformed-json diagnostic when uiRaw is invalid JSON', () => {
     const { calls, diagnostics } = decodeVscodeCline({ records: [envelope({ uiRaw: 'not json' })], context })
     expect(calls).toEqual([])
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]!.code).toBe('malformed-json')
+    expect(diagnostics[0]!.index).toBe(0)
+    // The sanitiser is wired into the parse-failure path: detail is a keyed
+    // fingerprint of the error, never its message.
+    expect(diagnostics[0]!.detail).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('D1 regression: with the bridge\'s empty privacy key, malformed JSON emits no detail — never an unkeyed digest', () => {
+    // The CLI bridge (packages/cli/src/providers/bridge.ts) decodes every
+    // bridged provider with `privacyKey: ''`. A JSON.parse error message
+    // embeds a fragment of the offending input, so an unkeyed digest of it
+    // would be dictionary-attackable. The keyless path must omit detail
+    // entirely, matching the pre-fingerprint diagnostic shape.
+    const { calls, diagnostics } = decodeVscodeCline({
+      records: [envelope({ uiRaw: 'not json' })],
+      context: { ...context, privacyKey: '' },
+    })
+    expect(calls).toEqual([])
     expect(diagnostics).toEqual([{ index: 0, code: 'malformed-json' }])
   })
 

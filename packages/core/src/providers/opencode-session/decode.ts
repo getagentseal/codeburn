@@ -3,7 +3,7 @@
 // Pure record decode: no fs, no SQLite, no env, no process, no pricing, no
 // strip-ansi. The CLI hands core a tagged envelope; core returns rich calls.
 
-import type { RecordDiagnostic } from '../../diagnostics.js'
+import { keyedDetail, type RecordDiagnostic } from '../../diagnostics.js'
 import type { DecodeContext } from '../../contracts.js'
 import type {
   FileMessageData,
@@ -157,6 +157,7 @@ function decodeSqlite(
   envelope: Extract<OpenCodeSessionEnvelope, { kind: 'sqlite' }>,
   providerName: string,
   seenKeys: Set<string>,
+  privacyKey: string,
 ): OpenCodeSessionDecodeResult {
   const calls: OpenCodeSessionDecodedCall[] = []
   const diagnostics: RecordDiagnostic[] = []
@@ -179,8 +180,12 @@ function decodeSqlite(
     let data: MessageData
     try {
       data = JSON.parse(msg.data) as MessageData
-    } catch {
-      diagnostics.push({ index: 0, code: 'malformed-json' })
+    } catch (err) {
+      // Keyed fingerprint of the error, never its message: a hostile msg.data
+      // could otherwise smuggle content through the parse failure. Without a
+      // privacy key the detail is omitted entirely (D1: no unkeyed digest).
+      const detail = keyedDetail(err, privacyKey)
+      diagnostics.push(detail ? { index: 0, code: 'malformed-json', detail } : { index: 0, code: 'malformed-json' })
       continue
     }
 
@@ -332,7 +337,7 @@ export function decodeOpenCodeSession(input: OpenCodeSessionDecodeInput): OpenCo
 
   switch (envelope.kind) {
     case 'sqlite':
-      return decodeSqlite(envelope, providerName, seenKeys)
+      return decodeSqlite(envelope, providerName, seenKeys, input.context.privacyKey)
     case 'file':
       return decodeFile(envelope, providerName, seenKeys)
     default:
