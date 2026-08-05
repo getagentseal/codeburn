@@ -37,6 +37,9 @@ function normalizeContentBlocks<T extends { type?: string; text?: string }>(
 
 export const codexToolNameMap: Record<string, string> = {
   exec_command: 'Bash',
+  // Codex Desktop's custom-tool transport uses the shorter `exec` name for
+  // the same shell tool that CLI rollouts record as `exec_command`.
+  exec: 'Bash',
   read_file: 'Read',
   write_file: 'Edit',
   apply_diff: 'Edit',
@@ -95,9 +98,43 @@ function getRawJsonStringField(head: string, field: string): string | undefined 
   }
 }
 
+function getRawJsonNumberField(head: string, field: string): number | undefined {
+  const match = new RegExp(`"${field}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`).exec(head)
+  if (!match) return undefined
+  const value = Number(match[1])
+  return Number.isFinite(value) ? value : undefined
+}
+
+// Extract the token buckets of a token_count payload from a compact head scan.
+// Mirrors the full-JSON `info` shape so the Buffer path and the string path
+// produce identical payloads for the decoder's token-count branch.
+function getRawTokenUsage(head: string, field: 'last_token_usage' | 'total_token_usage'): CodexTokenUsage | undefined {
+  const match = new RegExp(`"${field}"\\s*:\\s*\\{([^}]*)\\}`).exec(head)
+  if (!match) return undefined
+  const body = match[1]!
+  return {
+    input_tokens: getRawJsonNumberField(body, 'input_tokens'),
+    cached_input_tokens: getRawJsonNumberField(body, 'cached_input_tokens'),
+    output_tokens: getRawJsonNumberField(body, 'output_tokens'),
+    reasoning_output_tokens: getRawJsonNumberField(body, 'reasoning_output_tokens'),
+    total_tokens: getRawJsonNumberField(body, 'total_tokens'),
+  }
+}
+
 function payloadHead(head: string): string {
   const idx = head.indexOf('"payload"')
   return idx === -1 ? head : head.slice(idx)
+}
+
+function getRawInvocation(head: string): { server?: string; tool?: string } | undefined {
+  const idx = head.indexOf('"invocation"')
+  if (idx === -1) return undefined
+  // Server/tool are shallow fields and precede the potentially huge arguments
+  // object in Codex MCP records. Limit this scan to keep compact parsing cheap.
+  const invocationHead = head.slice(idx, idx + 8192)
+  const server = getRawJsonStringField(invocationHead, 'server')
+  const tool = getRawJsonStringField(invocationHead, 'tool')
+  return server || tool ? { server, tool } : undefined
 }
 
 function countJsonStringBytes(source: Buffer, valueStart: number): number {
@@ -172,6 +209,28 @@ export function parseCodexLine(line: string | Buffer): CodexEntry | null {
   const pHead = payloadHead(head)
   const payloadType = getRawJsonStringField(pHead, 'type')
   const role = getRawJsonStringField(pHead, 'role')
+  // task_complete appends the potentially huge final assistant message before
+  // its duration fields, and mcp_tool_call_end can place a large result after
+  // them. Mirror the pre-extraction decoder: for those events fall back to a
+  // tail window of the line so fields past the compact head are not lost.
+  const needsTimingTail = type === 'event_msg' && (payloadType === 'task_complete' || payloadType === 'mcp_tool_call_end')
+  const timingTail = needsTimingTail && line.length > RAW_HEAD_BYTES
+    ? line.subarray(Math.max(0, line.length - 16 * 1024)).toString('utf-8')
+    : pHead
+  // Synthesize the fields the full-JSON path would carry, so the Buffer path
+  // and the string path produce identical payloads for the same line: `info`
+  // (token buckets — latent: token_count lines are small and never route here)
+  // and `invocation` (live: large MCP records with a huge invocation.arguments
+  // object exceed LARGE_STREAM_LINE_BYTES and lose their mcp__server__tool
+  // attribution without this).
+  const compactModel = getRawJsonStringField(pHead, 'model')
+  const compactModelName = getRawJsonStringField(pHead, 'model_name')
+  const compactLastUsage = getRawTokenUsage(pHead, 'last_token_usage')
+  const compactTotalUsage = getRawTokenUsage(pHead, 'total_token_usage')
+  const compactInfo = compactModel || compactModelName || compactLastUsage || compactTotalUsage
+    ? { model: compactModel, model_name: compactModelName, last_token_usage: compactLastUsage, total_token_usage: compactTotalUsage }
+    : undefined
+  const invocation = getRawInvocation(pHead) ?? getRawInvocation(timingTail)
 
   const entry: CodexEntry = {
     type,
@@ -186,6 +245,8 @@ export function parseCodexLine(line: string | Buffer): CodexEntry | null {
       forked_from_id: getRawJsonStringField(pHead, 'forked_from_id'),
       model: getRawJsonStringField(pHead, 'model'),
       name: getRawJsonStringField(pHead, 'name'),
+      invocation,
+      info: compactInfo,
     },
   }
 
@@ -317,7 +378,24 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
       continue
     }
 
-    if (entry.type === 'response_item' && entry.payload?.type === 'function_call') {
+    // Forked sessions replay the parent's event history clustered at the fork
+    // creation time. Skip replayed events (within 5s of fork) so the parent's
+    // tool calls, patch applies and MCP tool ends do not leak into the child's
+    // turn (inflating tool counts, edit LOC and failed-edit counts). The
+    // token_count branch applies the same cutoff for token/cost dedup.
+    const isForkReplay = Boolean(s.forkCutoff && entry.timestamp && entry.timestamp < s.forkCutoff)
+    if (isForkReplay && (
+      entry.payload?.type === 'task_started' ||
+      entry.payload?.type === 'task_complete' ||
+      entry.payload?.type === 'function_call' ||
+      entry.payload?.type === 'function_call_output' ||
+      entry.payload?.type === 'custom_tool_call' ||
+      entry.payload?.type === 'custom_tool_call_output' ||
+      entry.payload?.type === 'mcp_tool_call_end' ||
+      entry.payload?.type === 'patch_apply_end'
+    )) continue
+
+    if (entry.type === 'response_item' && (entry.payload?.type === 'function_call' || entry.payload?.type === 'custom_tool_call')) {
       const rawName = entry.payload.name ?? ''
       const mapped = codexToolNameMap[rawName] ?? rawName
       s.pendingTools.push(mapped)

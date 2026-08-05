@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodeCodex } from '../../src/providers/codex/index.js'
+import { codexToolNameMap, decodeCodex, parseCodexLine } from '../../src/providers/codex/index.js'
 import type { CodexDecodeState } from '../../src/providers/codex/index.js'
 import type { DecodeContext } from '../../src/contracts.js'
 
@@ -27,6 +27,23 @@ function assistantMessage(text: string, timestamp: string) {
 }
 function functionCall(name: string, timestamp: string) {
   return JSON.stringify({ type: 'response_item', timestamp, payload: { type: 'function_call', name } })
+}
+function customToolCall(name: string, timestamp: string) {
+  return JSON.stringify({ type: 'response_item', timestamp, payload: { type: 'custom_tool_call', name } })
+}
+function patchApplyEnd(opts: { success: boolean; added: number; file: string; timestamp: string }) {
+  return JSON.stringify({
+    type: 'event_msg',
+    timestamp: opts.timestamp,
+    payload: {
+      type: 'patch_apply_end',
+      success: opts.success,
+      changes: { [opts.file]: { unified_diff: '+a\n'.repeat(opts.added) } },
+    },
+  })
+}
+function mcpToolCallEnd(server: string, tool: string, timestamp: string) {
+  return JSON.stringify({ type: 'event_msg', timestamp, payload: { type: 'mcp_tool_call_end', invocation: { server, tool } } })
 }
 function tokenCount(opts: { timestamp: string; last?: { input?: number; cached?: number; output?: number; reasoning?: number }; total?: { input?: number; cached?: number; output?: number; reasoning?: number; total?: number }; noInfo?: boolean }) {
   const info = opts.noInfo ? undefined : {
@@ -65,7 +82,7 @@ const CORPUS: string[] = [
 const FORK_BOUNDARY_INDEX = 7 // the fork's session_meta
 const MID_PARENT_INDEX = 4    // between A's two turns
 
-function decodeCold(records: string[]) {
+function decodeCold(records: (string | Buffer)[]) {
   return decodeCodex({ records, context }).calls
 }
 
@@ -125,5 +142,132 @@ describe('codex decoder — round-trip resume invariant', () => {
       ...decodeCodex({ records: CORPUS.slice(FORK_BOUNDARY_INDEX), context }).calls,
     ]
     expect(parentAndForkFresh.length).toBeGreaterThan(threaded.length)
+  })
+})
+
+describe('codex decoder — decode fidelity restoration (GAP 1-4)', () => {
+  it('GAP 1: custom_tool_call events feed the turn tools and tool sequence', () => {
+    const calls = decodeCold([
+      sessionMeta({ session_id: 'sess-custom' }),
+      userMessage('use the custom tool', '2026-04-14T12:00:01Z'),
+      customToolCall('my_custom_tool', '2026-04-14T12:00:02Z'),
+      tokenCount({ timestamp: '2026-04-14T12:00:03Z', last: { input: 100 }, total: { input: 100, total: 100 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['my_custom_tool'])
+    expect(calls[0]!.toolSequence).toEqual([[{ tool: 'my_custom_tool' }]])
+  })
+
+  it("GAP 2: fork replay does not leak the parent's tool/patch/MCP events into the child turn", () => {
+    // Parent: one turn with a FAILED edit alongside Bash + MCP. The child
+    // replays that history verbatim inside the 5s fork window, then does its
+    // own genuine work (a read + a successful edit on a different file). The
+    // child's turn must carry exactly its own tools/sequence/LOC — none of the
+    // replayed Bash, failed edit or MCP end. The child fixture has real tool
+    // events of its own so the test bites in BOTH directions: an
+    // over-aggressive skip that eats everything empties the child turn (child
+    // asserts fail); a neutralized skip leaks the parent's replay into it
+    // (parent asserts still pass, child asserts fail).
+    const calls = decodeCold([
+      // Parent session: one turn with a Bash call, a FAILED edit and an MCP call.
+      sessionMeta({ session_id: 'sess-parent', timestamp: '2026-04-14T10:00:00Z' }),
+      userMessage('parent turn', '2026-04-14T10:00:01Z'),
+      functionCall('exec_command', '2026-04-14T10:00:02Z'),
+      patchApplyEnd({ success: false, added: 2, file: 'src/a.ts', timestamp: '2026-04-14T10:00:03Z' }),
+      mcpToolCallEnd('srv', 't1', '2026-04-14T10:00:04Z'),
+      tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 500 }, total: { input: 500, total: 500 } }),
+      // Fork created at 10:05:00 → cutoff 10:05:05. The parent's history is
+      // replayed clustered inside the window (10:05:01-04) and must be skipped
+      // wholesale — a replayed FAILED patch and MCP end must not leak into the
+      // child's turn (which would inflate tools, locAdded and editFailed).
+      sessionMeta({ session_id: 'sess-fork', forked_from_id: 'sess-parent', timestamp: '2026-04-14T10:05:00Z' }),
+      functionCall('exec_command', '2026-04-14T10:05:01Z'),
+      patchApplyEnd({ success: false, added: 2, file: 'src/a.ts', timestamp: '2026-04-14T10:05:02Z' }),
+      mcpToolCallEnd('srv', 't1', '2026-04-14T10:05:03Z'),
+      tokenCount({ timestamp: '2026-04-14T10:05:04Z', last: { input: 500 }, total: { input: 500, total: 500 } }),
+      // Child's own turn, past the cutoff: genuine tool events of its own.
+      userMessage('child turn', '2026-04-14T10:05:20Z'),
+      functionCall('read_file', '2026-04-14T10:05:20Z'),
+      patchApplyEnd({ success: true, added: 3, file: 'src/b.ts', timestamp: '2026-04-14T10:05:20Z' }),
+      tokenCount({ timestamp: '2026-04-14T10:05:21Z', last: { input: 300 }, total: { input: 800, total: 800 } }),
+    ])
+    expect(calls).toHaveLength(2)
+    // The parent's turn keeps its own tools, failed-edit flag and LOC.
+    expect(calls[0]!.inputTokens).toBe(500)
+    expect(calls[0]!.tools).toEqual(['Bash', 'Edit', 'mcp__srv__t1'])
+    expect(calls[0]!.toolSequence).toEqual([
+      [{ tool: 'Bash' }],
+      [{ tool: 'Edit', file: 'src/a.ts' }],
+      [{ tool: 'mcp__srv__t1' }],
+    ])
+    expect(calls[0]!.locAdded).toBe(2)
+    expect(calls[0]!.editFailed).toBe(1)
+    // The child's turn sees NONE of the replayed events: exactly its own read +
+    // successful edit, no leaked Bash / failed edit / MCP end.
+    expect(calls[1]!.inputTokens).toBe(300)
+    expect(calls[1]!.tools).toEqual(['Read', 'Edit'])
+    expect(calls[1]!.toolSequence).toEqual([
+      [{ tool: 'Read' }],
+      [{ tool: 'Edit', file: 'src/b.ts' }],
+    ])
+    expect(calls[1]!.locAdded).toBe(3)
+    expect(calls[1]!.locRemoved).toBeUndefined()
+    expect(calls[1]!.editFailed).toBeUndefined()
+  })
+
+  it('GAP 3: Buffer path synthesizes payload.info and payload.invocation', () => {
+    // info on the Buffer path is a latent gap: a token_count line is a handful
+    // of numbers and never exceeds LARGE_STREAM_LINE_BYTES (32KB), so it always
+    // arrives as a string. The Buffer branch must still preserve it if hit.
+    const tokenLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T13:00:00Z',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { input_tokens: 111, output_tokens: 7, total_tokens: 118 },
+          total_token_usage: { input_tokens: 111, total_tokens: 118 },
+        },
+      },
+    })
+    const tokenEntry = parseCodexLine(Buffer.from(tokenLine))
+    expect(tokenEntry?.payload?.info?.last_token_usage?.input_tokens).toBe(111)
+    expect(tokenEntry?.payload?.info?.total_token_usage?.total_tokens).toBe(118)
+
+    // invocation is LIVE: an mcp_tool_call_end carrying a huge
+    // invocation.arguments object exceeds the 32KB threshold, routes to the
+    // Buffer path, and without invocation extraction the mcp__server__tool
+    // name is lost from the turn.
+    const bigArgs = 'y'.repeat(40 * 1024)
+    const mcpLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T13:00:01Z',
+      payload: { type: 'mcp_tool_call_end', invocation: { server: 'srv', tool: 'big', arguments: { blob: bigArgs } } },
+    })
+    expect(Buffer.byteLength(mcpLine)).toBeGreaterThan(32 * 1024)
+    const mcpEntry = parseCodexLine(Buffer.from(mcpLine))
+    expect(mcpEntry?.payload?.invocation).toEqual({ server: 'srv', tool: 'big' })
+
+    // Decode-level: the large MCP record is attributed as mcp__srv__big.
+    const calls = decodeCold([
+      sessionMeta({ session_id: 'sess-big' }),
+      userMessage('big mcp', '2026-04-14T13:00:10Z'),
+      Buffer.from(mcpLine),
+      tokenCount({ timestamp: '2026-04-14T13:00:11Z', last: { input: 50 }, total: { input: 50, total: 50 } }),
+    ])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.tools).toEqual(['mcp__srv__big'])
+  })
+
+  it("GAP 4: 'exec' maps to 'Bash' for the Codex Desktop custom-tool transport", () => {
+    expect(codexToolNameMap['exec']).toBe('Bash')
+    const calls = decodeCold([
+      sessionMeta({ session_id: 'sess-exec' }),
+      userMessage('run it', '2026-04-14T14:00:01Z'),
+      functionCall('exec_command', '2026-04-14T14:00:02Z'),
+      customToolCall('exec', '2026-04-14T14:00:03Z'),
+      tokenCount({ timestamp: '2026-04-14T14:00:04Z', last: { input: 50 }, total: { input: 50, total: 50 } }),
+    ])
+    expect(calls[0]!.tools).toEqual(['Bash', 'Bash'])
   })
 })

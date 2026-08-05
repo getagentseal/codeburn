@@ -28,6 +28,7 @@ export type CodexEntry = {
     forked_from_id?: string
     model?: string
     name?: string
+    invocation?: { server?: string; tool?: string }
     content?: Array<{ type?: string; text?: string }>
     info?: {
       model?: string
