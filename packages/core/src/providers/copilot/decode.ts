@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 import type {
   AssistantMessageData,
   ChatJournalPathSegment,
@@ -928,7 +929,11 @@ function decodeJsonl(envelope: Extract<CopilotRecordEnvelope, { kind: 'jsonl' }>
         // to avoid an empty $0 row (output is intentionally excluded).
         if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) continue
 
-        const dedupKey = `copilot:${sessionId}:shutdown:${model}`
+        // The model component is normalized exactly as the observation
+        // boundary normalizes `model`: the key ships on the envelope, so a
+        // display-name or hostile model string from the JSONL must collapse
+        // to 'unknown' inside the key, never ride it raw.
+        const dedupKey = `copilot:${sessionId}:shutdown:${normalizeModelIdentifier(model)}`
         if (seen.has(dedupKey)) continue
         seen.add(dedupKey)
 
@@ -1098,6 +1103,11 @@ function decodeJetBrains(envelope: Extract<CopilotRecordEnvelope, { kind: 'jetbr
   // the old turn under a fresh index — double-billing it. The per-hash
   // counter keeps genuinely repeated replies and errored turns (which
   // share replyText '') distinct within a conversation.
+  // Truncated unkeyed digest of reply text — a dedup identity, not a carrier:
+  // the digest is bounded (12 hex chars) and one-way, so no reply content can
+  // ship through this key, unlike a raw model or path. It stays unkeyed
+  // because this arm receives no privacy key; threading one is tracked with
+  // the copilot-bridge parity work (shape change, golden re-capture).
   const perContentIndex = new Map<string, number>()
   for (const turn of turns) {
     // One .db holds many chat tabs; group each turn under its own

@@ -54,6 +54,9 @@ import {
   toObservations as toKiroObservations,
 } from '../src/providers/kiro/index.js'
 import { decodeVercelGateway, toObservations as toVercelGatewayObservations } from '../src/providers/vercel-gateway/index.js'
+import { decodeZerostack, toObservations as toZerostackObservations } from '../src/providers/zerostack/index.js'
+import { decodeLingTaiTui, toObservations as toLingTaiTuiObservations } from '../src/providers/lingtai-tui/index.js'
+import { decodePi, toObservations as toPiObservations } from '../src/providers/pi/index.js'
 import type { DecodeContext } from '../src/contracts.js'
 import type { ZedThreadRow } from '../src/providers/zed/index.js'
 import type {
@@ -2081,11 +2084,13 @@ describe('content-smuggling guardrail: real kiro decode -> toObservations is sec
 
 
 describe('content-smuggling guardrail: real vercel-gateway decode -> toObservations is secret-free', () => {
-  // A hostile Vercel Gateway report planting every secret in the API fields the
-  // decode sees. The only free-text-capable API field is `model`; under the
-  // identifier-exemption convention model is an API identifier emitted by design,
-  // so the secret planted there is expected to remain. Every other secret must
-  // be absent from the envelope.
+  // A hostile Vercel Gateway report planting every secret the API fields can
+  // carry. `model` is externally supplied (the fetched report), so it is
+  // normalized at the observation boundary: a hostile prompt collapses to
+  // 'unknown' and the envelope still parses — a bad model in one call can
+  // never reject the whole batch. `day` is spliced into the synthesized
+  // timestamp, whose date-time constraint is the containment: a hostile day
+  // fails validation, and the error path names the timestamp field.
   function decodeAndMinimize() {
     const { calls } = decodeVercelGateway({
       records: [
@@ -2109,8 +2114,19 @@ describe('content-smuggling guardrail: real vercel-gateway decode -> toObservati
     }
   }
 
-  it('produces a schema-valid envelope from the hostile report', () => {
-    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  it('normalizes a hostile prompt in model to unknown; the envelope still parses (no whole-batch rejection)', () => {
+    const env = decodeAndMinimize()
+    expect(ObservationEnvelope.safeParse(env).success).toBe(true)
+    const call = env.sessions[0]!.calls[0]!
+    expect(call.model).toBe('unknown')
+  })
+
+  it('the hostile envelope serializes with none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    // The prompt was planted in model, the abs path was passed as projectPath;
+    // neither may survive the boundary.
+    expect(serialized).not.toContain(SECRETS.prompt)
+    expect(serialized).not.toContain(SECRETS.absPath)
   })
 
   it('is non-vacuous (at least one call)', () => {
@@ -2119,20 +2135,40 @@ describe('content-smuggling guardrail: real vercel-gateway decode -> toObservati
     expect(callCount).toBeGreaterThan(0)
   })
 
-  it('contains the model secret (identifier-exemption convention) and no other secrets', () => {
-    const serialized = JSON.stringify(decodeAndMinimize())
-    expect(serialized).toContain(SECRETS.prompt)
-    expect(serialized).not.toContain(SECRETS.absPath)
-    expect(serialized).not.toContain(SECRETS.apiKey)
-    expect(serialized).not.toContain(SECRETS.commandLine)
-    expect(serialized).not.toContain(SECRETS.fileContent)
+  it('still lets a legitimate identifier-shaped model cross unchanged', () => {
+    const { calls } = decodeVercelGateway({
+      records: [
+        {
+          day: '2026-07-17',
+          model: 'openai/gpt-4o',
+          total_cost: 1.23,
+          input_tokens: 100,
+          output_tokens: 50,
+        },
+      ],
+    })
+    const { sessions } = toVercelGatewayObservations(
+      { sessionId: 'report-identifier', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'vercel-gateway' },
+    )
+    const envelope = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+    expect(envelope.sessions[0]!.calls[0]!.model).toBe('openai/gpt-4o')
+    const serialized = JSON.stringify(envelope)
+    expect(serialized).toContain('openai/gpt-4o')
   })
 
   // `day` is the report's only other string field, and it is NOT sanitized: the
   // decode splices it verbatim into the synthesized timestamp and the dedup key.
   // The envelope's date-time constraint is the containment, not the decode — a
-  // hostile `day` fails validation and therefore never ships.
-  it('rejects the envelope when a hostile day is spliced into the timestamp', () => {
+  // hostile `day` fails validation and therefore never ships. The error is
+  // asserted to name the timestamp field so this test cannot pass because an
+  // unrelated field broke.
+  it('rejects the envelope when a hostile day is spliced into the timestamp, and the error names the timestamp field', () => {
     const { calls } = decodeVercelGateway({
       records: [{ day: SECRETS.apiKey, model: 'openai/gpt-4o', total_cost: 1, input_tokens: 1, output_tokens: 1 }],
     })
@@ -2148,5 +2184,322 @@ describe('content-smuggling guardrail: real vercel-gateway decode -> toObservati
       sessions,
     })
     expect(parsed.success).toBe(false)
+    if (!parsed.success) {
+      const paths = parsed.error.issues.map(i => i.path.join('.'))
+      expect(paths.some(p => p.includes('timestamp'))).toBe(true)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real zerostack decode -> toObservations is secret-free', () => {
+  // The zerostack dedup key threads the source ref. The raw host path must not
+  // cross into the envelope — dedupKey ships on the envelope — so the decoder
+  // fingerprints the source ref instead. A hostile sourceRef (the victim's
+  // absolute path) planted through the real decoder must appear nowhere in the
+  // serialized envelope.
+  const zerostackContext: DecodeContext = {
+    privacyKey: 'test-privacy-key',
+    providerId: 'zerostack',
+    sourceRef: SECRETS.absPath,
+  }
+
+  function decodeAndMinimize() {
+    const records = [
+      {
+        id: 'sess-hostile',
+        messages: [{ role: 'user', content: SECRETS.prompt }],
+        total_input_tokens: 100,
+        total_output_tokens: 50,
+        model: 'deepseek/deepseek-v4-pro',
+        created_at: '2026-07-17T10:00:00Z',
+        updated_at: '2026-07-17T10:01:00Z',
+      },
+    ]
+    const { calls } = decodeZerostack({ records, context: zerostackContext })
+    const { sessions } = toZerostackObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'zerostack' },
+    )
+    return {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session', () => {
+    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  })
+
+  it('fingerprints the source ref into the dedup key; the raw path appears nowhere', () => {
+    const env = decodeAndMinimize()
+    const allDedupKeys = env.sessions.flatMap(s => s.calls.map(c => c.dedupKey))
+    expect(allDedupKeys.length).toBeGreaterThan(0)
+    for (const key of allDedupKeys) {
+      expect(key).not.toContain(SECRETS.absPath)
+      expect(key).toMatch(/^zerostack:[0-9a-f]{16}:/)
+    }
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.absPath)
+  })
+
+  it('the serialized envelope contains none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    for (const secret of ALL_SECRETS) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real lingtai-tui decode -> toObservations is secret-free', () => {
+  // The lingtai-tui dedup key threads the source ref (the ledger path). The raw
+  // host path must not cross into the envelope — dedupKey ships on the
+  // envelope — so the decoder fingerprints the source ref instead.
+  const lingTaiContext: DecodeContext = {
+    privacyKey: 'test-privacy-key',
+    providerId: 'lingtai-tui',
+    sourceRef: SECRETS.absPath,
+  }
+
+  function decodeAndMinimize() {
+    const records = [
+      JSON.stringify({
+        ts: '2026-07-17T10:00:00.000Z',
+        input: 100,
+        output: 50,
+        model: 'gpt-5.5',
+        endpoint: 'example-endpoint',
+        source: 'main',
+      }),
+    ]
+    const { calls } = decodeLingTaiTui({
+      records,
+      context: lingTaiContext,
+      agentId: 'agent-hostile',
+      fallbackModel: 'unknown',
+      fallbackEndpoint: 'unknown',
+      projectPath: SECRETS.absPath,
+    })
+    const { sessions } = toLingTaiTuiObservations(
+      { sessionId: 'agent-hostile:main', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'lingtai-tui' },
+    )
+    return {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile ledger', () => {
+    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  })
+
+  it('fingerprints the source ref into the dedup key; the raw path appears nowhere', () => {
+    const env = decodeAndMinimize()
+    const allDedupKeys = env.sessions.flatMap(s => s.calls.map(c => c.dedupKey))
+    expect(allDedupKeys.length).toBeGreaterThan(0)
+    for (const key of allDedupKeys) {
+      expect(key).not.toContain(SECRETS.absPath)
+      expect(key).toMatch(/^lingtai-tui:[0-9a-f]{16}:/)
+    }
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.absPath)
+  })
+
+  it('normalizes a hostile model out of the dedup key; the raw ledger text appears nowhere', () => {
+    // The ledger's `model` field is provider free text. The observation boundary
+    // collapses it to 'unknown', so the KEY (built in the decoder) must use the
+    // normalized identifier too — otherwise the raw display name / planted
+    // prompt rides the envelope inside dedupKey.
+    const records = [
+      JSON.stringify({
+        ts: '2026-07-17T10:00:00.000Z',
+        input: 100,
+        output: 50,
+        model: SECRETS.prompt,
+        endpoint: 'example-endpoint',
+        source: 'main',
+      }),
+    ]
+    const { calls } = decodeLingTaiTui({
+      records,
+      context: lingTaiContext,
+      agentId: 'agent-hostile',
+      fallbackModel: 'unknown',
+      fallbackEndpoint: 'unknown',
+      projectPath: SECRETS.absPath,
+    })
+    const { sessions } = toLingTaiTuiObservations(
+      { sessionId: 'agent-hostile:main', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'lingtai-tui' },
+    )
+    const env = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(env).success).toBe(true)
+    expect(env.sessions[0]!.calls[0]!.model).toBe('unknown')
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.prompt)
+    expect(env.sessions[0]!.calls[0]!.dedupKey).toContain(':unknown:')
+  })
+
+  it('the serialized envelope contains none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    for (const secret of ALL_SECRETS) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real pi/omp decode -> toObservations is secret-free', () => {
+  // The pi/omp dedup key threads the session file path. The raw host path must
+  // not cross into the envelope — dedupKey ships on the envelope — so the
+  // decoder fingerprints the source ref instead. A hostile sourceRef (the
+  // victim's absolute path) and a hostile display-name model planted through
+  // the real decoder must appear nowhere in the serialized envelope.
+  const piContext: DecodeContext = {
+    privacyKey: 'test-privacy-key',
+    providerId: 'pi',
+    sourceRef: SECRETS.absPath,
+  }
+
+  function decodeAndMinimize() {
+    const records = [
+      JSON.stringify({
+        type: 'session',
+        id: 'sess-hostile',
+        timestamp: '2026-07-17T10:00:00.000Z',
+      }),
+      JSON.stringify({
+        type: 'message',
+        id: 'msg-hostile-1',
+        timestamp: '2026-07-17T10:00:10.000Z',
+        message: {
+          role: 'assistant',
+          model: SECRETS.prompt,
+          responseId: 'resp-hostile-1',
+          content: [],
+          usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+    ]
+    const { calls } = decodePi({ records, context: piContext })
+    const { sessions } = toPiObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'pi' },
+    )
+    return {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session', () => {
+    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  })
+
+  it('fingerprints the source ref into the dedup key; the raw path appears nowhere', () => {
+    const env = decodeAndMinimize()
+    const allDedupKeys = env.sessions.flatMap(s => s.calls.map(c => c.dedupKey))
+    expect(allDedupKeys.length).toBeGreaterThan(0)
+    for (const key of allDedupKeys) {
+      expect(key).not.toContain(SECRETS.absPath)
+      expect(key).toMatch(/^pi:[0-9a-f]{16}:/)
+    }
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.absPath)
+  })
+
+  it('normalizes a hostile display-name model out of the envelope', () => {
+    const env = decodeAndMinimize()
+    expect(env.sessions[0]!.calls[0]!.model).toBe('unknown')
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.prompt)
+  })
+
+  it('the serialized envelope contains none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    for (const secret of ALL_SECRETS) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real grok decode -> toObservations is secret-free', () => {
+  // The grok dedup key threads the session directory. The raw host path must
+  // not cross into the envelope — dedupKey ships on the envelope — so the
+  // decoder fingerprints the session dir instead. A hostile sourceDir (the
+  // victim's absolute path) and a hostile display-name model planted through
+  // the real decoder must appear nowhere in the serialized envelope.
+  const grokContext: DecodeContext = {
+    privacyKey: 'test-privacy-key',
+    providerId: 'grok',
+    sourceRef: SECRETS.absPath,
+  }
+
+  function decodeAndMinimize() {
+    const records = [
+      {
+        summary: {
+          info: { id: 'sess-hostile', cwd: SECRETS.absPath },
+          created_at: '2026-07-17T10:00:00.000Z',
+          updated_at: '2026-07-17T10:01:00.000Z',
+          current_model_id: SECRETS.prompt,
+          session_summary: 'hostile',
+        },
+        signals: null,
+        updatesLines: [
+          JSON.stringify({ params: { _meta: { totalTokens: 1000, promptId: 'p1' } } }),
+          JSON.stringify({ params: { _meta: { totalTokens: 1500, promptId: 'p1' } } }),
+        ],
+        sourceDir: SECRETS.absPath,
+        sessionName: 'sess-hostile',
+        project: 'hostile',
+      },
+    ]
+    const { calls } = decodeGrok({ records, context: grokContext })
+    const { sessions } = toGrokObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'grok' },
+    )
+    return {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session', () => {
+    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  })
+
+  it('fingerprints the session dir into the dedup key; the raw path appears nowhere', () => {
+    const env = decodeAndMinimize()
+    const allDedupKeys = env.sessions.flatMap(s => s.calls.map(c => c.dedupKey))
+    expect(allDedupKeys.length).toBeGreaterThan(0)
+    for (const key of allDedupKeys) {
+      expect(key).not.toContain(SECRETS.absPath)
+      expect(key).toMatch(/^grok:[0-9a-f]{16}:/)
+    }
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.absPath)
+  })
+
+  it('normalizes a hostile display-name model out of the envelope', () => {
+    const env = decodeAndMinimize()
+    expect(env.sessions[0]!.calls[0]!.model).toBe('unknown')
+    const serialized = JSON.stringify(env)
+    expect(serialized).not.toContain(SECRETS.prompt)
+  })
+
+  it('the serialized envelope contains none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    for (const secret of ALL_SECRETS) {
+      expect(serialized).not.toContain(secret)
+    }
   })
 })

@@ -5,19 +5,29 @@ import { describe, it, expect } from 'vitest'
 
 import { createCodebuffProvider } from '../../src/providers/codebuff.js'
 import { priceProviderCall } from '../../src/pricing-pass.js'
+import { getHostPrivacyKey } from '../../src/privacy-key.js'
+import { sourceRefFingerprint } from '@codeburn/core'
 import type { ParsedProviderCall, SessionSource } from '../../src/providers/types.js'
 
 // Byte-identical parity gate for the codebuff bridge migration. The GOLDEN below
 // was captured from the legacy in-CLI decode before the migration; the bridged
 // provider (discovery + I/O CLI-side, pure decode in @codeburn/core/providers/codebuff)
-// must reproduce it exactly. Dedup keys contain absolute source paths, so they are
-// computed from the discovered source at runtime rather than hard-coded.
+// must reproduce it exactly. Dedup keys thread a FINGERPRINT of the source path
+// (dedupKey ships on the envelope, so the raw path must never appear there), so
+// the expected values are DERIVED from the source at runtime via the same
+// sourceRefFingerprint the decoder uses — never the raw path, and never a
+// hard-coded literal. The bridge threads the HOST privacy key (getHostPrivacyKey,
+// per-install stable), so the golden derives with the same key.
 
 const here = dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = resolve(here, '../fixtures/codebuff-parity/manicode')
 
 function expectedGolden(sourcePath: string): ParsedProviderCall[] {
   const chatDir = sourcePath
+  // The CLI bridge threads the host privacy key into the rich decode, so the
+  // decoder keys the source ref under getHostPrivacyKey() — derive the
+  // expected key the same way instead of pasting what the code emits.
+  const chatRef = sourceRefFingerprint(getHostPrivacyKey(), chatDir)
   return [
     {
       provider: 'codebuff',
@@ -35,7 +45,7 @@ function expectedGolden(sourcePath: string): ParsedProviderCall[] {
       bashCommands: ['npm', 'npm'],
       timestamp: '2026-04-14T10:00:30.000Z',
       speed: 'standard',
-      deduplicationKey: `codebuff:${chatDir}:a1`,
+      deduplicationKey: `codebuff:${chatRef}:a1`,
       userMessage: 'implement the feature',
       sessionId: 'manicode/2026-04-14T10-00-00.000Z',
     },
@@ -55,7 +65,7 @@ function expectedGolden(sourcePath: string): ParsedProviderCall[] {
       bashCommands: [],
       timestamp: '2026-04-14T10:01:30.000Z',
       speed: 'standard',
-      deduplicationKey: `codebuff:${chatDir}:a2`,
+      deduplicationKey: `codebuff:${chatRef}:a2`,
       userMessage: 'fix the bug',
       sessionId: 'manicode/2026-04-14T10-00-00.000Z',
     },
@@ -75,7 +85,7 @@ function expectedGolden(sourcePath: string): ParsedProviderCall[] {
       bashCommands: [],
       timestamp: '2026-04-14T10:02:00.000Z',
       speed: 'standard',
-      deduplicationKey: `codebuff:${chatDir}:a3`,
+      deduplicationKey: `codebuff:${chatRef}:a3`,
       userMessage: '',
       sessionId: 'manicode/2026-04-14T10-00-00.000Z',
     },

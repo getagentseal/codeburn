@@ -346,6 +346,42 @@ describe('antigravity rich decode (moved to @codeburn/core)', () => {
     expect(calls[1]).toMatchObject({ inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50 })
   })
 
+  it('acceptance: a display-name model read from payload.model.display_name is normalized at the observation boundary', () => {
+    // The status-line decoder reads payload.model.display_name verbatim when no
+    // id is present (e.g. "Gemini 3.5 Flash (High)"). The observation boundary
+    // must normalize it to 'unknown' instead of rejecting the whole envelope.
+    const payload = {
+      conversation_id: 'accept-1',
+      model: { display_name: 'Gemini 3.5 Flash (High)' },
+      context_window: {
+        current_usage: { input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    }
+    const event = parseAntigravityStatusLinePayload(payload, '2026-05-05T05:05:05.005Z')
+    expect(event).not.toBeNull()
+    expect(event!.model).toBe('Gemini 3.5 Flash (High)')
+
+    const { calls } = decodeAntigravityStatusLine({
+      records: [JSON.stringify(event)],
+      context,
+      seenKeys: new Set(),
+    })
+    expect(calls[0]!.model).toBe('Gemini 3.5 Flash (High)')
+
+    const { sessions } = toObservations(
+      { sessionId: 'accept-1', projectPath: '/Users/t/project', calls },
+      { privacyKey: 'test-privacy-key', provider: 'antigravity' },
+    )
+    const envelope = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+    expect(sessions[0]!.calls[0]!.model).toBe('unknown')
+    expect(JSON.stringify(envelope)).not.toContain('Gemini 3.5 Flash')
+  })
+
   it('parseAntigravityStatusLinePayload uses the injected at value and never captures cwd', () => {
     const fixedAt = '2026-05-05T05:05:05.005Z'
     const payload = {

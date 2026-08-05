@@ -6,6 +6,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { sourceRefFingerprint } from '../../fingerprint.js'
 import type {
   CodebuffBlock,
   CodebuffChatMessage,
@@ -162,7 +163,8 @@ export type CodebuffDecodeResult = {
  * Decode a Codebuff chat-messages.json array into rich, cost-free calls. A single
  * pass: user messages set the pending prompt for the next assistant call; assistant
  * messages that carry credits or token usage flush into a call. Dedup is keyed on
- * `codebuff:<sourceRef>:<id>` against the live `seenKeys` set (host-owned).
+ * `codebuff:<sourceRefFingerprint>:<id>` against the live `seenKeys` set (host-owned);
+ * the source path is fingerprinted, never emitted raw.
  */
 export function decodeCodebuff({ records, context, seenKeys: liveSeen }: CodebuffDecodeInput): CodebuffDecodeResult {
   const seen = liveSeen ?? new Set<string>()
@@ -209,7 +211,9 @@ export function decodeCodebuff({ records, context, seenKeys: liveSeen }: Codebuf
     const timestamp = coerceTimestamp(msg.timestamp ?? msg.metadata?.timestamp) || fallbackTs
 
     const dedupId = msg.id ?? String(idx)
-    const dedupKey = `codebuff:${chatDir}:${dedupId}`
+    // The dedup key threads a FINGERPRINT of the chat directory (source path),
+    // never the raw path — dedupKey ships on the envelope.
+    const dedupKey = `codebuff:${sourceRefFingerprint(context.privacyKey, context.sourceRef)}:${dedupId}`
     if (seen.has(dedupKey)) continue
     seen.add(dedupKey)
 

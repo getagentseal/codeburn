@@ -2,6 +2,8 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { sourceRefFingerprint } from '../../fingerprint.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 import type { LingTaiTuiDecodedCall, LingTaiLedgerEntry, JsonObject } from './types.js'
 
 export type LingTaiTuiDecodeInput = {
@@ -141,14 +143,20 @@ export function decodeLingTaiTui({
     const runId = stringField(obj, 'run_id') ?? ''
     const sessionId = runId || `${agentId}:${sourceLabel}`
     const activity = activityForSource(sourceLabel)
-    // The dedup key threads the source ref (host ledger path) exactly as the
-    // pre-migration decode did — NOT the agent-dir projectPath.
+    // The dedup key threads a FINGERPRINT of the source ref (host ledger path),
+    // never the raw path — dedupKey ships on the envelope, so the raw path must
+    // not cross into an observation output. (The agent-dir projectPath is never
+    // used here.) The model component is the NORMALIZED identifier, never the
+    // raw ledger text: the observation boundary normalizes the same value (a
+    // display name like "GPT-5.5 Pro (High)" collapses to 'unknown' there), so
+    // building the key from the normalized form keeps the key and the
+    // envelope's model field consistent and stops free text from riding the key.
     const dedupKey = [
       'lingtai-tui',
-      context.sourceRef,
+      sourceRefFingerprint(context.privacyKey, context.sourceRef),
       lineNo,
       timestamp,
-      model,
+      normalizeModelIdentifier(model),
       endpoint,
       sourceLabel,
       emId,
