@@ -13,7 +13,7 @@
     "build:cli": "npm run build:cli -w codeburn",
     "build:dash": "npm run build:dash -w codeburn",
     "dev": "npm run dev -w codeburn",
-    "test": "npm run test -w codeburn",
+    "test": "npm run build -w @codeburn/core && npm run test -w @codeburn/core && npm run test -w codeburn",
     "check:workspace-versions": "node scripts/check-workspace-versions.mjs"
   },
   "engines": {

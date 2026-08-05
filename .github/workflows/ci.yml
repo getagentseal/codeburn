@@ -41,6 +41,33 @@ jobs:
       - name: Verify package contents
         run: npm pack --workspace=@codeburn/core --dry-run
 
+  cli:
+    name: cli (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.13.x', '24.x']
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Check workspace versions
+        run: npm run check:workspace-versions
+
+      - name: Install from lockfile
+        run: npm ci
+
+      - name: Build core
+        run: npm run build --workspace=@codeburn/core
+
+      - name: Test cli
+        run: npm test --workspace=codeburn
+
   semgrep:
     runs-on: ubuntu-latest
     steps:
