@@ -37,7 +37,8 @@ export type GrokSessionRecords = {
   summary: GrokSummary
   signals: GrokSignals | null
   updatesLines: string[]
-  /** Absolute session directory, used only for the host-side dedup key. */
+  /** Absolute session directory; fingerprinted into the host-side dedup key,
+   *  never emitted raw. */
   sourceDir: string
   /** Basename of the session directory, used as a session id fallback. */
   sessionName: string

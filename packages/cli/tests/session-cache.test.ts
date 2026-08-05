@@ -279,6 +279,21 @@ describe('computeEnvFingerprint', () => {
     expect(computeEnvFingerprint('kiro')).not.toBe(computeEnvFingerprint('unknown-provider'))
     expect(computeEnvFingerprint('warp')).not.toBe(computeEnvFingerprint('unknown-provider'))
   })
+
+  it('dedup-key-hygiene providers carry a parse version so cached raw-path keys re-derive', () => {
+    // #931: codebuff, zerostack, pi/omp and grok changed their dedup key shape
+    // (raw source path -> fingerprint) and lingtai-tui normalized the model
+    // component. Without an entry here the env fingerprint would not change, a
+    // warm session cache would keep serving the raw-path keys, and those keys
+    // seed the dedup sets — re-ingesting the same records under the new shape.
+    // Each of these providers MUST have a parse version so the one-time
+    // re-parse that drops the old keys actually fires. The comparison baseline
+    // is a provider with no entry and no env vars, whose fingerprint omits the
+    // `parser=` component entirely.
+    for (const provider of ['codebuff', 'zerostack', 'pi', 'omp', 'grok', 'lingtai-tui']) {
+      expect(computeEnvFingerprint(provider), provider).not.toBe(computeEnvFingerprint('unknown-provider'))
+    }
+  })
 })
 
 // ── fingerprintFile ────────────────────────────────────────────────────

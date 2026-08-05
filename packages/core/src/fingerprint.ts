@@ -13,7 +13,7 @@ import { createHmac } from 'node:crypto'
 const FINGERPRINT_LEN = 16
 
 /** Domain-separation prefixes so the same string in different roles differs. */
-type Domain = 'session' | 'project' | 'branch' | 'resource'
+type Domain = 'session' | 'project' | 'branch' | 'resource' | 'source'
 
 /** Field separator for composite HMAC inputs (ASCII Unit Separator). */
 const SEP = String.fromCharCode(0x1f)
@@ -146,6 +146,22 @@ export function projectRef(privacyKey: string, path: string): string {
  */
 export function branchRef(privacyKey: string, branch: string): string {
   return hmac(privacyKey, 'branch', branch)
+}
+
+/**
+ * Fingerprint the source path for dedup-key / identity derivation. The raw
+ * absolute path must never cross into an observation output, but a decoder
+ * that needs a stable opaque form of it (e.g. inside a dedupKey, which ships
+ * on the envelope) may use this. Keyed HMAC-SHA256 (decision D1) under the
+ * caller-supplied privacyKey: the key is REQUIRED and an empty key throws
+ * (like every other fingerprint in this module), so a source ref can never
+ * silently degrade to an unkeyed, dictionary-attackable digest. With the host
+ * key the ref is host-scoped — not brute-forceable, and not comparable across
+ * hosts. The path is normalized first, so a Windows path and its POSIX
+ * spelling fingerprint identically.
+ */
+export function sourceRefFingerprint(privacyKey: string, sourceRef: string): string {
+  return hmac(privacyKey, 'source', normalizePath(sourceRef))
 }
 
 export type CommandFamily =

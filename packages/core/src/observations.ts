@@ -5,6 +5,7 @@ import {
   CostBasis,
   FingerprintHex,
   IsoTimestamp,
+  ModelIdentifier,
   NonNegInt,
   NonNegUSD,
   OBSERVATION_SCHEMA_VERSION,
@@ -26,8 +27,8 @@ import {
 export const CallObservation = z
   .object({
     provider: z.string().min(1),
-    model: z.string().min(1),
-    pricingModel: z.string().min(1).optional(),
+    model: ModelIdentifier,
+    pricingModel: ModelIdentifier.optional(),
 
     tokens: TokenBuckets,
     webSearchRequests: NonNegInt,

@@ -8,6 +8,7 @@ import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import { extractResourceRefs } from '../resource-refs.js'
 import type { HermesDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 /** One Hermes session's rich decode, as the host holds it before minimization. */
 export interface RichHermesSessionDecode {
@@ -34,7 +35,7 @@ function toCallObservation(call: HermesDecodedCall, turnIndex: number, privacyKe
   const measured = call.recordedCost !== undefined
   return {
     provider: call.provider,
-    model: call.model,
+    model: normalizeModelIdentifier(call.model),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

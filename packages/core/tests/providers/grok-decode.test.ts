@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { decodeGrok, toObservations } from '../../src/providers/grok/index.js'
+import { sourceRefFingerprint } from '../../src/fingerprint.js'
 import { ObservationEnvelope } from '../../src/observations.js'
 import { OBSERVATION_SCHEMA_VERSION } from '../../src/schema.js'
 import type { DecodeContext } from '../../src/contracts.js'
@@ -92,6 +93,10 @@ describe('grok rich decode (moved to @codeburn/core)', () => {
     expect(call.sessionId).toBe('sess-1')
     expect(call.project).toBe('project')
     expect(call.projectPath).toBe('/Users/test/project')
+    // The dedup key threads a FINGERPRINT of the session dir, never the raw
+    // path — dedupKey ships on the envelope.
+    expect(call.deduplicationKey).toBe(`grok:${sourceRefFingerprint('k', '/sessions/%2FUsers%2Ftest/sess-1')}:2026-06-19T11:31:12.282793Z:sess-1`)
+    expect(call.deduplicationKey).not.toContain('/sessions/')
   })
 
   it('sums fresh input across compaction segments', () => {
