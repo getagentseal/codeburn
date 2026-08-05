@@ -128,6 +128,11 @@ export function decodeQwen({ records, seenKeys: liveSeen }: QwenDecodeInput): Qw
     const candidatesTokenCount = usage.candidatesTokenCount ?? 0
     if (promptTokenCount === 0 && candidatesTokenCount === 0) continue
 
+    // Deliberate shape: the pre-extraction decoder interpolated the raw fields
+    // (`qwen:${entry.sessionId}:${entry.uuid}`), so a record missing sessionId
+    // produced the literal 'qwen:undefined:<uuid>'. That spelling was a
+    // template-string artifact, never a contract; coalescing to '' is pinned by
+    // qwen-decode.test.ts ("pins the dedup-key shape ... no 'undefined' spelling").
     const dedupKey = `qwen:${entry.sessionId ?? ''}:${entry.uuid ?? ''}`
     if (seen.has(dedupKey)) continue
     seen.add(dedupKey)

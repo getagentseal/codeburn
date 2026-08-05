@@ -91,6 +91,49 @@ describe('qwen rich decode (moved to @codeburn/core)', () => {
     expect(again).toEqual([])
   })
 
+  it('pins the dedup-key shape for records missing sessionId/uuid — no "undefined" spelling', () => {
+    // The pre-extraction decoder interpolated the raw fields
+    // (`qwen:${entry.sessionId}:${entry.uuid}`), so a record missing sessionId
+    // produced the literal 'qwen:undefined:<uuid>'. That spelling was a
+    // template-string artifact of JS coercion, NOT a contract: no test, fixture,
+    // or golden ever pinned it (the CLI parity golden uses fully-formed records,
+    // where both shapes are byte-identical), and the sibling core decoders
+    // (kiro, openclaw, goose) resolve missing identifiers to real fallbacks
+    // rather than interpolating 'undefined'. The extraction deliberately
+    // coalesces to '' instead: the key keeps the uuid's entropy for dedup, never
+    // fabricates a fake value in a key persisted to the session cache, and
+    // matches the shape the CLI parity golden pins for well-formed records.
+    // Restoring the old spelling would be a behavior change with no contract
+    // behind it — this test exists so nobody flips it by accident.
+    const noSessionId = JSON.stringify({
+      uuid: 'a-orphan',
+      timestamp: '2026-05-16T10:02:05Z',
+      type: 'assistant',
+      message: { role: 'assistant', parts: [] },
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+    })
+    const noUuid = JSON.stringify({
+      sessionId: 'sess-b',
+      timestamp: '2026-05-16T10:02:06Z',
+      type: 'assistant',
+      message: { role: 'assistant', parts: [] },
+      usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+    })
+
+    const { calls } = decodeQwen({ records: [noSessionId, noUuid], context })
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.deduplicationKey).toBe('qwen::a-orphan')
+    expect(calls[0]!.sessionId).toBe('')
+    expect(calls[1]!.deduplicationKey).toBe('qwen:sess-b:')
+    expect(calls[1]!.sessionId).toBe('sess-b')
+
+    // The pinned key must round-trip through the dedup set: two records that
+    // share a uuid and lack a sessionId still collapse to ONE call, exactly as
+    // the old key did for the same input.
+    const dup = decodeQwen({ records: [noSessionId, noSessionId], context })
+    expect(dup.calls).toHaveLength(1)
+  })
+
   it('toObservations produces a schema-valid, content-free envelope', () => {
     const { calls } = decodeQwen({ records: RECORDS, context })
     const { sessions } = toObservations(
