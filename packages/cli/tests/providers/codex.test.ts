@@ -160,6 +160,56 @@ describe('codex provider - session discovery', () => {
     }])
   })
 
+  it('deduplicates the same session_id across active and archived roots', async () => {
+    const sharedLines = [
+      sessionMeta({ cwd: '/Users/test/shared', session_id: 'sess-shared' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ]
+    const activePath = await writeSession(tmpDir, '2026-04-14', 'rollout-shared.jsonl', sharedLines)
+    const archivedCopyPath = await writeArchivedSession(tmpDir, 'rollout-shared.jsonl', sharedLines)
+    const distinctPath = await writeArchivedSession(tmpDir, 'rollout-distinct.jsonl', [
+      sessionMeta({ cwd: '/Users/test/distinct', session_id: 'sess-distinct' }),
+      tokenCount({ last: { input: 200, output: 50 }, total: { total: 250 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    const paths = sessions.map(session => session.path)
+
+    expect(sessions).toHaveLength(2)
+    expect(paths).toEqual(expect.arrayContaining([activePath, distinctPath]))
+    expect(paths).not.toContain(archivedCopyPath)
+  })
+
+  it('does not double-count usage for an archived copy while counting distinct sessions', async () => {
+    const sharedLines = [
+      sessionMeta({ session_id: 'sess-shared' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ]
+    await writeSession(tmpDir, '2026-04-14', 'rollout-shared.jsonl', sharedLines)
+    await writeArchivedSession(tmpDir, 'rollout-shared-copy.jsonl', sharedLines)
+    await writeArchivedSession(tmpDir, 'rollout-distinct.jsonl', [
+      sessionMeta({ session_id: 'sess-distinct' }),
+      tokenCount({ last: { input: 200, output: 50 }, total: { total: 250 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    const seenKeys = new Set<string>()
+    const calls: ParsedProviderCall[] = []
+    for (const session of sessions) {
+      for await (const call of provider.createSessionParser(session, seenKeys).parse()) {
+        calls.push(call)
+      }
+    }
+
+    expect(calls.map(call => call.sessionId).sort()).toEqual(['sess-distinct', 'sess-shared'])
+    expect(calls.reduce(
+      (total, call) => total + call.inputTokens + call.cachedInputTokens + call.outputTokens + call.reasoningTokens,
+      0,
+    )).toBe(400)
+  })
+
   it('returns empty for non-existent directory', async () => {
     const provider = createCodexProvider('/nonexistent/path/that/does/not/exist')
     const sessions = await provider.discoverSessions()
@@ -332,6 +382,89 @@ describe('codex provider - JSONL parsing', () => {
     expect(call.deduplicationKey).toContain('codex:')
   })
 
+  it('parses large rollout lines and computes active timing for custom tool calls', async () => {
+    const largeTokenLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T10:01:10Z',
+      payload: {
+        type: 'token_count',
+        info: {
+          last_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 100, reasoning_output_tokens: 20, total_tokens: 220 },
+          total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 100, reasoning_output_tokens: 20, total_tokens: 220 },
+        },
+        rate_limits: { filler: 'x'.repeat(40_000) },
+      },
+    })
+    const largeCompleteLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T10:01:11Z',
+      payload: { type: 'task_complete', last_agent_message: 'x'.repeat(40_000), duration_ms: 10_000 },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-timing.jsonl', [
+      sessionMeta({ session_id: 'sess-timing', model: 'gpt-5.5' }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'task_started', turn_id: 'turn-1' } }),
+      userMessage('run the tool'),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:02Z', payload: { type: 'custom_tool_call', call_id: 'call-1', name: 'exec' } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:05Z', payload: { type: 'custom_tool_call_output', call_id: 'call-1', output: 'done' } }),
+      largeTokenLine,
+      largeCompleteLine,
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      outputTokens: 100,
+      reasoningTokens: 20,
+      tools: ['Bash'],
+      activeDurationMs: 7000,
+      activeGeneratedTokens: 120,
+      toolWaitMs: 3000,
+    })
+  })
+
+  it('keeps estimated output parsing for large token lines without usage info', async () => {
+    // Some rollout variants put token_count metadata beyond the compact head
+    // or omit `info` entirely. The line must still reach the character-based
+    // estimate path rather than being interpreted as an empty usage object.
+    const largeTokenLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T10:01:10Z',
+      payload: { type: 'token_count' },
+      filler: 'x'.repeat(40_000),
+    })
+    const assistantLine = JSON.stringify({
+      type: 'response_item',
+      timestamp: '2026-04-14T10:01:05Z',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'generated response '.repeat(100) }],
+      },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-estimated-large.jsonl', [
+      sessionMeta({ session_id: 'sess-estimated-large', model: 'gpt-5.5' }),
+      userMessage('summarize the result'),
+      assistantLine,
+      largeTokenLine,
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      model: 'gpt-5.5',
+      costIsEstimated: true,
+    })
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
   it('attributes MCP calls emitted as event_msg/mcp_tool_call_end', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp.jsonl', [
       sessionMeta({ session_id: 'sess-mcp', model: 'gpt-5.5' }),
@@ -354,6 +487,89 @@ describe('codex provider - JSONL parsing', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.tools).toEqual(['mcp__github__get_issue'])
+  })
+
+  it('subtracts native MCP wait time from active timing', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp-timing.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp-timing', model: 'gpt-5.5' }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'task_started' } }),
+      userMessage('look up the issue'),
+      JSON.stringify({
+        type: 'event_msg',
+        timestamp: '2026-04-14T10:00:05Z',
+        payload: {
+          type: 'mcp_tool_call_end',
+          call_id: 'mcp-1',
+          invocation: { server: 'github', tool: 'get_issue', arguments: {} },
+          duration: { secs: 3, nanos: 0 },
+        },
+      }),
+      tokenCount({
+        timestamp: '2026-04-14T10:00:08Z',
+        last: { input: 300, output: 100 },
+        total: { total: 400 },
+      }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:10Z', payload: { type: 'task_complete', duration_ms: 10_000 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ activeDurationMs: 7000, toolWaitMs: 3000 })
+  })
+
+  it('keeps MCP attribution on large result lines', async () => {
+    const largeMcpLine = JSON.stringify({
+      type: 'event_msg',
+      timestamp: '2026-04-14T10:00:05Z',
+      payload: {
+        type: 'mcp_tool_call_end',
+        call_id: 'mcp-large',
+        invocation: { server: 'github', tool: 'get_issue', arguments: { duration: '1s', body: 'x'.repeat(100_000) } },
+        duration: { secs: 3, nanos: 0 },
+        result: { Ok: { content: [{ type: 'text', text: 'x'.repeat(40_000) }] } },
+      },
+    })
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-mcp-large.jsonl', [
+      sessionMeta({ session_id: 'sess-mcp-large', model: 'gpt-5.5' }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'task_started' } }),
+      userMessage('look up the issue'),
+      largeMcpLine,
+      tokenCount({ timestamp: '2026-04-14T10:00:08Z', last: { input: 300, output: 100 }, total: { total: 400 } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:10Z', payload: { type: 'task_complete', duration_ms: 10_000 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ tools: ['mcp__github__get_issue'], activeDurationMs: 7000, toolWaitMs: 3000 })
+  })
+
+  it('omits active timing when recorded tool wait consumes the task duration', async () => {
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-degenerate-timing.jsonl', [
+      sessionMeta({ session_id: 'sess-degenerate-timing', model: 'gpt-5.5' }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'task_started' } }),
+      userMessage('wait for the tool'),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'custom_tool_call', call_id: 'call-1', name: 'exec' } }),
+      JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:10Z', payload: { type: 'custom_tool_call_output', call_id: 'call-1', output: 'done' } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:12Z', last: { input: 300, output: 100 }, total: { total: 400 } }),
+      JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:13Z', payload: { type: 'task_complete', duration_ms: 10_000 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const source = { path: filePath, project: 'test', provider: 'codex' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.activeDurationMs).toBeUndefined()
+    expect(calls[0]!.toolWaitMs).toBeUndefined()
   })
 
   it('attributes CLI-wrapped MCP calls (mcp-cli call server tool) to MCP + Bash', async () => {

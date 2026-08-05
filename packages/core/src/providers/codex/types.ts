@@ -28,6 +28,12 @@ export type CodexEntry = {
     forked_from_id?: string
     model?: string
     name?: string
+    turn_id?: string
+    call_id?: string
+    started_at?: number
+    duration_ms?: number
+    duration?: { secs?: number; nanos?: number } | string
+    invocation?: { server?: string; tool?: string }
     content?: Array<{ type?: string; text?: string }>
     info?: {
       model?: string
@@ -75,6 +81,15 @@ export type CodexDecodedCall = {
   locRemoved?: number
   editFailed?: number
   costIsEstimated?: boolean
+  // Tool-excluded active timing, attributed from the enclosing task's
+  // task_started/task_complete window (see decode.ts). `activeDurationMs` is
+  // the task duration minus recorded tool-wait intervals, split across the
+  // task's calls proportionally to their generated tokens; `toolWaitMs` is the
+  // excluded wait share. Present only when the task recorded both timing and
+  // generated tokens.
+  activeDurationMs?: number
+  activeGeneratedTokens?: number
+  toolWaitMs?: number
 }
 
 /**
@@ -131,4 +146,32 @@ export type CodexDecodeState = {
   turnCounter: number
   currentTurnId: string
   seenKeys: string[]
+  // Tool-excluded active-timing window (see decode.ts). Threaded through the
+  // state so a task whose task_started / token_counts land in one decode pass
+  // and its task_complete in a later (append-resume) pass still attributes
+  // activeDurationMs / activeGeneratedTokens / toolWaitMs to the calls emitted
+  // in the earlier pass. `taskResultStart` is an ABSOLUTE index into the
+  // concatenated prior+current call list (the host's `priorCallCount` offsets
+  // it on resume). `openToolStarts` is the JSON-serializable form of the
+  // call_id -> startedAt map. Absent on states written before the field
+  // existed (read as a fresh window).
+  taskResultStart?: number
+  taskGeneratedTokens?: number
+  taskToolIntervals?: Array<[number, number]>
+  taskStartedAt?: number
+  openToolStarts?: Record<string, number>
+}
+
+// A task that straddled a decode boundary: its task_started / token_counts were
+// emitted in an EARLIER pass than its task_complete. The decoder attributes the
+// in-pass calls directly; this patch carries the same proportional attribution
+// for the earlier-pass calls, which the host applies to its CONCATENATED
+// prior+new call list (both indices are absolute into that list). Emitted only
+// when a task_complete closes a window opened in a prior pass.
+export type CodexTimingPatch = {
+  resultStart: number
+  resultEnd: number
+  activeDurationMs: number
+  taskGeneratedTokens: number
+  toolWaitMs: number
 }

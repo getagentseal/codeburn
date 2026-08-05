@@ -20,6 +20,7 @@ import {
 } from '../src/providers/claude/index.js'
 import type { JournalEntry, ToolResultMeta } from '../src/providers/claude/index.js'
 import { decodeCodex, toObservations as toCodexObservations } from '../src/providers/codex/index.js'
+import { decodeClineCli, toObservations as toClineCliObservations } from '../src/providers/cline-cli/index.js'
 import { decodeQwen, toObservations as toQwenObservations } from '../src/providers/qwen/index.js'
 import { decodeGrok, toObservations as toGrokObservations } from '../src/providers/grok/index.js'
 import { decodeKimi, toObservations as toKimiObservations } from '../src/providers/kimi/index.js'
@@ -386,6 +387,85 @@ describe('content-smuggling guardrail: real qwen decode -> toObservations is sec
   })
 
   it('fingerprints the read_file path into a 16-hex resourceRead, never the raw path', () => {
+    const env = decodeAndMinimize()
+    const reads = env.sessions.flatMap(s => s.calls.flatMap(c => c.resourceReads ?? []))
+    expect(reads.length).toBeGreaterThan(0)
+    for (const ref of reads) {
+      expect(ref.resourceId).toMatch(/^[0-9a-f]{16}$/)
+      expect(typeof ref.resourceClass).toBe('string')
+    }
+    expect(allStrings(reads)).not.toContain(SECRETS.absPath)
+  })
+})
+
+describe('content-smuggling guardrail: real cline-cli decode -> toObservations is secret-free', () => {
+  // A hostile Cline CLI session planting every secret in the free-text fields a
+  // real decode captures: the user prompt, a run_commands shell line, and a
+  // read_files path — plus a tool NAME carrying a command line. Decoding it
+  // fully and minimizing MUST surface none of them.
+  const clineCliContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'cline-cli', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [{
+      meta: {
+        version: 1, session_id: 'sess-hostile', source: 'cli', status: 'completed',
+        provider: 'cline-pass', model: 'z-ai/glm-5.2',
+        cwd: SECRETS.absPath, workspace_root: SECRETS.absPath,
+        started_at: '2026-08-02T20:04:18.628Z', ended_at: '2026-08-02T20:08:27.768Z',
+        metadata: {}, project: 'secret-plan',
+      },
+      messages: [
+        {
+          id: 'u1', role: 'user', ts: 1785701064304,
+          content: [{ type: 'text', text: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` }],
+        },
+        {
+          id: 'a1', role: 'assistant', ts: 1785701064305,
+          modelInfo: { id: 'z-ai/glm-5.2', provider: 'cline-pass' },
+          metrics: { inputTokens: 500, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0.01 },
+          content: [
+            { type: 'text', text: 'done' },
+            { type: 'tool_use', id: 'call_0', name: 'run_commands', input: { commands: JSON.stringify([SECRETS.commandLine]) } },
+            { type: 'tool_use', id: 'call_1', name: 'read_files', input: { path: SECRETS.absPath } },
+            // A hostile tool NAME carrying a command line (spaces + slashes): it
+            // fails the canonical charset and must be dropped, not emitted.
+            { type: 'tool_use', id: 'call_2', name: SECRETS.commandLine, input: {} },
+          ],
+        },
+      ],
+    }]
+    const { calls } = decodeClineCli({ records, context: clineCliContext })
+    const { sessions } = toClineCliObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'cline-cli' },
+    )
+    return {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile chat', () => {
+    expect(ObservationEnvelope.safeParse(decodeAndMinimize()).success).toBe(true)
+  })
+
+  it('the serialized envelope contains none of the planted secrets', () => {
+    const serialized = JSON.stringify(decodeAndMinimize())
+    for (const secret of ALL_SECRETS) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+
+  it('keeps canonical tool names (Bash/Read) and drops the argument-carrying name', () => {
+    const env = decodeAndMinimize()
+    const allToolNames = env.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).toContain('Read')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('fingerprints the read_files path into a 16-hex resourceRead, never the raw path', () => {
     const env = decodeAndMinimize()
     const reads = env.sessions.flatMap(s => s.calls.flatMap(c => c.resourceReads ?? []))
     expect(reads.length).toBeGreaterThan(0)

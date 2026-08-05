@@ -46,7 +46,10 @@ export function showEmptyState(projectCount: number, scrollableHistory: boolean,
   return historyProjectCount === 0 && !historyLoading
 }
 
-const MIN_WIDE = 90
+// The By Model panel now carries six numeric columns. Keep panels stacked until
+// each half has enough room for those columns instead of truncating Tok/s at
+// ordinary 100–120 column terminals.
+const MIN_WIDE = 130
 const ORANGE = '#FF8C42'
 const DIM = '#555555'
 const GOLD = '#FFD700'
@@ -440,6 +443,7 @@ const MODEL_COL_COST = 8
 const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
 const MODEL_COL_ONESHOT = 7
+const MODEL_COL_TPS = 7
 const MODEL_NAME_WIDTH = 14
 const MIN_EDIT_TURNS_FOR_RATE = 5
 
@@ -449,6 +453,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
   const modelTotals = aggregateModelTotals(projects)
   const modelEfficiency = aggregateModelEfficiency(projects)
   const anyEstimated = Object.values(modelTotals).some(d => d.estimatedCostUSD > 0)
+  const anyActiveTiming = Object.values(modelTotals).some(d => d.activeDurationMs > 0 && d.activeGeneratedTokens > 0)
   const sorted = Object.entries(modelTotals).sort(([, a], [, b]) => b.costUSD - a.costUSD)
   const maxCost = sorted[0]?.[1]?.costUSD ?? 0
   const unpriced = findUnpricedModels(Object.entries(modelTotals).map(([model, d]) => ({
@@ -460,7 +465,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}{'1-shot'.padStart(MODEL_COL_ONESHOT)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}{'1-shot'.padStart(MODEL_COL_ONESHOT)}{'Tok/s'.padStart(MODEL_COL_TPS)}</Text>
       {sorted.map(([model, data], i) => {
         const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
         const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
@@ -468,6 +473,9 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
         const efficiency = modelEfficiency.get(model)
         const oneShotLabel = efficiency && efficiency.editTurns >= MIN_EDIT_TURNS_FOR_RATE && efficiency.oneShotRate !== null
           ? `${efficiency.oneShotRate.toFixed(1)}%`
+          : '-'
+        const tpsLabel = data.activeDurationMs > 0 && data.activeGeneratedTokens > 0
+          ? (data.activeGeneratedTokens / (data.activeDurationMs / 1000)).toFixed(1)
           : '-'
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
@@ -477,6 +485,7 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
             <Text>{oneShotLabel.padStart(MODEL_COL_ONESHOT)}</Text>
+            <Text>{tpsLabel.padStart(MODEL_COL_TPS)}</Text>
           </Text>
         )
       })}
@@ -487,6 +496,9 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
       )}
       {anyEstimated && (
         <Text dimColor wrap="truncate-end">~ estimated cost (priced from estimated tokens)</Text>
+      )}
+      {anyActiveTiming && (
+        <Text dimColor wrap="truncate-end">~ Tok/s: generated tokens / active time; tool wait excluded</Text>
       )}
     </Panel>
   )

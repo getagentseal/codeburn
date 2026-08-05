@@ -4,7 +4,7 @@ import { createInterface } from 'readline'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
-import { decodeCodex, codexToolNameMap, countUnifiedDiffLoc } from '@codeburn/core/providers/codex'
+import { decodeCodex, codexToolNameMap, countUnifiedDiffLoc, applyCodexTimingPatches } from '@codeburn/core/providers/codex'
 import type { CodexDecodedCall, CodexDecodeState, CodexEntry } from '@codeburn/core/providers/codex'
 
 import { readSessionLines } from '../fs-utils.js'
@@ -96,25 +96,47 @@ async function isValidCodexSession(filePath: string): Promise<{ valid: boolean; 
   return { valid, meta: valid ? entry : undefined }
 }
 
-async function discoverSessionFile(filePath: string): Promise<SessionSource | null> {
+type DiscoveredCodexSession = {
+  source: SessionSource
+  sessionId?: string
+}
+
+async function discoverSessionFile(filePath: string): Promise<DiscoveredCodexSession | null> {
   const s = await stat(filePath).catch(() => null)
   if (!s?.isFile()) return null
 
   const cachedProject = await getCachedCodexProject(filePath)
+  const { valid, meta } = await isValidCodexSession(filePath)
   if (cachedProject) {
-    return { path: filePath, project: cachedProject, provider: 'codex' }
+    return {
+      source: { path: filePath, project: cachedProject, provider: 'codex' },
+      sessionId: valid ? meta?.payload?.session_id : undefined,
+    }
   }
 
-  const { valid, meta } = await isValidCodexSession(filePath)
   if (!valid || !meta) return null
 
   const cwd = meta.payload?.cwd ?? 'unknown'
-  return { path: filePath, project: sanitizeProject(cwd), provider: 'codex' }
+  return {
+    source: { path: filePath, project: sanitizeProject(cwd), provider: 'codex' },
+    sessionId: meta.payload?.session_id,
+  }
 }
 
 async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
+  // A rollout can exist in both roots during/after archiving. The active root
+  // is scanned first, and session_id keeps the archived copy from resurfacing.
+  const seenSessionIds = new Set<string>()
   const sessionsDir = join(codexDir, 'sessions')
+
+  const addSession = (discovered: DiscoveredCodexSession | null): void => {
+    if (!discovered) return
+    const sessionId = discovered.sessionId?.trim()
+    if (sessionId && seenSessionIds.has(sessionId)) return
+    if (sessionId) seenSessionIds.add(sessionId)
+    sources.push(discovered.source)
+  }
 
   const years = await readdir(sessionsDir).catch(() => [] as string[])
 
@@ -136,8 +158,7 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
         for (const file of files) {
           if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
           const filePath = join(dayDir, file)
-          const source = await discoverSessionFile(filePath)
-          if (source) sources.push(source)
+          addSession(await discoverSessionFile(filePath))
         }
       }
     }
@@ -149,8 +170,7 @@ async function discoverSessionsInDir(codexDir: string): Promise<SessionSource[]>
   const archivedFiles = await readdir(archivedDir).catch(() => [] as string[])
   for (const file of archivedFiles) {
     if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue
-    const source = await discoverSessionFile(join(archivedDir, file))
-    if (source) sources.push(source)
+    addSession(await discoverSessionFile(join(archivedDir, file)))
   }
 
   return sources
@@ -187,6 +207,9 @@ function toPricedProviderCall(rich: CodexDecodedCall): ParsedProviderCall {
     ...(rich.locRemoved !== undefined ? { locRemoved: rich.locRemoved } : {}),
     ...(rich.editFailed !== undefined ? { editFailed: rich.editFailed } : {}),
     ...(rich.costIsEstimated ? { costIsEstimated: rich.costIsEstimated } : {}),
+    ...(rich.activeDurationMs !== undefined ? { activeDurationMs: rich.activeDurationMs } : {}),
+    ...(rich.activeGeneratedTokens !== undefined ? { activeGeneratedTokens: rich.activeGeneratedTokens } : {}),
+    ...(rich.toolWaitMs !== undefined ? { toolWaitMs: rich.toolWaitMs } : {}),
   }
   return priceProviderCall(call)
 }
@@ -244,10 +267,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       // pin an empty result set (mirrors the pre-phase-4 sawAnyLine guard).
       if (!sawAnyLine && !resume) return
 
-      const { calls: richCalls, state: newState } = decodeCodex({
+      const { calls: richCalls, state: newState, timingPatches } = decodeCodex({
         records,
         context: { privacyKey: '', providerId: 'codex', sourceRef: source.path },
         state: initialState,
+        // The decoder's task-timing window addresses the CONCATENATED call list
+        // (prior cached calls + this pass's calls), so it must know how many
+        // calls precede this pass.
+        priorCallCount: resume ? priorCalls.length : 0,
         // Live shared dedup set (mutated in place); the decoder leaves
         // state.seenKeys empty when a live set is supplied.
         seenKeys,
@@ -256,6 +283,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       const newPriced = richCalls.map(toPricedProviderCall)
       const allCalls = resume ? [...priorCalls, ...newPriced] : newPriced
+
+      // A task straddling the append boundary: the decoder attributed its
+      // in-pass calls and returned patches for the earlier-pass calls (which
+      // live in `priorCalls`), addressed absolutely into the concatenated list.
+      if (timingPatches && timingPatches.length > 0) applyCodexTimingPatches(allCalls, timingPatches)
 
       // Persist the state blob + host-priced calls + resume offset. seenKeys is
       // stripped from the stored state (cross-file dedup is reconstructed each

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodeCodex } from '../../src/providers/codex/index.js'
+import { decodeCodex, applyCodexTimingPatches } from '../../src/providers/codex/index.js'
 import type { CodexDecodeState } from '../../src/providers/codex/index.js'
 import type { DecodeContext } from '../../src/contracts.js'
 
@@ -65,6 +65,21 @@ const CORPUS: string[] = [
 const FORK_BOUNDARY_INDEX = 7 // the fork's session_meta
 const MID_PARENT_INDEX = 4    // between A's two turns
 
+// A single task (task_started -> tool call -> token_count -> task_complete)
+// whose active timing must survive ANY split of the decode: a parse that ends
+// mid-task (watch mode, refresh during a live run) strands the emitted calls
+// without timing unless the window threads through the serialized state and the
+// resumed pass hands the host a patch for the earlier-pass calls.
+const TIMING_CORPUS: string[] = [
+  sessionMeta({ session_id: 'sess-timing', timestamp: '2026-04-14T10:00:00Z' }),
+  JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:00:00Z', payload: { type: 'task_started', turn_id: 'turn-1' } }),
+  userMessage('run the tool', '2026-04-14T10:00:01Z'),
+  JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:02Z', payload: { type: 'custom_tool_call', call_id: 'call-1', name: 'exec' } }),
+  JSON.stringify({ type: 'response_item', timestamp: '2026-04-14T10:00:05Z', payload: { type: 'custom_tool_call_output', call_id: 'call-1', output: 'done' } }),
+  tokenCount({ timestamp: '2026-04-14T10:01:10Z', last: { input: 100, output: 100, reasoning: 20 }, total: { total: 220 } }),
+  JSON.stringify({ type: 'event_msg', timestamp: '2026-04-14T10:01:11Z', payload: { type: 'task_complete', duration_ms: 10_000 } }),
+]
+
 function decodeCold(records: string[]) {
   return decodeCodex({ records, context }).calls
 }
@@ -73,8 +88,12 @@ function decodeTwoPass(records: string[], split: number) {
   const first = decodeCodex({ records: records.slice(0, split), context })
   // Serialize state to JSON and back between passes (the resume invariant).
   const serialized: CodexDecodeState = JSON.parse(JSON.stringify(first.state))
-  const second = decodeCodex({ records: records.slice(split), context, state: serialized })
-  return [...first.calls, ...second.calls]
+  const second = decodeCodex({ records: records.slice(split), context, state: serialized, priorCallCount: first.calls.length })
+  // The host concatenates the passes' calls and applies any straddling-task
+  // timing patches, exactly as the CLI's codex provider does.
+  const combined = [...first.calls, ...second.calls]
+  applyCodexTimingPatches(combined, [...first.timingPatches, ...second.timingPatches])
+  return combined
 }
 
 describe('codex decoder — round-trip resume invariant', () => {
@@ -125,5 +144,39 @@ describe('codex decoder — round-trip resume invariant', () => {
       ...decodeCodex({ records: CORPUS.slice(FORK_BOUNDARY_INDEX), context }).calls,
     ]
     expect(parentAndForkFresh.length).toBeGreaterThan(threaded.length)
+  })
+
+  it('task timing attributes across ANY split — the append-resume window is threaded', () => {
+    // The mid-task-cut case: a parse that ends between token_count and
+    // task_complete must not strand the call without its timing. Every split
+    // (including exactly the straddle) must equal the cold pass, so an
+    // append-resume that closes a carried-over task re-attributes the
+    // earlier-pass calls via the timing patch.
+    const cold = decodeCold(TIMING_CORPUS)
+    expect(cold).toHaveLength(1)
+    expect(cold[0]).toMatchObject({ activeDurationMs: 7000, activeGeneratedTokens: 120, toolWaitMs: 3000 })
+    for (let split = 0; split <= TIMING_CORPUS.length; split++) {
+      expect(decodeTwoPass(TIMING_CORPUS, split), `split at index ${split}`).toEqual(cold)
+    }
+  })
+
+  it('an open task window is carried in the serialized state', () => {
+    // Split right after the token_count: pass 1 ends mid-task. The serialized
+    // state must expose the window so the resumed pass can close it.
+    const split = TIMING_CORPUS.length - 1
+    const first = decodeCodex({ records: TIMING_CORPUS.slice(0, split), context })
+    expect(first.calls).toHaveLength(1)
+    expect(first.calls[0]!.activeDurationMs).toBeUndefined()
+    const serialized: CodexDecodeState = JSON.parse(JSON.stringify(first.state))
+    expect(serialized.taskResultStart).toBe(0)
+    expect(serialized.taskGeneratedTokens).toBe(120)
+    expect(serialized.taskToolIntervals).toEqual([[Date.parse('2026-04-14T10:00:02Z'), Date.parse('2026-04-14T10:00:05Z')]])
+    // Resuming with the carried window closes the task and patches the earlier
+    // pass's call.
+    const second = decodeCodex({ records: TIMING_CORPUS.slice(split), context, state: serialized, priorCallCount: first.calls.length })
+    expect(second.timingPatches).toHaveLength(1)
+    const combined = [...first.calls, ...second.calls]
+    applyCodexTimingPatches(combined, second.timingPatches)
+    expect(combined[0]).toMatchObject({ activeDurationMs: 7000, activeGeneratedTokens: 120, toolWaitMs: 3000 })
   })
 })

@@ -49,6 +49,9 @@ const CLEARED = [
   // Provider session-discovery dirs
   'CLAUDE_CONFIG_DIR',
   'CLAUDE_CONFIG_DIRS',
+  'CLINE_DIR',
+  'CLINE_DATA_DIR',
+  'CLINE_SESSION_DATA_DIR',
   'CODEX_HOME',
   'CODEWHALE_HOME',
   'CRUSH_GLOBAL_DATA',

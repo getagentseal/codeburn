@@ -14,6 +14,7 @@ export {
   countUnifiedDiffLoc,
   mcpToolFromShellCommand,
   codexToolNameMap,
+  applyCodexTimingPatches,
   type CodexDecodeInput,
   type CodexDecodeResult,
 } from './decode.js'
@@ -28,6 +29,7 @@ export type {
   CodexDecodedCall,
   CodexDecodeState,
   CodexEntry,
+  CodexTimingPatch,
   CodexToolCall,
   CodexTokenUsage,
 } from './types.js'

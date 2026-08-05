@@ -127,6 +127,8 @@ const CORRECTION_PHRASES = [
 const USER_MESSAGE_ALLOWLIST = new Set([
   'src/providers/claude/decode.ts',
   'src/providers/claude/types.ts',
+  'src/providers/cline-cli/decode.ts',
+  'src/providers/cline-cli/types.ts',
   'src/providers/codebuff/decode.ts',
   'src/providers/codebuff/types.ts',
   'src/providers/codewhale/decode.ts',

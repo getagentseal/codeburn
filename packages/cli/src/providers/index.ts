@@ -1,5 +1,6 @@
 import { claude } from './claude.js'
 import { cline } from './cline.js'
+import { clineCli } from './cline-cli.js'
 import { codewhale } from './codewhale.js'
 import { codebuff } from './codebuff.js'
 import { codex } from './codex.js'
@@ -190,7 +191,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, codewhale, codebuff, codex, copilot, devin, droid, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok]
+const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.

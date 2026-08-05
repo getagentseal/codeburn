@@ -40,6 +40,10 @@
       "types": "./dist/providers/claude/index.d.ts",
       "import": "./dist/providers/claude/index.js"
     },
+    "./providers/cline-cli": {
+      "types": "./dist/providers/cline-cli/index.d.ts",
+      "import": "./dist/providers/cline-cli/index.js"
+    },
     "./providers/codebuff": {
       "types": "./dist/providers/codebuff/index.d.ts",
       "import": "./dist/providers/codebuff/index.js"

@@ -196,4 +196,55 @@ describe('provider turn grouping', () => {
       delete process.env['KIRO_HOME']
     }
   })
+
+  it('preserves Cline CLI reported cost through cache conversion instead of re-pricing from tokens', async () => {
+    const sessionsDir = join(home, '.cline', 'data', 'sessions')
+    const sessionId = '1785701058566_vnwtz'
+    const dir = join(sessionsDir, sessionId)
+    await mkdir(dir, { recursive: true })
+    process.env['CLINE_SESSION_DATA_DIR'] = sessionsDir
+
+    // A large token count paired with a deliberately tiny reported cost: any
+    // token-based re-pricing would land orders of magnitude above $0.0123,
+    // so passing means the CLI's own per-message cost survived the round trip.
+    await writeFile(join(dir, `${sessionId}.json`), JSON.stringify({
+      version: 1,
+      session_id: sessionId,
+      source: 'cli',
+      status: 'completed',
+      provider: 'cline-pass',
+      model: 'z-ai/glm-5.2',
+      cwd: '/Users/test/project-a',
+      workspace_root: '/Users/test/project-a',
+      started_at: '2026-05-16T10:00:00.000Z',
+      ended_at: '2026-05-16T10:01:00.000Z',
+      metadata: {},
+    }))
+    await writeFile(join(dir, `${sessionId}.messages.json`), JSON.stringify({
+      version: 1,
+      agent: 'lead',
+      sessionId,
+      messages: [
+        { id: 'u1', role: 'user', content: [{ type: 'text', text: 'do the thing' }], ts: Date.parse('2026-05-16T10:00:00.000Z') },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done' }],
+          ts: Date.parse('2026-05-16T10:00:30.000Z'),
+          modelInfo: { id: 'z-ai/glm-5.2', provider: 'cline-pass' },
+          metrics: { inputTokens: 500000, outputTokens: 20000, cacheReadTokens: 100000, cacheWriteTokens: 0, cost: 0.0123 },
+        },
+      ],
+    }))
+
+    try {
+      const parseAllSessions = await loadParser()
+      const projects = await parseAllSessions(dayRange(), 'cline-cli')
+      const session = projects[0]!.sessions[0]!
+
+      expect(session.totalCostUSD).toBeCloseTo(0.0123, 8)
+    } finally {
+      delete process.env['CLINE_SESSION_DATA_DIR']
+    }
+  })
 })

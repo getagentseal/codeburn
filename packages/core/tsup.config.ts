@@ -12,6 +12,7 @@ export default defineConfig({
     'src/contracts.ts',
     'src/detectors/index.ts',
     'src/providers/claude/index.ts',
+    'src/providers/cline-cli/index.ts',
     'src/providers/codebuff/index.ts',
     'src/providers/codewhale/index.ts',
     'src/providers/codex/index.ts',

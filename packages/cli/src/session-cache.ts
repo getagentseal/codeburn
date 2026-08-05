@@ -51,6 +51,10 @@ export type CachedCall = {
   toolErrors?: number
   // Codex: count of this call's patch applications with success === false.
   editFailed?: number
+  // Tool-excluded active throughput (Codex only), attributed per call.
+  activeDurationMs?: number
+  activeGeneratedTokens?: number
+  toolWaitMs?: number
 }
 
 export type CachedTurn = {
@@ -170,6 +174,7 @@ const TEMP_FILE_MAX_AGE_MS = 5 * 60 * 1000
 
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR'],
+  'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
   codewhale: ['CODEWHALE_HOME'],
   codex: ['CODEX_HOME'],
   hermes: ['HERMES_HOME'],
@@ -205,6 +210,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // the new optional fields.
   claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1',
   cline: 'worktree-project-grouping-v1',
+  // reported-cost-v1: the CLI reports its own per-message cost, so entries
+  // cached before cline-cli joined the reported-cost allowlist in parser.ts
+  // hold costUSD: undefined and get re-priced from tokens on every read.
+  'cline-cli': 'reported-cost-v1',
   codewhale: 'aggregate-session-v1-est-cost',
   // Bump when the Codex parser changes attribution so unchanged, already-cached
   // session files re-parse (session-cache.json serves them without invoking the
@@ -213,7 +222,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rich-session-capture-v1: per-call LOC deltas + editFailed from
   // patch_apply_end. (The codex-results.json CODEX_CACHE_VERSION is bumped in
   // lockstep so the pre-session-cache layer re-parses too.)
-  codex: 'mcp-attribution-v2-est-cost-rich-capture-v1-cross-provider-pr-v1',
+  // task-window-v10: the codex-results state now carries the task-timing window
+  // (see codex-cache.ts v10), so sessions cached without it — including any
+  // whose mid-task calls never got activeDurationMs/activeGeneratedTokens/
+  // toolWaitMs — re-parse once and pick the fields up.
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-task-window-v10',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'cli-shutdown-cost-v1-skills',
@@ -337,6 +350,9 @@ function validateCall(c: unknown): c is CachedCall {
     && (o['speed'] === 'standard' || o['speed'] === 'fast')
     && isOptionalNum(o['costUSD'])
     && isOptionalBool(o['isEstimated'])
+    && isOptionalNum(o['activeDurationMs'])
+    && isOptionalNum(o['activeGeneratedTokens'])
+    && isOptionalNum(o['toolWaitMs'])
     && isStringArray(o['tools'])
     && isStringArray(o['bashCommands'])
     && isStringArray(o['skills'])
