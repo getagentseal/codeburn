@@ -237,6 +237,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v5',
+  // folder-path-project-grouping-v1: threads attribute to the recorded
+  // workspace folder(s) — single folder becomes that project, multi-folder
+  // becomes a joined-basename project — instead of the shared `zed` bucket,
+  // so already-cached threads must re-parse once (the session cache would
+  // otherwise serve the old single-project turns without invoking the parser).
+  zed: 'folder-path-project-grouping-v1',
 }
 
 // ── Cache Dir ──────────────────────────────────────────────────────────

@@ -16,13 +16,15 @@ One SQLite database with one row per agent thread (`zed.ts:19`):
 
 ## Storage format
 
-The `threads` table stores each thread's `data` BLOB as zstd-compressed JSON (`data_type = "zstd"`; legacy rows may be uncompressed `"json"`, both are read, `zed.ts:117-127`). Decompression uses Node's built-in `zlib.zstdDecompressSync` (`zed.ts:17`), no extra dependency.
+The `threads` table stores each thread's `data` BLOB as zstd-compressed JSON (`data_type = "zstd"`; legacy rows may be uncompressed `"json"`, both are read, `zed.ts:153-165`). Decompression uses Node's built-in `zlib.zstdDecompressSync` (`zed.ts:17`), no extra dependency.
 
 The decompressed thread JSON carries:
 
 - `model`: `{ "provider": ..., "model": ... }`
 - `request_token_usage`: map of user-message id to `{ input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens }` (zero-valued fields are omitted)
 - `cumulative_token_usage`: same shape, whole-thread totals
+
+Each row's `folder_paths` column carries the workspace folder roots the thread was created against — absolute paths, one per line, lexicographically sorted (Zed's `PathList` serialization; the `folder_paths_order` column is display-only and unused here). The column is absent on databases written by older Zed, which added it via `ALTER TABLE`; the parser detects it with `PRAGMA table_info` and degrades gracefully (`zed.ts:94-101`).
 
 Token semantics match Anthropic's (separate cache-creation and cache-read fields), so pricing maps directly onto the LiteLLM engine. Shapes verified against Zed's serialization source (`crates/agent/src/db.rs`: `DbThread`, `TokenUsage`, `SerializedLanguageModel`, `DataType`) and a real store.
 
@@ -32,18 +34,18 @@ None.
 
 ## Deduplication
 
-Per `zed:<threadId>:<requestKey>` (`zed.ts:96`), where `requestKey` is the user-message id from `request_token_usage` or the synthetic `cumulative-remainder`.
+Per `zed:<threadId>:<requestKey>` (`zed.ts:132`), where `requestKey` is the user-message id from `request_token_usage` or the synthetic `cumulative-remainder`.
 
 ## Quirks
 
-- `request_token_usage` is keyed by user message and does not cover every request a thread made (verified on a real thread: cumulative was ~3x the map sum). One remainder entry per thread tops usage up to the exact `cumulative_token_usage` (`zed.ts:133-153`), so totals always match the store.
+- `request_token_usage` is keyed by user message and does not cover every request a thread made (verified on a real thread: cumulative was ~3x the map sum). One remainder entry per thread tops usage up to the exact `cumulative_token_usage` (`zed.ts:170-192`), so totals always match the store.
 - The per-request map carries no timestamps, so every call in a thread uses the thread's `updated_at`; day-level attribution inside long-running threads is approximate.
 - Node's zlib gained zstd in 22.15. On older Nodes the provider skips with a notice instead of failing (`zed.ts:14-17`).
-- All Zed usage currently lands under a single `zed` project; `folder_paths` is not yet mapped to per-project attribution.
+- Project attribution mirrors Zed's own sidebar grouping (`zed.ts:79-101`): a thread with exactly one `folder_paths` entry maps to that folder's project (`projectPath` = folder path, `project` = folder basename); a thread with two or more entries maps to a synthetic project named after the joined basenames (`codeburn, website`, matching `ProjectGroupKey::display_name`), with no `projectPath` since a multi-folder set has no one path; rows without the column (older schemas) keep the single `zed` bucket. Zed records which workspace roots a thread was created against, but not which folder it actually used.
 
 ## When fixing a bug here
 
-1. If discovery returns no sessions, confirm `threads.db` exists at the platform path and the `threads` table still has `id`, `summary`, `updated_at`, `data_type`, `data`.
+1. If discovery returns no sessions, confirm `threads.db` exists at the platform path and the `threads` table still has `id`, `summary`, `updated_at`, `data_type`, `data` (`folder_paths` is optional and only read when present).
 2. If threads are skipped, check `data_type` values on disk; only `zstd` and `json` are read.
 3. If totals disagree with the store, compare against `cumulative_token_usage` per thread; the remainder logic must bring each thread exactly to it.
 4. If model names stop pricing, inspect `model.model` strings in a real thread and add aliases if Zed introduces new hosted-model ids.

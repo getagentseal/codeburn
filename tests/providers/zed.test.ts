@@ -33,18 +33,30 @@ function buildDb(fn: (db: {
   exec(sql: string): void
   prepare(sql: string): { run(...params: unknown[]): void }
   close(): void
-}) => void): string {
+}) => void, opts: { legacySchema?: boolean } = {}): string {
   const dbPath = join(tmpDir, 'threads.db')
   const { DatabaseSync: Database } = requireForTest('node:sqlite')
   const db = new Database(dbPath)
-  db.exec(`CREATE TABLE threads (
-    id TEXT PRIMARY KEY,
-    summary TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    data_type TEXT NOT NULL,
-    data BLOB NOT NULL,
-    parent_id TEXT, folder_paths TEXT, folder_paths_order TEXT, created_at TEXT
-  )`)
+  if (opts.legacySchema) {
+    // Older Zed writes only the base columns; `folder_paths` was added later
+    // via ALTER TABLE, so databases opened by old versions lack it.
+    db.exec(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      data_type TEXT NOT NULL,
+      data BLOB NOT NULL
+    )`)
+  } else {
+    db.exec(`CREATE TABLE threads (
+      id TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      data_type TEXT NOT NULL,
+      data BLOB NOT NULL,
+      parent_id TEXT, folder_paths TEXT, folder_paths_order TEXT, created_at TEXT
+    )`)
+  }
   fn(db)
   db.close()
   return dbPath
@@ -59,15 +71,21 @@ function insertThread(db: {
   dataType?: string
   thread?: unknown
   rawData?: Buffer
+  folderPaths?: string[]
 }): void {
   const data = opts.rawData ?? zstd!(Buffer.from(JSON.stringify(opts.thread ?? {})))
-  db.prepare('INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)').run(
-    opts.id,
-    opts.summary ?? 'a thread',
-    opts.updatedAt ?? '2026-06-20T10:00:00Z',
-    opts.dataType ?? 'zstd',
-    data,
-  )
+  const summary = opts.summary ?? 'a thread'
+  const updatedAt = opts.updatedAt ?? '2026-06-20T10:00:00Z'
+  const dataType = opts.dataType ?? 'zstd'
+  if (opts.folderPaths !== undefined) {
+    db.prepare('INSERT INTO threads (id, summary, updated_at, data_type, data, folder_paths) VALUES (?, ?, ?, ?, ?, ?)').run(
+      opts.id, summary, updatedAt, dataType, data, opts.folderPaths.join('\n'),
+    )
+  } else {
+    db.prepare('INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)').run(
+      opts.id, summary, updatedAt, dataType, data,
+    )
+  }
 }
 
 async function collectCalls(dbPath: string, seenKeys = new Set<string>()): Promise<ParsedProviderCall[]> {
@@ -196,6 +214,130 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
     expect(calls.length).toBe(1)
     expect(calls[0]!.inputTokens).toBe(40)
     expect(calls[0]!.model).toBe('claude-sonnet-4-6')
+  })
+
+  it('attributes a single-folder thread to the recorded folder', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-single',
+        folderPaths: ['/Users/dev/codeburn'],
+        thread: {
+          model: { provider: 'anthropic', model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 1200, output_tokens: 300 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(1)
+    expect(calls[0]!.projectPath).toBe('/Users/dev/codeburn')
+    expect(calls[0]!.project).toBe('codeburn')
+  })
+
+  it('groups multi-folder threads under a joined-basename project name', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-multi',
+        folderPaths: ['/Users/dev/codeburn', '/Users/dev/website'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(1)
+    expect(calls[0]!.project).toBe('codeburn, website')
+    expect(calls[0]!.projectPath).toBeUndefined()
+  })
+
+  it('joins multi-folder basenames in stored order and drops empty names', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-triple',
+        folderPaths: ['/Users/dev/codeburn', '/Users/dev/design', '/Users/dev/website'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+      insertThread(db, {
+        id: 'thread-root-only',
+        folderPaths: ['/', '/Users/dev/website'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(2)
+    expect(calls.find(c => c.sessionId === 'thread-triple')!.project).toBe('codeburn, design, website')
+    expect(calls.find(c => c.sessionId === 'thread-triple')!.projectPath).toBeUndefined()
+    expect(calls.find(c => c.sessionId === 'thread-root-only')!.project).toBe('website')
+    expect(calls.find(c => c.sessionId === 'thread-root-only')!.projectPath).toBeUndefined()
+  })
+
+  it('falls back to the zed bucket when folder_paths is empty or absent', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-empty',
+        folderPaths: [],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+      insertThread(db, {
+        id: 'thread-absent',
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(2)
+    expect(calls.every(c => c.projectPath === undefined && c.project === undefined)).toBe(true)
+  })
+
+  it('tolerates whitespace and trailing newlines in folder_paths', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-messy',
+        folderPaths: ['  /Users/dev/codeburn  ', ''],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(1)
+    expect(calls[0]!.projectPath).toBe('/Users/dev/codeburn')
+    expect(calls[0]!.project).toBe('codeburn')
+  })
+
+  it('still parses databases without the folder_paths column (older Zed schemas)', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-old-schema',
+        thread: {
+          model: { model: 'claude-sonnet-4-6' },
+          request_token_usage: { 'req-1': { input_tokens: 40, output_tokens: 8 } },
+        },
+      })
+    }, { legacySchema: true })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(1)
+    expect(calls[0]!.model).toBe('claude-sonnet-4-6')
+    expect(calls[0]!.projectPath).toBeUndefined()
+    expect(calls[0]!.project).toBeUndefined()
   })
 
   it('dedupes across repeat parses via the shared seenKeys set', async () => {

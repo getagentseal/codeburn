@@ -32,12 +32,22 @@ const THREADS_QUERY = `
   ORDER BY updated_at ASC
 `
 
+// Newer Zed adds `folder_paths` (newline-separated absolute workspace roots,
+// lexicographically sorted) via ALTER TABLE, so databases written by older
+// versions do not have the column. Query it only when the schema has it.
+const THREADS_QUERY_WITH_FOLDER_PATHS = `
+  SELECT id, summary, updated_at, data_type, data, folder_paths
+  FROM threads
+  ORDER BY updated_at ASC
+`
+
 type ThreadRow = {
   id: string
   summary: string | null
   updated_at: string | null
   data_type: string | null
   data: Uint8Array | null
+  folder_paths: unknown
 }
 
 type TokenUsage = {
@@ -66,6 +76,75 @@ function usageIsEmpty(usage: TokenUsage): boolean {
   )
 }
 
+// A thread carries the workspace folder roots it was created against as a
+// newline-separated list. The display label is intentionally kept separate
+// from the stable path-set key because basenames are not unique.
+type ThreadProject = {
+  project: string
+  projectPath?: string
+}
+
+function pathComponents(path: string): string[] {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!normalized || /^[A-Za-z]:$/.test(normalized)) return []
+  const components = normalized.split('/').filter(Boolean)
+  const last = components.length - 1
+  if (last >= 0 && components[last]!.endsWith('.git')) {
+    components[last] = components[last]!.slice(0, -'.git'.length)
+  }
+  return components.filter(Boolean)
+}
+
+function pathDisplaySuffix(path: string, detail: number): string {
+  return pathComponents(path).slice(-(detail + 1)).join('/')
+}
+
+function displayNames(paths: string[]): string[] {
+  const names = paths.map(path => pathDisplaySuffix(path, 0))
+  const counts = new Map<string, number>()
+  for (const name of names) {
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+
+  return paths.map((path, index) => {
+    const name = names[index] ?? ''
+    if (!name || counts.get(name) === 1) return name
+
+    const components = pathComponents(path)
+    for (let detail = 1; detail < components.length; detail++) {
+      const candidate = pathDisplaySuffix(path, detail)
+      const conflicts = paths.some((otherPath, otherIndex) => {
+        if (otherIndex === index) return false
+        const otherName = names[otherIndex] ?? ''
+        return otherName === name && pathDisplaySuffix(otherPath, detail) === candidate
+      })
+      if (!conflicts) return candidate
+    }
+    return pathDisplaySuffix(path, components.length - 1) || name
+  })
+}
+
+function resolveThreadProject(folderPaths: unknown): ThreadProject | undefined {
+  if (typeof folderPaths !== 'string') return undefined
+  const paths = folderPaths.split('\n').map(p => p.trim()).filter(Boolean)
+  if (paths.length === 0) return undefined
+
+  const names = displayNames(paths).filter(Boolean)
+  return {
+    project: names.length > 0 ? names.join(', ') : 'Empty Workspace',
+    ...(paths.length === 1 ? { projectPath: paths[0]! } : {}),
+  }
+}
+
+function hasFolderPathsColumn(db: SqliteDatabase): boolean {
+  try {
+    const columns = db.query<{ name: string }>('PRAGMA table_info(threads)')
+    return columns.some(c => c.name === 'folder_paths')
+  } catch {
+    return false
+  }
+}
+
 function buildCall(opts: {
   threadId: string
   requestKey: string
@@ -73,6 +152,8 @@ function buildCall(opts: {
   model: string
   timestamp: string
   userMessage: string
+  project?: string
+  projectPath?: string
 }): ParsedProviderCall {
   const input = num(opts.usage.input_tokens)
   const output = num(opts.usage.output_tokens)
@@ -96,16 +177,19 @@ function buildCall(opts: {
     deduplicationKey: `zed:${opts.threadId}:${opts.requestKey}`,
     userMessage: opts.userMessage,
     sessionId: opts.threadId,
+    ...(opts.project ? { project: opts.project } : {}),
+    ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
   }
 }
 
 function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProviderCall[] {
   const calls: ParsedProviderCall[] = []
   let skipped = 0
+  const withFolderPaths = hasFolderPathsColumn(db)
 
   let rows: ThreadRow[]
   try {
-    rows = db.query<ThreadRow>(THREADS_QUERY)
+    rows = db.query<ThreadRow>(withFolderPaths ? THREADS_QUERY_WITH_FOLDER_PATHS : THREADS_QUERY)
   } catch {
     return calls
   }
@@ -153,8 +237,18 @@ function parseThreads(db: SqliteDatabase, seenKeys: Set<string>): ParsedProvider
         if (!usageIsEmpty(remainder)) entries.push(['cumulative-remainder', remainder])
       }
 
+      const project = resolveThreadProject(withFolderPaths ? row.folder_paths : null)
+
       for (const [requestKey, usage] of entries) {
-        const call = buildCall({ threadId: row.id, requestKey, usage, model, timestamp, userMessage })
+        const call = buildCall({
+          threadId: row.id,
+          requestKey,
+          usage,
+          model,
+          timestamp,
+          userMessage,
+          ...(project ?? {}),
+        })
         if (seenKeys.has(call.deduplicationKey)) continue
         seenKeys.add(call.deduplicationKey)
         calls.push(call)
