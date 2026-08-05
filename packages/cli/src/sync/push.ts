@@ -83,7 +83,9 @@ export function parseRetryAfterMs(value: string | null): number | null {
 /**
  * Send batches sequentially until all are sent. Ledgers each fully-accepted
  * batch. Partially-rejected batches are NOT ledgered (OTLP doesn't identify
- * which spans were rejected; deterministic span IDs make full-batch retry safe).
+ * which spans were rejected; deterministic span IDs make full-batch retry safe
+ * — buildOtlpPayload enforces that determinism by aborting the push when the
+ * privacy key cannot be persisted, so a retry can never carry fresh span IDs).
  *
  * 429 responses are honored: waits Retry-After (capped at maxWaitMs, default
  * backoff 5s when absent) and retries the same batch, up to max429Retries
