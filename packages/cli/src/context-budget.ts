@@ -1,4 +1,4 @@
-import { readdir } from 'fs/promises'
+import { readdir, realpath } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -60,8 +60,19 @@ async function countMcpTools(projectPath?: string): Promise<number> {
 }
 
 async function countSkills(projectPath?: string): Promise<number> {
-  const dirs = [join(homedir(), '.claude', 'skills')]
-  if (projectPath) dirs.push(join(projectPath, '.claude', 'skills'))
+  // Dedupe by resolved path: when the project IS the home dir (or a symlink
+  // into it), the home and project skills dirs are the same directory, and
+  // counting both double-counts every skill (and inflates the context budget).
+  // realpath collapses the symlinked spellings; a dir that no longer exists
+  // falls back to its raw path, which the existsSync below skips anyway.
+  const rawDirs = [
+    join(homedir(), '.claude', 'skills'),
+    ...(projectPath ? [join(projectPath, '.claude', 'skills')] : []),
+  ]
+  const resolved = await Promise.all(rawDirs.map(async dir => {
+    try { return await realpath(dir) } catch { return dir }
+  }))
+  const dirs = [...new Set(resolved)]
 
   let count = 0
   for (const dir of dirs) {
@@ -81,17 +92,28 @@ async function countSkills(projectPath?: string): Promise<number> {
 async function scanMemoryFiles(projectPath?: string): Promise<Array<{ name: string; tokens: number }>> {
   const home = homedir()
   const files: Array<{ name: string; tokens: number }> = []
-  const paths: Array<{ path: string; name: string }> = [
+  const rawPaths: Array<{ path: string; name: string }> = [
     { path: join(home, '.claude', 'CLAUDE.md'), name: '~/.claude/CLAUDE.md' },
   ]
 
   if (projectPath) {
-    paths.push({ path: join(projectPath, 'CLAUDE.md'), name: 'CLAUDE.md' })
-    paths.push({ path: join(projectPath, '.claude', 'CLAUDE.md'), name: '.claude/CLAUDE.md' })
-    paths.push({ path: join(projectPath, 'CLAUDE.local.md'), name: 'CLAUDE.local.md' })
+    rawPaths.push({ path: join(projectPath, 'CLAUDE.md'), name: 'CLAUDE.md' })
+    rawPaths.push({ path: join(projectPath, '.claude', 'CLAUDE.md'), name: '.claude/CLAUDE.md' })
+    rawPaths.push({ path: join(projectPath, 'CLAUDE.local.md'), name: 'CLAUDE.local.md' })
   }
 
-  for (const { path, name } of paths) {
+  // Dedupe by resolved path, like countSkills: when the project IS the home
+  // dir (or a symlink into it), the project and home spellings are the same
+  // file, and reading both double-counts its tokens. realpath collapses the
+  // symlinked spellings; a path that no longer exists falls back to its raw
+  // form, which the existsSync below skips anyway.
+  const resolved = await Promise.all(rawPaths.map(async ({ path, name }) => {
+    try { return { path: await realpath(path), name } } catch { return { path, name } }
+  }))
+  const seenPaths = new Set<string>()
+  for (const { path, name } of resolved) {
+    if (seenPaths.has(path)) continue
+    seenPaths.add(path)
     if (!existsSync(path)) continue
     const content = await readSessionFile(path)
     if (content === null) continue

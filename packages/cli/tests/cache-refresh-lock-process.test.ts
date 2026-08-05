@@ -85,6 +85,41 @@ describe('warm refresh child-process regression', () => {
     await expect(stat(join(cacheDir, 'session-refresh.lock.takeover'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('gives exactly one contender ownership of a stale zero-byte lock', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cb-refresh-corrupt-'))
+    roots.push(root)
+    const cacheDir = join(root, 'cache')
+    const barriers = join(root, 'barriers')
+    await mkdir(cacheDir, { recursive: true })
+    await mkdir(barriers, { recursive: true })
+    process.env['CODEBURN_CACHE_DIR'] = cacheDir
+    const initial = emptyCache()
+    initial.complete = true
+    await saveCache(initial)
+    const corruptPath = join(cacheDir, 'session-refresh.lock')
+    await writeFile(corruptPath, '')
+    await utimes(corruptPath, new Date(1), new Date(1))
+    const source = join(root, 'changed.json')
+    await writeFile(source, JSON.stringify({ output: 404 }))
+
+    const a = worker(cacheDir, barriers, 'a', source)
+    const b = worker(cacheDir, barriers, 'b', source)
+    const winner = await Promise.race([
+      waitFor(join(barriers, 'a.parsed')).then(() => 'a'),
+      waitFor(join(barriers, 'b.parsed')).then(() => 'b'),
+    ])
+    const loser = winner === 'a' ? 'b' : 'a'
+    expect(Number(existsSync(join(barriers, 'a.parsed'))) + Number(existsSync(join(barriers, 'b.parsed')))).toBe(1)
+    const loserOutcome = await waitForAny(barriers, [
+      `${loser}.timed-out`, `${loser}.parsed`, `${loser}.completed-by-other`, `${loser}.unavailable`,
+    ])
+    expect(loserOutcome, (await readdir(barriers)).join(',')).toBe(`${loser}.timed-out`)
+    await writeFile(join(barriers, `${winner}.save`), '')
+    await Promise.all([waitForExit(a), waitForExit(b)])
+    await expect(stat(join(cacheDir, 'session-refresh.lock.takeover'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(Object.keys((await loadCache()).providers['regression']?.files ?? {})).toEqual([source])
+  })
+
   it('serializes disjoint parsed updates so the later publication cannot drop the first', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cb-refresh-process-'))
     roots.push(root)

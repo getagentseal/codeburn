@@ -22,6 +22,7 @@ import {
   detectLowWorthSessions,
   detectSessionOutliers,
   scanAndDetect,
+  cacheKey,
   computeHealth,
   computeTrend,
   buildOptimizeJsonReport,
@@ -1038,6 +1039,49 @@ describe('detectSessionOutliers', () => {
     const finding = result.findings.find(f => f.id === 'cost-outliers')
     expect(finding).toBeDefined()
     expect(finding!.explanation).toContain('app/s1')
+  })
+})
+
+describe('optimize cacheKey collision resistance', () => {
+  it('does not collide two datasets that share project count and api-call sum', () => {
+    // The old fingerprint was projectCount + sum(api calls) only, so any two
+    // datasets agreeing on those two numbers shared one cached OptimizeResult -
+    // the second scan got the first's findings. Same shape, different spend must
+    // now key differently.
+    const a = projectWithSessions([100, 1, 1, 1]) // 4 calls, cost 103
+    const b = projectWithSessions([1, 1, 1, 1])   // 4 calls, cost 4
+    const range = optimizeDateRange(4)
+    expect(a.totalApiCalls).toBe(b.totalApiCalls)
+    expect(cacheKey([a], range)).not.toBe(cacheKey([b], range))
+  })
+
+  it('is stable for the identical dataset (still caches a genuine repeat)', () => {
+    const a = projectWithSessions([5, 3, 2])
+    const range = optimizeDateRange(3)
+    expect(cacheKey([a], range)).toBe(cacheKey([projectWithSessions([5, 3, 2])], range))
+  })
+
+  it('separates a re-price that leaves call count unchanged', () => {
+    // A dataset re-priced (cost moves, calls do not) must not serve stale findings.
+    const before = projectWithSessions([10, 10])
+    const after = projectWithSessions([25, 10]) // same 2 calls, higher cost
+    const range = optimizeDateRange(2)
+    expect(cacheKey([before], range)).not.toBe(cacheKey([after], range))
+  })
+
+  it('still collides datasets that agree on the five aggregates but differ per session', () => {
+    // The key is a projection, not a fingerprint: per-session distribution is
+    // deliberately outside it, so ten calls on one model and the same ten split
+    // across two models at equal total cost share one key. The 60s TTL bounds
+    // what a collided hit can serve. Pin the boundary so a future key change
+    // that alters it is a visible contract change, not a silent one.
+    const oneModel = projectWithSessions([10, 10, 10])
+    const split = projectWithSessions([5, 5, 20])
+    for (const p of [oneModel, split]) { p.totalSavingsUSD = 0; p.totalProxiedCostUSD = 0 }
+    const range = optimizeDateRange(3)
+    expect(oneModel.totalApiCalls).toBe(split.totalApiCalls)
+    expect(oneModel.totalCostUSD).toBe(split.totalCostUSD)
+    expect(cacheKey([oneModel], range)).toBe(cacheKey([split], range))
   })
 })
 

@@ -3063,9 +3063,28 @@ export function computeInputCostRate(projects: ProjectSummary[]): number {
 type CacheEntry = { data: OptimizeResult; ts: number }
 const resultCache = new Map<string, CacheEntry>()
 
-function cacheKey(projects: ProjectSummary[], dateRange: DateRange | undefined): string {
+export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | undefined): string {
   const dr = dateRange ? `${dateRange.start.getTime()}-${dateRange.end.getTime()}` : 'all'
-  const fingerprint = projects.length + ':' + projects.reduce((s, p) => s + p.totalApiCalls, 0)
+  // The key is a projection of five aggregates (project count, call count,
+  // cost, savings, proxied cost), not a fingerprint of the dataset. What it
+  // buys: it closes the project-count + call-sum collision that served stale
+  // findings after a re-price, where cost/tokens moved while the call count
+  // held - reachable in the long-lived menubar process within the 60s TTL.
+  // What it still does NOT cover: any two datasets agreeing on those five
+  // numbers collide, even when their per-session distribution differs (e.g.
+  // ten calls on one model vs. the same ten split across two models at equal
+  // total cost) - and the token- and tool-derived detectors are per-session,
+  // so a collided hit can serve findings computed from a different
+  // distribution. The 60s TTL (RESULT_CACHE_TTL_MS) bounds that damage.
+  let calls = 0, cost = 0, savings = 0, proxied = 0
+  for (const p of projects) {
+    calls += p.totalApiCalls
+    cost += p.totalCostUSD
+    savings += p.totalSavingsUSD
+    proxied += p.totalProxiedCostUSD
+  }
+  // Costs scaled to whole micro-dollars so float jitter cannot thrash the key.
+  const fingerprint = `${projects.length}:${calls}:${Math.round(cost * 1e6)}:${Math.round(savings * 1e6)}:${Math.round(proxied * 1e6)}`
   return `${dr}:${fingerprint}`
 }
 

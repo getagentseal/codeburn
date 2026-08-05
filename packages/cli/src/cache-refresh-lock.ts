@@ -1,4 +1,4 @@
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { existsSync } from 'fs'
 import { mkdir, open, readFile, stat, unlink, utimes, writeFile } from 'fs/promises'
 import { homedir } from 'os'
@@ -81,6 +81,13 @@ async function retryWindowsMutation(operation: () => Promise<void>, sleep: (ms: 
   return false
 }
 
+// The directory entry becomes visible before the awaited body write, so the
+// file is briefly observable at zero bytes. Deliberately left as is: a corrupt
+// body is only ever recovered once its mtime is older than staleMs, and this
+// window is milliseconds wide on a file whose mtime is by definition now, so
+// no observer can reach the age gate through it. Closing it would mean
+// link()ing a temp file into place, which is not portable to filesystems
+// without hard links.
 async function createExclusive(path: string, body: string): Promise<'created' | 'exists' | 'unavailable'> {
   try {
     const handle = await open(path, 'wx', 0o600)
@@ -92,7 +99,25 @@ async function createExclusive(path: string, body: string): Promise<'created' | 
   }
 }
 
-type Observation = { record: LockRecord; mtimeMs: number }
+// A null record is a body whose stat bracket agreed across the read and that
+// still does not parse into a lock record: a corrupt leftover of 0 bytes, a
+// truncation, or a wrong shape. The bracket is a heuristic, not proof that the
+// read was whole — a same-size rewrite moves neither size nor (on a coarse
+// filesystem) mtime — which is why nothing here treats a single read as
+// authoritative. It owns nothing, but it is a real file with a
+// real mtime, not an infrastructure failure — classifying it 'unavailable'
+// routed every later refresh to the read-only path and froze ingestion. It
+// carries no authority: it is only ever recovered through the unmodified
+// staleness gate, exactly like an abandoned but well-formed lock.
+//
+// `digest` fingerprints the exact bytes. A corrupt body has no token, so
+// token equality between two corrupt observations degenerates to
+// `undefined === undefined`. And mtime granularity is coarse on some
+// filesystems — upstream measured on macOS a 2s grid on FAT32, 10ms on
+// exFAT, and sub-ms on APFS, and on all three a same-size rewrite moves
+// neither mtime nor size — so mtime is not a reliable change signal on its
+// own: sameObservation must compare the digest too.
+type Observation = { record: LockRecord | null; mtimeMs: number; digest: string }
 type ObservationResult = Observation | 'missing' | 'changing' | 'unavailable'
 
 async function observe(path: string): Promise<ObservationResult> {
@@ -100,6 +125,7 @@ async function observe(path: string): Promise<ObservationResult> {
   // written, and heartbeat rewrites briefly truncate it. Treat that bounded
   // transition as contention, not broken infrastructure.
   let sawChange = false
+  let corrupt: Observation | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const before = await stat(path)
@@ -110,22 +136,49 @@ async function observe(path: string): Promise<ObservationResult> {
         await delay(1)
         continue
       }
-      const parsed = JSON.parse(raw) as Partial<LockRecord>
-      if (typeof parsed.pid === 'number' && typeof parsed.token === 'string' && typeof parsed.at === 'number') {
-        return { record: { pid: parsed.pid, token: parsed.token, at: parsed.at }, mtimeMs: after.mtimeMs }
+      const digest = createHash('sha1').update(raw).digest('hex')
+      // A body that is valid JSON of the wrong shape is corrupt like any other,
+      // including one written by a future version with a different record
+      // shape. That is safe precisely because staleness is never waived: a
+      // foreign version's LIVE lock keeps its mtime fresh through its own
+      // heartbeat, so it is never taken — both versions just degrade to the
+      // read-only path. Only an abandoned one is recovered, and a lock record
+      // is per-run state with nothing in it worth preserving.
+      let parsed: Partial<LockRecord> | undefined
+      try { parsed = JSON.parse(raw) as Partial<LockRecord> } catch { parsed = undefined }
+      if (parsed && typeof parsed.pid === 'number' && typeof parsed.token === 'string' && typeof parsed.at === 'number') {
+        return { record: { pid: parsed.pid, token: parsed.token, at: parsed.at }, mtimeMs: after.mtimeMs, digest }
       }
+      // Keep the most recent corrupt read. It is not evidence of stability on
+      // its own: tryTakeover re-observes under the guard and compares with
+      // sameObservation before acting, so stability is proven there, not here.
+      corrupt = { record: null, mtimeMs: after.mtimeMs, digest }
     } catch (err) {
       if (isMissingError(err)) return 'missing'
       const code = (err as NodeJS.ErrnoException | undefined)?.code
       if (code === 'EACCES' || code === 'EPERM') return 'unavailable'
+      // A hard I/O error (EIO, EISDIR, ...) invalidates an earlier corrupt
+      // read: the file may have been replaced or the filesystem degraded since
+      // those bytes were read, so they are not evidence about the current
+      // lock. Only a clean final read may report corruption; a lock whose last
+      // attempt hard-errored genuinely cannot be read and is 'unavailable'.
+      corrupt = null
     }
     await delay(1)
   }
-  return sawChange ? 'changing' : 'unavailable'
+  // Contention outranks corruption: a body seen mid-rewrite is a live owner's,
+  // and the caller must poll rather than treat it as recoverable.
+  if (sawChange) return 'changing'
+  return corrupt ?? 'unavailable'
 }
 
 function sameObservation(a: Observation, b: Observation): boolean {
-  return a.record.token === b.record.token && a.mtimeMs === b.mtimeMs
+  // Token equality already separates an owned record from a corrupt body: a
+  // null record yields `undefined`, which never equals a real token. What it
+  // cannot do is tell two corrupt bodies apart — both sides are `undefined` —
+  // so the bytes themselves must match too; "unchanged" then survives a coarse
+  // mtime (see the digest note above).
+  return a.record?.token === b.record?.token && a.mtimeMs === b.mtimeMs && a.digest === b.digest
 }
 
 let singleFlightTail: Promise<void> = Promise.resolve()
@@ -209,7 +262,7 @@ export async function acquireCacheRefreshLock(options: RefreshLockOptions = {}):
       if (current === 'missing') return true
       if (current === 'changing') return false
       if (current === 'unavailable') return false
-      if (current.record.token !== token) return true
+      if (current.record?.token !== token) return true
       return retryWindowsMutation(() => unlink(lockPath), sleep)
     } finally {
       await retryWindowsMutation(() => unlink(takeoverPath), sleep)
@@ -221,7 +274,7 @@ export async function acquireCacheRefreshLock(options: RefreshLockOptions = {}):
     if (guard !== 'created') return false
     try {
       const current = await observe(lockPath)
-      return current !== 'missing' && current !== 'changing' && current !== 'unavailable' && current.record.token === token
+      return current !== 'missing' && current !== 'changing' && current !== 'unavailable' && current.record?.token === token
     } finally {
       await retryWindowsMutation(() => unlink(takeoverPath), sleep)
     }
@@ -238,7 +291,23 @@ export async function acquireCacheRefreshLock(options: RefreshLockOptions = {}):
         if (guard !== 'created') { heartbeatRunning = false; return }
         try {
           const current = await observe(lockPath)
-          if (current === 'missing' || current === 'changing' || current === 'unavailable' || current.record.token !== token) return
+          if (current === 'missing' || current === 'changing' || current === 'unavailable') return
+          // A corrupt body is NOT ours to rewrite, even though no parseable
+          // token contradicts us. Holding the takeover guard excludes the other
+          // guard-takers, but NOT createExclusive, which publishes a directory
+          // entry before its body — so an unparseable body may be a successor's
+          // lock a millisecond from being written, or a foreign version's whose
+          // record shape we cannot read. Stamping our token over it made this
+          // process an owner again after it had been legitimately replaced:
+          // verifyStillOwner then answered true for a displaced writer, and
+          // release()'s removeIfOwned deleted the live successor's lock.
+          //
+          // So a body we cannot prove is ours ends our ownership. The mtime
+          // stops advancing, the fence refuses to publish (the parse is
+          // discarded, which is the fail-safe direction), and a successor
+          // recovers the lock one staleMs later through the age gate. Losing a
+          // parse is the correct price for never having two owners.
+          if (current.record === null || current.record.token !== token) return
           await writeFile(lockPath, body(), { encoding: 'utf-8' })
           const now = new Date(clock.wallNow())
           await utimes(lockPath, now, now)
@@ -325,6 +394,17 @@ export async function acquireCacheRefreshLock(options: RefreshLockOptions = {}):
         continue
       }
 
+      // A corrupt observation takes this path unchanged. Staleness is never
+      // waived for it: an abandoned corrupt lock is older than staleMs and is
+      // recovered here, while a corrupt body younger than that is waited out
+      // and left alone. No owner repairs its own corrupt body — the heartbeat
+      // refuses to rewrite a body it cannot prove is its own — so the wait is
+      // not about repair: a fresh mtime is evidence that something live is
+      // touching the file (a successor whose createExclusive body write has
+      // not landed yet, or a foreign-version owner heartbeating a record
+      // shape we cannot parse), and stealing it would be stealing from that.
+      // Worst case we time out and serve the prior snapshot read-only for one
+      // staleMs window instead of freezing forever.
       const age = Math.max(0, clock.wallNow() - observation.mtimeMs)
       if (age > staleMs) {
         const takeover = await tryTakeover(observation)

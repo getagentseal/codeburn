@@ -150,6 +150,14 @@ export type DailyCache = {
   /// as incomplete and is fully re-backfilled. Absent on caches written before
   /// this field existed → treated as incomplete (one self-healing re-backfill).
   complete?: boolean
+  /// True once a COMPLETE parse finalized this watermark. The pull-back below
+  /// only distrusts caches WITHOUT this stamp: a degraded parse can no longer
+  /// set `complete`, so a stamped cache whose watermark sits past its newest
+  /// populated day is a legitimately idle tail (recent days had no activity),
+  /// not a frozen hole, and re-deriving it every launch is pure waste. Absent
+  /// on caches written before this field: distrusted once (one healing
+  /// pull-back), then stamped.
+  watermarkTrusted?: boolean
 }
 
 function getCacheDir(): string {
@@ -294,7 +302,7 @@ function migrateDays(days: Record<string, unknown>[]): DailyEntry[] {
     }))
 }
 
-function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean }): DailyCache {
+function migratedFrom(parsed: { version: number; lastComputedDate: string | null; savingsConfigHash?: string; tzKey?: string; days: Record<string, unknown>[]; complete?: boolean; watermarkTrusted?: boolean }): DailyCache {
   return {
     version: DAILY_CACHE_VERSION,
     savingsConfigHash: parsed.savingsConfigHash ?? '',
@@ -306,6 +314,9 @@ function migratedFrom(parsed: { version: number; lastComputedDate: string | null
     // Only a cache explicitly marked complete stays trusted; one written before
     // the marker existed reads false and is re-backfilled once.
     complete: parsed.complete === true,
+    // Absent on a pre-fix cache: the watermark is distrusted once (healing
+    // pull-back), then re-stamped by the finalize that follows.
+    watermarkTrusted: parsed.watermarkTrusted === true,
   }
 }
 
@@ -409,6 +420,7 @@ async function adoptOlderDailyCaches(): Promise<DailyCache> {
     // accounting: leave complete unset so the next hydration re-derives every
     // day whose sources survive (the merge keeps the rest).
     complete: rest.length === candidates.length ? false : base.complete,
+    watermarkTrusted: rest.length === candidates.length ? false : base.watermarkTrusted,
   }
   await saveDailyCache(adopted).catch(() => {})
   return adopted
@@ -451,6 +463,7 @@ export function addNewDays(cache: DailyCache, incoming: DailyEntry[], newestDate
     lastComputedDate: nextLast,
     days: applyRetention(merged, newestDate),
     complete: cache.complete,
+    watermarkTrusted: cache.watermarkTrusted,
   }
 }
 
@@ -647,9 +660,12 @@ export async function ensureCacheHydrated(
   /// Whether the session parse that fed this backfill left the session cache
   /// fully hydrated. A partial (interrupted) session cache yields empty/partial
   /// older days; finalizing them would freeze that gap into the daily history.
-  /// So the backfill is only marked `complete` when this returns true. Defaults
-  /// to a trusting `true` for callers that don't (or can't) supply it.
-  sessionComplete: () => boolean = () => true,
+  /// So the backfill is only marked `complete` when this returns true. The
+  /// parse result is passed in because completeness travels WITH the data:
+  /// parser.ts tags each result array, and a memo hit can otherwise report
+  /// another parse's state. Defaults to a trusting `true` for callers that
+  /// don't (or can't) supply it.
+  sessionComplete: (projects: ProjectSummary[]) => boolean = () => true,
 ): Promise<DailyCache> {
   const now = new Date()
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -669,6 +685,27 @@ export async function ensureCacheHydrated(
       const freshDays = c.days.filter(d => d.date < todayStr)
       const latestFresh = freshDays.length > 0 ? freshDays[freshDays.length - 1].date : null
       c = { ...c, days: freshDays, lastComputedDate: latestFresh }
+    }
+
+    // A cache can claim `complete` while its watermark points PAST its newest
+    // populated day — what a run finalizing off a degraded (read-only) parse
+    // leaves behind: it advanced lastComputedDate over days the parse never
+    // covered. Since gapStart is lastComputedDate + 1, that hole is invisible
+    // to the gap logic forever. Trust the DATA over the marker: pull the
+    // watermark back to the newest day actually present so the ordinary gap
+    // parse re-derives the tail. Nothing is dropped — the cached days all stay.
+    //
+    // Only UNSTAMPED caches are distrusted here. A degraded parse can no longer
+    // set `complete` (that is this fix), so the corrupt state can only be
+    // written by pre-fix code: an unstamped cache. A stamped one whose watermark
+    // outruns its newest day is a legitimately idle tail (recent days had no
+    // activity), and re-deriving that empty tail on every launch is the
+    // regression this guard avoids. A cache with NO days is exempt: it has no
+    // newest day to trust, and a machine with no history at all must still be
+    // able to finalize (below) rather than re-backfill on every launch.
+    const newestCachedDate = c.days.reduce<string | null>((max, d) => (max === null || d.date > max ? d.date : max), null)
+    if (c.watermarkTrusted !== true && newestCachedDate !== null && c.lastComputedDate !== null && c.lastComputedDate > newestCachedDate) {
+      c = { ...c, lastComputedDate: newestCachedDate }
     }
 
     // Three reasons to re-derive the whole retention window:
@@ -691,12 +728,15 @@ export async function ensureCacheHydrated(
     const tzChanged = c.tzKey !== undefined && c.tzKey !== tzKey
     if (c.savingsConfigHash !== savingsConfigHash || c.complete !== true || tzChanged) {
       const baseline = c.days
+      const priorWatermark = c.lastComputedDate
       const backfillStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - BACKFILL_DAYS)
       let freshDays: DailyEntry[] = []
+      let freshProjects: ProjectSummary[] = []
       if (backfillStart.getTime() <= yesterdayEnd.getTime()) {
-        freshDays = aggregateDays(await parseSessions({ start: backfillStart, end: yesterdayEnd }))
+        freshProjects = await parseSessions({ start: backfillStart, end: yesterdayEnd })
+        freshDays = aggregateDays(freshProjects)
       }
-      const parseWasComplete = sessionComplete()
+      const parseWasComplete = sessionComplete(freshProjects)
       // A PARTIAL parse must not overwrite finalized baseline days with
       // undercounts (if their sources die before the next complete parse, the
       // undercount would be what survives). Partial fresh data only fills days
@@ -708,9 +748,18 @@ export async function ensureCacheHydrated(
         version: DAILY_CACHE_VERSION,
         savingsConfigHash,
         tzKey,
-        lastComputedDate: yesterdayStr,
+        // The watermark records how far history has actually been derived, so
+        // only a COMPLETE parse may advance it. A partial one produced no data
+        // for whatever it could not read; moving the watermark to yesterday
+        // anyway would place those days behind the next run's gapStart and
+        // freeze the hole in (retention still anchors on yesterdayStr — the
+        // real calendar edge — so holding the watermark can't evict anything).
+        lastComputedDate: parseWasComplete ? yesterdayStr : priorWatermark,
         days: applyRetention(merged, yesterdayStr),
         complete: parseWasComplete,
+        // Stamp the watermark as trusted only when a COMPLETE parse produced it,
+        // so a later idle tail under this watermark is not distrusted above.
+        watermarkTrusted: parseWasComplete,
       }
       await saveDailyCache(c)
       return c
@@ -733,18 +782,17 @@ export async function ensureCacheHydrated(
       const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
       const gapProjects = await parseSessions(gapRange)
       const gapDays = aggregateDays(gapProjects)
+      const parseWasComplete = sessionComplete(gapProjects)
+      const priorWatermark = c.lastComputedDate
       c = addNewDays(c, gapDays, yesterdayStr)
       // Finalize as complete ONLY when the session parse that produced these days
       // was itself complete. If it was partial, leave `complete: false` so the
       // next launch (once the session cache is whole) re-backfills instead of
-      // freezing the partial history.
-      c = { ...c, complete: sessionComplete() }
-      await saveDailyCache(c)
-    } else if (c.complete !== true && sessionComplete()) {
-      // No gap to fill (already current through yesterday) but not yet marked —
-      // e.g. a brand-new machine whose only data is today. Finalize so future
-      // launches don't re-backfill the whole window every time.
-      c = { ...c, complete: true }
+      // freezing the partial history — and hold the watermark where it was, for
+      // the same reason as the re-derive path above: a partial parse cannot
+      // vouch for the days it never read, and gapStart is the only thing that
+      // will ever bring them back.
+      c = { ...c, lastComputedDate: parseWasComplete ? c.lastComputedDate : priorWatermark, complete: parseWasComplete, watermarkTrusted: parseWasComplete }
       await saveDailyCache(c)
     }
     return c

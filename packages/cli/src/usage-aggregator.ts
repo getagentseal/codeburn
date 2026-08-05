@@ -93,8 +93,11 @@ async function hydrateCache(): Promise<DailyCache> {
       aggregateProjectsIntoDays,
       getDailyCacheConfigHash(),
       // Never finalize the daily history off a partial (interrupted) session
-      // hydration — that is what froze empty older days into the chart.
-      isSessionHydrationComplete,
+      // hydration — that is what froze empty older days into the chart. The
+      // completeness signal rides on the array parseAllSessions returns (a
+      // memo hit can otherwise report another parse's state), so the callback
+      // reads it off the exact parse result, not any process-global state.
+      (projects) => isSessionHydrationComplete(projects),
     )
   } catch (err) {
     // Previously swallowed silently, which turned any backfill failure into an

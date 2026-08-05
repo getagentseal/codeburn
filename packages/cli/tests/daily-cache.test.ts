@@ -183,6 +183,7 @@ describe('loadDailyCache', () => {
       lastComputedDate: '2026-04-10',
       days: [emptyDay('2026-04-09', 12.5, 40), emptyDay('2026-04-10', 7.25, 28)],
       complete: true,
+      watermarkTrusted: true,
     }
     await saveDailyCache(saved)
     const loaded = await loadDailyCache()
@@ -318,6 +319,7 @@ describe('ensureCacheHydrated', () => {
       lastComputedDate: '2026-06-11',
       days: [emptyDay('2026-06-11', 5, 10)],
       complete: true,
+      watermarkTrusted: true,
     }
     await saveDailyCache(saved)
 

@@ -576,6 +576,7 @@ async function scanProjectDirs(
       const cached = section.files[filePath]
       const action = reconcileFile(fp, cached)
       if (cached && (readOnly || action.action === 'unchanged')) {
+        if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
         unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
       } else if (!readOnly) {
         if (action.action === 'appended') {
@@ -587,6 +588,10 @@ async function scanProjectDirs(
           continue
         }
         changedFiles.push({ filePath, info: { dirName, fp, source } })
+      } else {
+        // Read-only with no cache entry at all: this file is dropped from what
+        // we serve, so the snapshot under-reports whatever days it covers.
+        readOnlyServedStale = true
       }
     }
     dirsDone++
@@ -1452,7 +1457,21 @@ async function parseProviderSources(
     // comes from a live API fetch in createSessionParser. There's nothing to
     // fingerprint or incrementally cache, so re-fetch every run with a synthetic
     // fingerprint (mtime=now so the date-range filter below never excludes it).
-    if (provider.network && !readOnly) {
+    // The read-only path must never re-fetch (it serves the published snapshot
+    // while another process owns the lock), and with no file to fingerprint the
+    // cached rows' freshness is UNVERIFIABLE — the report changes on the API's
+    // side, not on any local mtime. A read-only serve is therefore always a
+    // stale serve, exactly like a changed file on the file-backed path: serve
+    // the rows, but mark the serve stale so the parse reports an incomplete
+    // hydration and the daily cache holds its watermark instead of finalizing
+    // history off totals frozen at an old report.
+    if (provider.network) {
+      if (readOnly) {
+        readOnlyServedStale = true
+        const cached = section.files[source.path]
+        if (cached) unchangedSources.push({ source, cached })
+        continue
+      }
       changedSources.push({ source, fp: { dev: 0, ino: 0, mtimeMs: Date.now(), sizeBytes: 0 } })
       continue
     }
@@ -1466,9 +1485,13 @@ async function parseProviderSources(
     // re-read a file that already threw and hasn't changed. It re-parses only
     // when the file changes (then `reconcileFile` reports non-'unchanged').
     if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
+      if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedSources.push({ source, cached })
     } else if (!readOnly) {
       changedSources.push({ source, fp })
+    } else {
+      // Read-only with no cache entry at all — see scanProjectDirs.
+      readOnlyServedStale = true
     }
   }
 
@@ -1742,7 +1765,7 @@ async function parseProviderSources(
 
 const CACHE_TTL_MS = 180_000
 const MAX_CACHE_ENTRIES = 10
-const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
+const sessionCache = new Map<string, { data: HydrationCompleteProjects; ts: number }>()
 
 function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
   const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
@@ -1759,7 +1782,7 @@ export function clearSessionCache(): void {
   sessionCache.clear()
 }
 
-function cachePut(key: string, data: ProjectSummary[]) {
+function cachePut(key: string, data: HydrationCompleteProjects) {
   const now = Date.now()
   for (const [k, v] of sessionCache) {
     if (now - v.ts > CACHE_TTL_MS) sessionCache.delete(k)
@@ -2159,16 +2182,39 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
 
-// Reflects whether the most recently completed parse left the session cache
-// fully hydrated. The daily backfill reads this so it never finalizes history
-// built on a partial (interrupted) session cache. Set only at the end of a
-// runParse that reaches completion; a killed run leaves it false.
-let sessionHydrationComplete = false
-export function isSessionHydrationComplete(): boolean {
-  return sessionHydrationComplete
+// Completeness travels WITH the data, not in a module global: parseAllSessions
+// memoizes results per (range, provider) for 180 seconds, and a global set by
+// whichever parse ran LAST would describe a different parse than the one a
+// memo hit returns — a read-only stale gap parse can memoize partial data and
+// an unrelated later full parse can flip the global to complete, letting the
+// daily backfill finalize history off the partial snapshot. Each result array
+// is tagged at the end of the runParse that produced it (a run killed before
+// that point never tags anything), the memo keeps the same array object, and
+// the daily backfill reads the tag off the exact array the parse returned. An
+// untagged array — one that did not come from a parse — reads as incomplete,
+// which is the fail-safe direction.
+export type HydrationCompleteProjects = ProjectSummary[] & { readonly sessionHydrationComplete: boolean }
+const HYDRATION_COMPLETE_TAG = 'sessionHydrationComplete'
+
+export function isSessionHydrationComplete(projects: ProjectSummary[]): boolean {
+  return (projects as Partial<HydrationCompleteProjects>)[HYDRATION_COMPLETE_TAG] === true
 }
 
-export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
+function tagHydrationComplete(projects: ProjectSummary[], complete: boolean): HydrationCompleteProjects {
+  Object.defineProperty(projects, HYDRATION_COMPLETE_TAG, { value: complete, enumerable: false, configurable: true })
+  return projects as HydrationCompleteProjects
+}
+
+// Set by the read-only serving paths when the snapshot they served did NOT
+// match what is on disk: in read-only mode a changed file is served at its
+// stale fingerprint and a file with no cache entry is skipped entirely. A
+// read-only run under which nothing changed is equivalent to a full parse and
+// stays trustworthy; one that skipped real data is a PARTIAL hydration, and
+// finalizing daily history off it freezes the days it never saw out of the
+// chart (gapStart = lastComputedDate + 1 never looks back at them).
+let readOnlyServedStale = false
+
+export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<HydrationCompleteProjects> {
   const key = cacheKey(dateRange, providerFilter)
   const cached = sessionCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
@@ -2235,8 +2281,9 @@ async function runParse(
   dateRange?: DateRange,
   providerFilter?: string,
   options: RunParseOptions = {},
-): Promise<ProjectSummary[]> {
+): Promise<HydrationCompleteProjects> {
   const { isCold = false, readOnly = false, refreshLock } = options
+  readOnlyServedStale = false
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
   const allSources = await discoverAllSessions(providerFilter)
@@ -2341,7 +2388,6 @@ async function runParse(
       if (refreshLock) throw new RefreshPublicationUnavailableError()
     }
   }
-  sessionHydrationComplete = true
 
   // Merge across providers by normalised project path so the same repository
   // is not double-counted when it was worked on with more than one tool
@@ -2381,6 +2427,11 @@ async function runParse(
 
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)
   correlateCrossProviderPrSessions(result)
-  cachePut(key, result)
-  return result
+  // Tag the completeness of THIS parse onto the data before it enters the memo
+  // (see isSessionHydrationComplete): a read-only run that served a stale
+  // snapshot or skipped files reports incomplete; one under which nothing
+  // changed is equivalent to a full parse and stays trustworthy.
+  const tagged = tagHydrationComplete(result, !readOnly || !readOnlyServedStale)
+  cachePut(key, tagged)
+  return tagged
 }
