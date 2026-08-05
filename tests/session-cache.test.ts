@@ -6,6 +6,7 @@ import { basename, join } from 'path'
 
 import {
   CACHE_VERSION,
+  PROVIDER_ENV_VARS,
   type CachedCall,
   type CachedFile,
   type CachedTurn,
@@ -278,6 +279,129 @@ describe('computeEnvFingerprint', () => {
     expect(computeEnvFingerprint('copilot')).not.toBe(computeEnvFingerprint('unknown-provider'))
     expect(computeEnvFingerprint('kiro')).not.toBe(computeEnvFingerprint('unknown-provider'))
     expect(computeEnvFingerprint('warp')).not.toBe(computeEnvFingerprint('unknown-provider'))
+  })
+})
+
+// ── provider env overrides invalidate the fingerprint (#920) ─────────────
+
+describe('provider env overrides invalidate the fingerprint (#920)', () => {
+  // Nine providers honored an env var that relocates where discovery looks
+  // without the var being declared in PROVIDER_ENV_VARS, so
+  // computeEnvFingerprint did not hash it and the cache section survived the
+  // change: sessions parsed from the old root kept being reported and the new
+  // root was never read. Each pair below must change the fingerprint when the
+  // var is set. codex/CODEX_HOME is the control — it already worked and must
+  // keep working.
+  const CASES: Array<[provider: string, varName: string]> = [
+    ['kiro', 'KIRO_HOME'],
+    ['grok', 'GROK_HOME'],
+    ['kimi', 'KIMI_SHARE_DIR'],
+    ['mux', 'MUX_ROOT'],
+    ['mistral-vibe', 'VIBE_HOME'],
+    ['zerostack', 'ZS_DATA_DIR'],
+    ['codebuff', 'CODEBUFF_DATA_DIR'],
+    ['goose', 'GOOSE_PATH_ROOT'],
+    ['crush', 'CRUSH_GLOBAL_DATA'],
+    ['codex', 'CODEX_HOME'],
+  ]
+  const VARS = CASES.map(([, varName]) => varName)
+
+  // Save and restore every var we touch (beforeEach/afterEach), so a leaked
+  // env var never breaks unrelated tests in the same worker — and an ambient
+  // value never makes the "unset" case a lie.
+  const saved = new Map<string, string | undefined>()
+
+  beforeEach(() => {
+    for (const varName of VARS) {
+      saved.set(varName, process.env[varName])
+      delete process.env[varName]
+    }
+  })
+
+  afterEach(() => {
+    for (const varName of VARS) {
+      const original = saved.get(varName)
+      if (original === undefined) delete process.env[varName]
+      else process.env[varName] = original
+    }
+  })
+
+  for (const [provider, varName] of CASES) {
+    it(`changes the ${provider} fingerprint when ${varName} is set`, () => {
+      const unset = computeEnvFingerprint(provider)
+      process.env[varName] = '/tmp/codeburn-920-override'
+      const set = computeEnvFingerprint(provider)
+      expect(set).not.toBe(unset)
+      // Round trip: restoring the variable to its original state restores the
+      // original fingerprint, so the hash is a pure function of the
+      // environment.
+      delete process.env[varName]
+      expect(computeEnvFingerprint(provider)).toBe(unset)
+    })
+  }
+
+  it('changes the vercel-gateway fingerprint when AI_GATEWAY_API_KEY is set', () => {
+    const prev = process.env['AI_GATEWAY_API_KEY']
+    try {
+      const unset = computeEnvFingerprint('vercel-gateway')
+      process.env['AI_GATEWAY_API_KEY'] = 'sk-live-secret-abc'
+      const set = computeEnvFingerprint('vercel-gateway')
+      expect(set).not.toBe(unset)
+      delete process.env['AI_GATEWAY_API_KEY']
+      expect(computeEnvFingerprint('vercel-gateway')).toBe(unset)
+    } finally {
+      if (prev === undefined) delete process.env['AI_GATEWAY_API_KEY']
+      else process.env['AI_GATEWAY_API_KEY'] = prev
+    }
+  })
+
+  // Copilot is deliberately NOT declared in PROVIDER_ENV_VARS (Ruling 1 of
+  // lane 04): its OTel discovery returns one source per DB file
+  // ({ path: dbPath }, src/providers/copilot.ts:1935), and the durable
+  // carry-forward in getOrCreateProviderSection (src/parser.ts:2650) drops
+  // every cached entry whose source still exists on a fingerprint change — so
+  // declaring any CODEBURN_COPILOT_* var would force a re-parse that destroys
+  // conversations Copilot has since pruned from the DB, which only the cache
+  // still holds. The fingerprint must therefore NOT move when one is set.
+  // This reads as intent, not as an oversight — and the assertions below pin
+  // the WHOLE invariant (no entry at all, plus every one of the nine deferred
+  // reads), so a future "completing" edit fails a test instead of silently
+  // re-opening the durable history-loss path.
+  describe('copilot is deliberately undeclared in PROVIDER_ENV_VARS', () => {
+    it('has no PROVIDER_ENV_VARS entry at all', () => {
+      expect(PROVIDER_ENV_VARS['copilot']).toBeUndefined()
+    })
+
+    // The nine reads copilot.ts performs whose declaration is deferred (each
+    // is allowlisted in tests/provider-env-declarations.test.ts): setting any
+    // of them must leave the copilot fingerprint untouched.
+    const DEFERRED_COPILOT_VARS = [
+      'CODEBURN_COPILOT_SESSION_STATE_DIR',
+      'CODEBURN_COPILOT_OTEL_DB',
+      'CODEBURN_COPILOT_JETBRAINS_DIR',
+      'CODEBURN_COPILOT_WS_STORAGE_DIR',
+      'CODEBURN_COPILOT_GLOBAL_STORAGE_DIR',
+      'CODEBURN_COPILOT_DISABLE_OTEL',
+      'APPDATA',
+      'LOCALAPPDATA',
+      'XDG_CONFIG_HOME',
+    ]
+
+    for (const varName of DEFERRED_COPILOT_VARS) {
+      it(`does not move the copilot fingerprint when ${varName} is set (deliberately undeclared)`, () => {
+        const prev = process.env[varName]
+        try {
+          const before = computeEnvFingerprint('copilot')
+          process.env[varName] = `/tmp/codeburn-copilot-920/${varName}`
+          expect(computeEnvFingerprint('copilot')).toBe(before)
+          delete process.env[varName]
+          expect(computeEnvFingerprint('copilot')).toBe(before)
+        } finally {
+          if (prev === undefined) delete process.env[varName]
+          else process.env[varName] = prev
+        }
+      })
+    }
   })
 })
 
