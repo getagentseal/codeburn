@@ -11,9 +11,9 @@
 // This script is the assertion that closes that gap. It runs from
 // `prepublishOnly` (after the build) and in CI, so it is exercised on every
 // push rather than only on the rare publish.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'))
@@ -21,16 +21,55 @@ const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'))
 const problems = []
 let checked = 0
 
-for (const [subpath, entry] of Object.entries(pkg.exports ?? {})) {
+for (const [subpath, rawEntry] of Object.entries(pkg.exports ?? {})) {
+  // A plain string target (e.g. "./schemas/*": "./schemas/*") applies to every
+  // condition; normalize it so the import/types checks below stay uniform.
+  const entry = typeof rawEntry === 'string' ? { import: rawEntry, types: rawEntry } : rawEntry
   for (const condition of ['import', 'types']) {
-    const relative = entry?.[condition]
-    if (!relative) {
+    const pattern = entry?.[condition]
+    if (!pattern) {
       problems.push(`exports["${subpath}"] declares no "${condition}" target`)
       continue
     }
     checked++
-    if (!existsSync(join(pkgRoot, relative))) {
-      problems.push(`exports["${subpath}"].${condition} -> ${relative} does not exist`)
+    if (!pattern.includes('*')) {
+      if (!existsSync(join(pkgRoot, pattern))) {
+        problems.push(`exports["${subpath}"].${condition} -> ${pattern} does not exist`)
+      }
+      continue
+    }
+    // Subpath pattern: every file it can reach on disk must exist, or some
+    // consumer resolves the export to nothing. Node's `*` spans "/" and does
+    // not special-case dotfiles, so the walk is recursive and does not skip
+    // dots — a shallower scan would let a nested tree (e.g. schemas/v2/) or a
+    // dotfile pass the validator while remaining reachable through the export.
+    const star = pattern.indexOf('*')
+    const literal = pattern.slice(0, star)
+    const suffix = pattern.slice(star + 1)
+    // A literal prefix with no "/" at all (e.g. "foo*") means the scan starts
+    // at the package root. lastIndexOf('/') would return -1 here, and
+    // slice(0, -1) on it would truncate the name into a bogus directory, so
+    // the "does not exist" report below would point at the wrong place.
+    const slash = literal.lastIndexOf('/')
+    const dir = slash === -1 ? pkgRoot : join(pkgRoot, literal.slice(0, slash))
+    if (!existsSync(dir)) {
+      problems.push(`exports["${subpath}"].${condition} -> ${pattern} directory does not exist`)
+      continue
+    }
+    const reachable = []
+    const walk = (d) => {
+      for (const name of readdirSync(d, { withFileTypes: true })) {
+        const full = join(d, name.name)
+        if (name.isDirectory()) walk(full)
+        else {
+          const rel = './' + relative(pkgRoot, full)
+          if (rel.startsWith(literal) && rel.endsWith(suffix)) reachable.push(rel)
+        }
+      }
+    }
+    walk(dir)
+    if (reachable.length === 0) {
+      problems.push(`exports["${subpath}"].${condition} -> ${pattern} matches no files`)
     }
   }
 }

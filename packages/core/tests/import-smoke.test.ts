@@ -25,8 +25,15 @@ function exportsTargets(): string[] {
   const pkg = JSON.parse(readFileSync(resolve(pkgRoot, 'package.json'), 'utf8'))
   const targets: string[] = []
   for (const [subpath, entry] of Object.entries<Record<string, string>>(pkg.exports)) {
-    const rel = entry.import
+    const rel = typeof entry === 'string' ? entry : entry.import
+    // Every export entry must declare an import target: assert that FIRST so
+    // a malformed entry fails loudly instead of being skipped. Only after the
+    // assertion do we skip non-module subpaths — wildcard patterns (e.g.
+    // `./schemas/*`) and JSON schema data files, which ship as data rather
+    // than modules (importing .json would need import attributes the child
+    // does not use, and the I/O guardrail only covers code that runs).
     expect(rel, `exports["${subpath}"] must declare an import target`).toBeTruthy()
+    if (rel.includes('*') || rel.endsWith('.json')) continue
     targets.push(resolve(pkgRoot, rel))
   }
   // Barrel first so the child finds the full export set quickly.

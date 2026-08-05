@@ -36,6 +36,7 @@
       "types": "./dist/detectors/index.d.ts",
       "import": "./dist/detectors/index.js"
     },
+    "./schemas/*": "./schemas/*",
     "./providers/claude": {
       "types": "./dist/providers/claude/index.d.ts",
       "import": "./dist/providers/claude/index.js"

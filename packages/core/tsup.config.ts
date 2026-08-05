@@ -51,7 +51,16 @@ export default defineConfig({
   outDir: 'dist',
   clean: true,
   splitting: false,
-  sourcemap: true,
+  // No source maps. esbuild embeds sourcesContent by default, so the maps are
+  // self-contained: debugging the published package works with or without them,
+  // and the decision is about weight, not resolvability. Measured on this entry
+  // set, 41 maps total ~1.2 MB against ~420 kB of JavaScript — nearly 3x the
+  // shipped JS bytes. What the maps would buy: stepping into @codeburn/core
+  // frames while debugging an app, and symbolication of consumer stack traces.
+  // dist is unminified, so the loss is small: names and line numbers survive,
+  // only the original TS sources are absent. Local debugging runs src via
+  // vitest/tsx, never dist, so nothing in-repo consumes them either.
+  sourcemap: false,
   // Declarations come from `tsc -p tsconfig.build.json` instead. tsup's dts
   // worker bundles types for all 41 entries in one pass and exhausts the heap
   // (ERR_WORKER_OUT_OF_MEMORY) on Node 22 through 26.
