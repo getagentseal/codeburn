@@ -127,3 +127,229 @@ describe('codex decoder — round-trip resume invariant', () => {
     expect(parentAndForkFresh.length).toBeGreaterThan(threaded.length)
   })
 })
+
+// Structural discovery (issue #873/#626) admits rollouts from third-party
+// frontends whose schema conformance is unverified, so payload fields can hold
+// anything JSON can express. The decoder must not trust the declared types:
+// an unparseable timestamp used to throw RangeError out of the fork-cutoff
+// `new Date(NaN).toISOString()`, and a non-string model reached the host's
+// pricing pass, which calls `.replace()` on it. Either sank the session's
+// usage to zero instead of counting it.
+describe('codex decoder — untrusted fields from structurally-valid rollouts', () => {
+  const forkedMeta = (timestamp: unknown) => JSON.stringify({
+    type: 'session_meta',
+    ...(timestamp !== undefined ? { timestamp } : {}),
+    payload: {
+      cwd: '/Users/t/fork',
+      session_id: 'sess-fork',
+      model: 'gpt-5.5',
+      originator: 't3code_desktop',
+      forked_from_id: 'parent-1',
+    },
+  })
+
+  it('counts a forked rollout whose timestamp is unparseable instead of throwing it to zero', () => {
+    const records = [
+      forkedMeta('not-a-real-timestamp'),
+      tokenCount({ timestamp: '2026-04-14T10:01:00Z', last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ]
+    // Pre-guard this threw RangeError out of toISOString() and zeroed the session.
+    const calls = decodeCold(records)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(150)
+  })
+
+  it('counts a forked rollout with a numeric or missing timestamp instead of throwing', () => {
+    for (const timestamp of [12345, undefined]) {
+      const calls = decodeCold([
+        forkedMeta(timestamp),
+        tokenCount({ timestamp: '2026-04-14T10:01:00Z', last: { input: 100, output: 50 }, total: { total: 150 } }),
+      ])
+      expect(calls).toHaveLength(1)
+      expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBe(150)
+    }
+  })
+
+  it('counts a rollout with a non-string model via the fallback instead of throwing', () => {
+    const records = [
+      JSON.stringify({
+        type: 'session_meta',
+        timestamp: '2026-04-14T10:00:00Z',
+        payload: { cwd: '/Users/t/m', session_id: 'sess-badmodel', model: { name: 'gpt-5.5' }, originator: 't3code_desktop' },
+      }),
+      userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+      tokenCount({ timestamp: '2026-04-14T10:00:03Z', last: { input: 100 }, total: { input: 100, total: 100 } }),
+    ]
+    // Pre-guard the object model rode into the pricing pass ("model.replace is
+    // not a function"); it must fall back to a real model and be counted.
+    const calls = decodeCold(records)
+    expect(calls).toHaveLength(1)
+    expect(typeof calls[0]!.model).toBe('string')
+  })
+
+  it('ignores a non-string model on turn_context instead of overriding the session model', () => {
+    const records = [
+      sessionMeta({ session_id: 'sess-tc', model: 'gpt-5.3-codex' }),
+      JSON.stringify({
+        type: 'turn_context',
+        timestamp: '2026-04-14T10:00:02Z',
+        payload: { model: { name: 'gpt-5.5' }, cwd: '/x' },
+      }),
+      userMessage('fix the bug', '2026-04-14T10:00:03Z'),
+      tokenCount({ timestamp: '2026-04-14T10:00:05Z', last: { input: 100 }, total: { input: 100, total: 100 } }),
+    ]
+    const calls = decodeCold(records)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-5.3-codex')
+  })
+
+  it('does not leak a non-string cwd into projectPath/workingDirectory', () => {
+    const records = [
+      JSON.stringify({
+        type: 'session_meta',
+        timestamp: '2026-04-14T10:00:00Z',
+        payload: { cwd: 123, session_id: 'sess-badcwd', model: 'gpt-5.5', originator: 't3code_desktop' },
+      }),
+      userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+      tokenCount({ timestamp: '2026-04-14T10:00:03Z', last: { input: 100 }, total: { input: 100, total: 100 } }),
+    ]
+    const calls = decodeCold(records)
+    expect(calls).toHaveLength(1)
+    // A numeric cwd must not ride into the call (downstream path helpers call
+    // string methods on projectPath/workingDirectory).
+    expect(calls[0]!.projectPath).toBeUndefined()
+    expect(calls[0]!.workingDirectory).toBeUndefined()
+  })
+
+  it('drops a token_count whose timestamp is not a parseable string and records a diagnostic', () => {
+    // `timestamp` is declared `string` but arrives off the unchecked cast. A
+    // number/object/bool — or garbage text — riding into call.timestamp would
+    // make the host's day aggregator bucket the call under 'NaN-NaN-NaN'
+    // (Invalid Date), a day the daily cache keeps for ten years. The event is
+    // dropped instead of emitted with the unparseable value.
+    for (const ts of [12345, { t: '2026-04-14T10:01:00Z' }, ['2026-04-14T10:01:00Z'], true, 'not-a-real-timestamp']) {
+      const { calls, diagnostics } = decodeCodex({
+        records: [
+          sessionMeta({ session_id: 'sess-ts' }),
+          userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+          tokenCount({ timestamp: ts as unknown as string, last: { input: 100, output: 50 }, total: { total: 150 } }),
+        ],
+        context,
+      })
+      expect(calls, `timestamp ${JSON.stringify(ts)}`).toHaveLength(0)
+      expect(diagnostics).toHaveLength(1)
+      expect(diagnostics[0]!.code).toBe('invalid-value')
+    }
+  })
+
+  it('keeps pending content across a dropped token_count so the next flush still counts it', () => {
+    // Dropping the bad-timestamp event must not lose the turn: pending user
+    // content stays pending, so the next well-formed token_count flushes it.
+    const { calls, diagnostics } = decodeCodex({
+      records: [
+        sessionMeta({ session_id: 'sess-est-keep' }),
+        userMessage('estimate this turn', '2026-04-14T10:00:01Z'),
+        tokenCount({ timestamp: 12345 as unknown as string, noInfo: true }),
+        tokenCount({ timestamp: '2026-04-14T10:00:03Z', noInfo: true }),
+      ],
+      context,
+    })
+    expect(diagnostics).toHaveLength(1)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens + calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
+  it('turns non-finite token counts into zero instead of letting NaN reach the call', () => {
+    // A garbage string/object/bool mixed with real numbers used to turn the
+    // totals into a string or NaN (e.g. Math.max(0, 100 - 'oops')), which
+    // slipped past the `=== 0` skip and rode into the pricing pass as NaN
+    // cost. Non-finite fields now count as zero — the same default as a
+    // missing field — so the valid input count still lands.
+    const { calls } = decodeCodex({
+      records: [
+        sessionMeta({ session_id: 'sess-toks' }),
+        userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+        JSON.stringify({
+          type: 'event_msg',
+          timestamp: '2026-04-14T10:00:03Z',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: {
+                input_tokens: 100,
+                cached_input_tokens: 'oops',
+                output_tokens: { n: 50 },
+                reasoning_output_tokens: true,
+                total_tokens: 9999,
+              },
+              total_token_usage: {
+                input_tokens: 100,
+                cached_input_tokens: 'oops',
+                output_tokens: { n: 50 },
+                reasoning_output_tokens: true,
+                total_tokens: 9999,
+              },
+            },
+          },
+        }),
+      ],
+      context,
+    })
+    expect(calls).toHaveLength(1)
+    const c = calls[0]!
+    expect(c.inputTokens).toBe(100)
+    expect(c.cachedInputTokens).toBe(0)
+    expect(c.cacheReadInputTokens).toBe(0)
+    expect(c.outputTokens).toBe(0)
+    expect(c.reasoningTokens).toBe(0)
+    for (const n of [c.inputTokens, c.outputTokens, c.cachedInputTokens, c.cacheReadInputTokens, c.reasoningTokens]) {
+      expect(Number.isFinite(n)).toBe(true)
+    }
+  })
+
+  it('skips a token_count whose every count is non-finite instead of emitting NaN tokens', () => {
+    const { calls } = decodeCodex({
+      records: [
+        sessionMeta({ session_id: 'sess-zerotoks' }),
+        userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+        JSON.stringify({
+          type: 'event_msg',
+          timestamp: '2026-04-14T10:00:03Z',
+          payload: {
+            type: 'token_count',
+            info: {
+              last_token_usage: { input_tokens: 'abc', cached_input_tokens: {}, output_tokens: [], reasoning_output_tokens: true, total_tokens: 'zzz' },
+              total_token_usage: { input_tokens: 'abc', cached_input_tokens: {}, output_tokens: [], reasoning_output_tokens: true, total_tokens: 'zzz' },
+            },
+          },
+        }),
+      ],
+      context,
+    })
+    // All garbage counts as zero, so the existing totalTokens === 0 skip
+    // applies — no call, and no NaN anywhere.
+    expect(calls).toHaveLength(0)
+  })
+
+  it('falls back cleanly instead of coercing a non-string session_id or forked_from_id to [object Object]', () => {
+    // An object session_id used to stringify to '[object Object]' inside
+    // session ids and dedup keys, silently corrupting both.
+    const { calls } = decodeCodex({
+      records: [
+        JSON.stringify({
+          type: 'session_meta',
+          timestamp: '2026-04-14T10:00:00Z',
+          payload: { cwd: '/Users/t/p', session_id: { nested: 'sess-obj' }, forked_from_id: ['parent-1'], model: 'gpt-5.5', originator: 't3code_desktop' },
+        }),
+        userMessage('fix the bug', '2026-04-14T10:00:01Z'),
+        tokenCount({ timestamp: '2026-04-14T10:00:03Z', last: { input: 100 }, total: { input: 100, total: 100 } }),
+      ],
+      context,
+      sessionIdFallback: 'rollout-fallback',
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.sessionId).toBe('rollout-fallback')
+    expect(calls[0]!.sessionId).not.toContain('object')
+    expect(calls[0]!.deduplicationKey).not.toContain('object')
+  })
+})

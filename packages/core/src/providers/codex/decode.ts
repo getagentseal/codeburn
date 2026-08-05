@@ -198,12 +198,40 @@ export function parseCodexLine(line: string | Buffer): CodexEntry | null {
   return entry
 }
 
+// Every payload field here comes off an unchecked JSON.parse cast, so a
+// structurally-valid rollout can carry anything JSON can express where the
+// schema declares a string or a number. The host prices the emitted calls and
+// buckets them into days by timestamp, so a wrong-shaped value must never ride
+// through. One guarding idiom for all of them: pick the first value of the
+// right kind and let the caller fall back.
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value) return value
+  }
+  return undefined
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
+}
+
+// A timestamp that is not a string, or a string that does not parse to a
+// finite instant, would make the host's day aggregator bucket the call under
+// 'NaN-NaN-NaN' (Invalid Date) — a day the daily cache keeps for ten years.
+// Accept only strings that name a real instant.
+function firstParseableTimestamp(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string' || !value) continue
+    if (Number.isFinite(new Date(value).getTime())) return value
+  }
+  return undefined
+}
+
 function resolveModel(info: CodexEntry['payload'], sessionModel?: string): string {
-  return info?.model
-    ?? info?.info?.model
-    ?? info?.info?.model_name
-    ?? sessionModel
-    ?? 'gpt-5'
+  return firstString(info?.model, info?.info?.model, info?.info?.model_name, sessionModel) ?? 'gpt-5'
 }
 
 // ── Explicit state ──────────────────────────────────────────────────────
@@ -290,7 +318,7 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
   const calls: CodexDecodedCall[] = []
   const diagnostics: RecordDiagnostic[] = []
 
-  for (const rawLine of records) {
+  for (const [index, rawLine] of records.entries()) {
     const entry = parseCodexLine(rawLine as string | Buffer)
     if (!entry) continue
 
@@ -302,18 +330,29 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
       // the cumulative-dedup and delta counters intact. Per-file freshness comes
       // from the host starting a new decode (state: undefined) per file, not from
       // resetting here.
-      s.sessionId = entry.payload?.session_id ?? sessionIdFallback
-      s.sessionCwd = entry.payload?.cwd ?? s.sessionCwd
-      s.forkedFromId = entry.payload?.forked_from_id ?? ''
-      if (s.forkedFromId && entry.timestamp) {
-        s.forkCutoff = new Date(new Date(entry.timestamp).getTime() + 5000).toISOString()
+      s.sessionId = firstString(entry.payload?.session_id) ?? sessionIdFallback
+      // Same unchecked-cast caveat as the discovery payload check: `cwd` is
+      // declared `string` but comes straight off JSON.parse, and a non-string
+      // value would ride into projectPath/workingDirectory where downstream
+      // path helpers call string methods on it.
+      const sessionCwd = firstString(entry.payload?.cwd)
+      if (sessionCwd) s.sessionCwd = sessionCwd
+      s.forkedFromId = firstString(entry.payload?.forked_from_id) ?? ''
+      if (s.forkedFromId) {
+        // An unparseable timestamp (a garbage string, or a non-string from
+        // the unchecked JSON.parse cast) makes `new Date(NaN).toISOString()`
+        // throw RangeError, which would sink this whole session to zero.
+        const forkBase = firstParseableTimestamp(entry.timestamp)
+        if (forkBase) s.forkCutoff = new Date(new Date(forkBase).getTime() + 5000).toISOString()
       }
-      s.sessionModel = entry.payload?.model ?? s.sessionModel
+      const sessionModel = firstString(entry.payload?.model)
+      if (sessionModel) s.sessionModel = sessionModel
       continue
     }
 
-    if (entry.type === 'turn_context' && entry.payload?.model) {
-      s.sessionModel = entry.payload.model
+    if (entry.type === 'turn_context') {
+      const turnModel = firstString(entry.payload?.model)
+      if (turnModel) s.sessionModel = turnModel
       continue
     }
 
@@ -395,9 +434,20 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
     }
 
     if (entry.type === 'event_msg' && entry.payload?.type === 'token_count') {
+      // `timestamp` is declared `string` but comes straight off the unchecked
+      // cast. A number/object/bool — or a garbage string — riding into
+      // call.timestamp would make the host's day aggregator bucket the call
+      // under 'NaN-NaN-NaN' (Invalid Date), and the daily cache keeps that
+      // bucket for ten years. Drop the event and record a diagnostic instead;
+      // pending content stays pending so the next flush still counts it.
+      const timestamp = firstParseableTimestamp(entry.timestamp)
+      if (!timestamp) {
+        diagnostics.push({ index, code: 'invalid-value', detail: 'token_count timestamp is not a parseable string; event skipped' })
+        continue
+      }
       // Forked sessions replay the parent's event history clustered at the fork
       // creation time. Skip replays within 5s of the fork to avoid double-count.
-      if (s.forkCutoff && entry.timestamp && entry.timestamp < s.forkCutoff) continue
+      if (s.forkCutoff && timestamp < s.forkCutoff) continue
       const info = entry.payload.info
       if (!info) {
         if (s.pendingOutputChars === 0 && s.pendingUserMessage.length === 0) continue
@@ -406,7 +456,6 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
         if (estInput === 0 && estOutput === 0) continue
 
         const model = s.sessionModel ?? 'gpt-5'
-        const timestamp = entry.timestamp ?? ''
         const dedupKey = `codex:${s.sessionId}:${timestamp}:est${s.estCounter++}`
 
         if (seen.has(dedupKey)) { clearPending(s); continue }
@@ -441,7 +490,7 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
         continue
       }
 
-      const cumulativeTotal = info.total_token_usage?.total_tokens ?? 0
+      const cumulativeTotal = firstFiniteNumber(info.total_token_usage?.total_tokens) ?? 0
       if (s.prevCumulativeTotal !== null && cumulativeTotal === s.prevCumulativeTotal) continue
       s.prevCumulativeTotal = cumulativeTotal
 
@@ -452,27 +501,33 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
       let reasoningTokens = 0
 
       if (last) {
-        inputTokens = last.input_tokens ?? 0
-        cachedInputTokens = last.cached_input_tokens ?? 0
-        outputTokens = last.output_tokens ?? 0
-        reasoningTokens = last.reasoning_output_tokens ?? 0
+        // Token counts share the unchecked-cast caveat: a garbage string or
+        // object mixed with real numbers turns the totals into a string or
+        // NaN, which slips past the `=== 0` skip and reaches the host's
+        // pricing pass as NaN cost. A field that is not a finite number
+        // counts as zero — the same default as a missing field — so valid
+        // siblings are never thrown away and NaN can never form.
+        inputTokens = firstFiniteNumber(last.input_tokens) ?? 0
+        cachedInputTokens = firstFiniteNumber(last.cached_input_tokens) ?? 0
+        outputTokens = firstFiniteNumber(last.output_tokens) ?? 0
+        reasoningTokens = firstFiniteNumber(last.reasoning_output_tokens) ?? 0
       } else if (cumulativeTotal > 0) {
         const total = info.total_token_usage
         if (!total) continue
-        inputTokens = (total.input_tokens ?? 0) - s.prevInput
-        cachedInputTokens = (total.cached_input_tokens ?? 0) - s.prevCached
-        outputTokens = (total.output_tokens ?? 0) - s.prevOutput
-        reasoningTokens = (total.reasoning_output_tokens ?? 0) - s.prevReasoning
+        inputTokens = (firstFiniteNumber(total.input_tokens) ?? 0) - s.prevInput
+        cachedInputTokens = (firstFiniteNumber(total.cached_input_tokens) ?? 0) - s.prevCached
+        outputTokens = (firstFiniteNumber(total.output_tokens) ?? 0) - s.prevOutput
+        reasoningTokens = (firstFiniteNumber(total.reasoning_output_tokens) ?? 0) - s.prevReasoning
       }
 
       // Always advance the prev counters to mirror the cumulative state, whether
       // this event used `last` or the delta fallback.
       const total: CodexTokenUsage | undefined = info.total_token_usage
       if (total) {
-        s.prevInput = total.input_tokens ?? 0
-        s.prevCached = total.cached_input_tokens ?? 0
-        s.prevOutput = total.output_tokens ?? 0
-        s.prevReasoning = total.reasoning_output_tokens ?? 0
+        s.prevInput = firstFiniteNumber(total.input_tokens) ?? 0
+        s.prevCached = firstFiniteNumber(total.cached_input_tokens) ?? 0
+        s.prevOutput = firstFiniteNumber(total.output_tokens) ?? 0
+        s.prevReasoning = firstFiniteNumber(total.reasoning_output_tokens) ?? 0
       }
 
       const totalTokens = inputTokens + cachedInputTokens + outputTokens + reasoningTokens
@@ -483,11 +538,10 @@ export function decodeCodex({ records, state: prevState, seenKeys: liveSeen, ses
       const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens)
 
       const model = resolveModel(entry.payload, s.sessionModel)
-      const timestamp = entry.timestamp ?? ''
       // Fork replays copy the parent's token_count history verbatim, so key on
       // the parent namespace plus the cumulative breakdown: a true replay collides
       // exactly, genuinely different work at the same total stays distinct.
-      const dedupKey = `codex:${s.forkedFromId || s.sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+      const dedupKey = `codex:${s.forkedFromId || s.sessionId}:${cumulativeTotal}:${firstFiniteNumber(total?.input_tokens) ?? 0}:${firstFiniteNumber(total?.cached_input_tokens) ?? 0}:${firstFiniteNumber(total?.output_tokens) ?? 0}:${firstFiniteNumber(total?.reasoning_output_tokens) ?? 0}`
 
       if (seen.has(dedupKey)) continue
       seen.add(dedupKey)

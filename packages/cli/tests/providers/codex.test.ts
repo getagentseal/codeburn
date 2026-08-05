@@ -4,7 +4,9 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { createCodexProvider } from '../../src/providers/codex.js'
+import { aggregateProjectsIntoDays } from '../../src/day-aggregator.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
+import type { TaskCategory } from '../../src/types.js'
 
 let tmpDir: string
 
@@ -175,6 +177,153 @@ describe('codex provider - session discovery', () => {
     const provider = createCodexProvider(tmpDir)
     const sessions = await provider.discoverSessions()
     expect(sessions).toHaveLength(1)
+  })
+
+  it('accepts a third-party frontend originator (t3code_desktop)', async () => {
+    // Any client driving `codex app-server` writes structurally identical
+    // rollouts under ~/.codex/sessions with its own originator string.
+    // Discovery must be structural, not a per-client allowlist (issue #873).
+    await writeSession(tmpDir, '2026-04-14', 'rollout-t3code.jsonl', [
+      sessionMeta({ originator: 't3code_desktop', session_id: 'sess-t3code', cwd: '/Users/test/t3code' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toContain('rollout-t3code.jsonl')
+    expect(sessions[0]!.project).toBe('Users-test-t3code')
+  })
+
+  it('accepts the JetBrains plugin originator (issue #626)', async () => {
+    await writeSession(tmpDir, '2026-04-14', 'rollout-jetbrains.jsonl', [
+      sessionMeta({ originator: 'JetBrains.IntelliJ IDEA', session_id: 'sess-jb', cwd: '/Users/test/jb' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toContain('rollout-jetbrains.jsonl')
+    expect(sessions[0]!.project).toBe('Users-test-jb')
+  })
+
+  it('accepts a rollout with no originator field at all', async () => {
+    // Proves the gate is structural rather than string-matching: a rollout that
+    // omits `originator` entirely is still a valid Codex session.
+    const [year, month, day] = '2026-04-14'.split('-')
+    const sessionDir = join(tmpDir, 'sessions', year!, month!, day!)
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(
+      join(sessionDir, 'rollout-no-originator.jsonl'),
+      JSON.stringify({
+        type: 'session_meta',
+        timestamp: '2026-04-14T10:00:00Z',
+        payload: {
+          cwd: '/Users/test/anon',
+          session_id: 'sess-anon',
+          model: 'gpt-5.5',
+        },
+      }) + '\n' +
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }) + '\n',
+    )
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.project).toBe('Users-test-anon')
+  })
+
+  it('accepts an archived rollout from a third-party frontend', async () => {
+    await writeArchivedSession(tmpDir, 'rollout-archived-t3code.jsonl', [
+      sessionMeta({ originator: 't3code_desktop', session_id: 'sess-arch-t3', cwd: '/Users/test/arch' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.project).toBe('Users-test-arch')
+  })
+
+  it('still rejects foreign and malformed first lines regardless of originator', async () => {
+    const [year, month, day] = '2026-04-14'.split('-')
+    const sessionDir = join(tmpDir, 'sessions', year!, month!, day!)
+    await mkdir(sessionDir, { recursive: true })
+    // Wrong entry type, even with a codex-looking originator.
+    await writeFile(
+      join(sessionDir, 'rollout-wrong-type.jsonl'),
+      JSON.stringify({ type: 'other', payload: { originator: 'codex-cli', cwd: '/x' } }) + '\n',
+    )
+    // session_meta with no payload at all.
+    await writeFile(
+      join(sessionDir, 'rollout-no-payload.jsonl'),
+      JSON.stringify({ type: 'session_meta', timestamp: '2026-04-14T10:00:00Z' }) + '\n',
+    )
+    // session_meta with a non-object payload.
+    await writeFile(
+      join(sessionDir, 'rollout-scalar-payload.jsonl'),
+      JSON.stringify({ type: 'session_meta', payload: 'codex-cli' }) + '\n',
+    )
+    // session_meta with an array payload.
+    await writeFile(
+      join(sessionDir, 'rollout-array-payload.jsonl'),
+      JSON.stringify({ type: 'session_meta', payload: [] }) + '\n',
+    )
+    // Not JSON at all.
+    await writeFile(join(sessionDir, 'rollout-not-json.jsonl'), 'not json at all\n')
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toEqual([])
+  })
+
+  it('survives a non-string cwd instead of zeroing out the whole provider', async () => {
+    // Structural discovery admits rollouts from clients whose schema conformance
+    // is unverified, so a payload field can hold anything JSON can express.
+    // `cwd` is declared `string` but reaches sanitizeProject straight off
+    // JSON.parse: a number/object/array/bool used to throw
+    // "cwd.replace is not a function", escape discoverSessions, and get caught
+    // by safeDiscoverSessions — which returns [] for the ENTIRE codex provider,
+    // so one malformed file made every Codex report read zero.
+    const [year, month, day] = '2026-04-14'.split('-')
+    const sessionDir = join(tmpDir, 'sessions', year!, month!, day!)
+    await mkdir(sessionDir, { recursive: true })
+    const badCwds: Array<[string, unknown]> = [
+      ['number', 123],
+      ['object', { path: '/Users/test/obj' }],
+      ['array', ['/Users/test/arr']],
+      ['bool', true],
+      ['null', null],
+      ['empty', ''],
+    ]
+    for (const [label, cwd] of badCwds) {
+      await writeFile(
+        join(sessionDir, `rollout-badcwd-${label}.jsonl`),
+        JSON.stringify({
+          type: 'session_meta',
+          timestamp: '2026-04-14T10:00:00Z',
+          payload: { cwd, session_id: `sess-${label}`, originator: 'codex-cli' },
+        }) + '\n' +
+        tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }) + '\n',
+      )
+    }
+    // A healthy sibling: proves the provider is not zeroed out by the bad ones.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-good.jsonl', [
+      sessionMeta({ cwd: '/Users/test/good', session_id: 'sess-good' }),
+      tokenCount({ last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(badCwds.length + 1)
+    for (const s of sessions) expect(typeof s.project).toBe('string')
+    const byName = new Map(sessions.map(s => [s.path.split('/').pop()!, s.project]))
+    for (const [label] of badCwds) {
+      expect(byName.get(`rollout-badcwd-${label}.jsonl`)).toBe('unknown')
+    }
+    expect(byName.get('rollout-good.jsonl')).toBe('Users-test-good')
   })
 
   it('accepts session_meta lines larger than 16 KB (Codex CLI 0.128+)', async () => {
@@ -613,5 +762,116 @@ describe('codex provider - forked session dedupe', () => {
 
     const { tokens } = await aggregateTokens(tmpDir)
     expect(tokens).toBe(300)
+  })
+})
+
+describe('codex provider - token_count timestamps cannot poison the day aggregator', () => {
+  it('drops a numeric-timestamp token_count so the day aggregation has no NaN bucket', async () => {
+    // The decoder's call.timestamp feeds dateKey in the day aggregator. A
+    // number/object from an unchecked cast used to ride straight into the
+    // emitted call, where an Invalid Date bucketed the call under
+    // 'NaN-NaN-NaN' — a day the daily cache keeps for ten years.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-numts.jsonl', [
+      sessionMeta({ session_id: 'sess-numts', model: 'gpt-5.5' }),
+      userMessage('fix the bug'),
+      // Numeric timestamp: dropped by the decoder, with a diagnostic.
+      tokenCount({ timestamp: 1776000000000 as unknown as string, last: { input: 100, output: 50 }, total: { total: 150 } }),
+      // Well-formed timestamp: still counted, and it is the only call.
+      tokenCount({ timestamp: '2026-04-14T12:00:00', last: { input: 100, output: 50 }, total: { total: 150 } }),
+    ])
+
+    const provider = createCodexProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    const calls: ParsedProviderCall[] = []
+    for await (const c of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(c)
+
+    expect(calls).toHaveLength(1)
+    expect(typeof calls[0]!.timestamp).toBe('string')
+    expect(calls[0]!.timestamp).toBe('2026-04-14T12:00:00')
+
+    // Run the emitted call through the aggregator's exact bucketing path: a
+    // turn with no user-message timestamp falls back to the call's timestamp,
+    // which is the line where an unguarded value turned into a NaN day.
+    const zeroCategory = { turns: 0, costUSD: 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 }
+    const categoryBreakdown: Record<TaskCategory, typeof zeroCategory> = {
+      coding: { turns: 1, costUSD: calls[0]!.costUSD ?? 0, savingsUSD: 0, retries: 0, editTurns: 0, oneShotTurns: 0 },
+      debugging: zeroCategory,
+      feature: zeroCategory,
+      refactoring: zeroCategory,
+      testing: zeroCategory,
+      exploration: zeroCategory,
+      planning: zeroCategory,
+      delegation: zeroCategory,
+      git: zeroCategory,
+      'build/deploy': zeroCategory,
+      conversation: zeroCategory,
+      brainstorming: zeroCategory,
+      general: zeroCategory,
+    }
+    const days = aggregateProjectsIntoDays([{
+      project: 'test',
+      projectPath: '/Users/test',
+      sessions: [{
+        sessionId: calls[0]!.sessionId,
+        project: 'test',
+        firstTimestamp: calls[0]!.timestamp,
+        lastTimestamp: calls[0]!.timestamp,
+        totalCostUSD: calls[0]!.costUSD ?? 0,
+        totalSavingsUSD: 0,
+        totalInputTokens: calls[0]!.inputTokens,
+        totalOutputTokens: calls[0]!.outputTokens,
+        totalReasoningTokens: calls[0]!.reasoningTokens,
+        totalCacheReadTokens: calls[0]!.cacheReadInputTokens,
+        totalCacheWriteTokens: calls[0]!.cacheCreationInputTokens,
+        apiCalls: 1,
+        turns: [{
+          userMessage: calls[0]!.userMessage,
+          timestamp: '',
+          sessionId: calls[0]!.sessionId,
+          category: 'coding',
+          retries: 0,
+          hasEdits: false,
+          assistantCalls: [{
+            provider: 'codex',
+            model: calls[0]!.model,
+            usage: {
+              inputTokens: calls[0]!.inputTokens,
+              outputTokens: calls[0]!.outputTokens,
+              cacheCreationInputTokens: calls[0]!.cacheCreationInputTokens,
+              cacheReadInputTokens: calls[0]!.cacheReadInputTokens,
+              cachedInputTokens: calls[0]!.cachedInputTokens,
+              reasoningTokens: calls[0]!.reasoningTokens,
+              webSearchRequests: 0,
+            },
+            costUSD: calls[0]!.costUSD ?? 0,
+            tools: calls[0]!.tools,
+            mcpTools: [],
+            skills: [],
+            subagentTypes: [],
+            hasAgentSpawn: false,
+            hasPlanMode: false,
+            speed: 'standard',
+            timestamp: calls[0]!.timestamp,
+            bashCommands: [],
+            deduplicationKey: calls[0]!.deduplicationKey,
+          }],
+        }],
+        modelBreakdown: {},
+        toolBreakdown: {},
+        mcpBreakdown: {},
+        bashBreakdown: {},
+        categoryBreakdown,
+        skillBreakdown: {},
+        subagentBreakdown: {},
+      }],
+      totalCostUSD: calls[0]!.costUSD ?? 0,
+      totalSavingsUSD: 0,
+      totalApiCalls: 1,
+      totalProxiedCostUSD: 0,
+    }])
+
+    expect(days.some(d => d.date === 'NaN-NaN-NaN')).toBe(false)
+    expect(days.map(d => d.date)).toEqual(['2026-04-14'])
+    expect(days[0]!.calls).toBe(1)
   })
 })

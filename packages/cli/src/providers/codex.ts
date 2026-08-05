@@ -87,12 +87,30 @@ async function readFirstLine(filePath: string): Promise<CodexEntry | null> {
   }
 }
 
+// Validation is STRUCTURAL, never string-matching on `payload.originator`.
+// `originator` is a free-form CLIENT IDENTITY string, not a format marker: any
+// tool driving `codex app-server` writes structurally identical rollouts under
+// ~/.codex/sessions with its own value ("codex-tui", "Codex Desktop",
+// "t3code_desktop", "JetBrains.IntelliJ IDEA", ...). Gating on the spelling
+// silently dropped every third-party frontend and needed a new allowlist entry
+// per client (issues #626, #873).
+//
+// A `session_meta` first line with a well-formed payload object is signal
+// enough: the walker only visits `rollout-*.jsonl` under the strict
+// YYYY/MM/DD path or `archived_sessions/`, and codex.ts is the only provider
+// that reads ~/.codex, so directory ownership — not originator content —
+// decides the provider. Genuinely foreign files (wrong entry type, missing or
+// non-object payload, malformed JSON) are still rejected.
 async function isValidCodexSession(filePath: string): Promise<{ valid: boolean; meta?: CodexEntry }> {
   const entry = await readFirstLine(filePath)
   if (!entry) return { valid: false }
+  // `entry` comes from an unchecked JSON.parse cast, so re-check the payload
+  // shape at runtime instead of trusting the declared type.
+  const payload: unknown = entry.payload
   const valid = entry.type === 'session_meta' &&
-    typeof entry.payload?.originator === 'string' &&
-    entry.payload.originator.toLowerCase().startsWith('codex')
+    typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload)
   return { valid, meta: valid ? entry : undefined }
 }
 
@@ -108,7 +126,13 @@ async function discoverSessionFile(filePath: string): Promise<SessionSource | nu
   const { valid, meta } = await isValidCodexSession(filePath)
   if (!valid || !meta) return null
 
-  const cwd = meta.payload?.cwd ?? 'unknown'
+  // Same unchecked-cast caveat as the payload check above: `cwd` is declared
+  // `string` but comes straight off JSON.parse. A rollout carrying a number,
+  // object or array here would throw out of sanitizeProject, escape
+  // discoverSessions, and make safeDiscoverSessions return [] for the WHOLE
+  // codex provider — every Codex report reading zero because of one bad file.
+  const rawCwd: unknown = meta.payload?.cwd
+  const cwd = typeof rawCwd === 'string' && rawCwd ? rawCwd : 'unknown'
   return { path: filePath, project: sanitizeProject(cwd), provider: 'codex' }
 }
 
@@ -244,7 +268,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       // pin an empty result set (mirrors the pre-phase-4 sawAnyLine guard).
       if (!sawAnyLine && !resume) return
 
-      const { calls: richCalls, state: newState } = decodeCodex({
+      const { calls: richCalls, diagnostics, state: newState } = decodeCodex({
         records,
         context: { privacyKey: '', providerId: 'codex', sourceRef: source.path },
         state: initialState,
@@ -253,6 +277,15 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         seenKeys,
         sessionIdFallback: basename(source.path, '.jsonl'),
       })
+      if (diagnostics.length > 0) {
+        // The decoder drops token_count events whose timestamp is not a
+        // parseable string (a number/object/bool from an unchecked cast, or
+        // garbage text): such a call would make the day aggregator bucket it
+        // under 'NaN-NaN-NaN', a day the daily cache keeps for ten years.
+        // Surface the drop on stderr, mirroring the Zed bridge, so the
+        // skipped usage is visible instead of silent.
+        process.stderr.write(`codeburn: skipped ${diagnostics.length} codex token_count event(s) with unparseable timestamps\n`)
+      }
 
       const newPriced = richCalls.map(toPricedProviderCall)
       const allCalls = resume ? [...priorCalls, ...newPriced] : newPriced
