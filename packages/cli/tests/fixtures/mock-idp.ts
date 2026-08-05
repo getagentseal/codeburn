@@ -34,6 +34,8 @@ export interface MockIdp {
   revokedTokens: string[]
   /** Authorization codes that have been exchanged */
   exchangedCodes: string[]
+  /** OTLP trace batches received at POST /v1/traces */
+  tracesRequests: Array<{ auth: string | undefined; body: unknown }>
 }
 
 export async function startMockIdp(opts: MockIdpOptions = {}): Promise<MockIdp> {
@@ -52,12 +54,27 @@ export async function startMockIdp(opts: MockIdpOptions = {}): Promise<MockIdp> 
     issuedTokens: { access: [], refresh: [] },
     revokedTokens: [],
     exchangedCodes: [],
+    tracesRequests: [],
     close: async () => {},
   }
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${state.port}`)
     const path = url.pathname
+
+    // --- OTLP traces collector (records batches for push tests) ---
+    if (path === '/v1/traces' && req.method === 'POST') {
+      let body = ''
+      req.on('data', chunk => { body += chunk })
+      req.on('end', () => {
+        let parsed: unknown = null
+        try { parsed = JSON.parse(body || '{}') } catch { /* keep null */ }
+        state.tracesRequests.push({ auth: req.headers.authorization, body: parsed })
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end('{}')
+      })
+      return
+    }
 
     // --- Discovery doc ---
     if (path === '/.well-known/codeburn-export.json') {

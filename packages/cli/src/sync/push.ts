@@ -8,7 +8,16 @@
 import type { ProjectSummary } from '../types.js'
 import { assertHttps } from './discovery.js'
 import { ledgerKeySet, appendToLedger, type LedgerEntry } from './ledger.js'
-import { buildOtlpPayload, batchCalls, type CallWithSession } from './otlp.js'
+import {
+  buildOtlpPayload,
+  batchCalls,
+  buildAttributionOtlpPayload,
+  flattenAttributionRecords,
+  type CallWithSession,
+  type AttributionItem,
+  type OtlpPayload,
+} from './otlp.js'
+import type { SessionAttributionRecord } from '../yield.js'
 
 /**
  * Safety valve, not a routine cap — pushes now loop until all batches are
@@ -83,7 +92,9 @@ export function parseRetryAfterMs(value: string | null): number | null {
 /**
  * Send batches sequentially until all are sent. Ledgers each fully-accepted
  * batch. Partially-rejected batches are NOT ledgered (OTLP doesn't identify
- * which spans were rejected; deterministic span IDs make full-batch retry safe).
+ * which spans were rejected; deterministic span IDs make full-batch retry safe
+ * — buildOtlpPayload enforces that determinism by aborting the push when the
+ * privacy key cannot be persisted, so a retry can never carry fresh span IDs).
  *
  * 429 responses are honored: waits Retry-After (capped at maxWaitMs, default
  * backoff 5s when absent) and retries the same batch, up to max429Retries
@@ -91,6 +102,23 @@ export function parseRetryAfterMs(value: string | null): number | null {
  * retry on the next push.
  */
 export async function sendBatches(opts: SendBatchesOptions): Promise<PushResult> {
+  return sendBatchesCore({
+    ...opts,
+    buildPayload: buildOtlpPayload,
+    toOutbound: c => ({ key: c.call.deduplicationKey, ts: c.call.timestamp, costUSD: c.call.costUSD }),
+  })
+}
+
+/** How sendBatchesCore ledgers and prices a batch item. */
+type OutboundItem = { key: string; ts: string; costUSD: number }
+
+type SendBatchesCoreOptions<T> = Omit<SendBatchesOptions, 'batches'> & {
+  batches: T[][]
+  buildPayload: (batch: T[]) => OtlpPayload
+  toOutbound: (item: T) => OutboundItem
+}
+
+async function sendBatchesCore<T>(opts: SendBatchesCoreOptions<T>): Promise<PushResult> {
   assertHttps(opts.endpoint, 'Traces endpoint')
   const log = opts.log ?? (() => {})
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
@@ -107,7 +135,7 @@ export async function sendBatches(opts: SendBatchesOptions): Promise<PushResult>
 
     // Retry loop for the current batch (429 only)
     for (;;) {
-      const payload = buildOtlpPayload(batch)
+      const payload = opts.buildPayload(batch)
 
       const response = await fetch(opts.endpoint, {
         method: 'POST',
@@ -158,19 +186,69 @@ export async function sendBatches(opts: SendBatchesOptions): Promise<PushResult>
         totalRejected += rejected
         log(`  Batch: ${rejected}/${batch.length} spans rejected — whole batch will retry on next push`)
       } else {
-        const entries: LedgerEntry[] = batch.map(c => ({
-          key: c.call.deduplicationKey,
-          ts: c.call.timestamp,
-        }))
+        const outbound = batch.map(opts.toOutbound)
+        const entries: LedgerEntry[] = outbound.map(o => ({ key: o.key, ts: o.ts }))
         appendToLedger(entries)
         totalSent += batch.length
-        totalCostSent += batch.reduce((s, c) => s + c.call.costUSD, 0)
+        totalCostSent += outbound.reduce((s, o) => s + o.costUSD, 0)
       }
       break // batch done (success or partial) — move to next batch
     }
   }
 
   return { outcome: 'complete', totalSent, totalRejected, totalCostSent, totalWaitMs }
+}
+
+/**
+ * Safety valve for attribution items, mirroring MAX_PER_PUSH: bounds a first
+ * `--since all --attribution` push over a long history. Remaining facts are
+ * sent on the next push (the ledger tracks progress).
+ */
+export const MAX_ATTRIBUTION_PER_PUSH = 10_000
+
+/** Flatten attribution records into items and filter out already-sent ones. */
+export function collectUnsentAttribution(records: SessionAttributionRecord[]): {
+  allItems: AttributionItem[]
+  unsent: AttributionItem[]
+} {
+  const sent = ledgerKeySet()
+
+  // Empty records (no commits, no PR links) exist only to RETRACT a session
+  // span whose commits migrated to another session. Send one only when a
+  // PRIOR state for that session was already ledgered — a session that was
+  // never sent has nothing to retract.
+  const sessionsWithPriorState = new Set<string>()
+  for (const key of sent) {
+    if (key.startsWith('attr:s:')) {
+      const sessionId = key.slice('attr:s:'.length, key.lastIndexOf(':'))
+      sessionsWithPriorState.add(sessionId)
+    }
+  }
+  const sendable = records.filter(r =>
+    r.commits.length > 0 || r.prLinks.length > 0 || sessionsWithPriorState.has(r.sessionId),
+  )
+
+  const allItems = flattenAttributionRecords(sendable)
+  const unsent = allItems.filter(i => !sent.has(i.dedupKey))
+  return { allItems, unsent }
+}
+
+export interface SendAttributionBatchesOptions extends Omit<SendBatchesOptions, 'batches'> {
+  batches: AttributionItem[][]
+}
+
+/**
+ * Send attribution batches through the same retry/ledger pipeline as usage
+ * batches. Items are ledgered by their state-encoding dedup keys, so an
+ * identical attribution fact is sent once and a state transition (commit
+ * merged to main, commit reverted) re-sends the updated fact.
+ */
+export async function sendAttributionBatches(opts: SendAttributionBatchesOptions): Promise<PushResult> {
+  return sendBatchesCore({
+    ...opts,
+    buildPayload: buildAttributionOtlpPayload,
+    toOutbound: item => ({ key: item.dedupKey, ts: item.timestamp, costUSD: 0 }),
+  })
 }
 
 export { batchCalls }

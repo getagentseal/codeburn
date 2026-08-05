@@ -60,49 +60,75 @@ function makeCallWithSession(overrides?: Partial<ParsedApiCall> & { deduplicatio
 
 // ── OTLP Span/Trace ID Derivation ────────────────────────────────────
 
+// Fixed key for the golden pins: 64 hex chars, the same shape as the real
+// per-install key from privacy-key.ts. A golden pins the FULL encoding
+// (domain prefix + HMAC-SHA256 + truncation), so an accidental construction
+// change fails loudly instead of silently re-keying every emitted id.
+const TEST_KEY = 'c0deb00c'.repeat(8)
+
 describe('deriveSpanId', () => {
   it('returns 16 hex chars', () => {
-    const id = deriveSpanId('cursor:bubble:abc123')
+    const id = deriveSpanId(TEST_KEY, 'cursor:bubble:abc123')
     expect(id).toMatch(/^[0-9a-f]{16}$/)
   })
 
   it('is deterministic (same input = same output)', () => {
-    const a = deriveSpanId('my:dedup:key')
-    const b = deriveSpanId('my:dedup:key')
+    const a = deriveSpanId(TEST_KEY, 'my:dedup:key')
+    const b = deriveSpanId(TEST_KEY, 'my:dedup:key')
     expect(a).toBe(b)
   })
 
   it('different inputs produce different IDs', () => {
-    const a = deriveSpanId('key-1')
-    const b = deriveSpanId('key-2')
+    const a = deriveSpanId(TEST_KEY, 'key-1')
+    const b = deriveSpanId(TEST_KEY, 'key-2')
     expect(a).not.toBe(b)
   })
 
-  // GOLDEN PIN — do not update this value. The idempotency contract depends
-  // on span IDs being stable across releases: if the hash input or encoding
-  // ever changes, every re-sent span gets a new identity and backends that
-  // key on span ID double-count history. If this test fails, revert the
-  // encoding change (or design an explicit migration).
-  it('golden: SHA-256(deduplicationKey) first 8 bytes as hex', () => {
-    expect(deriveSpanId('golden-dedup-key')).toBe('ec3ca28cceacf381')
+  it('same input under different keys produces different IDs', () => {
+    const a = deriveSpanId(TEST_KEY, 'same:key')
+    const b = deriveSpanId('f'.repeat(64), 'same:key')
+    expect(a).not.toBe(b)
+  })
+
+  it('throws on an empty key (decision D1)', () => {
+    expect(() => deriveSpanId('', 'x')).toThrow(/privacyKey is required/)
+  })
+
+  // GOLDEN — deliberately updated in the keyed-encoding change. The old pin
+  // (ec3ca28cceacf381, plain SHA-256 of the dedup key) is retired because the
+  // construction it pinned was the dictionary-attackable one. Previously-sent
+  // span ids no longer correlate with new ones for the same dedup key — the
+  // host-side ledger is keyed by the raw deduplicationKey, not the span id, so
+  // re-push filtering is unaffected. If this test fails, revert the encoding
+  // change (or design an explicit migration).
+  it('golden: HMAC-SHA256(privacyKey, "sync-span:golden-dedup-key") first 8 bytes as hex', () => {
+    expect(deriveSpanId(TEST_KEY, 'golden-dedup-key')).toBe('517d8367a13d6124')
   })
 })
 
 describe('deriveTraceId', () => {
   it('returns 32 hex chars', () => {
-    const id = deriveTraceId('session-xyz')
+    const id = deriveTraceId(TEST_KEY, 'session-xyz')
     expect(id).toMatch(/^[0-9a-f]{32}$/)
   })
 
   it('is deterministic', () => {
-    const a = deriveTraceId('session-1')
-    const b = deriveTraceId('session-1')
+    const a = deriveTraceId(TEST_KEY, 'session-1')
+    const b = deriveTraceId(TEST_KEY, 'session-1')
     expect(a).toBe(b)
   })
 
-  // GOLDEN PIN — see deriveSpanId golden test for why this must not change.
-  it('golden: SHA-256(sessionId) first 16 bytes as hex', () => {
-    expect(deriveTraceId('golden-session-id')).toBe('ff1b1358ef64c52f80e50e7ae47ca176')
+  it('same input under different keys produces different IDs', () => {
+    const a = deriveTraceId(TEST_KEY, 'session-1')
+    const b = deriveTraceId('f'.repeat(64), 'session-1')
+    expect(a).not.toBe(b)
+  })
+
+  // GOLDEN — deliberately updated with the same keyed-encoding change as the
+  // span-id pin above; session ids can embed path-derived material for some
+  // providers, so they get the same construction.
+  it('golden: HMAC-SHA256(privacyKey, "sync-trace:golden-session-id") first 16 bytes as hex', () => {
+    expect(deriveTraceId(TEST_KEY, 'golden-session-id')).toBe('7a3483584b8b6bd1b07d8a347549b1b7')
   })
 })
 
@@ -115,11 +141,39 @@ describe('getDeviceId', () => {
   it('is stable across calls', () => {
     expect(getDeviceId()).toBe(getDeviceId())
   })
+})
 
-  // GOLDEN PIN — device ID must be stable across releases so a developer's
-  // machine keeps one identity in the backend.
-  it('golden: SHA-256(hostname:username) first 8 bytes as hex', () => {
-    expect(deriveDeviceId('host.example', 'alice')).toBe('004d1a2fc048f575')
+describe('deriveDeviceId', () => {
+  it('returns 16 hex chars', () => {
+    const id = deriveDeviceId(TEST_KEY, 'host.example', 'alice')
+    expect(id).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('is deterministic across calls', () => {
+    const a = deriveDeviceId(TEST_KEY, 'host.example', 'alice')
+    const b = deriveDeviceId(TEST_KEY, 'host.example', 'alice')
+    expect(a).toBe(b)
+  })
+
+  it('same host/user under different keys produces different IDs', () => {
+    const a = deriveDeviceId(TEST_KEY, 'host.example', 'alice')
+    const b = deriveDeviceId('f'.repeat(64), 'host.example', 'alice')
+    expect(a).not.toBe(b)
+  })
+
+  // GOLDEN — deliberately updated with the same keyed-encoding change as the
+  // span/trace pins: the old pin (10f57c433adc234f) pinned the colon-joined
+  // construction `sync-device:host.example:alice`. The host/username join now
+  // uses the same ASCII Unit Separator (0x1f) as core/fingerprint.ts so a
+  // username containing ':' cannot forge a host/user boundary.
+  it('golden: HMAC-SHA256(privacyKey, "sync-device:" + host + US + username) first 8 bytes as hex', () => {
+    expect(deriveDeviceId(TEST_KEY, 'host.example', 'alice')).toBe('f829295f3e76896f')
+  })
+
+  // F3: field-boundary collision — ':' is not a valid separator for composite
+  // inputs. host 'a' + user 'b:c' must differ from host 'a:b' + user 'c'.
+  it('separates host and username with US, not ":" (no boundary collision)', () => {
+    expect(deriveDeviceId(TEST_KEY, 'a', 'b:c')).not.toBe(deriveDeviceId(TEST_KEY, 'a:b', 'c'))
   })
 })
 

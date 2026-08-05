@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added (CLI)
+- `codeburn sync push --attribution` (opt-in): sends git attribution spans — the session→commit correlation from `codeburn yield` (`codeburn.session.attribution` and `codeburn.commit` span types with normalized repo remote, commit SHAs, merged/reverted state, and PR links). Nothing new is sent without the flag; local-only repos and Windows filesystem paths are never emitted as repo identities, and sessions whose project path no longer resolves never inherit the push-time working directory's repo. See docs/sync/README.md "Git attribution".
+
 ### Fixed
 - Claude Desktop and Cowork sessions are discovered for Windows Microsoft Store (MSIX) installs. (#611)
 

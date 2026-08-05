@@ -22,7 +22,8 @@ import {
 } from './auth.js'
 import { createCredentialStore } from './credentials.js'
 import { readSyncConfig, writeSyncConfig, deleteSyncConfig, updateLastSync } from './config.js'
-import { collectUnsentCalls, sendBatches, batchCalls, MAX_PER_PUSH } from './push.js'
+import { collectUnsentCalls, collectUnsentAttribution, sendBatches, sendAttributionBatches, batchCalls, MAX_PER_PUSH, MAX_ATTRIBUTION_PER_PUSH, type PushResult } from './push.js'
+import { batchAttributionItems } from './otlp.js'
 
 export function registerSyncCommands(program: Command): void {
   const sync = program
@@ -226,7 +227,8 @@ export function registerSyncCommands(program: Command): void {
     .description('Push unsent telemetry data to the configured endpoint')
     .option('--since <period>', 'Time window: today, 7d, 30d, month, all (max 6 months)', '7d')
     .option('--dry-run', 'Show what would be sent without sending')
-    .action(async (opts: { since: string; dryRun?: boolean }) => {
+    .option('--attribution', 'Also push git attribution spans (session→commit correlation from `codeburn yield`, plus PR links). Sends normalized repo remotes and commit SHAs to the endpoint.')
+    .action(async (opts: { since: string; dryRun?: boolean; attribution?: boolean }) => {
       const config = readSyncConfig()
       if (!config) {
         process.stderr.write('Sync not configured. Run `codeburn sync setup <url>` first.\n')
@@ -277,6 +279,18 @@ export function registerSyncCommands(program: Command): void {
         // Flatten + filter against sent-ledger
         const { allCalls, unsent } = collectUnsentCalls(projects)
 
+        // Attribution records (opt-in): session→commit correlation computed
+        // locally from the same parsed projects. Reuses the yield engine.
+        let attributionUnsent: Awaited<ReturnType<typeof collectUnsentAttribution>>['unsent'] = []
+        let attributionTotal = 0
+        if (opts.attribution) {
+          const { computeAttributionRecords } = await import('../yield.js')
+          const records = computeAttributionRecords(projects, range, process.cwd())
+          const collected = collectUnsentAttribution(records)
+          attributionUnsent = collected.unsent
+          attributionTotal = collected.allItems.length
+        }
+
         if (opts.dryRun) {
           const toPushCount = Math.min(unsent.length, MAX_PER_PUSH)
           const cost = unsent.slice(0, MAX_PER_PUSH).reduce((s, c) => s + c.call.costUSD, 0)
@@ -285,10 +299,19 @@ export function registerSyncCommands(program: Command): void {
           if (unsent.length > MAX_PER_PUSH) {
             process.stderr.write(`[dry-run] ${unsent.length - MAX_PER_PUSH} more calls exceed the ${MAX_PER_PUSH} safety limit — a second push would be needed\n`)
           }
+          if (opts.attribution) {
+            const toPushAttr = attributionUnsent.slice(0, MAX_ATTRIBUTION_PER_PUSH)
+            const commits = toPushAttr.filter(i => i.kind === 'commit').length
+            const sessions = toPushAttr.filter(i => i.kind === 'session').length
+            process.stderr.write(`[dry-run] Attribution: ${attributionTotal} facts total, would push ${toPushAttr.length} (${sessions} sessions, ${commits} commits)\n`)
+            if (attributionUnsent.length > MAX_ATTRIBUTION_PER_PUSH) {
+              process.stderr.write(`[dry-run] ${attributionUnsent.length - MAX_ATTRIBUTION_PER_PUSH} more attribution facts exceed the ${MAX_ATTRIBUTION_PER_PUSH} safety limit — a second push would be needed\n`)
+            }
+          }
           return
         }
 
-        if (unsent.length === 0) {
+        if (unsent.length === 0 && attributionUnsent.length === 0) {
           process.stderr.write(`Nothing to push (${allCalls.length} calls already synced).\n`)
           updateLastSync()
           return
@@ -302,15 +325,18 @@ export function registerSyncCommands(program: Command): void {
 
         // Batch and send (loops until done; waits out 429 rate limits)
         const discoveryDoc = await fetchDiscoveryDoc(config.baseUrl)
-        const batches = batchCalls(toPush, discoveryDoc.max_batch_size)
         const endpoint = `${config.baseUrl}${config.tracesPath}`
 
-        const result = await sendBatches({
-          endpoint,
-          accessToken: tokens.access_token,
-          batches,
-          log: msg => process.stderr.write(`${msg}\n`),
-        })
+        let result: PushResult = { outcome: 'complete', totalSent: 0, totalRejected: 0, totalCostSent: 0 }
+        if (toPush.length > 0) {
+          const batches = batchCalls(toPush, discoveryDoc.max_batch_size)
+          result = await sendBatches({
+            endpoint,
+            accessToken: tokens.access_token,
+            batches,
+            log: msg => process.stderr.write(`${msg}\n`),
+          })
+        }
 
         if (result.outcome === 'auth-rejected') {
           process.stderr.write('Auth rejected by server. Run `codeburn sync setup` to re-authenticate.\n')
@@ -323,11 +349,50 @@ export function registerSyncCommands(program: Command): void {
           process.stderr.write(`Server error (HTTP ${result.httpStatus}). Remaining calls will be sent on the next push.\n`)
         }
 
+        // Attribution spans ride the same endpoint after the usage push
+        // completes. Skipped when the usage push hit rate limits or server
+        // errors — the endpoint is already unhappy; both retry on next push.
+        let attrResult: PushResult | null = null
+        if (opts.attribution && attributionUnsent.length > 0) {
+          if (result.outcome === 'complete') {
+            // Safety valve, mirroring the usage-call cap
+            const attrToPush = attributionUnsent.slice(0, MAX_ATTRIBUTION_PER_PUSH)
+            if (attributionUnsent.length > MAX_ATTRIBUTION_PER_PUSH) {
+              process.stderr.write(`${attributionUnsent.length} attribution facts exceed the ${MAX_ATTRIBUTION_PER_PUSH} safety limit. Pushing first ${MAX_ATTRIBUTION_PER_PUSH}; run again to continue.\n`)
+            }
+            const attrBatches = batchAttributionItems(attrToPush, discoveryDoc.max_batch_size)
+            attrResult = await sendAttributionBatches({
+              endpoint,
+              accessToken: tokens.access_token,
+              batches: attrBatches,
+              log: msg => process.stderr.write(`${msg}\n`),
+            })
+            if (attrResult.outcome === 'auth-rejected') {
+              process.stderr.write('Auth rejected by server during attribution push. Run `codeburn sync setup` to re-authenticate.\n')
+              process.exit(1)
+            }
+            if (attrResult.outcome === 'rate-limited') {
+              process.stderr.write(`Rate limited during attribution push — gave up after repeated retries. Remaining facts will be sent on the next push.\n`)
+            }
+            if (attrResult.outcome === 'server-error') {
+              process.stderr.write(`Server error (HTTP ${attrResult.httpStatus}) during attribution push. Remaining facts will be sent on the next push.\n`)
+            }
+          } else {
+            process.stderr.write(`Skipping attribution push (${attributionUnsent.length} facts) — will retry on next push.\n`)
+          }
+        }
+
         // Update lastSync
         updateLastSync()
 
         // Summary
         process.stderr.write(`\nSynced ${result.totalSent} calls ($${result.totalCostSent.toFixed(2)}) to ${config.baseUrl}\n`)
+        if (attrResult) {
+          const attrSuffix = attrResult.outcome !== 'complete'
+            ? ` (push incomplete — remainder retries next push)`
+            : attrResult.totalRejected > 0 ? `, ${attrResult.totalRejected} rejected (will retry)` : ''
+          process.stderr.write(`  Attribution: ${attrResult.totalSent} facts synced${attrSuffix}\n`)
+        }
         if (result.totalRejected > 0) {
           process.stderr.write(`  ${result.totalRejected} spans rejected (will retry on next push)\n`)
         }
@@ -337,7 +402,7 @@ export function registerSyncCommands(program: Command): void {
 
         // Non-zero exit when the push did not complete, so cron/scripts can
         // detect it. Ledgered progress is kept; next push resumes.
-        if (result.outcome !== 'complete') {
+        if (result.outcome !== 'complete' || (attrResult !== null && attrResult.outcome !== 'complete')) {
           process.exitCode = 1
         }
       } catch (err) {

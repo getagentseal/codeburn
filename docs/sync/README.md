@@ -48,6 +48,9 @@ codeburn sync push --since 30d
 
 # Preview what would be sent
 codeburn sync push --dry-run
+
+# Also push git attribution (opt-in — see "Git attribution" below)
+codeburn sync push --attribution
 ```
 
 ### `codeburn sync status`
@@ -93,7 +96,37 @@ Each AI interaction becomes one OTLP span with these attributes:
 | `ai.project` | `my-app` | Project name |
 | `ai.tools` | `["Edit", "Bash"]` | Tools invoked |
 
-A pseudonymous `device_id` distinguishes your machines without revealing hostnames.
+A keyed `device_id` (HMAC of hostname and username under a per-install key that never leaves the machine) distinguishes your machines without revealing hostnames.
+
+### Git attribution (opt-in: `--attribution`)
+
+`codeburn sync push --attribution` additionally sends the session→commit correlation that `codeburn yield` computes locally, so the backend can join AI usage to git activity without git hooks. Two extra span types are emitted:
+
+**`codeburn.session.attribution`** — one per session with joinable evidence:
+
+| Field | Example | Description |
+|---|---|---|
+| `ai.session_id` | `abc123…` | Session (shares the usage spans' traceId) |
+| `ai.project` | `my-app` | Project name |
+| `git.repo` | `github.com/acme/widget` | Normalized `origin` remote (credentials and ports stripped) |
+| `git.pr_links` | `["…/pull/12"]` | PR URLs captured for the session |
+| `git.commit_count` | `2` | Number of attributed commits |
+
+**`codeburn.commit`** — one per commit attributed to a session:
+
+| Field | Example | Description |
+|---|---|---|
+| `git.sha` | `4f2a…` | Commit SHA |
+| `git.in_main` | `true` | Whether the commit landed in the main branch |
+| `git.was_reverted` | `false` | Whether a later commit reverted it |
+
+Attribution is **inferred** (timestamp-window correlation, the same heuristic as `codeburn yield`); the resource attribute `codeburn.attribution_methodology: timestamp-window` marks it as such. State transitions (a commit merging to main, or being reverted) are re-sent automatically on later pushes — receivers should upsert commits by `(git.repo, git.sha)` and session spans by `ai.session_id` (latest state wins). When a commit migrates to a later-parsed session with a tighter window, the losing session re-emits with `git.commit_count: 0` (a retraction), so summing `git.commit_count` across upserted session rows never double-counts. Retractions fire only when the commit was won by another session — commits that merely age out of the `--since` window are not retracted, so a previously-synced count stays correct. Session spans also re-emit when an ongoing session's window grows, keeping the span end time current.
+
+With `--attribution`, normalized repo remote URLs, commit SHAs, commit timestamps (span start times), PR URLs, and the merged/reverted booleans leave your machine — plus the same pseudonymous `codeburn.device_id` resource attribute the usage spans carry. PR links are rebuilt client-side from scheme + host + path only (userinfo, query strings, and fragments are dropped; https, `/org/repo/pull/N` path, bounded length, max 20 per session), and the repo identity itself passes a strict hostname/path allow-list before sending — malformed or transport-helper remotes (`ext::…`, `codecommit::…`) are rejected outright rather than parsed. Precisely what is and is not sent:
+
+- **Commits**: only from repos with a network `origin` remote, and only for sessions whose own project path resolved to that repo. Local-only repos, `file://` remotes, and Windows filesystem paths are never emitted as repo identities. A session whose project path no longer resolves never inherits the repo of the directory you happen to push from.
+- **PR links**: sent whenever a session captured them, even when the session's repo could not be identified — the PR URL itself names the repo, so this adds no information beyond the link the session already recorded.
+- Without the flag, none of this is sent.
 
 ### What is NOT sent
 
@@ -102,7 +135,7 @@ A pseudonymous `device_id` distinguishes your machines without revealing hostnam
 - **Bash commands** — may contain secrets, never sent
 - **Your name/email** — identity is derived server-side from your login token
 
-There is no flag to override this. Privacy is structural, not configurable.
+There is no flag to override this. Privacy is structural, not configurable. The only additive opt-in is `--attribution` (repo remotes, commit SHAs, and PR URLs — never code or prompts), described above.
 
 ## Authentication
 
