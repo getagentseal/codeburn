@@ -2,8 +2,8 @@ import { stat } from 'fs/promises'
 import { homedir } from 'os'
 import { basename, join } from 'path'
 
-import { discoverClineTasks, createClineParser, getVSCodeGlobalStoragePaths } from './vscode-cline-parser.js'
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
 
 const EXTENSION_ID = 'saoudrizwan.claude-dev'
 
@@ -38,6 +38,14 @@ async function dedupeTaskSources(sources: SessionSource[]): Promise<SessionSourc
 
 export function createClineProvider(overrideDirs?: string | string[]): Provider {
   const configuredDirs = normalizeOverrideDirs(overrideDirs)
+  // Cline may be installed in any VS Code variant (stable, Insiders, VSCodium),
+  // so every globalStorage root is scanned - same as the Roo Code and KiloCode
+  // siblings - plus Cline's own home-data root. Shared by discovery and
+  // probeRoots so doctor can never report a root discovery does not read.
+  const taskRoots = (): string[] => configuredDirs ?? [
+    ...clineTaskRoots(EXTENSION_ID),
+    getClineDataPath(),
+  ]
 
   return {
     name: 'cline',
@@ -51,14 +59,12 @@ export function createClineProvider(overrideDirs?: string | string[]): Provider 
       return rawTool
     },
 
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return taskRoots().map(path => ({ path, label: 'tasks' }))
+    },
+
     async discoverSessions(): Promise<SessionSource[]> {
-      // Cline may be installed in any VS Code variant (stable, Insiders,
-      // VSCodium), so every globalStorage root is scanned - same as the Roo Code
-      // and KiloCode siblings - plus Cline's own home-data root.
-      const baseDirs = configuredDirs ?? [
-        ...getVSCodeGlobalStoragePaths(EXTENSION_ID),
-        getClineDataPath(),
-      ]
+      const baseDirs = taskRoots()
 
       return dedupeTaskSources(await discoverClineTasks(EXTENSION_ID, 'cline', 'Cline', baseDirs))
     },

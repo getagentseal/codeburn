@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 // Grok Build (xAI's coding CLI) stores one session per directory at
 // <grok-home>/sessions/<url-encoded-cwd>/<uuid>/, where grok-home is $GROK_HOME
@@ -256,6 +256,10 @@ export function createGrokProvider(sessionsDir?: string): Provider {
   return {
     name: 'grok',
     displayName: 'Grok Build',
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dir, label: 'sessions' }]
+    },
 
     modelDisplayName(model: string): string {
       if (model.startsWith('grok-build')) return 'Grok Build'

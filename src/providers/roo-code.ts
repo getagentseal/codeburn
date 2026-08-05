@@ -1,5 +1,5 @@
-import { discoverClineTasks, createClineParser } from './vscode-cline-parser.js'
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
 
 const EXTENSION_ID = 'rooveterinaryinc.roo-cline'
 
@@ -14,6 +14,10 @@ export function createRooCodeProvider(overrideDir?: string | string[]): Provider
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return clineTaskRoots(EXTENSION_ID, overrideDir).map(path => ({ path, label: 'tasks' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
