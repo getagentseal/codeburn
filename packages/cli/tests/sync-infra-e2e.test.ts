@@ -15,11 +15,11 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { randomBytes, createHash } from 'crypto'
+import { randomBytes } from 'crypto'
 
 import { fetchDiscoveryDoc } from '../src/sync/discovery.js'
 import { fetchOidcConfig, refreshToken } from '../src/sync/auth.js'
-import { buildOtlpPayload, deriveSpanId, type CallWithSession } from '../src/sync/otlp.js'
+import { buildOtlpPayload, type CallWithSession } from '../src/sync/otlp.js'
 import type { ParsedApiCall, TokenUsage } from '../src/types.js'
 
 const BASE_URL = process.env.CODEBURN_SYNC_URL
@@ -185,7 +185,6 @@ describe.skipIf(SKIP)('sync infra e2e — push + verify', () => {
 
   it('deterministic span IDs allow safe re-push', async () => {
     const dedup = `test:infra-e2e:${testRunId}:idempotent`
-    const spanId = deriveSpanId(dedup)
 
     // Push same data twice
     const call: CallWithSession = {

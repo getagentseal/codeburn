@@ -105,12 +105,31 @@ Strict protobuf-JSON mapping of `ExportTraceServiceRequest`. lowerCamelCase fiel
 
 ### Span identity (deterministic)
 
+All ids are HMAC-SHA256 keyed by the per-install host privacy key (decision D1,
+see `packages/cli/src/privacy-key.ts`) with a role prefix — never a bare
+SHA-256, which would be confirmable by dictionary attack:
+
 ```
-span_id   = first 8 bytes of SHA-256(deduplicationKey) → hex (16 chars)
-trace_id  = first 16 bytes of SHA-256(sessionId)       → hex (32 chars)
+span_id   = first 8 bytes of HMAC-SHA256(privacyKey, "sync-span:" + deduplicationKey) → hex (16 chars)
+trace_id  = first 16 bytes of HMAC-SHA256(privacyKey, "sync-trace:" + sessionId)      → hex (32 chars)
 ```
 
-Re-sends are byte-identical. Server-side dedup is defense-in-depth.
+The key is generated once per install, persisted in the codeburn config dir,
+and never leaves the host, so re-sends are byte-identical on the same machine.
+Sync REQUIRES that persisted key: push aborts with an error if the config dir
+is unwritable (no per-process fallback key) or a key file exists but does not
+hold a valid key — corrupt content, a zero-byte file (a partial write), or an
+unreadable file, with no silent regeneration in any of those cases. Only "no
+file at all" may be created, and that first create is exclusive
+(O_CREAT|O_EXCL): concurrent first pushes collide, the loser re-reads and
+adopts the winner's key, so two processes can never mint different keys and
+mix ids derived under each. Either degradation — a per-process fallback key,
+or a silent re-key — would re-key every id between processes and break the
+partial-rejection retry guarantee below.
+Deliberately deleting the key file (or changing the derivation) re-keys every
+id: spans already sent under the old construction no longer correlate with new
+ones. A corrupt key file is the one case that never re-keys silently — the
+push stops and the operator must fix the disk or delete the file on purpose.
 
 ### Resource attributes
 
@@ -118,7 +137,7 @@ Re-sends are byte-identical. Server-side dedup is defense-in-depth.
 {
   "resource": {
     "attributes": [
-      { "key": "codeburn.device_id", "value": { "stringValue": "<SHA-256(hostname+username)[:16]>" } }
+      { "key": "codeburn.device_id", "value": { "stringValue": "<HMAC-SHA256(privacyKey, \"sync-device:\" + hostname + \"\\x1f\" + username)[:16]> (\\x1f = ASCII Unit Separator)" } }
     ]
   }
 }

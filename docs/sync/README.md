@@ -93,7 +93,7 @@ Each AI interaction becomes one OTLP span with these attributes:
 | `ai.project` | `my-app` | Project name |
 | `ai.tools` | `["Edit", "Bash"]` | Tools invoked |
 
-A pseudonymous `device_id` distinguishes your machines without revealing hostnames.
+A keyed `device_id` (HMAC of hostname and username under a per-install key that never leaves the machine) distinguishes your machines without revealing hostnames.
 
 ### What is NOT sent
 
