@@ -45,7 +45,9 @@ export interface ResourceFingerprint {
 // CLI's legacy JUNK_DIRS regex: every directory that regex named classifies here
 // as junk too (the extras — 'venv', '__pycache__', 'coverage', '.cache',
 // '.nuxt', '.output', '.svn', '.hg' — are added below), plus vendor /
-// site-packages / out / target, which the old regex missed.
+// site-packages / out / target, which the old regex missed. The host CLI must
+// consume the tables through junkSegmentOf (below) rather than re-testing paths
+// against its own regex, so the junk decision is one vocabulary everywhere.
 const DEPENDENCY_SEGMENTS = new Set(['node_modules', 'vendor', '.venv', 'venv', 'site-packages'])
 const BUILD_SEGMENTS = new Set([
   'dist', 'build', 'out', 'target', '.next', '.nuxt', '.output',
@@ -86,6 +88,27 @@ function extensionOf(basename: string): string | undefined {
 }
 
 /**
+ * First path segment that makes the path junk, in precedence order
+ * (dependency > build > vcs), along with the class it implies; or null.
+ * This is the single home of the junk precedence rule — classifyResource and
+ * junkSegmentOf both consult it, so the two cannot drift apart.
+ */
+function firstJunk(
+  segments: string[],
+): { segment: string; resourceClass: 'dependency' | 'build' | 'vcs' } | null {
+  for (const seg of segments) {
+    if (DEPENDENCY_SEGMENTS.has(seg)) return { segment: seg, resourceClass: 'dependency' }
+  }
+  for (const seg of segments) {
+    if (BUILD_SEGMENTS.has(seg)) return { segment: seg, resourceClass: 'build' }
+  }
+  for (const seg of segments) {
+    if (VCS_SEGMENTS.has(seg)) return { segment: seg, resourceClass: 'vcs' }
+  }
+  return null
+}
+
+/**
  * Classify a path by its segments and basename. Precedence is directory-based
  * first (a file under node_modules is a dependency regardless of its
  * extension), then basename/extension-based:
@@ -95,15 +118,8 @@ export function classifyResource(absolutePath: string): ResourceClass {
   const normalized = normalizePath(absolutePath)
   const segments = normalized.split('/').filter(Boolean)
 
-  for (const seg of segments) {
-    if (DEPENDENCY_SEGMENTS.has(seg)) return 'dependency'
-  }
-  for (const seg of segments) {
-    if (BUILD_SEGMENTS.has(seg)) return 'build'
-  }
-  for (const seg of segments) {
-    if (VCS_SEGMENTS.has(seg)) return 'vcs'
-  }
+  const junk = firstJunk(segments)
+  if (junk) return junk.resourceClass
 
   const basename = segments[segments.length - 1] ?? ''
   // A dotfile (e.g. `.eslintrc`, `.gitignore`) is configuration.
@@ -116,6 +132,24 @@ export function classifyResource(absolutePath: string): ResourceClass {
     if (SOURCE_EXTENSIONS.has(ext)) return 'source'
   }
   return 'other'
+}
+
+/**
+ * If `absolutePath` classifies as junk (resourceClass ∈ dependency/build/vcs,
+ * see JUNK_RESOURCE_CLASSES), return the exact path segment that made it junk
+ * ('node_modules', 'vendor', 'out', ...); otherwise null. Precedence matches
+ * classifyResource (dependency > build > vcs), so the returned segment is the
+ * one that determined the class.
+ *
+ * The host CLI uses this to keep its display and its junk decision on core's
+ * vocabulary: it still names the offending directory for the payload — a class
+ * alone cannot render 'node_modules/ (7x)' — but never re-tests paths against
+ * its own copy of the tables.
+ */
+export function junkSegmentOf(absolutePath: string): string | null {
+  const normalized = normalizePath(absolutePath)
+  const segments = normalized.split('/').filter(Boolean)
+  return firstJunk(segments)?.segment ?? null
 }
 
 /**

@@ -4,7 +4,7 @@ import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 
-import { projectRef as fingerprintProjectRef, resourceFingerprint, sessionRef as fingerprintSessionRef } from '@codeburn/core/fingerprint'
+import { junkSegmentOf, projectRef as fingerprintProjectRef, resourceFingerprint, sessionRef as fingerprintSessionRef } from '@codeburn/core/fingerprint'
 import { OBSERVATION_SCHEMA_VERSION } from '@codeburn/core/schema'
 import type { CallObservation, ObservationEnvelope, SessionObservation } from '@codeburn/core/observations'
 import type { Finding } from '@codeburn/core/contracts'
@@ -209,12 +209,10 @@ const MAX_IMPORT_DEPTH = 5
 const IMPORT_PATTERN = /^@(\.\.?\/[^\s]+|\/[^\s]+)/gm
 const COMMAND_PATTERN = /<command-name>([^<]+)<\/command-name>|(?:^|\s)\/([a-zA-Z][\w-]*)/gm
 
-const JUNK_DIRS = [
-  'node_modules', '.git', 'dist', 'build', '__pycache__', '.next',
-  '.nuxt', '.output', 'coverage', '.cache', '.tsbuildinfo',
-  '.venv', 'venv', '.svn', '.hg',
-]
-const JUNK_PATTERN = new RegExp(`/(?:${JUNK_DIRS.join('|')})/`)
+// What counts as a junk path (dependency/build/vcs) is core's decision alone —
+// junkSegmentOf (@codeburn/core/fingerprint) classifies against the same segment
+// tables the junk-reads/duplicate-reads detectors use. The host never re-tests
+// paths against its own list; it only names the offending segment for display.
 
 const SHELL_PROFILES = ['.zshrc', '.bashrc', '.bash_profile', '.profile']
 
@@ -757,20 +755,25 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   const totalJunkReads = evidenceCount(findings[0], 'junk-reads')
   const tokensSaved = evidenceCount(findings[0], 'tokens-saved')
 
-  // Display + trend stay host-derived from the raw path data (D5-A).
+  // The junk DECISION comes from core's classification — one vocabulary with
+  // the detector that produced the count, so recentJunkReads can never disagree
+  // with totalJunkReads (that mismatch used to 'resolve' the finding away for
+  // vendor/ site-packages/ out/ target/ repos). The host still names the
+  // offending directory from the raw path it retained (D5-A): a class alone
+  // cannot render 'vendor/ (7x)'.
   const dirCounts = new Map<string, number>()
   let recentJunkReads = 0
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
-    const filePath = call.input.file_path as string | undefined
-    if (!filePath || !JUNK_PATTERN.test(filePath)) continue
+    const filePath = call.input.file_path
+    // JUNK_PATTERN.test() coerced a truthy non-string instead of throwing;
+    // junkSegmentOf -> normalizePath would throw on one, so narrow the type
+    // here rather than letting a non-string reach core's classifier.
+    if (typeof filePath !== 'string') continue
+    const seg = junkSegmentOf(filePath)
+    if (!seg) continue
     if (call.recent) recentJunkReads++
-    for (const dir of JUNK_DIRS) {
-      if (filePath.includes(`/${dir}/`)) {
-        dirCounts.set(dir, (dirCounts.get(dir) ?? 0) + 1)
-        break
-      }
-    }
+    dirCounts.set(seg, (dirCounts.get(seg) ?? 0) + 1)
   }
 
   const hasRecentActivity = calls.some(c => c.recent)
@@ -808,11 +811,16 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
   const tokensSaved = evidenceCount(findings[0], 'tokens-saved')
 
   // Per-file breakdown + trend stay host-derived from the raw path data (D5-A).
+  // Junk exclusion asks core (junkSegmentOf) so the host drops exactly the
+  // resources the duplicate-reads detector excluded — the legacy narrow regex
+  // let vendor/ etc. through, putting non-counted files in the display.
   const sessionFiles = new Map<string, Map<string, { count: number; recent: number }>>()
   for (const call of calls) {
     if (!isReadTool(call.name)) continue
-    const filePath = call.input.file_path as string | undefined
-    if (!filePath || JUNK_PATTERN.test(filePath)) continue
+    const filePath = call.input.file_path
+    // Same type guard as detectJunkReads: junkSegmentOf -> normalizePath throws
+    // on a truthy non-string where JUNK_PATTERN.test() used to coerce it.
+    if (typeof filePath !== 'string' || junkSegmentOf(filePath)) continue
     const key = `${call.project}:${call.sessionId}`
     if (!sessionFiles.has(key)) sessionFiles.set(key, new Map())
     const fm = sessionFiles.get(key)!

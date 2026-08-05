@@ -4,6 +4,7 @@ import {
   branchRef,
   classifyResource,
   commandFamily,
+  junkSegmentOf,
   normalizePath,
   projectRef,
   resourceFingerprint,
@@ -127,6 +128,34 @@ describe('resource classification', () => {
 
   it('directory class beats extension (a .ts under node_modules is a dependency)', () => {
     expect(classifyResource('/repo/node_modules/pkg/index.ts')).toBe('dependency')
+  })
+})
+
+describe('junkSegmentOf', () => {
+  it('returns the exact segment that made the path junk', () => {
+    expect(junkSegmentOf('/repo/node_modules/lodash/index.js')).toBe('node_modules')
+    expect(junkSegmentOf('/go/src/app/vendor/lib.go')).toBe('vendor')
+    expect(junkSegmentOf('/py/.venv/lib/site.py')).toBe('.venv')
+    expect(junkSegmentOf('/py/venv/lib/site.py')).toBe('venv')
+    expect(junkSegmentOf('/py/site-packages/x.py')).toBe('site-packages')
+    expect(junkSegmentOf('/repo/dist/index.js')).toBe('dist')
+    expect(junkSegmentOf('/rs/target/debug/app')).toBe('target')
+    expect(junkSegmentOf('/repo/.next/server/page.js')).toBe('.next')
+    expect(junkSegmentOf('/repo/.git/HEAD')).toBe('.git')
+  })
+
+  it('follows classifyResource precedence (dependency > build > vcs)', () => {
+    // The segment returned must be the one that determined the class.
+    expect(junkSegmentOf('/a/vendor/b/out/c')).toBe('vendor')
+    expect(junkSegmentOf('/a/out/b/.git/c')).toBe('out')
+  })
+
+  it('returns null for non-junk paths, including .tsbuildinfo files', () => {
+    expect(junkSegmentOf('/repo/src/a.ts')).toBeNull()
+    expect(junkSegmentOf('/repo/README.md')).toBeNull()
+    // '.tsbuildinfo' names a file (tsconfig.tsbuildinfo), never a directory
+    // segment, so it is deliberately not junk (see junk-reads detector notes).
+    expect(junkSegmentOf('/repo/foo.tsbuildinfo')).toBeNull()
   })
 })
 

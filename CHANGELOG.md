@@ -4,6 +4,7 @@
 
 ### Fixed
 - Claude Desktop and Cowork sessions are discovered for Windows Microsoft Store (MSIX) installs. (#611)
+- The build-folder-reads finding is no longer dropped for repos whose junk reads live only under `vendor/`, `site-packages/`, `out/` or `target/` (Go, PHP, Python, Rust, and Java/Next). Core's detector already counted those reads — only the host's display and trend derivation used a narrower directory list, so when the window had recent activity the recent count stayed zero, the trend computed as 'resolved', and the finding vanished entirely. In mixed repos it survived but quoted core's total while listing directories from the host's narrower counts, so the numbers disagreed. Junk-read and duplicate-read detection now ask core for the offending segment, so the count, the directory list and the trend share one vocabulary; the count itself is unchanged.
 
 ## 0.9.19 - 2026-07-20
 

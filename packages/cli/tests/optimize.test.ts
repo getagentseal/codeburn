@@ -174,12 +174,16 @@ describe('detectJunkReads', () => {
     expect(detectJunkReads(calls)).toBeNull()
   })
 
-  it('handles missing file_path gracefully', () => {
+  it('handles missing or non-string file_path gracefully', () => {
     const calls = [
       call('Read', {}),
       call('Read', { file_path: null as unknown as string }),
+      // A truthy non-string must not throw: JUNK_PATTERN.test() coerced it,
+      // junkSegmentOf -> normalizePath would not.
+      call('Read', { file_path: 42 as unknown as string }),
     ]
     expect(detectJunkReads(calls)).toBeNull()
+    expect(() => detectDuplicateReads(calls)).not.toThrow()
   })
 
   it('suggests CLAUDE.md advice listing detected and common junk dirs', () => {
@@ -194,6 +198,26 @@ describe('detectJunkReads', () => {
       expect(finding.fix.destination).toBe('claude-md')
     }
     expect(finding.fix.label).toContain('CLAUDE.md')
+  })
+
+  it('flags a vendor-only project even with recent activity (was silently resolved)', () => {
+    // Regression: core classifies vendor/ as junk, but the host's legacy
+    // JUNK_DIRS regex did not, so recentJunkReads stayed 0 and computeTrend
+    // returned 'resolved' — the whole finding vanished for Go/PHP repos.
+    const calls = Array.from({ length: 5 }, (_, i) => ({
+      ...call('Read', { file_path: `/go/src/app/vendor/lib-${i}.go` }),
+      recent: true,
+    }))
+    const finding = detectJunkReads(calls)
+    expect(finding).not.toBeNull()
+    expect(finding!.trend).not.toBe('resolved')
+    // Display names the segment from core's vocabulary, and the explanation's
+    // count is core's total — the two no longer disagree.
+    expect(finding!.explanation).toContain('vendor/ (5x)')
+    expect(finding!.explanation).toContain('(5 reads)')
+    if (finding!.fix.type === 'paste') {
+      expect(finding!.fix.text).toContain('vendor')
+    }
   })
 })
 
@@ -221,6 +245,20 @@ describe('detectDuplicateReads', () => {
       call('Read', { file_path: '/x/node_modules/foo.js' }, 's1')
     )
     expect(detectDuplicateReads(calls)).toBeNull()
+  })
+
+  it('excludes vendor reads from the duplicate display (core vocabulary)', () => {
+    // core's duplicate-reads detector excludes every junk class (vendor
+    // included); the host-side per-file display must drop the same paths,
+    // or it names files that never contributed to the count.
+    const calls = [
+      ...Array.from({ length: 7 }, () => call('Read', { file_path: '/src/a.ts' }, 's1')),
+      ...Array.from({ length: 7 }, () => call('Read', { file_path: '/go/app/vendor/dep.ts' }, 's1')),
+    ]
+    const finding = detectDuplicateReads(calls)
+    expect(finding).not.toBeNull()
+    expect(finding!.explanation).toContain('a.ts')
+    expect(JSON.stringify(finding)).not.toContain('dep.ts')
   })
 
   it('returns null for single reads', () => {
