@@ -5,7 +5,7 @@ import zlib from 'node:zlib'
 
 import { describe, expect, it } from 'vitest'
 
-import { DiagnosticDetail } from '../src/diagnostics.js'
+import { DiagnosticDetail, sanitizeDetail } from '../src/diagnostics.js'
 import { ObservationEnvelope } from '../src/observations.js'
 import { OBSERVATION_SCHEMA_VERSION } from '../src/schema.js'
 import {
@@ -54,6 +54,14 @@ import {
   toObservations as toKiroObservations,
 } from '../src/providers/kiro/index.js'
 import { decodeVercelGateway, toObservations as toVercelGatewayObservations } from '../src/providers/vercel-gateway/index.js'
+import { decodeZerostack, toObservations as toZerostackObservations } from '../src/providers/zerostack/index.js'
+import { decodeDroid, toObservations as toDroidObservations } from '../src/providers/droid/index.js'
+import { decodeMux, toObservations as toMuxObservations } from '../src/providers/mux/index.js'
+import { decodeOpenDesign, toObservations as toOpenDesignObservations } from '../src/providers/open-design/index.js'
+import { decodeLingTaiTui, toObservations as toLingTaiTuiObservations } from '../src/providers/lingtai-tui/index.js'
+import { decodeGemini, toObservations as toGeminiObservations } from '../src/providers/gemini/index.js'
+import { decodeKimicode, toObservations as toKimicodeObservations } from '../src/providers/kimicode/index.js'
+import { decodePi, toObservations as toPiObservations } from '../src/providers/pi/index.js'
 import type { DecodeContext } from '../src/contracts.js'
 import type { ZedThreadRow } from '../src/providers/zed/index.js'
 import type {
@@ -1052,13 +1060,29 @@ describe('content-smuggling guardrail: real copilot decode -> toObservations is 
   })
 })
 
-describe('content-smuggling guardrail: diagnostic detail rejects paths', () => {
+describe('content-smuggling guardrail: diagnostic detail is a fingerprint, never content', () => {
   it('rejects an absolute path', () => {
     expect(DiagnosticDetail.safeParse(SECRETS.absPath).success).toBe(false)
   })
 
   it('rejects a command line (contains a slash)', () => {
     expect(DiagnosticDetail.safeParse(SECRETS.commandLine).success).toBe(false)
+  })
+
+  it('rejects slash-free content: a prompt line', () => {
+    expect(DiagnosticDetail.safeParse(SECRETS.prompt).success).toBe(false)
+  })
+
+  it('rejects slash-free content: an API key', () => {
+    expect(DiagnosticDetail.safeParse(SECRETS.apiKey).success).toBe(false)
+  })
+
+  it('sanitizeDetail turns every secret into a content-free fingerprint', () => {
+    for (const secret of ALL_SECRETS) {
+      const out = sanitizeDetail(secret, 'test-privacy-key')
+      expect(DiagnosticDetail.safeParse(out).success).toBe(true)
+      expect(out).not.toContain(secret)
+    }
   })
 })
 
@@ -2148,5 +2172,581 @@ describe('content-smuggling guardrail: real vercel-gateway decode -> toObservati
       sessions,
     })
     expect(parsed.success).toBe(false)
+  })
+})
+
+// ── allowlisted providers with no hostile-decode coverage until now ─────────
+// The architecture gate confines `userMessage` to these files; these tests are
+// the behavioral half of that gate: a hostile record whose user-content fields
+// carry a planted secret must never surface that secret in the emitted
+// observations or diagnostics. Every fixture plants secrets in fields the
+// decoder genuinely reads, and each proves the decode actually consumed the
+// record — either the rich decode received the secret verbatim (free-text
+// fields that are later minimized away) or, for decoders with no free-text
+// capture, a hostile value planted in a consumed field was coerced/dropped by
+// the read itself (see the open-design and lingtai-tui sections). A fixture
+// that silently stops decoding can therefore never make the no-secret
+// assertions vacuous.
+
+describe('content-smuggling guardrail: real zerostack decode -> toObservations is secret-free', () => {
+  // A hostile Zerostack session planting every secret in the free-text fields
+  // the decode captures: the first user message and the session working_dir.
+  const zerostackContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'zerostack', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [{
+      id: 'sess-hostile',
+      model: 'claude-opus-4-8',
+      total_input_tokens: 500,
+      total_output_tokens: 200,
+      updated_at: '2026-07-17T10:00:00.000Z',
+      working_dir: SECRETS.absPath,
+      messages: [
+        { role: 'user', content: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` },
+        { role: 'assistant', content: [{ text: 'ok' }] },
+      ],
+    }]
+    const { calls, diagnostics } = decodeZerostack({ records, context: zerostackContext })
+    const { sessions } = toZerostackObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'zerostack' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.absPath) // working_dir -> projectPath
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real droid decode -> toObservations is secret-free', () => {
+  // A hostile Droid JSONL planting every secret in the free-text fields the
+  // decode captures: the user message, an Execute command, and a tool NAME
+  // carrying a command line (must fail the canonical-name filter).
+  const droidContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'droid', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const settings = {
+      model: 'custom:GLM-5.1-[Proxy]-0',
+      tokenUsage: { inputTokens: 100, outputTokens: 50, cacheCreationTokens: 0, cacheReadTokens: 0, thinkingTokens: 0 },
+    }
+    const records = [
+      JSON.stringify({ type: 'session_start', id: 'sess-hostile' }),
+      JSON.stringify({
+        type: 'message', id: 'u1', timestamp: '2026-07-17T10:00:00.000Z',
+        message: { role: 'user', content: [{ type: 'text', text: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` }] },
+      }),
+      JSON.stringify({
+        type: 'message', id: 'a1', timestamp: '2026-07-17T10:00:05.000Z',
+        message: {
+          role: 'assistant',
+          content: [
+            // A hostile tool NAME carrying a command line: unmapped, so it
+            // reaches `tools` and must be dropped by the canonical filter.
+            { type: 'tool_use', id: 't1', name: SECRETS.commandLine, input: {} },
+            { type: 'tool_use', id: 't2', name: 'Execute', input: { command: SECRETS.commandLine } },
+          ],
+        },
+      }),
+    ]
+    const { calls, diagnostics } = decodeDroid({ records, settings, context: droidContext })
+    const { sessions } = toDroidObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'droid' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile JSONL (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.commandLine) // rawBashCommands + hostile tool name
+  })
+
+  it('keeps canonical tool names (Bash) and drops the argument-carrying name', () => {
+    const { envelope } = decodeAndMinimize()
+    const allToolNames = envelope.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real mux decode -> toObservations is secret-free', () => {
+  // A hostile Mux JSONL planting every secret in the free-text fields the
+  // decode captures: the user message, a bash script, and a tool NAME carrying
+  // a command line (must fail the canonical-name filter).
+  const muxContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'mux', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [
+      {
+        role: 'user', id: 'u1', createdAt: '2026-07-17T10:00:00.000Z',
+        parts: [{ type: 'text', text: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` }],
+      },
+      {
+        role: 'assistant', id: 'a1', createdAt: '2026-07-17T10:00:05.000Z',
+        metadata: {
+          model: 'anthropic:claude-opus-4-6',
+          timestamp: 1784354405000,
+          usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 10, reasoningTokens: 5 },
+        },
+        parts: [
+          // A hostile tool NAME carrying a command line: unmapped, so it
+          // reaches `tools` and must be dropped by the canonical filter.
+          { type: 'dynamic-tool', toolName: SECRETS.commandLine, input: {} },
+          { type: 'dynamic-tool', toolName: 'bash', input: { script: SECRETS.commandLine } },
+        ],
+      },
+    ]
+    const { calls, diagnostics } = decodeMux({ records, workspaceId: 'sess-hostile', context: muxContext })
+    const { sessions } = toMuxObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'mux' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile JSONL (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.commandLine) // rawBashCommands + hostile tool name
+  })
+
+  it('keeps canonical tool names (Bash) and drops the argument-carrying name', () => {
+    const { envelope } = decodeAndMinimize()
+    const allToolNames = envelope.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real open-design decode -> toObservations is secret-free', () => {
+  // A hostile Open Design event log. The decode captures NO free-text user
+  // content by design (userMessage is always ''); the only user-controlled
+  // values it consumes are machine identifiers (event / id / timestamp /
+  // model) and the four numeric usage-token fields. The vector here is
+  // hostile free text planted IN those token fields — fields the decoder
+  // genuinely reads via tokenValue(), which must coerce the non-numeric
+  // payload away rather than let it ride the call into the envelope.
+  const openDesignContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'open-design', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [
+      JSON.stringify({ event: 'start', id: 'e0', timestamp: '2026-07-17T10:00:00.000Z', data: { model: 'gpt-5.3' } }),
+      JSON.stringify({
+        event: 'agent', id: 'e1', timestamp: '2026-07-17T10:00:01.000Z',
+        data: {
+          type: 'usage',
+          usage: {
+            input_tokens: 100,
+            // Hostile free text in the token fields the decoder reads.
+            output_tokens: `${SECRETS.prompt}`,
+            cached_read_tokens: `${SECRETS.apiKey}`,
+            thought_tokens: `${SECRETS.commandLine}`,
+          },
+        },
+      }),
+    ]
+    const { calls, diagnostics } = decodeOpenDesign({ records, sessionId: 'sess-hostile', project: 'hostile-project', context: openDesignContext })
+    const { sessions } = toOpenDesignObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'open-design' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile event log (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    // One usage event -> one call; a dropped record would make the no-secret
+    // assertions below vacuous.
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the token fields were genuinely read and the hostile payloads coerced, not echoed', () => {
+    const { calls } = decodeAndMinimize()
+    // The numeric field survived the read, proving the decode consumed this
+    // usage event...
+    expect(calls[0]!.inputTokens).toBe(100)
+    // ...while the free text planted in the sibling token fields it also
+    // reads was coerced to zero — containment inside the read, not a
+    // skipped record.
+    expect(calls[0]!.outputTokens).toBe(0)
+    expect(calls[0]!.cacheReadInputTokens).toBe(0)
+    expect(calls[0]!.reasoningTokens).toBe(0)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real lingtai-tui decode -> toObservations is secret-free', () => {
+  // A hostile LingTai ledger. The decode reads NO free-text user content: the
+  // userMessage is synthesized from the machine-generated activity `source`
+  // label. The only user-controlled values it consumes are the ledger's own
+  // machine identifiers (source / em_id / run_id / ts / model / endpoint,
+  // which flow into the dedup key by design, exactly like every provider's
+  // model/dedupKey — they are not planted here) and the four numeric token
+  // fields. The vector here is hostile free text planted IN those token
+  // fields — fields the decoder genuinely reads via numericField(), which
+  // must coerce the non-numeric payload away rather than let it ride the
+  // call into the envelope.
+  const lingtaiContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'lingtai-tui', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [{
+      source: 'main',
+      em_id: 'em-1',
+      run_id: 'run-1',
+      ts: '2026-07-17T10:00:00.000Z',
+      // input stays numeric so the entry bills a call; the sibling token
+      // fields carry hostile free text the decoder genuinely reads.
+      input: 100,
+      output: `${SECRETS.prompt}`,
+      thinking: `${SECRETS.apiKey}`,
+      cached: `${SECRETS.commandLine}`,
+      model: 'claude-sonnet-4-6',
+      endpoint: 'anthropic',
+    }]
+    const { calls, diagnostics } = decodeLingTaiTui({
+      records,
+      context: lingtaiContext,
+      agentId: 'agent-hostile',
+      fallbackModel: 'fallback-model',
+      fallbackEndpoint: 'fallback-endpoint',
+      projectPath: SECRETS.absPath,
+      project: 'hostile-project',
+    })
+    const { sessions } = toLingTaiTuiObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'lingtai-tui' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile ledger (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the token fields were genuinely read and the hostile payloads coerced, not echoed', () => {
+    const { calls } = decodeAndMinimize()
+    // The numeric field survived the read, proving the decode consumed this
+    // ledger entry (totalTokens > 0)...
+    expect(calls[0]!.inputTokens).toBe(100)
+    // ...while the free text planted in the sibling token fields it also
+    // reads was coerced to zero — containment inside the read, not a
+    // skipped record.
+    expect(calls[0]!.outputTokens).toBe(0)
+    expect(calls[0]!.cachedInputTokens).toBe(0)
+    expect(calls[0]!.reasoningTokens).toBe(0)
+  })
+
+  it('the synthesized userMessage never echoes the hostile source label', () => {
+    const { calls } = decodeAndMinimize()
+    // A hostile `source` becomes the synthesized label 'LingTai ... conversation'
+    // in the rich decode, never the raw value.
+    expect(calls[0]!.userMessage).toBe('LingTai main conversation')
+    expect(calls[0]!.userMessage).not.toContain(SECRETS.prompt)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real gemini decode -> toObservations is secret-free', () => {
+  // A hostile Gemini session planting every secret in the free-text fields the
+  // decode captures: the user message, a run_command shell line, and a tool
+  // NAME carrying a command line (must fail the canonical-name filter).
+  const geminiContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'gemini', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const session = {
+      sessionId: 'sess-hostile',
+      startTime: '2026-07-17T10:00:00.000Z',
+      messages: [
+        { id: 'u1', timestamp: '2026-07-17T10:00:00.000Z', type: 'user', content: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` },
+        {
+          id: 'a1', timestamp: '2026-07-17T10:00:05.000Z', type: 'gemini', model: 'gemini-3-pro',
+          tokens: { input: 100, output: 50, cached: 10, thoughts: 5 },
+          toolCalls: [
+            // A hostile tool NAME carrying a command line: unmapped, so it
+            // reaches `tools` and must be dropped by the canonical filter.
+            { id: 't1', name: SECRETS.commandLine, args: {}, displayName: SECRETS.commandLine },
+            { id: 't2', name: 'run_command', args: { command: SECRETS.commandLine } },
+          ],
+        },
+      ],
+    }
+    const { calls, diagnostics } = decodeGemini({ records: [JSON.stringify(session)], context: geminiContext })
+    const { sessions } = toGeminiObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'gemini' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.commandLine) // rawBashCommands + hostile tool name
+  })
+
+  it('keeps canonical tool names (Bash) and drops the argument-carrying name', () => {
+    const { envelope } = decodeAndMinimize()
+    const allToolNames = envelope.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real kimicode decode -> toObservations is secret-free', () => {
+  // A hostile Kimicode wire log planting every secret in the free-text fields
+  // the decode captures: the prompt input, a Bash command, and a tool NAME
+  // carrying a command line (must fail the canonical-name filter).
+  const kimicodeContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'kimicode', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [
+      JSON.stringify({ type: 'turn.prompt', input: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` }),
+      JSON.stringify({ type: 'llm.request', model: 'kimi-k2', modelAlias: 'k2', turnStep: '1.0', time: '2026-07-17T10:00:00.000Z' }),
+      JSON.stringify({ type: 'context.append_loop_event', event: { type: 'tool.call', name: SECRETS.commandLine, args: {} } }),
+      JSON.stringify({ type: 'context.append_loop_event', event: { type: 'tool.call', name: 'Bash', args: { command: SECRETS.commandLine } } }),
+      JSON.stringify({ type: 'usage.record', model: 'k2', time: '2026-07-17T10:00:05.000Z', usage: { inputOther: 100, output: 50 } }),
+    ]
+    const { calls, diagnostics } = decodeKimicode({
+      records,
+      context: kimicodeContext,
+      sessionId: 'sess-hostile',
+      agentId: 'agent-hostile',
+    })
+    const { sessions } = toKimicodeObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'kimicode' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile wire log (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.commandLine) // rawBashCommands + hostile tool name
+  })
+
+  it('keeps canonical tool names (Bash) and drops the argument-carrying name', () => {
+    const { envelope } = decodeAndMinimize()
+    const allToolNames = envelope.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
+  })
+})
+
+describe('content-smuggling guardrail: real pi decode -> toObservations is secret-free', () => {
+  // A hostile Pi session planting every secret in the free-text fields the
+  // decode captures: the user message, a bash command, and a tool NAME carrying
+  // a command line (must fail the canonical-name filter).
+  const piContext: DecodeContext = { privacyKey: 'test-privacy-key', providerId: 'pi', sourceRef: 'ref' }
+
+  function decodeAndMinimize() {
+    const records = [
+      JSON.stringify({ type: 'session', id: 'sess-hostile' }),
+      JSON.stringify({
+        type: 'message', id: 'u1', timestamp: '2026-07-17T10:00:00.000Z',
+        message: { role: 'user', content: `${SECRETS.prompt} ${SECRETS.apiKey} ${SECRETS.fileContent}` },
+      }),
+      JSON.stringify({
+        type: 'message', id: 'a1', timestamp: '2026-07-17T10:00:05.000Z',
+        message: {
+          role: 'assistant', model: 'gpt-5', responseId: 'r1',
+          usage: { input: 100, output: 50 },
+          content: [
+            // A hostile tool NAME carrying a command line: unmapped, so it
+            // reaches `tools` and must be dropped by the canonical filter.
+            { type: 'toolCall', name: SECRETS.commandLine, arguments: {} },
+            { type: 'toolCall', name: 'bash', arguments: { command: SECRETS.commandLine } },
+          ],
+        },
+      }),
+    ]
+    const { calls, diagnostics } = decodePi({ records, context: piContext })
+    const { sessions } = toPiObservations(
+      { sessionId: 'sess-hostile', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'pi' },
+    )
+    return {
+      envelope: {
+        schemaVersion: OBSERVATION_SCHEMA_VERSION,
+        generator: { name: '@codeburn/core', version: '0.0.0-test' },
+        sessions,
+      },
+      calls,
+      diagnostics,
+    }
+  }
+
+  it('produces a schema-valid envelope from the hostile session (non-vacuous)', () => {
+    const { envelope, calls } = decodeAndMinimize()
+    expect(calls).toHaveLength(1)
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+  })
+
+  it('the planted secrets really entered the rich decode', () => {
+    const rich = allStrings(decodeAndMinimize().calls).join('\n')
+    expect(rich).toContain(SECRETS.prompt)
+    expect(rich).toContain(SECRETS.commandLine) // rawBashCommands + hostile tool name
+  })
+
+  it('keeps canonical tool names (Bash) and drops the argument-carrying name', () => {
+    const { envelope } = decodeAndMinimize()
+    const allToolNames = envelope.sessions.flatMap(s => s.calls.flatMap(c => c.toolNames))
+    expect(allToolNames).toContain('Bash')
+    expect(allToolNames).not.toContain(SECRETS.commandLine)
+  })
+
+  it('neither the observations nor the diagnostics contain any planted secret', () => {
+    const { envelope, diagnostics } = decodeAndMinimize()
+    const haystack = JSON.stringify(envelope) + '\n' + JSON.stringify(diagnostics)
+    for (const secret of ALL_SECRETS) {
+      expect(haystack).not.toContain(secret)
+    }
   })
 })

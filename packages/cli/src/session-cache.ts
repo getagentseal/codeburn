@@ -216,7 +216,18 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   codex: 'mcp-attribution-v2-est-cost-rich-capture-v1-cross-provider-pr-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
-  copilot: 'cli-shutdown-cost-v1-skills',
+  // JetBrains dedup-key hardening (D1): the per-turn digest changed from an
+  // unkeyed sha256 to an HMAC keyed with the host's privacy key, so EVERY
+  // cached copilot dedup key's value changed, not just hostile ones. The
+  // session cache seeds its dedup sets from the CACHED keys, and copilot is
+  // the sole DURABLE_PROVIDER_NAMES member — its union-merge never deletes
+  // cached turns, it appends any turn whose keys are not already cached. A
+  // pre-fix cache would therefore keep the old unkeyed-digest keys and
+  // re-ingest the same records under the new keyed shape on the next re-parse,
+  // and both would coexist (double-count). Bump so the env fingerprint
+  // changes, the section rebuilds once, and the old-shape keys are dropped
+  // instead of merged.
+  copilot: 'cli-shutdown-cost-v1-skills-dedup-key-hmac-v1',
   grok: 'estimated-cost-v1',
   hermes: 'reasoning-output-accounting-v1-est-cost',
   'lingtai-tui': 'token-ledger-registry-activity-v3',

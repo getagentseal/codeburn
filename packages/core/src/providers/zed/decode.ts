@@ -10,7 +10,7 @@
 import zlib from 'node:zlib'
 
 import type { DecodeContext } from '../../contracts.js'
-import type { RecordDiagnostic } from '../../diagnostics.js'
+import { keyedDetail, type RecordDiagnostic } from '../../diagnostics.js'
 import type { ZedDecodedCall, ZedThreadJson, ZedThreadRow, ZedTokenUsage } from './types.js'
 
 const zstdDecompressSync = (zlib as { zstdDecompressSync?: (buf: Buffer) => Buffer }).zstdDecompressSync
@@ -79,7 +79,7 @@ export type ZedDecodeResult = {
  * cumulative call. Dedup is keyed on `zed:<threadId>:<requestKey>` against the
  * live `seenKeys` set (host-owned).
  */
-export function decodeZed({ records, seenKeys: liveSeen }: ZedDecodeInput): ZedDecodeResult {
+export function decodeZed({ records, seenKeys: liveSeen, context }: ZedDecodeInput): ZedDecodeResult {
   const seen = liveSeen ?? new Set<string>()
   const calls: ZedDecodedCall[] = []
   const diagnostics: RecordDiagnostic[] = []
@@ -134,8 +134,15 @@ export function decodeZed({ records, seenKeys: liveSeen }: ZedDecodeInput): ZedD
         seen.add(call.deduplicationKey)
         calls.push(call)
       }
-    } catch {
-      diagnostics.push({ index, code: 'malformed-json' })
+    } catch (err) {
+      // Keyed fingerprint of the error, never its message: a hostile blob could
+      // otherwise smuggle content through a JSON.parse failure. Without a
+      // privacy key the detail is omitted entirely (D1: no unkeyed digest).
+      // `context?` is defensive: this error path is the only place the decoder
+      // touches context, so an untyped caller that supplies records only must
+      // get a diagnostic here, not a TypeError.
+      const detail = keyedDetail(err, context?.privacyKey)
+      diagnostics.push(detail ? { index, code: 'malformed-json', detail } : { index, code: 'malformed-json' })
     }
   })
 

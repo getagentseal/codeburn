@@ -724,7 +724,7 @@ const G5_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:29c75429dae1:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:d81513544dac:1",
     "userMessage": "Conversation B"
   },
   {
@@ -745,7 +745,7 @@ const G5_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:55e5aea23f97:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:77ecc7a691b9:1",
     "userMessage": "Conversation B"
   },
   {
@@ -766,7 +766,7 @@ const G5_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:e3b0c44298fc:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:b613679a0814:1",
     "userMessage": "Conversation B"
   },
   {
@@ -787,16 +787,16 @@ const G5_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:eff208336025:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:12086ad693b4:1",
     "userMessage": "Conversation B"
   }
 ]
 
 const G5_KEYS = [
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:29c75429dae1:1",
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:55e5aea23f97:1",
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:e3b0c44298fc:1",
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:eff208336025:1"
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:12086ad693b4:1",
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:77ecc7a691b9:1",
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:b613679a0814:1",
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:d81513544dac:1"
 ]
 
 const G6_GOLDEN: ParsedProviderCall[] = [
@@ -818,13 +818,13 @@ const G6_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:17a5d71b-27f7-4937-8803-7fc2cbb705cb:a4d4d9a6916b:1",
+    "deduplicationKey": "copilot:jb:17a5d71b-27f7-4937-8803-7fc2cbb705cb:1950183ecfb1:1",
     "userMessage": "Understanding HBase Architecture"
   }
 ]
 
 const G6_KEYS = [
-  "copilot:jb:17a5d71b-27f7-4937-8803-7fc2cbb705cb:a4d4d9a6916b:1"
+  "copilot:jb:17a5d71b-27f7-4937-8803-7fc2cbb705cb:1950183ecfb1:1"
 ]
 
 const G7_GOLDEN: ParsedProviderCall[] = [
@@ -1167,7 +1167,7 @@ const G13_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:eff208336025:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:12086ad693b4:1",
     "userMessage": "Conversation X7"
   },
   {
@@ -1188,14 +1188,14 @@ const G13_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:e0110dcd5a4e:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:5b8342db2b62:1",
     "userMessage": "Conversation X7"
   }
 ]
 
 const G13_KEYS = [
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:e0110dcd5a4e:1",
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:eff208336025:1"
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:12086ad693b4:1",
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:5b8342db2b62:1"
 ]
 
 const G14_GOLDEN: ParsedProviderCall[] = [
@@ -1217,13 +1217,13 @@ const G14_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:03e1bde7d7c0:1",
+    "deduplicationKey": "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:f4ee234a9585:1",
     "userMessage": "Conversation X8"
   }
 ]
 
 const G14_KEYS = [
-  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:03e1bde7d7c0:1"
+  "copilot:jb:485825c0-3331-46a7-acb2-c71875ad6640:f4ee234a9585:1"
 ]
 
 const G15_GOLDEN: ParsedProviderCall[] = [
@@ -1245,7 +1245,7 @@ const G15_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:x17-store:9829e901954d:1",
+    "deduplicationKey": "copilot:jb:x17-store:84b5586a1750:1",
     "userMessage": ""
   },
   {
@@ -1266,14 +1266,14 @@ const G15_GOLDEN: ParsedProviderCall[] = [
     "bashCommands": [],
     "timestamp": "2026-07-03T12:00:00.000Z",
     "speed": "standard",
-    "deduplicationKey": "copilot:jb:x17-store:95b22f4dffb0:1",
+    "deduplicationKey": "copilot:jb:x17-store:6e05b7ba9bf8:1",
     "userMessage": ""
   }
 ]
 
 const G15_KEYS = [
-  "copilot:jb:x17-store:95b22f4dffb0:1",
-  "copilot:jb:x17-store:9829e901954d:1"
+  "copilot:jb:x17-store:6e05b7ba9bf8:1",
+  "copilot:jb:x17-store:84b5586a1750:1"
 ]
 
 const G16_GOLDEN: ParsedProviderCall[] = [
