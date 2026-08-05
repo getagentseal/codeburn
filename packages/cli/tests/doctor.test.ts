@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 
 import { collectDoctorReport, renderDoctorTable, renderDoctorJson } from '../src/doctor.js'
 import { createCodexProvider } from '../src/providers/codex.js'
+import { createOpenCodeProvider } from '../src/providers/opencode.js'
 import { emptyCache, type SessionCache } from '../src/session-cache.js'
 import type { Provider, ProbeRoot, SessionSource } from '../src/providers/types.js'
 
@@ -141,6 +142,118 @@ describe('collectDoctorReport - env override', () => {
       else process.env['CODEX_HOME'] = prev
     }
   })
+
+  it('names a deliberate XDG_DATA_HOME override pointing at a missing dir, blaming the override not the install (opencode)', async () => {
+    const prev = process.env['XDG_DATA_HOME']
+    const bogus = join(tmpDir, 'xdg-missing')
+    process.env['XDG_DATA_HOME'] = bogus
+    try {
+      // Construct after setting env so the provider resolves XDG_DATA_HOME
+      // (src/providers/opencode.ts:42 reads it to resolve the data dir).
+      const provider = createOpenCodeProvider()
+      const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+      const r = only(report, 'opencode')
+
+      expect(r.envOverrides).toContainEqual({ name: 'XDG_DATA_HOME', value: bogus })
+      expect(r.status).toBe('empty')
+      // Regression (Ruling 3 of lane 04): with XDG_DATA_HOME treated as an
+      // ambient OS var, doctor skipped it and the verdict blamed the install
+      // ("tool likely not installed") instead of the override the user set.
+      expect(r.verdict).toContain('override XDG_DATA_HOME set')
+      expect(r.verdict).toContain('does not exist')
+    } finally {
+      if (prev === undefined) delete process.env['XDG_DATA_HOME']
+      else process.env['XDG_DATA_HOME'] = prev
+    }
+  })
+
+  // Windows sets APPDATA and LOCALAPPDATA for every process, so neither
+  // carries user intent: both are fingerprinted (a change moves the discovery
+  // root) but must never be named as a deliberate override (Ruling 3 of lane
+  // 04). Table-driven over both so removing either from AMBIENT_ENV_VARS
+  // fails a test instead of leaking it into the overrides list.
+  for (const varName of ['APPDATA', 'LOCALAPPDATA']) {
+    it(`does not name ${varName} as an override for a provider that declares it`, async () => {
+      const prev = process.env[varName]
+      process.env[varName] = join(tmpDir, varName.toLowerCase())
+      try {
+        const provider = fakeProvider({ name: 'claude', displayName: 'Claude' })
+        const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+        const r = only(report, 'claude')
+
+        expect(r.envOverrides.some(o => o.name === varName)).toBe(false)
+      } finally {
+        if (prev === undefined) delete process.env[varName]
+        else process.env[varName] = prev
+      }
+    })
+  }
+
+  // Every credential in SECRET_ENV_VARS must be redacted at collect time so
+  // neither the text render nor the JSON report can leak it (Ruling 2 of lane
+  // 04). Table-driven over both, so a credential added to the set without a
+  // redaction test fails here instead of leaking into a bug report.
+  for (const varName of ['AI_GATEWAY_API_KEY', 'VERCEL_OIDC_TOKEN']) {
+    it(`redacts credential values (${varName}) from overrides, the table render, and the JSON report`, async () => {
+      const secret = `sk-live-${varName}-value-12345`
+      const prev = process.env[varName]
+      const sibling = varName === 'AI_GATEWAY_API_KEY' ? 'VERCEL_OIDC_TOKEN' : 'AI_GATEWAY_API_KEY'
+      const prevSibling = process.env[sibling]
+      process.env[varName] = secret
+      // Isolate the case under test: a stray ambient sibling must not change
+      // what this case observes.
+      delete process.env[sibling]
+      try {
+        const provider = fakeProvider({ name: 'vercel-gateway', displayName: 'Vercel AI Gateway', network: true })
+        const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+        const r = only(report, 'vercel-gateway')
+
+        // The "is this credential set?" diagnostic is useful; the value is a
+        // live secret and must never leave doctor (Ruling 2 of lane 04).
+        expect(r.envOverrides).toContainEqual({ name: varName, value: '<set>' })
+        expect(r.envOverrides.some(o => o.value.includes(secret))).toBe(false)
+        const table = renderDoctorTable(report, { color: false })
+        expect(table).toContain(`${varName}=<set>`)
+        expect(table).not.toContain(secret)
+        expect(renderDoctorJson(report)).not.toContain(secret)
+      } finally {
+        if (prev === undefined) delete process.env[varName]
+        else process.env[varName] = prev
+        if (prevSibling === undefined) delete process.env[sibling]
+        else process.env[sibling] = prevSibling
+      }
+    })
+  }
+
+  // CODEBURN_CURSOR_MAX_BUBBLES caps how many bubbles Cursor parses
+  // (src/providers/cursor.ts:530) and KIMI_MODEL_NAME renames the model
+  // attributed to Kimi sessions (src/providers/kimi.ts:125): both are
+  // fingerprinted but cannot explain why nothing was discovered, so the
+  // verdict must not name them — while Details still lists them, because they
+  // ARE overrides in force. Each is asserted through the provider that
+  // declares it.
+  for (const [varName, providerName, displayName, value] of [
+    ['CODEBURN_CURSOR_MAX_BUBBLES', 'cursor', 'Cursor', '5000'],
+    ['KIMI_MODEL_NAME', 'kimi', 'Kimi', 'kimi-latest-920'],
+  ] as const) {
+    it(`does not blame ${varName} for an empty ${displayName} (not a discovery path)`, async () => {
+      const prev = process.env[varName]
+      process.env[varName] = value
+      try {
+        const provider = fakeProvider({ name: providerName, displayName })
+        const report = await collectDoctorReport('all', { providers: [provider], cache: emptyCache() })
+        const r = only(report, providerName)
+
+        expect(r.envOverrides).toContainEqual({ name: varName, value })
+        expect(r.verdict).not.toContain(varName)
+        const table = renderDoctorTable(report, { color: false })
+        expect(table).toContain(`${varName}=${value}`)
+      } finally {
+        if (prev === undefined) delete process.env[varName]
+        else process.env[varName] = prev
+      }
+    })
+  }
 })
 
 // ── Synthetic edge cases ───────────────────────────────────────────────────
