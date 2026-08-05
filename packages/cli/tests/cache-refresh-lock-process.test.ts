@@ -8,6 +8,24 @@ import { join } from 'path'
 import { emptyCache, loadCache, saveCache } from '../src/session-cache.js'
 
 const roots: string[] = []
+const children: ChildProcess[] = []
+
+async function killChild(child: ChildProcess): Promise<void> {
+  // Robust to a child that already exited: exitCode is set once the process
+  // is gone, so the early return skips it and the kill below is a no-op.
+  if (child.exitCode !== null) return
+  // A test that failed mid-flight can still hold pending waitForExit promises
+  // on this child; detach them so the SIGTERM exit does not reject a promise
+  // nobody is awaiting (unhandled-rejection noise on top of the real failure).
+  child.removeAllListeners('exit')
+  child.removeAllListeners('error')
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()))
+  if (child.exitCode !== null) return // exited between the check and the listener
+  if (!child.kill()) return
+  await Promise.race([exited, new Promise(resolve => { setTimeout(resolve, 1_000) })])
+  if (child.exitCode === null) child.kill('SIGKILL')
+  await Promise.race([exited, new Promise(resolve => { setTimeout(resolve, 1_000) })])
+}
 
 async function waitFor(path: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -37,14 +55,28 @@ function waitForExit(child: ChildProcess): Promise<void> {
 }
 
 function worker(cacheDir: string, barriers: string, id: string, source: string, bypass = false): ChildProcess {
-  return spawn(process.execPath, ['--import', 'tsx', join(process.cwd(), 'tests/fixtures/cache-refresh-worker.ts'), cacheDir, barriers, id, source, String(bypass)], {
+  // Resolve the fixture relative to this file, not process.cwd(): vitest keeps
+  // the shell's cwd (e.g. the repo root under `--root packages/cli`), where
+  // `tests/fixtures/` does not exist and every child dies on ENOENT before
+  // touching a barrier.
+  const child = spawn(process.execPath, ['--import', 'tsx', join(import.meta.dirname, 'fixtures/cache-refresh-worker.ts'), cacheDir, barriers, id, source, String(bypass)], {
     cwd: process.cwd(),
     stdio: ['ignore', 'ignore', 'pipe'],
   })
+  children.push(child)
+  return child
 }
 
 afterEach(async () => {
   delete process.env['CODEBURN_CACHE_DIR']
+  // A failed assertion (or a waitFor timeout) can leave a worker blocked on
+  // its barrier file indefinitely; with the global retry the next attempt
+  // spawns a fresh pair on top of the leaked ones. Kill everything we
+  // spawned and wait for it to die before tearing the temp roots down.
+  // Upstream 2a4b8f2 has the identical leaky afterEach, so this is not a
+  // regression the port introduces — the retry just makes the latent leak
+  // reachable.
+  await Promise.all(children.splice(0).map(killChild))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 

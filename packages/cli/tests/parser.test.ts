@@ -143,10 +143,27 @@ async function createJsonlSession(
   const dir = join(sessionStateDir, sessionId)
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, 'workspace.yaml'), `id: ${sessionId}\ncwd: /home/user/testproj\n`)
+  // Dated relative to now so the session stays inside the 90-day retention
+  // window whenever the suite runs; a fixed literal silently ages out (these
+  // events were `2026-05-01`, which prunes to zero once now is 90 days past it).
+  // The offset is 6h rather than 48h and is clamped into the current month on
+  // purpose: exactly now-minus-2d sits ON the 48h 'recent' cutoff in
+  // optimize.ts (RECENT_WINDOW_MS — recent iff ts >= now-48h), so any clock
+  // skew between this helper and the consumer flips the classification, and a
+  // current-month date range (cli-date.ts `month`, which starts at local
+  // midnight of the 1st) would exclude it on the 1st-2nd. Six hours keeps the
+  // events unambiguously recent (42h clear of the cutoff) and the clamp keeps
+  // them inside any current-month range in any timezone.
+  const now = Date.now()
+  const monthStart = new Date(now)
+  monthStart.setDate(1)
+  monthStart.setHours(0, 0, 0, 0)
+  const base = Math.max(monthStart.getTime(), now - 6 * 60 * 60 * 1000)
+  const ts = (offsetSec: number) => new Date(base + offsetSec * 1000).toISOString()
   const lines = [
-    JSON.stringify({ type: 'session.model_change', timestamp: '2026-05-01T10:00:00Z', data: { newModel: 'gpt-4.1' } }),
-    JSON.stringify({ type: 'user.message', timestamp: '2026-05-01T10:00:05Z', data: { content: 'hello', interactionId: 'int-1' } }),
-    JSON.stringify({ type: 'assistant.message', timestamp: '2026-05-01T10:00:10Z', data: { messageId: 'msg-1', outputTokens, interactionId: 'int-1', toolRequests: [] } }),
+    JSON.stringify({ type: 'session.model_change', timestamp: ts(0), data: { newModel: 'gpt-4.1' } }),
+    JSON.stringify({ type: 'user.message', timestamp: ts(5), data: { content: 'hello', interactionId: 'int-1' } }),
+    JSON.stringify({ type: 'assistant.message', timestamp: ts(10), data: { messageId: 'msg-1', outputTokens, interactionId: 'int-1', toolRequests: [] } }),
   ]
   await writeFile(join(dir, 'events.jsonl'), lines.join('\n') + '\n')
   return join(dir, 'events.jsonl')
