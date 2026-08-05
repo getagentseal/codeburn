@@ -54,7 +54,12 @@ jobs:
           set -e
           semgrep --config .semgrep/rules/no-bracket-assign-hot-paths.yml \
             --strict --json \
-            packages/cli/src/providers/ packages/cli/src/parser.ts > semgrep-out.json
+            packages/cli/src/providers/ packages/cli/src/parser.ts packages/core/src/providers/ > semgrep-out.json
+          SCANNED=$(jq '.paths.scanned | length' semgrep-out.json)
+          if [ "$SCANNED" -eq 0 ]; then
+            echo "::error::semgrep scanned no files — the rule's paths.include no longer matches any scan target; check .semgrep/rules/no-bracket-assign-hot-paths.yml"
+            exit 1
+          fi
           FINDINGS=$(jq '.results | length' semgrep-out.json)
           if [ "$FINDINGS" -gt 0 ]; then
             jq -r '.results[] | "::error file=\(.path),line=\(.start.line)::\(.extra.message)"' semgrep-out.json

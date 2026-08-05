@@ -18,5 +18,6 @@ rules:
           ...
     paths:
       include:
-        - '/src/providers/*.ts'
-        - '/src/parser.ts'
+        - '/packages/cli/src/providers/**/*.ts'
+        - '/packages/cli/src/parser.ts'
+        - '/packages/core/src/providers/**/*.ts'
