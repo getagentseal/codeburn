@@ -5,6 +5,13 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
+// Bumped to 17: Zed threads now attribute to their recorded workspace
+// folder(s) — a single folder becomes that project, multi-folder workspaces
+// become a joined-basename project ("codeburn, website") — instead of the
+// shared `zed` bucket, so days finalized at v16 carry the old single-project
+// split. Raising MIN_SUPPORTED_VERSION forces the one-time re-derivation of
+// days whose threads.db still exists.
+//
 // Bumped to 16: Codex discovery is structural instead of originator-gated
 // (#873/#626), so rollouts written by third-party frontends driving
 // `codex app-server` ("t3code_desktop", "JetBrains.IntelliJ IDEA", ...) now
@@ -67,8 +74,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 16
-const MIN_SUPPORTED_VERSION = 16
+export const DAILY_CACHE_VERSION = 17
+const MIN_SUPPORTED_VERSION = 17
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including
