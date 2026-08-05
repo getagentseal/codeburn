@@ -340,11 +340,11 @@ describe('kiro golden pins (raw calls, unmodified provider)', () => {
     expect(blankCalls[0]!.deduplicationKey).toBe('kiro:wf-g1b2:')
   })
 
-  it('G2 — A1 input tokens derived from truncated prompt; A2 from full prompt', async () => {
+  it('G2 — A1 input tokens from the full prompt (500 cap is display-only); A2 modern arm from full prompt', async () => {
     const wsHashA1 = 'a'.repeat(32)
     const wsDirA1 = join(tmpDir, 'g2a1', wsHashA1)
     await mkdir(wsDirA1, { recursive: true })
-    const chatPath = join(wsDirA1, 'trunc.chat')
+    const chatPath = join(wsDirA1, 'long.chat')
     await writeFile(chatPath, makeChatFile({
       executionId: 'exec-g2a1',
       workflowId: 'wf-g2a1',
@@ -353,7 +353,13 @@ describe('kiro golden pins (raw calls, unmodified provider)', () => {
     }))
     const a1 = await parseSource({ path: chatPath, project: 'p', provider: 'kiro' })
     expect(a1).toHaveLength(1)
-    expect(a1[0]!.inputTokens).toBe(125)
+    // 3000 fixture chars / 4 per token = 750. The prior pin (125) encoded the
+    // pre-fix behaviour: input tokens were estimated from the last human turn
+    // sliced to 500 chars (500 / 4 = 125), under-reporting cost for any longer
+    // prompt. That bug was fixed by porting upstream 6c4645a ('fix(kiro):
+    // estimate input tokens from the full prompt, not a 500-char slice');
+    // do not restore 125.
+    expect(a1[0]!.inputTokens).toBe(750)
     expect(a1[0]!.userMessage.length).toBe(500)
 
     const wsHashA2 = 'b'.repeat(32)
@@ -369,6 +375,28 @@ describe('kiro golden pins (raw calls, unmodified provider)', () => {
     const a2 = await parseSource({ path: execPath, project: 'p', provider: 'kiro' })
     expect(a2).toHaveLength(1)
     expect(a2[0]!.inputTokens).toBe(500)
+  })
+
+  it('G2b — A1 rounding is pinned: an odd length forces ceil, not round/floor', async () => {
+    // 3000 (G2), 2400 (money-path regression) and 1000+1000 (multi-turn
+    // accumulation) are all exact multiples of four, so they cannot
+    // distinguish ceil from round or floor in estimateTokensFromChars.
+    // 3001 chars / 4 = 750.25: ceil gives 751, round and floor both give
+    // 750 — only the ceil pin passes here.
+    const wsHash = 'd'.repeat(32)
+    const wsDir = join(tmpDir, 'g2b', wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const chatPath = join(wsDir, 'odd.chat')
+    await writeFile(chatPath, makeChatFile({
+      executionId: 'exec-g2b',
+      workflowId: 'wf-g2b',
+      userPrompt: 'x'.repeat(3001),
+      botResponses: ['short'],
+    }))
+    const calls = await parseSource({ path: chatPath, project: 'p', provider: 'kiro' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(751)
+    expect(calls[0]!.userMessage.length).toBe(500)
   })
 
   it('G3 — A1 single-tool toolSequence is present but undefined', async () => {

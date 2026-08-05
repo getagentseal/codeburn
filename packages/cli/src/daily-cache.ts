@@ -5,7 +5,23 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 15: per-project daily rollups. Days and provider slices now carry
+// Bumped to 17 — 16 is skipped on purpose: main already spent it on the codex
+// structural-discovery fix (eece4cf), so a v16 cache in the wild is a
+// main-owned cache meaning the codex fix, not this one. Claiming 16 here too
+// would let a user who has ever run a main build load its v16 cache as
+// CURRENT and COMPLETE, and this invalidation would never fire. 17 is the
+// first version that also means the kiro chat-file fix.
+//
+// kiro chat-file input tokens are now estimated from every human turn's full
+// text instead of the last 500 chars (#909, this PR), so a v15 rollup
+// finalized by the pre-fix binary carries kiro costs off by up to
+// severalfold. Nothing downstream can notice on its own: `usage-aggregator`
+// serves every day before today from this cache, and retention is ten years,
+// so an upgrading user with a warm complete cache would keep the stale
+// pre-fix kiro day totals forever while freshly reparsed sessions disagreed
+// with them. Raising MIN_SUPPORTED_VERSION forces the one-time re-derivation.
+//
+// v15: per-project daily rollups. Days and provider slices now carry
 // a `projects` breakdown (cost/calls/savings/sessions per project) so project
 // history outlives the session files, like models and categories already do.
 // This bump is the first to ride the v14 carry-forward: the old cache is
@@ -57,8 +73,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 15
-const MIN_SUPPORTED_VERSION = 15
+export const DAILY_CACHE_VERSION = 17
+const MIN_SUPPORTED_VERSION = 17
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including

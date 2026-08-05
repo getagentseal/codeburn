@@ -466,3 +466,79 @@ describe('ensureCacheHydrated: timezone invalidation', () => {
     expect(preserved.days[0]!.date).toBe(twoDaysAgoStr)
   })
 })
+
+// A complete v15 cache is trusted as-is (unchanged savings hash, matching tz,
+// complete marker set) — so without the v17 bump, an upgrading user keeps the
+// pre-fix kiro day totals forever while freshly reparsed sessions disagree
+// with them. The bump mints a fresh filename, adoption marks the result
+// incomplete, and the next hydration re-derives the window; the corrected kiro
+// estimate (every human turn's full text, #909) wins wherever the sources
+// survive, and sourceless days carry forward under the v14 NEVER-LOSE rule.
+describe('ensureCacheHydrated: schema version invalidation (#909)', () => {
+  function kiroDay(date: string, cost: number, calls: number, inputTokens: number): DailyEntry {
+    return {
+      date,
+      cost,
+      savingsUSD: 0,
+      calls,
+      sessions: 1,
+      inputTokens,
+      outputTokens: 200,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      editTurns: 0,
+      oneShotTurns: 0,
+      models: {
+        'claude-haiku-4-5': { calls, cost, savingsUSD: 0, inputTokens, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      },
+      categories: {},
+      providers: {
+        kiro: { cost, calls, savingsUSD: 0, sessions: 1, inputTokens, outputTokens: 200 },
+      },
+    }
+  }
+
+  it('re-derives a warm complete v15 cache instead of serving its pre-fix kiro totals', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-12T12:00:00.000Z'))
+
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    // A cache exactly as a pre-fix release left it: current schema at the
+    // time, finalized off a complete parse, watermark at yesterday, matching
+    // tz and savings hash. Nothing but the version bump can invalidate it.
+    const v15 = {
+      version: 15,
+      savingsConfigHash: '',
+      tzKey: currentTzKey(),
+      lastComputedDate: '2026-06-11',
+      days: [kiroDay('2026-06-11', 4.55, 1, 500)],
+      complete: true,
+    }
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.v15.json'), JSON.stringify(v15), 'utf-8')
+
+    let parseCalls = 0
+    const hydrated = await ensureCacheHydrated(
+      async () => {
+        parseCalls += 1
+        return []
+      },
+      // The corrected kiro accounting: 750 input tokens (3000 chars / 4)
+      // instead of the 500-char-slice 125, i.e. the full-prompt estimate.
+      () => [kiroDay('2026-06-11', 18.2, 1, 750)],
+    )
+
+    // The whole point: the window is re-parsed rather than served frozen.
+    expect(parseCalls).toBe(1)
+    // ...and the fresh derivation wins over the stale v15 day, at the
+    // provider-slice level where the pre-fix kiro cost actually lived.
+    const day = hydrated.days.find(d => d.date === '2026-06-11')
+    expect(day?.cost).toBe(18.2)
+    expect(day?.providers['kiro']?.cost).toBe(18.2)
+    expect(day?.providers['kiro']?.inputTokens).toBe(750)
+    expect(hydrated.version).toBe(DAILY_CACHE_VERSION)
+    expect(hydrated.complete).toBe(true)
+    // The v15 file is never rewritten or deleted — old binaries still own it.
+    expect(JSON.parse(await readFile(join(TMP_CACHE_ROOT, 'daily-cache.v15.json'), 'utf-8')).version).toBe(15)
+  })
+})

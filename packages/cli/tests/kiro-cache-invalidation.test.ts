@@ -57,9 +57,16 @@ function kiroAgentDir(): string {
 
 // What computeEnvFingerprint('kiro') returned before kiro had an entry in
 // PROVIDER_PARSE_VERSIONS: no env vars, no parser version, i.e. a hash of
-// zero parts. This is the fingerprint sitting in every pre-fix cache.
+// zero parts. This is the fingerprint sitting in every pre-registration cache.
 function preFixFingerprint(): string {
   return createHash('sha256').update([].join('\0')).digest('hex').slice(0, 16)
+}
+
+// What computeEnvFingerprint('kiro') returned under the FIRST parser version
+// ('ide-parsing-v1-est-cost'): the fingerprint sitting in every cache written
+// by the release that shipped the 500-char-slice input-token estimate.
+function v1Fingerprint(): string {
+  return createHash('sha256').update('parser=ide-parsing-v1-est-cost').digest('hex').slice(0, 16)
 }
 
 // Writes one IDE execution file in the context.messages[].entries format that
@@ -84,6 +91,33 @@ async function seedExecutionFile(): Promise<string> {
   return path
 }
 
+// Writes one chat-shaped IDE file (chat array + metadata) with a 3000-char
+// human prompt, and returns its path. Routes to decodeKiroChatFile.
+async function seedChatFile(): Promise<string> {
+  const dir = join(kiroAgentDir(), 'c'.repeat(32))
+  await mkdir(dir, { recursive: true })
+  const path = join(dir, 'chat-stale-001.chat')
+  await writeFile(path, JSON.stringify({
+    executionId: 'exec-chat-stale-001',
+    actionId: 'act',
+    chat: [
+      { role: 'human', content: '<identity>\nYou are Kiro.\n</identity>' },
+      { role: 'bot', content: 'I will follow these instructions.' },
+      { role: 'human', content: 'x'.repeat(3000) },
+      { role: 'bot', content: 'short' },
+    ],
+    metadata: {
+      modelId: 'claude-haiku-4-5',
+      modelProvider: 'qdev',
+      workflow: 'act',
+      workflowId: 'wf-chat-stale-001',
+      startTime: 1780000000000,
+      endTime: 1780000001000,
+    },
+  }))
+  return path
+}
+
 async function seedCache(execPath: string, envFingerprint: string): Promise<void> {
   const fp = await fingerprintFile(execPath)
   if (!fp) throw new Error('failed to fingerprint seeded execution file')
@@ -100,6 +134,60 @@ async function seedCache(execPath: string, envFingerprint: string): Promise<void
   }
   await mkdir(CACHE_DIR, { recursive: true })
   await writeFile(sessionCachePath(), JSON.stringify(cache))
+}
+
+// Seeds the same chat file as seedChatFile, but cached under the given
+// fingerprint with a turn carrying the PRE-FIX token estimate (125 = the
+// 500-char slice of the 3000-char prompt). If the cache is served as-is, the
+// stale estimate survives; a fingerprint bump discards the section and the
+// corrected math (3000 / 4 = 750) lands on re-parse.
+async function seedChatCache(envFingerprint: string): Promise<string> {
+  const path = await seedChatFile()
+  const fp = await fingerprintFile(path)
+  if (!fp) throw new Error('failed to fingerprint seeded chat file')
+  const cache: SessionCache = {
+    version: CACHE_VERSION,
+    providers: {
+      kiro: {
+        envFingerprint,
+        files: {
+          [path]: {
+            fingerprint: fp,
+            mcpInventory: [],
+            turns: [{
+              timestamp: '2026-05-27T00:00:00.000Z',
+              sessionId: 'wf-chat-stale-001',
+              userMessage: 'x'.repeat(500),
+              calls: [{
+                provider: 'kiro',
+                model: 'claude-haiku-4-5',
+                usage: {
+                  inputTokens: 125,
+                  outputTokens: 2,
+                  cacheCreationInputTokens: 0,
+                  cacheReadInputTokens: 0,
+                  cachedInputTokens: 0,
+                  reasoningTokens: 0,
+                  webSearchRequests: 0,
+                  cacheCreationOneHourTokens: 0,
+                },
+                speed: 'standard',
+                timestamp: '2026-05-27T00:00:00.000Z',
+                tools: [],
+                bashCommands: [],
+                skills: [],
+                subagentTypes: [],
+                deduplicationKey: 'kiro:wf-chat-stale-001:exec-chat-stale-001',
+              }],
+            }],
+          },
+        },
+      },
+    },
+  }
+  await mkdir(CACHE_DIR, { recursive: true })
+  await writeFile(sessionCachePath(), JSON.stringify(cache))
+  return path
 }
 
 async function parseKiroCalls() {
@@ -127,6 +215,26 @@ describe('Kiro session cache invalidation', () => {
     expect(computeEnvFingerprint('kiro')).not.toBe(preFixFingerprint())
   })
 
+  it('bumps the kiro parser version again for the full-prompt input-token fix', () => {
+    // The v1 fingerprint is what the release that shipped the 500-char-slice
+    // estimate wrote into every user cache. It must NOT match the current one,
+    // or cached chat files would keep the pre-fix 125-token estimate forever.
+    expect(computeEnvFingerprint('kiro')).not.toBe(v1Fingerprint())
+  })
+
+  it('control: a chat cache at the CURRENT fingerprint is honored (stale 125 stays)', async () => {
+    await seedChatCache(computeEnvFingerprint('kiro'))
+
+    const calls = await parseKiroCalls()
+
+    // The seeded cache is structurally valid and trusted: the unchanged chat
+    // file is not re-parsed, so the pre-fix 125-token estimate survives
+    // verbatim. This proves the seed is real (not silently ignored) — and that
+    // WITHOUT a fingerprint bump, the stale estimate would be served forever.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.usage.inputTokens).toBe(125)
+  })
+
   it('control: a zero-turn cache entry at the current fingerprint is honored', async () => {
     const execPath = await seedExecutionFile()
     await seedCache(execPath, computeEnvFingerprint('kiro'))
@@ -138,6 +246,18 @@ describe('Kiro session cache invalidation', () => {
     // guards the regression test below against passing for the wrong reason
     // (an invalid or unread seed being silently ignored).
     expect(calls).toHaveLength(0)
+  })
+
+  it('regression: a v1 cache fingerprint forces a re-parse that lands the corrected tokens', async () => {
+    await seedChatCache(v1Fingerprint())
+
+    const calls = await parseKiroCalls()
+
+    // The v1 fingerprint no longer matches, the stale section is discarded,
+    // the unchanged chat file re-parses, and the full-prompt estimate (3000
+    // chars / 4 = 750) replaces the cached 125 — the money-path correction.
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.usage.inputTokens).toBe(750)
   })
 
   it('regression: a pre-fix cache fingerprint forces a re-parse that recovers the calls', async () => {

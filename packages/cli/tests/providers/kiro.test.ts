@@ -220,6 +220,104 @@ describe('kiro provider - chat file parsing', () => {
     expect(calls[0]!.outputTokens).toBe(109)
   })
 
+  it('estimates input tokens from the full prompt, not a 500-char slice (money-path)', async () => {
+    // Regression: decodeKiroChatFile estimated input tokens from
+    // pendingUserMessage (the last human turn sliced to 500 chars) while
+    // output summed every bot char, so a long prompt undercounted input
+    // tokens - and cost - severalfold.
+    const wsHash = 'n'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const chatPath = join(wsDir, 'long.chat')
+    const prompt = 'x'.repeat(2400) // 2400 chars / 4 = 600 tokens; a 500-slice would give 125
+    await writeFile(chatPath, makeChatFile({ userPrompt: prompt, botResponses: ['ok'] }))
+
+    const source = { path: chatPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(priceProviderCall(call))
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(600)
+    // userMessage stays capped for display; only the token estimate uses the full length.
+    expect(calls[0]!.userMessage.length).toBe(500)
+  })
+
+  it('accumulates EVERY human turn - including an identical resubmit - and skips identity messages', async () => {
+    // A resubmitted prompt is a real second model input (the model consumed
+    // its tokens twice), so it must be counted - the same semantics every
+    // other kiro arm uses (modern-execution, ws-session, cli, v2 all sum
+    // every human/user message). The one non-input human message, the
+    // `<identity>` system preamble, stays excluded.
+    const wsHash = 'o'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const chatPath = join(wsDir, 'multi.chat')
+    const prompt = 'y'.repeat(1000) // 1000 chars / 4 = 250 tokens
+    const chat = [
+      { role: 'human', content: '<identity>\nYou are Kiro.\n</identity>' }, // excluded
+      { role: 'bot', content: 'I will follow these instructions.' },
+      { role: 'human', content: prompt }, // 250
+      { role: 'bot', content: 'first answer' },
+      { role: 'human', content: prompt }, // resubmit - identical text, counted again: +250
+      { role: 'bot', content: 'second answer' },
+    ]
+    await writeFile(chatPath, JSON.stringify({
+      executionId: 'exec-multi-001',
+      actionId: 'act',
+      chat,
+      metadata: { modelId: 'claude-haiku-4-5', modelProvider: 'qdev', workflow: 'act', workflowId: 'wf-multi-001', startTime: 1777333000000, endTime: 1777333010000 },
+    }))
+
+    const source = { path: chatPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(priceProviderCall(call))
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(500) // 250 + 250, identity not counted
+    // Display shows the LAST human turn, capped at 500.
+    expect(calls[0]!.userMessage).toBe(prompt.slice(0, 500))
+  })
+
+  it('excludes a near-miss identity preamble (leading newline / BOM) instead of counting it as input', async () => {
+    // The <identity> preamble is a large system-injected human record. With
+    // the full-length accumulator, a near-miss match - a leading newline or
+    // BOM before the tag - would silently add the preamble's whole length to
+    // input tokens on every affected session. decodeKiroChatFile trims
+    // leading whitespace before the startsWith match; pin that here so a
+    // regression cannot re-inflate tokens. (A renamed preamble remains a
+    // residual risk: no prefix match can catch it, and it is out of scope.)
+    const wsHash = 'r'.repeat(32)
+    const wsDir = join(tmpDir, wsHash)
+    await mkdir(wsDir, { recursive: true })
+    const chatPath = join(wsDir, 'near-miss.chat')
+    const prompt = 'z'.repeat(1000) // 1000 chars / 4 = 250 tokens
+    const chat = [
+      { role: 'human', content: '\n<identity>\nYou are Kiro.\n</identity>' }, // leading newline - still excluded
+      { role: 'bot', content: 'I will follow these instructions.' },
+      { role: 'human', content: '\uFEFF<identity>\nYou are Kiro.\n</identity>' }, // BOM - still excluded
+      { role: 'bot', content: 'I will follow these instructions too.' },
+      { role: 'human', content: prompt },
+      { role: 'bot', content: 'answer' },
+    ]
+    await writeFile(chatPath, JSON.stringify({
+      executionId: 'exec-near-001',
+      actionId: 'act',
+      chat,
+      metadata: { modelId: 'claude-haiku-4-5', modelProvider: 'qdev', workflow: 'act', workflowId: 'wf-near-001', startTime: 1777333000000, endTime: 1777333010000 },
+    }))
+
+    const source = { path: chatPath, project: 'test', provider: 'kiro' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of kiro.createSessionParser(source, new Set()).parse()) calls.push(priceProviderCall(call))
+
+    expect(calls).toHaveLength(1)
+    // Only the real prompt counts: 250. If either near-miss preamble were
+    // treated as input, tokens would jump by both preamble lengths.
+    expect(calls[0]!.inputTokens).toBe(250)
+    // Display shows the last human turn, capped at 500.
+    expect(calls[0]!.userMessage).toBe(prompt.slice(0, 500))
+  })
+
   it('normalizes dot-versioned model IDs to dashes', async () => {
     const wsHash = 'h'.repeat(32)
     const wsDir = join(tmpDir, wsHash)

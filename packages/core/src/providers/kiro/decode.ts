@@ -186,12 +186,33 @@ export function decodeKiroChatFile(input: {
   if (modelId === 'auto' || !modelId) modelId = 'kiro-auto'
 
   let pendingUserMessage = ''
+  // Accumulate every human turn's full length for the input-token estimate,
+  // mirroring the modern-execution path's inputChars accumulator. The prior
+  // code estimated input tokens from pendingUserMessage.length alone - the
+  // LAST human turn truncated to 500 chars - so a multi-turn session, or any
+  // final prompt over 500 chars, undercounted input tokens (and therefore
+  // costUSD) severalfold, while output correctly summed all bot chars. Note
+  // the chat arm still counts only human records: tool and system records
+  // stay excluded, unlike the modern-execution, CLI and v2 arms (whose
+  // comments state tool results are fed back to the model as input), so this
+  // arm still under-reports - just far less than before.
+  let inputChars = 0
   const allTools: string[] = []
   const toolSequence: KiroToolCall[][] = []
 
   for (const msg of chat) {
     if (msg.role === 'human') {
-      if (msg.content.startsWith('<identity>')) continue
+      // The <identity> system preamble is the one non-input human record.
+      // Trim leading whitespace before matching: preambles are large, and
+      // with the full-length accumulator below a missed match (a leading
+      // newline or BOM before the tag) would silently add the preamble's
+      // whole length to input tokens on every affected session. Tolerating
+      // leading whitespace costs nothing real - a genuine prompt never
+      // starts with whitespace plus an identity tag - and the failure
+      // asymmetry favours exclusion: a false negative inflates tokens by
+      // the preamble length, a false positive only skips a preamble.
+      if (msg.content.trimStart().startsWith('<identity>')) continue
+      inputChars += msg.content.length
       pendingUserMessage = msg.content.slice(0, 500)
     }
     if (msg.role === 'bot') {
@@ -210,7 +231,7 @@ export function decodeKiroChatFile(input: {
   if (seen.has(dedupKey)) return { calls, diagnostics: [] }
 
   const outputTokens = estimateTokensFromChars(totalOutputChars)
-  const inputTokens = estimateTokensFromChars(pendingUserMessage.length)
+  const inputTokens = estimateTokensFromChars(inputChars)
   const tsDate = parseKiroTimestamp(metadata.startTime)
   if (!tsDate) return { calls, diagnostics: [] }
   const timestamp = tsDate.toISOString()

@@ -4,6 +4,7 @@
 
 ### Fixed
 - Claude Desktop and Cowork sessions are discovered for Windows Microsoft Store (MSIX) installs. (#611)
+- **Kiro chat sessions no longer under-report input.** The token estimate for chat-file sessions (legacy `.chat` and chat-shaped IDE files) now counts every human turn's full text instead of only the last 500 characters, so multi-turn sessions and long prompts stop under-reporting input (and cost) severalfold. The estimate still counts human turns only — tool and system content, and resent context, are not included — and the summary still shows the last prompt, capped at 500 chars. Already-cached sessions re-parse once so the corrected numbers replace the old ones, and the daily cache bumps to v17 with this fix (v16 was skipped — main already claimed it for the codex structural-discovery fix), so finalized day totals re-derive too — for days whose kiro chat files still exist: since the v14 NEVER-LOSE carry-forward, a bump re-derives what sources survive and carries every sourceless (day, provider) slice forward with its old values, so a day whose kiro chat files have since been deleted keeps the pre-fix cost after the bump (minor in practice, since kiro IDE sources usually persist, but a carry-forward, not a refresh). (#909)
 
 ## 0.9.19 - 2026-07-20
 
