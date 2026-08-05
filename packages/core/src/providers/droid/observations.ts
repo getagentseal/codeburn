@@ -4,6 +4,7 @@ import { projectRef, sessionRef } from '../../fingerprint.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import type { DroidDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 export interface RichDroidSessionDecode {
   sessionId: string
@@ -21,7 +22,7 @@ const CANONICAL_TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/
 function toCallObservation(call: DroidDecodedCall, turnIndex: number, privacyKey: string): CallObservation {
   return {
     provider: call.provider,
-    model: call.model,
+    model: normalizeModelIdentifier(call.model),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

@@ -170,6 +170,29 @@ describe('warp rich decode (moved to @codeburn/core)', () => {
     expect(calls[0]!.model).toBe('gpt-5.3-codex')
   })
 
+  it('acceptance: a display-name model the alias map does not cover is normalized at the observation boundary', () => {
+    // Warp's alias map is closed, so any NEW model id arrives verbatim (spaces
+    // and all) — e.g. "GPT-5.4 Codex (medium reasoning)" or "Claude Sonnet
+    // 4.7". The decode passes it through; the observation boundary must
+    // normalize it to 'unknown' instead of rejecting the whole envelope.
+    const exchanges: WarpQueryRow[] = [makeExchange('ex-1', { model_id: 'GPT-5.4 Codex (medium reasoning)' })]
+    const { calls } = decodeWarp({ records: [makeComposite('conv-a', BASE_CONVERSATION, exchanges)], context })
+    expect(calls[0]!.model).toBe('GPT-5.4 Codex (medium reasoning)')
+
+    const { sessions } = toObservations(
+      { sessionId: 'conv-a', projectPath: '/Users/me/projects/codeburn', calls },
+      { privacyKey: 'test-privacy-key', provider: 'warp' },
+    )
+    const envelope = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(envelope).success).toBe(true)
+    expect(sessions[0]!.calls[0]!.model).toBe('unknown')
+    expect(JSON.stringify(envelope)).not.toContain('GPT-5.4 Codex')
+  })
+
   it('uses the fallback token budget when conversation usage is absent', () => {
     const conversation: WarpConversationRow = {
       ...BASE_CONVERSATION,

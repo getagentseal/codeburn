@@ -4,6 +4,8 @@ import { describe, it, expect } from 'vitest'
 
 import { createLingTaiTuiProvider } from '../../src/providers/lingtai-tui.js'
 import { priceProviderCall } from '../../src/pricing-pass.js'
+import { getHostPrivacyKey } from '../../src/privacy-key.js'
+import { sourceRefFingerprint } from '@codeburn/core'
 import type { ParsedProviderCall, SessionSource } from '../../src/providers/types.js'
 
 // Byte-identical parity gate for the lingtai-tui bridge migration (phase 8).
@@ -14,8 +16,10 @@ import type { ParsedProviderCall, SessionSource } from '../../src/providers/type
 // per-source-label activity synthesis (main / tc_wake / daemon => userMessage +
 // tools + subagentTypes), model/endpoint fallback from the manifest when a
 // ledger row omits them, run_id vs `${agentId}:${label}` session ids, the
-// composite dedup key threaded on the SOURCE PATH (not the agent dir), turnId,
-// and the manifest-derived project / projectPath carried onto the call.
+// composite dedup key threaded on a FINGERPRINT of the source path (never the
+// raw path — dedupKey ships on the envelope; the raw ledger model is normalized
+// in the key), turnId, and the manifest-derived project / projectPath carried
+// onto the call.
 const here = dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = resolve(here, '../fixtures/lingtai-parity')
 
@@ -33,7 +37,11 @@ function dedup(
   thinking: number,
   cached: number,
 ): string {
-  return ['lingtai-tui', sourcePath, lineNo, ts, model, endpoint, label, emId, runId, input, output, thinking, cached].join(':')
+  // The bridge threads the HOST privacy key into the rich decode
+  // (getHostPrivacyKey, per-install stable), so the decoder keys the source ref
+  // under that key — derive the expected key the same way instead of pasting
+  // what the code emits.
+  return ['lingtai-tui', sourceRefFingerprint(getHostPrivacyKey(), sourcePath), lineNo, ts, model, endpoint, label, emId, runId, input, output, thinking, cached].join(':')
 }
 
 function golden(sourcePath: string, agentDir: string): ParsedProviderCall[] {

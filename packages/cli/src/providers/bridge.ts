@@ -1,5 +1,6 @@
 import type { DecodeContext } from '@codeburn/core'
 
+import { getHostPrivacyKey } from '../privacy-key.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 // ── The dual-registry bridge ────────────────────────────────────────────────
@@ -81,10 +82,22 @@ export function createBridgedProvider<TRich>(spec: BridgedProviderSpec<TRich>): 
         async *parse(): AsyncGenerator<ParsedProviderCall> {
           const records = await spec.readRecords(source)
           if (records === null) return
-          // The CLI holds the rich decode only; minimization / fingerprinting
-          // happens on the sync path, so an empty privacy key is correct here
-          // (the rich decoder never consumes it), matching claude/codex.
-          const context: DecodeContext = { privacyKey: '', providerId: spec.name, sourceRef: source.path }
+          // The host privacy key, threaded into the rich decode (D1). An empty
+          // key was correct when the bridge was written — the comment then said
+          // the rich decoder never consumes it, because minimization /
+          // fingerprinting happened later on the sync path. That intent is
+          // OVERTAKEN by the sourceRef-fingerprint work (#931): the rich
+          // decoders now derive their dedup keys from sourceRefFingerprint,
+          // and dedupKey ships on the observation envelope, so the rich decode
+          // DOES consume the key. On an empty key core's fingerprint module
+          // throws (it never degrades to an unkeyed digest), so the bridge has
+          // to supply the real one. getHostPrivacyKey() is per-install stable
+          // (persisted, like the optimize detectors use), so dedup keys stay
+          // stable across runs and the session-cache re-parse / dedup
+          // semantics are unchanged; it only falls back to a per-process key
+          // when the config dir is unwritable, in which case the session cache
+          // cannot persist either.
+          const context: DecodeContext = { privacyKey: getHostPrivacyKey(), providerId: spec.name, sourceRef: source.path }
           const { calls } = spec.decode({ records, context, seenKeys })
           for (const rich of calls) {
             yield spec.toProviderCall(rich)

@@ -5,7 +5,28 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 15: per-project daily rollups. Days and provider slices now carry
+// Bumped to 17: dedup-key hygiene (#931, this PR). The codebuff, zerostack,
+// pi/omp and grok decoders now thread a FINGERPRINT of the source path into
+// their dedup keys (and lingtai-tui normalizes the model component) instead of
+// the raw path / raw ledger text, because dedupKey ships on the observation
+// envelope. Unchanged files are served from the session cache, whose dedup
+// sets are seeded from the CACHED keys — so a warm cache built by the pre-fix
+// binary keeps the raw-path keys, the same records re-ingest under the new
+// key shape, totals go inconsistent, and the raw path stays on disk forever.
+// The per-provider parse versions (session-cache.ts PROVIDER_PARSE_VERSIONS)
+// force the session-cache re-parse that drops those keys; this bump forces the
+// daily cache to re-derive every day whose sources survive instead of serving
+// the pre-fix rollups. Raising MIN_SUPPORTED_VERSION to 17 makes a v16 file
+// load as an old-version file rather than the trusted current cache.
+//
+// v16 is SKIPPED: main already spent it on the codex structural-discovery fix
+// (eece4cf, #873/#626). A user who has ever run a main build owns a v16 cache
+// containing only the codex fix; claiming 16 here too would load that file as
+// CURRENT and COMPLETE, so the invalidation would never fire — the exact
+// failure this bump exists to prevent. Claiming 17 instead sends that v16 file
+// through the old-version adoption/re-derive path.
+//
+// v15: per-project daily rollups. Days and provider slices now carry
 // a `projects` breakdown (cost/calls/savings/sessions per project) so project
 // history outlives the session files, like models and categories already do.
 // This bump is the first to ride the v14 carry-forward: the old cache is
@@ -57,8 +78,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 15
-const MIN_SUPPORTED_VERSION = 15
+export const DAILY_CACHE_VERSION = 17
+const MIN_SUPPORTED_VERSION = 17
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including

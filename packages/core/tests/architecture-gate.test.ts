@@ -299,11 +299,13 @@ function isBoundedKind(kind: string): boolean {
 
 // The only string fields NOT length/charset-capped: machine-generated
 // identifiers with `minLength:1` and no upper bound. Each is a controlled
-// vocabulary emitted by the host (a generator version, a provider/model/pricing
-// slug, or a hash-derived dedup key), never user free text — provider and model
-// ids have no natural maximum, so no maxLength is asserted. content-smuggling
-// tests prove no user text reaches these. Every entry is justified; a NEW
-// minLength-only string field NOT listed here fails the gate.
+// vocabulary emitted by the host (a generator version, a provider slug, or a
+// hash-derived dedup key), never user free text — provider ids have no natural
+// maximum, so no maxLength is asserted. In 0.2.0 the model/pricingModel slugs
+// ARE capped (ModelIdentifier charset + maxLength); the 0.1.0 entries below
+// stay allowlisted only because that schema is frozen as shipped. Every entry
+// is justified; a NEW minLength-only string field NOT listed here fails the
+// gate.
 const MACHINE_ID_ALLOWLIST = new Set<string>([
   'observation-0.1.0#ObservationEnvelope/generator/version',
   'observation-0.1.0#ObservationEnvelope/sessions/items/providerId',
@@ -314,8 +316,6 @@ const MACHINE_ID_ALLOWLIST = new Set<string>([
   'observation-0.2.0#ObservationEnvelope/generator/version',
   'observation-0.2.0#ObservationEnvelope/sessions/items/providerId',
   'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/provider',
-  'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/model',
-  'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/pricingModel',
   'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/dedupKey',
 ])
 
@@ -351,8 +351,8 @@ const EXPECTED_STRING_FIELDS: StringField[] = [
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/endedAt', kind: 'format:date-time' },
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/gitBranchRef', kind: 'pattern:^[0-9a-f]{16}$' },
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/provider', kind: 'minLength-only:1' },
-  { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/model', kind: 'minLength-only:1' },
-  { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/pricingModel', kind: 'minLength-only:1' },
+  { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/model', kind: 'pattern:^[A-Za-z0-9._:/@-]+$' },
+  { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/pricingModel', kind: 'pattern:^[A-Za-z0-9._:/@-]+$' },
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/speed', kind: 'enum[2]' },
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/costBasis', kind: 'enum[2]' },
   { path: 'observation-0.2.0#ObservationEnvelope/sessions/items/calls/items/timestamp', kind: 'format:date-time' },

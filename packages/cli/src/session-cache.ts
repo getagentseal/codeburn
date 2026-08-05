@@ -198,6 +198,13 @@ export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 // needs no suffix: the cli-shutdown-cost-v1 bump below already forces its one
 // re-parse, which lands the flag too, and durable orphans now survive
 // fingerprint changes (the carry-forward in getOrCreateProviderSection).
+// Dedup-key hygiene (#931): codebuff, zerostack, pi/omp and grok now thread a
+// FINGERPRINT of the source path into their dedup keys (and lingtai-tui
+// normalizes the model component) instead of the raw path / raw ledger text.
+// The session cache seeds its dedup sets from the CACHED keys, so a pre-fix
+// cache keeps the raw-path keys and the same records re-ingest under the new
+// key shape. Each entry/suffix below changes the provider's env fingerprint,
+// which forces the one-time re-parse that drops the raw-path keys from disk.
 export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // rich-session-capture-v1: parse-time capture of per-turn gitBranch, per-call
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
@@ -217,9 +224,16 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
   copilot: 'cli-shutdown-cost-v1-skills',
-  grok: 'estimated-cost-v1',
+  // source-ref-fingerprint-v1: the dedup key now threads a fingerprint of the
+  // source path (chat dir) instead of the raw path, which ships on the
+  // envelope. Forces one re-parse so cached raw-path keys are dropped.
+  codebuff: 'source-ref-fingerprint-v1',
+  zerostack: 'source-ref-fingerprint-v1',
+  pi: 'source-ref-fingerprint-v1',
+  omp: 'source-ref-fingerprint-v1',
+  grok: 'estimated-cost-v1-source-ref-fingerprint-v1',
   hermes: 'reasoning-output-accounting-v1-est-cost',
-  'lingtai-tui': 'token-ledger-registry-activity-v3',
+  'lingtai-tui': 'token-ledger-registry-activity-v3-source-ref-fp-v1-model-normalized-v1',
   'ibm-bob': 'worktree-project-grouping-v1',
   kiro: 'ide-parsing-v1-est-cost',
   quickdesk: 'emf-sqlite-v2-est-cost',
