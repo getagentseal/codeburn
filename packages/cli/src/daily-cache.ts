@@ -5,7 +5,28 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 15: per-project daily rollups. Days and provider slices now carry
+// Bumped to 17: pi/omp, cline and opencode/kilo-code session discovery
+// was restored (#845, this PR). v15/v16 rollups missed OMP sessions
+// written after a `type: "title"` slot line, Cline sessions under the
+// Insiders / VSCodium / home-data roots, and opencode/kilo-code
+// interrupted or user-only sessions whose session-level fallback queried
+// a `model_id` column neither schema has. Those files were skipped before
+// they were ever parsed, so nothing downstream can notice on its own: the
+// daily cache serves every day before today, retention is ten years, and
+// an upgrading user with a warm complete cache would keep the pre-fix
+// zeroes forever while today's numbers silently disagreed with them.
+// Raising MIN_SUPPORTED_VERSION forces the one-time re-derivation.
+//
+// v16 is skipped on purpose: main already spent it on the codex
+// structural-discovery fix (eece4cf). The cache filename and the accepted
+// version window ([MIN_SUPPORTED_VERSION, DAILY_CACHE_VERSION]) are
+// shared across trees, so claiming 16 here would load a main-built v16
+// cache — which carries only the codex fix, none of this PR's — as
+// current and complete, and the invalidation would never fire. 17 is the
+// first version that contains both the codex fix and this PR's discovery
+// fixes; the next bump must check what main has already claimed.
+//
+// v15: per-project daily rollups. Days and provider slices now carry
 // a `projects` breakdown (cost/calls/savings/sessions per project) so project
 // history outlives the session files, like models and categories already do.
 // This bump is the first to ride the v14 carry-forward: the old cache is
@@ -57,8 +78,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 15
-const MIN_SUPPORTED_VERSION = 15
+export const DAILY_CACHE_VERSION = 17
+const MIN_SUPPORTED_VERSION = 17
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including

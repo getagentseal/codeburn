@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 import { decodePi } from '@codeburn/core/providers/pi'
 import type { PiDecodedCall } from '@codeburn/core/providers/pi'
-import { readSessionFile } from '../fs-utils.js'
+import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { createBridgedProvider } from './bridge.js'
 import type { Provider, SessionSource, ParsedProviderCall } from './types.js'
@@ -13,7 +13,10 @@ type PiEntry = {
   type: string
   id?: string
   timestamp?: string
-  cwd?: string
+  /// JSON can carry anything here; the reader validates before use (a real
+  /// transcript always writes a string, but a malformed record must not
+  /// crash discovery with a `basename` type error).
+  cwd?: unknown
   message?: unknown
 }
 
@@ -25,16 +28,31 @@ function getOmpSessionsDir(override?: string): string {
   return override ?? join(homedir(), '.omp', 'agent', 'sessions')
 }
 
-async function readFirstEntry(filePath: string): Promise<PiEntry | null> {
-  const content = await readSessionFile(filePath)
-  if (content === null) return null
-  const line = content.split('\n')[0]
-  if (!line?.trim()) return null
-  try {
-    return JSON.parse(line) as PiEntry
-  } catch {
-    return null
+// OMP can write a fixed-width title metadata line (`type: "title"`) before the
+// `type: "session"` header (issue #845), and either provider may pad the
+// header with blank lines. Scan a bounded number of leading lines rather than
+// just the first one, so discovery stops after twenty parse attempts and never
+// walks a message-only or pathological transcript line by line to EOF. The
+// bound caps how many LINES are inspected, not how many bytes: readSessionLines
+// buffers one physical line whole, so a single oversized line is bounded only
+// by the streaming reader's cap, not by this constant.
+const MAX_HEADER_LINES_SCANNED = 20
+
+async function readSessionEntry(filePath: string): Promise<PiEntry | null> {
+  let linesScanned = 0
+  for await (const line of readSessionLines(filePath)) {
+    if (linesScanned >= MAX_HEADER_LINES_SCANNED) break
+    linesScanned++
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const entry = JSON.parse(trimmed) as PiEntry
+      if (entry.type === 'session') return entry
+    } catch {
+      continue
+    }
   }
+  return null
 }
 
 async function discoverSessionsInDir(sessionsDir: string, providerName: string): Promise<SessionSource[]> {
@@ -65,10 +83,13 @@ async function discoverSessionsInDir(sessionsDir: string, providerName: string):
       const fileStat = await stat(filePath).catch(() => null)
       if (!fileStat?.isFile()) continue
 
-      const first = await readFirstEntry(filePath)
-      if (!first || first.type !== 'session') continue
+      const entry = await readSessionEntry(filePath)
+      if (!entry) continue
 
-      const cwd = first.cwd ?? dirName
+      // A malformed record can carry a non-string cwd (e.g. a number); fall
+      // back to the project directory the way a missing cwd does, rather than
+      // crashing basename with a type error.
+      const cwd = typeof entry.cwd === 'string' && entry.cwd.length > 0 ? entry.cwd : dirName
       sources.push({ path: filePath, project: basename(cwd), provider: providerName })
     }
   }

@@ -64,7 +64,7 @@ function createTestDb(dir: string): string {
       time_archived INTEGER,
       cost REAL, tokens_input INTEGER, tokens_output INTEGER,
       tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
-      model_id TEXT
+      model TEXT
     )
   `)
   db.exec(`
@@ -164,7 +164,7 @@ function createKiloTestDb(dir: string): string {
       time_archived INTEGER,
       cost REAL, tokens_input INTEGER, tokens_output INTEGER,
       tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER,
-      model_id TEXT
+      model TEXT
     )
   `)
   db.exec(`
@@ -1277,9 +1277,9 @@ skipUnlessSqlite('SQLite arm S9-S12 — session-level fallback', () => {
       insertSession(db, 'sess-1')
       insertMessage(db, 'msg-user', 'sess-1', 1700000000000, { role: 'user' })
       insertPart(db, 'p-user', 'msg-user', 'sess-1', { type: 'text', text: 'hello' })
-      // session row rollup
-      db.prepare(`UPDATE session SET cost=1, tokens_input=100, tokens_output=50, tokens_reasoning=5, tokens_cache_read=10, tokens_cache_write=20, model_id=? WHERE id=?`)
-        .run('session-model', 'sess-1')
+      // session row rollup — model is the real-schema JSON object
+      db.prepare(`UPDATE session SET cost=1, tokens_input=100, tokens_output=50, tokens_reasoning=5, tokens_cache_read=10, tokens_cache_write=20, model=? WHERE id=?`)
+        .run(JSON.stringify({ providerID: 'test-provider', id: 'session-model' }), 'sess-1')
     })
 
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
@@ -1294,7 +1294,7 @@ skipUnlessSqlite('SQLite arm S9-S12 — session-level fallback', () => {
     "deduplicationKey": "opencode:sess-1:session-level",
     "fallbackCostUSD": 1,
     "inputTokens": 100,
-    "model": "session-model",
+    "model": "test-provider/session-model",
     "outputTokens": 50,
     "provider": "opencode",
     "reasoningTokens": 5,
@@ -1816,6 +1816,60 @@ skipUnlessSqlite('kilo-code SQLite arm golden', () => {
     expect(keys).toContain('bashCommands')
     expect(keys).not.toContain('project')
     expect(keys).not.toContain('projectPath')
+  })
+})
+
+// Kilo-code mirror of the opencode S9 case (SQLite arm, §7). The opencode and
+// kilo-code SQLite arms share readSqliteSessionRecords + decodeOpenCodeSession,
+// so the session-level fallback must resolve `model` the same way for kilo.
+// The kilo golden and the zero-yield stderr case never populate a session
+// rollup, so this is the only kilo test that pins the fallback call end to end.
+
+skipUnlessSqlite('kilo-code SQLite arm S9 mirror — session-level fallback', () => {
+  it('emits the session-level fallback with the model resolved from the real `model` column', async () => {
+    const dbPath = createKiloTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'kilo-sess-s9')
+      insertMessage(db, 'msg-user', 'kilo-sess-s9', 1700000000000, { role: 'user' })
+      insertPart(db, 'p-user', 'msg-user', 'kilo-sess-s9', { type: 'text', text: 'hello' })
+      // session row rollup — model is the real-schema JSON object (same as S9)
+      db.prepare(`UPDATE session SET cost=1, tokens_input=100, tokens_output=50, tokens_reasoning=5, tokens_cache_read=10, tokens_cache_write=20, model=? WHERE id=?`)
+        .run(JSON.stringify({ providerID: 'test-provider', id: 'session-model' }), 'kilo-sess-s9')
+    })
+
+    const calls = await collectKiloCalls(dbPath, 'kilo-sess-s9')
+    expect(calls).toEqual([
+  {
+    "bashCommands": [],
+    "cacheCreationInputTokens": 20,
+    "cacheReadInputTokens": 10,
+    "cachedInputTokens": 10,
+    "costBasis": "estimated",
+    "costUSD": 1,
+    "deduplicationKey": "kilo-code:kilo-sess-s9:session-level",
+    "fallbackCostUSD": 1,
+    "inputTokens": 100,
+    "model": "test-provider/session-model",
+    "outputTokens": 50,
+    "provider": "kilo-code",
+    "reasoningTokens": 5,
+    "sessionId": "kilo-sess-s9",
+    "speed": "standard",
+    "timestamp": "2023-11-14T22:13:20.000Z",
+    "tools": [],
+    "userMessage": "",
+    "webSearchRequests": 0,
+  },
+])
+    // Key-presence gate, mirroring S9: the session-level arm emits NO
+    // skills/subagentTypes keys for kilo-code either.
+    const keys = Object.keys(calls[0]!)
+    expect(keys).not.toContain('skills')
+    expect(keys).not.toContain('subagentTypes')
+    expect(keys).toContain('tools')
+    expect(keys).toContain('bashCommands')
+    expect(keys).toContain('fallbackCostUSD')
+    expect(keys).toContain('costBasis')
   })
 })
 

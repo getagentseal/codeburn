@@ -33,10 +33,6 @@ export function getVSCodeGlobalStoragePaths(extensionId: string, homeDir = homed
   ]
 }
 
-export function getVSCodeGlobalStoragePath(extensionId: string): string {
-  return getVSCodeGlobalStoragePaths(extensionId)[0]!
-}
-
 export async function discoverClineTasks(extensionId: string, providerName: string, displayName: string, overrideDir?: string | string[]): Promise<SessionSource[]> {
   const baseDirs = overrideDir
     ? (Array.isArray(overrideDir) ? overrideDir : [overrideDir])

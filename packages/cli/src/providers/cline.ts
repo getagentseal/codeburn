@@ -6,7 +6,7 @@ import { decodeVscodeCline } from '@codeburn/core/providers/vscode-cline'
 import type { VscodeClineDecodedCall } from '@codeburn/core/providers/vscode-cline'
 
 import { createBridgedProvider } from './bridge.js'
-import { discoverClineTasks, getVSCodeGlobalStoragePath, readClineRecords, toClineProviderCall } from './vscode-cline-parser.js'
+import { discoverClineTasks, getVSCodeGlobalStoragePaths, readClineRecords, toClineProviderCall } from './vscode-cline-parser.js'
 import type { Provider, SessionSource } from './types.js'
 
 const EXTENSION_ID = 'saoudrizwan.claude-dev'
@@ -17,7 +17,7 @@ export function getClineDataPath(): string {
 
 function normalizeOverrideDirs(overrideDirs?: string | string[]): string[] | undefined {
   if (overrideDirs === undefined) return undefined
-  // Cline has two default roots, so tests and future callers can override one or both.
+  // Cline has several default roots, so tests and future callers can override one or all.
   return Array.isArray(overrideDirs) ? overrideDirs : [overrideDirs]
 }
 
@@ -56,16 +56,15 @@ export function createClineProvider(overrideDirs?: string | string[]): Provider 
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
+      // Cline may be installed in any VS Code variant (stable, Insiders,
+      // VSCodium), so every globalStorage root is scanned - same as the Roo Code
+      // and KiloCode siblings - plus Cline's own home-data root.
       const baseDirs = configuredDirs ?? [
-        getVSCodeGlobalStoragePath(EXTENSION_ID),
+        ...getVSCodeGlobalStoragePaths(EXTENSION_ID),
         getClineDataPath(),
       ]
 
-      const sources = await Promise.all(
-        baseDirs.map(dir => discoverClineTasks(EXTENSION_ID, 'cline', 'Cline', dir)),
-      )
-
-      return dedupeTaskSources(sources.flat())
+      return dedupeTaskSources(await discoverClineTasks(EXTENSION_ID, 'cline', 'Cline', baseDirs))
     },
 
     readRecords: readClineRecords,

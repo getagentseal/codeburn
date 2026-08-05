@@ -111,13 +111,30 @@ describe('omp provider - session discovery', () => {
     expect(sessions[0]!.project).toBe('myproject')
   })
 
+  it('discovers title-first sessions', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    await writeSession(projectDir, 'title-first.jsonl', [
+      JSON.stringify({ type: 'title', title: 'OMP title-first session' }),
+      '',
+      sessionMeta({ cwd: '/Users/test/myproject' }),
+      assistantMessage({}),
+    ])
+
+    const provider = createOmpProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.provider).toBe('omp')
+    expect(sessions[0]!.project).toBe('myproject')
+  })
+
   it('returns empty for non-existent directory', async () => {
     const provider = createOmpProvider('/nonexistent/omp/path')
     const sessions = await provider.discoverSessions()
     expect(sessions).toEqual([])
   })
 
-  it('skips files whose first line is not a session entry', async () => {
+  it('skips files without a session entry', async () => {
     const projectDir = join(tmpDir, '--Users-test-myproject--')
     await writeSession(projectDir, 'bad.jsonl', [
       JSON.stringify({ type: 'message', id: 'x' }),

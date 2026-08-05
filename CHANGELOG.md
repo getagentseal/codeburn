@@ -4,6 +4,7 @@
 
 ### Fixed
 - Claude Desktop and Cowork sessions are discovered for Windows Microsoft Store (MSIX) installs. (#611)
+- Sessions that were silently invisible now appear: Pi and Oh My Pi transcripts with an OMP title slot, Cline sessions under Code - Insiders or VSCodium roots, and OpenCode/kilo-code usage that silently read as zero now reports. (#845)
 
 ## 0.9.19 - 2026-07-20
 

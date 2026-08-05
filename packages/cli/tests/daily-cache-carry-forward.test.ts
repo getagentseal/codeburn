@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -302,6 +302,45 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days).toHaveLength(1)
     expect(out.days[0]).toMatchObject({ date: d.date, cost: d.cost, calls: d.calls, carried: true })
+  })
+
+  it('a version bump forces a re-derive that recovers usage the old cache never had', async () => {
+    // The pre-fix binary shipped daily-cache v16 (main's codex discovery
+    // fix spent 16; this PR's fixes land at 17). THIS LITERAL IS THE POINT:
+    // it must stay pinned to the version the pre-fix binary wrote, so a warm
+    // cache from that binary sits at daily-cache.v16.json, complete: true,
+    // with no opencode usage (the session-level fallback and pi/omp discovery
+    // fixes landed after). Only the MIN_SUPPORTED_VERSION bump decides
+    // whether that file loads as the trusted CURRENT cache — freezing the
+    // pre-fix zeroes forever — or as an old-version file that forces the
+    // one-time re-derive. When the next bump lands, move this literal to the
+    // version the current binary shipped.
+    const PRE_FIX_CACHE_VERSION = 16
+    const preFixCache: DailyCache = {
+      version: PRE_FIX_CACHE_VERSION,
+      savingsConfigHash: 'cfg-A',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      days: [seededDay()],
+      complete: true,
+    }
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${PRE_FIX_CACHE_VERSION}.json`), JSON.stringify(preFixCache), 'utf-8')
+
+    const aggregate = vi.fn(() => [day(daysAgoStr(30), { opencode: slice(12.5, 7) })])
+    const out = await ensureCacheHydrated(noSessions, aggregate, 'cfg-A')
+
+    // The bump forced a full re-derivation: the fresh parse was consulted.
+    expect(aggregate).toHaveBeenCalled()
+    expect(out.version).toBe(DAILY_CACHE_VERSION)
+    expect(out.complete).toBe(true)
+    // The recovered usage is picked up by the re-derive…
+    expect(out.days[0]!.providers['opencode']!.cost).toBe(12.5)
+    expect(out.days[0]!.providers['opencode']!.calls).toBe(7)
+    // …and providers the parse could not re-derive keep their old
+    // accounting, carried forward (never-lose invariant intact).
+    expect(out.days[0]!.providers['claude']!.cost).toBe(230.06)
+    expect(out.days[0]!.providers['codex']!.cost).toBe(79.29)
+    expect(out.days[0]!.carried).toBe(true)
   })
 
   it('a same-version file found under an old name is trusted as-is (no spurious rebuild)', async () => {
