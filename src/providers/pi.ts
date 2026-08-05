@@ -6,7 +6,7 @@ import { readSessionFile, readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { normalizeContentBlocks } from '../content-utils.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 const modelDisplayNames: Record<string, string> = {
   'gpt-5.4': 'GPT-5.4',
@@ -272,6 +272,10 @@ export function createPiProvider(sessionsDir?: string): Provider {
 
   return {
     name: 'pi',
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dir, label: 'sessions' }]
+    },
     displayName: 'Pi',
 
     modelDisplayName(model: string): string {
@@ -302,6 +306,10 @@ export function createOmpProvider(sessionsDir?: string): Provider {
 
   return {
     name: 'omp',
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dir, label: 'sessions' }]
+    },
     displayName: 'OMP',
 
     modelDisplayName(model: string): string {

@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { extractBashCommands } from '../bash-utils.js'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ProbeRoot, ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -345,6 +345,10 @@ export function createKimiProvider(overrideDir?: string): Provider {
   return {
     name: 'kimi',
     displayName: 'Kimi',
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: join(shareDir, 'sessions'), label: 'sessions' }]
+    },
 
     modelDisplayName(model: string): string {
       return getShortModelName(model)

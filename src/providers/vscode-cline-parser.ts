@@ -42,11 +42,18 @@ export function getVSCodeGlobalStoragePath(extensionId: string): string {
   return getVSCodeGlobalStoragePaths(extensionId)[0]!
 }
 
-export async function discoverClineTasks(extensionId: string, providerName: string, displayName: string, overrideDir?: string | string[]): Promise<SessionSource[]> {
-  const baseDirs = overrideDir
+// The roots discoverClineTasks scans: an explicit override wins, otherwise
+// every VS Code variant's globalStorage. Exported so a provider's probeRoots()
+// can report exactly what discovery reads by calling the same function, rather
+// than mirroring this logic and drifting from it.
+export function clineTaskRoots(extensionId: string, overrideDir?: string | string[]): string[] {
+  return overrideDir
     ? (Array.isArray(overrideDir) ? overrideDir : [overrideDir])
     : getVSCodeGlobalStoragePaths(extensionId)
-  return discoverClineTasksInBaseDirs(baseDirs, providerName, displayName)
+}
+
+export async function discoverClineTasks(extensionId: string, providerName: string, displayName: string, overrideDir?: string | string[]): Promise<SessionSource[]> {
+  return discoverClineTasksInBaseDirs(clineTaskRoots(extensionId, overrideDir), providerName, displayName)
 }
 
 export async function discoverClineTasksInBaseDirs(baseDirs: string[], providerName: string, displayName: string): Promise<SessionSource[]> {

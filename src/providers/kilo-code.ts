@@ -1,9 +1,9 @@
 import { join } from 'path'
 import { homedir } from 'os'
 
-import { discoverClineTasks, createClineParser } from './vscode-cline-parser.js'
+import { discoverClineTasks, createClineParser, clineTaskRoots } from './vscode-cline-parser.js'
 import { discoverSqliteSessions, createSqliteSessionParser, type SqliteProviderConfig } from './sqlite-session-parser.js'
-import type { Provider, SessionSource, SessionParser } from './types.js'
+import type { ProbeRoot, Provider, SessionSource, SessionParser } from './types.js'
 
 const EXTENSION_ID = 'kilocode.kilo-code'
 const PROVIDER_NAME = 'kilo-code'
@@ -31,6 +31,14 @@ export function createKiloCodeProvider(overrideDir?: string | string[]): Provide
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      // Both halves of discovery: the legacy task tree and the SQLite store.
+      return [
+        ...clineTaskRoots(EXTENSION_ID, overrideDir).map(path => ({ path, label: 'tasks' })),
+        { path: sqliteConfig.dbDir, label: 'sqlite' },
+      ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
