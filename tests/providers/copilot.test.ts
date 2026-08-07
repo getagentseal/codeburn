@@ -11,6 +11,19 @@ import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 let tmpDir: string
 
+// The machine running this suite may itself have a real
+// ~/.copilot/session-store.db, which discoverSessions would pick up by
+// default and leak into every discovery test's source list. Pin the path to
+// a nonexistent file globally; tests that need a store pass an explicit
+// fixture path to createCopilotProvider (or re-stub the env themselves).
+beforeEach(() => {
+  vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', '/nonexistent/session-store.db')
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 async function createSessionDir(sessionId: string, lines: string[], cwd = '/home/user/myproject') {
   const sessionDir = join(tmpDir, sessionId)
   await mkdir(sessionDir, { recursive: true })
@@ -122,6 +135,18 @@ async function collectCalls(source: { path: string; project: string; provider: s
   const calls: ParsedProviderCall[] = []
   for await (const call of copilot.createSessionParser(source, seenKeys).parse()) calls.push(call)
   return calls
+}
+
+// Write a transcript inside the test's tmpDir sandbox, but at the production
+// directory shape — {ws}/{hash}/GitHub.copilot-chat/transcripts/<id>.jsonl —
+// because sessionId derivation reads the path structure (file basename for
+// transcripts). Never touches the real VS Code storage.
+async function createTranscriptFile(sessionId: string, lines: string[]) {
+  const transcriptsDir = join(tmpDir, 'ws', 'hash1', 'GitHub.copilot-chat', 'transcripts')
+  await mkdir(transcriptsDir, { recursive: true })
+  const path = join(transcriptsDir, `${sessionId}.jsonl`)
+  await writeFile(path, lines.join('\n') + '\n')
+  return path
 }
 
 describe('copilot provider - JSONL parsing', () => {
@@ -335,8 +360,83 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls[0]!.model).toBe('gpt-4.1')
   })
 
+  it('attributes turns between subagent.started and subagent.completed to the subagent', async () => {
+    // CLI ≥ ~1.0.7x writes subagent.started/completed (not subagent.selected);
+    // event shapes from a real delegating 1.0.78 session. The label must cover
+    // the subagent's turns and clear afterwards, not bleed onto the parent's.
+    const eventsPath = await createSessionDir('sess-subagent-cli', [
+      modelChange('claude-sonnet-5'),
+      userMessage('delegate a search'),
+      JSON.stringify({
+        type: 'subagent.started',
+        timestamp: '2026-08-07T10:00:11Z',
+        data: { toolCallId: 'toolu_01SZnHjC', agentName: 'explore', agentDisplayName: 'Explore Agent' },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T10:00:14Z',
+        data: { messageId: 'msg-sub', model: 'claude-haiku-4.5', outputTokens: 197, toolRequests: [] },
+      }),
+      JSON.stringify({
+        type: 'subagent.completed',
+        timestamp: '2026-08-07T10:00:19Z',
+        data: { toolCallId: 'toolu_01SZnHjC', agentName: 'explore', model: 'claude-haiku-4.5', totalTokens: 26435 },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T10:00:22Z',
+        data: { messageId: 'msg-parent', model: 'claude-sonnet-5', outputTokens: 51, toolRequests: [] },
+      }),
+    ])
+
+    const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'jsonl' })
+    const sub = calls.find(c => c.deduplicationKey.endsWith(':msg-sub'))!
+    expect(sub.subagentTypes).toEqual(['explore'])
+    expect(sub.model).toBe('claude-haiku-4.5')
+    const parent = calls.find(c => c.deduplicationKey.endsWith(':msg-parent'))!
+    expect(parent.subagentTypes).toBeUndefined()
+  })
+
+  it('completing a nested subagent restores the outer label, matched by toolCallId', async () => {
+    const started = (id: string, name: string) =>
+      JSON.stringify({ type: 'subagent.started', timestamp: '2026-08-07T10:00:11Z', data: { toolCallId: id, agentName: name } })
+    const completed = (id: string) =>
+      JSON.stringify({ type: 'subagent.completed', timestamp: '2026-08-07T10:00:19Z', data: { toolCallId: id, agentName: 'x' } })
+    const msg = (messageId: string, outputTokens = 10) =>
+      JSON.stringify({ type: 'assistant.message', timestamp: '2026-08-07T10:00:14Z', data: { messageId, model: 'claude-sonnet-5', outputTokens, toolRequests: [] } })
+
+    const eventsPath = await createSessionDir('sess-subagent-nested', [
+      modelChange('claude-sonnet-5'),
+      started('call-A', 'explore'),
+      started('call-B', 'plan'),
+      msg('msg-inner'),      // while B runs → 'plan'
+      completed('call-B'),
+      msg('msg-outer'),      // B done, A still active → 'explore', NOT unlabeled
+      completed('call-A'),
+      msg('msg-after'),      // all done → no label
+    ])
+
+    const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'jsonl' })
+    const byId = (id: string) => calls.find(c => c.deduplicationKey.endsWith(`:${id}`))!
+    expect(byId('msg-inner').subagentTypes).toEqual(['plan'])
+    expect(byId('msg-outer').subagentTypes).toEqual(['explore'])
+    expect(byId('msg-after').subagentTypes).toBeUndefined()
+  })
+
+  it('keeps subagent.selected sticky when no completed event ever arrives', async () => {
+    // Older CLIs only write subagent.selected; nothing clears it.
+    const eventsPath = await createSessionDir('sess-subagent-selected', [
+      modelChange('claude-sonnet-5'),
+      JSON.stringify({ type: 'subagent.selected', data: { agentName: 'refactor' } }),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 25 }),
+      assistantMessage({ messageId: 'msg-2', outputTokens: 30, timestamp: '2026-04-15T10:01:00Z' }),
+    ])
+    const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'jsonl' })
+    expect(calls.map(c => c.subagentTypes)).toEqual([['refactor'], ['refactor']])
+  })
+
   it('infers OpenAI auto bucket for transcript toolCallId prefix call_', async () => {
-    const eventsPath = await createSessionDir('sess-tr-call', [
+    const eventsPath = await createTranscriptFile('sess-tr-call', [
       transcriptSessionStart('sess-tr-call'),
       transcriptUserMessage('check model inference'),
       transcriptAssistantMessage({
@@ -346,16 +446,20 @@ describe('copilot provider - JSONL parsing', () => {
       }),
     ])
 
-    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const source = { path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' }
     const calls: ParsedProviderCall[] = []
     for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('copilot-openai-auto')
+    // Each transcript is its own session, keyed by file basename — NOT the
+    // shared parent dir name 'transcripts', which would collapse every
+    // transcript into one session and one dedup namespace.
+    expect(calls[0]!.sessionId).toBe('sess-tr-call')
   })
 
   it('infers Anthropic auto bucket for transcript toolCallId prefixes tooluse_/toolu_vrtx_', async () => {
-    const eventsPath = await createSessionDir('sess-tr-claude', [
+    const eventsPath = await createTranscriptFile('sess-tr-claude', [
       transcriptSessionStart('sess-tr-claude'),
       transcriptUserMessage('check model inference'),
       transcriptAssistantMessage({
@@ -365,7 +469,7 @@ describe('copilot provider - JSONL parsing', () => {
       }),
     ])
 
-    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const source = { path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' }
     const calls: ParsedProviderCall[] = []
     for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
 
@@ -374,7 +478,7 @@ describe('copilot provider - JSONL parsing', () => {
   })
 
   it('chooses the dominant inferred transcript model when prefixes are mixed', async () => {
-    const eventsPath = await createSessionDir('sess-tr-mixed', [
+    const eventsPath = await createTranscriptFile('sess-tr-mixed', [
       transcriptSessionStart('sess-tr-mixed'),
       transcriptUserMessage('mixed'),
       transcriptAssistantMessage({
@@ -394,7 +498,7 @@ describe('copilot provider - JSONL parsing', () => {
       }),
     ])
 
-    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const source = { path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' }
     const calls: ParsedProviderCall[] = []
     for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
 
@@ -402,8 +506,35 @@ describe('copilot provider - JSONL parsing', () => {
     expect(calls.every(c => c.model === 'copilot-openai-auto')).toBe(true)
   })
 
+  it('parses a producerless transcript with explicit model info and no tool calls', async () => {
+    // Prefix inference has nothing to work with here; the explicit
+    // session.model_change must still establish the model, and the shutdown
+    // rollup must stay ignored — provenance, not the producer field, gates it.
+    const eventsPath = await createTranscriptFile('sess-tr-explicit', [
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'sess-tr-explicit' } }),
+      modelChange('gpt-4.1'),
+      transcriptUserMessage('hi'),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-04-15T10:00:15Z',
+        data: { messageId: 'msg-1', outputTokens: 80, toolRequests: [] },
+      }),
+      shutdownEvent({
+        modelMetrics: {
+          'gpt-4.1': { inputTokens: 1000, outputTokens: 80, cacheReadTokens: 500, cacheWriteTokens: 200 },
+        },
+      }),
+    ])
+
+    const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('gpt-4.1')
+    expect(calls[0]!.outputTokens).toBe(80)
+    expect(calls.every(c => !c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+  })
+
   it('normalizes Copilot MCP tool names from VS Code transcripts', async () => {
-    const eventsPath = await createSessionDir('sess-tr-mcp-tools', [
+    const eventsPath = await createTranscriptFile('sess-tr-mcp-tools', [
       transcriptSessionStart('sess-tr-mcp-tools'),
       transcriptUserMessage('use GitHub MCP'),
       transcriptAssistantMessage({
@@ -414,7 +545,7 @@ describe('copilot provider - JSONL parsing', () => {
       }),
     ])
 
-    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const source = { path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' }
     const calls: ParsedProviderCall[] = []
     for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
 
@@ -458,7 +589,7 @@ describe('copilot provider - session.shutdown token/cost rollup', () => {
     // One per-turn assistant.message call + one supplementary shutdown call.
     expect(calls).toHaveLength(2)
 
-    const shutdown = calls.find(c => c.deduplicationKey === 'copilot:sess-shutdown:shutdown:claude-sonnet-4-5')
+    const shutdown = calls.find(c => c.deduplicationKey === 'copilot:sess-shutdown:shutdown:claude-sonnet-4-5:1')
     expect(shutdown).toBeDefined()
     expect(shutdown!.model).toBe('claude-sonnet-4-5')
     expect(shutdown!.inputTokens).toBe(4)              // 71282 - 35495 - 35783
@@ -546,6 +677,86 @@ describe('copilot provider - session.shutdown token/cost rollup', () => {
     expect(gpt.costUSD).toBeCloseTo(calculateCost('gpt-5', 50, 0, 0, 5000, 0), 12)
   })
 
+  it('emits per-leg deltas for a resumed session with cumulative shutdown rollups', async () => {
+    // Numbers from a real resumed CLI 1.0.78 session (3 legs via --resume):
+    // each leg appends a session.shutdown whose modelMetrics are CUMULATIVE.
+    // Emitting deltas keyed by occurrence keeps a growing file append-only
+    // under the durable union-by-key cache merge — re-parsing after each
+    // resume adds only the new leg, never double-counting earlier ones.
+    const legs = [
+      { inputTokens: 24672, outputTokens: 17, cacheReadTokens: 0, cacheWriteTokens: 24670 },
+      { inputTokens: 74463, outputTokens: 149, cacheReadTokens: 49489, cacheWriteTokens: 24968 },
+      { inputTokens: 124783, outputTokens: 243, cacheReadTokens: 99569, cacheWriteTokens: 25204 },
+    ]
+    const lines = [modelChange('claude-sonnet-5'), assistantMessage({ messageId: 'msg-1', outputTokens: 17 })]
+    for (const [i, leg] of legs.entries()) {
+      lines.push(shutdownEvent({ modelMetrics: { 'claude-sonnet-5': leg }, timestamp: `2026-08-0${i + 1}T10:00:00Z` }))
+    }
+    const eventsPath = await createSessionDir('sess-resumed', lines)
+    const calls = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot', sourceType: 'jsonl' })
+
+    const shutdowns = calls.filter(c => c.deduplicationKey.includes(':shutdown:'))
+    expect(shutdowns.map(c => c.deduplicationKey)).toEqual([
+      'copilot:sess-resumed:shutdown:claude-sonnet-5:1',
+      'copilot:sess-resumed:shutdown:claude-sonnet-5:2',
+      'copilot:sess-resumed:shutdown:claude-sonnet-5:3',
+    ])
+    // Each leg lands on its own shutdown timestamp (a resumed session can
+    // span days; whole-rollup emission would collapse them onto one).
+    expect(shutdowns.map(c => c.timestamp)).toEqual([
+      '2026-08-01T10:00:00Z', '2026-08-02T10:00:00Z', '2026-08-03T10:00:00Z',
+    ])
+    // Per-leg deltas sum exactly to the final cumulative rollup.
+    const sum = (k: 'inputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens') =>
+      shutdowns.reduce((a, c) => a + c[k], 0)
+    expect(sum('cacheReadInputTokens')).toBe(99569)
+    expect(sum('cacheCreationInputTokens')).toBe(25204)
+    expect(sum('inputTokens')).toBe(124783 - 99569 - 25204)
+
+    // A later re-parse of the grown file (prior legs already cached) emits
+    // only what the seen-key set lacks.
+    const seen = new Set(calls.map(c => c.deduplicationKey))
+    const again = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot', sourceType: 'jsonl' }, seen)
+    expect(again).toHaveLength(0)
+  })
+
+  it('starts a fresh delta baseline when a cumulative rollup goes backwards (counter reset)', async () => {
+    // Hypothetical but cheap to guard: if the CLI ever resets its counters
+    // mid-session, the post-reset epoch must be billed from zero — a stale
+    // high-water baseline would clamp it away (and the reset leg's real usage
+    // with it).
+    const eventsPath = await createSessionDir('sess-reset', [
+      modelChange('claude-sonnet-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 10 }),
+      shutdownEvent({
+        modelMetrics: { 'claude-sonnet-5': { inputTokens: 10000, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 5000 } },
+        timestamp: '2026-08-01T10:00:00Z',
+      }),
+      // Reset: cumulative drops below the previous rollup → new epoch.
+      shutdownEvent({
+        modelMetrics: { 'claude-sonnet-5': { inputTokens: 2000, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 1000 } },
+        timestamp: '2026-08-02T10:00:00Z',
+      }),
+      shutdownEvent({
+        modelMetrics: { 'claude-sonnet-5': { inputTokens: 5000, outputTokens: 8, cacheReadTokens: 2000, cacheWriteTokens: 1500 } },
+        timestamp: '2026-08-03T10:00:00Z',
+      }),
+    ])
+    const calls = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot', sourceType: 'jsonl' })
+    const shutdowns = calls.filter(c => c.deduplicationKey.includes(':shutdown:'))
+    expect(shutdowns).toHaveLength(3)
+    // Leg 1: epoch-1 usage in full.
+    expect(shutdowns[0]!.inputTokens).toBe(5000)  // 10000 − 0 − 5000
+    expect(shutdowns[0]!.cacheCreationInputTokens).toBe(5000)
+    // Leg 2 (reset): billed from zero, not clamped away against the old baseline.
+    expect(shutdowns[1]!.inputTokens).toBe(1000)  // 2000 − 0 − 1000
+    expect(shutdowns[1]!.cacheCreationInputTokens).toBe(1000)
+    // Leg 3: normal delta within the new epoch.
+    expect(shutdowns[2]!.inputTokens).toBe(500)   // (5000−2000) − 2000 − 500
+    expect(shutdowns[2]!.cacheReadInputTokens).toBe(2000)
+    expect(shutdowns[2]!.cacheCreationInputTokens).toBe(500)
+  })
+
   it('keeps shutdown dedup keys stable across re-parses', async () => {
     const eventsPath = await createSessionDir('sess-reparse', [
       modelChange('claude-sonnet-4-5'),
@@ -594,7 +805,7 @@ describe('copilot provider - session.shutdown token/cost rollup', () => {
   })
 
   it('ignores session.shutdown for VS Code transcript sessions', async () => {
-    const eventsPath = await createSessionDir('sess-tr-shutdown', [
+    const eventsPath = await createTranscriptFile('sess-tr-shutdown', [
       transcriptSessionStart('sess-tr-shutdown'),
       transcriptUserMessage('hi'),
       transcriptAssistantMessage({ messageId: 'msg-1', content: 'done', toolCallIds: ['call_abc'] }),
@@ -604,13 +815,172 @@ describe('copilot provider - session.shutdown token/cost rollup', () => {
         },
       }),
     ])
-    const source = { path: eventsPath, project: 'test', provider: 'copilot' }
+    const source = { path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'transcript' }
     const calls = await collectCalls(source)
 
     // Only the transcript assistant call; the shutdown rollup is CLI-only.
     expect(calls).toHaveLength(1)
     expect(calls.every(c => !c.deduplicationKey.includes(':shutdown:'))).toBe(true)
     expect(calls[0]!.model).toBe('copilot-openai-auto')
+  })
+
+  // Regression test for #944: events are redacted copies of a real Copilot CLI
+  // 1.0.78 session. The CLI writes the same producer ('copilot-agent') as VS
+  // Code transcripts, so content sniffing skipped this session's shutdown
+  // rollup — reporting 100 of its 49,573 tokens and zero input/cache.
+  it('parses a CLI session whose session.start carries producer copilot-agent (issue #944)', async () => {
+    const eventsPath = await createSessionDir('sess-cli-producer', [
+      JSON.stringify({
+        type: 'session.start',
+        timestamp: '2026-08-07T17:56:35.573Z',
+        data: {
+          sessionId: 'sess-cli-producer',
+          version: 1,
+          producer: 'copilot-agent',
+          copilotVersion: '1.0.78',
+          startTime: '2026-08-07T17:56:35.554Z',
+          context: { cwd: '/home/user/myproject' },
+        },
+      }),
+      JSON.stringify({
+        type: 'session.model_change',
+        timestamp: '2026-08-07T17:56:36.725Z',
+        data: { newModel: 'claude-sonnet-5', reasoningEffort: null },
+      }),
+      JSON.stringify({
+        type: 'user.message',
+        timestamp: '2026-08-07T17:56:36.732Z',
+        data: { content: 'Run echo and summarize the output.' },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T17:56:38.763Z',
+        data: {
+          messageId: 'a982a391-9ee3-4fbd-89a9-26d5af78c890',
+          model: 'claude-sonnet-5',
+          content: '',
+          toolRequests: [{
+            toolCallId: 'toolu_017eL3f5aeGiLoALignYMZEN',
+            name: 'bash',
+            arguments: { command: 'echo codeburn-repro-944', description: 'Echo test string' },
+            type: 'function',
+          }],
+          turnId: '0',
+          outputTokens: 81,
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T17:56:40.417Z',
+        data: {
+          messageId: '8758ea51-797f-4285-972c-495911e2839f',
+          model: 'claude-sonnet-5',
+          content: 'The command printed the string "codeburn-repro-944".',
+          toolRequests: [],
+          turnId: '1',
+          outputTokens: 19,
+        },
+      }),
+      JSON.stringify({
+        type: 'session.shutdown',
+        timestamp: '2026-08-07T17:56:40.591Z',
+        data: {
+          shutdownType: 'routine',
+          sessionStartTime: 1786125395554,
+          modelMetrics: {
+            'claude-sonnet-5': {
+              requests: { count: 2, cost: 1 },
+              usage: { inputTokens: 49473, outputTokens: 100, cacheReadTokens: 24678, cacheWriteTokens: 24791, reasoningTokens: 0 },
+            },
+          },
+        },
+      }),
+    ])
+
+    // Discovery tags session-state files 'jsonl'; provenance, not the shared
+    // producer value, must classify this as a CLI session.
+    const calls = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot', sourceType: 'jsonl' })
+
+    // Two per-turn output calls with the REAL model — not the
+    // 'copilot-anthropic-auto' bucket transcript inference would pick from the
+    // toolu_ toolCallId prefix.
+    const perTurn = calls.filter(c => !c.deduplicationKey.includes(':shutdown:'))
+    expect(perTurn.map(c => c.outputTokens)).toEqual([81, 19])
+    expect(perTurn.every(c => c.model === 'claude-sonnet-5')).toBe(true)
+
+    // The shutdown rollup lands: the tokens the misclassification dropped.
+    const shutdown = calls.find(c => c.deduplicationKey === 'copilot:sess-cli-producer:shutdown:claude-sonnet-5:1')
+    expect(shutdown).toBeDefined()
+    expect(shutdown!.inputTokens).toBe(4) // 49473 − 24678 − 24791 (cache-inclusive)
+    expect(shutdown!.cacheReadInputTokens).toBe(24678)
+    expect(shutdown!.cacheCreationInputTokens).toBe(24791)
+    expect(shutdown!.outputTokens).toBe(0) // owned by the per-turn events
+    expect(shutdown!.costIsEstimated).toBe(false)
+    expect(shutdown!.costUSD).toBeCloseTo(calculateCost('claude-sonnet-5', 4, 0, 24791, 24678, 0), 12)
+    expect(shutdown!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('treats a bare (untagged) source as CLI format, not transcript', async () => {
+    // Producer sniffing must not resurface for sources without a sourceType tag
+    // (the pre-tagging shape): same events, same result as the tagged parse.
+    const eventsPath = await createSessionDir('sess-cli-untagged', [
+      JSON.stringify({
+        type: 'session.start',
+        timestamp: '2026-08-07T17:56:35.573Z',
+        data: { sessionId: 'sess-cli-untagged', producer: 'copilot-agent', copilotVersion: '1.0.78' },
+      }),
+      modelChange('claude-sonnet-5'),
+      userMessage('hello'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 42 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-5': { inputTokens: 1000, outputTokens: 42, cacheReadTokens: 600, cacheWriteTokens: 300 },
+        },
+      }),
+    ])
+
+    const calls = await collectCalls({ path: eventsPath, project: 'myproject', provider: 'copilot' })
+    expect(calls.some(c => c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+    expect(calls.find(c => c.deduplicationKey.includes(':shutdown:'))!.cacheReadInputTokens).toBe(600)
+  })
+
+  it('wires discovery through parsing: a discovered CLI session keeps its shutdown rollup', async () => {
+    // The full #944 pipeline: discoverSessions must tag the session-state file
+    // so that the parser it hands off to keeps the shutdown tokens.
+    await createSessionDir('sess-wire', [
+      JSON.stringify({
+        type: 'session.start',
+        timestamp: '2026-08-07T17:56:35.573Z',
+        data: { sessionId: 'sess-wire', producer: 'copilot-agent', copilotVersion: '1.0.78' },
+      }),
+      modelChange('claude-sonnet-5'),
+      userMessage('hello'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 42 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-5': { inputTokens: 5000, outputTokens: 42, cacheReadTokens: 3000, cacheWriteTokens: 1500 },
+        },
+      }),
+    ])
+
+    // Keep discovery hermetic: a real agent-traces.db on the host must not leak in.
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    try {
+      const provider = createCopilotProvider(tmpDir, '/nonexistent/vscode', '/nonexistent/global', '/nonexistent/jetbrains')
+      const sessions = await provider.discoverSessions()
+      expect(sessions).toHaveLength(1)
+
+      const calls: ParsedProviderCall[] = []
+      for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) calls.push(call)
+
+      const shutdown = calls.find(c => c.deduplicationKey === 'copilot:sess-wire:shutdown:claude-sonnet-5:1')
+      expect(shutdown).toBeDefined()
+      expect(shutdown!.inputTokens).toBe(500) // 5000 − 3000 − 1500
+      expect(shutdown!.cacheReadInputTokens).toBe(3000)
+      expect(shutdown!.cacheCreationInputTokens).toBe(1500)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 
@@ -811,6 +1181,9 @@ describe('copilot provider - discoverSessions', () => {
     expect(sessions).toHaveLength(2)
     expect(sessions.every(s => s.provider === 'copilot')).toBe(true)
     expect(sessions.every(s => s.path.endsWith('events.jsonl'))).toBe(true)
+    // Session-state files are tagged as CLI sources — the tag (not the file's
+    // producer value) decides transcript vs CLI parsing (#944).
+    expect(sessions.every(s => (s as { sourceType?: string }).sourceType === 'jsonl')).toBe(true)
   })
 
   it('reads project name from workspace.yaml cwd', async () => {
@@ -864,6 +1237,7 @@ describe('copilot provider - discoverSessions', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]!.project).toBe('myapp')
     expect(sessions[0]!.path).toContain('session-1.jsonl')
+    expect((sessions[0] as { sourceType?: string }).sourceType).toBe('transcript')
   })
 
   it('includes VSCodium workspaceStorage paths on all supported platforms', () => {
@@ -1383,6 +1757,444 @@ describe('copilot provider - OTel cache token parsing', () => {
 // {"__first__":{"type":"Subgraph",…}} blobs; the model and projectName are
 // separate serialized fields. These helpers reproduce that on-disk shape so
 // tests exercise the real regex/scan extraction path.
+
+// ---------------------------------------------------------------------------
+// Session-store tests (~/.copilot/session-store.db)
+//
+// The Copilot CLI and the GitHub Copilot desktop app write per-request usage
+// rows into assistant_usage_events. These tests verify the row → call
+// contract (cache-inclusive input decomposed, output excluded), the
+// discovery-time shutdown-rollup suppression for covered sessions, and the
+// graceful-absence path for stores predating the table. Fixture DBs are
+// built programmatically — never committed binaries.
+// ---------------------------------------------------------------------------
+
+/** Creates a minimal session-store.db schema matching the Copilot CLI store. */
+function createSessionStoreDb(dbPath: string): void {
+  const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+  const db = new DatabaseSync(dbPath)
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      cwd TEXT,
+      repository TEXT,
+      branch TEXT
+    );
+    CREATE TABLE assistant_usage_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      model TEXT NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `)
+  db.close()
+}
+
+interface UsageRowDef {
+  sessionId: string
+  model: string
+  // Cache-INCLUSIVE, as the CLI writes it (input + cache_read + cache_write).
+  inputTokens: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  createdAt?: string
+  cwd?: string
+  repository?: string
+}
+
+function insertUsageRow(dbPath: string, row: UsageRowDef): void {
+  const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+  const db = new DatabaseSync(dbPath)
+  db.prepare(`INSERT OR IGNORE INTO sessions (id, cwd, repository) VALUES (?, ?, ?)`)
+    .run(row.sessionId, row.cwd ?? null, row.repository ?? null)
+  db.prepare(
+    `INSERT INTO assistant_usage_events
+       (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    row.sessionId,
+    row.model,
+    row.inputTokens,
+    row.outputTokens ?? 0,
+    row.cacheReadTokens ?? 0,
+    row.cacheWriteTokens ?? 0,
+    row.reasoningTokens ?? 0,
+    row.createdAt ?? '2026-08-01T12:00:00.000Z',
+  )
+  db.close()
+}
+
+const storeSource = (path: string) =>
+  ({ path, project: 'copilot', provider: 'copilot', sourceType: 'session-store' })
+
+describe.skipIf(!isSqliteAvailable())('copilot provider - session-store parsing', () => {
+  let dbPath: string
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-store-test-'))
+    dbPath = join(tmpDir, 'session-store.db')
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+    vi.unstubAllEnvs()
+  })
+
+  it('decomposes cache-inclusive input_tokens per request row, output excluded', async () => {
+    createSessionStoreDb(dbPath)
+    // First two requests of a real CLI session: input_tokens is
+    // cache-INCLUSIVE (24680 = 2 + 0 + 24678), confirmed by the rows' own
+    // token_details_json split (tokenType:"input" holds the uncached
+    // remainder). The rows carry output tokens which must NOT be emitted —
+    // per-turn output is owned by the events.jsonl assistant.message calls.
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-a', model: 'claude-sonnet-4-5',
+      inputTokens: 24680, outputTokens: 81, cacheReadTokens: 0, cacheWriteTokens: 24678,
+      createdAt: '2026-08-07T17:56:38.756Z', cwd: '/home/user/myproject',
+    })
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-a', model: 'claude-sonnet-4-5',
+      inputTokens: 24793, outputTokens: 19, cacheReadTokens: 24678, cacheWriteTokens: 113,
+      createdAt: '2026-08-07T17:56:40.414Z',
+    })
+
+    const calls = await collectCalls(storeSource(dbPath))
+    expect(calls).toHaveLength(2)
+
+    const first = calls[0]!
+    expect(first.deduplicationKey).toBe('copilot-store:sess-a:1')
+    expect(first.model).toBe('claude-sonnet-4-5')
+    expect(first.inputTokens).toBe(2)               // 24680 - 0 - 24678
+    expect(first.cacheReadInputTokens).toBe(0)
+    expect(first.cacheCreationInputTokens).toBe(24678)
+    expect(first.outputTokens).toBe(0)
+    expect(first.costIsEstimated).toBe(false)        // measured, not estimated
+    expect(first.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-5', 2, 0, 24678, 0, 0), 12)
+    expect(first.costUSD).toBeGreaterThan(0)
+    expect(first.project).toBe('myproject')          // sessions.cwd basename
+    expect(first.sessionId).toBe('sess-a')
+    expect(first.timestamp).toBe('2026-08-07T17:56:38.756Z')
+
+    const second = calls[1]!
+    expect(second.deduplicationKey).toBe('copilot-store:sess-a:2')
+    expect(second.inputTokens).toBe(2)               // 24793 - 24678 - 113
+    expect(second.cacheReadInputTokens).toBe(24678)
+    expect(second.cacheCreationInputTokens).toBe(113)
+  })
+
+  it('bills a multi-model (delegating) session per row model', async () => {
+    createSessionStoreDb(dbPath)
+    // A delegating CLI session: subagent requests land as their own rows with
+    // a distinct model, exactly as observed for haiku-backed subagents.
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-multi', model: 'claude-sonnet-4-5',
+      inputTokens: 10100, cacheReadTokens: 8000, cacheWriteTokens: 2000, reasoningTokens: 94,
+    })
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-multi', model: 'claude-haiku-4.5',
+      inputTokens: 5050, cacheReadTokens: 5000, cacheWriteTokens: 0,
+    })
+
+    const calls = await collectCalls(storeSource(dbPath))
+    expect(calls).toHaveLength(2)
+
+    const sonnet = calls.find(c => c.model === 'claude-sonnet-4-5')!
+    expect(sonnet.inputTokens).toBe(100)
+    expect(sonnet.reasoningTokens).toBe(94)
+    // Reasoning is metadata, never a cost line: the CLI's own
+    // token_details_json prices only input/cache/output, and reasoning
+    // tokens are a subset of output_tokens — billed by the per-turn
+    // assistant.message call. A cost above input+cache pricing here means
+    // reasoning got billed twice.
+    expect(sonnet.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-5', 100, 0, 2000, 8000, 0), 12)
+    const haiku = calls.find(c => c.model === 'claude-haiku-4.5')!
+    expect(haiku.inputTokens).toBe(50)
+    expect(haiku.cacheReadInputTokens).toBe(5000)
+  })
+
+  it('skips all-zero rows and reads SQL-default timestamps as UTC', async () => {
+    createSessionStoreDb(dbPath)
+    // A row with no input/cache/reasoning adds nothing over the per-turn
+    // events (output is excluded by design) — no empty $0 call.
+    insertUsageRow(dbPath, { sessionId: 'sess-z', model: 'gpt-5', inputTokens: 0, outputTokens: 42 })
+    // created_at written by SQLite's datetime('now') default: UTC but
+    // timezone-less, with and without subseconds. Neither may be read as
+    // local time — that would land the request on the wrong day.
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-z', model: 'gpt-5',
+      inputTokens: 500, cacheReadTokens: 200, createdAt: '2026-08-07 17:56:38',
+    })
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-z', model: 'gpt-5',
+      inputTokens: 600, cacheReadTokens: 300, createdAt: '2026-08-07 23:59:59.756',
+    })
+
+    const calls = await collectCalls(storeSource(dbPath))
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.timestamp).toBe('2026-08-07T17:56:38.000Z')
+    expect(calls[1]!.timestamp).toBe('2026-08-07T23:59:59.756Z')
+  })
+
+  it('keeps dedup keys stable as the store grows', async () => {
+    createSessionStoreDb(dbPath)
+    insertUsageRow(dbPath, { sessionId: 'sess-grow', model: 'gpt-5', inputTokens: 1000, cacheReadTokens: 400 })
+
+    const seen = new Set<string>()
+    const first = await collectCalls(storeSource(dbPath), seen)
+    expect(first.map(c => c.deduplicationKey)).toEqual(['copilot-store:sess-grow:1'])
+
+    // Unchanged store re-parsed with the shared dedup set: nothing re-emits.
+    expect(await collectCalls(storeSource(dbPath), seen)).toHaveLength(0)
+
+    // New request row: only it is emitted, under the next AUTOINCREMENT id —
+    // the append-only shape the durable union-by-key cache merge requires.
+    insertUsageRow(dbPath, { sessionId: 'sess-grow', model: 'gpt-5', inputTokens: 2000, cacheReadTokens: 900 })
+    const grown = await collectCalls(storeSource(dbPath), seen)
+    expect(grown.map(c => c.deduplicationKey)).toEqual(['copilot-store:sess-grow:2'])
+  })
+
+  it('suppresses the shutdown rollup for sessions the store covers', async () => {
+    createSessionStoreDb(dbPath)
+    insertUsageRow(dbPath, {
+      sessionId: 'sess-covered', model: 'claude-sonnet-4-5',
+      inputTokens: 10100, cacheReadTokens: 8000, cacheWriteTokens: 2000,
+      cwd: '/home/user/myproject',
+    })
+    const eventsPath = await createSessionDir('sess-covered', [
+      modelChange('claude-sonnet-4-5'),
+      userMessage('do the thing'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 345 }),
+      // Rollup numbers deliberately differ from the DB rows: totals must
+      // prove the store won, not that the two happened to agree.
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 71282, outputTokens: 345, cacheReadTokens: 35495, cacheWriteTokens: 35783, reasoningTokens: 31 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    const store = sources.find(s => (s as { sourceType?: string }).sourceType === 'session-store')
+    expect(store).toBeDefined()
+    const jsonl = sources.find(s => s.path === eventsPath)
+    expect(jsonl).toBeDefined()
+
+    const seen = new Set<string>()
+    const collect = async (src: typeof sources[number]) => {
+      const out: ParsedProviderCall[] = []
+      for await (const call of provider.createSessionParser(src, seen).parse()) out.push(call)
+      return out
+    }
+    const calls = [...(await collect(store!)), ...(await collect(jsonl!))]
+
+    expect(calls.some(c => c.deduplicationKey.includes(':shutdown:'))).toBe(false)
+    const total = (k: 'inputTokens' | 'outputTokens' | 'cacheReadInputTokens' | 'cacheCreationInputTokens') =>
+      calls.reduce((s, c) => s + c[k], 0)
+    // Input/cache from the store rows only; per-turn output still owned by
+    // the assistant.message call.
+    expect(total('inputTokens')).toBe(100)
+    expect(total('cacheReadInputTokens')).toBe(8000)
+    expect(total('cacheCreationInputTokens')).toBe(2000)
+    expect(total('outputTokens')).toBe(345)
+  })
+
+  it('keeps the shutdown rollup for sessions the store does not cover', async () => {
+    createSessionStoreDb(dbPath)
+    // The store knows about a DIFFERENT session (e.g. one run under a newer
+    // CLI); sess-uncovered predates the table's rows and must keep its
+    // rollup-derived input/cache.
+    insertUsageRow(dbPath, { sessionId: 'sess-other', model: 'gpt-5', inputTokens: 700, cacheReadTokens: 300 })
+    const eventsPath = await createSessionDir('sess-uncovered', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 100 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 10100, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 2000 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    const jsonl = sources.find(s => s.path === eventsPath)!
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(jsonl, new Set()).parse()) calls.push(call)
+
+    const rollup = calls.find(c => c.deduplicationKey === 'copilot:sess-uncovered:shutdown:claude-sonnet-4-5:1')
+    expect(rollup).toBeDefined()
+    expect(rollup!.inputTokens).toBe(100)
+    expect(rollup!.cacheReadInputTokens).toBe(8000)
+  })
+
+  it('does not count sessions with only zero-usage rows as covered', async () => {
+    createSessionStoreDb(dbPath)
+    // Rows exist but none is billable: the store source would emit nothing
+    // for this session, so suppressing its rollup would silently drop the
+    // input/cache the rollup still carries.
+    insertUsageRow(dbPath, { sessionId: 'sess-zero', model: 'gpt-5', inputTokens: 0, outputTokens: 42 })
+    const eventsPath = await createSessionDir('sess-zero', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 100 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 10100, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 2000 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    const jsonl = sources.find(s => s.path === eventsPath)!
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(jsonl, new Set()).parse()) calls.push(call)
+    expect(calls.some(c => c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+  })
+
+  it('defers session-state parsing when the store is locked', async () => {
+    createSessionStoreDb(dbPath)
+    insertUsageRow(dbPath, { sessionId: 'sess-locked', model: 'gpt-5', inputTokens: 1000, cacheReadTokens: 400 })
+    const eventsPath = await createSessionDir('sess-locked', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 100 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 10100, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 2000 },
+        },
+      }),
+    ])
+
+    // Hold an exclusive write transaction for the duration of discovery, the
+    // shape of a CLI mid-checkpoint. Coverage is then unknowable: parsing
+    // events.jsonl anyway could durably cache rollup calls the store's rows
+    // will duplicate once it unlocks, so the file must be deferred — not
+    // parsed uncovered, and not suppressed blind.
+    const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+    const locker = new DatabaseSync(dbPath)
+    locker.exec('BEGIN EXCLUSIVE')
+    try {
+      const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+      const sources = await provider.discoverSessions()
+      expect(sources.some(s => (s as { sourceType?: string }).sourceType === 'session-store')).toBe(false)
+
+      const jsonl = sources.find(s => s.path === eventsPath)!
+      const consume = async () => {
+        for await (const _ of provider.createSessionParser(jsonl, new Set()).parse()) void _
+      }
+      // The busy shape parseProviderSources skips-and-retries on.
+      await expect(consume()).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+    } finally {
+      locker.exec('ROLLBACK')
+      locker.close()
+    }
+  })
+
+  it('defers session-state parsing when the store is corrupt', async () => {
+    // Corruption-class failures (SQLITE_CORRUPT/NOTADB/CANTOPEN — measured as
+    // the store's realistic failure modes; WAL write locks don't even block
+    // readers) must defer like a lock, NOT read as absence: rollups cached
+    // while coverage is unknowable would be duplicated by the DB rows the
+    // moment the store reads again, permanently under the durable merge.
+    await writeFile(dbPath, 'not a sqlite database at all')
+    const eventsPath = await createSessionDir('sess-corrupt', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 100 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 10100, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 2000 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    expect(sources.some(s => (s as { sourceType?: string }).sourceType === 'session-store')).toBe(false)
+
+    const jsonl = sources.find(s => s.path === eventsPath)!
+    const consume = async () => {
+      for await (const _ of provider.createSessionParser(jsonl, new Set()).parse()) void _
+    }
+    await expect(consume()).rejects.toMatchObject({ code: 'SQLITE_BUSY' })
+  })
+
+  it('treats a store whose schema the parser cannot read as absent', async () => {
+    // A schema mismatch ("no such column") is a permanent shape, not a
+    // transient failure: deferring would stall CLI parsing forever, and the
+    // rollups ARE the right source for a store the parser can't read. The
+    // probe runs the parser's exact query, so the mismatch is caught before
+    // any rollup is suppressed.
+    const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+    const db = new DatabaseSync(dbPath)
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT);
+      CREATE TABLE assistant_usage_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER
+      );
+      INSERT INTO assistant_usage_events (session_id, model, input_tokens) VALUES ('sess-newschema', 'gpt-5', 900);
+    `)
+    db.close()
+
+    const eventsPath = await createSessionDir('sess-newschema', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 50 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 5100, outputTokens: 50, cacheReadTokens: 4000, cacheWriteTokens: 1000 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    expect(sources.some(s => (s as { sourceType?: string }).sourceType === 'session-store')).toBe(false)
+
+    const jsonl = sources.find(s => s.path === eventsPath)!
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(jsonl, new Set()).parse()) calls.push(call)
+    expect(calls.some(c => c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+  })
+
+  it('treats a store without assistant_usage_events as absent', async () => {
+    // Older CLI builds create session-store.db without the usage table. The
+    // source must not surface (and must not throw), and no session gets its
+    // shutdown rollup suppressed.
+    const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+    const db = new DatabaseSync(dbPath)
+    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT)')
+    db.close()
+
+    const eventsPath = await createSessionDir('sess-old-cli', [
+      modelChange('claude-sonnet-4-5'),
+      assistantMessage({ messageId: 'msg-1', outputTokens: 50 }),
+      shutdownEvent({
+        modelMetrics: {
+          'claude-sonnet-4-5': { inputTokens: 5100, outputTokens: 50, cacheReadTokens: 4000, cacheWriteTokens: 1000 },
+        },
+      }),
+    ])
+
+    const provider = createCopilotProvider(tmpDir, '/nonexistent/ws', '/nonexistent/global', '/nonexistent/jb', dbPath)
+    const sources = await provider.discoverSessions()
+    expect(sources.some(s => (s as { sourceType?: string }).sourceType === 'session-store')).toBe(false)
+
+    const jsonl = sources.find(s => s.path === eventsPath)!
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(jsonl, new Set()).parse()) calls.push(call)
+    expect(calls.some(c => c.deduplicationKey.includes(':shutdown:'))).toBe(true)
+  })
+})
 
 describe('copilot provider - JetBrains parsing', () => {
   beforeEach(async () => {

@@ -5,7 +5,21 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
-// Bumped to 16: Codex discovery is structural instead of originator-gated
+// Bumped to 18: copilot input/cache tokens for sessions covered by the CLI's
+// session-store.db moved from one shutdown-rollup lump (stamped at session
+// end) to per-request DB rows with real timestamps. Lifetime totals barely
+// move, but per-day attribution does — a session straddling midnight now
+// lands its input/cache on the days the requests actually happened — so days
+// finalized at v17 would disagree with the live parse. Re-derivation rides
+// the v14 carry-forward semantics; sourceless days carry forward as-is.
+//
+// v17: copilot CLI sessions were misclassified as VS Code transcripts
+// (#944), so days finalized at v16 or earlier carry output-only copilot costs —
+// the session.shutdown rollup's input/cache tokens were dropped. Raising
+// MIN_SUPPORTED_VERSION forces the one-time re-derivation under the
+// provenance-based classification; sourceless days carry forward as-is.
+//
+// v16: Codex discovery is structural instead of originator-gated
 // (#873/#626), so rollouts written by third-party frontends driving
 // `codex app-server` ("t3code_desktop", "JetBrains.IntelliJ IDEA", ...) now
 // contribute usage that v15 rollups never contained. Those files were rejected
@@ -67,8 +81,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // that older binaries skipped. v8 added local-model savings to the daily
 // rollup; the `savingsConfigHash` field is invalidated separately when the
 // user changes their `localModelSavings` mapping.
-export const DAILY_CACHE_VERSION = 16
-const MIN_SUPPORTED_VERSION = 16
+export const DAILY_CACHE_VERSION = 18
+const MIN_SUPPORTED_VERSION = 18
 // Version-suffixed so different binaries each own a distinct file and never
 // clobber an incompatible schema. Bumping the version mints a fresh filename;
 // adoptOlderDailyCaches then unions days out of every previous file (including
