@@ -224,7 +224,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1',
   cursor: 'composer-anchored-crediting-v1-est-cost',
   'cursor-agent': 'workspaceless-transcript-v1',
-  copilot: 'cli-shutdown-cost-v1-skills',
+  // source-provenance-v1 (#944): CLI sessions were misread as VS Code
+  // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
+  // input/cache rollup; this bump re-parses them so the missing tokens land.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1',
   grok: 'estimated-cost-v1',
   hermes: 'reasoning-output-accounting-v1-est-cost',
   'lingtai-tui': 'token-ledger-registry-activity-v3',

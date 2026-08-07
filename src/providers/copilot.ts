@@ -194,6 +194,9 @@ type SubagentSelectedData = {
   agentName: string
   agentDisplayName?: string
   tools?: string[]
+  // Present on subagent.started/completed (CLI ≥ ~1.0.7x): the delegation
+  // tool call that launched the run, used to pair completed with started.
+  toolCallId?: string
 }
 
 // Per-model usage rollup the CLI writes into session.shutdown. inputTokens is
@@ -217,6 +220,8 @@ type CopilotEvent =
   | { type: 'user.message'; data: UserMessageData; timestamp?: string }
   | { type: 'assistant.message'; data: AssistantMessageData; timestamp?: string }
   | { type: 'subagent.selected'; data: SubagentSelectedData; timestamp?: string }
+  | { type: 'subagent.started'; data: SubagentSelectedData; timestamp?: string }
+  | { type: 'subagent.completed'; data: SubagentSelectedData; timestamp?: string }
   | { type: 'session.shutdown'; data: SessionShutdownData; timestamp?: string }
 
 type ChatJournalPathSegment = string | number
@@ -693,56 +698,71 @@ function inferTranscriptModel(lines: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// JSONL parser (handles both regular session-state events and VS Code
-// transcript format via session.start { producer: 'copilot-agent' })
+// JSONL parser (handles both regular CLI session-state events and the VS Code
+// transcript format — the same event vocabulary, but transcripts carry no
+// token counts and no session.shutdown rollup)
 // ---------------------------------------------------------------------------
 
+/**
+ * `isTranscript` comes from discovery (where the file lives), never from
+ * content: the Copilot CLI writes the same session.start producer
+ * ('copilot-agent') that VS Code transcripts carry, so producer sniffing
+ * misread every CLI session as a transcript and dropped its session.shutdown
+ * input/cache rollup (#944).
+ */
 function createJsonlParser(
   source: SessionSource,
-  seenKeys: Set<string>
+  seenKeys: Set<string>,
+  isTranscript: boolean
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const content = await readSessionFile(source.path)
       if (!content) return
-      const sessionId = basename(dirname(source.path))
+      // CLI session-state files live at <sessionId>/events.jsonl; transcripts
+      // at transcripts/<sessionId>.jsonl — keying the latter on the parent dir
+      // would collapse every transcript into one "transcripts" session (and
+      // one shared dedup namespace).
+      const sessionId = isTranscript
+        ? basename(source.path, '.jsonl')
+        : basename(dirname(source.path))
       const lines = content.split('\n').filter((l) => l.trim())
 
-      // Detect VS Code transcript format: the first session.start event has
-      // { producer: 'copilot-agent' } and no outputTokens in messages.
-      let isTranscript = false
       let currentModel = ''
       let pendingUserMessage = ''
-      // Track the active subagent for this session (from subagent.selected events).
-      // Resets when a new subagent is selected.
-      let currentSubagentType: string | undefined
-
-      // First pass: detect format and infer transcript model if needed.
-      for (const line of lines) {
-        try {
-          const ev = JSON.parse(line) as CopilotEvent
-          if (ev.type === 'session.start') {
-            const data = ev.data as SessionStartData & { producer?: string }
-            if (data.producer === 'copilot-agent') {
-              isTranscript = true
-            }
-            break
-          }
-          if (ev.type === 'session.model_change') break // regular format
-        } catch {
-          continue
-        }
-      }
+      // Subagent attribution. Older CLIs write subagent.selected — sticky
+      // until replaced, never cleared. CLI ≥ ~1.0.7x brackets each run with
+      // started/completed instead; runs can nest or overlap, so completed
+      // removes ONLY its own toolCallId's entry and the label falls back to
+      // the still-active run (or the sticky selected value) rather than
+      // wiping attribution for everything in flight.
+      let selectedSubagentType: string | undefined
+      const activeSubagents: Array<{ toolCallId: string; name: string }> = []
+      const currentSubagentType = (): string | undefined =>
+        activeSubagents[activeSubagents.length - 1]?.name ?? selectedSubagentType
 
       if (isTranscript) {
+        // Tool-call-id prefix inference seeds the model; it must not gate the
+        // whole file, or a transcript carrying explicit model info
+        // (session.model_change / per-message model) but no tool calls would
+        // yield nothing. Messages that still end up modelless are skipped
+        // individually below.
         currentModel = inferTranscriptModel(lines)
-        if (!currentModel) return // no toolCallIds to infer model from
       }
 
       // Shutdown rollups may lack their own timestamp; remember the last
       // stamped event so the supplementary call is never left with an empty
       // timestamp, which the date-range filters silently drop.
       let lastEventTimestamp = ''
+
+      // A resumed session appends one session.shutdown PER LEG, each carrying
+      // CUMULATIVE per-model totals. Emitting each rollup whole would need the
+      // cache to update a prior call in place — the durable merge is
+      // append-only by dedup key — so we emit per-leg DELTAS keyed by
+      // occurrence instead: re-parses of a growing file append only the new
+      // leg, and each leg lands on its own timestamp.
+      const prevShutdownUsage = new Map<string, ShutdownModelUsage>()
+      const shutdownCountByModel = new Map<string, number>()
 
       for (const line of lines) {
         let event: CopilotEvent
@@ -766,7 +786,25 @@ function createJsonlParser(
         }
 
         if (event.type === 'subagent.selected') {
-          currentSubagentType = (event.data as SubagentSelectedData).agentName
+          selectedSubagentType = (event.data as SubagentSelectedData).agentName
+          continue
+        }
+
+        if (event.type === 'subagent.started') {
+          const data = event.data as SubagentSelectedData
+          activeSubagents.push({ toolCallId: data.toolCallId ?? '', name: data.agentName })
+          continue
+        }
+
+        if (event.type === 'subagent.completed') {
+          const id = (event.data as SubagentSelectedData).toolCallId ?? ''
+          let idx = -1
+          for (let i = activeSubagents.length - 1; i >= 0; i--) {
+            if (activeSubagents[i]!.toolCallId === id) { idx = i; break }
+          }
+          // Unmatched completed (id missing or never started): end the most
+          // recent run rather than someone else's.
+          activeSubagents.splice(idx >= 0 ? idx : activeSubagents.length - 1, 1)
           continue
         }
 
@@ -783,11 +821,12 @@ function createJsonlParser(
           // is gated to the CLI (non-transcript) format, leaving VS Code,
           // JetBrains and OTel sources untouched.
           //
-          // We emit one supplementary call per model carrying ONLY the
-          // input/cache tokens the per-turn events lack; output is excluded so
-          // the assistant.message output (and its cost) is not double-counted.
-          // Combined with the per-turn output cost, this yields the full,
-          // CLI-measured session cost.
+          // We emit one supplementary call per model PER SHUTDOWN LEG (resumed
+          // sessions write one cumulative rollup per leg; see the delta
+          // tracking above) carrying ONLY the input/cache tokens the per-turn
+          // events lack; output is excluded so the assistant.message output
+          // (and its cost) is not double-counted. Combined with the per-turn
+          // output cost, this yields the full, CLI-measured session cost.
           if (isTranscript) continue
           const shutdownData = event.data as SessionShutdownData
           const modelMetrics = shutdownData.modelMetrics
@@ -801,23 +840,49 @@ function createJsonlParser(
             const usage = metrics['usage']
             if (!isRecord(usage)) continue
 
-            const cacheReadTokens = numberOrZero(usage['cacheReadTokens'])
-            const cacheWriteTokens = numberOrZero(usage['cacheWriteTokens'])
-            const reasoningTokens = numberOrZero(usage['reasoningTokens'])
+            const cumulative: Required<ShutdownModelUsage> = {
+              inputTokens: numberOrZero(usage['inputTokens']),
+              outputTokens: numberOrZero(usage['outputTokens']),
+              cacheReadTokens: numberOrZero(usage['cacheReadTokens']),
+              cacheWriteTokens: numberOrZero(usage['cacheWriteTokens']),
+              reasoningTokens: numberOrZero(usage['reasoningTokens']),
+            }
+            const prevRaw = prevShutdownUsage.get(model)
+            prevShutdownUsage.set(model, cumulative)
+            const n = (shutdownCountByModel.get(model) ?? 0) + 1
+            shutdownCountByModel.set(model, n)
+
+            // A cumulative total BELOW the previous rollup means the CLI reset
+            // its counters (a fresh accounting epoch): delta from zero, else
+            // this leg's post-reset usage would be clamped away entirely.
+            // inputTokens is the monotonic sentinel — it is cache-inclusive,
+            // so any usage at all grows it.
+            const prev =
+              prevRaw && cumulative.inputTokens < numberOrZero(prevRaw.inputTokens)
+                ? undefined
+                : prevRaw
+
+            // This leg's contribution: cumulative minus the previous rollup.
+            // The clamp guards any remaining non-monotonic field.
+            const delta = (k: keyof ShutdownModelUsage): number =>
+              Math.max(0, cumulative[k] - numberOrZero(prev?.[k]))
+            const cacheReadTokens = delta('cacheReadTokens')
+            const cacheWriteTokens = delta('cacheWriteTokens')
+            const reasoningTokens = delta('reasoningTokens')
             // usage.inputTokens is cache-INCLUSIVE (input + cache_read +
             // cache_write). calculateCost expects the uncached input alone with
             // cache tokens billed separately, so subtract the cache components.
             // Clamp at 0 in case a future schema reports input non-inclusively.
             const inputTokens = Math.max(
               0,
-              numberOrZero(usage['inputTokens']) - cacheReadTokens - cacheWriteTokens
+              delta('inputTokens') - cacheReadTokens - cacheWriteTokens
             )
 
             // Nothing this call would add over the per-turn events, so skip it
             // to avoid an empty $0 row (output is intentionally excluded).
-            if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) continue
+            if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0) continue
 
-            const dedupKey = `copilot:${sessionId}:shutdown:${model}`
+            const dedupKey = `copilot:${sessionId}:shutdown:${model}:${n}`
             if (seenKeys.has(dedupKey)) continue
             seenKeys.add(dedupKey)
 
@@ -898,6 +963,7 @@ function createJsonlParser(
           // Cost will be lower than actual API cost. This is the original
           // behaviour — OTel data (below) replaces it when available.
           const costUSD = calculateCost(currentModel, 0, outputTokens, 0, 0, 0)
+          const subagentType = currentSubagentType()
 
           yield {
             provider: 'copilot',
@@ -914,7 +980,7 @@ function createJsonlParser(
             tools,
             bashCommands,
             skills: skills.length > 0 ? skills : undefined,
-            subagentTypes: currentSubagentType ? [currentSubagentType] : undefined,
+            subagentTypes: subagentType ? [subagentType] : undefined,
             timestamp: event.timestamp ?? '',
             speed: 'standard' as const,
             deduplicationKey: dedupKey,
@@ -1837,6 +1903,12 @@ interface JsonlSessionSource extends SessionSource {
   sourceType: 'jsonl'
 }
 
+// A VS Code workspaceStorage transcript. Distinct from 'jsonl' (CLI
+// session-state) so classification rides provenance, not file contents (#944).
+interface TranscriptSessionSource extends SessionSource {
+  sourceType: 'transcript'
+}
+
 interface ChatSessionSource extends SessionSource {
   sourceType: 'chatsession'
 }
@@ -1872,6 +1944,10 @@ function isChatSessionSource(source: SessionSource): source is ChatSessionSource
 
 function isJetBrainsSource(source: SessionSource): source is JetBrainsSessionSource {
   return (source as JetBrainsSessionSource).sourceType === 'jetbrains'
+}
+
+function isTranscriptSource(source: SessionSource): source is TranscriptSessionSource {
+  return (source as TranscriptSessionSource).sourceType === 'transcript'
 }
 
 // ---------------------------------------------------------------------------
@@ -2242,8 +2318,8 @@ async function discoverEmptyWindowChatSessions(
  */
 async function discoverTranscriptSessions(
   workspaceStorageDirs: string[]
-): Promise<JsonlSessionSource[]> {
-  const sources: JsonlSessionSource[] = []
+): Promise<TranscriptSessionSource[]> {
+  const sources: TranscriptSessionSource[] = []
 
   for (const wsDir of workspaceStorageDirs) {
     let hashDirs: string[]
@@ -2275,7 +2351,7 @@ async function discoverTranscriptSessions(
           path: join(transcriptsDir, file),
           project,
           provider: 'copilot',
-          sourceType: 'jsonl',
+          sourceType: 'transcript',
         })
       }
     }
@@ -2418,7 +2494,7 @@ export function createCopilotProvider(
       if (isJetBrainsSource(source)) {
         return createJetBrainsParser(source, seenKeys)
       }
-      return createJsonlParser(source, seenKeys)
+      return createJsonlParser(source, seenKeys, isTranscriptSource(source))
     },
   }
 }

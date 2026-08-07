@@ -605,3 +605,77 @@ describe('(h) provider filter excludes claude from the orphan pass', () => {
     expect(totalCost(after)).toBeCloseTo(costBefore, 10)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (f) Growing resumed CLI session: durable merge appends only the new leg
+// ═══════════════════════════════════════════════════════════════════════════
+// Resumed Copilot CLI sessions append one CUMULATIVE session.shutdown per leg
+// (#944). The parser emits per-leg deltas keyed by occurrence; this exercises
+// the PRODUCTION merge path — the durable union-by-dedup-key merge against the
+// on-disk cache when the file grows between parses — which the unit tests
+// (which pre-seed seenKeys) cannot reach.
+describe('(f) growing resumed CLI session durable merge', () => {
+  it('totals equal the final cumulative rollup after the file grows a leg', async () => {
+    const sessionStateDir = join(tmpHome, 'session-state')
+    await mkdir(sessionStateDir, { recursive: true })
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STATE_DIR', sessionStateDir)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    vi.stubEnv('CODEBURN_COPILOT_WS_STORAGE_DIR', join(tmpHome, 'no-ws'))
+    vi.stubEnv('CODEBURN_COPILOT_GLOBAL_STORAGE_DIR', join(tmpHome, 'no-global'))
+    vi.stubEnv('CODEBURN_COPILOT_JETBRAINS_DIR', join(tmpHome, 'no-jb'))
+
+    const base = Date.now() - 5 * 24 * 60 * 60 * 1000
+    const at = (offsetSec: number): string => new Date(base + offsetSec * 1000).toISOString()
+    const dir = join(sessionStateDir, 'sess-grow')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'workspace.yaml'), 'id: sess-grow\ncwd: /home/user/testproj\n')
+    const eventsPath = join(dir, 'events.jsonl')
+
+    // Cumulative rollups from a real resumed CLI 1.0.78 session.
+    const shutdown = (ts: string, inputTokens: number, cacheReadTokens: number, cacheWriteTokens: number, outputTokens: number) =>
+      JSON.stringify({
+        type: 'session.shutdown',
+        timestamp: ts,
+        data: {
+          shutdownType: 'routine',
+          modelMetrics: {
+            'claude-sonnet-4-5': {
+              requests: { count: 1, cost: 1 },
+              usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens: 0 },
+            },
+          },
+        },
+      })
+    const leg1 = [
+      JSON.stringify({ type: 'session.model_change', timestamp: at(0), data: { newModel: 'claude-sonnet-4-5' } }),
+      JSON.stringify({ type: 'assistant.message', timestamp: at(10), data: { messageId: 'msg-1', outputTokens: 17, toolRequests: [] } }),
+      shutdown(at(20), 24672, 0, 24670, 17),
+    ]
+    await writeFile(eventsPath, leg1.join('\n') + '\n')
+
+    const sumUsage = (projects: Awaited<ReturnType<typeof parseAllSessions>>) => {
+      const calls = projects.flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+      return {
+        input: calls.reduce((s, c) => s + c.usage.inputTokens, 0),
+        cacheRead: calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0),
+        cacheWrite: calls.reduce((s, c) => s + c.usage.cacheCreationInputTokens, 0),
+      }
+    }
+
+    const first = sumUsage(await parseAllSessions(undefined, 'copilot'))
+    expect(first).toEqual({ input: 2, cacheRead: 0, cacheWrite: 24670 })
+
+    // The session resumes: leg 2 appends per-turn events plus a CUMULATIVE
+    // rollup. The cached leg-1 delta must be kept once and only the leg-2
+    // delta appended — totals equal the final cumulative rollup exactly.
+    clearSessionCache()
+    await writeFile(eventsPath, [
+      ...leg1,
+      JSON.stringify({ type: 'assistant.message', timestamp: at(100), data: { messageId: 'msg-2', outputTokens: 132, toolRequests: [] } }),
+      shutdown(at(120), 74463, 49489, 24968, 149),
+    ].join('\n') + '\n')
+
+    const second = sumUsage(await parseAllSessions(undefined, 'copilot'))
+    expect(second).toEqual({ input: 74463 - 49489 - 24968, cacheRead: 49489, cacheWrite: 24968 })
+  })
+})
