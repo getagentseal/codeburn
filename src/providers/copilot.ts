@@ -802,9 +802,14 @@ function createJsonlParser(
           for (let i = activeSubagents.length - 1; i >= 0; i--) {
             if (activeSubagents[i]!.toolCallId === id) { idx = i; break }
           }
-          // Unmatched completed (id missing or never started): end the most
-          // recent run rather than someone else's.
-          activeSubagents.splice(idx >= 0 ? idx : activeSubagents.length - 1, 1)
+          if (idx >= 0) {
+            activeSubagents.splice(idx, 1)
+          } else {
+            // Unmatched completed (id missing or never started): end the most
+            // recent run rather than someone else's; on an empty stack this is
+            // an explicit no-op.
+            activeSubagents.pop()
+          }
           continue
         }
 
