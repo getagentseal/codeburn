@@ -2524,7 +2524,14 @@ function providerCallsToCachedTurns(calls: ParsedProviderCall[]): CachedTurn[] {
 
 function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
   const u = call.usage
-  const outputForCost = call.provider === 'claude'
+  // Claude thinking and Copilot reasoning tokens are already INSIDE
+  // outputTokens (Copilot's own per-request token_details_json prices
+  // input/cache/output and nothing else, and its reasoning counts are a
+  // subset of the output count), so adding them here would bill them twice —
+  // for copilot literally so: its session-store/shutdown supplementary calls
+  // carry reasoningTokens with outputTokens 0 while the per-turn call bills
+  // the full output. Other providers report reasoning separately from output.
+  const outputForCost = call.provider === 'claude' || call.provider === 'copilot'
     ? u.outputTokens
     : u.outputTokens + u.reasoningTokens
   const costUSD = calculateCost(

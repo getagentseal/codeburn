@@ -186,6 +186,11 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   crush: ['XDG_DATA_HOME'],
   warp: ['WARP_DB_PATH'],
   antigravity: ['CODEBURN_CACHE_DIR'],
+  // Only the session-store override is fingerprinted: unlike the other
+  // CODEBURN_COPILOT_* vars (which merely move discovery), repointing this DB
+  // changes which sessions COVER their events.jsonl shutdown rollups — the
+  // cached parse of OTHER files depends on it, so it must force a re-parse.
+  copilot: ['CODEBURN_COPILOT_SESSION_STORE_DB'],
   qwen: ['QWEN_DATA_DIR'],
   'ibm-bob': ['XDG_CONFIG_HOME'],
   quickdesk: ['QUICKWORK_HOME'],
@@ -227,7 +232,12 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // source-provenance-v1 (#944): CLI sessions were misread as VS Code
   // transcripts (both carry producer 'copilot-agent'), skipping the shutdown
   // input/cache rollup; this bump re-parses them so the missing tokens land.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1',
+  // session-store-v1: input/cache for sessions covered by session-store.db
+  // moved from shutdown-rollup calls to per-request DB rows. Cached rollup
+  // calls must not survive next to the new DB calls — the durable union merge
+  // never deletes, so only this re-parse (which suppresses covered rollups at
+  // the source) prevents both from counting.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v1',
   grok: 'estimated-cost-v1',
   hermes: 'reasoning-output-accounting-v1-est-cost',
   'lingtai-tui': 'token-ledger-registry-activity-v3',

@@ -13,6 +13,7 @@ import { join } from 'path'
 import { createRequire } from 'node:module'
 
 import { isSqliteAvailable } from '../src/sqlite.js'
+import { calculateCost } from '../src/models.js'
 import { clearSessionCache, parseAllSessions } from '../src/parser.js'
 import { loadCache, saveCache, sessionCachePath } from '../src/session-cache.js'
 import type { SessionSource, SessionParser, ParsedProviderCall } from '../src/providers/types.js'
@@ -677,5 +678,220 @@ describe('(f) growing resumed CLI session durable merge', () => {
 
     const second = sumUsage(await parseAllSessions(undefined, 'copilot'))
     expect(second).toEqual({ input: 74463 - 49489 - 24968, cacheRead: 49489, cacheWrite: 24968 })
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (i) Growing session-store DB: durable merge appends only the new rows
+// ═══════════════════════════════════════════════════════════════════════════
+// session-store.db records one usage row per API request; rows only ever
+// append (AUTOINCREMENT ids). This exercises the PRODUCTION path end to end:
+// discovery suppresses the covered session's shutdown rollup, the DB rows
+// land as supplementary calls, and a re-parse after INSERTs appends exactly
+// the new rows under the durable union-by-dedup-key merge — totals must
+// equal the DB, not the rollup, and never double-count.
+function createStoreDb(dbPath: string): void {
+  const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+  const db = new DatabaseSync(dbPath)
+  db.exec(`
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, repository TEXT);
+    CREATE TABLE assistant_usage_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER,
+      cache_write_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      created_at TEXT
+    );
+  `)
+  db.close()
+}
+
+function insertStoreRow(
+  dbPath: string,
+  sessionId: string,
+  inputTokens: number,   // cache-inclusive, as the CLI writes it
+  cacheRead: number,
+  cacheWrite: number,
+  createdAt: string,
+  reasoning = 0,
+): void {
+  const { DatabaseSync } = requireForTest('node:sqlite') as { DatabaseSync: new (path: string) => TestDb }
+  const db = new DatabaseSync(dbPath)
+  db.prepare(`INSERT OR IGNORE INTO sessions (id, cwd) VALUES (?, ?)`).run(sessionId, '/home/user/testproj')
+  db.prepare(
+    `INSERT INTO assistant_usage_events
+       (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, created_at)
+     VALUES (?, 'claude-sonnet-4-5', ?, 0, ?, ?, ?, ?)`
+  ).run(sessionId, inputTokens, cacheRead, cacheWrite, reasoning, createdAt)
+  db.close()
+}
+
+describe.skipIf(!isSqliteAvailable())('(i) growing session-store DB durable merge', () => {
+  it('totals track the store exactly as rows append, with the rollup suppressed', async () => {
+    const sessionStateDir = join(tmpHome, 'session-state')
+    await mkdir(sessionStateDir, { recursive: true })
+    const dbPath = join(tmpHome, 'session-store.db')
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STATE_DIR', sessionStateDir)
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', dbPath)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    vi.stubEnv('CODEBURN_COPILOT_WS_STORAGE_DIR', join(tmpHome, 'no-ws'))
+    vi.stubEnv('CODEBURN_COPILOT_GLOBAL_STORAGE_DIR', join(tmpHome, 'no-global'))
+    vi.stubEnv('CODEBURN_COPILOT_JETBRAINS_DIR', join(tmpHome, 'no-jb'))
+
+    const base = Date.now() - 5 * 24 * 60 * 60 * 1000
+    const at = (offsetSec: number): string => new Date(base + offsetSec * 1000).toISOString()
+
+    // The session's events.jsonl carries per-turn output AND a shutdown
+    // rollup whose numbers deliberately DIFFER from the DB rows: the final
+    // totals prove which side won, not that the two happened to agree.
+    const dir = join(sessionStateDir, 'sess-store')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'workspace.yaml'), 'id: sess-store\ncwd: /home/user/testproj\n')
+    await writeFile(join(dir, 'events.jsonl'), [
+      JSON.stringify({ type: 'session.model_change', timestamp: at(0), data: { newModel: 'claude-sonnet-4-5' } }),
+      JSON.stringify({ type: 'assistant.message', timestamp: at(10), data: { messageId: 'msg-1', outputTokens: 17, toolRequests: [] } }),
+      JSON.stringify({
+        type: 'session.shutdown',
+        timestamp: at(20),
+        data: {
+          shutdownType: 'routine',
+          modelMetrics: {
+            'claude-sonnet-4-5': {
+              requests: { count: 1, cost: 1 },
+              usage: { inputTokens: 999999, outputTokens: 17, cacheReadTokens: 900000, cacheWriteTokens: 90000, reasoningTokens: 0 },
+            },
+          },
+        },
+      }),
+    ].join('\n') + '\n')
+
+    createStoreDb(dbPath)
+    // Row 1 carries reasoning tokens: they are a subset of the session's
+    // per-turn output and must ride as metadata WITHOUT entering the
+    // query-path cost recompute (cachedCallToApiCall discards the parser's
+    // costUSD for copilot and re-derives from tokens — the assertion below
+    // is the only guard that exercises that production path).
+    insertStoreRow(dbPath, 'sess-store', 12000, 10000, 1500, at(12), 40) // input 500
+    insertStoreRow(dbPath, 'sess-store', 8000, 7000, 900, at(15))       // input 100
+
+    const sumUsage = (projects: Awaited<ReturnType<typeof parseAllSessions>>) => {
+      const calls = projects.flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+      return {
+        input: calls.reduce((s, c) => s + c.usage.inputTokens, 0),
+        cacheRead: calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0),
+        cacheWrite: calls.reduce((s, c) => s + c.usage.cacheCreationInputTokens, 0),
+        output: calls.reduce((s, c) => s + c.usage.outputTokens, 0),
+        cost: calls.reduce((s, c) => s + c.costUSD, 0),
+      }
+    }
+
+    // The reasoning-free cost of everything above: per-turn output plus the
+    // two store rows priced on input/cache alone. A higher observed cost
+    // means the 40 reasoning tokens were billed at the output rate on a call
+    // that owns no output — double-billing them against the per-turn call.
+    const expectedCost =
+      calculateCost('claude-sonnet-4-5', 0, 17, 0, 0, 0) +
+      calculateCost('claude-sonnet-4-5', 500, 0, 1500, 10000, 0) +
+      calculateCost('claude-sonnet-4-5', 100, 0, 900, 7000, 0)
+
+    // First parse: input/cache equal the DB rows exactly (the 999999-token
+    // rollup is suppressed); output stays with the per-turn event.
+    const first = sumUsage(await parseAllSessions(undefined, 'copilot'))
+    expect(first.cost).toBeCloseTo(expectedCost, 12)
+    expect(first).toEqual({ input: 600, cacheRead: 17000, cacheWrite: 2400, output: 17, cost: first.cost })
+
+    // The session continues: one more API request lands as one more row.
+    // Re-parse against the warm disk cache — the durable merge must append
+    // only the new row's key, keeping totals equal to the DB.
+    clearSessionCache()
+    insertStoreRow(dbPath, 'sess-store', 5000, 4600, 300, at(30))    // input 100
+
+    const second = sumUsage(await parseAllSessions(undefined, 'copilot'))
+    expect(second.cost).toBeCloseTo(expectedCost + calculateCost('claude-sonnet-4-5', 100, 0, 300, 4600, 0), 12)
+    expect(second).toEqual({ input: 700, cacheRead: 21600, cacheWrite: 2700, output: 17, cost: second.cost })
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (j) Rollup-day reattribution: usage lands on the request days, not the day
+//     the CLI finally shut down
+// ═══════════════════════════════════════════════════════════════════════════
+// Observed in the wild: a session ran entirely on day N (per-request DB rows)
+// but its session.shutdown rollup was stamped the NEXT morning when the CLI
+// was closed. The rollup path put the whole session's input/cache on day N+1;
+// with the store covering the session, the tokens must land on day N and the
+// session must contribute NOTHING to day N+1 — while still counting exactly
+// once in an unfiltered (lifetime) parse. This is the per-day attribution
+// change the daily-cache v18 bump re-derives for.
+describe.skipIf(!isSqliteAvailable())('(j) rollup-day reattribution to request days', () => {
+  it('counts a next-morning-shutdown session on its request day only', async () => {
+    const sessionStateDir = join(tmpHome, 'session-state')
+    await mkdir(sessionStateDir, { recursive: true })
+    const dbPath = join(tmpHome, 'session-store.db')
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STATE_DIR', sessionStateDir)
+    vi.stubEnv('CODEBURN_COPILOT_SESSION_STORE_DB', dbPath)
+    vi.stubEnv('CODEBURN_COPILOT_DISABLE_OTEL', '1')
+    vi.stubEnv('CODEBURN_COPILOT_WS_STORAGE_DIR', join(tmpHome, 'no-ws'))
+    vi.stubEnv('CODEBURN_COPILOT_GLOBAL_STORAGE_DIR', join(tmpHome, 'no-global'))
+    vi.stubEnv('CODEBURN_COPILOT_JETBRAINS_DIR', join(tmpHome, 'no-jb'))
+
+    // "Day N" = 5 days ago; the shutdown lands ~19h later ("next morning").
+    const dayN = Date.now() - 5 * 24 * 60 * 60 * 1000
+    const at = (offsetHours: number): string => new Date(dayN + offsetHours * 3600 * 1000).toISOString()
+
+    const dir = join(sessionStateDir, 'sess-overnight')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'workspace.yaml'), 'id: sess-overnight\ncwd: /home/user/testproj\n')
+    await writeFile(join(dir, 'events.jsonl'), [
+      JSON.stringify({ type: 'session.model_change', timestamp: at(0), data: { newModel: 'claude-sonnet-4-5' } }),
+      JSON.stringify({ type: 'assistant.message', timestamp: at(1), data: { messageId: 'msg-1', outputTokens: 25, toolRequests: [] } }),
+      JSON.stringify({
+        type: 'session.shutdown',
+        timestamp: at(19),
+        data: {
+          shutdownType: 'routine',
+          modelMetrics: {
+            'claude-sonnet-4-5': {
+              requests: { count: 2, cost: 1 },
+              usage: { inputTokens: 20000, outputTokens: 25, cacheReadTokens: 17000, cacheWriteTokens: 2400, reasoningTokens: 0 },
+            },
+          },
+        },
+      }),
+    ].join('\n') + '\n')
+
+    createStoreDb(dbPath)
+    insertStoreRow(dbPath, 'sess-overnight', 12000, 10000, 1500, at(1)) // input 500
+    insertStoreRow(dbPath, 'sess-overnight', 8000, 7000, 900, at(2))    // input 100
+
+    const inventory = (projects: Awaited<ReturnType<typeof parseAllSessions>>) => {
+      const sessions = projects.flatMap(p => p.sessions).filter(s => s.turns.some(t => t.assistantCalls.length > 0))
+      const calls = sessions.flatMap(s => s.turns).flatMap(t => t.assistantCalls)
+      return {
+        sessions: sessions.length,
+        input: calls.reduce((s, c) => s + c.usage.inputTokens, 0),
+        cacheRead: calls.reduce((s, c) => s + c.usage.cacheReadInputTokens, 0),
+        output: calls.reduce((s, c) => s + c.usage.outputTokens, 0),
+      }
+    }
+
+    // Lifetime: exactly one session, tokens counted once, from the store.
+    const lifetime = inventory(await parseAllSessions(undefined, 'copilot'))
+    expect(lifetime).toEqual({ sessions: 1, input: 600, cacheRead: 17000, output: 25 })
+
+    // A range covering only the shutdown stamp (rollup path would have put
+    // 600/17000 here): the session must contribute nothing at all.
+    const shutdownDay = inventory(await parseAllSessions(
+      { start: new Date(dayN + 12 * 3600 * 1000), end: new Date(dayN + 36 * 3600 * 1000) }, 'copilot'))
+    expect(shutdownDay).toEqual({ sessions: 0, input: 0, cacheRead: 0, output: 0 })
+
+    // The request day carries everything.
+    const requestDay = inventory(await parseAllSessions(
+      { start: new Date(dayN - 1 * 3600 * 1000), end: new Date(dayN + 12 * 3600 * 1000) }, 'copilot'))
+    expect(requestDay).toEqual({ sessions: 1, input: 600, cacheRead: 17000, output: 25 })
   })
 })

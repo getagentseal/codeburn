@@ -40,6 +40,7 @@
 //   CODEBURN_COPILOT_WS_STORAGE_DIR — Override VS Code workspaceStorage
 //   CODEBURN_COPILOT_GLOBAL_STORAGE_DIR — Override VS Code globalStorage
 //   CODEBURN_COPILOT_JETBRAINS_DIR — Override the JetBrains github-copilot root
+//   CODEBURN_COPILOT_SESSION_STORE_DB — Override the ~/.copilot/session-store.db path
 //
 // ARCHITECTURE:
 //   discoverSessions() returns OTel sessions and legacy JSONL sessions. When
@@ -260,6 +261,10 @@ interface SpanAttributes {
 
 function getCopilotSessionStateDir(override?: string): string {
   return override ?? process.env['CODEBURN_COPILOT_SESSION_STATE_DIR'] ?? join(homedir(), '.copilot', 'session-state')
+}
+
+function getSessionStoreDbPath(override?: string): string {
+  return override ?? process.env['CODEBURN_COPILOT_SESSION_STORE_DB'] ?? join(homedir(), '.copilot', 'session-store.db')
 }
 
 /**
@@ -713,7 +718,8 @@ function inferTranscriptModel(lines: string[]): string {
 function createJsonlParser(
   source: SessionSource,
   seenKeys: Set<string>,
-  isTranscript: boolean
+  isTranscript: boolean,
+  shutdownCovered: boolean
 ): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -833,6 +839,15 @@ function createJsonlParser(
           // (and its cost) is not double-counted. Combined with the per-turn
           // output cost, this yields the full, CLI-measured session cost.
           if (isTranscript) continue
+          // When session-store.db holds per-request usage rows for this
+          // session (tagged at discovery), those rows are authoritative for
+          // input/cache: written per request instead of only on clean
+          // shutdown, and they describe the SAME tokens this rollup lumps
+          // together — emitting both would double-count. One residual mixed
+          // case is accepted: a CLI upgraded mid-session leaves leg 1 only in
+          // this rollup and leg 2 only in the DB, and leg 1's input/cache
+          // goes uncounted because the DB side wins for the whole session.
+          if (shutdownCovered) continue
           const shutdownData = event.data as SessionShutdownData
           const modelMetrics = shutdownData.modelMetrics
           if (!isRecord(modelMetrics)) continue
@@ -861,7 +876,14 @@ function createJsonlParser(
             // its counters (a fresh accounting epoch): delta from zero, else
             // this leg's post-reset usage would be clamped away entirely.
             // inputTokens is the monotonic sentinel — it is cache-inclusive,
-            // so any usage at all grows it.
+            // so any usage at all grows it. In-session COMPACTION is a
+            // confirmed reset trigger (CLI 1.0.78: a clean single-process
+            // 107-request session's sole rollup covered exactly its five
+            // post-compaction requests), so rollup-only accounting
+            // undercounts any compacted session — usage between the last
+            // pre-reset rollup and the reset is simply never written here.
+            // Only the per-request session-store rows record it; that is why
+            // they are authoritative for covered sessions.
             const prev =
               prevRaw && cumulative.inputTokens < numberOrZero(prevRaw.inputTokens)
                 ? undefined
@@ -1862,7 +1884,7 @@ function createOtelParser(
               outputTokens,
               cacheCreationTokens,
               cacheReadTokens,
-              0 // reasoningTokens — not exposed in current OTel schema
+              0 // webSearchRequests — not applicable to OTel spans
             )
 
             yield {
@@ -1896,6 +1918,169 @@ function createOtelParser(
 }
 
 // ---------------------------------------------------------------------------
+// Session-store SQLite parser — per-request usage rows from session-store.db
+// ---------------------------------------------------------------------------
+//
+// The Copilot CLI and the GitHub Copilot desktop app both write
+// ~/.copilot/session-store.db unconditionally. Its assistant_usage_events
+// table records one row per API request AS IT HAPPENS, where the
+// session.shutdown rollup in events.jsonl is written only on clean shutdown
+// (a crash loses the whole session's input/cache accounting) and lumps a
+// session leg into one per-model total. The DB rows are therefore
+// authoritative for input/cache tokens; createJsonlParser suppresses the
+// rollup for sessions the DB covers (see shutdownCovered).
+//
+// The emitted calls mirror the shutdown-call contract exactly: input/cache/
+// reasoning only, output 0 — per-turn output (and its tools/userMessage
+// metadata) stays owned by the events.jsonl assistant.message calls, so
+// emitting output here would double-count it. Billing-grade cost from
+// total_nano_aiu and throughput from the latency columns are deliberately
+// not read yet (upstream #890).
+
+// The one usage query, shared verbatim between the discovery probe and the
+// parser so the two can never diverge on schema: discovery runs it LIMIT 1
+// (prepare validates every table and column it touches) before deciding
+// coverage, so a store whose shape the parser cannot read is never allowed
+// to suppress shutdown rollups it then fails to replace.
+const SESSION_STORE_USAGE_SELECT = `SELECT e.id, e.session_id, e.model,
+       e.input_tokens, e.cache_read_tokens, e.cache_write_tokens,
+       e.reasoning_tokens, e.created_at,
+       s.cwd, s.repository
+  FROM assistant_usage_events e
+  LEFT JOIN sessions s ON s.id = e.session_id`
+
+// Type alias, not interface: db.query's Row constraint needs the implicit
+// index signature only anonymous object types carry.
+type SessionStoreUsageRow = {
+  id: number
+  session_id: string
+  model: string
+  input_tokens: number | null
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  reasoning_tokens: number | null
+  created_at: string | null
+  cwd: string | null
+  repository: string | null
+}
+
+function createSessionStoreParser(
+  source: SessionSource,
+  seenKeys: Set<string>
+): SessionParser {
+  return {
+    async *parse(): AsyncGenerator<ParsedProviderCall> {
+      // Lazy-load the SQLite module (same pattern as the OTel source)
+      const { openDatabase, isSqliteBusyError } = await import('../sqlite.js')
+
+      const db = openDatabase(source.path)
+      try {
+        let rows: SessionStoreUsageRow[]
+        try {
+          rows = db.query<SessionStoreUsageRow>(`${SESSION_STORE_USAGE_SELECT} ORDER BY e.id ASC`)
+        } catch (err) {
+          // Discovery only emits this source when assistant_usage_events
+          // exists, but the CLI may migrate the schema between discovery and
+          // parse. A busy/locked error must propagate — parseProviderSources
+          // skips the source and retries next refresh. Any other prepare
+          // error means the table shape changed mid-run: yield nothing. The
+          // covered sessions' rollups were already suppressed under coverage
+          // that was true at discovery, so their input/cache stays absent
+          // until the DB changes and this source re-parses.
+          if (isSqliteBusyError(err)) throw err
+          return
+        }
+
+        for (const row of rows) {
+          if (!row.session_id || !row.model) continue
+
+          const cacheReadTokens = numberOrZero(row.cache_read_tokens)
+          const cacheWriteTokens = numberOrZero(row.cache_write_tokens)
+          const reasoningTokens = numberOrZero(row.reasoning_tokens)
+          // input_tokens is cache-INCLUSIVE (input + cache_read + cache_write),
+          // the same convention the shutdown rollup uses — confirmed against
+          // token_details_json, whose tokenType:"input" entries hold exactly
+          // this difference. calculateCost expects the uncached remainder with
+          // cache tokens billed separately, so subtract; clamp guards a future
+          // schema that reports input non-inclusively.
+          const inputTokens = Math.max(
+            0,
+            numberOrZero(row.input_tokens) - cacheReadTokens - cacheWriteTokens
+          )
+
+          // Nothing this call would add over the per-turn events (output is
+          // intentionally excluded), so skip it to avoid an empty $0 row.
+          if (inputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0 && reasoningTokens === 0) continue
+
+          // `id` is AUTOINCREMENT: stable across re-parses and never reused,
+          // so a growing DB appends only new keys under the durable
+          // union-by-dedup-key cache merge.
+          const dedupKey = `copilot-store:${row.session_id}:${row.id}`
+          if (seenKeys.has(dedupKey)) continue
+          seenKeys.add(dedupKey)
+
+          // One DB spans every project, so the project must ride each call
+          // (the per-source fallback would lump them all together). Mirrors
+          // the workspace.yaml cwd→basename logic of the JSONL sources.
+          const project = row.cwd
+            ? basename(row.cwd)
+            : row.repository
+              ? basename(row.repository.replace(/\.git$/, ''))
+              : row.session_id
+
+          // created_at defaults to SQLite's datetime('now') — UTC but
+          // timezone-less ('2026-08-07 17:56:38', or with fractional seconds
+          // under 'subsec'), which Date.parse reads as LOCAL time and would
+          // shift the request onto the wrong day. The CLI writes explicit
+          // ISO-Z strings (audited: every observed row), so this normalizes
+          // only the defensive zoneless shapes to UTC; anything carrying its
+          // own zone/offset passes through untouched.
+          const rawTimestamp = row.created_at ?? ''
+          const timestamp = timestampToISO(
+            /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(rawTimestamp)
+              ? rawTimestamp.replace(' ', 'T') + 'Z'
+              : rawTimestamp
+          )
+
+          // Tokens are real per-request counts written by the CLI, so this
+          // cost is measured, not char-estimated. reasoning_tokens rides as
+          // metadata only, never as a cost line: it is a SUBSET of the row's
+          // output_tokens (the row's own token_details_json prices exactly
+          // input/cache_read/cache_write/output, no reasoning entry), and
+          // output — reasoning included — is billed by the per-turn
+          // assistant.message call. Pricing reasoning here would double-count.
+          const costUSD = calculateCost(row.model, inputTokens, 0, cacheWriteTokens, cacheReadTokens, 0)
+
+          yield {
+            provider: 'copilot',
+            sessionId: row.session_id,
+            project,
+            model: row.model,
+            inputTokens,
+            outputTokens: 0,
+            cacheCreationInputTokens: cacheWriteTokens,
+            cacheReadInputTokens: cacheReadTokens,
+            cachedInputTokens: 0,
+            reasoningTokens,
+            webSearchRequests: 0,
+            costUSD,
+            costIsEstimated: false,
+            tools: [],
+            bashCommands: [],
+            timestamp,
+            speed: 'standard' as const,
+            deduplicationKey: dedupKey,
+            userMessage: '',
+          }
+        }
+      } finally {
+        db.close()
+      }
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extended SessionSource for OTel sessions
 // ---------------------------------------------------------------------------
 
@@ -1906,6 +2091,24 @@ interface OTelSessionSource extends SessionSource {
 
 interface JsonlSessionSource extends SessionSource {
   sourceType: 'jsonl'
+  // Set at discovery when session-store.db carries per-request usage rows for
+  // this session. The DB is then authoritative for input/cache tokens and the
+  // parser must not also emit the session.shutdown rollup — both describe the
+  // same tokens. The flag rides the source (like sourceType) rather than
+  // seenKeys because the two paths' dedup keys share no shape and the durable
+  // cache would keep stale rollup calls alive regardless of parse order.
+  shutdownCovered?: boolean
+  // Set at discovery when session-store.db exists but was unreadable this run
+  // (locked, corrupt, mid-replace): coverage is unknowable, so this file must
+  // not parse this run (see createSessionParser).
+  storeProbeBusy?: boolean
+}
+
+// The Copilot CLI / GitHub desktop-app session store (~/.copilot/session-store.db).
+// One source per DB file; the parser iterates every session's usage rows in a
+// single DB open, mirroring the OTel source.
+interface SessionStoreSessionSource extends SessionSource {
+  sourceType: 'session-store'
 }
 
 // A VS Code workspaceStorage transcript. Distinct from 'jsonl' (CLI
@@ -1953,6 +2156,10 @@ function isJetBrainsSource(source: SessionSource): source is JetBrainsSessionSou
 
 function isTranscriptSource(source: SessionSource): source is TranscriptSessionSource {
   return (source as TranscriptSessionSource).sourceType === 'transcript'
+}
+
+function isSessionStoreSource(source: SessionSource): source is SessionStoreSessionSource {
+  return (source as SessionStoreSessionSource).sourceType === 'session-store'
 }
 
 // ---------------------------------------------------------------------------
@@ -2014,6 +2221,85 @@ async function discoverOtelSessions(
     return []
   }
   return [{ path: dbPath, project: 'copilot-chat', provider: 'copilot', sourceType: 'otel' }]
+}
+
+// ---------------------------------------------------------------------------
+// Session discovery: session-store SQLite
+// ---------------------------------------------------------------------------
+
+interface SessionStoreDiscovery {
+  source: SessionStoreSessionSource
+  // Sessions with at least one usage row in the DB. For these the DB is
+  // authoritative for input/cache and the matching events.jsonl source is
+  // tagged shutdownCovered so its rollup is not also emitted.
+  coveredSessionIds: Set<string>
+}
+
+/**
+ * Probe session-store.db and collect which sessions it carries usage rows for.
+ * The covered-session set MUST come from the same successful open that emits
+ * the source: if the set were computed but the source later never parsed (or
+ * vice versa), one run would either drop input/cache entirely or double-count
+ * them — and copilot's durable cache would make that permanent.
+ *
+ * Permanent absence — no file, no sqlite driver, or a schema the parser's
+ * own query cannot prepare against ("no such table": CLI builds before the
+ * store existed; "no such column": a future migration) — returns null: no
+ * source, no suppression, and the shutdown-rollup path carries the sessions
+ * exactly as before.
+ *
+ * EVERY other failure returns 'busy' so discoverSessions defers the JSONL
+ * sources to the next refresh instead of guessing. Measured against the real
+ * driver (node:sqlite, WAL store): a write lock never blocks readers and a
+ * hot -wal without its -shm reads fine, so the reachable failures here are
+ * corruption-class — SQLITE_CORRUPT (11), SQLITE_NOTADB (26, e.g. mid
+ * atomic-replace), SQLITE_CANTOPEN (14, deleted after the stat) — plus the
+ * classic busy/locked pair. None of those prove the store is gone, and
+ * treating them as absence would let the JSONL parse cache rollup calls that
+ * the DB rows duplicate the moment the store reads again — permanently,
+ * since the durable union merge never deletes.
+ */
+async function discoverSessionStoreUsage(
+  dbPath: string
+): Promise<SessionStoreDiscovery | 'busy' | null> {
+  try {
+    await stat(dbPath)
+  } catch {
+    return null
+  }
+  const { openDatabase, isSqliteAvailable } = await import('../sqlite.js')
+  if (!isSqliteAvailable()) return null
+  try {
+    const db = openDatabase(dbPath)
+    try {
+      // Prepare-validate the parser's exact query first, so coverage can
+      // never be computed against a store the parser then fails to read.
+      db.query(`${SESSION_STORE_USAGE_SELECT} LIMIT 1`)
+      // Coverage requires at least one BILLABLE row: a session whose rows are
+      // all zero would suppress its rollup while the store source emits
+      // nothing for it, silently dropping the rollup's input/cache.
+      const rows = db.query<{ session_id: string | null }>(
+        `SELECT DISTINCT session_id FROM assistant_usage_events
+         WHERE COALESCE(input_tokens, 0) > 0
+            OR COALESCE(cache_read_tokens, 0) > 0
+            OR COALESCE(cache_write_tokens, 0) > 0
+            OR COALESCE(reasoning_tokens, 0) > 0`
+      )
+      const coveredSessionIds = new Set<string>()
+      for (const row of rows) {
+        if (row.session_id) coveredSessionIds.add(row.session_id)
+      }
+      return {
+        source: { path: dbPath, project: 'copilot', provider: 'copilot', sourceType: 'session-store' },
+        coveredSessionIds,
+      }
+    } finally {
+      db.close()
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return /no such (table|column)/i.test(message) ? null : 'busy'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2369,7 +2655,8 @@ export function createCopilotProvider(
   sessionStateDir?: string,
   workspaceStorageDir?: string,
   globalStorageDir?: string,
-  jetbrainsDir?: string
+  jetbrainsDir?: string,
+  sessionStoreDb?: string
 ): Provider {
   // jsonlDir is resolved lazily inside discoverSessions so that env-var
   // overrides set after module load (e.g. in tests) are respected.
@@ -2430,10 +2717,42 @@ export function createCopilotProvider(
         }
       }
 
+      // 1b. Discover the CLI / GitHub desktop-app session store. Written per
+      // API request (crash-proof) where the events.jsonl shutdown rollup
+      // exists only after a clean exit, so its rows are authoritative for
+      // input/cache tokens; the covered-session set lets the JSONL sources
+      // below suppress their now-redundant rollups. True absence (older CLI
+      // schema, no sqlite driver) leaves the rollup path untouched; an
+      // unreadable store defers instead (see discoverSessionStoreUsage).
+      let sessionStore: SessionStoreDiscovery | 'busy' | null = null
+      try {
+        sessionStore = await discoverSessionStoreUsage(getSessionStoreDbPath(sessionStoreDb))
+      } catch {
+        sessionStore = null
+      }
+      if (sessionStore && sessionStore !== 'busy') sources.push(sessionStore.source)
+
       // 2. Discover JSONL sessions (fallback — output tokens only)
       try {
         const jsonlDir = getCopilotSessionStateDir(sessionStateDir)
         const jsonlSources = await discoverJsonlSessions(jsonlDir)
+        if (sessionStore === 'busy') {
+          // Coverage is unknowable this run (store locked, corrupt, or
+          // mid-replace). Parsing session-state anyway could durably cache
+          // rollup calls the store's rows will duplicate once it reads
+          // again, so defer these files to the next refresh (their parser
+          // raises a busy error; parseProviderSources skips-and-retries, and
+          // already-cached turns keep serving meanwhile).
+          for (const src of jsonlSources) src.storeProbeBusy = true
+        } else if (sessionStore) {
+          for (const src of jsonlSources) {
+            // Same sessionId derivation as createJsonlParser: the CLI keys
+            // session-state dirs and session-store rows by the same id.
+            if (sessionStore.coveredSessionIds.has(basename(dirname(src.path)))) {
+              src.shutdownCovered = true
+            }
+          }
+        }
         sources.push(...jsonlSources)
       } catch {
         // JSONL discovery failed
@@ -2493,13 +2812,39 @@ export function createCopilotProvider(
       if (isOtelSource(source)) {
         return createOtelParser(source, seenKeys)
       }
+      if (isSessionStoreSource(source)) {
+        return createSessionStoreParser(source, seenKeys)
+      }
       if (isChatSessionSource(source)) {
         return createChatSessionParser(source, seenKeys)
       }
       if (isJetBrainsSource(source)) {
         return createJetBrainsParser(source, seenKeys)
       }
-      return createJsonlParser(source, seenKeys, isTranscriptSource(source))
+      // An unreadable session-store.db (locked, corrupt, mid-replace) makes
+      // rollup coverage unknowable; parsing session-state anyway could
+      // durably cache shutdown calls that the DB rows duplicate once it
+      // reads again — the union merge never deletes, so that double-count
+      // would be permanent. Raise the busy shape parseProviderSources
+      // skips-and-retries on: this file re-parses next refresh while cached
+      // turns keep serving.
+      if ((source as JsonlSessionSource).storeProbeBusy) {
+        return {
+          // eslint-disable-next-line require-yield
+          async *parse(): AsyncGenerator<ParsedProviderCall> {
+            throw Object.assign(
+              new Error('copilot session-store.db is locked; deferring session-state parse'),
+              { code: 'SQLITE_BUSY' }
+            )
+          },
+        }
+      }
+      return createJsonlParser(
+        source,
+        seenKeys,
+        isTranscriptSource(source),
+        (source as JsonlSessionSource).shutdownCovered === true
+      )
     },
   }
 }
