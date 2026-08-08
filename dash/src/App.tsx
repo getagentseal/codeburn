@@ -21,6 +21,8 @@ import { DataTable } from '@/components/DataTable'
 import { GranularUsageChart, DeviceUsageChart, type Unit } from '@/components/UsageChart'
 import { DeviceSearchModal } from '@/components/DeviceSearchModal'
 import { ContextExplorer } from '@/components/ContextExplorer'
+import { WorkflowPanel, hasWorkflowContent } from '@/components/WorkflowPanel'
+import { Punchcard } from '@/components/Punchcard'
 
 const n = (v: number | undefined): number => v ?? 0
 
@@ -86,6 +88,15 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
   const activityBars: BarItem[] = c
     ? c.topActivities.filter((a) => a.cost > 0).map((a) => ({ name: a.name, value: a.cost, display: usd(a.cost) }))
     : []
+  // Workflow rides beside Model efficiency only when it carries data. Without
+  // it the row is a single full-width Model efficiency panel, so an older peer
+  // (no workflow block) renders exactly as the dashboard did before.
+  const workflowPanel = c && hasWorkflowContent(c) ? (
+    <Panel title="Workflow">
+      <WorkflowPanel current={c} />
+    </Panel>
+  ) : null
+  const timeline = payload?.history.timeline
 
   return (
     <>
@@ -150,7 +161,7 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
         </Panel>
       </div>
 
-      <div className="mb-3">
+      <div className={cn('mb-3 grid gap-3', workflowPanel && 'lg:grid-cols-2')}>
         <Panel title="Model efficiency">
           <DataTable
             columns={[
@@ -165,7 +176,16 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
             }))}
           />
         </Panel>
+        {workflowPanel}
       </div>
+
+      {timeline && (
+        <div className="mb-3">
+          <Panel title="Spend punchcard">
+            <Punchcard timeline={timeline} />
+          </Panel>
+        </div>
+      )}
 
       <div className="mb-3 grid gap-3 lg:grid-cols-2">
         <Panel title="Top projects">
