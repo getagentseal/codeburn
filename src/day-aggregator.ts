@@ -26,6 +26,23 @@ export function dateKey(iso: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+/// Bucket an ISO timestamp under an explicit IANA timezone instead of the
+/// machine's local one. `en-CA` emits the ISO-ish YYYY-MM-DD layout directly,
+/// so formatToParts under the given `timeZone` yields exactly that shape. Used
+/// to re-aggregate the same parse under a cache's OLD tzKey when a timezone
+/// change forces a full re-derive (issue #770): comparing that bucketing to the
+/// fresh one shows exactly which turns re-bucketed across local midnight.
+export function dateKeyInTz(iso: string, tz: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(iso))
+  let year = '', month = '', day = ''
+  for (const p of parts) {
+    if (p.type === 'year') year = p.value
+    else if (p.type === 'month') month = p.value
+    else if (p.type === 'day') day = p.value
+  }
+  return `${year}-${month}-${day}`
+}
+
 function emptySlice(): ProviderDaySlice {
   return {
     calls: 0, cost: 0, savingsUSD: 0,
@@ -34,7 +51,7 @@ function emptySlice(): ProviderDaySlice {
   }
 }
 
-export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntry[] {
+export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn: (iso: string) => string = dateKey): DailyEntry[] {
   const byDate = new Map<string, DailyEntry>()
   const ensure = (date: string): DailyEntry => {
     let d = byDate.get(date)
@@ -61,7 +78,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
 
   for (const project of projects) {
     for (const session of project.sessions) {
-      const sessionDate = dateKey(session.firstTimestamp)
+      const sessionDate = dateKeyFn(session.firstTimestamp)
       const sessionDay = ensure(sessionDate)
       sessionDay.sessions += 1
       ensureProject(sessionDay, session.project, project.projectPath).sessions += 1
@@ -94,7 +111,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
         //   sliced per call, per-call bucketing here was what caused the
         //   constant offset against the whole-turn headline; the slice is
         //   what makes it exact now.)
-        const turnDate = dateKey(turn.timestamp || turn.assistantCalls[0]!.timestamp)
+        const turnDate = dateKeyFn(turn.timestamp || turn.assistantCalls[0]!.timestamp)
         const turnDay = ensure(turnDate)
 
         const editTurns = turn.hasEdits ? 1 : 0
@@ -154,7 +171,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           // Call-derived values bucket under the call's OWN day (see the
           // two-rule comment above). An unparseable call timestamp falls back
           // to the turn's anchor day rather than producing a garbage date key.
-          const callDate = Number.isNaN(new Date(call.timestamp).getTime()) ? turnDate : dateKey(call.timestamp)
+          const callDate = Number.isNaN(new Date(call.timestamp).getTime()) ? turnDate : dateKeyFn(call.timestamp)
           const callDay = ensure(callDate)
 
           callDay.cost += call.costUSD

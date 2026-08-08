@@ -6,7 +6,7 @@ import { findUnpricedModels, getLocalModelSavingsConfigHash, getPriceOverridesCo
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { claude, getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { stat } from 'node:fs/promises'
-import { aggregateProjectsIntoDays, buildPeriodDataFromDays } from './day-aggregator.js'
+import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKeyInTz } from './day-aggregator.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
@@ -95,6 +95,10 @@ async function hydrateCache(): Promise<DailyCache> {
       // Never finalize the daily history off a partial (interrupted) session
       // hydration — that is what froze empty older days into the chart.
       isSessionHydrationComplete,
+      // On a tz-change re-derive the same parse is re-aggregated under the old
+      // tzKey so carried slices can be reduced by the turns that re-bucketed
+      // across local midnight (issue #770).
+      (projects, tz) => aggregateProjectsIntoDays(projects, (iso) => dateKeyInTz(iso, tz)),
     )
   } catch (err) {
     // Previously swallowed silently, which turned any backfill failure into an
