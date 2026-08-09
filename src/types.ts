@@ -288,7 +288,12 @@ export type SessionSummary = {
 
 export type ProjectSummary = {
   project: string
+  /// A real filesystem path when the project has one. Multi-root workspaces
+  /// leave this empty because a root set is not a valid single path.
   projectPath: string
+  /// Stable aggregation identity. For a multi-root workspace this is the
+  /// normalized root-set serialization; it is never passed to filesystem APIs.
+  projectIdentity?: string
   sessions: SessionSummary[]
   totalCostUSD: number
   totalSavingsUSD: number

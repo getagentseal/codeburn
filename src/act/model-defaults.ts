@@ -73,6 +73,7 @@ function isDebuggingHeavy(project: ProjectSummary): boolean {
 }
 
 export function recommendModelDefault(project: ProjectSummary, opts: { now?: Date } = {}): ModelDefaultRecommendation | null {
+  if (!project.projectPath) return null
   const now = opts.now ?? new Date()
   const stats = aggregateModelStats([project])
     .filter(s => s.model !== '<synthetic>' && s.editTurns >= MIN_EDIT_TURNS)

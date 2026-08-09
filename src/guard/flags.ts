@@ -23,7 +23,9 @@ export async function buildFlags(projects: ProjectSummary[]): Promise<GuardFlags
     const openers: string[] = []
     if (lowWorth.has(project.project)) openers.push(LOW_WORTH_OPENER)
     if (contextHeavy.has(project.project)) openers.push(CONTEXT_HEAVY_OPENER)
-    if (openers.length > 0) flags.push({ path: project.projectPath, openers })
+    // A multi-root workspace has no single settings path to install a guard
+    // against, so do not persist an empty path that could match unexpectedly.
+    if (openers.length > 0 && project.projectPath) flags.push({ path: project.projectPath, openers })
   }
   return { generatedAt: new Date().toISOString(), projects: flags }
 }

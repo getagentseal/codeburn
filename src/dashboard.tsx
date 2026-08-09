@@ -445,7 +445,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: 
         return (
           <Text key={`${project.project}-${i}`} wrap="truncate-end">
             <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
-            <Text dimColor> {fit(shortProject(project.projectPath), nw)}</Text>
+            <Text dimColor> {fit(shortProject(project.projectPath || project.project), nw)}</Text>
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>

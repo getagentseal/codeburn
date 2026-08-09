@@ -14,6 +14,7 @@ import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
 import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
+import { projectIdentityOf } from './project-identity.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
 const TOP_BRANCHES = 15
@@ -228,15 +229,14 @@ function sliceDayToProvider(day: DailyEntry, provider: string): DailyEntry {
 
 /// Does a cached day's project entry pass the active name filters? Mirrors
 /// parser.filterProjectsByName exactly — case-insensitive substring match
-/// against the project name OR its filesystem path, include first then exclude —
-/// so a filter selects the same projects whether it is resolved against a fresh
-/// parse or against the day cache. Patterns arrive pre-lowercased. `path` is
-/// absent on entries whose sessions were gone before it could be recorded; the
-/// name is then all there is to match on, as it is for the display layers.
-function dayProjectMatches(name: string, path: string | undefined, include: string[], exclude: string[]): boolean {
-  const n = name.toLowerCase()
-  const p = (path ?? '').toLowerCase()
-  const hit = (pattern: string): boolean => n.includes(pattern) || (p !== '' && p.includes(pattern))
+/// against the project name, stable identity, or filesystem path, include first
+/// then exclude, so a filter selects the same projects whether it is resolved
+/// against a fresh parse or against the day cache. Patterns arrive pre-lowercased.
+function dayProjectMatches(identity: string, project: ProjectDayStats, include: string[], exclude: string[]): boolean {
+  const candidates = [identity, project.name ?? '', project.path ?? '']
+    .map(value => value.toLowerCase())
+    .filter(Boolean)
+  const hit = (pattern: string): boolean => candidates.some(candidate => candidate.includes(pattern))
   if (include.length > 0 && !include.some(hit)) return false
   if (exclude.length > 0 && exclude.some(hit)) return false
   return true
@@ -252,7 +252,7 @@ function sumMatchingProjects(
 ): { cost: number; calls: number; savingsUSD: number; sessions: number; projects: Record<string, ProjectDayStats>; matched: number } {
   const out = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0, projects: {} as Record<string, ProjectDayStats>, matched: 0 }
   for (const [name, p] of Object.entries(projects)) {
-    if (!dayProjectMatches(name, p.path, include, exclude)) continue
+    if (!dayProjectMatches(name, p, include, exclude)) continue
     out.cost += p.cost
     out.calls += p.calls
     out.savingsUSD += p.savingsUSD ?? 0
@@ -751,7 +751,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     // path. Days recorded before the projects rollup existed have totals but
     // no project split, so this list can sum to less than the headline — an
     // honest gap, not a bug.
-    type CachedProjectTotal = { cost: number; savingsUSD: number; sessions: number; path?: string }
+    type CachedProjectTotal = { cost: number; savingsUSD: number; sessions: number; path?: string; name?: string }
     const cachedTotals = new Map<string, CachedProjectTotal>()
     for (const d of cacheDaysForPeriod) {
       for (const [name, p] of Object.entries(d.projects ?? {})) {
@@ -760,16 +760,20 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         acc.savingsUSD += p.savingsUSD
         acc.sessions += p.sessions
         if (!acc.path && p.path) acc.path = p.path
+        if (!acc.name && p.name) acc.name = p.name
         cachedTotals.set(name, acc)
       }
     }
-    const liveByName = new Map(scanProjects.map(p => [p.project, p]))
+    // Live projects are keyed by the same identity (path/root-set when known,
+    // label otherwise) the day entries use, so a cached-only and a live entry
+    // for the same workspace reconcile to one row instead of double counting.
+    const liveByName = new Map(scanProjects.map(p => [projectIdentityOf(p), p]))
     const names = new Set([...cachedTotals.keys(), ...liveByName.keys()])
     currentData.projects = [...names].map(name => {
       const cached = cachedTotals.get(name)
       const live = liveByName.get(name)
       return {
-        name: live ? friendlyProject(live) : friendlyFromPath(cached?.path, name),
+        name: live ? friendlyProject(live) : cached?.name ?? friendlyFromPath(cached?.path, name),
         cost: cached?.cost ?? live!.totalCostUSD,
         savingsUSD: cached?.savingsUSD ?? live!.totalSavingsUSD,
         // max for the same reason as the headline: start-day bucketing vs

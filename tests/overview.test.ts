@@ -222,6 +222,20 @@ describe('renderOverview', () => {
     expect(out).toContain('Projects-Content-OS')
     expect(out).not.toContain(' OS ')
   })
+
+  it('uses the display label when a project has no single filesystem path', () => {
+    const out = renderOverview([makeProject({
+      project: 'codeburn, website',
+      projectPath: '',
+      cost: 3.25,
+      calls: 1,
+      model: 'claude-sonnet-4-5',
+      provider: 'zed',
+      tokens: { input: 1000, output: 200, cacheR: 0, cacheW: 0 },
+    })], { label: 'June 2026', color: false })
+
+    expect(out).toContain('codeburn, website')
+  })
 })
 
 describe('renderOverview unpriced models', () => {

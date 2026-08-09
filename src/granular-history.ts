@@ -1,4 +1,5 @@
 import type { DateRange, ProjectSummary } from './types.js'
+import { projectIdentityOf } from './project-identity.js'
 
 const FIFTEEN_MINUTES = 15
 const ONE_HOUR = 60
@@ -204,7 +205,7 @@ export function buildGranularHistory(
           // Session ids are usually globally unique, but a few providers scope
           // them to a workspace. Include the project path so two workspaces do
           // not collapse into one line when they reuse the same local id.
-          const sessionKey = `${call.provider}\0${project.projectPath}\0${session.sessionId}`
+          const sessionKey = `${call.provider}\0${projectIdentityOf(project)}\0${session.sessionId}`
           const projectName = session.project || project.project || 'Unknown project'
 
           bucket.cost += cost

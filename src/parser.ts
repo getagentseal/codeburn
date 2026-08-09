@@ -47,6 +47,7 @@ import type {
 } from './types.js'
 import { classifyTurn, BASH_TOOLS, EDIT_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
+import { crossProviderProjectKey, normalizeProjectIdentity, projectIdentityOf } from './project-identity.js'
 
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
@@ -57,11 +58,6 @@ function claudeSlugFallbackPath(dirName: string): string {
   // separator from the original cwd or a literal dash in the leaf name.
   // Without cwd metadata, keep the slug intact instead of inventing segments.
   return dirName
-}
-
-function normalizeProjectPathKey(projectPath: string): string {
-  const normalized = projectPath.trim().replace(/\\/g, '/')
-  return (normalized.replace(/\/+$/, '') || normalized).toLowerCase()
 }
 
 function projectNameFromPath(projectPath: string, fallback: string): string {
@@ -2263,7 +2259,7 @@ async function scanProjectDirs(
 
     if (session.apiCalls > 0 || anchorOnly) {
       const projectKey = cachedFile.canonicalCwd
-        ? normalizeProjectPathKey(cachedFile.canonicalCwd)
+        ? normalizeProjectIdentity(cachedFile.canonicalCwd)
         : `slug:${dirName}`
       const existing = projectMap.get(projectKey)
       // An anchor (no in-range spend) goes into a separate bucket, never `sessions`.
@@ -2308,11 +2304,19 @@ async function scanProjectDirs(
 /// `totalProxiedCostUSD` (subscription-covered). All ProjectSummary callers go
 /// through here so the rule stays consistent across the fresh, cached, and
 /// date/day-filtered paths.
-function summarizeProject(project: string, projectPath: string, sessions: SessionSummary[], anchors: SessionSummary[] = []): ProjectSummary {
+function summarizeProject(
+  project: string,
+  projectPath: string,
+  sessions: SessionSummary[],
+  anchors: SessionSummary[] = [],
+  projectIdentity?: string,
+): ProjectSummary {
   const totalCostUSD = sessions.reduce((s, sess) => s + sess.totalCostUSD, 0)
+  const identity = projectIdentity || projectPath || project
   return {
     project,
     projectPath,
+    projectIdentity: identity,
     sessions,
     totalCostUSD,
     totalSavingsUSD: sessions.reduce((s, sess) => s + sess.totalSavingsUSD, 0),
@@ -2399,6 +2403,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     deduplicationKey: call.deduplicationKey,
     project: call.project,
     projectPath: call.projectPath,
+    projectIdentity: call.projectIdentity,
     workingDirectory: call.workingDirectory,
     toolSequence: call.toolSequence,
     ...(call.locAdded ? { locAdded: call.locAdded } : {}),
@@ -2421,6 +2426,7 @@ async function canonicalizeProviderCallProject(call: ParsedProviderCall): Promis
     workingDirectory: call.workingDirectory ?? call.projectPath,
     project: projectNameFromPath(canonical.path, call.project ?? canonical.path),
     projectPath: canonical.path,
+    projectIdentity: canonical.path,
   }
 }
 
@@ -2859,7 +2865,10 @@ function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): Cl
   return { ...turn, assistantCalls: inRangeCalls, timestamp: inRangeCalls[0]!.timestamp }
 }
 
-async function parseProviderSources(
+/// Parse one provider's sources into per-project summaries. Exported so
+/// aggregation-level regressions (identical display labels on distinct roots)
+/// can be asserted without spinning up the whole scan pipeline.
+export async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
   seenKeys: Set<string>,
@@ -3058,7 +3067,7 @@ async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; projectIdentity?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -3087,13 +3096,23 @@ async function parseProviderSources(
         ? (classifiedTurnSlicedToRange(classifiedFull, dateRange) ?? classifiedFull)
         : classifiedFull
       const project = slicedTurn.calls[0]?.project ?? source.project
-      const key = `${providerName}:${turn.sessionId}:${project}`
+      // Grouping identity: the stable project identity when the call carries
+      // one, falling back to the path and then display label. Label-only keying
+      // merged distinct roots that happened to share a basename (e.g. two
+      // machines both working in "repo") and kept the first project path.
+      const projectPath = slicedTurn.calls[0]?.projectPath
+      const projectIdentity = slicedTurn.calls[0]?.projectIdentity
+      const identity = projectIdentityOf(slicedTurn.calls[0] ?? {}, project)
+      const key = `${providerName}:${turn.sessionId}:${identity}`
 
       const existing = sessionMap.get(key)
       if (existing) {
         existing.turns.push(classified)
         if (!existing.projectPath && slicedTurn.calls[0]?.projectPath) {
           existing.projectPath = slicedTurn.calls[0]!.projectPath
+        }
+        if (!existing.projectIdentity && slicedTurn.calls[0]?.projectIdentity) {
+          existing.projectIdentity = slicedTurn.calls[0]!.projectIdentity
         }
         if (!existing.workingDirectory && slicedTurn.calls[0]?.workingDirectory) existing.workingDirectory = slicedTurn.calls[0].workingDirectory
         if (cachedFile.prLinks?.length) {
@@ -3105,6 +3124,7 @@ async function parseProviderSources(
         sessionMap.set(key, {
           project,
           projectPath: slicedTurn.calls[0]?.projectPath,
+          projectIdentity: slicedTurn.calls[0]?.projectIdentity,
           workingDirectory: slicedTurn.calls[0]?.workingDirectory,
           turns: [classified],
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
@@ -3142,7 +3162,10 @@ async function parseProviderSources(
           ? (classifiedTurnSlicedToRange(classifiedFull, dateRange) ?? classifiedFull)
           : classifiedFull
         const project = slicedTurn.calls[0]?.project ?? providerName
-        const key = `${providerName}:${turn.sessionId}:${project}`
+        const projectPath = slicedTurn.calls[0]?.projectPath
+        const projectIdentity = slicedTurn.calls[0]?.projectIdentity
+        const identity = projectIdentityOf(slicedTurn.calls[0] ?? {}, project)
+        const key = `${providerName}:${turn.sessionId}:${identity}`
 
         const existingEntry = sessionMap.get(key)
         if (existingEntry) {
@@ -3150,15 +3173,28 @@ async function parseProviderSources(
           if (!existingEntry.projectPath && slicedTurn.calls[0]?.projectPath) {
             existingEntry.projectPath = slicedTurn.calls[0]!.projectPath
           }
+          if (!existingEntry.projectIdentity && slicedTurn.calls[0]?.projectIdentity) {
+            existingEntry.projectIdentity = slicedTurn.calls[0]!.projectIdentity
+          }
         } else {
-          sessionMap.set(key, { project, projectPath: slicedTurn.calls[0]?.projectPath, workingDirectory: slicedTurn.calls[0]?.workingDirectory, turns: [classified] })
+          sessionMap.set(key, {
+            project,
+            projectPath: slicedTurn.calls[0]?.projectPath,
+            projectIdentity: slicedTurn.calls[0]?.projectIdentity,
+            workingDirectory: slicedTurn.calls[0]?.workingDirectory,
+            turns: [classified],
+          })
         }
       }
     }
   }
 
-  const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title }] of sessionMap) {
+  // Merge sessions into per-project summaries keyed by the stable identity
+  // (project path / root-set when known, display label otherwise). The display
+  // label and real filesystem path are preserved separately so identical
+  // basenames on distinct roots yield separate projects.
+  const projectMap = new Map<string, { project: string; projectPath?: string; projectIdentity?: string; sessions: SessionSummary[] }>()
+  for (const [key, { project, projectPath, projectIdentity, workingDirectory, turns, prLinks, title }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const session = buildSessionSummary(sessionId, project, turns)
     const explicitLinks = new Set(turns.flatMap(turn => turn.prRefs ?? []))
@@ -3170,19 +3206,21 @@ async function parseProviderSources(
     if (workingDirectory) session.workingDirectory = workingDirectory
     if (title) session.title = title
     if (session.apiCalls > 0) {
-      const existing = projectMap.get(project)
+      const identityKey = normalizeProjectIdentity(projectIdentityOf({ project, projectPath, projectIdentity }))
+      const existing = projectMap.get(identityKey)
       if (existing) {
         existing.sessions.push(session)
         if (!existing.projectPath && projectPath) existing.projectPath = projectPath
+        if (!existing.projectIdentity && projectIdentity) existing.projectIdentity = projectIdentity
       } else {
-        projectMap.set(project, { projectPath, sessions: [session] })
+        projectMap.set(identityKey, { project, projectPath, projectIdentity, sessions: [session] })
       }
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, { projectPath, sessions }] of projectMap) {
-    projects.push(summarizeProject(dirName, projectPath ?? unsanitizePath(dirName), sessions))
+  for (const { project, projectPath, projectIdentity, sessions } of projectMap.values()) {
+    projects.push(summarizeProject(project, projectPath ?? (projectIdentity ? '' : unsanitizePath(project)), sessions, [], projectIdentity))
   }
 
   return projects
@@ -3230,7 +3268,8 @@ export function filterProjectsByName(
     result = result.filter(p => {
       const name = p.project.toLowerCase()
       const path = p.projectPath.toLowerCase()
-      return patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const identity = p.projectIdentity?.toLowerCase() ?? ''
+      return patterns.some(pat => name.includes(pat) || path.includes(pat) || identity.includes(pat))
     })
   }
   if (exclude && exclude.length > 0) {
@@ -3238,7 +3277,8 @@ export function filterProjectsByName(
     result = result.filter(p => {
       const name = p.project.toLowerCase()
       const path = p.projectPath.toLowerCase()
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
+      const identity = p.projectIdentity?.toLowerCase() ?? ''
+      return !patterns.some(pat => name.includes(pat) || path.includes(pat) || identity.includes(pat))
     })
   }
   return result
@@ -3395,7 +3435,7 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
     }
     const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
     if (sessions.length === 0 && dedupedAnchors.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors, project.projectIdentity))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3408,16 +3448,14 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
 // (pre-existing, tracked separately) and totalProxiedCostUSD is re-derived
 // after the merge rather than summed here.
 export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
-  const crossProviderKey = (p: ProjectSummary): string => {
-    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
-    return path.includes('/') ? path : p.project.toLowerCase()
-  }
+  const crossProviderKey = (p: ProjectSummary): string => crossProviderProjectKey(p)
   const mergedMap = new Map<string, ProjectSummary>()
   for (const p of projects) {
     const key = crossProviderKey(p)
     const existing = mergedMap.get(key)
     if (existing) {
       existing.sessions.push(...p.sessions)
+      if (!existing.projectIdentity && p.projectIdentity) existing.projectIdentity = p.projectIdentity
       if (p.subagentAnchors?.length) existing.subagentAnchors = [...(existing.subagentAnchors ?? []), ...p.subagentAnchors]
       existing.totalCostUSD += p.totalCostUSD
       existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
@@ -3570,7 +3608,7 @@ export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], s
     // config's children.
     const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.source?.id === sourceId)
     if (sessions.length === 0 && anchors.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors, project.projectIdentity))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3604,7 +3642,7 @@ export function filterProjectsByDateRange(projects: ProjectSummary[], dateRange:
     }
     const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
     if (sessions.length === 0 && dedupedAnchors.length === 0) continue
-    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors, project.projectIdentity))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }
@@ -3831,13 +3869,19 @@ async function runParse(
   //    Resolve at the ProjectSummary level here: prepend '/' if needed to get
   //    an absolute path, then run the same worktree-detection logic.
   const resolvedOtherProjects = await Promise.all(otherProjects.map(async p => {
+    if (!p.projectPath) return p
     const absPath = p.projectPath.startsWith('/') || p.projectPath.startsWith('\\')
       ? p.projectPath
       : '/' + p.projectPath
     const canonical = await resolveCanonicalProjectPath(absPath)
     // Skip if path is unchanged: same location, not a worktree, not a subdir
     if (!canonical.isWorktree && canonical.path === absPath.replace(/[/\\]+$/, '')) return p
-    return { ...p, project: projectNameFromPath(canonical.path, p.project), projectPath: canonical.path }
+    return {
+      ...p,
+      project: projectNameFromPath(canonical.path, p.project),
+      projectPath: canonical.path,
+      projectIdentity: canonical.path,
+    }
   }))
 
   const mergedMap = mergeProjectsByCrossProviderKey([...claudeProjects, ...resolvedOtherProjects])

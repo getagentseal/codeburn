@@ -78,10 +78,17 @@ function usageIsEmpty(usage: TokenUsage): boolean {
 
 // A thread carries the workspace folder roots it was created against as a
 // newline-separated list. The display label is intentionally kept separate
-// from the stable path-set key because basenames are not unique.
+// from the stable root-set identity because basenames are not unique: two
+// threads rooted at /Users/alice/repo and /Users/bob/repo both display as
+// "repo" but must aggregate under distinct identities (single root: the
+// normalized absolute path; multi-root: the sorted normalized roots joined by
+// '\n'). `projectIdentity` carries that identity; `projectPath` is populated
+// only for single-root threads because multi-root sets are not filesystem
+// paths.
 type ThreadProject = {
   project: string
   projectPath?: string
+  projectIdentity: string
 }
 
 function pathComponents(path: string): string[] {
@@ -97,6 +104,25 @@ function pathComponents(path: string): string[] {
 
 function pathDisplaySuffix(path: string, detail: number): string {
   return pathComponents(path).slice(-(detail + 1)).join('/')
+}
+
+// Normalize one workspace root for the stable identity: slashes unified,
+// trailing separators stripped, and the filesystem root ('/') kept intact so
+// a root-only thread still carries a non-empty identity.
+function normalizeRoot(path: string): string {
+  const trimmed = path.trim()
+  const unified = trimmed.replace(/\\/g, '/')
+  if (/^\/+$/u.test(unified)) return '/'
+  if (/^[A-Za-z]:\/+$/u.test(unified)) return `${unified.slice(0, 2)}/`
+  return unified.replace(/\/+$/, '') || trimmed || '/'
+}
+
+// Stable root-set identity: ordered, deduplicated normalization of the thread's
+// workspace roots. Distinct from the display label built by displayNames(),
+// which keeps basenames and is therefore not unique across machines.
+function projectIdentity(paths: string[]): string {
+  const roots = [...new Set(paths.map(normalizeRoot).filter(Boolean))].sort()
+  return roots.join('\n')
 }
 
 function displayNames(paths: string[]): string[] {
@@ -129,10 +155,15 @@ function resolveThreadProject(folderPaths: unknown): ThreadProject | undefined {
   const paths = folderPaths.split('\n').map(p => p.trim()).filter(Boolean)
   if (paths.length === 0) return undefined
 
-  const names = displayNames(paths).filter(Boolean)
+  // Display label and aggregation identity deliberately diverge: the label is
+  // the disambiguated basename list, the identity is the normalized root-set
+  // (a single normalized path, or the sorted roots joined by '\n').
+  const normalizedRoots = [...new Set(paths.map(normalizeRoot))]
+  const names = displayNames(normalizedRoots).filter(Boolean)
   return {
     project: names.length > 0 ? names.join(', ') : 'Empty Workspace',
-    ...(paths.length === 1 ? { projectPath: paths[0]! } : {}),
+    ...(normalizedRoots.length === 1 ? { projectPath: normalizedRoots[0]! } : {}),
+    projectIdentity: projectIdentity(normalizedRoots),
   }
 }
 
@@ -154,6 +185,7 @@ function buildCall(opts: {
   userMessage: string
   project?: string
   projectPath?: string
+  projectIdentity?: string
 }): ParsedProviderCall {
   const input = num(opts.usage.input_tokens)
   const output = num(opts.usage.output_tokens)
@@ -179,6 +211,7 @@ function buildCall(opts: {
     sessionId: opts.threadId,
     ...(opts.project ? { project: opts.project } : {}),
     ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
+    ...(opts.projectIdentity ? { projectIdentity: opts.projectIdentity } : {}),
   }
 }
 

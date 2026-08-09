@@ -5,6 +5,12 @@ import { homedir } from 'os'
 import { join } from 'path'
 import type { DateRange, ProjectSummary } from './types.js'
 
+// Project day rollups are keyed by the stable identity (the project's path,
+// or the joined root-set identity for multi-folder Zed workspaces) rather than the
+// display label, which was not unique: two Zed threads rooted at
+// /Users/alice/repo and /Users/bob/repo both displayed as "repo" and would
+// otherwise merge into one daily entry under the first-seen path.
+//
 // Bumped to 17: Zed threads now attribute to their recorded workspace
 // folder(s) — a single folder becomes that project, multi-folder workspaces
 // become a joined-basename project ("codeburn, website") — instead of the
@@ -95,10 +101,10 @@ export type ModelDayStats = {
 
 export type CategoryDayStats = { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }
 
-/// `path` is the project's filesystem path when known — it is what display
-/// layers derive a friendly name from once the sessions that carried the
-/// mapping are gone.
-export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string }
+/// `path` is the project's filesystem path when known. `name` preserves a
+/// display label for identities such as multi-root workspaces that have no
+/// single filesystem path.
+export type ProjectDayStats = { cost: number; calls: number; savingsUSD: number; sessions: number; path?: string; name?: string }
 
 export type ProviderDaySlice = {
   calls: number
@@ -282,12 +288,12 @@ function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
   if (!isRecord(raw)) return {}
   const out: NonNullable<DailyEntry['projects']> = {}
   for (const [name, p] of Object.entries(raw)) {
-    // A project key is a directory basename, so it can legitimately be a
-    // prototype-member name ("constructor", "valueOf", ...). `setOwn` writes it
-    // as an own property via defineProperty, so keeping it is pollution-safe —
-    // and dropping it would silently subtract that project's cost from a
-    // --project/--exclude total (the day's split would no longer sum to its own
-    // cost, which the filtered headline relies on).
+    // An identity key can legitimately be a prototype-member name
+    // ("constructor", "valueOf", ...). `setOwn` writes it as an own property
+    // via defineProperty, so keeping it is pollution-safe — and dropping it
+    // would silently subtract that project's cost from a --project/--exclude
+    // total (the day's split would no longer sum to its own cost, which the
+    // filtered headline relies on).
     if (!isRecord(p)) continue
     setOwn(out, name, {
       cost: num(p.cost),
@@ -295,6 +301,7 @@ function sanitizeProjects(raw: unknown): { projects?: DailyEntry['projects'] } {
       savingsUSD: num(p.savingsUSD),
       sessions: num(p.sessions),
       ...(typeof p.path === 'string' && p.path.length > 0 ? { path: p.path } : {}),
+      ...(typeof p.name === 'string' && p.name.length > 0 ? { name: p.name } : {}),
     })
   }
   return Object.keys(out).length > 0 ? { projects: out } : {}
@@ -575,6 +582,7 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
     acc.calls += num(p.calls)
     acc.savingsUSD += num(p.savingsUSD)
     if (!acc.path && typeof p.path === 'string') acc.path = p.path
+    if (!acc.name && typeof p.name === 'string') acc.name = p.name
     // Same session dedup as the slice-level sessions above: a placeholder's
     // project sessions were already counted into the day when the fresh day
     // was built, so only the excess is added.
@@ -587,12 +595,19 @@ function addSliceIntoDay(day: DailyEntry, provider: string, slice: ProviderDaySl
   const mergedProjects = merged.projects
   if (mergedProjects) {
     for (const [name, p] of Object.entries(placeholderProjects)) {
-      if (!p || typeof p !== 'object') continue
-      if (Object.hasOwn(mergedProjects, name)) {
-        if (num(p.sessions) > num(mergedProjects[name]!.sessions)) mergedProjects[name]!.sessions = num(p.sessions)
-      } else {
-        setOwn(mergedProjects, name, { cost: 0, calls: 0, savingsUSD: 0, sessions: num(p.sessions) })
-      }
+        if (!p || typeof p !== 'object') continue
+        if (Object.hasOwn(mergedProjects, name)) {
+          if (num(p.sessions) > num(mergedProjects[name]!.sessions)) mergedProjects[name]!.sessions = num(p.sessions)
+          if (!mergedProjects[name]!.name && typeof p.name === 'string') mergedProjects[name]!.name = p.name
+        } else {
+          setOwn(mergedProjects, name, {
+            cost: 0,
+            calls: 0,
+            savingsUSD: 0,
+            sessions: num(p.sessions),
+            ...(typeof p.name === 'string' ? { name: p.name } : {}),
+          })
+        }
     }
   } else if (placeholder?.projects) {
     merged.projects = structuredClone(placeholder.projects)

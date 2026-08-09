@@ -1,6 +1,7 @@
 import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cache.js'
 import type { PeriodData } from './menubar-json.js'
-import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { CATEGORY_LABELS, type ProjectSummary, type SessionSummary, type TaskCategory } from './types.js'
+import { projectIdentityOf } from './project-identity.js'
 
 function emptyEntry(date: string): DailyEntry {
   return {
@@ -46,31 +47,54 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
     if (!s) { s = emptySlice(); day.providers[provider] = s }
     return s
   }
-  const ensureProject = (holder: { projects?: Record<string, ProjectDayStats> }, project: string, path?: string): ProjectDayStats => {
+  const ensureProject = (
+    holder: { projects?: Record<string, ProjectDayStats> },
+    project: string,
+    path?: string,
+    name?: string,
+  ): ProjectDayStats => {
     const projects = (holder.projects ??= {})
     // defineProperty so a project directory named "__proto__" becomes an own
     // key instead of mutating the prototype link.
     let p = Object.hasOwn(projects, project) ? projects[project] : undefined
     if (!p) {
-      p = { cost: 0, calls: 0, savingsUSD: 0, sessions: 0 }
+      p = {
+        cost: 0,
+        calls: 0,
+        savingsUSD: 0,
+        sessions: 0,
+        ...(name ? { name } : {}),
+      }
       Object.defineProperty(projects, project, { value: p, enumerable: true, writable: true, configurable: true })
     }
     if (!p.path && path) p.path = path
+    if (!p.name && name) p.name = name
     return p
   }
+
+  // Key per-day per-project rollups by the stable identity (path/root-set when
+  // known, display label otherwise) so two projects sharing a basename — e.g.
+  // Zed threads rooted at /Users/alice/repo and /Users/bob/repo, both labelled
+  // "repo" — stay separate in the persisted daily attribution instead of
+  // merging under the first-seen path. Multi-root labels are stored in `name`
+  // because their identity is not a filesystem path.
+  const projectRollupKey = (project: ProjectSummary, session: SessionSummary): string =>
+    projectIdentityOf(project, session.project)
+  const projectPath = (project: ProjectSummary): string | undefined => project.projectPath || undefined
+  const projectName = (project: ProjectSummary): string | undefined => project.projectPath ? undefined : project.project
 
   for (const project of projects) {
     for (const session of project.sessions) {
       const sessionDate = dateKey(session.firstTimestamp)
       const sessionDay = ensure(sessionDate)
       sessionDay.sessions += 1
-      ensureProject(sessionDay, session.project, project.projectPath).sessions += 1
+      ensureProject(sessionDay, projectRollupKey(project, session), projectPath(project), projectName(project)).sessions += 1
       // A session belongs to exactly one provider; its calls all carry it.
       const sessionProvider = session.turns.flatMap(t => t.assistantCalls)[0]?.provider
       if (sessionProvider) {
         const slice = ensureSlice(sessionDay, sessionProvider)
         slice.sessions! += 1
-        ensureProject(slice, session.project, project.projectPath).sessions += 1
+        ensureProject(slice, projectRollupKey(project, session), projectPath(project), projectName(project)).sessions += 1
       }
 
       for (const turn of session.turns) {
@@ -165,7 +189,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           callDay.cacheReadTokens += call.usage.cacheReadInputTokens
           callDay.cacheWriteTokens += call.usage.cacheCreationInputTokens
 
-          const dayProject = ensureProject(callDay, session.project, project.projectPath)
+          const dayProject = ensureProject(callDay, projectRollupKey(project, session), projectPath(project), projectName(project))
           dayProject.cost += call.costUSD
           dayProject.calls += 1
           dayProject.savingsUSD += callSavings
@@ -193,7 +217,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[]): DailyEntr
           slice.cacheReadTokens! += call.usage.cacheReadInputTokens
           slice.cacheWriteTokens! += call.usage.cacheCreationInputTokens
 
-          const sliceProject = ensureProject(slice, session.project, project.projectPath)
+          const sliceProject = ensureProject(slice, projectRollupKey(project, session), projectPath(project), projectName(project))
           sliceProject.cost += call.costUSD
           sliceProject.calls += 1
           sliceProject.savingsUSD += callSavings

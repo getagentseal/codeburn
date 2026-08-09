@@ -50,6 +50,9 @@ export type ParsedProviderCall = {
   sessionId: string
   project?: string
   projectPath?: string
+  /// Stable aggregation identity, distinct from projectPath for multi-root
+  /// workspaces. It must not be treated as a filesystem path.
+  projectIdentity?: string
   // Exact provider-recorded cwd, kept separately because projectPath may later
   // canonicalize a linked worktree to its main repository.
   workingDirectory?: string

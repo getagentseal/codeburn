@@ -35,12 +35,11 @@ function isAbsoluteProjectPath(path: string): boolean {
 }
 function projectName(p: ProjectSummary): string {
   const path = p.projectPath
-  if (path) {
-    if (path === homedir()) return 'Home'
-    if (!isAbsoluteProjectPath(path)) return p.project || path
-    const base = path.replace(/[/\\]+$/, '').split(/[/\\]/).filter(Boolean).pop()
-    if (base) return base
-  }
+  if (!path) return p.project
+  if (path === homedir()) return 'Home'
+  if (!isAbsoluteProjectPath(path)) return p.project || path
+  const base = path.replace(/[/\\]+$/, '').split(/[/\\]/).filter(Boolean).pop()
+  if (base) return base
   return p.project.split('-').filter(Boolean).pop() || p.project
 }
 

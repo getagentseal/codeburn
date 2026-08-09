@@ -34,6 +34,10 @@ function pct(n: number, total: number): number {
   return total > 0 ? round2((n / total) * 100) : 0
 }
 
+function projectLabel(project: ProjectSummary): string {
+  return project.projectPath || project.project
+}
+
 type DailyAgg = {
   cost: number
   savings: number
@@ -90,7 +94,7 @@ function buildRecordRows(projects: ProjectSummary[]): Row[] {
       for (const turn of session.turns) {
         for (const call of turn.assistantCalls) {
           rows.push({
-            project: project.projectPath,
+            project: projectLabel(project),
             sessionId: session.sessionId,
             timestamp: call.timestamp || turn.timestamp || undefined,
             category: turn.category,
@@ -245,7 +249,7 @@ function buildProjectRows(projects: ProjectSummary[]): Row[] {
     .slice()
     .sort((a, b) => (b.totalCostUSD + b.totalSavingsUSD) - (a.totalCostUSD + a.totalSavingsUSD))
     .map(p => ({
-      Project: p.projectPath,
+      Project: projectLabel(p),
       [`Cost (${code})`]: roundForActiveCurrency(convertCost(p.totalCostUSD)),
       [`Saved (${code})`]: roundForActiveCurrency(convertCost(p.totalSavingsUSD)),
       [`Avg/Session (${code})`]: p.sessions.length > 0 ? roundForActiveCurrency(convertCost(p.totalCostUSD / p.sessions.length)) : '',
@@ -264,7 +268,7 @@ function buildSessionRows(projects: ProjectSummary[]): Row[] {
         s.turns.flatMap(turn => turn.assistantCalls.map(call => call.model).filter(Boolean)),
       )
       rows.push({
-        Project: p.projectPath,
+        Project: projectLabel(p),
         'Session ID': s.sessionId,
         'Started At': s.firstTimestamp ?? '',
         [`Cost (${code})`]: roundForActiveCurrency(convertCost(s.totalCostUSD)),

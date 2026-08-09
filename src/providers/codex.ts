@@ -641,7 +641,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // Guarded for the same reason as discoverSessionFile: parseCodexLine
           // hands back an unchecked JSON.parse cast, and a non-string cwd would
           // ride into projectPath/workingDirectory where the parser's path
-          // helpers (normalizeProjectPathKey, resolveCanonicalProjectPath) call
+          // helpers (normalizeProjectIdentity, resolveCanonicalProjectPath) call
           // string methods on it.
           const rawSessionCwd: unknown = entry.payload?.cwd
           if (typeof rawSessionCwd === 'string' && rawSessionCwd) sessionCwd = rawSessionCwd

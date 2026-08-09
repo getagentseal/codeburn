@@ -231,6 +231,7 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
     const calls = await collectCalls(dbPath)
     expect(calls.length).toBe(1)
     expect(calls[0]!.projectPath).toBe('/Users/dev/codeburn')
+    expect(calls[0]!.projectIdentity).toBe('/Users/dev/codeburn')
     expect(calls[0]!.project).toBe('codeburn')
   })
 
@@ -250,6 +251,70 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
     expect(calls.length).toBe(1)
     expect(calls[0]!.project).toBe('codeburn, website')
     expect(calls[0]!.projectPath).toBeUndefined()
+    expect(calls[0]!.projectIdentity).toBe('/Users/dev/codeburn\n/Users/dev/website')
+  })
+
+  it('keeps the root-set identity sorted and normalized independently of the display label', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-unsorted',
+        folderPaths: ['/Users/zeta/website', '/Users/alpha/codeburn/'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+      insertThread(db, {
+        id: 'thread-dup',
+        folderPaths: ['/Users/alpha/codeburn', '/Users/alpha/codeburn'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.find(c => c.sessionId === 'thread-dup')!.projectPath).toBe('/Users/alpha/codeburn')
+    expect(calls.find(c => c.sessionId === 'thread-dup')!.projectIdentity).toBe('/Users/alpha/codeburn')
+    // Stored order is preserved for the display label; the identity sorts the
+    // roots so the same workspace is unambiguously keyed on any machine.
+    expect(calls.find(c => c.sessionId === 'thread-unsorted')!.project).toBe('website, codeburn')
+    expect(calls.find(c => c.sessionId === 'thread-unsorted')!.projectPath).toBeUndefined()
+    expect(calls.find(c => c.sessionId === 'thread-unsorted')!.projectIdentity).toBe('/Users/alpha/codeburn\n/Users/zeta/website')
+  })
+
+  it('carries identical basenames under distinct roots as distinct identities', async () => {
+    const dbPath = buildDb((db) => {
+      insertThread(db, {
+        id: 'thread-alice',
+        folderPaths: ['/Users/alice/repo'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+      insertThread(db, {
+        id: 'thread-bob',
+        folderPaths: ['/Users/bob/repo'],
+        thread: {
+          model: { model: 'claude-opus-4-8' },
+          request_token_usage: { 'req-1': { input_tokens: 100, output_tokens: 50 } },
+        },
+      })
+    })
+
+    const calls = await collectCalls(dbPath)
+    expect(calls.length).toBe(2)
+    const alice = calls.find(c => c.sessionId === 'thread-alice')!
+    const bob = calls.find(c => c.sessionId === 'thread-bob')!
+    expect(alice.project).toBe('repo')
+    expect(bob.project).toBe('repo')
+    expect(alice.projectPath).toBe('/Users/alice/repo')
+    expect(bob.projectPath).toBe('/Users/bob/repo')
+    expect(alice.projectIdentity).toBe('/Users/alice/repo')
+    expect(bob.projectIdentity).toBe('/Users/bob/repo')
+    expect(alice.projectPath).not.toBe(bob.projectPath)
   })
 
   it('joins multi-folder basenames in stored order and drops empty names', async () => {
@@ -276,8 +341,12 @@ describe.skipIf(skipReason !== null)('zed provider (#480)', () => {
     expect(calls.length).toBe(2)
     expect(calls.find(c => c.sessionId === 'thread-triple')!.project).toBe('codeburn, design, website')
     expect(calls.find(c => c.sessionId === 'thread-triple')!.projectPath).toBeUndefined()
+    expect(calls.find(c => c.sessionId === 'thread-triple')!.projectIdentity).toBe('/Users/dev/codeburn\n/Users/dev/design\n/Users/dev/website')
     expect(calls.find(c => c.sessionId === 'thread-root-only')!.project).toBe('website')
+    // A bare '/' root keeps itself in the identity (it is the filesystem
+    // root, not an empty string) so root-only workspaces stay keyable.
     expect(calls.find(c => c.sessionId === 'thread-root-only')!.projectPath).toBeUndefined()
+    expect(calls.find(c => c.sessionId === 'thread-root-only')!.projectIdentity).toBe('/\n/Users/dev/website')
   })
 
   it('falls back to the zed bucket when folder_paths is empty or absent', async () => {
