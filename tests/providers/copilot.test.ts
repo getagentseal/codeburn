@@ -410,6 +410,45 @@ describe('copilot provider - JSONL parsing', () => {
     expect(byId('msg-after').subagentTypes).toBeUndefined()
   })
 
+  it('ignores a completed event whose non-empty toolCallId matches no active run', async () => {
+    // A completion for a run we never saw start must not evict an unrelated
+    // active run; only a genuinely ID-less completion may pop the stack.
+    const eventsPath = await createSessionDir('sess-subagent-unmatched', [
+      modelChange('claude-sonnet-5'),
+      JSON.stringify({
+        type: 'subagent.started',
+        timestamp: '2026-08-07T10:00:11Z',
+        data: { toolCallId: 'call-A', agentName: 'explore' },
+      }),
+      JSON.stringify({
+        type: 'subagent.completed',
+        timestamp: '2026-08-07T10:00:12Z',
+        data: { toolCallId: 'call-unknown', agentName: 'phantom' },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T10:00:14Z',
+        data: { messageId: 'msg-1', model: 'claude-sonnet-5', outputTokens: 10, toolRequests: [] },
+      }),
+      JSON.stringify({
+        type: 'subagent.completed',
+        timestamp: '2026-08-07T10:00:15Z',
+        data: { agentName: 'legacy-no-id' },
+      }),
+      JSON.stringify({
+        type: 'assistant.message',
+        timestamp: '2026-08-07T10:00:16Z',
+        data: { messageId: 'msg-2', model: 'claude-sonnet-5', outputTokens: 12, toolRequests: [] },
+      }),
+    ])
+
+    const calls = await collectCalls({ path: eventsPath, project: 'test', provider: 'copilot', sourceType: 'jsonl' })
+    // The unmatched completion left 'explore' active…
+    expect(calls.find(c => c.deduplicationKey.endsWith(':msg-1'))!.subagentTypes).toEqual(['explore'])
+    // …and the ID-less completion (legacy shape) ended it.
+    expect(calls.find(c => c.deduplicationKey.endsWith(':msg-2'))!.subagentTypes).toBeUndefined()
+  })
+
   it('keeps subagent.selected sticky when no completed event ever arrives', async () => {
     // Older CLIs only write subagent.selected; nothing clears it.
     const eventsPath = await createSessionDir('sess-subagent-selected', [

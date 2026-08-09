@@ -798,18 +798,22 @@ function createJsonlParser(
 
         if (event.type === 'subagent.completed') {
           const id = (event.data as SubagentSelectedData).toolCallId ?? ''
-          let idx = -1
-          for (let i = activeSubagents.length - 1; i >= 0; i--) {
-            if (activeSubagents[i]!.toolCallId === id) { idx = i; break }
-          }
-          if (idx >= 0) {
-            activeSubagents.splice(idx, 1)
-          } else {
-            // Unmatched completed (id missing or never started): end the most
-            // recent run rather than someone else's; on an empty stack this is
-            // an explicit no-op.
+          if (!id) {
+            // ID-less completion (transitional CLIs that key nothing, like
+            // subagent.selected): end the most recently started run; explicit
+            // no-op on an empty stack.
             activeSubagents.pop()
+            continue
           }
+          for (let i = activeSubagents.length - 1; i >= 0; i--) {
+            if (activeSubagents[i]!.toolCallId === id) {
+              activeSubagents.splice(i, 1)
+              break
+            }
+          }
+          // A non-empty id that matches nothing refers to a run we never saw
+          // start — leave the active runs alone rather than evicting an
+          // unrelated one.
           continue
         }
 
