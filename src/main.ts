@@ -1375,6 +1375,51 @@ program
   })
 
 program
+  .command('calibrate')
+  .description('Record live plan-window utilization samples for plan-burn calibration (local only)')
+  .option('--enable', 'Turn sampling on (the resident serve process samples every few minutes)')
+  .option('--disable', 'Turn sampling off (recorded samples are kept)')
+  .option('--sample', 'Take one sample right now')
+  .action(async (opts: { enable?: boolean; disable?: boolean; sample?: boolean }) => {
+    const { readSamplesInfo, sampleUsageNow, usageSamplesPath } = await import('./usage-sampler.js')
+
+    if (opts.enable || opts.disable) {
+      const config = await readConfig()
+      config.calibration = { enabled: Boolean(opts.enable) }
+      await saveConfig(config)
+      console.log(`\n  Calibration sampling ${opts.enable ? 'enabled' : 'disabled'}.`)
+    }
+
+    if (opts.enable || opts.sample) {
+      const outcome = await sampleUsageNow({ force: true })
+      if (outcome.ok) {
+        const parts = [
+          outcome.sample.fiveHour ? `5h ${outcome.sample.fiveHour.pct}%` : undefined,
+          outcome.sample.sevenDay ? `weekly ${outcome.sample.sevenDay.pct}%` : undefined,
+          ...(outcome.sample.scoped ?? []).map(w => `${w.label} ${w.pct}%`),
+        ].filter(Boolean)
+        console.log(`  Sampled: ${parts.join(' · ')}`)
+      } else {
+        const why: Record<string, string> = {
+          'no-token': 'no Claude Code OAuth token found (run claude once to sign in)',
+          'http-error': 'the usage endpoint refused the request',
+          'malformed': 'the usage endpoint returned an unexpected shape',
+          'network': 'the usage endpoint was unreachable',
+          'throttled': 'sampled too recently',
+        }
+        console.log(`  Sample failed: ${why[outcome.reason] ?? outcome.reason}.`)
+        if (opts.enable) console.log('  Sampling stays enabled; the serve process retries on its own.')
+      }
+    }
+
+    const config = await readConfig()
+    const info = await readSamplesInfo()
+    console.log(`\n  Status: ${config.calibration?.enabled ? 'enabled' : 'disabled'}`)
+    console.log(`  Samples: ${info.count}${info.firstTs ? ` (${info.firstTs} → ${info.lastTs})` : ''}`)
+    console.log(`  File: ${usageSamplesPath()}\n`)
+  })
+
+program
   .command('model-alias [from] [to]')
   .description('Map a provider model name to a canonical one for pricing (e.g. codeburn model-alias my-model claude-opus-4-6)')
   .option('--remove <from>', 'Remove an alias')
@@ -2360,6 +2405,15 @@ return program
 
 if (process.argv[2] === 'serve') {
   const { runStdioServe } = await import('./serve.js')
+  // Opt-in calibration rides on the resident process: a low-cadence tick whose
+  // real spacing is enforced by the sampler's own mtime throttle. unref'd so it
+  // never keeps serve alive, and every failure mode is a quiet typed outcome.
+  const calibrationOn = await readConfig().then(c => c.calibration?.enabled === true).catch(() => false)
+  if (calibrationOn) {
+    const { sampleUsageNow } = await import('./usage-sampler.js')
+    void sampleUsageNow().catch(() => {})
+    setInterval(() => { void sampleUsageNow().catch(() => {}) }, 60_000).unref()
+  }
   await runStdioServe(buildProgram)
 } else {
   buildProgram().parse()

@@ -61,6 +61,12 @@ export type CodeburnConfig = {
   // Matched against the canonical project path: prefix on a path-segment
   // boundary, case-insensitive, trailing-slash and backslash tolerant.
   proxyPaths?: string[]
+  // Opt-in plan-limit calibration: when enabled, the resident serve process
+  // periodically records Anthropic's live plan-window utilization to a local
+  // JSONL (usage-sampler.ts) so plan-burn weights can be fitted later.
+  calibration?: {
+    enabled?: boolean
+  }
 }
 
 function getConfigDir(): string {
