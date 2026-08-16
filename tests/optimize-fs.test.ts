@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterAll, afterEach, beforeEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -29,6 +29,7 @@ import {
   estimateContextBudget,
   discoverProjectCwd,
 } from '../src/context-budget.js'
+import type { ProjectSummary } from '../src/types.js'
 
 // ============================================================================
 // Helpers for filesystem fixtures
@@ -370,6 +371,64 @@ describe('scanAndDetect', () => {
     expect(result.healthScore).toBe(100)
     expect(result.healthGrade).toBe('A')
     expect(result.costRate).toBe(0)
+  })
+
+  // The session scan only ever reads Claude Code transcripts, so under a
+  // non-Claude --provider it used to report Claude-derived findings beside a
+  // header scoped to the other provider - e.g. `optimize --provider codex`
+  // printing a read/edit ratio counted from Claude sessions.
+  describe('provider scoping', () => {
+    // These fixtures live in the shared fake home, so they have to come back
+    // out: later suites in this file assert on an otherwise empty ~/.claude.
+    const CLAUDE_DIR = join(FAKE_HOME_FOR_MOCK, '.claude')
+    afterEach(() => {
+      for (const sub of ['projects', 'skills']) {
+        rmSync(join(CLAUDE_DIR, sub), { recursive: true, force: true })
+      }
+    })
+
+    function claudeSessionWithEditHeavyTurns(): void {
+      const projectDir = join(CLAUDE_DIR, 'projects', 'provider-scope')
+      mkdirSync(projectDir, { recursive: true })
+      const now = new Date().toISOString()
+      const entry = (name: string, file: string) => JSON.stringify({
+        type: 'assistant', timestamp: now,
+        message: { content: [{ type: 'tool_use', name, input: { file_path: file } }] },
+      })
+      const lines = [entry('Read', '/src/a.ts')]
+      for (let i = 0; i < 12; i++) lines.push(entry('Edit', `/src/f${i}.ts`))
+      writeFileSync(join(projectDir, 'session.jsonl'), lines.join('\n'))
+    }
+
+    function projectFixture(): ProjectSummary {
+      return {
+        project: 'provider-scope',
+        projectPath: '/tmp/provider-scope',
+        sessions: [],
+        totalCostUSD: 1,
+        totalApiCalls: 13,
+      } as unknown as ProjectSummary
+    }
+
+    it('reports transcript-derived findings when scoped to claude', async () => {
+      claudeSessionWithEditHeavyTurns()
+      const result = await scanAndDetect([projectFixture()], undefined, 'claude')
+      expect(result.findings.map(f => f.id)).toContain('read-edit-ratio')
+    })
+
+    it('omits transcript-derived findings when scoped to another provider', async () => {
+      claudeSessionWithEditHeavyTurns()
+      mkdirSync(join(CLAUDE_DIR, 'skills', 'never-invoked'), { recursive: true })
+      writeFileSync(join(CLAUDE_DIR, 'skills', 'never-invoked', 'SKILL.md'), '# skill\n')
+
+      const result = await scanAndDetect([projectFixture()], undefined, 'codex')
+      const ids = result.findings.map(f => f.id)
+
+      expect(ids).not.toContain('read-edit-ratio')
+      // An unmeasured skill must not be reported as an unused one: the scan
+      // returns nothing under this filter, which is not evidence of disuse.
+      expect(ids).not.toContain('unused-skills')
+    })
   })
 })
 

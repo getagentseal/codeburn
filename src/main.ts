@@ -1849,9 +1849,9 @@ program
         appliedHeader = buildOptimizeAppliedHeader(applied) ?? undefined
         previouslyApplied = applied.appliedByFinding
       } catch { /* the header is optional; never block the findings */ }
-      await runOptimize(projects, label, range, { format, appliedHeader, previouslyApplied })
+      await runOptimize(projects, label, range, { format, appliedHeader, previouslyApplied, provider: opts.provider })
     } else {
-      await runOptimize(projects, label, range, { format })
+      await runOptimize(projects, label, range, { format, provider: opts.provider })
     }
   })
 

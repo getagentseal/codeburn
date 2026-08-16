@@ -551,7 +551,18 @@ export async function scanJsonlFile(
   return { calls, cwds, apiCalls, userMessages }
 }
 
-async function scanSessions(dateRange?: DateRange): Promise<ScanData> {
+// The session scan reads Claude Code transcripts only, so a `--provider` that
+// excludes Claude leaves nothing for it to do. Callers must also skip the
+// detectors it feeds (see `claudeOnly` in scanAndDetect) — the empty scan
+// returned here is an absence of measurement, not a measurement of absence.
+export function providerCoversClaude(provider?: string): boolean {
+  return !provider || provider === 'all' || provider === 'claude'
+}
+
+async function scanSessions(dateRange?: DateRange, provider?: string): Promise<ScanData> {
+  if (!providerCoversClaude(provider)) {
+    return { toolCalls: [], projectCwds: new Set(), apiCalls: [], userMessages: [] }
+  }
   const sources = await discoverAllSessions('claude')
   const allCalls: ToolCall[] = []
   const allCwds = new Set<string>()
@@ -2977,7 +2988,7 @@ export function computeInputCostRate(projects: ProjectSummary[]): number {
 type CacheEntry = { data: OptimizeResult; ts: number }
 const resultCache = new Map<string, CacheEntry>()
 
-export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | undefined): string {
+export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | undefined, provider?: string): string {
   const dr = dateRange ? `${dateRange.start.getTime()}-${dateRange.end.getTime()}` : 'all'
   // Fingerprint enough of the dataset that two materially different inputs
   // cannot collide onto one cached OptimizeResult. Project count + api-call
@@ -2994,23 +3005,27 @@ export function cacheKey(projects: ProjectSummary[], dateRange: DateRange | unde
   }
   // Costs scaled to whole micro-dollars so float jitter cannot thrash the key.
   const fingerprint = `${projects.length}:${calls}:${Math.round(cost * 1e6)}:${Math.round(savings * 1e6)}:${Math.round(proxied * 1e6)}`
-  return `${dr}:${fingerprint}`
+  // The provider decides whether the Claude session scan runs at all, so two
+  // filters that happen to share a project fingerprint must not share a result.
+  return `${provider ?? 'all'}:${dr}:${fingerprint}`
 }
 
 export async function scanAndDetect(
   projects: ProjectSummary[],
   dateRange?: DateRange,
+  provider?: string,
 ): Promise<OptimizeResult> {
   if (projects.length === 0) {
     return { findings: [], costRate: 0, healthScore: 100, healthGrade: 'A', modelRecommendations: [] }
   }
 
-  const key = cacheKey(projects, dateRange)
+  const key = cacheKey(projects, dateRange, provider)
   const cached = resultCache.get(key)
   if (cached && Date.now() - cached.ts < RESULT_CACHE_TTL_MS) return cached.data
 
   const costRate = computeInputCostRate(projects)
-  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange)
+  const scanCoversClaude = providerCoversClaude(provider)
+  const { toolCalls, projectCwds, apiCalls, userMessages } = await scanSessions(dateRange, provider)
   const mcpCoverage = aggregateMcpCoverage(projects)
 
   const findings: WasteFinding[] = []
@@ -3025,35 +3040,44 @@ export async function scanAndDetect(
   )
   const firstSessionIds = findYoungProjectFirstSessionIds(projects)
   const outlierExclusions = new Set([...lowWorthSessionIds, ...contextBloatVisibleIds, ...firstSessionIds])
+  // Detectors fed by the session scan or by `~/.claude` config only mean
+  // anything when the run covers Claude. Under a different `--provider` they
+  // must be skipped rather than handed an empty scan: emptiness reads as
+  // "never invoked", so every skill, agent and command would be reported as
+  // unused when it was simply not measured.
+  const claudeOnly = (detect: () => WasteFinding | null): (() => WasteFinding | null) =>
+    scanCoversClaude ? detect : () => null
   const syncDetectors: Array<() => WasteFinding | null> = [
-    () => detectCacheBloat(apiCalls, projects, dateRange),
-    () => detectLowReadEditRatio(toolCalls),
-    () => detectJunkReads(toolCalls, dateRange),
-    () => detectDuplicateReads(toolCalls, dateRange),
-    () => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage),
+    claudeOnly(() => detectCacheBloat(apiCalls, projects, dateRange)),
+    claudeOnly(() => detectLowReadEditRatio(toolCalls)),
+    claudeOnly(() => detectJunkReads(toolCalls, dateRange)),
+    claudeOnly(() => detectDuplicateReads(toolCalls, dateRange)),
+    claudeOnly(() => detectUnusedMcp(toolCalls, projects, projectCwds, mcpCoverage)),
     () => detectMcpToolCoverage(projects, mcpCoverage),
     () => detectMcpProfileAdvisor(projects, mcpCoverage),
     // mcp-deferral-gaps family (#614): detection only, no apply plans yet.
-    () => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls),
-    () => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage),
-    () => detectMcpDeferThreshold(projects, projectCwds),
+    claudeOnly(() => detectMcpDeferralOff(toolCalls, projects, projectCwds, apiCalls)),
+    claudeOnly(() => detectMcpAlwaysLoadHygiene(projects, projectCwds, apiCalls, mcpCoverage)),
+    claudeOnly(() => detectMcpDeferThreshold(projects, projectCwds)),
     () => detectCapabilityReliability(projects),
     () => detectLowWorthSessions(projects),
     () => detectContextBloat(projects, lowWorthSessionIds),
     () => detectSessionOutliers(projects, outlierExclusions),
-    () => detectBloatedClaudeMd(projectCwds),
-    () => detectBashBloat(),
+    claudeOnly(() => detectBloatedClaudeMd(projectCwds)),
+    claudeOnly(() => detectBashBloat()),
   ]
   for (const detect of syncDetectors) {
     const finding = detect()
     if (finding) findings.push(finding)
   }
 
-  const ghostResults = await Promise.all([
-    detectGhostAgents(toolCalls),
-    detectGhostSkills(toolCalls),
-    detectGhostCommands(userMessages),
-  ])
+  const ghostResults = scanCoversClaude
+    ? await Promise.all([
+      detectGhostAgents(toolCalls),
+      detectGhostSkills(toolCalls),
+      detectGhostCommands(userMessages),
+    ])
+    : []
   for (const f of ghostResults) if (f) findings.push(f)
 
   findings.sort((a, b) => urgencyScore(b) - urgencyScore(a))
@@ -3281,7 +3305,7 @@ export async function runOptimize(
   projects: ProjectSummary[],
   periodLabel: string,
   dateRange?: DateRange,
-  opts: { format?: 'text' | 'json'; appliedHeader?: string; previouslyApplied?: Record<string, string> } = {},
+  opts: { format?: 'text' | 'json'; appliedHeader?: string; previouslyApplied?: Record<string, string>; provider?: string } = {},
 ): Promise<void> {
   const format = opts.format ?? 'text'
   if (projects.length === 0 && format === 'text') {
@@ -3293,7 +3317,7 @@ export async function runOptimize(
     process.stderr.write(chalk.dim('  Analyzing your sessions...\n'))
   }
 
-  const result = await scanAndDetect(projects, dateRange)
+  const result = await scanAndDetect(projects, dateRange, opts.provider)
   const { findings, costRate, healthScore, healthGrade } = result
   const sessions = projects.flatMap(p => p.sessions)
   const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
