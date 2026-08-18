@@ -11,10 +11,25 @@ command: codeburn-run
 separate-locales: false
 
 finish-args:
-  # CodeBurn reads local session logs written by AI coding tools into
-  # dot-directories across the home dir (~/.claude, ~/.codex, ~/.cursor, ...).
-  # Everything is parsed locally; nothing is uploaded.
-  - --filesystem=home
+  # CodeBurn only ever READS: session logs in dot-directories all over the home
+  # dir (~/.claude, ~/.codex, ~/.cursor, ... 45 providers and counting), and the
+  # user's own project directories, which git attribution, CLAUDE.md discovery
+  # and per-project MCP config all need. Everything is parsed locally; nothing
+  # is uploaded.
+  #
+  # So the grant is the whole home, read-only. Enumerating provider directories
+  # instead was tried and rejected: it cannot cover project directories at all
+  # (they are arbitrary paths), and it silently drops any provider whose root is
+  # not on the list -- ~/.kimi-code, ~/.clawdbot, ~/.local/share/devin/cli and
+  # the multi-account Claude roots are all real examples. A missing grant fails
+  # as ENOENT, which is indistinguishable from "tool not installed".
+  - --filesystem=home:ro
+  # The two exceptions, both write paths CodeBurn owns:
+  #   settings, act journal, sharing store, sync credentials
+  - --filesystem=~/.config/codeburn:create
+  #   `codeburn export` needs somewhere real to land; under home:ro it would
+  #   write to the sandbox tmpfs and report success.
+  - --filesystem=xdg-download:create
   - --share=ipc
   - --socket=x11
   - --socket=wayland
@@ -49,6 +64,23 @@ modules:
       - type: script
         dest-filename: codeburn-run
         commands:
+          # $HOME is not redirected inside the sandbox, so CodeBurn's default
+          # ~/.cache/codeburn lands on the tmpfs and every launch re-fetches the
+          # LiteLLM table and cold-parses. Same story for OpenCode, which
+          # resolves through XDG_DATA_HOME. Both are filled in only when the
+          # user has not set them: `:+` rather than `+` because getCodeburnCacheDir
+          # and getDataDir both treat an empty value as unset, so an empty
+          # variable would otherwise reintroduce exactly this bug. XDG_CACHE_HOME
+          # carries its own `:-` default so a launch that unsets it cannot turn
+          # the cache dir into the literal "/codeburn".
+          - |
+            if [ -z "${CODEBURN_CACHE_DIR:+x}" ]; then
+              export CODEBURN_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/codeburn"
+            fi
+          - |
+            if [ -z "${OPENCODE_DATA_DIR:+x}" ]; then
+              export OPENCODE_DATA_DIR="${HOME}/.local/share/opencode"
+            fi
           - exec zypak-wrapper /app/codeburn/codeburn "$@"
       - type: file
         path: org.agentseal.CodeBurn.desktop
