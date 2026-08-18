@@ -59,6 +59,14 @@ value as unset, so the guards use `:+` rather than `+`):
   resolves through `XDG_DATA_HOME`, which Flatpak redirects into the sandbox, so
   the provider would find nothing.
 
+If a user needs CodeBurn to write somewhere else — an export destination the
+portal-backed directory picker does not cover, for instance — that is a
+per-install decision rather than a manifest one:
+
+```bash
+flatpak override --user --filesystem=~/Documents org.agentseal.CodeBurn
+```
+
 `tests/flatpak-grants.test.ts` pins the read-only property: it fails if a
 writable whole-home grant reappears, if `home:ro` goes missing, or if a writable
 grant is added without being declared and justified in that test.
