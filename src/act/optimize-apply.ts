@@ -13,6 +13,10 @@ export type ApplyOptions = {
   yes?: boolean
   dryRun?: boolean
   only?: string
+  // Mirrors `optimize --provider`. The scan below only reads Claude
+  // transcripts, and this path does not just report findings, it plans and
+  // applies them - a Codex-scoped run must never offer to edit ~/.claude.
+  provider?: string
   actionsDir?: string
   ctx?: PlanContext
   // Test seams: crafted findings skip the session scan; streams default to
@@ -103,7 +107,7 @@ export async function runOptimizeApply(
   let costRate = opts.costRate ?? 0
   if (!findings) {
     errout.write(chalk.dim('  Analyzing your sessions...\n'))
-    const scanned = await scanAndDetect(projects, dateRange)
+    const scanned = await scanAndDetect(projects, dateRange, opts.provider)
     findings = scanned.findings
     costRate = scanned.costRate
   }
