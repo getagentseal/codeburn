@@ -289,6 +289,17 @@ const BUILTIN_ALIASES: Record<string, string> = {
   'claude-4-7-opus-xhigh':         'claude-opus-4-7',
   'claude-4-7-opus-xhigh-fast':    'claude-opus-4-7',
   'qwen-auto':                     'claude-sonnet-4-5',
+  // OrcaRouter's smart route. The route picks a model per request; at the time
+  // of writing it lands on a Qwen/Llama flash model, so a fast Sonnet rate is
+  // the honest estimate until the route's target stabilizes (mirrors the
+  // `*-auto` presets above).
+  'orcarouter/auto':               'claude-sonnet-4-5',
+  // OrcaRouter's fusion routes currently serve openai/gpt-oss-120b (verified
+  // live 2026-08). If the gateway re-routes them, these drift like any other
+  // preset estimate; they keep a priced row instead of reporting $0.
+  'orcarouter/fusion':             'openai/gpt-oss-120b',
+  'orcarouter/fusion-flash':       'openai/gpt-oss-120b',
+  'orcarouter/fusion-mini':        'openai/gpt-oss-120b',
   'kimi-auto':                     'kimi-k2-thinking',
   'kimi-code':                     'kimi-k2-thinking',
   'kimi-for-coding':               'kimi-k2-thinking',
@@ -622,7 +633,7 @@ function getCanonicalName(model: string): string {
 // `nousresearch/`, …) is never dropped by a stale list.
 const EXTRA_NAMESPACES = [
   // Routing wrappers (see ROUTER_PREFIXES); no catalog lists them.
-  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity',
+  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity', 'orcarouter',
   // LiteLLM route prefixes that never appear as a key prefix.
   'litellm_proxy', 'openai_like',
   // Vendor spellings the catalog indexes under another name: `zhipu` is `z-ai`,
@@ -661,6 +672,12 @@ function stripKnownFirstNamespace(model: string): string {
 
 // Routing wrappers (OmniRoute, Cline Pass, cmd/, …) are not model ids.
 // Peel them so any plan/gateway spelling of the same model shares one price.
+// OrcaRouter is a gateway that routes to many vendors. Its catalog exposes
+// route ids (`orcarouter/auto`, `orcarouter/fusion`, …) and plain vendor ids
+// (`deepseek/deepseek-v4-pro`); a route id can also spell a nested upstream
+// (`orcarouter/deepseek/deepseek-v4-pro`), and the completion response's
+// `model` field reports the upstream id that actually ran. Peeling the prefix
+// lets every routed spelling price at the upstream row.
 const ROUTER_PREFIXES = [
   /^omniroute:/i,
   /^cp\//i,
@@ -668,6 +685,7 @@ const ROUTER_PREFIXES = [
   /^cline-free\//i,
   /^cmd\//i,
   /^antigravity\//i,
+  /^orcarouter\//i,
   // `xiaomi/` is NOT peeled: it is the vendor namespace LiteLLM prices under,
   // and BUILTIN_ALIASES maps the bare MiMo ids INTO it. Peeling would pull the
   // opposite way. It stays a known namespace via the catalog-derived set.
@@ -965,6 +983,14 @@ const autoModelNames: Record<string, string> = {
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',
   'kimi-auto': 'Kimi (auto)',
+  // OrcaRouter route ids. The smart route routes per request and the fusion
+  // routes resolve to a gateway-picked upstream, so each keeps its branded
+  // route label rather than the current upstream's display name. Prices are
+  // aliased in BUILTIN_ALIASES to the route's current target.
+  'orcarouter/auto': 'OrcaRouter (auto)',
+  'orcarouter/fusion': 'OrcaRouter Fusion',
+  'orcarouter/fusion-flash': 'OrcaRouter Fusion Flash',
+  'orcarouter/fusion-mini': 'OrcaRouter Fusion Mini',
 }
 
 const SHORT_NAMES: Record<string, string> = {
