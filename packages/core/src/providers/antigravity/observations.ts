@@ -8,6 +8,7 @@ import { projectRef, sessionRef } from '../../fingerprint.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import type { AntigravityDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 /** One Antigravity cascade's rich decode, as the host holds it before minimization. */
 export interface RichAntigravitySessionDecode {
@@ -27,7 +28,7 @@ export interface AntigravityToObservationsContext {
 function toCallObservation(call: AntigravityDecodedCall, turnIndex: number): CallObservation {
   return {
     provider: call.provider,
-    model: call.model,
+    model: normalizeModelIdentifier(call.model),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

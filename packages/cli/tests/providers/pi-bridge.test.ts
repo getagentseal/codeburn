@@ -5,14 +5,18 @@ import { describe, it, expect } from 'vitest'
 
 import { createPiProvider, createOmpProvider } from '../../src/providers/pi.js'
 import { priceProviderCall } from '../../src/pricing-pass.js'
+import { getHostPrivacyKey } from '../../src/privacy-key.js'
+import { sourceRefFingerprint } from '@codeburn/core'
 import type { ParsedProviderCall, SessionSource } from '../../src/providers/types.js'
 
 // Byte-identical parity gate for the pi/omp bridge migration (phase 8). One core
 // decode serves both providers; the GOLDENs were captured from the legacy in-CLI
 // decode (git show origin/feat/core-extraction:packages/cli/src/providers/pi.ts)
-// run over the committed fixtures. Covers: the `<provider>:<absPath>:<id>` dedup
-// key — anchored to the SESSION FILE PATH, not the sessionId, and computed from
-// FIXTURE_DIR so the golden is checkout-portable — plus its
+// run over the committed fixtures. Covers: the
+// `<provider>:<sourceRefFingerprint>:<id>` dedup key — the raw session file
+// path is the defect and must never appear (dedupKey ships on the envelope), so
+// the expected values are DERIVED from the session file path via the same
+// sourceRefFingerprint the decoder uses — plus its
 // responseId||entryId||timestamp||lineIdx fallback chain; sessionId from the
 // session entry `id` vs the basename-of-path fallback (omp entry omits id ->
 // 'ofile'); SKILL.md and skill:// reads reclassified as the `Skill` tool with
@@ -26,6 +30,12 @@ const OMP_DIR = resolve(here, '../fixtures/pi-parity/omp-sessions')
 
 const PI_PATH = resolve(PI_DIR, 'proj1/sess-file.jsonl')
 const OMP_PATH = resolve(OMP_DIR, 'projO/ofile.jsonl')
+// The bridge threads the HOST privacy key into the rich decode
+// (getHostPrivacyKey, per-install stable), so the decoder keys the source ref
+// under that key — derive the expected keys the same way instead of pasting
+// what the code emits.
+const PI_REF = sourceRefFingerprint(getHostPrivacyKey(), PI_PATH)
+const OMP_REF = sourceRefFingerprint(getHostPrivacyKey(), OMP_PATH)
 
 async function collect(provider: {
   discoverSessions: () => Promise<SessionSource[]>
@@ -58,7 +68,7 @@ const PI_GOLDEN: ParsedProviderCall[] = [
     skills: ['my-skill', 'web-search'],
     timestamp: '2026-06-10T10:00:02.000Z',
     speed: 'standard',
-    deduplicationKey: `pi:${PI_PATH}:resp-1`,
+    deduplicationKey: `pi:${PI_REF}:resp-1`,
     userMessage: 'do stuff',
     sessionId: 'pi-sess-1',
   },
@@ -82,8 +92,9 @@ const OMP_GOLDEN: ParsedProviderCall[] = [
     timestamp: '2026-06-11T10:00:00.000Z',
     speed: 'standard',
     // responseId '' -> entry.id absent -> entry.timestamp; sessionId falls back
-    // to basename-of-path because the session entry carries no id.
-    deduplicationKey: `omp:${OMP_PATH}:2026-06-11T10:00:00.000Z`,
+    // to basename-of-path because the session entry carries no id. The dedup key
+    // threads a fingerprint of the file path (never the raw path).
+    deduplicationKey: `omp:${OMP_REF}:2026-06-11T10:00:00.000Z`,
     userMessage: '',
     sessionId: 'ofile',
   },

@@ -10,6 +10,7 @@ import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import { extractResourceRefs } from '../resource-refs.js'
 import type { CodexDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 /** One Codex session's rich decode, as the host holds it before minimization. */
 export interface RichCodexSessionDecode {
@@ -35,7 +36,7 @@ const CANONICAL_TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/
 function toCallObservation(call: CodexDecodedCall, turnIndex: number, privacyKey: string): CallObservation {
   return {
     provider: call.provider,
-    model: call.model,
+    model: normalizeModelIdentifier(call.model),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

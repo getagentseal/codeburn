@@ -7,6 +7,7 @@ import { projectRef, sessionRef } from '../../fingerprint.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
 import type { CallObservation, SessionObservation } from '../../observations.js'
 import type { DevinDecodedCall } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 /** One Devin session's rich decode, as the host holds it before minimization. */
 export interface RichDevinSessionDecode {
@@ -34,7 +35,7 @@ function toCallObservation(call: DevinDecodedCall, turnIndex: number, privacyKey
     provider: call.provider,
     // The raw model id, not the host's display name: the envelope is keyed by
     // provider ids, and display formatting lives CLI-side.
-    model: call.generationModel ?? call.modelName,
+    model: normalizeModelIdentifier(call.generationModel ?? call.modelName),
     tokens: {
       input: call.inputTokens,
       output: call.outputTokens,

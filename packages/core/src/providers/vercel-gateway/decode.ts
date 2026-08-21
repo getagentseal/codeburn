@@ -5,6 +5,7 @@
 // threads the shared cross-file dedup set.
 
 import type { VercelGatewayDecodedCall, VercelGatewayReportRow } from './types.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 
 export type VercelGatewayDecodeInput = {
   records: unknown[]
@@ -22,9 +23,15 @@ export type VercelGatewayDecodeResult = {
  * mapping matches the original host-side parser verbatim:
  *   - day/model/cost defaults
  *   - all-zero rows are skipped BEFORE dedup key burn
- *   - dedup key `vercel-gateway:<day>:<model>` with add-after-skip semantics
+ *   - dedup key `vercel-gateway:<day>:<normalized model>` with add-after-skip
+ *     semantics. The model component is run through normalizeModelIdentifier
+ *     (the same function the observation boundary applies to `model`): the
+ *     key SHIPS on the envelope, so a hostile prompt or display name planted
+ *     in the externally-supplied report collapses to 'unknown' inside the key
+ *     too, and a legitimate identifier-shaped slug is unchanged.
  *   - timestamp synthesized as `${day}T12:00:00.000Z`
- *   - sessionId synthesized as `${day}:${model}`
+ *   - sessionId synthesized as `${day}:${model}` (rich-decode only — never
+ *     shipped raw; the envelope's sessionRef is an HMAC fingerprint of it)
  */
 export function decodeVercelGateway(input: VercelGatewayDecodeInput): VercelGatewayDecodeResult {
   const { records, seenKeys: liveSeen } = input
@@ -44,7 +51,7 @@ export function decodeVercelGateway(input: VercelGatewayDecodeInput): VercelGate
     // key and block a later non-zero row for the same day×model.
     if (costUSD === 0 && inputTokens === 0 && outputTokens === 0) continue
 
-    const deduplicationKey = `vercel-gateway:${day}:${model}`
+    const deduplicationKey = `vercel-gateway:${day}:${normalizeModelIdentifier(model)}`
     if (seen.has(deduplicationKey)) continue
     seen.add(deduplicationKey)
 

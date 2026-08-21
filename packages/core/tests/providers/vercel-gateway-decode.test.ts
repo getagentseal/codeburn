@@ -109,8 +109,11 @@ describe('vercel-gateway observations', () => {
     }
   }
 
-  it('produces a schema-valid envelope', () => {
-    expect(ObservationEnvelope.safeParse(buildEnvelope()).success).toBe(true)
+  it('normalizes a hostile prompt in model to unknown; the envelope still parses (no whole-batch rejection)', () => {
+    const env = buildEnvelope()
+    expect(ObservationEnvelope.safeParse(env).success).toBe(true)
+    const call = env.sessions[0]?.calls[0]
+    expect(call?.model).toBe('unknown')
   })
 
   it('contains at least one call (non-vacuous)', () => {
@@ -119,17 +122,39 @@ describe('vercel-gateway observations', () => {
     expect(callCount).toBeGreaterThan(0)
   })
 
-  it('emits no free text except the model identifier (identifier-exemption convention)', () => {
-    const env = buildEnvelope()
-    const serialized = JSON.stringify(env)
-
-    // The model field is an API identifier and is emitted by design; the planted
-    // secret in model is therefore expected to appear there and only there.
-    expect(serialized).toContain(SECRETS.prompt)
+  it('the hostile envelope serializes with none of the planted secrets', () => {
+    const serialized = JSON.stringify(buildEnvelope())
+    // The prompt was planted in model, the abs path was passed as projectPath;
+    // neither may survive the boundary.
+    expect(serialized).not.toContain(SECRETS.prompt)
     expect(serialized).not.toContain(SECRETS.absPath)
-    expect(serialized).not.toContain(SECRETS.apiKey)
-    expect(serialized).not.toContain(SECRETS.commandLine)
-    expect(serialized).not.toContain(SECRETS.fileContent)
+  })
+
+  it('a legitimate identifier-shaped model crosses unchanged', () => {
+    const { calls } = decodeVercelGateway({
+      records: [
+        {
+          day: '2026-07-17',
+          model: 'anthropic/claude-sonnet-4.6',
+          total_cost: 1.23,
+          input_tokens: 100,
+          output_tokens: 50,
+        },
+      ],
+    })
+    const { sessions } = toObservations(
+      { sessionId: 'report-2026-07-17', projectPath: SECRETS.absPath, calls },
+      { privacyKey: 'test-privacy-key', provider: 'vercel-gateway' },
+    )
+    const env = {
+      schemaVersion: OBSERVATION_SCHEMA_VERSION,
+      generator: { name: '@codeburn/core', version: '0.0.0-test' },
+      sessions,
+    }
+    expect(ObservationEnvelope.safeParse(env).success).toBe(true)
+    expect(env.sessions[0]?.calls[0]?.model).toBe('anthropic/claude-sonnet-4.6')
+    const serialized = JSON.stringify(env)
+    expect(serialized).toContain('anthropic/claude-sonnet-4.6')
   })
 
   it('exposes the provider-reported cost as measured', () => {

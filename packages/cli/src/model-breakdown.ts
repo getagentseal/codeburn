@@ -8,6 +8,8 @@ export interface ModelTotals {
   freshInput: number
   cacheRead: number
   cacheWrite: number
+  activeDurationMs: number
+  activeGeneratedTokens: number
 }
 
 /// Aggregate per-model usage across every session, keyed by the friendly display
@@ -24,6 +26,7 @@ export function aggregateModelTotals(projects: ProjectSummary[]): Record<string,
         const name = getShortModelName(model)
         const totals = (modelTotals[name] ??= {
           calls: 0, costUSD: 0, estimatedCostUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0,
+          activeDurationMs: 0, activeGeneratedTokens: 0,
         })
         totals.calls += data.calls
         totals.costUSD += data.costUSD
@@ -31,6 +34,8 @@ export function aggregateModelTotals(projects: ProjectSummary[]): Record<string,
         totals.freshInput += data.tokens.inputTokens
         totals.cacheRead += data.tokens.cacheReadInputTokens
         totals.cacheWrite += data.tokens.cacheCreationInputTokens
+        totals.activeDurationMs += data.activeDurationMs ?? 0
+        totals.activeGeneratedTokens += data.activeGeneratedTokens ?? 0
       }
     }
   }

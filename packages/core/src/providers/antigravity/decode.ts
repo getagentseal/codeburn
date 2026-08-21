@@ -5,6 +5,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 import type {
   AntigravityDecodedCall,
   AntigravityGeneratorMetadata,
@@ -342,7 +343,13 @@ function parseFiniteToken(value: unknown): number {
 function usageSignature(event: AntigravityStatusLineEvent): string {
   const u = event.usage
   return [
-    event.model,
+    // The model component must never be the raw display name: this signature
+    // feeds the dedup key, which SHIPS on the envelope, and the observation
+    // boundary normalizes the same value (a display name like "Gemini 3.5
+    // Flash (High)" collapses to 'unknown' there). Building the signature
+    // from the normalized identifier keeps the key and the envelope's model
+    // field consistent and stops free text from riding the key.
+    normalizeModelIdentifier(event.model),
     u.inputTokens,
     u.outputTokens,
     u.cacheCreationInputTokens,

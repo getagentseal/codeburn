@@ -20,7 +20,21 @@ export interface DecodeContext {
   privacyKey: string
   /** The provider whose records these are. */
   providerId: string
-  /** An opaque fingerprint of the source (file/stream) being decoded. */
+  /**
+   * The host's absolute filesystem path to the source being decoded — NOT an
+   * opaque fingerprint. Decoders may use it to derive session/chat identity
+   * (a chat directory name, a session file's basename), but the RAW value must
+   * never cross into an observation output — and dedupKey is an observation
+   * output: it is a field on CallObservation that ships on the envelope, so
+   * folding the raw path into a dedup key is a leak. A decoder that needs an
+   * opaque form of the source in a dedup key or identity must fingerprint it
+   * first via fingerprint.ts (`sourceRefFingerprint` — keyed HMAC-SHA256,
+   * decision D1; the key is required and an empty key throws, so the ref can
+   * never degrade to an unkeyed digest). Every fingerprint/ref field on the
+   * envelope (sessionRef, projectRef, gitBranchRef, resource refs, and the
+   * dedupKey's source component) is HMAC-derived via fingerprint.ts with the
+   * host privacyKey, which the CLI bridge threads from getHostPrivacyKey().
+   */
   sourceRef: string
 }
 

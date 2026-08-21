@@ -76,6 +76,14 @@ export type ParsedProviderCall = {
   // Exact provider-recorded cwd, kept separately because projectPath may later
   // canonicalize a linked worktree to its main repository.
   workingDirectory?: string
+  // Tool-excluded active throughput: `activeDurationMs` is the task duration
+  // minus recorded tool-wait intervals, `activeGeneratedTokens` the task's
+  // generated tokens, both attributed to this call proportionally (Codex only).
+  // `toolWaitMs` is the excluded wait share. Present only when the enclosing
+  // task recorded both timing and generated tokens.
+  activeDurationMs?: number
+  activeGeneratedTokens?: number
+  toolWaitMs?: number
 }
 
 // A directory or database file that a provider's discoverSessions() scans.

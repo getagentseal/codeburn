@@ -7,6 +7,7 @@ import { basename } from 'node:path'
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { sourceRefFingerprint } from '../../fingerprint.js'
 import type { PiDecodedCall, PiEntry } from './types.js'
 
 // Pi/OMP tool ids mapped to the canonical vocabulary. Unknown ids pass through.
@@ -83,9 +84,11 @@ function normalizeContentBlocks<T extends { type?: string; text?: string }>(
 /**
  * Decode Pi/OMP session records into rich, cost-free calls. A single pass over
  * the entries: user messages set pending prompt; assistant messages with token
- * usage flush into calls. Dedup is keyed on `<provider>:<path>:<responseId>`
- * against live seenKeys. `provider` ('pi' or 'omp') comes from
- * `context.providerId`, since Pi and OMP share this exact decode.
+ * usage flush into calls. Dedup is keyed on
+ * `<provider>:<sourceRefFingerprint>:<responseId>` against live seenKeys — the
+ * source path is fingerprinted, never emitted raw (dedupKey ships on the
+ * envelope). `provider` ('pi' or 'omp') comes from `context.providerId`, since
+ * Pi and OMP share this exact decode.
  */
 export function decodePi({
   records,
@@ -147,7 +150,11 @@ export function decodePi({
 
     const model = msg.model ?? 'gpt-5'
     const responseId = msg.responseId ?? ''
-    const dedupKey = `${provider}:${sourcePath}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
+    // The dedup key threads a FINGERPRINT of the session file path, never the
+    // raw path — dedupKey ships on the envelope, so the raw path must not
+    // cross into an observation output. (The basename-derived sessionId below
+    // stays the host's session identity; it is not a path.)
+    const dedupKey = `${provider}:${sourceRefFingerprint(context.privacyKey, context.sourceRef)}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
 
     if (seen.has(dedupKey)) continue
     seen.add(dedupKey)

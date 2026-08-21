@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { tmpdir } from 'os'
@@ -302,6 +302,48 @@ describe('never-lose invariant: invalidations with vanished sources', () => {
     const out = await ensureCacheHydrated(noSessions, () => [], 'cfg-A')
     expect(out.days).toHaveLength(1)
     expect(out.days[0]).toMatchObject({ date: d.date, cost: d.cost, calls: d.calls, carried: true })
+  })
+
+  it('a version bump forces a re-derive that drops the raw-path dedup keys', async () => {
+    // The pre-fix binary shipped daily-cache v15. THIS LITERAL IS THE POINT:
+    // it must stay pinned to the version the pre-fix binary wrote, so a warm
+    // complete cache from that binary sits at daily-cache.v15.json with dedup
+    // keys threaded on RAW source paths (codebuff/zerostack/pi/omp/grok) and
+    // raw ledger model text (lingtai-tui). Those keys ship on the observation
+    // envelope, and the session cache seeds its dedup sets from the cached
+    // keys, so the pre-fix cache re-ingests the same records under the new
+    // key shapes — the pre-fix day below carries the inflated double count.
+    // Only the MIN_SUPPORTED_VERSION bump decides whether that file loads as
+    // the trusted CURRENT cache — freezing the inflated rollup forever — or as
+    // an old-version file that forces the one-time re-derive, which drops the
+    // raw-path keys and lands the corrected single count. When the next bump
+    // lands, move this literal to the version the current binary shipped.
+    const PRE_FIX_CACHE_VERSION = 15
+    const preFixDay = day(daysAgoStr(30), { codebuff: slice(10.0, 2) })
+    const preFixCache: DailyCache = {
+      version: PRE_FIX_CACHE_VERSION,
+      savingsConfigHash: 'cfg-A',
+      tzKey: currentTzKey(),
+      lastComputedDate: daysAgoStr(1),
+      days: [preFixDay],
+      complete: true,
+    }
+    await writeFile(join(TMP_CACHE_ROOT, `daily-cache.v${PRE_FIX_CACHE_VERSION}.json`), JSON.stringify(preFixCache), 'utf-8')
+
+    // The re-derive under the fingerprint-shaped keys sees ONE record per
+    // session (the raw-path keys no longer collide with the new keys, so the
+    // re-ingestion is gone): corrected 5.0 / 1 call.
+    const aggregate = vi.fn(() => [day(daysAgoStr(30), { codebuff: slice(5.0, 1) })])
+    const out = await ensureCacheHydrated(noSessions, aggregate, 'cfg-A')
+
+    // The bump forced a full re-derivation: the fresh parse was consulted.
+    expect(aggregate).toHaveBeenCalled()
+    expect(out.version).toBe(DAILY_CACHE_VERSION)
+    expect(out.complete).toBe(true)
+    // The corrected single count wins; the inflated pre-fix slice is gone.
+    expect(out.days[0]!.providers['codebuff']!.cost).toBe(5.0)
+    expect(out.days[0]!.providers['codebuff']!.calls).toBe(1)
+    expect(out.days[0]!.cost).toBe(5.0)
   })
 
   it('a same-version file found under an old name is trusted as-is (no spurious rebuild)', async () => {

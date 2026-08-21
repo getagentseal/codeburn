@@ -6,6 +6,7 @@
 
 import type { DecodeContext } from '../../contracts.js'
 import type { RecordDiagnostic } from '../../diagnostics.js'
+import { normalizeModelIdentifier } from '../../schema.js'
 import type {
   QuickdeskDatabaseInput,
   QuickdeskDecodedCall,
@@ -142,7 +143,11 @@ function decodeMetrics(input: QuickdeskMetricsInput, seen: Set<string>): Quickde
     if (metadata?.deleted) continue
 
     const fallbackId = `${project}:${fileId}`
-    const deduplicationKey = `quickdesk:${linkedSessionId || fallbackId}:${timestamp}:${model}:${inputTokens}:${outputTokens}`
+    // The model component is normalized exactly as the observation boundary
+    // normalizes `model`: the key ships on the envelope, so a display name or
+    // free text in the CSV 'Model' column must collapse to 'unknown' inside
+    // the key too, never ride it raw.
+    const deduplicationKey = `quickdesk:${linkedSessionId || fallbackId}:${timestamp}:${normalizeModelIdentifier(model)}:${inputTokens}:${outputTokens}`
     if (seen.has(deduplicationKey)) continue
     seen.add(deduplicationKey)
 

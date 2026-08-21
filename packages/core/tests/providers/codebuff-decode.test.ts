@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { decodeCodebuff, toObservations, type CodebuffChatMessage } from '../../src/providers/codebuff/index.js'
 import { ObservationEnvelope } from '../../src/observations.js'
 import { OBSERVATION_SCHEMA_VERSION } from '../../src/schema.js'
+import { sourceRefFingerprint } from '../../src/fingerprint.js'
 import type { DecodeContext } from '../../src/contracts.js'
 
 const context: DecodeContext = { privacyKey: 'k', providerId: 'codebuff', sourceRef: '/data/manicode/projects/alpha/chats/2026-04-14T10-00-00.000Z' }
@@ -93,7 +94,13 @@ describe('codebuff rich decode (moved to @codeburn/core)', () => {
     expect(first!.rawBashCommands).toEqual(['npm test'])
     expect(first!.credits).toBe(42)
     expect(first!.userMessage).toBe('implement the feature')
-    expect(first!.deduplicationKey).toBe(`codebuff:${context.sourceRef}:a1`)
+    // The dedup key threads a FINGERPRINT of the chat directory (the source
+    // ref), never the raw absolute path: dedupKey ships on the envelope, so
+    // the raw-path form (`codebuff:${context.sourceRef}:a1`) was the defect —
+    // do not restore it. The expectation is DERIVED from the same fingerprint
+    // function the decoder uses, so the golden pins the contract, not a
+    // literal.
+    expect(first!.deduplicationKey).toBe(`codebuff:${sourceRefFingerprint(context.privacyKey, context.sourceRef)}:a1`)
 
     expect(second!.model).toBe('claude-haiku-4-5-20251001')
     expect(second!.inputTokens).toBe(5000)
