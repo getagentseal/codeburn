@@ -14,6 +14,7 @@ import {
   type SessionCache,
 } from './session-cache.js'
 import { renderTable } from './text-table.js'
+import { wslDoctorNote } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -75,6 +76,9 @@ export type DoctorReport = {
   /// found. Surfaced because deleted transcripts are unrecoverable: daily
   /// totals survive in CodeBurn's cache, but per-session detail does not.
   claudeRetention?: ClaudeRetentionNote
+  /// Present on Windows when no WSL root was probed, so an opt-out or a
+  /// missing wsl.exe reads as a reason instead of a silent zero (#1059).
+  wslNote?: string
 }
 
 export type CollectDoctorOptions = {
@@ -330,6 +334,8 @@ export async function collectDoctorReport(
     providers.sort((a, b) => (a.displayName < b.displayName ? -1 : a.displayName > b.displayName ? 1 : 0))
 
     const report: DoctorReport = { generatedAt: new Date().toISOString(), providers }
+    const wslNote = wslDoctorNote()
+    if (wslNote) report.wslNote = wslNote
     if (providers.some(p => p.provider === 'claude')) {
       const retention = await collectClaudeRetention()
       if (retention) report.claudeRetention = retention
@@ -443,6 +449,11 @@ export function renderDoctorTable(
       if (r.cachedFailed > 0) out.push('    ' + c.dim('cached parse failures: ') + String(r.cachedFailed))
       if (r.error) out.push('    ' + c.red('error: ') + r.error)
     }
+  }
+
+  if (report.wslNote) {
+    out.push('')
+    out.push(c.dim(report.wslNote))
   }
 
   if (report.claudeRetention) {

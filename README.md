@@ -353,6 +353,18 @@ Today's spend sits in the tray as a number beside the flame icon (turn it off in
 
 The tray app reads everything through the CLI, so install that first (`npm install -g codeburn`) — it needs **codeburn 0.9.9 or newer**, and shows a setup screen with the install command until it finds one. Source and build instructions are in [`windows/`](windows/) ([windows/DEVELOPMENT.md](windows/DEVELOPMENT.md)). The `.msi` is unsigned for now, so SmartScreen prompts on first run.
 
+#### WSL
+
+Agents you run *inside* a WSL distro write their history to the distro's Linux home, not to your Windows user profile, so a Windows-only scan reports nothing for them. CodeBurn on Windows now also scans each WSL distro's home directories (`\\wsl$\<distro>\home\*` and `\\wsl$\<distro>\root`) for Claude Code (`~/.claude`) and Codex (`~/.codex`) history, merging what it finds with your Windows sessions. It is read-only, and the tray app inherits it — it reads everything through the CLI.
+
+Only **running** distros are scanned by default: reaching into `\\wsl$\<distro>` boots a stopped distro, which CodeBurn will not do behind your back. Start the distro (or set `CODEBURN_WSL=all`) if you want the others included. Stopping a distro does not lose its numbers — an offline root is not a deleted transcript, so its usage keeps counting and comes straight back out of the cache when you start it again. `codeburn doctor` lists every root it probed, WSL ones included, and says so in one line when it probed none.
+
+| Value | Behaviour |
+| --- | --- |
+| `CODEBURN_WSL=running` | Default. Scans running distros only. |
+| `CODEBURN_WSL=all` | Scans every installed distro, starting stopped ones on first access. |
+| `CODEBURN_WSL=off` | Skips WSL discovery; `wsl.exe` is never run and no distro is enumerated. A path already in the cache from an earlier run may still be stat'd once. |
+
 ### Linux (GNOME)
 
 Linux gets the same ambient view through a GNOME Shell extension (GNOME 45+): spend in the top panel, period switcher, compact mode, and daily budget alerts. It lives in [`gnome/`](gnome/):

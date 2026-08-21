@@ -5,6 +5,7 @@ import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import type { ToolCall } from './types.js'
+import { isWslUncPath } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -207,6 +208,11 @@ const UNREFERENCED_SHARD_MAX_AGE_MS = 60 * 60 * 1000
 // that only the cache still holds (see DURABLE_PROVIDER_NAMES below). Do not
 // "complete" the map for copilot until the durable carry-forward learns to
 // merge instead of drop.
+// CODEBURN_WSL (src/wsl.ts) is also deliberately absent, for claude and codex
+// alike. It only adds or removes whole discovery roots, and cache entries are
+// keyed by source path — an added root brings new paths, a removed one leaves
+// orphans that evict normally. Nothing it changes can make a kept entry stale,
+// while declaring it would force a full re-parse on every toggle.
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'APPDATA', 'LOCALAPPDATA'],
   'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
@@ -1327,6 +1333,10 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     // A source path that IS a SQLite database (copilot OTel's agent-traces.db)
     // needs the same WAL fold as the virtual-suffix forms below.
     if (SQLITE_DB_PATH.test(filePath)) return fingerprintSqliteFile(filePath)
+    // WSL's 9P share (`\\wsl$\...`) synthesizes dev/ino per mount, so they can
+    // differ run to run for an unchanged file — keying on them would re-parse
+    // every WSL session every time. mtime+size only for those paths (#1059).
+    if (isWslUncPath(filePath)) return { dev: 0, ino: 0, mtimeMs: s.mtimeMs, sizeBytes: s.size }
     return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
   } catch {
     // Providers encode extra context into source paths using virtual suffixes:

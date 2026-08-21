@@ -31,6 +31,7 @@ import {
   saveCache,
 } from './session-cache.js'
 import { acquireCacheRefreshLock, type RefreshLockHandle } from './cache-refresh-lock.js'
+import { isWslUncPath } from './wsl.js'
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
@@ -1999,7 +2000,11 @@ async function scanProjectDirs(
   // same set so `section.files` still holds them when summaries are built.
   for (const [filePath, cached] of Object.entries(section.files)) {
     if (allDiscoveredFiles.has(filePath)) continue
-    if (!readOnly && !cached.prLinks?.length) continue
+    // A \\wsl$ entry vanishes from discovery whenever its distro is stopped,
+    // which is an offline root, not a deleted transcript. Keep serving it in
+    // write mode too, or every `wsl --shutdown` drops that spend from the
+    // totals while the read-only serve path still shows it (#1059).
+    if (!readOnly && !cached.prLinks?.length && !isWslUncPath(filePath)) continue
     const dirName = cached.canonicalProjectName
       ?? cached.turns[0]?.calls[0]?.project
       ?? basename(dirname(filePath))
@@ -2261,6 +2266,9 @@ async function scanProjectDirs(
       // Keep PR-bearing orphans: their transcript is gone and can never re-parse,
       // but they carry attributable PR spend (surfaced above as a legacy split).
       if (section.files[cachedPath]?.prLinks?.length) continue
+      // Keep WSL orphans: a stopped distro is offline, not deleted. Evicting
+      // would force a full 9P re-parse on the next `wsl` start (#1059).
+      if (isWslUncPath(cachedPath)) continue
       delete section.files[cachedPath]
       markCacheDirty(diskCache, 'claude', cachedPath)
     }
@@ -3275,6 +3283,9 @@ async function parseProviderSources(
 
   if (!readOnly && sources.length > 0 && !provider.durableSources) {
     for (const cachedPath of Object.keys(section.files)) {
+      // A stopped WSL distro is an offline root, not a deleted file: evicting
+      // would force a full 9P re-parse on every `wsl --shutdown` cycle (#1059).
+      if (isWslUncPath(cachedPath)) continue
       if (!allDiscoveredFiles.has(cachedPath)) {
         delete section.files[cachedPath]
         markCacheDirty(diskCache, providerName, cachedPath)
@@ -3361,8 +3372,11 @@ async function parseProviderSources(
   // Second pass: durable orphans — cache entries for paths that are no longer
   // discovered (e.g. OTel conversations pruned from the DB). Their turns are
   // counted here so the monthly total never drops.
-  if (provider.durableSources) {
+  // WSL orphans join them for every provider: their distro being stopped must
+  // not drop the spend from the totals for the length of a shutdown (#1059).
+  if (provider.durableSources || Object.keys(section.files).some(isWslUncPath)) {
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
+      if (!provider.durableSources && !isWslUncPath(cachedPath)) continue
       if (allDiscoveredFiles.has(cachedPath)) continue  // already counted above
 
       for (const turn of cachedFile.turns) {

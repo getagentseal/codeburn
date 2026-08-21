@@ -10,6 +10,7 @@ import { readCachedCodexResults, writeCachedCodexResults, getCachedCodexProject,
 import { mergeToolIntervals } from '../codex-throughput.js'
 import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
+import { wslHomes } from '../wsl.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -1232,6 +1233,13 @@ export async function parseCodexFileFull(source: SessionSource, seenKeys: Set<st
 
 export function createCodexProvider(codexDir?: string): Provider {
   const dir = getCodexDir(codexDir)
+  // An explicit dir means "scan exactly this" (tests, callers with a fixture).
+  // Otherwise add every WSL home's ~/.codex as an extra root (#1059); empty
+  // off-win32. Discovery runs per-root so its basename dedup — which collapses
+  // a session archived out of sessions/ — never merges two distros. Resolved
+  // lazily: `codex` is constructed at import, and WSL probing spawns wsl.exe.
+  const codexDirs = (): string[] =>
+    codexDir ? [dir] : [...new Set([dir, ...wslHomes().map(home => join(home, '.codex'))])]
 
   return {
     name: 'codex',
@@ -1248,17 +1256,18 @@ export function createCodexProvider(codexDir?: string): Provider {
       return toolNameMap[rawTool] ?? rawTool
     },
 
-    // Same `dir` discoverSessionsInDir walks: <codexDir>/sessions (dated
+    // The same dirs discoverSessionsInDir walks: <codexDir>/sessions (dated
     // rollout files) and <codexDir>/archived_sessions. Honors CODEX_HOME.
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [
-        { path: join(dir, 'sessions'), label: 'sessions' },
-        { path: join(dir, 'archived_sessions'), label: 'archived' },
-      ]
+      return codexDirs().flatMap(d => [
+        { path: join(d, 'sessions'), label: 'sessions' },
+        { path: join(d, 'archived_sessions'), label: 'archived' },
+      ])
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessionsInDir(dir)
+      const perDir = await Promise.all(codexDirs().map(d => discoverSessionsInDir(d)))
+      return perDir.flat()
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
