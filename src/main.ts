@@ -2,8 +2,8 @@ import { isAbsolute } from 'path'
 import { Command, Option } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { findUnpricedModels, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath } from './models.js'
-import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI } from './parser.js'
+import { findUnpricedModels, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setLocalModelSavings, setProxyPaths, normalizeProxyPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
+import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { convertCost, formatCost } from './currency.js'
@@ -14,6 +14,7 @@ import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, type DurablePeriod } from './usage-aggregator.js'
+import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
 import { runWebDashboard } from './web-dashboard.js'
@@ -1072,15 +1073,64 @@ program
         : customRange
         ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
         : daySelection ?? getDateRange(opts.period)
-      const payload = await buildMenubarPayloadForRange(periodInfo, {
+      // Fast path: the menubar app spawns this exact command fresh on every
+      // poll tick, so nothing in-process (parser.ts's TTL/burst caches,
+      // session-cache.ts's cacheMemo) ever survives between polls. A cheap
+      // stat-only pass (no session-cache.json parse, no transcript content
+      // read) over the discoverable corpus tells us whether anything changed
+      // since the last identical query; when it hasn't — or the only thing
+      // that changed is still within loadStatusSnapshot's settle window and
+      // may still be mid-write — skip the full parse + aggregation pipeline
+      // entirely and serve the persisted snapshot instead.
+      // Single source of truth for the fields that define the query scope,
+      // shared between the cache key below and the payload builder options
+      // — a field added to only one of the two would otherwise silently
+      // desync the cache from what it's supposed to be keying on.
+      const queryScope = {
         provider: pf,
         project: opts.project,
         exclude: opts.exclude,
-        daysSelection,
         optimize: opts.optimize !== false,
         timeline: opts.timeline !== false,
-        claudeConfigSourceId: opts.claudeConfigSource,
+        claudeConfigSourceId: opts.claudeConfigSource ?? null,
+      }
+      const queryKey = JSON.stringify({
+        start: periodInfo.range.start.toISOString(),
+        end: periodInfo.range.end.toISOString(),
+        label: periodInfo.label,
+        ...queryScope,
+        days: daysSelection ? [...daysSelection.days].sort() : undefined,
+        // Mirrors parser.ts's cacheKey: pricing-affecting config must
+        // invalidate this snapshot the same way it invalidates the
+        // parse-level memo, or an edited alias/override/savings config keeps
+        // serving costs priced under the old config until something
+        // unrelated moves the corpus fingerprint.
+        proxyPathsConfigHash: getProxyPathsConfigHash(),
+        modelAliasesConfigHash: getModelAliasesConfigHash(),
+        priceOverridesConfigHash: getPriceOverridesConfigHash(),
+        localModelSavingsConfigHash: getLocalModelSavingsConfigHash(),
+        // Same reasoning, different config: the rendered payload's costs are
+        // in the ACTIVE display currency (see `getCurrency`/`loadCurrency`,
+        // refreshed fresh from config.json by the `preAction` hook ahead of
+        // this handler), which the corpus fingerprint and the four hashes
+        // above never touch. Without this, switching currencies keeps
+        // serving the old currency's numbers until a session file happens to
+        // change too.
+        currency: getCurrency(),
       })
+      const corpus = await computeCorpusFingerprint(pf)
+      const snapshot = await loadStatusSnapshot(corpus.hash, corpus.newestMtimeMs, queryKey)
+      const payload = (snapshot ?? await buildMenubarPayloadForRange(periodInfo, {
+        ...queryScope,
+        daysSelection,
+      })) as Awaited<ReturnType<typeof buildMenubarPayloadForRange>>
+      // A read-only parse that had to serve stale/skip real files
+      // (isSessionHydrationComplete() === false) is a knowingly-degraded
+      // result. Persisting it under the CURRENT (already-advanced) corpus
+      // fingerprint would make that degraded answer look authoritative to
+      // every future poll that matches this fingerprint — never checkpoint a
+      // partial hydration as if it were a real, complete parse.
+      if (!snapshot && isSessionHydrationComplete()) await saveStatusSnapshot(corpus.hash, corpus.newestMtimeMs, queryKey, payload)
       if (opts.scope === 'combined') {
         // Combined multi-device usage is best-effort enrichment on the menubar's
         // hot path. Never let pulling peers (or a corrupt remotes store) take

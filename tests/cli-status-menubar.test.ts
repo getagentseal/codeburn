@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter as pathDelimiter, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -644,6 +645,69 @@ describe('codeburn status --format menubar-json', () => {
 
       expect(result.status).toBe(1)
       expect(result.stderr).toContain('unknown scope "remote"')
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('serves a repeat identical query from the status snapshot, debounces a fresh change, then reflects it once settled', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-snapshot-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+
+      const now = new Date()
+      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
+
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1')].join('\n'),
+      )
+
+      const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all', '--no-optimize']
+
+      const first = runCli(args, home)
+      expect(first.status, `stderr: ${first.stderr}`).toBe(0)
+      const firstPayload = JSON.parse(first.stdout) as { current: { calls: number } }
+      expect(firstPayload.current.calls).toBe(1)
+
+      // The persisted snapshot carries cost/usage aggregates and project
+      // paths, so it must land group/world-unreadable regardless of umask.
+      const snapshotPath = join(home, '.cache', 'codeburn', 'status-snapshot.json')
+      expect(statSync(snapshotPath).mode & 0o777).toBe(0o600)
+
+      // Identical query against an unchanged corpus: served from the
+      // snapshot, byte-identical to the first call.
+      const second = runCli(args, home)
+      expect(second.status, `stderr: ${second.stderr}`).toBe(0)
+      expect(second.stdout).toBe(first.stdout)
+
+      // New session activity moves the corpus fingerprint. A call made right
+      // after — still well inside the (large, forced) settle window — must
+      // debounce: the freshly-touched file may still be mid-write, so it
+      // keeps serving the last SETTLED snapshot rather than recomputing on
+      // every tick of a burst.
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [
+          userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1'),
+          userLine('s1', ts(120_000)), assistantLine('s1', ts(180_000), 'msg-2'),
+        ].join('\n'),
+      )
+      const debounced = runCli(args, home, { CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '60000' })
+      expect(debounced.status, `stderr: ${debounced.stderr}`).toBe(0)
+      expect(debounced.stdout).toBe(first.stdout)
+
+      // Once the change is treated as settled (forcing the window to 0), the
+      // very next call must reflect it — the debounce only ever delays
+      // picking up a real update, it never masks one permanently.
+      const settled = runCli(args, home, { CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
+      expect(settled.status, `stderr: ${settled.stderr}`).toBe(0)
+      const settledPayload = JSON.parse(settled.stdout) as { current: { calls: number } }
+      expect(settledPayload.current.calls).toBe(2)
     } finally {
       await rm(home, { recursive: true, force: true })
     }
