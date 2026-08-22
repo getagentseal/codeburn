@@ -12,6 +12,7 @@ import { normalizeContentBlocks } from '../content-utils.js'
 import { estimateTokensFromChars } from '../token-estimate.js'
 import type { ToolCall } from '../types.js'
 import type { Provider, ProbeRoot, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import { defaultBilledCodexHome, defaultLauncherRoots, isNestedLauncherCodexHome } from '../launcher-homes.js'
 
 const modelDisplayNames: Record<string, string> = {
   'codex-auto-review': 'Codex Auto Review',
@@ -1329,8 +1330,19 @@ export async function parseCodexFileFull(source: SessionSource, seenKeys: Set<st
   return { calls, ...(capture.write ? { write: capture.write } : {}) }
 }
 
-export function createCodexProvider(codexDir?: string): Provider {
+export function createCodexProvider(
+  codexDir?: string,
+  opts?: { primaryDir?: string; launcherRoots?: string[] },
+): Provider {
   const dir = getCodexDir(codexDir)
+  const primaryDir = opts?.primaryDir ?? defaultBilledCodexHome()
+  const skipNested = isNestedLauncherCodexHome(dir, {
+    primaryDir,
+    launcherRoots: opts?.launcherRoots ?? defaultLauncherRoots(),
+  })
+  // One tree for discovery and probeRoots. A nest CODEX_HOME with a distinct
+  // billed home redirects the default factory; an explicit nest factory is empty.
+  const scannedDir = skipNested ? (codexDir === undefined ? primaryDir : null) : dir
 
   return {
     name: 'codex',
@@ -1350,14 +1362,16 @@ export function createCodexProvider(codexDir?: string): Provider {
     // Same `dir` discoverSessionsInDir walks: <codexDir>/sessions (dated
     // rollout files) and <codexDir>/archived_sessions. Honors CODEX_HOME.
     async probeRoots(): Promise<ProbeRoot[]> {
+      if (!scannedDir) return []
       return [
-        { path: join(dir, 'sessions'), label: 'sessions' },
-        { path: join(dir, 'archived_sessions'), label: 'archived' },
+        { path: join(scannedDir, 'sessions'), label: 'sessions' },
+        { path: join(scannedDir, 'archived_sessions'), label: 'archived' },
       ]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessionsInDir(dir)
+      if (!scannedDir) return []
+      return discoverSessionsInDir(scannedDir)
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
