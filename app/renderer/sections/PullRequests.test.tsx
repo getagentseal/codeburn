@@ -280,11 +280,11 @@ describe('PullRequests', () => {
     expect(screen.queryByText(/Other \(/)).toBeNull()
   })
 
-  it('shows the quiet empty state (never a fake table) when no PR links exist', async () => {
+  it('shows a period-aware empty state (never a fake table) when no PR links exist', async () => {
     getOverview.mockResolvedValue(makePayload())
     render(<PullRequests period="lifetime" provider="all" />)
 
-    expect(await screen.findByText(/PR links are captured as sessions are parsed/)).toBeInTheDocument()
+    expect(await screen.findByText(/No sessions in Lifetime mentioned a pull request URL/)).toBeInTheDocument()
     expect(screen.queryByRole('table')).toBeNull()
   })
 
@@ -292,7 +292,27 @@ describe('PullRequests', () => {
     getOverview.mockResolvedValue(makePayload({ rows: [], distinctCost: 0, distinctSessions: 0, attributedCost: 0, unattributedCost: 0 }))
     render(<PullRequests period="lifetime" provider="all" />)
 
-    expect(await screen.findByText(/PR links are captured as sessions are parsed/)).toBeInTheDocument()
+    expect(await screen.findByText(/No sessions in Lifetime mentioned a pull request URL/)).toBeInTheDocument()
     expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('names Today and points at Lifetime when a wider window has rows', async () => {
+    getOverview.mockImplementation(async (period: string) => {
+      if (period === 'lifetime') return makePayload(SAMPLE)
+      return makePayload()
+    })
+    render(<PullRequests period="today" provider="all" />)
+
+    expect(await screen.findByText(/No sessions in Today mentioned a pull request URL/)).toBeInTheDocument()
+    expect(await screen.findByText(/Lifetime has 2 pull requests/)).toBeInTheDocument()
+    expect(getOverview).toHaveBeenCalledWith('lifetime', 'all')
+  })
+
+  it('names the custom range, not the dormant standard period', async () => {
+    getOverview.mockResolvedValue(makePayload())
+    render(<PullRequests period="30days" provider="all" range={{ from: '2026-08-20', to: '2026-08-22' }} />)
+
+    expect(await screen.findByText(/No sessions in Aug 20 – 22 mentioned a pull request URL/)).toBeInTheDocument()
+    expect(screen.queryByText(/Last 30 days/)).toBeNull()
   })
 })

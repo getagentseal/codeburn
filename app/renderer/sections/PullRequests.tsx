@@ -9,7 +9,9 @@ import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { PERIOD_LABELS } from '../lib/period'
 import type { CliError, DateRange, MenubarPayload, Period } from '../lib/types'
+import { rangeLabel } from '../components/TopBar'
 
 type PullRequests = NonNullable<MenubarPayload['current']['pullRequests']>
 type PrRow = PullRequests['rows'][number]
@@ -60,27 +62,72 @@ export function PullRequests({ period, provider, range = null }: { period: Perio
   )
   // The key remounts the content on a period/provider/range switch so row state
   // (an open expansion) never survives onto the same PR rendered from new data.
-  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} />
+  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} />
 }
 
-export function PullRequestsContent({ overview }: { overview: Polled<MenubarPayload> }) {
+export function PullRequestsContent({ overview, period, provider, range = null }: {
+  overview: Polled<MenubarPayload>
+  period: Period
+  provider: string
+  range?: DateRange | null
+}) {
   if (!overview.data) {
     if (overview.error) return <CliErrorPanel error={overview.error} subject="pull requests" />
     return <SectionSkeleton label="Scanning pull requests…" rows={5} />
   }
-  return <PullRequestsPage pullRequests={overview.data.current.pullRequests} staleError={overview.error} />
+  return <PullRequestsPage
+    pullRequests={overview.data.current.pullRequests}
+    staleError={overview.error}
+    period={period}
+    provider={provider}
+    range={range}
+  />
 }
 
-function PullRequestsPage({ pullRequests, staleError }: { pullRequests?: PullRequests; staleError: CliError | null }) {
+function PullRequestsPage({ pullRequests, staleError, period, provider, range }: {
+  pullRequests?: PullRequests
+  staleError: CliError | null
+  period: Period
+  provider: string
+  range: DateRange | null
+}) {
+  const empty = !pullRequests || pullRequests.rows.length === 0
   return (
     <>
       {staleError && <StaleBanner error={staleError} />}
       <Panel title="Pull request spend">
-        {pullRequests && pullRequests.rows.length > 0
-          ? <PrTable pullRequests={pullRequests} />
-          : <EmptyNote>PR links are captured as sessions are parsed. Once a session references a pull request, it appears here.</EmptyNote>}
+        {empty
+          ? <PrEmptyNote period={period} provider={provider} range={range} />
+          : <PrTable pullRequests={pullRequests} />}
       </Panel>
     </>
+  )
+}
+
+function PrEmptyNote({ period, provider, range }: { period: Period; provider: string; range: DateRange | null }) {
+  const [widerCount, setWiderCount] = useState<number | null>(null)
+  const canProbeWider = !range && period !== 'lifetime'
+  useEffect(() => {
+    if (!canProbeWider) return
+    let cancelled = false
+    void codeburn.getOverview('lifetime', provider).then(payload => {
+      if (cancelled) return
+      setWiderCount(payload.current.pullRequests?.rows.length ?? 0)
+    }).catch(() => {
+      if (!cancelled) setWiderCount(null)
+    })
+    return () => { cancelled = true }
+  }, [canProbeWider, provider])
+
+  const periodLabel = range ? rangeLabel(range) : PERIOD_LABELS[period]
+  const widerHint = widerCount && widerCount > 0
+    ? ` Lifetime has ${widerCount.toLocaleString('en-US')} pull requests. Switch the period control to Life.`
+    : ''
+  return (
+    <EmptyNote>
+      No sessions in {periodLabel} mentioned a pull request URL. Spend is attributed only when a transcript contains a github.com/…/pull/N link.
+      {widerHint}
+    </EmptyNote>
   )
 }
 

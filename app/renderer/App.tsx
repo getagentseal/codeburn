@@ -18,7 +18,7 @@ import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import { motionClass } from './lib/motion'
 import { codeburn } from './lib/ipc'
 import { isModifierChord, shortcutLabel } from './lib/platform'
-import { localDateKey } from './lib/period'
+import { localDateKey, PERIOD_LABELS } from './lib/period'
 import { persistRefreshValue, readRefreshValue, refreshValueToMs, RefreshCadenceContext, type RefreshCadence } from './lib/refreshCadence'
 import { OverviewContent } from './sections/Overview'
 import { OptimizeContent } from './sections/Optimize'
@@ -116,15 +116,6 @@ const SECTION_TITLES: Record<Section, string> = {
   compare: 'Compare',
   plans: 'Plans',
   settings: 'Settings',
-}
-
-const PERIOD_LABELS: Record<Period, string> = {
-  today: 'Today',
-  week: 'Last 7 days',
-  month: 'This month',
-  '30days': 'Last 30 days',
-  all: 'Last 6 months',
-  lifetime: 'Lifetime',
 }
 
 const STANDARD_PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all', 'lifetime']
@@ -565,7 +556,7 @@ function AppMain() {
               ) : section === 'sessions' ? (
                 <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={detectedProviders} onProviderChange={onProviderSelect} ready={ready} />
               ) : section === 'pullRequests' ? (
-                <PullRequestsContent overview={overview} />
+                <PullRequestsContent overview={overview} period={period} provider={provider} range={customRange} />
               ) : section === 'spend' ? (
                 <SpendContent period={period} provider={provider} range={customRange} overview={overview} refreshToken={refreshToken} ready={ready} />
               ) : section === 'optimize' ? (

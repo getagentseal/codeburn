@@ -1,5 +1,15 @@
 import type { DailyHistoryEntry, Period } from './types'
 
+/** Same words the desktop TopBar and empty states must use. `all` is last six months, not lifetime. */
+export const PERIOD_LABELS: Record<Period, string> = {
+  today: 'Today',
+  week: 'Last 7 days',
+  month: 'This month',
+  '30days': 'Last 30 days',
+  all: 'Last 6 months',
+  lifetime: 'Lifetime',
+}
+
 // The CLI emits `history.daily` as a SPARSE list of active days only (not a
 // backfilled calendar). Charts must zero-fill inactive days client-side to keep
 // the time axis honest; helpers here own that windowing.
