@@ -532,7 +532,7 @@ Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, an
 
 ### Pricing
 
-Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing.
+Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing. Routing-gateway model ids are priced as the model they wrap: [OrcaRouter](https://www.orcarouter.ai) route ids (`orcarouter/auto`, `orcarouter/fusion`, …) peel to the model the gateway routes to, and a nested upstream spelling (`orcarouter/deepseek/deepseek-v4-pro`) prices at that exact row, so a gateway-routed session reports real spend instead of $0.
 
 ### Task Categories
 
