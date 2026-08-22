@@ -20,6 +20,7 @@ import {
   loadCache,
   mergeCallByDedupKey,
   reconcileFile,
+  reconcileIndexedFile,
   saveCache,
   sessionCacheDir,
 } from '../src/session-cache.js'
@@ -628,6 +629,26 @@ describe('reconcileFile', () => {
     })
     const current: FileFingerprint = { dev: 2, ino: 100, mtimeMs: 2000, sizeBytes: 8000 }
     expect(reconcileFile(current, cached)).toEqual({ action: 'modified' })
+  })
+})
+
+describe('reconcileIndexedFile', () => {
+  it('unchanged index-only stays unchanged', () => {
+    const fp: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 }
+    const stub = makeCachedFile({ fingerprint: fp, lastCompleteLineOffset: 4500, turns: [] })
+    expect(reconcileIndexedFile(fp, stub, true)).toEqual({ action: 'unchanged' })
+  })
+
+  it('size growth on index-only is modified, not appended — no turn body to resume into', () => {
+    const cached = makeCachedFile({
+      fingerprint: { dev: 1, ino: 100, mtimeMs: 1000, sizeBytes: 5000 },
+      lastCompleteLineOffset: 4500,
+      turns: [],
+    })
+    const current: FileFingerprint = { dev: 1, ino: 100, mtimeMs: 2000, sizeBytes: 8000 }
+    expect(reconcileFile(current, cached)).toEqual({ action: 'appended', readFromOffset: 4500 })
+    expect(reconcileIndexedFile(current, cached, true)).toEqual({ action: 'modified' })
+    expect(reconcileIndexedFile(current, cached, false)).toEqual({ action: 'appended', readFromOffset: 4500 })
   })
 })
 

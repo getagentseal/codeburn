@@ -166,6 +166,10 @@ export type SessionCache = {
 // provider's whole (100MB-scale) history, and a ranged query loads only the
 // months it can possibly report on. Turn shape unchanged, so v8 and v7 both
 // migrate losslessly.
+// v9 envelope (additive, no version bump): an optional per-file fingerprint
+// `index` so a scoped load can classify out-of-range sources `unchanged`
+// without reading those shards' turn bodies (#1034). Absence means a pre-#1034
+// envelope; the next save backfills it. Old v9 readers ignore the extra field.
 export const CACHE_VERSION = 9
 
 // The cache directory is version-suffixed for the same reason the file used to
@@ -349,11 +353,25 @@ export function sessionCacheDir(): string {
 // turn), so the pair bounds every turn the shard can contribute and a ranged
 // load can skip the shard outright when the two do not overlap the query.
 type ShardRef = { name: string; until: string }
+/** Fingerprint + bucket of one cached file in a *skipped* shard. Cheap enough
+ *  to live on the envelope so a scoped load can skip that shard body (#1034).
+ *  Loaded months are already in `section.files` — they must not be copied here
+ *  or a 1.9 GB corpus inflates the envelope for a two-file skip. */
+export type FileIndexEntry = {
+  fingerprint: FileFingerprint
+  lastCompleteLineOffset?: number
+  /** Shard bucket (`YYYY-MM` or `0000-00`). Lets a scoped save drop index
+   *  entries for months it loaded without reading those shards. */
+  bucket: string
+}
 type EnvelopeProvider = {
   envFingerprint: string
   durable?: boolean
   /** month (`YYYY-MM`, or `0000-00` for turn-less files) -> shard */
   shards: Record<string, ShardRef>
+  /** Files in shards this load *skipped*. Optional. A full load omits it.
+   *  Pre-#1034 envelopes omit it and scoped loads re-parse out-of-range files. */
+  index?: Record<string, FileIndexEntry>
 }
 type CacheEnvelope = {
   version: number
@@ -417,6 +435,10 @@ type CacheState = {
   /** `provider\0path` -> the bucket the entry was loaded/saved under, so a
    *  delete or a re-bucketing can dirty the bucket it is leaving. */
   bucketOf: Map<string, string>
+  /** `provider\0path` -> fingerprint of a file whose turn body was not loaded
+   *  (out-of-range shard). Never copied into `section.files`: empty-turn stubs
+   *  would re-bucket into `0000-00` and prune the real shard entry. */
+  fileIndex: Map<string, FileIndexEntry>
   /** The load scope this cache was read under, for the cross-request memo. */
   scope: string
 }
@@ -432,6 +454,7 @@ function stateOf(cache: SessionCache): CacheState {
       loaded: new Map(),
       fingerprints: new Map(),
       bucketOf: new Map(),
+      fileIndex: new Map(),
       scope: 'all',
     }
     cacheStates.set(cache, state)
@@ -540,6 +563,45 @@ function validateFingerprint(fp: unknown): fp is FileFingerprint {
   if (!fp || typeof fp !== 'object') return false
   const f = fp as Record<string, unknown>
   return isNum(f['dev']) && isNum(f['ino']) && isNum(f['mtimeMs']) && isNum(f['sizeBytes'])
+}
+
+function isFileIndexEntry(v: unknown): v is FileIndexEntry {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  return validateFingerprint(o['fingerprint'])
+    && isOptionalNum(o['lastCompleteLineOffset'])
+    && typeof o['bucket'] === 'string'
+}
+
+/** Fail-open: a corrupt index costs the optimization, not the cache. */
+function readFileIndex(raw: unknown): Record<string, FileIndexEntry> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, FileIndexEntry> = {}
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (isFileIndexEntry(entry)) out[path] = entry
+  }
+  return out
+}
+
+function toIndexEntry(file: CachedFile): FileIndexEntry {
+  return {
+    fingerprint: file.fingerprint,
+    bucket: cacheFileSpan(file).bucket,
+  }
+}
+
+function fileIndexKey(provider: string, path: string): string {
+  return `${provider}\0${path}`
+}
+
+function fileIndexForProvider(state: CacheState, provider: string): Record<string, FileIndexEntry> | undefined {
+  const prefix = `${provider}\0`
+  const out: Record<string, FileIndexEntry> = {}
+  for (const [key, entry] of state.fileIndex) {
+    if (!key.startsWith(prefix)) continue
+    out[key.slice(prefix.length)] = entry
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 function validateUsage(u: unknown): u is CachedUsage {
@@ -884,6 +946,27 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     state.fingerprints.set(provider, meta.envFingerprint)
   }
   await Promise.all(reads)
+  // Fingerprints of shards this load deliberately skipped: expose them for
+  // reconcileFile without installing empty-turn stubs into section.files
+  // (#1034). A full load (loaded === null) has every attempted bucket in
+  // memory or dirty-empty — never index-only. A scoped load must not treat
+  // a selected-but-unreadable bucket as skipped: those paths have to reparse.
+  for (const [provider, meta] of Object.entries(envelope.providers)) {
+    const section = cache.providers[provider]
+    if (!section) continue
+    const loaded = state.loaded.get(provider)
+    if (loaded == null) continue
+    const index = meta.index !== undefined ? readFileIndex(meta.index) : {}
+    for (const [path, entry] of Object.entries(index)) {
+      if (section.files[path]) continue
+      if (loaded.has(entry.bucket)) continue
+      // Envelope no longer names this bucket: the shard is gone. Trusting the
+      // index would hide the file forever (unchanged → skip parse and skip
+      // the next save). Fall through as uncached so it re-parses.
+      if (!(entry.bucket in meta.shards)) continue
+      state.fileIndex.set(fileIndexKey(provider, path), entry)
+    }
+  }
   state.scope = scopeKey
   cacheMemo = { dir, nonce: envelope.nonce, scope: scopeKey, cache }
   return cache
@@ -1047,6 +1130,44 @@ type ProviderPlan = {
   refs: Record<string, ShardRef>
 }
 
+/** Build the envelope fingerprint index for one provider.
+ *  Full load: omit — every file is already in memory / shards.
+ *  Scoped load: only files in skipped, still-named buckets. Never copy
+ *  in-memory files (that was the 5.6 MB envelope on a 2-file skip). */
+async function buildProviderIndex(
+  _provider: string,
+  plan: ProviderPlan,
+  shards: Record<string, ShardRef>,
+  priorIndex: Record<string, FileIndexEntry> | undefined,
+  dir: string,
+): Promise<Record<string, FileIndexEntry> | undefined> {
+  if (!plan.loaded) return undefined
+
+  const index: Record<string, FileIndexEntry> = {}
+  for (const [path, entry] of Object.entries(priorIndex ?? {})) {
+    if (plan.moved.has(path)) continue
+    if (plan.section.files[path]) continue
+    if (plan.loaded.has(entry.bucket)) continue
+    if (!(entry.bucket in shards)) continue
+    index[path] = { fingerprint: entry.fingerprint, bucket: entry.bucket }
+  }
+
+  if (priorIndex === undefined) {
+    // Pre-#1034 envelope: read each carried, unloaded shard once.
+    for (const [bucket, ref] of Object.entries(shards)) {
+      if (plan.loaded.has(bucket)) continue
+      const files = await loadShard(join(dir, ref.name))
+      if (!files) continue
+      for (const [path, file] of Object.entries(files)) {
+        if (plan.moved.has(path) || plan.section.files[path] || index[path]) continue
+        index[path] = toIndexEntry(file)
+      }
+    }
+  }
+
+  return Object.keys(index).length > 0 ? index : undefined
+}
+
 export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Promise<boolean>): Promise<boolean> {
   const dir = sessionCacheDir()
   if (!existsSync(dir)) await mkdir(dir, { recursive: true, mode: 0o700 })
@@ -1106,8 +1227,16 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       // trigger below reads shards it otherwise would not.
       if (loaded) {
         for (const [path, file] of Object.entries(section.files)) {
-          if (state.bucketOf.has(`${provider}\0${path}`)) continue
+          const priorBucket = state.bucketOf.get(`${provider}\0${path}`)
+            ?? state.fileIndex.get(fileIndexKey(provider, path))?.bucket
           const bucket = cacheFileSpan(file).bucket
+          if (priorBucket !== undefined) {
+            // Index-only files have no bucketOf from a shard read. If they
+            // reparsed into a loaded month, the old shard is still carried
+            // unless we mark the path moved.
+            if (priorBucket !== bucket) plan.moved.add(path)
+            continue
+          }
           if (!loaded.has(bucket) || bucket === UNDATED_BUCKET) plan.moved.add(path)
         }
       }
@@ -1204,6 +1333,7 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
     // Last look before publishing: a concurrent save may have unlinked a shard
     // in the moment since. An envelope must never name a file that is already
     // gone — that reads back as a corrupt month and drops its history.
+    const latest = settled ?? live
     const providers: Record<string, EnvelopeProvider> = {}
     for (const [provider, plan] of plans) {
       const shards: Record<string, ShardRef> = {}
@@ -1215,10 +1345,20 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
         // option, and the sweep retires the name.
         if (files) shards[bucket] = await writeShard(provider, bucket, files)
       }
+      const latestProv = latest?.providers[provider]
+      // A concurrent full save omits `index` on purpose. That is not "no prior
+      // knowledge" — do not fall back to this process's stale fileIndex or we
+      // skip shard backfill and drop siblings the full writer just published.
+      const priorIndex = latestProv === undefined
+        ? fileIndexForProvider(state, provider)
+        : latestProv.index !== undefined
+          ? readFileIndex(latestProv.index)
+          : undefined
       providers[provider] = {
         envFingerprint: plan.section.envFingerprint,
         ...(plan.section.durable ? { durable: true } : {}),
         shards,
+        index: await buildProviderIndex(provider, plan, shards, priorIndex, dir),
       }
     }
 
@@ -1246,13 +1386,22 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
     state.shards.clear()
     state.fingerprints.clear()
     state.bucketOf.clear()
+    state.fileIndex.clear()
     // `loaded` deliberately survives: a merged-and-rewritten shard is complete
     // on disk but still partial in memory, so the next save has to merge again.
     for (const [provider, meta] of Object.entries(providers)) {
       state.shards.set(provider, meta.shards)
       state.fingerprints.set(provider, meta.envFingerprint)
-      for (const [path, file] of Object.entries(cache.providers[provider]!.files)) {
+      const liveFiles = cache.providers[provider]!.files
+      for (const [path, file] of Object.entries(liveFiles)) {
         state.bucketOf.set(`${provider}\0${path}`, cacheFileSpan(file).bucket)
+      }
+      // Skipped months stay index-only; in-memory files are the live copy.
+      // Do not re-install an index entry whose bucket this envelope dropped.
+      for (const [path, entry] of Object.entries(meta.index ?? {})) {
+        if (liveFiles[path]) continue
+        if (!(entry.bucket in meta.shards)) continue
+        state.fileIndex.set(fileIndexKey(provider, path), entry)
       }
     }
     // Write-through: the object just published IS the freshest state, so the
@@ -1396,6 +1545,38 @@ export function reconcileFile(
   }
 
   return { action: 'modified' }
+}
+
+/** CachedFile for reconcileFile: the loaded body, or a fingerprint-only stub
+ *  from a skipped shard. Stubs are never installed into `section.files`. */
+export function lookupCachedFile(cache: SessionCache, provider: string, path: string): CachedFile | undefined {
+  const live = cache.providers[provider]?.files[path]
+  if (live) return live
+  const entry = stateOf(cache).fileIndex.get(fileIndexKey(provider, path))
+  if (!entry) return undefined
+  return {
+    fingerprint: entry.fingerprint,
+    ...(entry.lastCompleteLineOffset !== undefined ? { lastCompleteLineOffset: entry.lastCompleteLineOffset } : {}),
+    mcpInventory: [],
+    turns: [],
+  }
+}
+
+export function isIndexOnly(cache: SessionCache, provider: string, path: string): boolean {
+  return cache.providers[provider]?.files[path] === undefined
+    && stateOf(cache).fileIndex.has(fileIndexKey(provider, path))
+}
+
+/** Index-only hits have fingerprints, not turn bodies: append is impossible
+ *  without loading the shard, so growth becomes a full re-parse. */
+export function reconcileIndexedFile(
+  current: FileFingerprint,
+  cached: CachedFile | undefined,
+  indexOnly: boolean,
+): ReconcileAction {
+  const action = reconcileFile(current, cached)
+  if (indexOnly && action.action === 'appended') return { action: 'modified' }
+  return action
 }
 
 // ── Dedup Merge ────────────────────────────────────────────────────────

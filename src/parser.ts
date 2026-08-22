@@ -24,10 +24,12 @@ import {
   fingerprintFile,
   isCacheComplete,
   isCacheDirty,
+  isIndexOnly,
   loadCache,
+  lookupCachedFile,
   markCacheDirty,
   monthScopeForRange,
-  reconcileFile,
+  reconcileIndexedFile,
   saveCache,
 } from './session-cache.js'
 import { acquireCacheRefreshLock, type RefreshLockHandle } from './cache-refresh-lock.js'
@@ -1965,8 +1967,20 @@ async function scanProjectDirs(
       const fp = await fingerprintFile(filePath)
       if (!fp) continue
 
-      const cached = section.files[filePath]
-      const action = reconcileFile(fp, cached)
+      const cached = lookupCachedFile(diskCache, 'claude', filePath)
+      const indexOnly = isIndexOnly(diskCache, 'claude', filePath)
+      const action = reconcileIndexedFile(fp, cached, indexOnly)
+      if (indexOnly) {
+        // Out-of-range shard: fingerprint is enough to skip an unchanged file
+        // without loading turn bodies. Do not push empty-turn stubs into
+        // summaries or section.files (#1034).
+        if (readOnly || action.action === 'unchanged') {
+          if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
+          continue
+        }
+        if (!readOnly) changedFiles.push({ filePath, info: { dirName, fp, source } })
+        continue
+      }
       if (cached && (readOnly || action.action === 'unchanged')) {
         if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
         unchangedFiles.push({ filePath, dirName, source, cached: section.files[filePath]! })
@@ -2841,6 +2855,15 @@ function cachedFileNeedsProviderReparse(providerName: string, sourcePath: string
   )
 }
 
+/** Index-only stubs have empty turns. Provider overrides that inspect the body
+ *  (Gemini legacy aggregates) cannot prove "safe to skip", and Devin/Antigravity
+ *  already force reparse via cachedFileNeedsProviderReparse even on a stub
+ *  (Devin always; Antigravity 0-turn). Gemini is fail-closed for the class. */
+function indexOnlyMustReparse(providerName: string, sourcePath: string, cached: CachedFile): boolean {
+  if (cachedFileNeedsProviderReparse(providerName, sourcePath, cached)) return true
+  return providerName === 'gemini'
+}
+
 const warnedProviderReadFailures = new Set<string>()
 
 function warnProviderReadFailureOnce(providerName: string, err: unknown): void {
@@ -3058,11 +3081,27 @@ async function parseProviderSources(
     const fp = await fingerprintFile(source.path)
     if (!fp) continue
 
-    const cached = section.files[source.path]
-    const action = reconcileFile(fp, cached)
+    const cached = lookupCachedFile(diskCache, providerName, source.path)
+    const indexOnly = isIndexOnly(diskCache, providerName, source.path)
+    const action = reconcileIndexedFile(fp, cached, indexOnly)
     // A cached parse failure at this same fingerprint stays skipped — don't
     // re-read a file that already threw and hasn't changed. It re-parses only
     // when the file changes (then `reconcileFile` reports non-'unchanged').
+    if (indexOnly) {
+      // Out-of-range shard: skip unchanged sources without loading turn bodies.
+      // Fingerprint growth cannot append (no body), so it falls through as a
+      // full re-parse (#1034). Provider overrides still apply: Devin always,
+      // Antigravity 0-turn/statusline, Gemini as a class (no body to inspect).
+      if (readOnly) {
+        if (action.action !== 'unchanged') readOnlyServedStale = true
+        continue
+      }
+      if (action.action === 'unchanged' && cached && !indexOnlyMustReparse(providerName, source.path, cached)) {
+        continue
+      }
+      changedSources.push({ source, fp })
+      continue
+    }
     if (cached && (readOnly || (action.action === 'unchanged' && (cached.failed || !cachedFileNeedsProviderReparse(providerName, source.path, cached))))) {
       if (readOnly && action.action !== 'unchanged') readOnlyServedStale = true
       unchangedSources.push({ source, cached })
