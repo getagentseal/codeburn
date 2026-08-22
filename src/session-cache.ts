@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
+import { DAILY_CACHE_VERSION } from './daily-cache.js'
 import type { ToolCall } from './types.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -272,6 +273,23 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
 // disappear — they are preserved so month-to-date totals never drop.
 export const DURABLE_PROVIDER_NAMES: ReadonlySet<string> = new Set(['copilot'])
 
+// ── Cache Semantics Revision ───────────────────────────────────────────
+// Bump this when cost/accounting semantics change without a matching
+// PROVIDER_PARSE_VERSIONS bump. Issue #1095 / vidoluco's #946 postmortem:
+// an unpublished fork shared the same PROVIDER_PARSE_VERSIONS but wrote
+// synthetic/differently-priced calls into a shared cache dir, and the
+// published build adopted them because session-cache entries were
+// fingerprinted only by source file and parse version. This revision is
+// hashed into the envelope semantics token so foreign-build envelopes
+// mismatch and become cache misses.
+//
+// This fix does NOT bump DAILY_CACHE_VERSION: the semantics token changes
+// SESSION-CACHE ENVELOPE ADOPTION policy (whether a foreign envelope's
+// provider data is trusted), not the shape or content of daily-cache.v26
+// day records. daily-cache has its own independent versioning/migration
+// path for that.
+export const CACHE_SEMANTICS_REVISION = 1
+
 // Estimated-cost surfacing (#639): providers that set `costIsEstimated` carry a
 // `-est-cost` suffix (or a new entry) so their already-cached sessions reparse
 // once and the flag lands, instead of silently reading as measured. Copilot
@@ -390,6 +408,7 @@ type EnvelopeProvider = {
 type CacheEnvelope = {
   version: number
   complete?: boolean
+  semanticsToken?: string
   nonce: string
   providers: Record<string, EnvelopeProvider>
 }
@@ -512,6 +531,16 @@ export function computeEnvFingerprint(provider: string): string {
   const parts = vars.map(v => `${v}=${process.env[v] ?? ''}`)
   const parseVersion = PROVIDER_PARSE_VERSIONS[provider]
   if (parseVersion) parts.push(`parser=${parseVersion}`)
+  return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
+}
+
+export function computeCacheSemanticsToken(): string {
+  const parseVersions = Object.entries(PROVIDER_PARSE_VERSIONS).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const parts = [
+    JSON.stringify(parseVersions),
+    `daily=${DAILY_CACHE_VERSION}`,
+    `semantics=${CACHE_SEMANTICS_REVISION}`,
+  ]
   return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
 }
 
@@ -813,6 +842,7 @@ function isEnvelope(raw: unknown): raw is CacheEnvelope {
   if (!raw || typeof raw !== 'object') return false
   const o = raw as Record<string, unknown>
   if (o['version'] !== CACHE_VERSION || typeof o['nonce'] !== 'string') return false
+  if (!isOptionalString(o['semanticsToken'])) return false
   const providers = o['providers']
   if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return false
   return Object.values(providers as Record<string, unknown>).every(p => {
@@ -865,6 +895,7 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
   const dir = sessionCacheDir()
   const envelope = await readEnvelope(dir)
   if (!envelope) return afterMissingShardCache()
+  const semanticsMismatch = envelope.semanticsToken !== undefined && envelope.semanticsToken !== computeCacheSemanticsToken()
   const scopeKey = scope ? `${scope.fromMonth}..${scope.toMonth}` : 'all'
   if (cacheMemo && cacheMemo.dir === dir && cacheMemo.nonce === envelope.nonce
     && (cacheMemo.scope === 'all' || cacheMemo.scope === scopeKey)) return cacheMemo.cache
@@ -888,7 +919,7 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     // retires residuals over the complete cached serve set, so a scoped load
     // of a copilot section persisted before the durable stamp landed would
     // make pairing range-dependent. The name check closes that window.
-    const full = !scope || meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider) || meta.envFingerprint !== computeEnvFingerprint(provider)
+    const full = !scope || meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider) || meta.envFingerprint !== computeEnvFingerprint(provider) || semanticsMismatch
     const loaded: Set<string> | null = full ? null : new Set()
     // Shards are read concurrently but merged in envelope order, so the result
     // never depends on which read finished first. A path that somehow ended up
@@ -925,6 +956,23 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     state.fingerprints.set(provider, meta.envFingerprint)
   }
   await Promise.all(reads)
+  if (semanticsMismatch) {
+    for (const [provider, section] of Object.entries(cache.providers)) {
+      const durable = section.durable === true || DURABLE_PROVIDER_NAMES.has(provider)
+      if (durable) {
+        for (const [path, file] of Object.entries(section.files)) {
+          if (existsSync(path)) {
+            delete file.lastCompleteLineOffset
+            delete file.failed
+            file.fingerprint = { dev: 0, ino: 0, mtimeMs: 0, sizeBytes: -1 }
+          }
+        }
+      } else {
+        section.files = {}
+      }
+      markCacheDirty(cache, provider)
+    }
+  }
   state.scope = scopeKey
   cacheMemo = { dir, nonce: envelope.nonce, scope: scopeKey, cache }
   return cache
@@ -1266,6 +1314,7 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
     const envelope: CacheEnvelope = {
       version: CACHE_VERSION,
       complete: cache.complete === true,
+      semanticsToken: computeCacheSemanticsToken(),
       nonce: randomBytes(8).toString('hex'),
       providers,
     }
