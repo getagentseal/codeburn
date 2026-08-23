@@ -969,6 +969,14 @@ export function calculateCost(
 }
 
 const autoModelNames: Record<string, string> = {
+  // OrcaRouter route ids. The smart route routes per request and the fusion
+  // routes resolve to a gateway-picked upstream, so each keeps its branded
+  // route label rather than the current upstream's display name. Prices are
+  // aliased in BUILTIN_ALIASES to the route's current target.
+  'orcarouter/auto': 'OrcaRouter (auto)',
+  'orcarouter/fusion': 'OrcaRouter Fusion',
+  'orcarouter/fusion-flash': 'OrcaRouter Fusion Flash',
+  'orcarouter/fusion-mini': 'OrcaRouter Fusion Mini',
   'glm-5.3': 'GLM-5.3',
   'GLM-5.3': 'GLM-5.3',
   'cursor-auto': 'Cursor (auto)',
@@ -983,14 +991,6 @@ const autoModelNames: Record<string, string> = {
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',
   'kimi-auto': 'Kimi (auto)',
-  // OrcaRouter route ids. The smart route routes per request and the fusion
-  // routes resolve to a gateway-picked upstream, so each keeps its branded
-  // route label rather than the current upstream's display name. Prices are
-  // aliased in BUILTIN_ALIASES to the route's current target.
-  'orcarouter/auto': 'OrcaRouter (auto)',
-  'orcarouter/fusion': 'OrcaRouter Fusion',
-  'orcarouter/fusion-flash': 'OrcaRouter Fusion Flash',
-  'orcarouter/fusion-mini': 'OrcaRouter Fusion Mini',
 }
 
 const SHORT_NAMES: Record<string, string> = {
