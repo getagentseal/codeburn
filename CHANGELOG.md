@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed (macOS)
+
+- **CodeBurnMenubar now launches mise-installed CodeBurn correctly from Spotlight.** Spotlight gives GUI apps a minimal PATH, so a persisted `mise use -g npm:codeburn` launcher could be found but then fail with exit 127 when its shell wrapper tried to resolve `node`. The menubar child environment now includes mise's stable shim directory (including a custom `MISE_DATA_DIR` when available), matching the existing Volta/asdf/nvm handling without invoking a shell. (#1124)
+
 ## 0.9.21 - 2026-08-24
 
 ### Added

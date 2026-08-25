@@ -69,7 +69,7 @@ The app registers itself as a menubar accessory (`LSUIElement = true` at runtime
 
 On launch and every 60 seconds thereafter, the app spawns `codeburn status --format menubar-json --no-optimize` directly (argv, no shell) via `CodeburnCLI.makeProcess` and decodes the JSON into `MenubarPayload`. The manual refresh button in the footer invokes the same command without `--no-optimize`, which includes optimize findings but takes longer.
 
-Release installs record a persistent absolute CLI path in `~/Library/Application Support/CodeBurn/codeburn-cli-path.v1`, then fall back to Homebrew's common `codeburn` locations. For development only, set `CODEBURN_ALLOW_DEV_BIN=1` with `CODEBURN_BIN`; the value is validated against a strict allowlist before use, so a malicious env var can't inject shell commands.
+Release installs record a persistent absolute CLI path in `~/Library/Application Support/CodeBurn/codeburn-cli-path.v1`, then fall back to common Homebrew and Node-manager locations. GUI launches augment the minimal macOS PATH with Volta, npm-global, asdf, mise, and nvm runtime locations so a persisted JavaScript launcher also works when the app is opened from Spotlight. For development only, set `CODEBURN_ALLOW_DEV_BIN=1` with `CODEBURN_BIN`; the value is validated against a strict allowlist before use, so a malicious env var can't inject shell commands.
 
 ## Project layout
 

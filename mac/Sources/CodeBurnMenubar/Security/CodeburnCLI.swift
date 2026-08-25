@@ -14,13 +14,25 @@ enum CodeburnCLI {
     /// Homebrew and npm global installs.
     private static let additionalPathEntries = ["/opt/homebrew/bin", "/usr/local/bin"]
 
-    private static let userNodePaths: [String] = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+    private static func userNodePaths(
+        homeDirectory: String,
+        environment: [String: String]
+    ) -> [String] {
+        let home = homeDirectory
         var paths: [String] = []
         for dir in ["\(home)/.volta/bin", "\(home)/.npm-global/bin", "\(home)/.asdf/shims"] {
             paths.append(dir)
         }
-        let nvmDir = ProcessInfo.processInfo.environment["NVM_DIR"] ?? "\(home)/.nvm"
+        // `mise use -g npm:codeburn` installs the CLI under its npm backend, but
+        // that wrapper still resolves `node` through PATH. Apps opened by
+        // Spotlight inherit only the system PATH, so include mise's stable shim
+        // directory (the same integration its official docs prescribe for
+        // non-interactive environments). Respect a custom data directory when
+        // it is available to the GUI process; otherwise use mise's macOS default.
+        let miseDataDir = environment["MISE_DATA_DIR"] ?? "\(home)/.local/share/mise"
+        paths.append("\(miseDataDir)/shims")
+
+        let nvmDir = environment["NVM_DIR"] ?? "\(home)/.nvm"
         let versionsDir = "\(nvmDir)/versions/node"
         if let entries = try? FileManager.default.contentsOfDirectory(atPath: versionsDir) {
             for entry in entries.sorted().reversed() {
@@ -32,7 +44,7 @@ enum CodeburnCLI {
             }
         }
         return paths
-    }()
+    }
     private static let persistedPathFilename = "codeburn-cli-path.v1"
 
     /// Returns the argv that launches the CLI. Dev override via `CODEBURN_BIN` is honoured only
@@ -58,7 +70,12 @@ enum CodeburnCLI {
         if let persisted = persistedCLIPath(), isSafe(persisted), FileManager.default.isExecutableFile(atPath: persisted) {
             return [persisted]
         }
-        for candidate in (additionalPathEntries + userNodePaths).map({ "\($0)/codeburn" }) {
+        let environment = ProcessInfo.processInfo.environment
+        let userPaths = userNodePaths(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            environment: environment
+        )
+        for candidate in (additionalPathEntries + userPaths).map({ "\($0)/codeburn" }) {
             if isSafe(candidate), FileManager.default.isExecutableFile(atPath: candidate) {
                 return [candidate]
             }
@@ -80,8 +97,8 @@ enum CodeburnCLI {
     }
 
     /// Builds a `Process` that runs the CLI with the given subcommand args. Uses `/usr/bin/env`
-    /// so PATH lookup happens without involving a shell, and augments PATH with Homebrew
-    /// defaults. Caller sets stdout/stderr pipes and calls `run()`.
+    /// so PATH lookup happens without involving a shell, and augments PATH with common package
+    /// manager locations. Caller sets stdout/stderr pipes and calls `run()`.
     static func makeProcess(
         subcommand: [String],
         qualityOfService: QualityOfService = .userInitiated
@@ -89,7 +106,11 @@ enum CodeburnCLI {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = augmentedPath(environment["PATH"] ?? "")
+        environment["PATH"] = augmentedPath(
+            environment["PATH"] ?? "",
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            environment: environment
+        )
         process.environment = environment
         // `env --` treats everything following as argv, not VAR=val pairs -- guards against an
         // argument accidentally resembling an env assignment.
@@ -107,9 +128,14 @@ enum CodeburnCLI {
         return safeArgPattern.firstMatch(in: s, range: range) != nil
     }
 
-    private static func augmentedPath(_ existing: String) -> String {
+    static func augmentedPath(
+        _ existing: String,
+        homeDirectory: String,
+        environment: [String: String]
+    ) -> String {
         var parts = existing.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
-        for extra in additionalPathEntries + userNodePaths where !parts.contains(extra) {
+        let userPaths = userNodePaths(homeDirectory: homeDirectory, environment: environment)
+        for extra in additionalPathEntries + userPaths where !parts.contains(extra) {
             parts.append(extra)
         }
         return parts.joined(separator: ":")
