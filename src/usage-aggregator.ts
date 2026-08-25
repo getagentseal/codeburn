@@ -12,7 +12,7 @@ import { aggregateModelEfficiency } from './model-efficiency.js'
 import { aggregateModels } from './models-report.js'
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
-import { scanAndDetect } from './optimize.js'
+import { scanAndDetect, type OptimizeResult } from './optimize.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens } from './session-output.js'
 import { getDaysInRange, ensureCacheHydrated, emptyCache, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
@@ -970,7 +970,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
   })()
 
-  const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange, opts.provider)
+  const optimize = await computeOptimizeBlock(scanProjects, scanRange, opts.optimize === false ? null : opts.provider ?? 'all')
   const granularRange = opts.daysSelection?.range ?? scanRange
   const granularHistory = opts.timeline === false ? undefined : buildGranularHistory(scanProjects, granularRange)
   // `stale` keeps its original meaning: a read-only serve that could not see
@@ -980,4 +980,21 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const partialFirstPaint = hydration?.deferredForFirstPaint === true
   const stale = hydration?.complete === false && !partialFirstPaint ? true : undefined
   return buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory, stale, hydrationStateFor(hydration))
+}
+
+// scanAndDetect reads mutable, non-fingerprinted state (~/.claude settings.json,
+// project CLAUDE.md, defined skills/agents/commands, MCP config) that the corpus
+// fingerprint and the queryKey never observe and that has no single enumerable
+// fingerprint (#1135 part 2). The status snapshot therefore does NOT carry the
+// optimize block: callers serve the base payload from the snapshot, then call
+// this helper to recompute only the optimize field on top. `provider === null`
+// mirrors `opts.optimize === false` and produces an empty block without
+// touching disk.
+export async function computeOptimizeBlock(
+  scanProjects: ProjectSummary[],
+  scanRange: DateRange,
+  provider: string | null,
+): Promise<OptimizeResult | null> {
+  if (provider === null) return null
+  return scanAndDetect(scanProjects, scanRange, provider)
 }

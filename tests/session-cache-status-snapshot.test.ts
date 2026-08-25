@@ -283,10 +283,12 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
       )
       const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(delimiter) }
 
-      // Warm the session cache through the DEFAULT optimize path: it parses
-      // and persists the corpus but never reads or writes the status snapshot
-      // (main.ts: useSnapshot = !optimize). Also discovers the config-source
-      // id the scoped queries below select.
+      // Warm the session cache through a default-optimize poll: it parses and
+      // persists the corpus. #1135 part 2 also persisted the BASE payload
+      // (with the optimize block stripped) on this path, so the warm-up
+      // writes a snapshot at its own (no --claude-config-source) queryKey.
+      // The assertions below only care about the scoped queryKey, so we
+      // clear any warm-up snapshot files before the next call.
       const warmStart = Date.now()
       const warm = runCli(['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all'], home, env)
       const warmElapsedMs = Date.now() - warmStart
@@ -298,7 +300,7 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
       expect(warmPayload.current.calls).toBe(2)
       const workSourceId = warmPayload.claudeConfigs.options.find(o => o.label === 'claude-work')?.id
       expect(workSourceId).toBeTruthy()
-      expect(await snapshotFileNames(cacheDir)).toEqual([])
+      for (const f of await snapshotFileNames(cacheDir)) await rm(join(cacheDir, f))
 
       // New activity in the SELECTED root that the warm cache has never seen.
       // A read-only parse has no cache entry for it and must skip it,
