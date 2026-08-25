@@ -415,7 +415,7 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
     .map(([name, d]) => ({ name, cost: d.cost, calls: d.calls, savingsUSD: d.savingsUSD, savingsBaselineModel: '', estimatedCostUSD: d.estimatedCostUSD }))
 }
 
-export function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
+function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {
   if (!optimize || optimize.findings.length === 0) {
     return { findingCount: 0, savingsUSD: 0, topFindings: [] }
   }

@@ -168,6 +168,36 @@ describe('concurrent writers (status snapshot)', () => {
   })
 })
 
+// Belt-and-braces mirror of the save gate in main.ts (#1135 fix round): a
+// payload marked degraded (`stale === true` or a `hydration` block) must
+// never have been persisted, so a record that somehow carries those markers
+// (older build, hand-edited file) loads as a miss and is recomputed.
+describe('load-time re-validation mirrors the save gate', () => {
+  it('treats a persisted payload carrying stale === true as a miss', async () => {
+    const queryKey = 'degraded-stale'
+    await saveStatusSnapshot('corpus-a', 1_000, 1_000, queryKey, SEMANTIC_KEY, { stale: true, p: 'degraded' })
+
+    expect(await loadStatusSnapshot('corpus-a', queryKey, SEMANTIC_KEY)).toBeNull()
+  })
+
+  it('treats a persisted payload carrying a hydration block as a miss', async () => {
+    const queryKey = 'degraded-hydration'
+    await saveStatusSnapshot('corpus-a', 1_000, 1_000, queryKey, SEMANTIC_KEY, {
+      hydration: { complete: false, indexedFiles: 1, totalFiles: 2 },
+      p: 'partial',
+    })
+
+    expect(await loadStatusSnapshot('corpus-a', queryKey, SEMANTIC_KEY)).toBeNull()
+  })
+
+  it('still serves a clean persisted payload (control)', async () => {
+    const queryKey = 'clean-control'
+    await saveStatusSnapshot('corpus-a', 1_000, 1_000, queryKey, SEMANTIC_KEY, { p: 'clean' })
+
+    expect(await loadStatusSnapshot('corpus-a', queryKey, SEMANTIC_KEY)).toEqual({ p: 'clean' })
+  })
+})
+
 // Post-merge review of PR #999: a `status --format menubar-json --no-optimize`
 // poll that runs while ANOTHER process holds `session-refresh.lock` parses
 // read-only and serves a degraded corpus (payload.stale === true), and a later
@@ -283,12 +313,10 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
       )
       const env = { CLAUDE_CONFIG_DIRS: [work, personal].join(delimiter) }
 
-      // Warm the session cache through a default-optimize poll: it parses and
-      // persists the corpus. #1135 part 2 also persisted the BASE payload
-      // (with the optimize block stripped) on this path, so the warm-up
-      // writes a snapshot at its own (no --claude-config-source) queryKey.
-      // The assertions below only care about the scoped queryKey, so we
-      // clear any warm-up snapshot files before the next call.
+      // Warm the session cache through the DEFAULT optimize path: it parses
+      // and persists the corpus but never reads or writes the status snapshot
+      // (main.ts: useSnapshot = !optimize). Also discovers the config-source
+      // id the scoped queries below select.
       const warmStart = Date.now()
       const warm = runCli(['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all'], home, env)
       const warmElapsedMs = Date.now() - warmStart
@@ -300,7 +328,7 @@ describe('degraded read-only parse is never persisted as a status snapshot', () 
       expect(warmPayload.current.calls).toBe(2)
       const workSourceId = warmPayload.claudeConfigs.options.find(o => o.label === 'claude-work')?.id
       expect(workSourceId).toBeTruthy()
-      for (const f of await snapshotFileNames(cacheDir)) await rm(join(cacheDir, f))
+      expect(await snapshotFileNames(cacheDir)).toEqual([])
 
       // New activity in the SELECTED root that the warm cache has never seen.
       // A read-only parse has no cache entry for it and must skip it,

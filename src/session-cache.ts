@@ -1963,6 +1963,12 @@ export async function loadStatusSnapshot(corpusFingerprint: string, queryKey: st
   const stored = await readStatusSnapshotRecord(queryKey)
   if (!stored) return null
   if (stored.semanticKey !== semanticKey) return null
+  // Belt-and-braces mirror of the save gate in main.ts: a payload marked
+  // degraded (`stale === true` or a `hydration` block) must never have been
+  // persisted, so one that somehow was (an older build, a hand-edited file)
+  // is treated as a miss and recomputed rather than served.
+  const candidate = stored.payload as { stale?: unknown; hydration?: unknown } | null | undefined
+  if (candidate !== null && typeof candidate === 'object' && (candidate.stale === true || candidate.hydration !== undefined)) return null
   if (stored.corpusFingerprint === corpusFingerprint) return stored.payload ?? null
 
   const now = Date.now()

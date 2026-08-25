@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter as pathDelimiter, join } from 'node:path'
@@ -14,13 +14,6 @@ const SNAPSHOT_FILE_RE = /^status-snapshot\.[0-9a-f]+\.json$/
 function findSnapshotFiles(cacheDir: string): string[] {
   if (!existsSync(cacheDir)) return []
   return readdirSync(cacheDir).filter(f => SNAPSHOT_FILE_RE.test(f)).map(f => join(cacheDir, f))
-}
-
-// Synchronous read is fine here — these tests already run inside a child CLI
-// invocation and just need to peek at the on-disk snapshot before the next
-// call writes over it.
-async function readFileString(path: string): Promise<string> {
-  return await readFile(path, 'utf-8')
 }
 
 // Every case here spawns the real CLI and does genuine multi-provider parse
@@ -875,7 +868,7 @@ describe('codeburn status --format menubar-json', () => {
     }
   })
 
-  it('persists the base payload on the optimize path, serves a repeat from cache, and re-derives the optimize block on a non-fingerprinted change', async () => {
+  it('never persists or serves the default optimize-enabled payload from the status snapshot', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-optimize-cache-'))
 
     try {
@@ -892,109 +885,32 @@ describe('codeburn status --format menubar-json', () => {
 
       const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'claude']
 
-      // The base payload IS persisted under the optimize path (#1135 part 2).
-      // The optimize block is NOT — it depends on ~/.claude state the corpus
-      // fingerprint cannot observe, and pinning it would let an agent edit
-      // with no session change serve stale findings indefinitely. The
-      // persisted record carries an empty optimize placeholder.
       const before = runCli(args, home)
       expect(before.status, `stderr: ${before.stderr}`).toBe(0)
-      const beforePayload = JSON.parse(before.stdout) as {
-        current: { calls: number }
-        optimize: { findingCount: number }
-        generated: string
-      }
-      const findingsBefore = beforePayload.optimize.findingCount
+      const findingsBefore = (JSON.parse(before.stdout) as { optimize: { findingCount: number } }).optimize.findingCount
 
       const cacheDir = join(home, '.cache', 'codeburn')
-      const snapshotFiles = findSnapshotFiles(cacheDir)
-      expect(snapshotFiles).toHaveLength(1)
-      const persistedRecord = JSON.parse(await readFileString(snapshotFiles[0]!)) as {
-        payload: { optimize: { findingCount: number, topFindings: unknown[] } }
-      }
-      expect(persistedRecord.payload.optimize).toEqual({ findingCount: 0, savingsUSD: 0, topFindings: [] })
-
-      // Identical query: the snapshot is hit. The non-optimize fields are
-      // served verbatim from disk, including the cached `generated` timestamp
-      // (a fresh render would re-mint it) — the timestamp is itself the proof
-      // we read the on-disk record. The optimize block, however, is
-      // re-derived fresh and so MUST match the first call's findings (no
-      // ~/.claude change yet between them).
-      const after = runCli(args, home)
-      expect(after.status, `stderr: ${after.stderr}`).toBe(0)
-      const afterPayload = JSON.parse(after.stdout) as {
-        current: { calls: number }
-        optimize: { findingCount: number, topFindings: Array<{ title: string }> }
-        generated: string
-      }
-      expect(afterPayload.current).toEqual(beforePayload.current)
-      expect(afterPayload.generated).toBe(beforePayload.generated)
-      expect(afterPayload.optimize.findingCount).toBe(findingsBefore)
-      expect(afterPayload.optimize.topFindings).toEqual(beforePayload.optimize.topFindings)
+      expect(findSnapshotFiles(cacheDir)).toEqual([])
 
       // Mutable, non-fingerprinted optimize input: an unused custom agent
-      // definition. The session corpus is unchanged, so the snapshot still
-      // hits; the optimize block, however, must be re-derived against the
-      // current ~/.claude/agents directory and now reports the new ghost.
+      // definition. The session corpus is untouched, so a corpus-fingerprint-
+      // keyed snapshot would never notice this changed.
       const agentsDir = join(home, '.claude', 'agents')
       await mkdir(agentsDir, { recursive: true })
       await writeFile(join(agentsDir, 'ghost-agent.md'), '# never invoked this period')
 
-      const afterAgent = runCli(args, home)
-      expect(afterAgent.status, `stderr: ${afterAgent.stderr}`).toBe(0)
-      const afterAgentPayload = JSON.parse(afterAgent.stdout) as { optimize: { findingCount: number } }
-      expect(afterAgentPayload.optimize.findingCount).toBe(findingsBefore + 1)
+      const after = runCli(args, home)
+      expect(after.status, `stderr: ${after.stderr}`).toBe(0)
+      const findingsAfter = (JSON.parse(after.stdout) as { optimize: { findingCount: number } }).optimize.findingCount
+
+      expect(findingsAfter).toBe(findingsBefore + 1)
+      expect(findSnapshotFiles(cacheDir)).toEqual([])
     } finally {
       await rm(home, { recursive: true, force: true })
     }
   })
 
-  it('caches a second identical optimize-enabled request and returns it byte-identical on the non-optimize fields', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-optimize-hit-'))
-
-    try {
-      const projectDir = join(home, '.claude', 'projects', 'myapp')
-      await mkdir(projectDir, { recursive: true })
-      const now = new Date()
-      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
-      const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
-      await writeFile(
-        join(projectDir, 'session.jsonl'),
-        [userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1')].join('\n'),
-      )
-
-      const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'claude']
-
-      const first = runCli(args, home)
-      expect(first.status, `stderr: ${first.stderr}`).toBe(0)
-      const firstPayload = JSON.parse(first.stdout) as {
-        current: { calls: number }
-        optimize: { findingCount: number, topFindings: unknown[] }
-        generated: string
-      }
-
-      // A second identical optimize=true request hits the persisted base on
-      // disk. Every field is byte-identical to the first call, including the
-      // cached `generated` timestamp — a fresh render would re-mint it; the
-      // surviving timestamp is itself the proof we read the on-disk record
-      // rather than re-rendering.
-      const second = runCli(args, home)
-      expect(second.status, `stderr: ${second.stderr}`).toBe(0)
-      const secondPayload = JSON.parse(second.stdout) as {
-        current: unknown
-        optimize: { findingCount: number, topFindings: unknown[] }
-        generated: string
-        history: unknown
-        currency: unknown
-      }
-      expect(secondPayload).toEqual(firstPayload)
-    } finally {
-      await rm(home, { recursive: true, force: true })
-    }
-  })
-
-  it('misses the snapshot and recomputes when the corpus fingerprint moves', async () => {
+  it('reflects appended session activity on the very next optimize-path call', async () => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-optimize-miss-'))
 
     try {
@@ -1009,6 +925,10 @@ describe('codeburn status --format menubar-json', () => {
         [userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1')].join('\n'),
       )
 
+      // Same provider for both calls: the only delta between the two
+      // invocations is the appended session line, so a changed answer can
+      // only come from the corpus change being picked up, never from a
+      // queryKey change.
       const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'claude']
 
       const first = runCli(args, home)
@@ -1016,9 +936,8 @@ describe('codeburn status --format menubar-json', () => {
       const firstPayload = JSON.parse(first.stdout) as { current: { calls: number } }
       expect(firstPayload.current.calls).toBe(1)
 
-      // A real corpus change (a new session line in the existing file)
-      // advances the fingerprint; the next call must recompute and reflect
-      // the additional call instead of serving the cached base.
+      // The optimize path never reads the disk snapshot, so the new session
+      // line shows up immediately, with no settle window to wait out.
       await writeFile(
         join(projectDir, 'session.jsonl'),
         [
@@ -1027,10 +946,10 @@ describe('codeburn status --format menubar-json', () => {
         ].join('\n'),
       )
 
-      const settled = runCli(args, home, { CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
-      expect(settled.status, `stderr: ${settled.stderr}`).toBe(0)
-      const settledPayload = JSON.parse(settled.stdout) as { current: { calls: number } }
-      expect(settledPayload.current.calls).toBe(2)
+      const second = runCli(args, home)
+      expect(second.status, `stderr: ${second.stderr}`).toBe(0)
+      const secondPayload = JSON.parse(second.stdout) as { current: { calls: number } }
+      expect(secondPayload.current.calls).toBe(2)
     } finally {
       await rm(home, { recursive: true, force: true })
     }

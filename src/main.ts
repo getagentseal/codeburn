@@ -16,8 +16,7 @@ import { isBehavioralCall } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, computeOptimizeBlock, type DurablePeriod } from './usage-aggregator.js'
-import { buildOptimize } from './menubar-json.js'
+import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, type DurablePeriod } from './usage-aggregator.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
@@ -1176,41 +1175,28 @@ program
         pricingGenerationKey: getPricingGenerationKey(),
       })
       // Optimize findings (the default; see --no-optimize) depend on mutable
-      // project/config/prompt/hook state — ~/.claude and project-level
-      // settings.json, CLAUDE.md, defined skills/agents/commands, MCP config
-      // — that computeCorpusFingerprint and queryKey never observe and that
-      // has no single enumerable fingerprint. Persisting THIS class of output
-      // would mean editing a hook or removing an unused skill leaves the
-      // menubar showing stale findings with no session change to ever
-      // invalidate them (#1135 part 2). The base payload is the expensive
-      // thing to recompute and the one we cache: the optimize block is
-      // re-derived fresh on every snapshot hit through computeOptimizeBlock
-      // (re-running scanAndDetect over a fresh parse of the unchanged
-      // corpus), then re-attached. The queryKey already partitions
-      // optimize=true from optimize=false, so the two are naturally keyed
-      // apart without a separate cache namespace.
-      const useSnapshot = true
-      const corpus = await computeCorpusFingerprint(pf)
-      const snapshot = await loadStatusSnapshot(corpus.hash, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY)
+      // project/config/prompt/hook state: ~/.claude and project-level
+      // settings.json, CLAUDE.md, defined skills/agents/commands, MCP config.
+      // computeCorpusFingerprint and queryKey never observe those inputs, and
+      // they have no single enumerable fingerprint. Persisting THAT class of
+      // output would leave an agent edit with no session change serving stale
+      // findings indefinitely. Caching only the base payload and re-deriving
+      // the findings on each hit (#1135 part 2) was tried on this branch and
+      // reverted in post-build review: scanAndDetect needs the parsed corpus,
+      // so the re-derivation pays the full parse the snapshot exists to avoid
+      // on exactly the cold processes the snapshot is for, and the resident
+      // serve child gains nothing either because its in-memory output memo
+      // already dedupes a repeated argv. Simplest correct stance: the
+      // optimize path never reads or writes the disk snapshot at all, it
+      // always recomputes fresh. One-shot and serve-child behavior are
+      // identical for both optimize values.
+      const useSnapshot = !queryScope.optimize
+      const corpus = useSnapshot ? await computeCorpusFingerprint(pf) : null
+      const snapshot = corpus ? await loadStatusSnapshot(corpus.hash, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY) : null
       const payload = (snapshot ?? await buildMenubarPayloadForRange(periodInfo, {
         ...queryScope,
         daysSelection,
       })) as Awaited<ReturnType<typeof buildMenubarPayloadForRange>>
-      if (snapshot && queryScope.optimize) {
-        // Snapshot hit on the optimize path: re-derive only the optimize block
-        // (scanAndDetect reads the mutable non-fingerprinted inputs fresh) and
-        // patch it in. parseAllSessions hits the warm session cache so the only
-        // real cost is the optimize pass, which has its own 60s in-process memo
-        // and is what the menubar pays for the live view.
-        const { parseAllSessions, filterProjectsByName } = await import('./parser.js')
-        const freshProjects = filterProjectsByName(
-          await parseAllSessions(periodInfo.range, pf),
-          queryScope.project ?? [],
-          queryScope.exclude ?? [],
-        )
-        const optimizeResult = await computeOptimizeBlock(freshProjects, periodInfo.range, pf)
-        payload.optimize = buildOptimize(optimizeResult)
-      }
       // A read-only parse that had to serve stale/skip real files
       // (isSessionHydrationComplete() === false) is a knowingly-degraded
       // result. Persisting it under the CURRENT (already-advanced) corpus
@@ -1223,12 +1209,7 @@ program
       // so re-reading it here can bless a payload whose stale flag says
       // degraded and pin its under-reported totals until the corpus changes.
       if (useSnapshot && corpus && !snapshot && payload.stale !== true && payload.hydration === undefined && isSessionHydrationComplete()) {
-        // Strip the optimize block before persisting: it depends on mutable,
-        // non-fingerprinted inputs and must be re-derived on every hit (see
-        // the design note above). The queryKey carries optimize as a boolean,
-        // so the persisted shape is uniform regardless of which path wrote it.
-        const persisted = { ...payload, optimize: buildOptimize(null) }
-        await saveStatusSnapshot(corpus.hash, corpus.newestMtimeMs, corpus.observedAtMs, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY, persisted)
+        await saveStatusSnapshot(corpus.hash, corpus.newestMtimeMs, corpus.observedAtMs, queryKey, STATUS_SNAPSHOT_SEMANTIC_KEY, payload)
       }
       if (opts.scope === 'combined') {
         // Combined multi-device usage is best-effort enrichment on the menubar's
