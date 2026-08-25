@@ -11,6 +11,7 @@ import { discoverAllSessions, getProvider } from './providers/index.js'
 import { flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { kimicodeLineageForSource } from './providers/kimicode.js'
 import { isSqliteBusyError } from './sqlite.js'
 import { getCodeburnCacheDir } from './cache-dir.js'
 import {
@@ -54,6 +55,7 @@ import type {
   ParsedApiCall,
   ParsedTurn,
   ProjectSummary,
+  SessionLineage,
   SessionSummary,
   SessionSourceMetadata,
   TokenUsage,
@@ -2086,6 +2088,7 @@ async function scanProjectDirs(
     const cwd = parsed.workingDirectory
     const trustedCwd = cwd && !isCoworkSession(cwd, filePath) ? cwd : undefined
     const canonical = trustedCwd ? await resolveCanonicalProjectPath(trustedCwd) : undefined
+    const lineage = claudeLineageForParse(parsed.parentSessionId, parsed.agentSpawnLinks)
     section.files[filePath] = {
       fingerprint: info.fp,
       lastCompleteLineOffset: parsed.lastCompleteLineOffset,
@@ -2101,6 +2104,7 @@ async function scanProjectDirs(
       ...(parsed.parentSessionId ? { parentSessionId: parsed.parentSessionId } : {}),
       ...(Object.keys(parsed.agentSpawnLinks ?? {}).length > 0 ? { agentSpawnLinks: parsed.agentSpawnLinks } : {}),
       ...(parsed.ambiguousSpawnAgentIds?.length ? { ambiguousSpawnAgentIds: parsed.ambiguousSpawnAgentIds } : {}),
+      ...(lineage ? { lineage } : {}),
     }
     markCacheDirty(diskCache, 'claude', filePath)
   }
@@ -2228,12 +2232,18 @@ async function scanProjectDirs(
             // (prefer the newly-parsed tail), PR links union, isSidechain is sticky.
             // parentSessionId is sticky (cached-first, it is the earliest region);
             // agentSpawnLinks union (cached-first, first-seen spawn id per agent wins).
+            // Lineage is sticky: a parent/child identity recorded on either side
+            // stays on the merged entry, with cached-first priority (the earliest
+            // region wrote it). A newly-appended region that promotes the file to
+            // root (e.g. an agent spawn result lands in the tail) wins because the
+            // brief forbids dropping already-valid evidence.
             const mergedTitle = sessionMeta.title ?? cached.title
             const mergedPrLinks = Array.from(new Set([...(cached.prLinks ?? []), ...sessionMeta.prLinks]))
             const mergedSidechain = cached.isSidechain === true || sessionMeta.isSidechain
             const mergedParentSessionId = cached.parentSessionId ?? sessionMeta.parentSessionId
             const mergedSpawnLinks = { ...sessionMeta.agentSpawnLinks, ...cached.agentSpawnLinks }
             const mergedAmbiguousIds = Array.from(new Set([...(cached.ambiguousSpawnAgentIds ?? []), ...sessionMeta.ambiguousSpawnAgentIds]))
+            const mergedLineage = claudeLineageForParse(mergedParentSessionId, mergedSpawnLinks) ?? cached.lineage
 
             section.files[filePath] = {
               fingerprint: info.fp,
@@ -2250,6 +2260,7 @@ async function scanProjectDirs(
               ...(mergedParentSessionId ? { parentSessionId: mergedParentSessionId } : {}),
               ...(Object.keys(mergedSpawnLinks).length > 0 ? { agentSpawnLinks: mergedSpawnLinks } : {}),
               ...(mergedAmbiguousIds.length > 0 ? { ambiguousSpawnAgentIds: mergedAmbiguousIds } : {}),
+              ...(mergedLineage ? { lineage: mergedLineage } : {}),
             }
             markCacheDirty(diskCache, 'claude', filePath)
             filesDone++
@@ -2406,6 +2417,9 @@ async function scanProjectDirs(
     }
     if (cachedFile.ambiguousSpawnAgentIds?.length) session.ambiguousSpawnAgentIds = cachedFile.ambiguousSpawnAgentIds
     if (Object.keys(spawnPrSets).length > 0) session.spawnPrSets = spawnPrSets
+    // Provider-recorded parent/child lineage (CB-1, slice 1). Mirrors whatever
+    // the install path stored on the cached file; absent when no evidence.
+    if (cachedFile.lineage) session.lineage = cachedFile.lineage
 
     if (session.apiCalls > 0 || anchorOnly) {
       const projectKey = cachedFile.canonicalCwd
@@ -2936,6 +2950,25 @@ export type ClaudeFileParse = {
   ambiguousSpawnAgentIds?: string[]
 }
 
+/// Derives the SessionLineage for a Claude file from the same fields the
+/// sidechain folder already consumes (`parentSessionId` on a child, the
+/// presence of `agentSpawnLinks` on a parent). Provider-recorded only -
+/// no inference from directory layout, agentType, or filenames. Returns
+/// `undefined` when the file has no provider evidence, in which case the
+/// install path must omit the field.
+function claudeLineageForParse(
+  parentSessionId: string | undefined,
+  agentSpawnLinks: Record<string, string> | undefined,
+): SessionLineage | undefined {
+  if (parentSessionId) {
+    return { parentSessionId, role: 'child', evidence: 'provider-recorded' }
+  }
+  if (agentSpawnLinks && Object.keys(agentSpawnLinks).length > 0) {
+    return { role: 'root', evidence: 'provider-recorded' }
+  }
+  return undefined
+}
+
 export async function parseClaudeFileFull(
   filePath: string,
   seenMsgIds: Set<string>,
@@ -3026,6 +3059,22 @@ function cachedFileNeedsProviderReparse(providerName: string, sourcePath: string
   return cached.turns.some(turn =>
     turn.calls.some(call => call.deduplicationKey === `gemini:${turn.sessionId}`),
   )
+}
+
+/// Per-source lineage resolver. Today only Kimi Code records parent/child
+/// evidence on disk outside Claude's own transcript; the rest of the
+/// providers return `undefined` so the install path is a no-op for them
+/// (no `state.json` re-reads, no extra I/O on codex/copilot/etc.). The
+/// Claude install path is handled inline by `installClaudeFile`, which
+/// already owns the parent's `agentSpawnLinks` and the child's
+/// `parentSessionId` from the same transcript.
+async function resolveProviderLineage(
+  providerName: string,
+  source: SessionSource,
+): Promise<SessionLineage | undefined> {
+  if (providerName !== 'kimicode') return undefined
+  const agentId = source.sourceId || basename(dirname(source.path))
+  return kimicodeLineageForSource(source.path, agentId)
 }
 
 const warnedProviderReadFailures = new Set<string>()
@@ -3480,6 +3529,11 @@ export async function parseProviderSources(
         const canonicalCalls = await Promise.all(providerCalls.map(canonicalizeProviderCallProject))
         const turns = providerCallsToCachedTurns(canonicalCalls)
         const prLinks = [...new Set(canonicalCalls.flatMap(call => call.prLinks ?? []))]
+        // Provider-recorded parent/child lineage (CB-1, slice 1). Kimi Code is
+        // the only non-Claude provider that records evidence on disk today;
+        // every other provider returns `undefined` here, so the install path
+        // stays a no-op for them.
+        const sourceLineage = await resolveProviderLineage(providerName, source)
 
         // Store/merge parsed turns into the cache.
         // Durable providers use a union-by-deduplicationKey merge: existing turns
@@ -3521,8 +3575,14 @@ export async function parseProviderSources(
             existingEntry.turns = [...existingEntry.turns, ...newTurns]
             existingEntry.fingerprint = fp
             if (prLinks.length) existingEntry.prLinks = [...new Set([...(existingEntry.prLinks ?? []), ...prLinks])]
+            // Lineage is sticky on the merge: a recorded parent/child on
+            // either side stays. A first parse that missed the `state.json`
+            // agents map (e.g. a brand-new session before its first spawn)
+            // later grows into a parent; re-parsing it then promotes its
+            // role to `root` here, never silently drops the field.
+            if (sourceLineage) existingEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
         } else {
           // Non-durable: overwrite (clearedPaths already deleted stale entry above)
@@ -3533,8 +3593,9 @@ export async function parseProviderSources(
           if (existingCacheEntry) {
             existingCacheEntry.turns = [...existingCacheEntry.turns, ...turns]
             if (prLinks.length) existingCacheEntry.prLinks = [...new Set([...(existingCacheEntry.prLinks ?? []), ...prLinks])]
+            if (sourceLineage) existingCacheEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
         }
         didParse = true
@@ -3892,7 +3953,7 @@ export async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -3944,6 +4005,11 @@ export async function parseProviderSources(
           for (const link of cachedFile.prLinks) links.add(link)
         }
         if (!existing.title && cachedFile.title) existing.title = cachedFile.title
+        // First evidence wins: lineage was installed at parse time on the
+        // cached file that captured it, and the session map is the union of
+        // every contributing file's evidence. A second cache entry that
+        // re-states the same evidence is dropped silently.
+        if (!existing.lineage && cachedFile.lineage) existing.lineage = cachedFile.lineage
       } else {
         sessionMap.set(key, {
           project,
@@ -3952,6 +4018,7 @@ export async function parseProviderSources(
           turns: [classified],
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
           ...(cachedFile.title ? { title: cachedFile.title } : {}),
+          ...(cachedFile.lineage ? { lineage: cachedFile.lineage } : {}),
         })
       }
     }
@@ -4142,7 +4209,7 @@ export async function parseProviderSources(
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title }] of sessionMap) {
+  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const assembledTurns = providerName === 'copilot'
       ? foldCopilotSupplementaryTurns(sessionId, turns, copilotRecon?.supplementaryStoreKeys)
@@ -4156,6 +4223,7 @@ export async function parseProviderSources(
     }
     if (workingDirectory) session.workingDirectory = workingDirectory
     if (title) session.title = title
+    if (lineage) session.lineage = lineage
     // Supplementary-only sessions (e.g. a rollup with no per-turn calls) have
     // apiCalls 0 by design but their tokens/cost are real and must serve.
     if (session.apiCalls > 0 || session.totalCostUSD > 0 || session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens + session.totalReasoningTokens > 0) {
@@ -4359,6 +4427,7 @@ function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): 
   if (original.ambiguousSpawnAgentIds?.length) rebuilt.ambiguousSpawnAgentIds = original.ambiguousSpawnAgentIds
   if (original.title) rebuilt.title = original.title
   if (original.agentType) rebuilt.agentType = original.agentType
+  if (original.lineage) rebuilt.lineage = original.lineage
 }
 
 // The "PR active entering this slice", recomputed by replaying the ORIGINAL full

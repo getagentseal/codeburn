@@ -204,6 +204,34 @@ export type SessionSourceMetadata = {
   kind: 'claude-config' | 'claude-desktop'
 }
 
+/// Provider-recorded parent-child session lineage (CB-1, slice 1). The
+/// relationship is captured ONLY when a provider writes it on disk in a
+/// durable form: a child file that names its parent (Claude's
+/// transcript-internal `sessionId` on a sidechain; Kimi Code's
+/// `state.json` `agents[<id>].parentAgentId` for any non-`main` agent), or
+/// a parent file whose spawn/child manifest names the children (Claude's
+/// `agentSpawnLinks`, Kimi Code's `state.json` `agents` map listing any
+/// non-`main` entry). The brief forbids inference from time adjacency or
+/// directory layout: a parent whose only evidence is the child file living
+/// under its directory does not yet qualify, and stays `lineage`-less. The
+/// field is purely additive metadata; nothing here changes the cost/token/
+/// call totals, the by-PR fold, or any other aggregation.
+export type SessionLineage = {
+  /// On a child session, the parent session's id (Claude:
+  /// transcript-internal `sessionId`; Kimi Code: `parentAgentId === 'main'`,
+  /// so this is the parent's own session id). Absent on a root session.
+  parentSessionId?: string
+  /// `'root'` when this session is itself a parent (provider-recorded
+  /// children exist); `'child'` when it is a subagent of another session.
+  /// Mutually exclusive for the providers that currently record lineage.
+  role: 'root' | 'child'
+  /// The single supported evidence class: the provider wrote the link
+  /// durably (not inferred). `provider-recorded` is the only value this
+  /// field ever holds; the discriminator exists so a future evidence class
+  /// (e.g. inferred) cannot silently downgrade strictness.
+  evidence: 'provider-recorded'
+}
+
 export type SessionSummary = {
   sessionId: string
   project: string
@@ -300,6 +328,13 @@ export type SessionSummary = {
   // Built-in tools (Bash, Edit, etc.) are filtered out. Provider-agnostic field;
   // currently populated only by the Claude parser.
   mcpInventory?: string[]
+  /// Provider-recorded parent/child lineage (CB-1, slice 1). Set only when
+  /// the parser captured durable provider evidence (see SessionLineage);
+  /// absent for sessions with no such evidence. The per-provider
+  /// `parentSessionId` / `agentSpawnLinks` / `agentId` fields above remain
+  /// the source of truth for by-PR subagent folding and are kept populated
+  /// independently of this field.
+  lineage?: SessionLineage
 }
 
 export type ProjectSummary = {

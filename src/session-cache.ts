@@ -137,6 +137,12 @@ export type CachedFile = {
   // tool_use could not be paired (ambiguous multi-result record). Drives a
   // grace-window fallback for a late child. Absent when no pairing was ambiguous.
   ambiguousSpawnAgentIds?: string[]
+  // Provider-recorded parent/child lineage (CB-1, slice 1). Set when the
+  // parser captured durable evidence (see SessionLineage). Mirrors onto
+  // SessionSummary.lineage at serve time so a warm read retains the field.
+  // Absent when no provider-recorded evidence exists - the brief forbids
+  // inferring lineage from directory layout or time adjacency.
+  lineage?: import('./types.js').SessionLineage
 }
 
 export type ProviderSection = {
@@ -290,7 +296,14 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // LOC deltas / interruptions / userModified / toolErrors, and session-level
   // title / prLinks / isSidechain. Forces one re-parse so cached sessions gain
   // the new optional fields.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1',
+  // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
+  // on the cached file. The child evidence is the transcript's
+  // provider-recorded `parentSessionId` (already captured); the root evidence
+  // is the parent-side `agentSpawnLinks` (already captured). A one-time
+  // re-parse is forced so cached sessions without the lineage field gain it.
+  // The field is purely additive; every cost / token / call total is
+  // byte-identical to a build that omits it (see parser-lineage-capture test).
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -367,7 +380,15 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   kiro: 'ide-parsing-v1-est-cost-project-path-v1',
   opencode: 'session-model-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
-  kimicode: 'wire-usage-v1-est-cost',
+  // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
+  // on the cached file for every kimicode wire. Child evidence is the
+  // provider-recorded `state.json` `agents[<id>].parentAgentId === 'main'`
+  // (any non-`main` agent); root evidence is a sibling non-`main` entry
+  // alongside the `main` agent. A one-time re-parse is forced so cached
+  // sessions without the lineage field gain it. The field is purely
+  // additive; every cost / token / call total is byte-identical to a build
+  // that omits it.
+  kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
   'kilo-code': 'worktree-project-grouping-v1-session-model-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
@@ -574,6 +595,19 @@ function isOptionalStringRecord(v: unknown): boolean {
   return Object.values(v as Record<string, unknown>).every(e => typeof e === 'string')
 }
 
+// Validates the optional SessionLineage payload. Only `provider-recorded`
+// is accepted; a stray role/evidence value (e.g. an inferred-link stub the
+// brief forbids) must fail the shard validation rather than silently leak.
+function isOptionalLineage(v: unknown): boolean {
+  if (v === undefined) return true
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  const o = v as Record<string, unknown>
+  if (isOptionalString(o['parentSessionId']) === false) return false
+  if (o['role'] !== 'root' && o['role'] !== 'child') return false
+  if (o['evidence'] !== 'provider-recorded') return false
+  return true
+}
+
 function isToolCall(v: unknown): boolean {
   if (!v || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
@@ -667,6 +701,7 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])
     && (o['ambiguousSpawnAgentIds'] === undefined || isStringArray(o['ambiguousSpawnAgentIds']))
+    && isOptionalLineage(o['lineage'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
 }

@@ -13,6 +13,12 @@ type SessionState = {
   createdAt?: string
   updatedAt?: string
   workDir?: string
+  /// Map of agent name -> descriptor. Carries the `parentAgentId` field
+  /// the provider records for every subagent: `null` for the `main` agent
+  /// (so it has no parent of its own), the parent agent name otherwise.
+  /// `state.json` keeps this map for every session; the wire parser uses
+  /// it only for CB-1 lineage attribution.
+  agents?: Record<string, { parentAgentId?: string | null }>
 }
 
 type RequestContext = {
@@ -106,10 +112,22 @@ async function readState(sessionDir: string): Promise<SessionState> {
   try {
     const state = asObject(JSON.parse(await readFile(join(sessionDir, 'state.json'), 'utf8')))
     if (!state) return {}
+    const agents = asObject(state['agents'])
+    let agentsMap: SessionState['agents']
+    if (agents) {
+      agentsMap = {}
+      for (const [name, descriptor] of Object.entries(agents)) {
+        const desc = asObject(descriptor)
+        if (!desc) continue
+        const parent = desc['parentAgentId']
+        agentsMap[name] = { parentAgentId: parent === null || typeof parent === 'string' ? parent : undefined }
+      }
+    }
     return {
       createdAt: stringValue(state['createdAt']) || undefined,
       updatedAt: stringValue(state['updatedAt']) || undefined,
       workDir: stringValue(state['workDir']) || undefined,
+      ...(agentsMap ? { agents: agentsMap } : {}),
     }
   } catch {
     return {}
@@ -178,6 +196,32 @@ function sessionIdForWire(path: string): string {
 
 function agentIdForWire(path: string): string {
   return basename(dirname(path))
+}
+
+/// Provider-recorded parent/child lineage for a single Kimi Code source.
+/// The provider writes `state.json` `agents[<name>].parentAgentId` for every
+/// agent in the session - `null` (or absent) for `main`, an agent name
+/// otherwise. A non-`main` agent whose `parentAgentId === 'main'` is a
+/// child of the session's own root. A `main` agent is a root when at
+/// least one non-`main` entry exists alongside it. Returns `undefined`
+/// when `state.json` is missing or carries no `agents` map, so the
+/// install path can omit the field without a default.
+export async function kimicodeLineageForSource(path: string, agentId: string): Promise<import('../types.js').SessionLineage | undefined> {
+  const state = await readState(sessionDirForWire(path))
+  const agents = state.agents
+  if (!agents) return undefined
+  if (agentId !== 'main') {
+    const self = agents[agentId]
+    if (!self) return undefined
+    // The parent is `main` (the canonical session root). Provider-recorded.
+    if (self.parentAgentId !== 'main') return undefined
+    return { parentSessionId: 'main', role: 'child', evidence: 'provider-recorded' }
+  }
+  // `main` is a root only when another agent sits alongside it. A
+  // standalone main session has no children to be the parent of.
+  const hasChild = Object.entries(agents).some(([name, desc]) => name !== 'main' && desc.parentAgentId === 'main')
+  if (!hasChild) return undefined
+  return { role: 'root', evidence: 'provider-recorded' }
 }
 
 function turnIdFromStep(value: unknown): string {
