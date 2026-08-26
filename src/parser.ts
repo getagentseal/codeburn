@@ -3534,6 +3534,10 @@ export async function parseProviderSources(
         // every other provider returns `undefined` here, so the install path
         // stays a no-op for them.
         const sourceLineage = await resolveProviderLineage(providerName, source)
+        const sourceAgentMetadata = {
+          ...(source.agentName ? { agentName: source.agentName } : {}),
+          ...(source.agentStartedAt ? { agentStartedAt: source.agentStartedAt } : {}),
+        }
 
         // Store/merge parsed turns into the cache.
         // Durable providers use a union-by-deduplicationKey merge: existing turns
@@ -3582,7 +3586,7 @@ export async function parseProviderSources(
             // role to `root` here, never silently drops the field.
             if (sourceLineage) existingEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
         } else {
           // Non-durable: overwrite (clearedPaths already deleted stale entry above)
@@ -3595,7 +3599,7 @@ export async function parseProviderSources(
             if (prLinks.length) existingCacheEntry.prLinks = [...new Set([...(existingCacheEntry.prLinks ?? []), ...prLinks])]
             if (sourceLineage) existingCacheEntry.lineage = sourceLineage
           } else {
-            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
+            section.files[source.path] = { fingerprint: fp, mcpInventory: [], turns, ...sourceAgentMetadata, ...(prLinks.length ? { prLinks } : {}), ...(sourceLineage ? { lineage: sourceLineage } : {}) }
           }
         }
         didParse = true
@@ -3953,7 +3957,7 @@ export async function parseProviderSources(
 
   // Query-time: derive SessionSummary from all cached turns.
   // Uses seenKeys (shared across providers) for cross-provider dedup.
-  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage }>()
+  const sessionMap = new Map<string, { project: string; projectPath?: string; workingDirectory?: string; turns: ClassifiedTurn[]; prLinks?: Set<string>; title?: string; lineage?: SessionLineage; agentName?: string; agentStartedAt?: string }>()
 
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
@@ -4010,6 +4014,8 @@ export async function parseProviderSources(
         // every contributing file's evidence. A second cache entry that
         // re-states the same evidence is dropped silently.
         if (!existing.lineage && cachedFile.lineage) existing.lineage = cachedFile.lineage
+        if (!existing.agentName && cachedFile.agentName) existing.agentName = cachedFile.agentName
+        if (!existing.agentStartedAt && cachedFile.agentStartedAt) existing.agentStartedAt = cachedFile.agentStartedAt
       } else {
         sessionMap.set(key, {
           project,
@@ -4019,6 +4025,8 @@ export async function parseProviderSources(
           ...(cachedFile.prLinks?.length ? { prLinks: new Set(cachedFile.prLinks) } : {}),
           ...(cachedFile.title ? { title: cachedFile.title } : {}),
           ...(cachedFile.lineage ? { lineage: cachedFile.lineage } : {}),
+          ...(cachedFile.agentName ? { agentName: cachedFile.agentName } : {}),
+          ...(cachedFile.agentStartedAt ? { agentStartedAt: cachedFile.agentStartedAt } : {}),
         })
       }
     }
@@ -4209,7 +4217,7 @@ export async function parseProviderSources(
   }
 
   const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
-  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage }] of sessionMap) {
+  for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage, agentName, agentStartedAt }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const assembledTurns = providerName === 'copilot'
       ? foldCopilotSupplementaryTurns(sessionId, turns, copilotRecon?.supplementaryStoreKeys)
@@ -4224,6 +4232,8 @@ export async function parseProviderSources(
     if (workingDirectory) session.workingDirectory = workingDirectory
     if (title) session.title = title
     if (lineage) session.lineage = lineage
+    if (agentName) session.agentName = agentName
+    if (agentStartedAt) session.agentStartedAt = agentStartedAt
     // Supplementary-only sessions (e.g. a rollup with no per-turn calls) have
     // apiCalls 0 by design but their tokens/cost are real and must serve.
     if (session.apiCalls > 0 || session.totalCostUSD > 0 || session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens + session.totalReasoningTokens > 0) {

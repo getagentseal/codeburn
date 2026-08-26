@@ -113,6 +113,10 @@ export type CachedFile = {
   // the `agentType` from its sibling `.meta.json` (e.g. `workflow-subagent`,
   // `Explore`, `general-purpose`). Drives the Claude-scoped agent-type breakdown.
   agentType?: string
+  // OMP nested agent transcripts retain their file-stem identity and session
+  // header timestamp for the menubar's per-agent activity rows.
+  agentName?: string
+  agentStartedAt?: string
   // Negative-result marker: this file threw while parsing at the recorded
   // fingerprint. Cached so we don't re-read + re-throw it on every refresh; it
   // is re-parsed only when the file changes (fingerprint differs). Carries no
@@ -697,6 +701,8 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && (o['prLinks'] === undefined || isStringArray(o['prLinks']))
     && isOptionalBool(o['isSidechain'])
     && isOptionalString(o['agentType'])
+    && isOptionalString(o['agentName'])
+    && isOptionalString(o['agentStartedAt'])
     && isOptionalBool(o['failed'])
     && isOptionalString(o['parentSessionId'])
     && isOptionalStringRecord(o['agentSpawnLinks'])

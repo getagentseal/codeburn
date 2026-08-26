@@ -19,6 +19,15 @@ import { buildGranularHistory } from './granular-history.js'
 
 // Row caps for the by-PR / by-branch payload aggregations, ranked by cost.
 const TOP_BRANCHES = 15
+type SubagentRow = NonNullable<BreakdownArrays['subagents']>[number]
+
+
+function compactTokenCount(totalTokens: number): string {
+  if (totalTokens >= 1_000_000) return `${(totalTokens / 1_000_000).toFixed(totalTokens >= 10_000_000 ? 0 : 2).replace(/\.?0+$/, '')}M`
+  if (totalTokens >= 1_000) return `${(totalTokens / 1_000).toFixed(totalTokens >= 100_000 ? 0 : 1).replace(/\.?0+$/, '')}k`
+  return String(totalTokens)
+}
+
 
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
@@ -918,6 +927,17 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     const toolMap: Record<string, number> = {}
     const skillMap: Record<string, { turns: number; cost: number }> = {}
     const subagentMap: Record<string, { calls: number; cost: number }> = {}
+    const ompSubagentMap = new Map<string, {
+      agentName: string
+      model: string
+      startedAt: string
+      calls: number
+      cost: number
+      inputTokens: number
+      outputTokens: number
+      cacheReadTokens: number
+      cacheWriteTokens: number
+    }>()
     const mcpMap: Record<string, number> = {}
     // Local-model savings rollup: avoided spend (cost forced to $0, baseline
     // recorded) grouped by model and provider. Mirrors the per-call savingsUSD
@@ -930,6 +950,31 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       for (const [t, d] of Object.entries(s.toolBreakdown)) { if (!t.startsWith('lang:')) toolMap[t] = (toolMap[t] ?? 0) + d.calls }
       for (const [sk, d] of Object.entries(s.skillBreakdown)) { const e = skillMap[sk] ?? { turns: 0, cost: 0 }; e.turns += d.turns; e.cost += d.costUSD; skillMap[sk] = e }
       for (const [sa, d] of Object.entries(s.subagentBreakdown)) { const e = subagentMap[sa] ?? { calls: 0, cost: 0 }; e.calls += d.calls; e.cost += d.costUSD; subagentMap[sa] = e }
+      if (s.agentName && s.turns.some(turn => turn.assistantCalls.some(call => call.provider === 'omp'))) {
+        const calls = s.turns.flatMap(turn => turn.assistantCalls)
+        const models = Array.from(new Set(calls.map(call => call.model))).sort()
+        const model = models.join(', ') || 'unknown'
+        const startedAt = s.agentStartedAt ?? s.firstTimestamp
+        const key = `${s.agentName}\u0000${model}\u0000${startedAt}`
+        const entry = ompSubagentMap.get(key) ?? {
+          agentName: s.agentName,
+          model,
+          startedAt,
+          calls: 0,
+          cost: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }
+        entry.calls += s.apiCalls
+        entry.cost += s.totalCostUSD
+        entry.inputTokens += s.totalInputTokens
+        entry.outputTokens += s.totalOutputTokens
+        entry.cacheReadTokens += s.totalCacheReadTokens
+        entry.cacheWriteTokens += s.totalCacheWriteTokens
+        ompSubagentMap.set(key, entry)
+      }
       for (const [m, d] of Object.entries(s.mcpBreakdown)) { mcpMap[m] = (mcpMap[m] ?? 0) + d.calls }
       for (const turn of s.turns) for (const call of turn.assistantCalls) {
         if (!call.savingsUSD || call.savingsUSD <= 0) continue
@@ -961,10 +1006,22 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
       byModel: Array.from(savingsByModel.entries()).sort(([, a], [, b]) => b.savingsUSD - a.savingsUSD).slice(0, 5).map(([name, d]) => ({ name, ...d })),
       byProvider: Array.from(savingsByProvider.entries()).sort(([, a], [, b]) => b.savingsUSD - a.savingsUSD).slice(0, 5).map(([name, d]) => ({ name, ...d })),
     }
+    const subagents: SubagentRow[] = [
+      ...Object.entries(subagentMap).map(([name, d]) => ({ name, ...d })),
+      ...Array.from(ompSubagentMap.values()).map(entry => {
+        const totalTokens = entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.cacheWriteTokens
+        const startTime = entry.startedAt.match(/T(\d{2}:\d{2})/)?.[1]
+        return {
+          name: `${entry.agentName} ${entry.model} ${startTime ? `${startTime}Z` : entry.startedAt} ${entry.calls}t ${compactTokenCount(totalTokens)}`,
+          ...entry,
+          totalTokens,
+        }
+      }),
+    ]
     return {
       tools: Object.entries(toolMap).sort(([, a], [, b]) => b - a).slice(0, 10).map(([name, calls]) => ({ name, calls })),
       skills: Object.entries(skillMap).sort(([, a], [, b]) => b.cost - a.cost).slice(0, 10).map(([name, d]) => ({ name, ...d })),
-      subagents: Object.entries(subagentMap).sort(([, a], [, b]) => b.cost - a.cost).slice(0, 10).map(([name, d]) => ({ name, ...d })),
+      subagents: subagents.sort((a, b) => b.cost - a.cost || (b.totalTokens ?? 0) - (a.totalTokens ?? 0)).slice(0, 10),
       mcpServers: Object.entries(mcpMap).sort(([, a], [, b]) => b - a).slice(0, 10).map(([name, calls]) => ({ name, calls })),
       localModelSavings,
     }

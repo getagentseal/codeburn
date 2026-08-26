@@ -16,12 +16,12 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
 })
 
-function sessionMeta(opts: { id?: string; cwd?: string } = {}) {
+function sessionMeta(opts: { id?: string; cwd?: string; timestamp?: string } = {}) {
   return JSON.stringify({
     type: 'session',
     version: 3,
     id: opts.id ?? 'sess-001',
-    timestamp: '2026-04-14T10:00:00.000Z',
+    timestamp: opts.timestamp ?? '2026-04-14T10:00:00.000Z',
     cwd: opts.cwd ?? '/Users/test/myproject',
   })
 }
@@ -125,6 +125,32 @@ describe('omp provider - session discovery', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]!.provider).toBe('omp')
     expect(sessions[0]!.project).toBe('myproject')
+  })
+
+  it('discovers nested per-agent sessions with their resolved model and start time', async () => {
+    const projectDir = join(tmpDir, '--Users-test-myproject--')
+    const agentDir = join(projectDir, '2026-04-14T10-00-00-000Z_parent-001')
+    const filePath = await writeSession(agentDir, 'KillSwitch.jsonl', [
+      sessionMeta({ id: 'agent-001', timestamp: '2026-04-14T10:00:00.000Z' }),
+      JSON.stringify({ type: 'model_change', model: 'openai-codex/gpt-5.6-terra' }),
+      assistantMessage({ model: 'gpt-5.6-terra' }),
+    ])
+
+    const provider = createOmpProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]).toMatchObject({
+      path: filePath,
+      agentName: 'KillSwitch',
+      agentStartedAt: '2026-04-14T10:00:00.000Z',
+    })
+
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser(sessions[0]!, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls[0]!.model).toBe('openai-codex/gpt-5.6-terra')
   })
 
   it('returns empty for non-existent directory', async () => {

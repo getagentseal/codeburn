@@ -327,7 +327,19 @@ export type MenubarPayload = {
     }
     tools: Array<{ name: string; calls: number }>
     skills: Array<{ name: string; turns: number; cost: number }>
-    subagents: Array<{ name: string; calls: number; cost: number }>
+    subagents: Array<{
+      name: string
+      calls: number
+      cost: number
+      agentName?: string
+      model?: string
+      startedAt?: string
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
+      totalTokens?: number
+    }>
     mcpServers: Array<{ name: string; calls: number }>
     /// Every pull request with attributed spend, cost-descending, plus the
     /// multi-link-safe distinct total. Absent when no PR links were observed and

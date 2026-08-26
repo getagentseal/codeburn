@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { homedir } from 'os'
@@ -68,9 +69,11 @@ type PiEntry = {
   id?: string
   timestamp?: string
   cwd?: string
+  model?: string
   message?: {
     role?: string
     content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
+    provider?: string
     model?: string
     responseId?: string
     usage?: {
@@ -131,24 +134,41 @@ async function discoverSessionsInDir(sessionsDir: string, providerName: string):
     const dirStat = await stat(dirPath).catch(() => null)
     if (!dirStat?.isDirectory()) continue
 
-    let files: string[]
+    let entries: Dirent[]
     try {
-      files = await readdir(dirPath)
+      entries = await readdir(dirPath, { withFileTypes: true })
     } catch {
       continue
     }
 
-    for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
-      const filePath = join(dirPath, file)
-      const fileStat = await stat(filePath).catch(() => null)
-      if (!fileStat?.isFile()) continue
-
+    const addSession = async (filePath: string, agentName?: string): Promise<void> => {
       const entry = await readSessionEntry(filePath)
-      if (!entry) continue
-
+      if (!entry) return
       const cwd = entry.cwd ?? dirName
-      sources.push({ path: filePath, project: basename(cwd), provider: providerName })
+      sources.push({
+        path: filePath,
+        project: basename(cwd),
+        provider: providerName,
+        ...(agentName ? {
+          agentName,
+          ...(typeof entry.timestamp === 'string' ? { agentStartedAt: entry.timestamp } : {}),
+        } : {}),
+      })
+    }
+
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        await addSession(join(dirPath, entry.name))
+        continue
+      }
+      if (providerName !== 'omp' || !entry.isDirectory()) continue
+
+      const agentDir = join(dirPath, entry.name)
+      const agentEntries = await readdir(agentDir, { withFileTypes: true }).catch(() => [])
+      for (const agentEntry of agentEntries) {
+        if (!agentEntry.isFile() || !agentEntry.name.endsWith('.jsonl')) continue
+        await addSession(join(agentDir, agentEntry.name), basename(agentEntry.name, '.jsonl'))
+      }
     }
   }
 
@@ -162,6 +182,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       if (content === null) return
       const lines = content.split('\n').filter(l => l.trim())
       let sessionId = basename(source.path, '.jsonl')
+      let resolvedModel = ''
       let pendingUserMessage = ''
 
       for (const [lineIdx, line] of lines.entries()) {
@@ -174,6 +195,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         if (entry.type === 'session') {
           sessionId = entry.id ?? sessionId
+          continue
+        }
+        if (entry.type === 'model_change') {
+          if (typeof entry.model === 'string' && entry.model) resolvedModel = entry.model
           continue
         }
 
@@ -203,7 +228,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         const cacheWrite = msg.usage.cacheWrite ?? 0
         if (input === 0 && output === 0) continue
 
-        const model = msg.model ?? 'gpt-5'
+        const messageModel = msg.model ?? ''
+        const model = messageModel.includes('/')
+          ? messageModel
+          : resolvedModel && (!messageModel || resolvedModel === messageModel || resolvedModel.endsWith(`/${messageModel}`))
+            ? resolvedModel
+            : messageModel || resolvedModel || 'gpt-5'
         const responseId = msg.responseId ?? ''
         const dedupKey = `${source.provider}:${source.path}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
 

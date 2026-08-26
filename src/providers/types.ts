@@ -8,6 +8,10 @@ export type SessionSource = {
   sourceLabel?: string
   sourcePath?: string
   sourceKind?: 'claude-config' | 'claude-desktop'
+  // OMP stores each crewmate transcript under its parent-session directory.
+  // These fields retain that per-agent identity through the shared cache path.
+  agentName?: string
+  agentStartedAt?: string
   // This file IS the durable record of its provider's usage — copilot's
   // session-store.db, whose crash-only rows have no rollup to fall back to —
   // rather than a journal the provider could re-emit. Two effects:

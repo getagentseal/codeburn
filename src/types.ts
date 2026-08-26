@@ -253,6 +253,10 @@ export type SessionSummary = {
   // (`workflow-subagent`, `Explore`, `general-purpose`, …); undefined for
   // ordinary sessions. Drives the Claude-scoped agent-type breakdown.
   agentType?: string
+  /// OMP nested-agent file stem. Kept separate from Claude's agentType metadata.
+  agentName?: string
+  /// OMP nested-agent session-header timestamp.
+  agentStartedAt?: string
   /// Claude Code only: for a sidechain (subagent) transcript, the id of the
   /// session that spawned it (the transcript's internal `sessionId`, which is the
   /// parent, cross-checked against the owning directory). Lets by-PR attribution
