@@ -54,7 +54,7 @@ const { version } = require('../package.json')
 // Bump when the menubar payload's rendering semantics change without a package
 // release or daily-cache version change. The envelope version in session-cache
 // protects record shape; this protects the meaning of an otherwise valid one.
-const STATUS_SNAPSHOT_RENDER_VERSION = 1
+const STATUS_SNAPSHOT_RENDER_VERSION = 2
 const STATUS_SNAPSHOT_SEMANTIC_KEY = `${version}:render-${STATUS_SNAPSHOT_RENDER_VERSION}:daily-${DAILY_CACHE_VERSION}`
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
 import { CodexThroughputReader, newestCodexSession, renderCodexThroughput } from './codex-throughput.js'
