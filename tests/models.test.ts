@@ -135,10 +135,11 @@ describe('getModelCosts', () => {
       expect(calculateCost('grok-4.6', 100_001, 10_000, 0, 100_000, 0)).toBeCloseTo(0.620004, 12)
     })
 
-    it('uses a price override instead of the built-in prompt tier', () => {
+    it('uses an aliased price override instead of the built-in prompt tier', () => {
+      setModelAliases({ 'xai-oauth/grok-4.6': 'grok-4.6' })
       setPriceOverrides({ 'grok-4.6': { input: 2, output: 6, cacheRead: 0.5 } })
 
-      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 100_000, 0)).toBeCloseTo(0.31, 12)
+      expect(calculateCost('xai-oauth/grok-4.6', 100_000, 10_000, 0, 100_000, 0)).toBeCloseTo(0.31, 12)
     })
   })
 
