@@ -71,7 +71,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 // Also folded into getPricingGenerationKey() below: a resident/snapshot-caching
 // consumer needs the same "pricing behavior changed" signal this already gives
 // the on-disk LiteLLM cache, not just the on-disk cache itself.
-export const CACHE_SCHEMA_VERSION = 2
+export const CACHE_SCHEMA_VERSION = 3
 const WEB_SEARCH_COST = 0.01
 const ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE = 1.6
 
@@ -109,6 +109,13 @@ function buildCosts(
     cacheWriteCostIsExplicit: cacheWrite !== null && cacheWrite !== undefined,
   }
 }
+// For grok-4.6, prompt tokens mean input tokens plus cached input tokens for a
+// request. At 200k prompt tokens, xAI prices every priced bucket at this high
+// tier rather than applying a marginal rate. Cache creation stays unset because
+// xAI publishes no separate cache-write rate.
+const GROK_4_6_PROMPT_TOKEN_THRESHOLD = 200_000
+const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
+
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
   const [input, output, cacheWrite, cacheRead, fast] = raw
@@ -1188,24 +1195,29 @@ export function calculateCost(
     return 0
   }
 
-  const multiplier = speed === 'fast' ? costs.fastMultiplier : 1
+  const safe = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0)
+  const safeOneHourCacheCreation = safe(oneHourCacheCreationTokens)
+  const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
+  const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
+  const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
+  const tieredCosts = (
+    !exactPriceOverrideFor(model)
+    && resolveCanonicalModelId(model) === 'grok-4.6'
+    && promptTokens >= GROK_4_6_PROMPT_TOKEN_THRESHOLD
+  ) ? GROK_4_6_HIGH_PROMPT_COSTS : costs
+  const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token
   // count would otherwise produce a negative cost that silently subtracts
   // from real spend in aggregate totals. NaN is also handled here; the
   // arithmetic below short-circuits to 0 when any operand is non-finite.
-  const safe = (n: number) => (Number.isFinite(n) && n > 0 ? n : 0)
-  const safeOneHourCacheCreation = safe(oneHourCacheCreationTokens)
-  const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
-  const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
-
   return multiplier * (
-    safe(inputTokens) * costs.inputCostPerToken +
-    safe(outputTokens) * costs.outputCostPerToken +
-    safeFiveMinuteCacheCreation * costs.cacheWriteCostPerToken +
-    safeOneHourCacheCreation * costs.cacheWriteCostPerToken * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
-    safe(cacheReadTokens) * costs.cacheReadCostPerToken +
-    safe(webSearchRequests) * costs.webSearchCostPerRequest
+    safe(inputTokens) * tieredCosts.inputCostPerToken +
+    safe(outputTokens) * tieredCosts.outputCostPerToken +
+    safeFiveMinuteCacheCreation * tieredCosts.cacheWriteCostPerToken +
+    safeOneHourCacheCreation * tieredCosts.cacheWriteCostPerToken * ONE_HOUR_CACHE_WRITE_MULTIPLIER_FROM_FIVE_MINUTE_RATE +
+    safe(cacheReadTokens) * tieredCosts.cacheReadCostPerToken +
+    safe(webSearchRequests) * tieredCosts.webSearchCostPerRequest
   )
 }
 

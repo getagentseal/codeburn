@@ -9,6 +9,7 @@ import {
   getShortModelName,
   resolveCanonicalModelId,
   calculateCost,
+  CACHE_SCHEMA_VERSION,
   loadPricing,
   setModelAliases,
   setPriceOverrides,
@@ -119,6 +120,26 @@ describe('getModelCosts', () => {
 
     expect(calculateCost('gpt-5.6-codex', 1_000_000, 1_000_000, 0, 0, 0)).toBeGreaterThan(0)
     expect(calculateCost('gpt-5.6-codex-max', 1_000_000, 1_000_000, 0, 0, 0)).toBeGreaterThan(0)
+  })
+
+  describe('grok-4.6 prompt tier', () => {
+    it('uses the low tier below 200000 prompt tokens', () => {
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 99_999, 0)).toBeCloseTo(0.3099995, 12)
+    })
+
+    it('uses the high tier for every token at exactly 200000 prompt tokens', () => {
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 100_000, 0)).toBeCloseTo(0.62, 12)
+    })
+
+    it('uses the high tier above 200000 prompt tokens', () => {
+      expect(calculateCost('grok-4.6', 100_001, 10_000, 0, 100_000, 0)).toBeCloseTo(0.620004, 12)
+    })
+
+    it('uses a price override instead of the built-in prompt tier', () => {
+      setPriceOverrides({ 'grok-4.6': { input: 2, output: 6, cacheRead: 0.5 } })
+
+      expect(calculateCost('grok-4.6', 100_000, 10_000, 0, 100_000, 0)).toBeCloseTo(0.31, 12)
+    })
   })
 
   it('prices claude-haiku-4.5 (copilot session-store raw id), aliased to the existing claude-haiku-4-5 row (#1093)', () => {
@@ -909,7 +930,7 @@ describe('DeepSeek v4 models resolve to pricing', () => {
       process.env['CODEBURN_CACHE_DIR'] = cacheRoot
       await mkdir(cacheRoot, { recursive: true })
       await writeFile(join(cacheRoot, 'litellm-pricing.json'), JSON.stringify({
-        version: 2, // must match models.ts's CACHE_SCHEMA_VERSION or the cache is treated as a miss
+        version: CACHE_SCHEMA_VERSION,
         timestamp: Date.now(),
         data: {
           'gpt-4o-mini': {
@@ -1108,7 +1129,7 @@ describe('findUnpricedModels', () => {
     try {
       process.env['CODEBURN_CACHE_DIR'] = cacheRoot
       await writeFile(join(cacheRoot, 'litellm-pricing.json'), JSON.stringify({
-        version: 2, // must match models.ts's CACHE_SCHEMA_VERSION or the cache is treated as a miss
+        version: CACHE_SCHEMA_VERSION,
         timestamp: Date.now(),
         data: {
           'zz-zero-stub-model': {
