@@ -81,6 +81,9 @@ type PiEntry = {
       output: number
       cacheRead: number
       cacheWrite: number
+      cost?: {
+        total?: number
+      }
     }
   }
 }
@@ -219,9 +222,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (msg.role !== 'assistant' || !msg.usage) continue
 
         // Coerce undefined/null token fields to 0. Pi/OMP session files
-        // sometimes omit individual usage fields; the destructure used to
-        // pass undefined into calculateCost which then returned NaN, and
-        // that NaN propagated into every aggregate cost total.
+        // sometimes omit individual usage fields; pass only numeric values to
+        // the pricing fallback so it cannot contaminate aggregates with NaN.
         const input = msg.usage.input ?? 0
         const output = msg.usage.output ?? 0
         const cacheRead = msg.usage.cacheRead ?? 0
@@ -267,7 +269,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             return typeof cmd === 'string' ? extractBashCommands(cmd) : []
           })
 
-        const costUSD = calculateCost(model, input, output, cacheWrite, cacheRead, 0)
+        const reportedCost = msg.usage.cost?.total
+        const costUSD = typeof reportedCost === 'number' && Number.isFinite(reportedCost)
+          ? reportedCost
+          : calculateCost(messageModel || resolvedModel || model, input, output, cacheWrite, cacheRead, 0)
         const timestamp = entry.timestamp ?? ''
 
         yield {

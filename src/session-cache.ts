@@ -382,6 +382,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // the git repo. Cached entries from before the bump lack projectPath and
   // would serve attribution-blind sessions forever without a re-parse.
   kiro: 'ide-parsing-v1-est-cost-project-path-v1',
+  // nested-agent-v1: OMP writes crewmate transcripts one directory below each
+  // parent session. reported-cost-v2 persists those measured costs through the
+  // cache, including the explicit zero on xai-oauth turns.
+  omp: 'nested-agent-v1-reported-cost-v2',
   opencode: 'session-model-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried

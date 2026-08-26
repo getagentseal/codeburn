@@ -48,6 +48,7 @@ function assistantMessage(opts: {
   output?: number
   cacheRead?: number
   cacheWrite?: number
+  cost?: number
   tools?: Array<{ name: string; command?: string }>
 }) {
   const content = (opts.tools ?? []).map(t => ({
@@ -72,7 +73,7 @@ function assistantMessage(opts: {
         output: opts.output ?? 200,
         cacheRead: opts.cacheRead ?? 0,
         cacheWrite: opts.cacheWrite ?? 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: opts.cost ?? 0 },
       },
       timestamp: 1776023230000,
     },
@@ -211,11 +212,12 @@ describe('omp provider - JSONL parsing', () => {
     expect(call.deduplicationKey).toContain('resp-omp-1')
   })
 
-  it('ignores the embedded usage.cost and recalculates cost', async () => {
+  it('preserves a provider-reported cost, including an explicit zero', async () => {
     const projectDir = join(tmpDir, '--Users-test-myproject--')
     const filePath = await writeSession(projectDir, 'session.jsonl', [
       sessionMeta(),
-      assistantMessage({ input: 1000, output: 200, cacheRead: 0, cacheWrite: 0 }),
+      assistantMessage({ input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, cost: 1.234 }),
+      assistantMessage({ id: 'msg-asst-2', responseId: 'resp-002', input: 500, output: 100, cost: 0 }),
     ])
 
     const provider = createOmpProvider(tmpDir)
@@ -225,8 +227,7 @@ describe('omp provider - JSONL parsing', () => {
       calls.push(call)
     }
 
-    // cost must be calculated by codeburn, not taken from usage.cost (which is zeroed in fixture)
-    expect(calls[0]!.costUSD).toBeGreaterThanOrEqual(0)
+    expect(calls.map(call => call.costUSD)).toEqual([1.234, 0])
   })
 
   it('collects tool names from toolCall content items', async () => {
