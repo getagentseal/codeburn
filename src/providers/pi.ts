@@ -73,7 +73,6 @@ type PiEntry = {
   message?: {
     role?: string
     content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
-    provider?: string
     model?: string
     responseId?: string
     usage?: {
