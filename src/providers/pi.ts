@@ -75,6 +75,9 @@ type PiEntry = {
     content?: Array<{ type?: string; text?: string; name?: string; arguments?: Record<string, unknown> }> | string
     model?: string
     responseId?: string
+    attribution?: {
+      timestamp?: number
+    }
     usage?: {
       input: number
       output: number
@@ -186,6 +189,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let sessionId = basename(source.path, '.jsonl')
       let resolvedModel = ''
       let pendingUserMessage = ''
+      let sessionTimestamp = ''
+      let pendingUserTimestamp = ''
 
       for (const [lineIdx, line] of lines.entries()) {
         let entry: PiEntry
@@ -197,6 +202,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         if (entry.type === 'session') {
           sessionId = entry.id ?? sessionId
+          if (typeof entry.timestamp === 'string' && entry.timestamp) sessionTimestamp = entry.timestamp
           continue
         }
         if (entry.type === 'model_change') {
@@ -210,6 +216,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (!msg) continue
 
         if (msg.role === 'user') {
+          const attributedTimestamp = msg.attribution?.timestamp
+          if (typeof entry.timestamp === 'string' && entry.timestamp) {
+            pendingUserTimestamp = entry.timestamp
+          } else if (typeof attributedTimestamp === 'number' && Number.isFinite(attributedTimestamp)) {
+            pendingUserTimestamp = new Date(attributedTimestamp).toISOString()
+          }
           const texts = normalizeContentBlocks(msg.content)
             .filter(c => c.type === 'text')
             .map(c => c.text ?? '')
@@ -269,11 +281,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           })
 
         const reportedCost = msg.usage.cost?.total
-        const costUSD = typeof reportedCost === 'number' && Number.isFinite(reportedCost)
+        const costUSD = typeof reportedCost === 'number' && Number.isFinite(reportedCost) && reportedCost !== 0
           ? reportedCost
           : calculateCost(messageModel || resolvedModel || model, input, output, cacheWrite, cacheRead, 0)
-        const timestamp = entry.timestamp ?? ''
-
+        const timestamp = entry.timestamp || pendingUserTimestamp || sessionTimestamp
+        if (!timestamp) continue
         yield {
           provider: source.provider,
           model,
