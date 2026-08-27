@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 
 import { getCodeburnCacheDir, readExistingTextFile } from './cache-dir.js'
 import type { ParsedProviderCall } from './providers/types.js'
+import { isWslUncPath } from './wsl.js'
 
 // v4: attribute MCP calls emitted as event_msg/mcp_tool_call_end (issue #478).
 // Recent Codex sessions cached under v3 dropped these, so force a re-parse.
@@ -192,13 +193,21 @@ async function endsLineAt(filePath: string, offset: number): Promise<boolean> {
   }
 }
 
+/// WSL's 9P share synthesizes dev/ino per mount, so they can differ run to run
+/// for an unchanged file. Zero them for `\\wsl$\...` paths so the resume check
+/// below still matches instead of re-reading every WSL rollout whole (#1059).
+function fingerprintFromStat(filePath: string, s: { dev: number; ino: number; mtimeMs: number; size: number }): FileFingerprint {
+  if (isWslUncPath(filePath)) return { dev: 0, ino: 0, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+  return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+}
+
 export async function readCachedCodexResults(
   filePath: string,
 ): Promise<CodexCacheHit | null> {
   try {
     const s = await stat(filePath)
     const cache = await loadCache(currentCacheDir())
-    const fp = { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+    const fp = fingerprintFromStat(filePath, s)
     const entry = getEntry(cache, filePath, fp)
     if (entry) return { kind: 'exact', calls: entry.calls }
     // Rollouts are append-only: the same inode, grown past a boundary we
@@ -227,7 +236,7 @@ export async function getCachedCodexProject(
   try {
     const s = await stat(filePath)
     const cache = await loadCache(currentCacheDir())
-    const entry = getEntry(cache, filePath, { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size })
+    const entry = getEntry(cache, filePath, fingerprintFromStat(filePath, s))
     return entry?.project ?? null
   } catch {}
   return null
@@ -237,8 +246,7 @@ export async function fingerprintFile(
   filePath: string,
 ): Promise<FileFingerprint | null> {
   try {
-    const s = await stat(filePath)
-    return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
+    return fingerprintFromStat(filePath, await stat(filePath))
   } catch {
     return null
   }
@@ -265,6 +273,25 @@ export async function writeCachedCodexResults(
   } catch {}
 }
 
+/// Remove exact source paths after the session-cache reconciliation has proved
+/// they were deleted under an active WSL home. The generic flush cannot make
+/// that decision itself: statting an offline UNC share can hang, while treating
+/// the resulting failure as deletion would lose a stopped distro's warm cache.
+export async function evictCachedCodexResults(filePaths: Iterable<string>): Promise<boolean> {
+  try {
+    const cache = await loadCache(currentCacheDir())
+    let changed = false
+    for (const filePath of filePaths) {
+      if (!Object.hasOwn(cache.files, filePath)) continue
+      delete cache.files[filePath]
+      changed = true
+    }
+    return changed
+  } catch {
+    return false
+  }
+}
+
 export async function flushCodexCache(): Promise<void> {
   const cacheDir = currentCacheDir()
   const memCache = memCaches.get(cacheDir)
@@ -273,6 +300,11 @@ export async function flushCodexCache(): Promise<void> {
     // Evict entries for files that no longer exist on disk
     const paths = Object.keys(memCache.files)
     for (const p of paths) {
+      // A stopped WSL distro makes its UNC share unavailable. Probing it here
+      // can block for the OS/network timeout, and would evict the entry even
+      // though the source is still durable. WSL discovery owns availability;
+      // retain the entry until a later parse can observe the file again.
+      if (isWslUncPath(p)) continue
       try {
         await stat(p)
       } catch {

@@ -6,6 +6,7 @@ import { join } from 'path'
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { acquireCacheRefreshLock } from './cache-refresh-lock.js'
 import type { ToolCall } from './types.js'
+import { isWslUncPath } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -244,6 +245,14 @@ const UNREFERENCED_SHARD_MAX_AGE_MS = 60 * 60 * 1000
 // cached rows persist as durable orphans contributing exactly what they
 // always did. There is no cross-file dependency for the fingerprint to catch,
 // so declaring it would buy nothing and cost the durable-history loss above.
+//
+// CODEBURN_WSL (src/wsl.ts) is also deliberately absent, for claude and codex
+// alike. It is a live read policy, not parsed content: active roots add paths;
+// stopped roots retain historical WSL rows without touching their UNC share;
+// and active-root deletions are reconciled explicitly by src/parser.ts.
+// `off` disables discovery/UNC access while leaving that retained history
+// readable. Hashing the policy here would instead discard the rows that make a
+// shutdown/restart cycle lossless and force a full 9P re-parse after re-enable.
 export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   claude: ['CLAUDE_CONFIG_DIRS', 'CLAUDE_CONFIG_DIR', 'CODEBURN_DESKTOP_SESSIONS_DIR', 'APPDATA', 'LOCALAPPDATA'],
   'cline-cli': ['CLINE_SESSION_DATA_DIR', 'CLINE_DATA_DIR', 'CLINE_DIR'],
@@ -1454,6 +1463,10 @@ export async function fingerprintFile(filePath: string): Promise<FileFingerprint
     // A source path that IS a SQLite database (copilot OTel's agent-traces.db)
     // needs the same WAL fold as the virtual-suffix forms below.
     if (SQLITE_DB_PATH.test(filePath)) return fingerprintSqliteFile(filePath)
+    // WSL's 9P share (`\\wsl$\...`) synthesizes dev/ino per mount, so they can
+    // differ run to run for an unchanged file — keying on them would re-parse
+    // every WSL session every time. mtime+size only for those paths (#1059).
+    if (isWslUncPath(filePath)) return { dev: 0, ino: 0, mtimeMs: s.mtimeMs, sizeBytes: s.size }
     return { dev: s.dev, ino: s.ino, mtimeMs: s.mtimeMs, sizeBytes: s.size }
   } catch {
     // Providers encode extra context into source paths using virtual suffixes:

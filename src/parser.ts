@@ -8,7 +8,7 @@ import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getSho
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
-import { flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
+import { evictCachedCodexResults, flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeLineageForSource } from './providers/kimicode.js'
@@ -40,6 +40,7 @@ import {
   sourcePathStatCandidates,
 } from './session-cache.js'
 import { acquireCacheRefreshLock, type RefreshLockHandle, type RefreshLockOutcome } from './cache-refresh-lock.js'
+import { classifyWslCachePath, isWslUncPath, refreshWslHomes, wslMode } from './wsl.js'
 import { decideParseWorkers, parseFilesInOrder, ParseWorkerPool, type ClaudeWorkerParse, type ParseJob } from './parse-workers.js'
 import type { CodexFullParse } from './providers/codex.js'
 import { dateKey } from './day-aggregator.js'
@@ -65,6 +66,19 @@ import type {
 import { classifyTurn, BASH_TOOLS, EDIT_TOOLS } from './classifier.js'
 import { extractBashCommands } from './bash-utils.js'
 import { isTrustedAbsoluteWorkingDirectory } from './path-privacy.js'
+
+/// An undiscovered WSL path is ambiguous: its distro may be stopped, or the
+/// transcript may have been deleted while the distro stayed live. Refresh the
+/// running-home probe only when an orphan needs that distinction. The normal
+/// discovery path keeps its short TTL; this path is the correctness fence for
+/// cache eviction and deliberately never touches a UNC source itself.
+function refreshWslHomesForOrphans(paths: Iterable<string>, discovered: ReadonlySet<string>): readonly string[] {
+  if (wslMode() === 'off') return []
+  for (const path of paths) {
+    if (isWslUncPath(path) && !discovered.has(path)) return refreshWslHomes()
+  }
+  return []
+}
 
 function unsanitizePath(dirName: string): string {
   return dirName.replace(/-/g, '/')
@@ -2028,6 +2042,8 @@ async function scanProjectDirs(
   }
   discoverProgress.finish()
 
+  const wslHomesForOrphans = refreshWslHomesForOrphans(Object.keys(section.files), allDiscoveredFiles)
+
   // Orphans: cached sessions whose source file is no longer discovered. In
   // read-only mode surface them all (the snapshot is authoritative, nothing is
   // being pruned). In write mode surface only PR-bearing orphans: their transcript
@@ -2036,7 +2052,13 @@ async function scanProjectDirs(
   // same set so `section.files` still holds them when summaries are built.
   for (const [filePath, cached] of Object.entries(section.files)) {
     if (allDiscoveredFiles.has(filePath)) continue
-    if (!readOnly && !cached.prLinks?.length) continue
+    const wslStatus = classifyWslCachePath(filePath, wslHomesForOrphans)
+    // A WSL path missing from discovery is retained only when its root is
+    // currently offline (or WSL discovery is explicitly disabled). If the
+    // refreshed probe still exposes the home, the transcript was deleted
+    // under a live root and must not keep serving stale usage. PR-bearing
+    // orphans remain the existing intentional legacy exception.
+    if (!readOnly && !cached.prLinks?.length && wslStatus !== 'offline' && wslStatus !== 'disabled') continue
     const dirName = cached.canonicalProjectName
       ?? cached.turns[0]?.calls[0]?.project
       ?? basename(dirname(filePath))
@@ -2305,12 +2327,20 @@ async function scanProjectDirs(
   }
   parseProgress.finish()
 
-  if (!readOnly && dirs.length > 0) {
+  if (!readOnly) {
     for (const cachedPath of Object.keys(section.files)) {
       if (allDiscoveredFiles.has(cachedPath)) continue
       // Keep PR-bearing orphans: their transcript is gone and can never re-parse,
       // but they carry attributable PR spend (surfaced above as a legacy split).
       if (section.files[cachedPath]?.prLinks?.length) continue
+      const wslStatus = classifyWslCachePath(cachedPath, wslHomesForOrphans)
+      // An offline WSL root is not a deletion; keep its rows so a shutdown
+      // does not make totals flicker or force a 9P re-parse on restart. An
+      // active-root orphan is a real deletion and follows native eviction.
+      if (wslStatus === 'offline' || wslStatus === 'disabled') continue
+      // Preserve the old no-discovery guard for ordinary paths. WSL paths
+      // have an independent active/offline probe even when dirs is empty.
+      if (wslStatus === 'not-wsl' && dirs.length === 0) continue
       delete section.files[cachedPath]
       markCacheDirty(diskCache, 'claude', cachedPath)
     }
@@ -3386,6 +3416,8 @@ export async function parseProviderSources(
     }
   }
 
+  const wslHomesForOrphans = refreshWslHomesForOrphans(Object.keys(section.files), allDiscoveredFiles)
+
   if (readOnly) {
     for (const [path, cached] of Object.entries(section.files)) {
       if (allDiscoveredFiles.has(path)) continue
@@ -3466,6 +3498,7 @@ export async function parseProviderSources(
 
   // Parse changed files, update cache
   let didParse = false
+  let evictedCodexResultCache = false
   // Track which paths have already been cleared this pass so that subsequent
   // sources sharing the same path (e.g. multiple OTel conversations from one
   // agent-traces.db) can accumulate via the merge logic below rather than
@@ -3688,14 +3721,32 @@ export async function parseProviderSources(
     markCacheDirty(diskCache, providerName)
   }
 
-  if (!readOnly && sources.length > 0 && !provider.durableSources) {
+  if (!readOnly && !provider.durableSources) {
     for (const cachedPath of Object.keys(section.files)) {
-      if (!allDiscoveredFiles.has(cachedPath)) {
-        delete section.files[cachedPath]
-        markCacheDirty(diskCache, providerName, cachedPath)
+      if (allDiscoveredFiles.has(cachedPath)) continue
+      const wslStatus = classifyWslCachePath(cachedPath, wslHomesForOrphans)
+      // A stopped WSL distro is an offline root, not a deleted file. Keep its
+      // cache entry, including when it is the only source and `sources` is
+      // empty, so offline Codex usage still contributes. An active-root WSL
+      // orphan is a real deletion and is evicted like a native source.
+      if (wslStatus === 'offline' || wslStatus === 'disabled') continue
+      // With no discovered sources, do not widen the existing eviction policy
+      // to ordinary cached paths; only WSL paths get the orphan reconciliation
+      // needed for the no-source/stopped-distro case.
+      if (sources.length === 0 && wslStatus === 'not-wsl') continue
+      // The separate Codex result cache cannot stat arbitrary WSL paths during
+      // its generic flush: a stopped distro can make that probe hang. Now that
+      // the active-home reconciliation has proved this exact path was deleted,
+      // remove the raw parse row explicitly as well. Persist once below even
+      // when this provider had zero discovered sources and parsed nothing.
+      if (providerName === 'codex' && wslStatus === 'active') {
+        evictedCodexResultCache = await evictCachedCodexResults([cachedPath]) || evictedCodexResultCache
       }
+      delete section.files[cachedPath]
+      markCacheDirty(diskCache, providerName, cachedPath)
     }
   }
+  if (evictedCodexResultCache) await flushCodexCache()
 
   // 90-day age-out for durable providers: prune only orphaned entries whose
   // newest call is older than 90 days. Still-discovered sources remain live
@@ -4035,9 +4086,21 @@ export async function parseProviderSources(
   // Second pass: durable orphans — cache entries for paths that are no longer
   // discovered (e.g. OTel conversations pruned from the DB). Their turns are
   // counted here so the monthly total never drops.
-  if (provider.durableSources) {
+  // WSL orphans join them for every provider: their distro being stopped must
+  // not drop the spend from the totals for the length of a shutdown (#1059).
+  if (provider.durableSources || Object.keys(section.files).some(isWslUncPath)) {
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
+      if (!provider.durableSources && !isWslUncPath(cachedPath)) continue
       if (allDiscoveredFiles.has(cachedPath)) continue  // already counted above
+      // Active-root WSL orphans were deleted and are removed by the cleanup
+      // pass above. Offline/disabled roots remain historical cache rows and
+      // are intentionally counted without touching their UNC source.
+      const wslStatus = classifyWslCachePath(cachedPath, wslHomesForOrphans)
+      // A non-durable active-root orphan was deleted and the cleanup pass
+      // above removed it. Durable providers intentionally preserve historical
+      // rows after their source prunes them, so their active WSL orphans must
+      // remain visible just like durable native orphans.
+      if (wslStatus === 'active' && !provider.durableSources) continue
 
       for (const rawTurn of cachedFile.turns) {
         const turn = reconcileCopilotCalls(rawTurn)
@@ -5395,15 +5458,24 @@ async function runParseInner(
   const processedProviders = new Set(providerGroups.keys())
   for (const providerName of Object.keys(diskCache.providers)) {
     if (processedProviders.has(providerName)) continue
+    // Claude is reconciled by scanProjectDirs above (including its WSL-only
+    // orphan pass), not by the generic provider parser. Running the new WSL
+    // cache-only fallback here would append the same Claude entries a second
+    // time to `otherProjects`.
+    if (providerName === 'claude') continue
     // Skip if filtered to a different provider
     if (providerFilter && providerFilter !== 'all' && providerFilter !== providerName) continue
     const section = diskCache.providers[providerName]
     if (!section || Object.keys(section.files).length === 0) continue
+    const hasWslCachedSources = Object.keys(section.files).some(isWslUncPath)
     // Use the persisted durable flag (set by parseProviderSources when it first
     // processes a durableSources provider) OR the static DURABLE_PROVIDER_NAMES
     // constant — both checks are O(1) and avoid a getProvider() dynamic-import
     // round-trip for every unprocessed provider in the disk cache.
-    if (!section.durable && !DURABLE_PROVIDER_NAMES.has(providerName)) continue
+    // WSL cache paths are also processed with no discovered sources: a stopped
+    // distro intentionally disappears from discovery, but its cached usage is
+    // still part of the report until the root is reachable again.
+    if (!section.durable && !DURABLE_PROVIDER_NAMES.has(providerName) && !hasWslCachedSources) continue
     const projects = await parseProviderSources(providerName, [], seenKeys, diskCache, dateRange, saveProgress, readOnly)
     otherProjects.push(...projects)
   }

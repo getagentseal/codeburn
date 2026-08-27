@@ -16,6 +16,7 @@ import {
 } from './session-cache.js'
 import { renderTable } from './text-table.js'
 import { collectLauncherNotes, type LauncherNote } from './launcher-homes.js'
+import { wslDoctorNote } from './wsl.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -99,6 +100,9 @@ export type DoctorReport = {
   claudeRetention?: ClaudeRetentionNote
   /// Present only when there is something to list.
   cacheHealth?: DoctorCacheHealth
+  /// Present on Windows when no WSL root was probed, so an opt-out or a
+  /// missing wsl.exe reads as a reason instead of a silent zero (#1059).
+  wslNote?: string
 }
 
 export type CollectDoctorOptions = {
@@ -360,6 +364,8 @@ export async function collectDoctorReport(
     const report: DoctorReport = { generatedAt: new Date().toISOString(), providers }
     const launchers = opts.launchers ?? collectLauncherNotes()
     if (launchers.length > 0) report.launchers = launchers
+    const wslNote = wslDoctorNote()
+    if (wslNote) report.wslNote = wslNote
     if (providers.some(p => p.provider === 'claude')) {
       const retention = await collectClaudeRetention()
       if (retention) report.claudeRetention = retention
@@ -539,6 +545,11 @@ export function renderDoctorTable(
         c.dim(issue.reason === 'failed' ? '  (cached parse failure)' : '  (cached with 0 turns)'),
       )
     }
+  }
+
+  if (report.wslNote) {
+    out.push('')
+    out.push(c.dim(report.wslNote))
   }
 
   if (report.claudeRetention) {
