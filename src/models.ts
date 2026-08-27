@@ -116,6 +116,18 @@ function buildCosts(
 const GROK_4_6_PROMPT_TOKEN_THRESHOLD = 200_000
 const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
 
+// Swap in the vendor's high tier when a request's prompt crosses the published
+// threshold. A user-set exact priceOverride still wins over the built-in tier.
+// Kept as a helper so the next tiered model extends this one branch instead of
+// copy-pasting the inline condition.
+function tieredCostsFor(model: string, baseCosts: ModelCosts, promptTokens: number): ModelCosts {
+  if (exactPriceOverrideFor(model)) return baseCosts
+  if (resolveCanonicalModelId(model) === 'grok-4.6' && promptTokens >= GROK_4_6_PROMPT_TOKEN_THRESHOLD) {
+    return GROK_4_6_HIGH_PROMPT_COSTS
+  }
+  return baseCosts
+}
+
 
 function tupleToCosts(raw: SnapshotEntry): ModelCosts {
   const [input, output, cacheWrite, cacheRead, fast] = raw
@@ -1200,11 +1212,7 @@ export function calculateCost(
   const safeCacheCreation = Math.max(safe(cacheCreationTokens), safeOneHourCacheCreation)
   const safeFiveMinuteCacheCreation = Math.max(0, safeCacheCreation - safeOneHourCacheCreation)
   const promptTokens = safe(inputTokens) + safe(cacheReadTokens)
-  const tieredCosts = (
-    !exactPriceOverrideFor(model)
-    && resolveCanonicalModelId(model) === 'grok-4.6'
-    && promptTokens >= GROK_4_6_PROMPT_TOKEN_THRESHOLD
-  ) ? GROK_4_6_HIGH_PROMPT_COSTS : costs
+  const tieredCosts = tieredCostsFor(model, costs, promptTokens)
   const multiplier = speed === 'fast' ? tieredCosts.fastMultiplier : 1
 
   // Clamp negative inputs to 0. A corrupt JSONL that emits a negative token

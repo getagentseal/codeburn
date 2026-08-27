@@ -180,6 +180,19 @@ async function discoverSessionsInDir(sessionsDir: string, providerName: string):
   return sources
 }
 
+// OMP records a session-level model (`model_change` entry) plus an optional
+// per-message `model`. The per-message value may be a bare model name without
+// the provider prefix (e.g. "gpt-5.6-terra" vs "openai-codex/gpt-5.6-terra").
+// Prefer the fully-qualified form when the two agree; fall back to whatever
+// the message carries, then the session model, then a safe default.
+function resolveMessageModel(messageModel: string, resolvedModel: string): string {
+  if (messageModel.includes('/')) return messageModel
+  if (resolvedModel && (!messageModel || resolvedModel === messageModel || resolvedModel.endsWith(`/${messageModel}`))) {
+    return resolvedModel
+  }
+  return messageModel || resolvedModel || 'gpt-5'
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
@@ -242,11 +255,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (input === 0 && output === 0) continue
 
         const messageModel = msg.model ?? ''
-        const model = messageModel.includes('/')
-          ? messageModel
-          : resolvedModel && (!messageModel || resolvedModel === messageModel || resolvedModel.endsWith(`/${messageModel}`))
-            ? resolvedModel
-            : messageModel || resolvedModel || 'gpt-5'
+        const model = resolveMessageModel(messageModel, resolvedModel)
         const responseId = msg.responseId ?? ''
         const dedupKey = `${source.provider}:${source.path}:${responseId || entry.id || entry.timestamp || String(lineIdx)}`
 
@@ -281,6 +290,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           })
 
         const reportedCost = msg.usage.cost?.total
+        // A zero reported cost acts as absent: OMP writes cost.total = 0 for
+        // xai-oauth calls, so the alias table and price overrides never apply.
+        // A genuinely free call would recompute to a small nonzero number;
+        // that is the trade-off we accept for fixing the OAuth zero.
         const costUSD = typeof reportedCost === 'number' && Number.isFinite(reportedCost) && reportedCost !== 0
           ? reportedCost
           : calculateCost(messageModel || resolvedModel || model, input, output, cacheWrite, cacheRead, 0)

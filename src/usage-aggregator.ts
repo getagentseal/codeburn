@@ -22,13 +22,6 @@ const TOP_BRANCHES = 15
 type SubagentRow = NonNullable<BreakdownArrays['subagents']>[number]
 
 
-function compactTokenCount(totalTokens: number): string {
-  if (totalTokens >= 1_000_000) return `${(totalTokens / 1_000_000).toFixed(totalTokens >= 10_000_000 ? 0 : 2).replace(/\.?0+$/, '')}M`
-  if (totalTokens >= 1_000) return `${(totalTokens / 1_000).toFixed(totalTokens >= 100_000 ? 0 : 1).replace(/\.?0+$/, '')}k`
-  return String(totalTokens)
-}
-
-
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
@@ -1008,15 +1001,11 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     }
     const subagents: SubagentRow[] = [
       ...Object.entries(subagentMap).map(([name, d]) => ({ name, ...d })),
-      ...Array.from(ompSubagentMap.values()).map(entry => {
-        const totalTokens = entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.cacheWriteTokens
-        const startTime = entry.startedAt.match(/T(\d{2}:\d{2})/)?.[1]
-        return {
-          name: `${entry.agentName} ${entry.model} ${startTime ? `${startTime}Z` : entry.startedAt} ${entry.calls}t ${compactTokenCount(totalTokens)}`,
-          ...entry,
-          totalTokens,
-        }
-      }),
+      ...Array.from(ompSubagentMap.values()).map(entry => ({
+        name: entry.agentName,
+        ...entry,
+        totalTokens: entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.cacheWriteTokens,
+      })),
     ]
     return {
       tools: Object.entries(toolMap).sort(([, a], [, b]) => b - a).slice(0, 10).map(([name, calls]) => ({ name, calls })),
