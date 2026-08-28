@@ -86,6 +86,8 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
     <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
+    <key>CodeBurnLoginItemMaintenanceVersion</key>
+    <integer>1</integer>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

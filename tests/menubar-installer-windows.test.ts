@@ -203,6 +203,23 @@ describe('installMenubarApp on windows', () => {
     expect(installerCalls).toHaveLength(1)
   })
 
+  it('rejects macOS placement repair flags before touching the Windows installer', async () => {
+    await expect(installMenubarApp({
+      platform: 'win32',
+      cliVersion: '0.9.20',
+      repairPlacement: true,
+      windows: hooks(),
+    })).rejects.toThrow(/only available for the macOS menu bar app/)
+    await expect(installMenubarApp({
+      platform: 'win32',
+      cliVersion: '0.9.20',
+      resetPlacement: true,
+      windows: hooks(),
+    })).rejects.toThrow(/only available for the macOS menu bar app/)
+    expect(installerCalls).toEqual([])
+    expect(launched).toEqual([])
+  })
+
   it('aborts on a checksum mismatch without running the installer', async () => {
     await expect(installMenubarApp({
       platform: 'win32',

@@ -18,6 +18,30 @@ codeburn menubar
 
 That's it. The command records the persistent `codeburn` CLI path, downloads the latest `.app` from the newest `mac-v*` GitHub Release with a matching checksum, verifies it, drops it into `~/Applications`, clears Gatekeeper quarantine, and launches it. Re-running it upgrades in place with `--force`, or just launches the existing copy otherwise.
 
+If the process runs but its status item never appears, including after a
+reinstall and reboot, macOS may have retained bad per-bundle-id placement state.
+First refresh the installed app so it can safely transfer its own Login Item
+state, then repair it without keeping a duplicate app:
+
+```bash
+codeburn menubar --force
+codeburn menubar --repair-placement
+```
+
+The installer verifies the official release first, replaces the existing app
+at the same path with a locally re-signed copy using a fresh CodeBurn recovery
+bundle id, and preserves that id across future `--force` updates. macOS may ask
+for CodeBurn permissions again because the repaired app has a new local code
+identity. A Developer-ID signed or notarized app cannot be re-identified
+locally without invalidating its signature, so the command fails safely for
+those artifacts instead of silently downgrading them.
+
+To return to the official bundle identity later, reinstall it explicitly:
+
+```bash
+codeburn menubar --reset-placement
+```
+
 ### Build from source
 
 For contributors running a local build instead of the packaged release:

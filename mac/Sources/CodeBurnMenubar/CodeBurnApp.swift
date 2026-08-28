@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import Observation
 import ServiceManagement
+import Darwin
 
 private let refreshIntervalSeconds: UInt64 = 30
 private let forceRefreshWatchdogSeconds: TimeInterval = 90
@@ -122,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        runMaintenanceCommandIfRequested()
         ProcessInfo.processInfo.automaticTerminationSupportEnabled = false
         ProcessInfo.processInfo.disableSuddenTermination()
         // Deliberately NO app-lifetime beginActivity here. A permanent
@@ -153,6 +155,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         registerLoginItemIfNeeded()
         observeSubscriptionDisconnect()
         Task { await updateChecker.checkIfNeeded() }
+    }
+
+    /// Runs only from the installed source bundle during identity repair. The
+    /// exact installed code identity is required for SMAppService to address
+    /// the source registration. Packaged builds advertise this protocol in
+    /// Info.plist so older binaries are never launched with an unknown flag.
+    private func runMaintenanceCommandIfRequested() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let statusRequested = arguments.contains("--codeburn-login-item-status")
+        let unregisterRequested = arguments.contains("--codeburn-unregister-login-item")
+        let registerRequested = arguments.contains("--codeburn-register-login-item")
+        guard statusRequested || unregisterRequested || registerRequested else {
+            return
+        }
+
+        let key = "codeburn.loginItemRegistered"
+        let service = SMAppService.mainApp
+        do {
+            let state = LoginItemRegistrationPolicy.migrationState(
+                status: service.status,
+                wasPreviouslyRegistered: UserDefaults.standard.bool(forKey: key)
+            )
+            if unregisterRequested {
+                switch service.status {
+                case .enabled, .requiresApproval:
+                    try service.unregister()
+                case .notRegistered, .notFound:
+                    break
+                @unknown default:
+                    break
+                }
+            } else if registerRequested, service.status != .enabled {
+                try service.register()
+            }
+            let resultState: LoginItemMigrationState
+            if registerRequested {
+                switch service.status {
+                case .enabled:
+                    resultState = .registered
+                case .requiresApproval:
+                    resultState = .disabled
+                case .notRegistered, .notFound:
+                    resultState = .notRegistered
+                @unknown default:
+                    resultState = .unknown
+                }
+            } else {
+                // Unregister reports the state that was retired so the caller
+                // can verify it addressed the intended identity.
+                resultState = state
+            }
+            print(resultState.rawValue)
+            fflush(stdout)
+            Darwin.exit(EXIT_SUCCESS)
+        } catch {
+            let message = "CodeBurn Login Item maintenance failed: \(error.localizedDescription)\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            Darwin.exit(EXIT_FAILURE)
+        }
     }
 
     private func setupWakeObservers() {
@@ -285,15 +346,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
     private func registerLoginItemIfNeeded() {
         let key = "codeburn.loginItemRegistered"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let service = SMAppService.mainApp
+        let wasPreviouslyRegistered = UserDefaults.standard.bool(forKey: key)
+        guard LoginItemRegistrationPolicy.shouldRegister(
+            status: service.status,
+            wasPreviouslyRegistered: wasPreviouslyRegistered
+        ) else {
+            if LoginItemRegistrationPolicy.shouldRecordRegistration(
+                status: service.status,
+                wasPreviouslyRegistered: wasPreviouslyRegistered
+            ) {
+                UserDefaults.standard.set(true, forKey: key)
+            }
+            return
+        }
 
         // Registers in-process. The old path told System Events to make the login
         // item, which made macOS ask for Automation access on first launch (#1026).
         // No AppleScript fallback: a failure here must not bring that prompt back.
         do {
-            if SMAppService.mainApp.status != .enabled {
-                try SMAppService.mainApp.register()
-            }
+            try service.register()
             UserDefaults.standard.set(true, forKey: key)
         } catch {
             NSLog("CodeBurn: login item registration failed: \(error.localizedDescription)")

@@ -1,28 +1,132 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   buildPersistentCodeburnLookupPath,
   downloadToFile,
   formatGitHubReleaseLookupError,
+  createMenubarPlacementRecoveryBundleId,
+  isSupportedMenubarBundleId,
+  isAdHocMenubarSignatureDetails,
+  isMissingDefaultsDomainError,
+  installedMenubarSupportsLoginItemMaintenance,
+  isRestoredMenubarLoginItemState,
+  planMenubarLoginItemMigration,
+  selectMenubarBundleId,
   isMissingDirectAssetError,
   resolveLatestMenubarReleaseAssets,
   resolveMenubarReleaseAssets,
   resolvePersistentCodeburnPathFromWhichOutput,
   resolveProxyUrlForUrl,
+  resolveActiveMenubarBundleId,
+  reidentifyMenubarBundleForPlacementRecovery,
+  migrateMenubarPreferencesForPlacementRecovery,
+  prepareMenubarPreferenceMigration,
+  runInstalledMenubarLoginItemMaintenance,
+  replaceMenubarBundleWithRollback,
   resolveVersionedMenubarReleaseAssets,
   shouldFallbackToReleaseApi,
   verifyChecksum,
   type ReleaseResponse,
 } from '../src/menubar-installer.js'
 
+const execFileAsync = promisify(execFile)
+
 function asset(name: string) {
   return { name, browser_download_url: `https://example.test/${name}` }
 }
 
 describe('resolveMenubarReleaseAssets', () => {
+  it('fails closed for an ambiguous legacy approval state', () => {
+    expect(planMenubarLoginItemMigration('disabled')).toEqual({
+      preserveDisable: true,
+      retirePrevious: true,
+      restoreOnFailure: false,
+    })
+  })
+
+  it('requires rollback to restore the source consent level exactly', () => {
+    expect(isRestoredMenubarLoginItemState('registered', 'registered')).toBe(true)
+    expect(isRestoredMenubarLoginItemState('disabled', 'registered')).toBe(false)
+  })
+
+  it('distinguishes an absent defaults domain from an operational export failure', () => {
+    expect(isMissingDefaultsDomainError(new Error('Domain org.example does not exist.'))).toBe(true)
+    expect(isMissingDefaultsDomainError(new Error('Domain (org.example) not found.'))).toBe(true)
+    expect(isMissingDefaultsDomainError(new Error(
+      'The domain/default pair of (org.example, MissingKey) does not exist',
+    ))).toBe(true)
+    expect(isMissingDefaultsDomainError(new Error('defaults exited with status 1: permission denied'))).toBe(false)
+  })
+
+  it('accepts only the canonical or namespaced placement-recovery bundle ids', () => {
+    expect(isSupportedMenubarBundleId('org.agentseal.codeburn-menubar')).toBe(true)
+    expect(isSupportedMenubarBundleId(
+      'org.agentseal.codeburn-menubar.recovery.0123456789abcdef'
+    )).toBe(true)
+    expect(isSupportedMenubarBundleId(
+      'org.agentseal.codeburn-menubar.recovery.not-random'
+    )).toBe(false)
+    expect(isSupportedMenubarBundleId('org.attacker.codeburn-menubar')).toBe(false)
+  })
+
+  it('creates a stable recovery namespace from validated entropy', () => {
+    expect(createMenubarPlacementRecoveryBundleId('0123456789abcdef')).toBe(
+      'org.agentseal.codeburn-menubar.recovery.0123456789abcdef'
+    )
+    expect(() => createMenubarPlacementRecoveryBundleId('../escape')).toThrow(/16 lowercase hex/)
+  })
+
+  it('persists repaired identity across updates and rotates only on explicit repair', () => {
+    const repaired = 'org.agentseal.codeburn-menubar.recovery.0123456789abcdef'
+    expect(selectMenubarBundleId({ persistedBundleId: repaired })).toBe(repaired)
+    expect(selectMenubarBundleId({
+      repairPlacement: true,
+      persistedBundleId: repaired,
+      recoverySuffix: 'fedcba9876543210',
+    })).toBe('org.agentseal.codeburn-menubar.recovery.fedcba9876543210')
+    expect(selectMenubarBundleId({ persistedBundleId: 'org.attacker.injected' })).toBe(
+      'org.agentseal.codeburn-menubar'
+    )
+    expect(selectMenubarBundleId({
+      resetPlacement: true,
+      persistedBundleId: repaired,
+    })).toBe('org.agentseal.codeburn-menubar')
+    expect(() => selectMenubarBundleId({
+      repairPlacement: true,
+      resetPlacement: true,
+    })).toThrow(/cannot be used together/)
+  })
+
+  it('uses the installed bundle identity when the persistence sidecar is missing or stale', () => {
+    const repaired = createMenubarPlacementRecoveryBundleId('abcdefabcdefabcd')
+    expect(resolveActiveMenubarBundleId({ installedBundleId: repaired })).toBe(repaired)
+    expect(resolveActiveMenubarBundleId({
+      installedBundleId: 'org.agentseal.codeburn-menubar',
+      persistedBundleId: repaired,
+    })).toBe('org.agentseal.codeburn-menubar')
+    expect(() => resolveActiveMenubarBundleId({
+      installedBundleId: 'org.attacker.injected',
+    })).toThrow(/unsupported installed menubar bundle id/)
+  })
+
+  it('allows re-identification only for the ad-hoc release signature', () => {
+    expect(isAdHocMenubarSignatureDetails(`
+CodeDirectory v=20400 flags=0x2(adhoc)
+Signature=adhoc
+TeamIdentifier=not set
+`)).toBe(true)
+    expect(isAdHocMenubarSignatureDetails(`
+Authority=Developer ID Application: AgentSeal
+TeamIdentifier=ABCDE12345
+Runtime Version=26.0.0
+`)).toBe(false)
+  })
+
   it('ignores dev zips and pairs the checksum with the versioned zip', () => {
     const release: ReleaseResponse = {
       tag_name: 'mac-v0.9.8',
@@ -435,5 +539,340 @@ describe('release asset download retry', () => {
     }).catch((err: unknown) => { captured = err })
 
     expect((captured as Error).cause).toBe(original)
+  })
+})
+
+describe.runIf(process.platform === 'darwin')('placement repair bundle re-identification', () => {
+  let sandbox: string
+  let appPath: string
+
+  beforeEach(async () => {
+    sandbox = await mkdtemp(join(tmpdir(), 'menubar-reidentify-'))
+    appPath = join(sandbox, 'CodeBurnMenubar.app')
+    const contents = join(appPath, 'Contents')
+    const executable = join(contents, 'MacOS', 'CodeBurnMenubar')
+    await mkdir(join(contents, 'MacOS'), { recursive: true })
+    await writeFile(executable, '#!/bin/sh\nexit 0\n')
+    await chmod(executable, 0o755)
+    await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>CodeBurnMenubar</string>
+<key>CFBundleIdentifier</key><string>org.agentseal.codeburn-menubar</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>\n`)
+    await execFileAsync('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', appPath])
+  })
+
+  afterEach(async () => {
+    await rm(sandbox, { recursive: true, force: true })
+  })
+
+  it('changes only to a supported recovery id and leaves a valid signed bundle', async () => {
+    const recoveryID = 'org.agentseal.codeburn-menubar.recovery.0123456789abcdef'
+    await reidentifyMenubarBundleForPlacementRecovery(appPath, recoveryID)
+
+    const { stdout } = await execFileAsync('/usr/libexec/PlistBuddy', [
+      '-c', 'Print :CFBundleIdentifier', join(appPath, 'Contents', 'Info.plist'),
+    ])
+    expect(stdout.trim()).toBe(recoveryID)
+    await expect(execFileAsync('/usr/bin/codesign', [
+      '--verify', '--deep', '--strict', appPath,
+    ])).resolves.toBeDefined()
+    await expect(reidentifyMenubarBundleForPlacementRecovery(
+      appPath,
+      'org.attacker.injected',
+    )).rejects.toThrow(/unsupported recovery bundle id/)
+  })
+
+  it('runs bounded Login Item maintenance only for a capable exact installed identity', async () => {
+    const executableDir = join(appPath, 'Contents', 'MacOS')
+    const executablePath = join(executableDir, 'CodeBurnMenubar')
+    await mkdir(executableDir, { recursive: true })
+    await writeFile(executablePath, `#!/bin/sh
+case "$1" in
+  --codeburn-login-item-status) echo disabled ;;
+  --codeburn-unregister-login-item) echo disabled ;;
+  --codeburn-register-login-item) echo registered ;;
+  *) exit 2 ;;
+esac
+`)
+    await chmod(executablePath, 0o755)
+
+    expect(await installedMenubarSupportsLoginItemMaintenance(appPath)).toBe(false)
+    await execFileAsync('/usr/libexec/PlistBuddy', [
+      '-c', 'Add :CodeBurnLoginItemMaintenanceVersion integer 1',
+      join(appPath, 'Contents', 'Info.plist'),
+    ])
+    expect(await installedMenubarSupportsLoginItemMaintenance(appPath)).toBe(true)
+    await expect(runInstalledMenubarLoginItemMaintenance(
+      appPath,
+      'org.agentseal.codeburn-menubar',
+      'status',
+    )).resolves.toBe('disabled')
+    await expect(runInstalledMenubarLoginItemMaintenance(
+      appPath,
+      'org.agentseal.codeburn-menubar',
+      'unregister',
+    )).resolves.toBe('disabled')
+    await expect(runInstalledMenubarLoginItemMaintenance(
+      appPath,
+      'org.agentseal.codeburn-menubar',
+      'register',
+    )).resolves.toBe('registered')
+    await expect(runInstalledMenubarLoginItemMaintenance(
+      appPath,
+      createMenubarPlacementRecoveryBundleId('9999999999999999'),
+      'status',
+    )).rejects.toThrow(/identity is org\.agentseal\.codeburn-menubar/)
+  })
+
+  it('terminates a non-responsive Login Item maintenance command', async () => {
+    const executableDir = join(appPath, 'Contents', 'MacOS')
+    const executablePath = join(executableDir, 'CodeBurnMenubar')
+    await mkdir(executableDir, { recursive: true })
+    await writeFile(executablePath, '#!/bin/sh\nsleep 2\n')
+    await chmod(executablePath, 0o755)
+    await execFileAsync('/usr/libexec/PlistBuddy', [
+      '-c', 'Add :CodeBurnLoginItemMaintenanceVersion integer 1',
+      join(appPath, 'Contents', 'Info.plist'),
+    ])
+
+    await expect(runInstalledMenubarLoginItemMaintenance(
+      appPath,
+      'org.agentseal.codeburn-menubar',
+      'status',
+      { timeoutMs: 25 },
+    )).rejects.toThrow(/timed out after 25ms/)
+  })
+
+  it('migrates preferences between recovery identities without touching other domains', async () => {
+    const sourceID = createMenubarPlacementRecoveryBundleId('1111111111111111')
+    const targetID = createMenubarPlacementRecoveryBundleId('2222222222222222')
+    await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+    await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    try {
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'CodeBurnDisplayMetric', '-string', 'tokens',
+      ])
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'codeburn.loginItemRegistered', '-bool', 'true',
+      ])
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'NSStatusItem Legacy Ghost Position', '-string', 'poisoned',
+      ])
+      await migrateMenubarPreferencesForPlacementRecovery(sourceID, targetID, sandbox)
+
+      const { stdout } = await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'CodeBurnDisplayMetric',
+      ])
+      expect(stdout.trim()).toBe('tokens')
+      await expect(execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'codeburn.loginItemRegistered',
+      ])).rejects.toBeDefined()
+      await expect(execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'NSStatusItem Legacy Ghost Position',
+      ])).rejects.toBeDefined()
+    } finally {
+      await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+      await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    }
+  })
+
+  it('restores the target preference domain when a prepared migration rolls back', async () => {
+    const sourceID = createMenubarPlacementRecoveryBundleId('3333333333333333')
+    const targetID = createMenubarPlacementRecoveryBundleId('4444444444444444')
+    await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+    await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    try {
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'CodeBurnDisplayMetric', '-string', 'tokens',
+      ])
+      await execFileAsync('/usr/bin/defaults', [
+        'write', targetID, 'CodeBurnDisplayMetric', '-string', 'cost',
+      ])
+
+      const migration = await prepareMenubarPreferenceMigration(sourceID, targetID, sandbox)
+      await migration.apply()
+      expect((await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'CodeBurnDisplayMetric',
+      ])).stdout.trim()).toBe('tokens')
+
+      await migration.rollback()
+      expect((await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'CodeBurnDisplayMetric',
+      ])).stdout.trim()).toBe('cost')
+    } finally {
+      await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+      await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    }
+  })
+
+  it('carries an explicit Login Items disable choice to a replacement identity', async () => {
+    const sourceID = createMenubarPlacementRecoveryBundleId('7777777777777777')
+    const targetID = createMenubarPlacementRecoveryBundleId('8888888888888888')
+    await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+    await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    try {
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'codeburn.loginItemRegistered', '-bool', 'true',
+      ])
+      const migration = await prepareMenubarPreferenceMigration(
+        sourceID,
+        targetID,
+        sandbox,
+        { preserveLoginDisable: true },
+      )
+      await migration.apply()
+
+      expect((await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'codeburn.loginItemRegistered',
+      ])).stdout.trim()).toBe('1')
+    } finally {
+      await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+      await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    }
+  })
+
+  it('sanitizes target placement and preserves disable without a source domain', async () => {
+    const sourceID = createMenubarPlacementRecoveryBundleId('aaaaaaaaaaaaaaaa')
+    const targetID = createMenubarPlacementRecoveryBundleId('bbbbbbbbbbbbbbbb')
+    await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+    await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    try {
+      await execFileAsync('/usr/bin/defaults', [
+        'write', targetID, 'NSStatusItem Legacy Ghost Position', '-string', 'poisoned',
+      ])
+      const migration = await prepareMenubarPreferenceMigration(
+        sourceID,
+        targetID,
+        sandbox,
+        { preserveLoginDisable: true },
+      )
+      await migration.apply()
+
+      expect((await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'codeburn.loginItemRegistered',
+      ])).stdout.trim()).toBe('1')
+      await expect(execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'NSStatusItem Legacy Ghost Position',
+      ])).rejects.toBeDefined()
+    } finally {
+      await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+      await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    }
+  })
+
+  it('removes a superseded recovery preference domain only after commit', async () => {
+    const sourceID = createMenubarPlacementRecoveryBundleId('5555555555555555')
+    const targetID = createMenubarPlacementRecoveryBundleId('6666666666666666')
+    await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+    await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    try {
+      await execFileAsync('/usr/bin/defaults', [
+        'write', sourceID, 'CodeBurnDisplayMetric', '-string', 'tokens',
+      ])
+
+      const migration = await prepareMenubarPreferenceMigration(sourceID, targetID, sandbox)
+      await migration.apply()
+      await migration.commit()
+
+      await expect(execFileAsync('/usr/bin/defaults', [
+        'read', sourceID, 'CodeBurnDisplayMetric',
+      ])).rejects.toBeDefined()
+      expect((await execFileAsync('/usr/bin/defaults', [
+        'read', targetID, 'CodeBurnDisplayMetric',
+      ])).stdout.trim()).toBe('tokens')
+    } finally {
+      await execFileAsync('/usr/bin/defaults', ['delete', sourceID]).catch(() => {})
+      await execFileAsync('/usr/bin/defaults', ['delete', targetID]).catch(() => {})
+    }
+  })
+
+  it('restores the previous app and state when replacement cannot commit', async () => {
+    const targetPath = join(sandbox, 'Installed.app')
+    const stagedPath = join(sandbox, 'Staged.app')
+    await mkdir(targetPath)
+    await mkdir(stagedPath)
+    await writeFile(join(targetPath, 'marker'), 'old')
+    await writeFile(join(stagedPath, 'marker'), 'new')
+    let restoredState = false
+
+    await expect(replaceMenubarBundleWithRollback({
+      stagedPath,
+      targetPath,
+      commitState: async () => { throw new Error('disk full') },
+      restoreState: async () => { restoredState = true },
+      launch: async () => { throw new Error('must not launch') },
+    })).rejects.toThrow(/disk full/)
+
+    expect(await readFile(join(targetPath, 'marker'), 'utf8')).toBe('old')
+    expect(restoredState).toBe(true)
+    expect((await readdir(sandbox)).filter(name => name.includes('backup'))).toEqual([])
+  })
+
+  it('commits and launches the new app without leaving a backup bundle', async () => {
+    const targetPath = join(sandbox, 'Installed.app')
+    const stagedPath = join(sandbox, 'Staged.app')
+    await mkdir(targetPath)
+    await mkdir(stagedPath)
+    await writeFile(join(targetPath, 'marker'), 'old')
+    await writeFile(join(stagedPath, 'marker'), 'new')
+    let launched = false
+
+    await replaceMenubarBundleWithRollback({
+      stagedPath,
+      targetPath,
+      commitState: async () => {},
+      restoreState: async () => {},
+      launch: async () => { launched = true },
+    })
+
+    expect(await readFile(join(targetPath, 'marker'), 'utf8')).toBe('new')
+    expect(launched).toBe(true)
+    expect((await readdir(sandbox)).filter(name => name.includes('backup'))).toEqual([])
+  })
+
+  it('keeps the committed new app when only the launch request fails', async () => {
+    const targetPath = join(sandbox, 'Installed.app')
+    const stagedPath = join(sandbox, 'Staged.app')
+    await mkdir(targetPath)
+    await mkdir(stagedPath)
+    await writeFile(join(targetPath, 'marker'), 'old')
+    await writeFile(join(stagedPath, 'marker'), 'new')
+    let restoredState = false
+
+    await expect(replaceMenubarBundleWithRollback({
+      stagedPath,
+      targetPath,
+      commitState: async () => {},
+      restoreState: async () => { restoredState = true },
+      launch: async () => { throw new Error('launch request failed') },
+    })).rejects.toThrow(/launch request failed/)
+
+    expect(await readFile(join(targetPath, 'marker'), 'utf8')).toBe('new')
+    expect(restoredState).toBe(false)
+  })
+
+  it('restores identity state even when the previous bundle cannot be restored', async () => {
+    const targetPath = join(sandbox, 'Installed.app')
+    const stagedPath = join(sandbox, 'Staged.app')
+    const backupPath = `${targetPath}.codeburn-backup-${process.pid}`
+    await mkdir(targetPath)
+    await mkdir(stagedPath)
+    let restoredState = false
+
+    await expect(replaceMenubarBundleWithRollback({
+      stagedPath,
+      targetPath,
+      commitState: async () => {
+        await rm(backupPath, { recursive: true, force: true })
+        throw new Error('identity commit failed')
+      },
+      restoreState: async () => { restoredState = true },
+      launch: async () => { throw new Error('must not launch') },
+    })).rejects.toThrow(/could not be fully restored/)
+
+    expect(restoredState).toBe(true)
   })
 })

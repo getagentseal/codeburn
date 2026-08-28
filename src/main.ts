@@ -1393,11 +1393,22 @@ program
   .command('menubar')
   .description('Install and launch the menubar app on macOS and Windows (one command, no clone)')
   .option('--force', 'Reinstall even if a copy is already installed')
-  .action(async (opts: { force?: boolean }) => {
+  .option('--repair-placement', 'Repair a missing macOS menu bar item with a fresh local bundle identity')
+  .option('--reset-placement', 'Return the macOS menu bar app to its official bundle identity')
+  .action(async (opts: { force?: boolean; repairPlacement?: boolean; resetPlacement?: boolean }) => {
     try {
-      const result = await installMenubarApp({ force: opts.force, cliVersion: version })
+      const result = await installMenubarApp({
+        force: opts.force,
+        repairPlacement: opts.repairPlacement,
+        resetPlacement: opts.resetPlacement,
+        cliVersion: version,
+      })
       // A cancelled Windows installer leaves nothing to point at.
-      if (result.installedPath) console.log(`\n  Ready. ${result.installedPath}\n`)
+      if (result.installedPath) {
+        console.log(result.launched
+          ? `\n  Ready. ${result.installedPath}\n`
+          : `\n  Installed. Open ${result.installedPath} manually.\n`)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`\n  Menubar install failed: ${message}\n`)

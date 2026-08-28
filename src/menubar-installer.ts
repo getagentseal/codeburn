@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, platform, tmpdir } from 'node:os'
@@ -20,6 +20,14 @@ const RELEASE_API = 'https://api.github.com/repos/getagentseal/codeburn/releases
 const RELEASE_DOWNLOAD_BASE = 'https://github.com/getagentseal/codeburn/releases/download'
 const APP_BUNDLE_NAME = 'CodeBurnMenubar.app'
 const EXPECTED_BUNDLE_ID = 'org.agentseal.codeburn-menubar'
+const RECOVERY_BUNDLE_ID_PREFIX = `${EXPECTED_BUNDLE_ID}.recovery.`
+const RECOVERY_BUNDLE_ID_PATTERN = /^org\.agentseal\.codeburn-menubar\.recovery\.[0-9a-f]{16}$/
+const STATUS_ITEM_AUTOSAVE_NAME = 'CodeBurnMenubar.MainStatusItem'
+const LOGIN_ITEM_MAINTENANCE_VERSION_KEY = 'CodeBurnLoginItemMaintenanceVersion'
+const LOGIN_ITEM_STATUS_ARGUMENT = '--codeburn-login-item-status'
+const LOGIN_ITEM_UNREGISTER_ARGUMENT = '--codeburn-unregister-login-item'
+const LOGIN_ITEM_REGISTER_ARGUMENT = '--codeburn-register-login-item'
+const LOGIN_ITEM_MAINTENANCE_TIMEOUT_MS = 5_000
 const VERSIONED_ASSET_PATTERN = /^CodeBurnMenubar-v.+\.zip$/
 const APP_PROCESS_NAME = 'CodeBurnMenubar'
 const SUPPORTED_OS = 'darwin'
@@ -30,10 +38,77 @@ const WINDOWS_PRODUCT_NAME = 'CodeBurn Menubar'
 const WINDOWS_ASSET_PATTERN = /^CodeBurn\.Menubar_.+_x64_en-US\.msi$/
 const MIN_MACOS_MAJOR = 14
 const PERSISTED_CLI_PATH = join(homedir(), 'Library', 'Application Support', 'CodeBurn', 'codeburn-cli-path.v1')
+const PERSISTED_MENUBAR_BUNDLE_ID = join(
+  homedir(),
+  'Library',
+  'Application Support',
+  'CodeBurn',
+  'menubar-bundle-id.v1',
+)
 const PERSISTENT_CLI_REQUIRED_MESSAGE =
   'The menubar app needs a persistent codeburn command. Install CodeBurn globally first: npm install -g codeburn'
 
 export type InstallResult = { installedPath: string; launched: boolean }
+
+function isMenubarPlacementRecoveryBundleId(bundleID: string): boolean {
+  return RECOVERY_BUNDLE_ID_PATTERN.test(bundleID)
+}
+
+export function isSupportedMenubarBundleId(bundleID: string): boolean {
+  return bundleID === EXPECTED_BUNDLE_ID || isMenubarPlacementRecoveryBundleId(bundleID)
+}
+
+export function isAdHocMenubarSignatureDetails(details: string): boolean {
+  return /^Signature=adhoc$/m.test(details) && /^TeamIdentifier=not set$/m.test(details)
+}
+
+export function isMissingDefaultsDomainError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /Domain \(?[^\n]+\)? (?:does not exist|not found)/i.test(message) ||
+    /domain\/default pair of \([^\n]+\) does not exist/i.test(message)
+}
+
+export function createMenubarPlacementRecoveryBundleId(suffix = randomBytes(8).toString('hex')): string {
+  if (!/^[0-9a-f]{16}$/.test(suffix)) {
+    throw new Error('Menubar placement recovery id suffix must be 16 lowercase hex characters.')
+  }
+  return `${RECOVERY_BUNDLE_ID_PREFIX}${suffix}`
+}
+
+export function selectMenubarBundleId(options: {
+  repairPlacement?: boolean
+  resetPlacement?: boolean
+  persistedBundleId?: string
+  recoverySuffix?: string
+} = {}): string {
+  if (options.repairPlacement && options.resetPlacement) {
+    throw new Error('--repair-placement and --reset-placement cannot be used together.')
+  }
+  if (options.repairPlacement) {
+    return createMenubarPlacementRecoveryBundleId(options.recoverySuffix)
+  }
+  if (options.resetPlacement) return EXPECTED_BUNDLE_ID
+  if (options.persistedBundleId && isMenubarPlacementRecoveryBundleId(options.persistedBundleId)) {
+    return options.persistedBundleId
+  }
+  return EXPECTED_BUNDLE_ID
+}
+
+export function resolveActiveMenubarBundleId(options: {
+  installedBundleId?: string
+  persistedBundleId?: string
+}): string {
+  if (options.installedBundleId !== undefined) {
+    if (!isSupportedMenubarBundleId(options.installedBundleId)) {
+      throw new Error(`Refusing unsupported installed menubar bundle id ${options.installedBundleId}.`)
+    }
+    return options.installedBundleId
+  }
+  if (options.persistedBundleId && isMenubarPlacementRecoveryBundleId(options.persistedBundleId)) {
+    return options.persistedBundleId
+  }
+  return EXPECTED_BUNDLE_ID
+}
 
 export type ReleaseAsset = { name: string; browser_download_url: string }
 export type ReleaseResponse = { tag_name: string; assets: ReleaseAsset[] }
@@ -41,6 +116,8 @@ export type ReleaseResponse = { tag_name: string; assets: ReleaseAsset[] }
 export type ResolvedAssets = { release: ReleaseResponse; zip: ReleaseAsset; checksum: ReleaseAsset }
 export type InstallOptions = {
   force?: boolean
+  repairPlacement?: boolean
+  resetPlacement?: boolean
   cliVersion?: string
   platform?: string
   windows?: WindowsInstallHooks
@@ -460,6 +537,54 @@ async function captureCommand(command: string, args: string[]): Promise<string> 
   })
 }
 
+async function captureCommandWithTimeout(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    let settled = false
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback()
+    }
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM')
+      const forceKill = setTimeout(() => proc.kill('SIGKILL'), 250)
+      forceKill.unref()
+      finish(() => reject(new Error(`${command} timed out after ${timeoutMs}ms`)))
+    }, timeoutMs)
+    timer.unref()
+    proc.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
+    proc.stderr.on('data', (chunk: Buffer) => { err += chunk.toString() })
+    proc.on('error', error => finish(() => reject(error)))
+    proc.on('close', code => finish(() => {
+      if (code === 0) resolve(out.trim())
+      else reject(new Error(`${command} exited with status ${code}${err ? `: ${err.trim()}` : ''}`))
+    }))
+  })
+}
+
+async function captureCommandStreams(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ stdout: stdout.trim(), stderr: stderr.trim() })
+      else reject(new Error(`${command} exited with status ${code}${stderr ? `: ${stderr.trim()}` : ''}`))
+    })
+  })
+}
+
 async function verifyBundleIdentity(appPath: string): Promise<void> {
   const bundleID = await captureCommand('/usr/libexec/PlistBuddy', [
     '-c',
@@ -470,6 +595,286 @@ async function verifyBundleIdentity(appPath: string): Promise<void> {
     throw new Error(`Unexpected menubar bundle id ${bundleID}; expected ${EXPECTED_BUNDLE_ID}.`)
   }
   await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath])
+}
+
+export async function reidentifyMenubarBundleForPlacementRecovery(
+  appPath: string,
+  bundleID: string,
+): Promise<void> {
+  if (!isMenubarPlacementRecoveryBundleId(bundleID)) {
+    throw new Error(`Refusing unsupported recovery bundle id ${bundleID}.`)
+  }
+
+  const signature = await captureCommandStreams('/usr/bin/codesign', [
+    '-dvvv',
+    '--verbose=4',
+    appPath,
+  ])
+  const signatureDetails = `${signature.stdout}\n${signature.stderr}`
+  if (!isAdHocMenubarSignatureDetails(signatureDetails)) {
+    throw new Error(
+      'This CodeBurn Menubar build is Developer-ID signed or notarized and cannot be safely ' +
+      're-identified locally without invalidating its signature. Placement repair is unavailable ' +
+      'for this artifact; use `--reset-placement` to keep the official identity.'
+    )
+  }
+
+  const infoPlist = join(appPath, 'Contents', 'Info.plist')
+  await runCommand('/usr/libexec/PlistBuddy', [
+    '-c',
+    `Set :CFBundleIdentifier ${bundleID}`,
+    infoPlist,
+  ])
+  // The official bundle has already passed checksum, identity, and signature
+  // verification in stageMenubarApp. Changing Info.plist invalidates that
+  // signature, so apply a local ad-hoc signature and verify the resulting
+  // bundle before it can replace the installed copy.
+  await runCommand('/usr/bin/codesign', [
+    '--force',
+    '--sign',
+    '-',
+    '--preserve-metadata=entitlements,flags,runtime',
+    '--timestamp=none',
+    '--deep',
+    appPath,
+  ])
+  const writtenBundleID = await captureCommand('/usr/libexec/PlistBuddy', [
+    '-c',
+    'Print :CFBundleIdentifier',
+    infoPlist,
+  ])
+  if (writtenBundleID !== bundleID) {
+    throw new Error(`Menubar placement recovery wrote ${writtenBundleID}; expected ${bundleID}.`)
+  }
+  await runCommand('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath])
+  await runCommand('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', appPath]).catch(() => {})
+}
+
+export async function migrateMenubarPreferencesForPlacementRecovery(
+  sourceBundleID: string,
+  targetBundleID: string,
+  stagingDir: string,
+): Promise<void> {
+  const migration = await prepareMenubarPreferenceMigration(
+    sourceBundleID,
+    targetBundleID,
+    stagingDir,
+  )
+  await migration.apply()
+  await migration.commit()
+}
+
+export type MenubarPreferenceMigration = {
+  apply: () => Promise<void>
+  rollback: () => Promise<void>
+  commit: () => Promise<void>
+}
+
+async function readPreferenceKeysFromPlist(plistPath: string): Promise<string[]> {
+  const json = await captureCommand('/usr/bin/plutil', [
+    '-convert',
+    'json',
+    '-o',
+    '-',
+    plistPath,
+  ])
+  const value: unknown = JSON.parse(json)
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Preference export ${plistPath} was not a dictionary.`)
+  }
+  return Object.keys(value)
+}
+
+export async function prepareMenubarPreferenceMigration(
+  sourceBundleID: string,
+  targetBundleID: string,
+  stagingDir: string,
+  options: { preserveLoginDisable?: boolean } = {},
+): Promise<MenubarPreferenceMigration> {
+  if (!isSupportedMenubarBundleId(sourceBundleID) || !isSupportedMenubarBundleId(targetBundleID)) {
+    throw new Error('Refusing to migrate preferences for an unsupported menubar bundle id.')
+  }
+  if (sourceBundleID === targetBundleID) {
+    return {
+      apply: async () => {},
+      rollback: async () => {},
+      commit: async () => {},
+    }
+  }
+
+  const sourcePreferencesPath = join(stagingDir, 'menubar-preferences-source.plist')
+  const targetPreferencesPath = join(stagingDir, 'menubar-preferences-target.plist')
+  let hasSourcePreferences = false
+  let hadTargetPreferences = false
+  let sourcePreferenceKeys: string[] = []
+  let targetPreferenceKeys: string[] = []
+  let applied = false
+
+  try {
+    const exported = await captureCommand('/usr/bin/defaults', ['export', sourceBundleID, '-'])
+    await writeFile(sourcePreferencesPath, `${exported}\n`, { mode: 0o600 })
+    await chmod(sourcePreferencesPath, 0o600)
+    sourcePreferenceKeys = await readPreferenceKeysFromPlist(sourcePreferencesPath)
+    // `defaults export` can emit an empty dictionary with status 0 for a
+    // nonexistent domain. Treat that as no source rather than importing an
+    // empty plist over an existing target domain.
+    hasSourcePreferences = sourcePreferenceKeys.length > 0
+  } catch (error) {
+    // A first install can have no source preference domain yet.
+    if (!isMissingDefaultsDomainError(error)) throw error
+  }
+
+  try {
+    const exported = await captureCommand('/usr/bin/defaults', ['export', targetBundleID, '-'])
+    await writeFile(targetPreferencesPath, `${exported}\n`, { mode: 0o600 })
+    await chmod(targetPreferencesPath, 0o600)
+    targetPreferenceKeys = await readPreferenceKeysFromPlist(targetPreferencesPath)
+    hadTargetPreferences = targetPreferenceKeys.length > 0
+  } catch (error) {
+    // A fresh recovery identity intentionally has no target domain.
+    if (!isMissingDefaultsDomainError(error)) throw error
+  }
+
+  return {
+    apply: async () => {
+      if (applied) return
+      if (hasSourcePreferences) {
+        await runCommand('/usr/bin/defaults', ['import', targetBundleID, sourcePreferencesPath])
+      }
+      applied = true
+
+      // Preserve product settings, never any AppKit status-item placement
+      // state. Older builds had no autosaveName, so strip every legacy
+      // NSStatusItem key as well as the documented stable-name keys.
+      const importedKeys = hasSourcePreferences ? sourcePreferenceKeys : targetPreferenceKeys
+      const keysToDelete = new Set([
+        `NSStatusItem Preferred Position ${STATUS_ITEM_AUTOSAVE_NAME}`,
+        `NSStatusItem Visible ${STATUS_ITEM_AUTOSAVE_NAME}`,
+        // Registration history belongs to the bundle identity. Excluding it
+        // lets the new identity register exactly once while the source
+        // identity's marker still preserves a user's later disable choice.
+        'codeburn.loginItemRegistered',
+        ...importedKeys.filter(key => key.startsWith('NSStatusItem ')),
+      ])
+      for (const key of keysToDelete) {
+        try {
+          await captureCommand('/usr/bin/defaults', ['delete', targetBundleID, key])
+        } catch (error) {
+          if (!isMissingDefaultsDomainError(error)) throw error
+        }
+      }
+      if (options.preserveLoginDisable) {
+        await runCommand('/usr/bin/defaults', [
+          'write', targetBundleID, 'codeburn.loginItemRegistered', '-bool', 'true',
+        ])
+      }
+    },
+    rollback: async () => {
+      if (!applied) return
+      if (hadTargetPreferences) {
+        await runCommand('/usr/bin/defaults', ['import', targetBundleID, targetPreferencesPath])
+      } else {
+        try {
+          await captureCommand('/usr/bin/defaults', ['delete', targetBundleID])
+        } catch (error) {
+          if (!isMissingDefaultsDomainError(error)) throw error
+        }
+      }
+      applied = false
+    },
+    commit: async () => {
+      // Retain the canonical preference domain as the user's reversible
+      // fallback, but bound recovery residue to the currently selected ID.
+      if (isMenubarPlacementRecoveryBundleId(sourceBundleID)) {
+        await runCommand('/usr/bin/defaults', ['delete', sourceBundleID]).catch(() => {})
+      }
+    },
+  }
+}
+
+export type MenubarLoginItemState =
+  | 'registered'
+  | 'disabled'
+  | 'not-registered'
+  | 'unknown'
+  | 'unsupported'
+
+type MenubarLoginItemMaintenanceAction = 'status' | 'unregister' | 'register'
+
+export function planMenubarLoginItemMigration(state: MenubarLoginItemState): {
+  preserveDisable: boolean
+  retirePrevious: boolean
+  restoreOnFailure: boolean
+} {
+  return {
+    preserveDisable: state === 'disabled',
+    retirePrevious: state === 'registered' || state === 'disabled',
+    restoreOnFailure: state === 'registered',
+  }
+}
+
+export function isRestoredMenubarLoginItemState(
+  state: MenubarLoginItemState,
+  originalState: MenubarLoginItemState,
+): boolean {
+  return originalState === 'registered' && state === 'registered'
+}
+
+export async function installedMenubarSupportsLoginItemMaintenance(
+  installedAppPath: string,
+): Promise<boolean> {
+  try {
+    const version = await captureCommand('/usr/libexec/PlistBuddy', [
+      '-c',
+      `Print :${LOGIN_ITEM_MAINTENANCE_VERSION_KEY}`,
+      join(installedAppPath, 'Contents', 'Info.plist'),
+    ])
+    return Number.parseInt(version, 10) >= 1
+  } catch {
+    return false
+  }
+}
+
+export async function runInstalledMenubarLoginItemMaintenance(
+  installedAppPath: string,
+  expectedBundleID: string,
+  action: MenubarLoginItemMaintenanceAction,
+  options: { timeoutMs?: number } = {},
+): Promise<MenubarLoginItemState> {
+  if (!isSupportedMenubarBundleId(expectedBundleID)) {
+    throw new Error(`Refusing Login Item maintenance for unsupported bundle id ${expectedBundleID}.`)
+  }
+  if (!(await installedMenubarSupportsLoginItemMaintenance(installedAppPath))) {
+    return 'unsupported'
+  }
+
+  const actualBundleID = await captureCommand('/usr/libexec/PlistBuddy', [
+    '-c',
+    'Print :CFBundleIdentifier',
+    join(installedAppPath, 'Contents', 'Info.plist'),
+  ])
+  if (actualBundleID !== expectedBundleID) {
+    throw new Error(
+      `Installed CodeBurn Menubar identity is ${actualBundleID}; expected ${expectedBundleID}.`,
+    )
+  }
+
+  const argument = action === 'status'
+    ? LOGIN_ITEM_STATUS_ARGUMENT
+    : action === 'unregister'
+      ? LOGIN_ITEM_UNREGISTER_ARGUMENT
+      : LOGIN_ITEM_REGISTER_ARGUMENT
+  const executablePath = join(installedAppPath, 'Contents', 'MacOS', APP_PROCESS_NAME)
+  const result = await captureCommandWithTimeout(
+    executablePath,
+    [argument],
+    options.timeoutMs ?? LOGIN_ITEM_MAINTENANCE_TIMEOUT_MS,
+  )
+  if (result === 'registered' || result === 'disabled' ||
+      result === 'not-registered' || result === 'unknown') {
+    return result
+  }
+  throw new Error(`CodeBurn Menubar returned an unexpected Login Item state: ${result || '(empty)'}`)
 }
 
 async function resolvePersistentCodeburnPath(): Promise<string> {
@@ -493,6 +898,120 @@ async function persistCodeburnPath(): Promise<void> {
   await mkdir(join(homedir(), 'Library', 'Application Support', 'CodeBurn'), { recursive: true, mode: 0o700 })
   await writeFile(PERSISTED_CLI_PATH, `${cliPath}\n`, { mode: 0o600 })
   await chmod(PERSISTED_CLI_PATH, 0o600)
+}
+
+async function readPersistedMenubarBundleId(): Promise<string | undefined> {
+  try {
+    const bundleID = (await readFile(PERSISTED_MENUBAR_BUNDLE_ID, 'utf8')).trim()
+    return isMenubarPlacementRecoveryBundleId(bundleID) ? bundleID : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function readInstalledMenubarBundleId(appPath: string): Promise<string> {
+  return captureCommand('/usr/libexec/PlistBuddy', [
+    '-c',
+    'Print :CFBundleIdentifier',
+    join(appPath, 'Contents', 'Info.plist'),
+  ])
+}
+
+async function persistMenubarBundleId(bundleID: string): Promise<void> {
+  if (bundleID === EXPECTED_BUNDLE_ID) {
+    await rm(PERSISTED_MENUBAR_BUNDLE_ID, { force: true })
+    return
+  }
+  if (!isMenubarPlacementRecoveryBundleId(bundleID)) {
+    throw new Error(`Refusing to persist unsupported menubar bundle id ${bundleID}.`)
+  }
+  const supportDir = join(homedir(), 'Library', 'Application Support', 'CodeBurn')
+  await mkdir(supportDir, { recursive: true, mode: 0o700 })
+  await chmod(supportDir, 0o700)
+  const temporaryDir = await mkdtemp(join(supportDir, '.menubar-bundle-id-'))
+  const temporaryPath = join(temporaryDir, 'value')
+  try {
+    await writeFile(temporaryPath, `${bundleID}\n`, { mode: 0o600 })
+    await chmod(temporaryPath, 0o600)
+    await rename(temporaryPath, PERSISTED_MENUBAR_BUNDLE_ID)
+  } finally {
+    await rm(temporaryDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+export async function replaceMenubarBundleWithRollback(options: {
+  stagedPath: string
+  targetPath: string
+  commitState: () => Promise<void>
+  restoreState: () => Promise<void>
+  launch: () => Promise<void>
+}): Promise<void> {
+  const backupPath = `${options.targetPath}.codeburn-backup-${process.pid}`
+  const failedPath = `${options.targetPath}.codeburn-failed-${process.pid}`
+  const hadPreviousBundle = await exists(options.targetPath)
+  let installedNewBundle = false
+
+  if (hadPreviousBundle) {
+    await rm(backupPath, { recursive: true, force: true })
+    await rename(options.targetPath, backupPath)
+  }
+
+  try {
+    await rename(options.stagedPath, options.targetPath)
+    installedNewBundle = true
+    await options.commitState()
+  } catch (installError) {
+    const rollbackErrors: unknown[] = []
+    if (installedNewBundle) {
+      try {
+        // Preserve the failed candidate until the previous app is back in its
+        // canonical path. A rollback must never delete both runnable copies.
+        await rm(failedPath, { recursive: true, force: true })
+        await rename(options.targetPath, failedPath)
+      } catch (error) {
+        rollbackErrors.push(error)
+      }
+    }
+    if (hadPreviousBundle) {
+      try {
+        await rename(backupPath, options.targetPath)
+      } catch (error) {
+        rollbackErrors.push(error)
+      }
+    }
+    if (await exists(options.targetPath)) {
+      await rm(failedPath, { recursive: true, force: true }).catch(() => {})
+    }
+    try {
+      await options.restoreState()
+    } catch (restoreError) {
+      rollbackErrors.push(restoreError)
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [installError, ...rollbackErrors],
+        'Menubar replacement failed and its previous bundle or identity state could not be fully restored.',
+      )
+    }
+    throw installError
+  }
+
+  if (hadPreviousBundle) {
+    try {
+      await rm(backupPath, { recursive: true, force: true })
+    } catch (error) {
+      // The new app is already installed and running. This private path does
+      // not end in .app, so Finder/LaunchServices will not treat it as a
+      // second installation; report cleanup without turning success into a
+      // misleading failed-install result.
+      console.warn(`CodeBurn Menubar installed, but its private rollback backup could not be removed: ${String(error)}`)
+    }
+  }
+
+  // LaunchServices failure does not undo an otherwise committed install. The
+  // caller can retry launch or tell the user exactly which installed app to
+  // open without restoring the poisoned identity that prompted the repair.
+  await options.launch()
 }
 
 async function isAppRunning(): Promise<boolean> {
@@ -673,15 +1192,43 @@ async function installWindowsMenubarApp(options: InstallOptions): Promise<Instal
 }
 
 export async function installMenubarApp(options: InstallOptions = {}): Promise<InstallResult> {
-  if ((options.platform ?? platform()) === 'win32') return installWindowsMenubarApp(options)
+  if ((options.platform ?? platform()) === 'win32') {
+    if (options.repairPlacement || options.resetPlacement) {
+      throw new Error('--repair-placement and --reset-placement are only available for the macOS menu bar app.')
+    }
+    return installWindowsMenubarApp(options)
+  }
   await ensureSupportedPlatform()
   await persistCodeburnPath()
 
   const appsDir = userApplicationsDir()
   const targetPath = join(appsDir, APP_BUNDLE_NAME)
   const alreadyInstalled = await exists(targetPath)
+  const persistedBundleId = await readPersistedMenubarBundleId()
+  const installedBundleId = alreadyInstalled
+    ? await readInstalledMenubarBundleId(targetPath)
+    : undefined
+  const previousBundleId = resolveActiveMenubarBundleId({
+    installedBundleId,
+    persistedBundleId,
+  })
+  const selectedBundleId = selectMenubarBundleId({
+    repairPlacement: options.repairPlacement,
+    resetPlacement: options.resetPlacement,
+    persistedBundleId: isMenubarPlacementRecoveryBundleId(previousBundleId)
+      ? previousBundleId
+      : undefined,
+  })
 
-  if (alreadyInstalled && !options.force) {
+  if (alreadyInstalled && previousBundleId !== selectedBundleId &&
+      !(await installedMenubarSupportsLoginItemMaintenance(targetPath))) {
+    throw new Error(
+      'This installed CodeBurn Menubar predates safe Login Item identity transfer. ' +
+      'Run `codeburn menubar --force` once, then rerun the placement repair command.',
+    )
+  }
+
+  if (alreadyInstalled && !options.force && !options.repairPlacement && !options.resetPlacement) {
     if (!(await isAppRunning())) {
       await runCommand('/usr/bin/open', [targetPath])
     }
@@ -710,18 +1257,167 @@ export async function installMenubarApp(options: InstallOptions = {}): Promise<I
       unpackedApp = await stageMenubarApp(assets, stagingDir)
     }
 
-    await mkdir(appsDir, { recursive: true })
-    if (alreadyInstalled) {
-      // Kill the running copy before replacing its bundle so `mv` can proceed cleanly and the
-      // user ends up on the new version.
-      await killRunningApp()
-      await rm(targetPath, { recursive: true, force: true })
+    if ((previousBundleId !== selectedBundleId || selectedBundleId !== EXPECTED_BUNDLE_ID) &&
+        !(await installedMenubarSupportsLoginItemMaintenance(unpackedApp))) {
+      throw new Error(
+        'The downloaded CodeBurn Menubar build predates safe bundle-identity transfer. ' +
+        'Install a current official release before using placement repair.',
+      )
     }
-    await rename(unpackedApp, targetPath)
 
-    console.log('Launching CodeBurn Menubar...')
-    await runCommand('/usr/bin/open', [targetPath])
-    return { installedPath: targetPath, launched: true }
+    await mkdir(appsDir, { recursive: true })
+    const wasRunning = alreadyInstalled && await isAppRunning()
+    if (alreadyInstalled) {
+      // Stop the running copy before the transactional bundle swap.
+      await killRunningApp()
+    }
+    let preferenceMigration: MenubarPreferenceMigration
+    let loginItemWasUnregistered = false
+    let loginItemState: MenubarLoginItemState = 'not-registered'
+    let loginItemMigrationPlan = planMenubarLoginItemMigration(loginItemState)
+    try {
+      if (alreadyInstalled && previousBundleId !== selectedBundleId) {
+        loginItemState = await runInstalledMenubarLoginItemMaintenance(
+          targetPath,
+          previousBundleId,
+          'status',
+        )
+        if (loginItemState === 'unsupported' || loginItemState === 'unknown') {
+          throw new Error('CodeBurn could not safely determine the existing Login Item state.')
+        }
+        loginItemMigrationPlan = planMenubarLoginItemMigration(loginItemState)
+      }
+      if (previousBundleId !== selectedBundleId) {
+        console.log('Preparing CodeBurn Menubar settings for the selected bundle identity...')
+      }
+      // Snapshot only after the old app has stopped, so its final UserDefaults
+      // writes cannot race the identity migration.
+      preferenceMigration = await prepareMenubarPreferenceMigration(
+        previousBundleId,
+        selectedBundleId,
+        stagingDir,
+        { preserveLoginDisable: loginItemMigrationPlan.preserveDisable },
+      )
+
+      if (selectedBundleId !== EXPECTED_BUNDLE_ID) {
+        console.log(options.repairPlacement
+          ? 'Repairing menu bar placement with a fresh local bundle identity...'
+          : 'Restoring the repaired menu bar bundle identity...')
+        await reidentifyMenubarBundleForPlacementRecovery(unpackedApp, selectedBundleId)
+      }
+
+      if (alreadyInstalled && previousBundleId !== selectedBundleId) {
+        if (loginItemMigrationPlan.retirePrevious) {
+          console.log('Retiring the previous CodeBurn Menubar Login Item identity...')
+          // The process may successfully unregister and then time out or crash
+          // before replying. Arm the idempotent restore before invoking it.
+          loginItemWasUnregistered = loginItemMigrationPlan.restoreOnFailure
+          const retiredState = await runInstalledMenubarLoginItemMaintenance(
+            targetPath,
+            previousBundleId,
+            'unregister',
+          )
+          if (retiredState !== loginItemState) {
+            throw new Error('CodeBurn could not confirm retirement of the previous Login Item identity.')
+          }
+        }
+      }
+    } catch (error) {
+      if (loginItemWasUnregistered) {
+        try {
+          const restoredState = await runInstalledMenubarLoginItemMaintenance(
+            targetPath,
+            previousBundleId,
+            'register',
+          )
+          if (!isRestoredMenubarLoginItemState(restoredState, loginItemState)) {
+            throw new Error(`Unexpected state ${restoredState}`)
+          }
+          loginItemWasUnregistered = false
+        } catch (restoreError) {
+          if (wasRunning) await runCommand('/usr/bin/open', [targetPath]).catch(() => {})
+          throw new AggregateError(
+            [error, restoreError],
+            'Placement repair stopped before installation and could not restore the previous Login Item.',
+          )
+        }
+      }
+      if (wasRunning) await runCommand('/usr/bin/open', [targetPath]).catch(() => {})
+      throw error
+    }
+    let launched = false
+    try {
+      await replaceMenubarBundleWithRollback({
+        stagedPath: unpackedApp,
+        targetPath,
+        commitState: async () => {
+          await preferenceMigration.apply()
+          await persistMenubarBundleId(selectedBundleId)
+        },
+        restoreState: async () => {
+          await preferenceMigration.rollback()
+          await persistMenubarBundleId(previousBundleId)
+          if (loginItemWasUnregistered) {
+            const restoredState = await runInstalledMenubarLoginItemMaintenance(
+              targetPath,
+              previousBundleId,
+              'register',
+            )
+            if (!isRestoredMenubarLoginItemState(restoredState, loginItemState)) {
+              throw new Error('CodeBurn could not restore the previous Login Item identity.')
+            }
+            loginItemWasUnregistered = false
+          }
+          if (wasRunning) await runCommand('/usr/bin/open', [targetPath])
+        },
+        launch: async () => {
+          console.log('Launching CodeBurn Menubar...')
+          if (options.repairPlacement) {
+            console.log('macOS may ask for CodeBurn permissions again because placement repair uses a new local identity.')
+          } else if (options.resetPlacement) {
+            console.log('Restored the official CodeBurn Menubar bundle identity.')
+          }
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              await runCommand('/usr/bin/open', [targetPath])
+              launched = true
+              return
+            } catch (error) {
+              if (attempt === 1) {
+                await new Promise(resolve => setTimeout(resolve, 250))
+                continue
+              }
+              console.warn(
+                `CodeBurn Menubar was installed at ${targetPath}, but macOS did not launch it. ` +
+                `Open that app manually. ${String(error)}`,
+              )
+            }
+          }
+        },
+      })
+    } catch (error) {
+      if (loginItemWasUnregistered) {
+        try {
+          const restoredState = await runInstalledMenubarLoginItemMaintenance(
+            targetPath,
+            previousBundleId,
+            'register',
+          )
+          if (!isRestoredMenubarLoginItemState(restoredState, loginItemState)) {
+            throw new Error(`Unexpected state ${restoredState}`)
+          }
+          loginItemWasUnregistered = false
+        } catch (restoreError) {
+          throw new AggregateError(
+            [error, restoreError],
+            'Menubar replacement failed and its previous Login Item could not be restored.',
+          )
+        }
+      }
+      throw error
+    }
+    await preferenceMigration.commit()
+    return { installedPath: targetPath, launched }
   } finally {
     await rm(stagingDir, { recursive: true, force: true })
   }
