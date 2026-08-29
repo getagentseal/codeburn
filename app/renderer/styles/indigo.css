@@ -97,10 +97,10 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 .sbars .s:first-child { border-radius: 0 0 2px 2px; }
 .sbars .s:last-child { border-radius: 2px 2px 0 0; }
 .sbars .s:only-child { border-radius: 2px; }
-.s-opus { background: var(--s-opus); }
-.s-son { background: var(--s-sonnet); }
-.s-hai { background: var(--s-haiku); }
-.s-gpt { background: var(--s-gpt); }
+.s-flagship { background: var(--s-flagship); }
+.s-premium { background: var(--s-premium); }
+.s-balanced { background: var(--s-balanced); }
+.s-fast { background: var(--s-fast); }
 .s-other { background: var(--s-other); }
 .legend { display: flex; gap: 16px; padding: 9px 4px 0; font-size: 10.5px; color: var(--mut); flex-wrap: wrap; }
 .legend i { width: 8px; height: 8px; border-radius: 2.5px; display: inline-block; margin-right: 6px; vertical-align: -1px; }

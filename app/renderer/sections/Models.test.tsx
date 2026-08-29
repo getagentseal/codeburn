@@ -164,8 +164,8 @@ describe('Models', () => {
     expect(screen.getByText('$35.10')).toHaveClass('pos')
 
     const dots = [...container.querySelectorAll('.mdot')]
-    expect(dots[0]).toHaveAttribute('style', expect.stringContaining('var(--s-opus)'))
-    expect(dots[1]).toHaveAttribute('style', expect.stringContaining('var(--s-gpt)'))
+    expect(dots[0]).toHaveAttribute('style', expect.stringContaining('var(--s-flagship)'))
+    expect(dots[1]).toHaveAttribute('style', expect.stringContaining('var(--s-balanced)'))
   })
 
   it('names the provider on each model row so duplicate model names stay distinguishable', async () => {

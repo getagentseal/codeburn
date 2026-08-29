@@ -4,11 +4,10 @@
   --side: #ffffff;
   --panel: #ffffff;
   --phead: #fafbfc;
-  --s-opus: #2a78d6;
-  --s-fable: #1baf7a;
-  --s-sonnet: #e87ba4;
-  --s-haiku: #eda100;
-  --s-gpt: #008300;
+  --s-flagship: #2a78d6;
+  --s-premium: #1baf7a;
+  --s-balanced: #e87ba4;
+  --s-fast: #eda100;
   --s-other: #8b93a1;
   --card-shadow: 0 1px 2px rgba(20,24,33,.05), 0 1px 3px rgba(20,24,33,.06);
   --accent: #e8590c;
@@ -48,11 +47,10 @@
     --side: #131519;
     --panel: #16181d;
     --phead: #1a1d22;
-    --s-opus: #3987e5;
-    --s-fable: #199e70;
-    --s-sonnet: #d55181;
-    --s-haiku: #c98500;
-    --s-gpt: #008300;
+    --s-flagship: #3987e5;
+    --s-premium: #199e70;
+    --s-balanced: #d55181;
+    --s-fast: #c98500;
     --s-other: #6b7280;
     --card-shadow: 0 1px 2px rgba(0,0,0,.24), 0 1px 3px rgba(0,0,0,.30);
     --accent: #f2701c;
@@ -80,7 +78,7 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
   --canvas: #0e1013; --side: #131519; --panel: #16181d; --phead: #1a1d22;
-  --s-opus: #3987e5; --s-fable: #199e70; --s-sonnet: #d55181; --s-haiku: #c98500; --s-gpt: #008300; --s-other: #6b7280;
+  --s-flagship: #3987e5; --s-premium: #199e70; --s-balanced: #d55181; --s-fast: #c98500; --s-other: #6b7280;
   --card-shadow: 0 1px 2px rgba(0,0,0,.24), 0 1px 3px rgba(0,0,0,.30);
   --accent: #f2701c; --accent-text: #f2701c; --bg: #0e1013; --line: #282c33; --line2: #20242a;
   --ink: #e8eaee; --mut: #959ca8; --mut2: #8b93a1; --ok: #3ecf8e;
@@ -94,7 +92,7 @@
 :root[data-theme='light'] {
   color-scheme: light;
   --canvas: #f5f6f8; --side: #ffffff; --panel: #ffffff; --phead: #fafbfc;
-  --s-opus: #2a78d6; --s-fable: #1baf7a; --s-sonnet: #e87ba4; --s-haiku: #eda100; --s-gpt: #008300; --s-other: #8b93a1;
+  --s-flagship: #2a78d6; --s-premium: #1baf7a; --s-balanced: #e87ba4; --s-fast: #eda100; --s-other: #8b93a1;
   --card-shadow: 0 1px 2px rgba(20,24,33,.05), 0 1px 3px rgba(20,24,33,.06);
   --accent: #e8590c; --accent-text: #bf4808; --bg: #f5f6f8; --line: #e6e8ec; --line2: #eef0f3;
   --ink: #181b20; --mut: #697181; --mut2: #68707c; --ok: #12805c;
@@ -440,12 +438,11 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .models-by-task .model-task-row td:first-child { padding-left: 24px; font-weight: 500; }
 .models-by-task .model-task-row td:first-child::before { left: 22px; }
 .models-by-task .model-task-row td:last-child::before { right: 2px; }
-.s-opus  { background: var(--s-opus); }
-.s-fable { background: var(--s-fable); }
-.s-son   { background: var(--s-sonnet); }
-.s-hai   { background: var(--s-haiku); }
-.s-gpt   { background: var(--s-gpt); }
-.s-other { background: var(--s-other); }
+.s-flagship { background: var(--s-flagship); }
+.s-premium  { background: var(--s-premium); }
+.s-balanced { background: var(--s-balanced); }
+.s-fast     { background: var(--s-fast); }
+.s-other    { background: var(--s-other); }
 .track i, .tglon { background: var(--accent); box-shadow: none; }
 .track i.over { background: var(--bad); }
 .track i.mut { background: var(--bar); }
