@@ -283,6 +283,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   // !readOnly), so an undeclared credential would keep serving the previous
   // account's usage after a swap — the exact #920 defect.
   'vercel-gateway': ['AI_GATEWAY_API_KEY', 'VERCEL_OIDC_TOKEN'],
+  bahulam: ['BAHULAM_PROJECTS_DIR'],
 }
 
 // Names of providers whose cache entries are never evicted when source files
@@ -401,6 +402,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v5',
+  // reported-cost-v1: Bahulam records per-turn cost; cached entries before this
+  // entry carry costUSD: undefined and get re-priced from tokens on warm reads.
+  bahulam: 'reported-cost-v1',
 }
 
 function getLegacyCachePath(): string {
