@@ -27,6 +27,7 @@ import { quickdesk } from './quickdesk.js'
 import { rooCode } from './roo-code.js'
 import { zerostack } from './zerostack.js'
 import { grok } from './grok.js'
+import { bahulam } from './bahulam.js'
 import type { Provider, SessionSource } from './types.js'
 
 let antigravityProvider: Provider | null = null
@@ -193,7 +194,7 @@ async function loadZed(): Promise<Provider | null> {
   }
 }
 
-const coreProviders: Provider[] = [claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok]
+const coreProviders: Provider[] = [bahulam, claude, cline, clineCli, codewhale, codebuff, codex, copilot, devin, droid, dsh, gemini, hermes, ibmBob, kiloCode, kiro, kimi, kimicode, lingtaiTui, mistralVibe, mux, openclaw, openclaude, openDesign, pi, omp, qwen, quickdesk, rooCode, zerostack, grok]
 
 // Lazily loaded providers, listed by name so --provider validation works even
 // when an optional module fails to load. Must stay in sync with getAllProviders.
