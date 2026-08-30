@@ -8,6 +8,8 @@ Add Bahulam Code provider
 
 This pull request adds Bahulam Code as a first-class CodeBurn provider and includes fixture coverage for discovery, parsing, cost semantics, model attribution, tool capture, project attribution, and provider cache invalidation.
 
+Disclosure: I maintain Bahulam Code. This PR adds CodeBurn support for a tool I publish.
+
 ### Core behavior
 
 1. **Cost semantics**: Distinguishes "cost reported as $0" (metered free call) from "cost absent" (no cost field). Uses `isReportedCost` presence check matching the cline-cli pattern. Reported zero-cost calls preserve `costUSD: 0` with `costIsEstimated: false`. Absent cost triggers `calculateCost` with `costIsEstimated: true`. Negative costs (invalid) are treated as absent.
@@ -16,7 +18,7 @@ This pull request adds Bahulam Code as a first-class CodeBurn provider and inclu
 
 3. **Tool events**: `tool_call`/`tool_request` events are accumulated between `complete` events. Tool names and bash commands (via `extractBashCommands`) are attached to the subsequent `complete` yield.
 
-4. **CWD / project attribution**: `workingDirectory` and `projectPath` are set from the JSONL entry's `cwd` field. Source project remains the directory slug for backward compatibility.
+4. **CWD / project attribution**: `workingDirectory` and `projectPath` are set from the first `cwd` seen in the session. Source project remains the directory slug for backward compatibility.
 
 ### New files
 
@@ -25,7 +27,7 @@ This pull request adds Bahulam Code as a first-class CodeBurn provider and inclu
 ### Documentation
 
 6. **`docs/providers/README.md`**: Bahulam row added to eager provider index (alphabetical, before Claude).
-7. **`README.md`**: Bahulam Code link added to supported-tools section (text-only, no asset file).
+7. **`README.md`**: Bahulam Code link added to supported-tools section using `assets/providers/bahulam.png`.
 8. **`SUBMISSION.md`**: Updated with current PR context.
 
 ## User-visible behavior
@@ -48,7 +50,7 @@ This pull request adds Bahulam Code as a first-class CodeBurn provider and inclu
 
 - Bahulam remains an eager provider because it has no heavyweight optional dependencies.
 - The provider keeps the legacy `kepler_event` top-level event type for backward-compatible session parsing.
-- README uses a text link for Bahulam Code instead of adding a provider logo asset.
+- README includes the Bahulam Code provider logo asset.
 
 ## Reviewer focus
 

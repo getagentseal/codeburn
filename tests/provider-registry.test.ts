@@ -14,7 +14,7 @@ function fakeProvider(name: string, discover: Provider['discoverSessions']): Pro
 
 describe('provider registry', () => {
   it('has core providers registered synchronously', () => {
-    expect(providers.map(p => p.name)).toEqual(['claude', 'cline', 'cline-cli', 'codewhale', 'codebuff', 'codex', 'copilot', 'devin', 'droid', 'dsh', 'gemini', 'hermes', 'ibm-bob', 'kilo-code', 'kiro', 'kimi', 'kimicode', 'lingtai-tui', 'mistral-vibe', 'mux', 'openclaw', 'openclaude', 'open-design', 'pi', 'omp', 'qwen', 'quickdesk', 'roo-code', 'zerostack', 'grok'])
+    expect(providers.map(p => p.name)).toEqual(['bahulam', 'claude', 'cline', 'cline-cli', 'codewhale', 'codebuff', 'codex', 'copilot', 'devin', 'droid', 'dsh', 'gemini', 'hermes', 'ibm-bob', 'kilo-code', 'kiro', 'kimi', 'kimicode', 'lingtai-tui', 'mistral-vibe', 'mux', 'openclaw', 'openclaude', 'open-design', 'pi', 'omp', 'qwen', 'quickdesk', 'roo-code', 'zerostack', 'grok'])
   })
 
   it('codebuff tool display names normalize codebuff-native names to canonical set', () => {

@@ -316,7 +316,7 @@ describe('bahulam provider - cost semantics', () => {
   it('estimates cost when no cost field is reported', async () => {
     await writeSession(tmpDir, 'my-project', 'sess-a', [
       userMessage('no cost', T1),
-      completeEvent({ total_input_tokens: 1000, total_output_tokens: 100 }, T2),
+      completeEvent({ total_input_tokens: 1000, total_output_tokens: 100, model: 'claude-sonnet-4-6' }, T2),
     ])
 
     const [call] = await collect(tmpDir)
@@ -328,7 +328,7 @@ describe('bahulam provider - cost semantics', () => {
   it('treats a negative cost as absent and estimates instead', async () => {
     await writeSession(tmpDir, 'my-project', 'sess-a', [
       userMessage('bad cost', T1),
-      completeEvent({ total_input_tokens: 1000, total_output_tokens: 100, cost: -5 }, T2),
+      completeEvent({ total_input_tokens: 1000, total_output_tokens: 100, cost: -5, model: 'claude-sonnet-4-6' }, T2),
     ])
 
     const [call] = await collect(tmpDir)
@@ -417,13 +417,27 @@ describe('bahulam provider - multi-model', () => {
   it('falls back to aggregate when usage.models is absent', async () => {
     await writeSession(tmpDir, 'my-project', 'sess-a', [
       userMessage('no model breakdown', T1),
+      completeEvent({ total_input_tokens: 100, total_output_tokens: 10, model: 'claude-sonnet-4-6' }, T2),
+    ])
+
+    const calls = await collect(tmpDir)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.model).toBe('anthropic/claude-sonnet-4-6')
+  })
+
+  it('leaves missing model attribution unknown instead of fabricating a fallback', async () => {
+    await writeSession(tmpDir, 'my-project', 'sess-a', [
+      userMessage('missing model', T1),
       completeEvent({ total_input_tokens: 100, total_output_tokens: 10 }, T2),
     ])
 
     const calls = await collect(tmpDir)
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.model).toBeTruthy()
+    expect(calls[0]?.model).toBe('')
+    expect(calls[0]?.costUSD).toBe(0)
+    expect(calls[0]?.costIsEstimated).toBe(true)
   })
 })
 

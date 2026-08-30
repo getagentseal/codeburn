@@ -285,7 +285,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           if (!model) {
             model = qualifiedModel(String(data['model'] ?? u['model'] ?? resolvedModel ?? ''))
           }
-          if (!model) model = resolvedModel || 'gpt-5'
+          if (!model) model = resolvedModel
 
           const responseId = String(u['response_id'] ?? u['id'] ?? '')
           const turnKey = responseId || `${entry.timestamp || 'line'}:${lineIdx}`
