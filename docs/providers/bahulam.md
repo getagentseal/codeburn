@@ -3,12 +3,12 @@
 Bahulam Code — open-source coding agent.
 
 - **Source:** `src/providers/bahulam.ts`
-- **Loading:** eager (`src/providers/index.ts:1`)
+- **Loading:** eager (`src/providers/index.ts` `coreProviders`)
 - **Test:** `tests/providers/bahulam.test.ts`
 
 ## Where it reads from
 
-`~/.bahulam/projects/` (`bahulam.ts:21-25`). Honors `BAHULAM_PROJECTS_DIR` env override, matching opentab's convention.
+`~/.bahulam/projects/`. Honors `BAHULAM_PROJECTS_DIR` env override, matching opentab's convention.
 
 ## Storage format
 
@@ -26,11 +26,11 @@ None at the provider level; the normal parser/cache layers apply.
 
 ## Deduplication
 
-Per `bahulam:<sessionId>:<timestamp>:<lineIndex>` (`bahulam.ts:231`).
+Per source path plus a complete-event key: `bahulam:<sourcePath>:<responseId>` when the usage has a response id, otherwise `bahulam:<sourcePath>:<timestamp>:<lineIndex>`. Multi-model rows append `:model:<index>:<model>`, while sharing the same turn id.
 
 ## Cost
 
-Bahulam records per-turn cost in every `complete` event. The reported cost is passed through; computed cost (via LiteLLM pricing) is flagged `costIsEstimated: true`.
+Bahulam records per-turn cost on `complete` events. Reported costs, including `$0`, are passed through; absent or invalid costs fall back to LiteLLM pricing and are flagged `costIsEstimated: true`.
 
 ## Quirks
 

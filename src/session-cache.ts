@@ -402,9 +402,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v5',
-  // reported-cost-v1: Bahulam records per-turn cost; cached entries before this
-  // entry carry costUSD: undefined and get re-priced from tokens on warm reads.
-  bahulam: 'reported-cost-v1',
+  // reported-cost-v2-tools-turns: Bahulam records per-turn cost; this parser
+  // also captures tool events, cwd attribution, and groups multi-model rows
+  // under one turn id, so older cached entries must re-parse.
+  bahulam: 'reported-cost-v2-tools-turns',
 }
 
 function getLegacyCachePath(): string {

@@ -10,6 +10,7 @@ For the architectural picture, see `../architecture.md`.
 
 | Provider | Storage | Source | Test |
 |---|---|---|---|
+| [Bahulam](bahulam.md) | JSONL | `src/providers/bahulam.ts` | `tests/providers/bahulam.test.ts` |
 | [Claude](claude.md) | JSONL (no parser) | `src/providers/claude.ts` | none (covered indirectly) |
 | [Cline](cline.md) | JSON | `src/providers/cline.ts` | `tests/providers/cline.test.ts` |
 | [Cline CLI](cline-cli.md) | JSON | `src/providers/cline-cli.ts` | `tests/providers/cline-cli.test.ts` |

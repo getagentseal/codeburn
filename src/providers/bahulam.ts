@@ -33,6 +33,17 @@ function safeNum(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+function isReportedCost(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function reportedCost(...values: unknown[]): { cost: number; reported: boolean } {
+  for (const value of values) {
+    if (isReportedCost(value)) return { cost: value, reported: true }
+  }
+  return { cost: 0, reported: false }
+}
+
 function firstValue(...values: unknown[]): number {
   for (const v of values) {
     if (v !== null && v !== undefined && v !== '') return safeNum(v)
@@ -49,6 +60,48 @@ function qualifiedModel(modelName: string): string {
   if (/^gemini/i.test(modelName)) return `google/${modelName}`
   if (/^deepseek/i.test(modelName)) return `deepseek/${modelName}`
   return modelName
+}
+
+const toolNameMap: Record<string, string> = {
+  shell: 'Bash',
+  read_file: 'Read',
+  read_files: 'Read',
+  list_files: 'Read',
+  get_project_overview: 'Read',
+  analyze_code: 'Read',
+  search_code: 'Grep',
+  search_files: 'Glob',
+  edit_file: 'Edit',
+  write_file: 'Write',
+  write_project: 'Write',
+  run_tests: 'Bash',
+  lint_check: 'Bash',
+  validate_file: 'Bash',
+  validate_structure: 'Bash',
+  grep: 'Grep',
+  glob: 'Glob',
+  web_fetch: 'WebFetch',
+  web_search: 'WebSearch',
+  plan: 'EnterPlanMode',
+  explore: 'Read',
+  debug: 'Read',
+  verify: 'Bash',
+  refactor: 'Edit',
+  delegate: 'Agent',
+}
+
+function mapToolName(rawTool: string): string {
+  return toolNameMap[rawTool] ?? rawTool
+}
+
+function extractUsefulBashCommands(command: string): string[] {
+  const normalized = command
+    .replace(/\\\r?\n/g, ' ')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith('#'))
+    .join('\n')
+  return extractBashCommands(normalized).filter(cmd => cmd !== '#' && cmd !== '\\')
 }
 
 // ── session file discovery ─────────────────────────────────────────────────
@@ -115,6 +168,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let pendingUserTs = ''
       let resolvedModel = ''
       let sessionTs = ''
+      let sessionCwd = ''
+      let pendingTools: string[] = []
+      let pendingBashCommands: string[] = []
 
       for (const [lineIdx, line] of lines.entries()) {
         let entry: BahulamEntry
@@ -127,6 +183,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         const ts = entry.timestamp ?? ''
         if (ts && !sessionTs) sessionTs = ts
+        if (entry.cwd && !sessionCwd) sessionCwd = entry.cwd
 
         // ── user messages ──────────────────────────────────────────────────
         if (entry.type === 'user') {
@@ -174,6 +231,23 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           continue
         }
 
+        // tool_call / tool_request — accumulate tools and bash commands
+        if (eventType === 'tool_call' || eventType === 'tool_request') {
+          const toolName = String(data['tool_name'] ?? data['tool'] ?? data['name'] ?? '')
+          const mappedTool = toolName ? mapToolName(toolName) : ''
+          if (mappedTool) pendingTools.push(mappedTool)
+          const args = data['arguments'] ?? data['args'] ?? data['input'] ?? {}
+          const commandArg = typeof args === 'object' && args !== null
+            ? (args as Record<string, unknown>)['command']
+            : undefined
+          if (mappedTool === 'Bash' && typeof commandArg === 'string') {
+            for (const cmd of extractUsefulBashCommands(commandArg)) {
+              pendingBashCommands.push(cmd)
+            }
+          }
+          continue
+        }
+
         // complete — carries per-turn token usage and cost
         if (eventType === 'complete') {
           const usage = data['usage']
@@ -194,7 +268,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
             ? safeNum((cc as Record<string, unknown>)['ephemeral_1h_input_tokens'])
             : 0
 
-          const costUSD = firstValue(
+          const costField = reportedCost(
             u['total_cost'], u['total_cost_usd'],
             u['cost'], u['cost_usd'],
           )
@@ -214,46 +288,87 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           if (!model) model = resolvedModel || 'gpt-5'
 
           const responseId = String(u['response_id'] ?? u['id'] ?? '')
-          const dedupKey = `${PROVIDER_NAME}:${source.path}:${responseId || entry.timestamp || String(lineIdx)}`
+          const turnKey = responseId || `${entry.timestamp || 'line'}:${lineIdx}`
+          const cwd = sessionCwd || undefined
 
-          if (seenKeys.has(dedupKey)) continue
-          seenKeys.add(dedupKey)
+          // ── yield block using captured locals ──────────────────────────
+          const emitCall = (overrides?: Partial<ParsedProviderCall>): ParsedProviderCall | null => {
+            const timestamp = ts || pendingUserTs || sessionTs
+            if (!timestamp) return null
+            const dedupKey = overrides?.deduplicationKey
+              ?? `${PROVIDER_NAME}:${source.path}:${turnKey}`
+            if (seenKeys.has(dedupKey)) return null
+            seenKeys.add(dedupKey)
+            return {
+              provider: PROVIDER_NAME,
+              model: overrides?.model ?? model,
+              inputTokens: overrides?.inputTokens ?? inp,
+              outputTokens: overrides?.outputTokens ?? out,
+              cacheCreationInputTokens: overrides?.cacheCreationInputTokens ?? cw,
+              cacheReadInputTokens: overrides?.cacheReadInputTokens ?? cr,
+              cachedInputTokens: overrides?.cacheReadInputTokens ?? cr,
+              reasoningTokens: overrides?.reasoningTokens ?? reasoning,
+              webSearchRequests: 0,
+              costUSD: overrides?.costUSD ?? (costField.reported ? costField.cost : calculateCost(model, inp, out, cw, cr, 0, 'standard', cw1h)),
+              costIsEstimated: overrides?.costIsEstimated ?? !costField.reported,
+              tools: [...pendingTools],
+              bashCommands: [...pendingBashCommands],
+              timestamp,
+              speed: 'standard',
+              deduplicationKey: dedupKey,
+              userMessage: pendingUserMessage,
+              sessionId,
+              turnId: `${sessionId}:${turnKey}`,
+              project: source.project,
+              projectPath: cwd,
+              workingDirectory: cwd,
+              ...overrides,
+            }
+          }
 
-          const timestamp = ts || pendingUserTs || sessionTs
-          if (!timestamp) continue
+          // ── Multi-model: emit one call per model entry ─────────────────
+          if (Array.isArray(modelsUsage) && modelsUsage.length > 1) {
+            for (const [modelIdx, mEntry] of modelsUsage.entries()) {
+              if (!mEntry || typeof mEntry !== 'object') continue
+              const me = mEntry as Record<string, unknown>
+              const mModel = qualifiedModel(String(me['model'] ?? ''))
+              if (!mModel) continue
 
-          // Cost: Bahulam records true cost; trust it when present
-          const finalCost = costUSD !== 0
-            ? costUSD
-            : calculateCost(model, inp, out, cw, cr, 0, 'standard', cw1h)
+              const mTotalIn = firstValue(me['total_input_tokens'], me['input_tokens'], me['prompt_tokens'])
+              const mCr = firstValue(me['cache_read_input_tokens'], me['cache_read_tokens'], me['cached_input_tokens'])
+              const mCw = firstValue(me['cache_creation_input_tokens'], me['cache_creation_tokens'], me['cache_write_tokens'])
+              const mInp = Math.max(0, mTotalIn - mCr - mCw)
+              const mOut = firstValue(me['total_output_tokens'], me['output_tokens'], me['completion_tokens'])
+              const mReasoning = firstValue(me['reasoning_tokens'], me['thinking_tokens'])
+              const mCostField = reportedCost(me['cost'], me['cost_usd'], me['total_cost'], me['total_cost_usd'])
+              const mCost = mCostField.reported
+                ? mCostField.cost
+                : calculateCost(mModel, mInp, mOut, mCw, mCr, 0, 'standard', 0)
 
-          yield {
-            provider: PROVIDER_NAME,
-            model,
-            inputTokens: inp,
-            outputTokens: out,
-            cacheCreationInputTokens: cw,
-            cacheReadInputTokens: cr,
-            cachedInputTokens: cr,
-            reasoningTokens: reasoning,
-            webSearchRequests: 0,
-            costUSD: finalCost,
-            tools: [],
-            bashCommands: [],
-            timestamp,
-            speed: 'standard',
-            deduplicationKey: dedupKey,
-            userMessage: pendingUserMessage,
-            sessionId,
+              const call = emitCall({
+                model: mModel,
+                inputTokens: mInp,
+                outputTokens: mOut,
+                cacheCreationInputTokens: mCw,
+                cacheReadInputTokens: mCr,
+                reasoningTokens: mReasoning,
+                costUSD: mCost,
+                costIsEstimated: !mCostField.reported,
+                deduplicationKey: `${PROVIDER_NAME}:${source.path}:${turnKey}:model:${modelIdx}:${mModel}`,
+              })
+              if (call) yield call
+            }
+          } else {
+            // Single model or aggregate: emit one call
+            const call = emitCall()
+            if (call) yield call
           }
 
           pendingUserMessage = ''
+          pendingTools = []
+          pendingBashCommands = []
           continue
         }
-
-        // tool_call / tool_request — ignored (tools consumed in UI)
-        // We don't accumulate them for ParsedProviderCall; the Pi provider
-        // also skips tool-only events.
       }
     },
   }

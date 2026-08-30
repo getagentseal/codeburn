@@ -69,11 +69,11 @@
 
 <p align="center"><em>One source of truth: every surface reads the session files already on your disk.</em></p>
 
-**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 41 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
+**CodeBurn is a free, open-source, local-first tool that tracks AI coding token usage and cost across 42 tools and agents (Claude Code, Cursor, Codex, Gemini, Grok and more), broken down by model, project, and task.**
 
 You pay for Claude, Codex, Cursor, and a stack of other AI tools. The bill tells you the total. It never tells you that half of it went to conversation instead of code, or that an expensive model burned your budget on work a cheaper one would have one-shot.
 
-CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **41 AI tools**.
+CodeBurn does. It reads the session files your tools already write to disk and breaks down every token and dollar by **task, model, tool, and project**, across **42 AI tools**.
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily.
 
@@ -402,6 +402,7 @@ Everything is read from local disk, same as the CLI. Project names are pseudonym
 CodeBurn auto-detects which AI tools you use. Each logo links to its provider doc.
 
 <p align="center">
+  <a href="docs/providers/bahulam.md" title="Bahulam Code"><img src="assets/providers/bahulam.png" alt="Bahulam Code" height="34" /></a>
   <a href="docs/providers/claude.md" title="Claude Code &amp; Claude Desktop"><img src="assets/providers/claude.jpg" alt="Claude Code &amp; Claude Desktop" height="34" /></a>
   <a href="docs/providers/cline.md" title="Cline"><img src="assets/providers/cline.svg" alt="Cline" height="34" /></a>
   <a href="docs/providers/codewhale.md" title="CodeWhale"><img src="assets/providers/codewhale.svg" alt="CodeWhale" height="34" /></a>
@@ -716,6 +717,7 @@ These are starting points, not verdicts. A 60% cache hit on a single experimenta
 
 | Provider | Data location | Notes |
 |----------|---------------|-------|
+| **Bahulam Code** | `~/.bahulam/projects/<project-slug>/<session-id>.jsonl` (honors `BAHULAM_PROJECTS_DIR`) | Reads Bahulam/legacy Kepler JSONL events. `complete` events provide per-turn token usage and reported cost; multi-model usage emits one call per model; `tool_call` / `tool_request` events attach tool and shell-command usage to the following turn. |
 | **Claude Code** | `~/.claude/projects/<sanitized-path>/<session-id>.jsonl` | Each assistant entry carries model name, token usage (input, output, cache read, cache write), `tool_use` blocks, and timestamps. |
 | **Claude (multiple config dirs)** | Set via `CLAUDE_CONFIG_DIRS` (e.g. `~/.claude-work:~/.claude-personal`) | Scans every listed directory and merges sessions into one row per project so totals reflect all your Claude usage. Use `:` on POSIX, `;` on Windows; overrides `CLAUDE_CONFIG_DIR`. Missing or unreadable directories are skipped. |
 | **Codex (OpenAI)** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`, `~/.codex/archived_sessions/rollout-*.jsonl` | Reads `token_count` events (per-call and cumulative usage) and `function_call` entries for tool tracking; attributes cost by project working directory. `codeburn report --provider codex` views Codex alone. |
