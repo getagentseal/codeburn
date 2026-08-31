@@ -123,6 +123,24 @@ struct ZaiQuotaTests {
         }
     }
 
+    @Test("body-level rejections map to real errors, not parse failures")
+    func bodyLevelRejection() throws {
+        for (body, expected) in [
+            (#"{"code":401,"msg":"token expired or incorrect","success":false}"#,
+             ZaiSubscriptionService.FetchError.authenticationRejected),
+            (#"{"code":403,"msg":"forbidden","success":false}"#, .authenticationRejected),
+            (#"{"code":429,"msg":"slow down","success":false}"#, .rateLimited),
+            (#"{"code":500,"msg":"boom","success":false}"#, .providerUnavailable),
+        ] {
+            do {
+                _ = try ZaiSubscriptionService.decode(Data(body.utf8))
+                Issue.record("Expected body-level rejection to fail")
+            } catch let error as ZaiSubscriptionService.FetchError {
+                #expect(error == expected)
+            }
+        }
+    }
+
     @Test("malformed or empty quota fails")
     func malformedQuota() throws {
         for body in [

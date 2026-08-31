@@ -110,6 +110,17 @@ enum ZaiSubscriptionService {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw FetchError.parseFailure
         }
+        // Z.ai rejects bad auth inside an HTTP 200 body
+        // ({"code":401,"msg":"token expired or incorrect","success":false}),
+        // so map the body code before the shape check or a bad key reads as
+        // an unrecognized response instead of a rejected one.
+        if let success = root["success"] as? Bool, !success {
+            switch jsonNumber(root["code"]).map(Int.init) {
+            case 401, 403: throw FetchError.authenticationRejected
+            case 429: throw FetchError.rateLimited
+            default: throw FetchError.providerUnavailable
+            }
+        }
         let payload = (root["data"] as? [String: Any]) ?? root
         guard let limits = payload["limits"] as? [Any] else { throw FetchError.parseFailure }
 
