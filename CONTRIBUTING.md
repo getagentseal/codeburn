@@ -24,8 +24,8 @@ There is no separate build step required to run the dev CLI. `npm run dev` runs 
 
 | Command | What it does |
 |---|---|
-| `npm test` | Runs the vitest suite under `tests/` (189 of the 192 files, 2,494 tests). |
-| `npm run test:locks` | Runs the three parallelism-sensitive `cache-refresh-lock` suites serially. |
+| `npm test` | Runs the vitest suite under `tests/` (261 of the 265 files, 3,495 tests). |
+| `npm run test:locks` | Runs the four parallelism-sensitive `cache-refresh-lock` suites serially. |
 | `npm run test:watch` | Same scope as `npm test`, in watch mode. |
 | `npm run dev -- status` | Runs the CLI in dev mode against your real data. |
 | `npm run build` | Bundles the litellm pricing snapshot, then runs `tsup` to produce `dist/cli.js`. |

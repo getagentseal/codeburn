@@ -4,7 +4,7 @@ Google Gemini CLI.
 
 - **Source:** `src/providers/gemini.ts`
 - **Loading:** eager (`src/providers/index.ts:5`)
-- **Test:** none. Adding a fixture-based test is a known good first issue.
+- **Test:** `tests/providers/gemini.test.ts`
 
 ## Where it reads from
 
@@ -30,6 +30,6 @@ Per `sessionId` (`gemini.ts:72`). Gemini sessions are aggregated to a single cal
 
 ## When fixing a bug here
 
-1. The lack of a test file is a hazard. **Add a fixture and a test before changing parsing logic** so future regressions are caught.
+1. Add a fixture and a focused case to `tests/providers/gemini.test.ts` before changing parsing logic.
 2. If the bug involves a new Gemini version's schema, sniff with the same first-character heuristic; do not call `JSON.parse` on the whole file.
 3. If the bug is "Gemini sessions report less than expected", check whether the cached-token subtraction is over-correcting.

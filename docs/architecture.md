@@ -193,7 +193,7 @@ type Provider = {
 
 `src/providers/index.ts` registers providers across two tiers:
 
-- **Eager**: `claude`, `cline`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `open-design`, `pi`, `omp`, `qwen`, `roo-code`, `zerostack`, `grok`. Imported at module load.
+- **Eager**: `claude`, `cline`, `cline-cli`, `codewhale`, `codebuff`, `codex`, `copilot`, `devin`, `droid`, `dsh`, `gemini`, `hermes`, `ibm-bob`, `kilo-code`, `kiro`, `kimi`, `kimicode`, `lingtai-tui`, `mistral-vibe`, `mux`, `openclaw`, `openclaude`, `open-design`, `pi`, `omp`, `qwen`, `quickdesk`, `roo-code`, `zerostack`, `grok`. Imported at module load.
 - **Lazy**: `antigravity`, `forge`, `goose`, `cursor`, `opencode`, `cursor-agent`, `crush`, `warp`, `vercel-gateway`, `zcode`, `zed`. Imported via dynamic `import()` so the heavy dependencies (SQLite, protobuf, network clients) do not touch users who do not have those tools installed.
 
 Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is silent and excludes that provider from the run.
@@ -254,18 +254,18 @@ The `prepublishOnly` hook in `package.json` runs `npm run build` so `npm publish
 
 ## Tests
 
-`npm test` runs vitest, scoped to `tests/`. 192 test files live there:
+`npm test` runs vitest, scoped to `tests/`. 265 test files live there:
 
-- `tests/` root (141 files) covers CLI, parser, optimize, cache, format, models, plans.
+- `tests/` root (208 files) covers CLI, parser, optimize, cache, format, models, plans.
 - `tests/security/` (1 file) covers prototype-pollution guards.
-- `tests/providers/` (44 files) covers per-provider parsing.
-- `tests/sharing/` (6 files) covers the share/export surface.
+- `tests/providers/` (49 files) covers per-provider parsing.
+- `tests/sharing/` (7 files) covers the share/export surface.
 - `tests/setup/` holds the env-isolation setup file, not specs.
 - `tests/fixtures/` holds redacted real-world session data.
 
 The scope is deliberate: the Electron app under `app/` has its own vitest config and its
 own `jsdom` dependency, so vitest's default glob must not reach it from a root install.
-The three `cache-refresh-lock` suites are excluded from `npm test` and run serially via
+The four `cache-refresh-lock` suites are excluded from `npm test` and run serially via
 `npm run test:locks`, because they exercise a cross-process file lock and fail under full
 worker pressure.
 
