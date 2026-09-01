@@ -7,6 +7,7 @@ import { parseAllSessions, clearSessionCache } from '../src/parser.js'
 import { readCacheOnDisk } from './fixtures/session-cache-io.js'
 
 let tmpDir: string
+let savedCodexHome: string | undefined
 
 beforeEach(async () => {
   clearSessionCache()
@@ -14,10 +15,18 @@ beforeEach(async () => {
   process.env['CLAUDE_CONFIG_DIR'] = tmpDir
   process.env['CODEBURN_CACHE_DIR'] = join(tmpDir, 'cache')
   process.env['CODEBURN_DESKTOP_SESSIONS_DIR'] = join(tmpDir, 'desktop-sessions')
+  // Hermetic: Codex discovery defaults to CODEX_HOME / ~/.codex, so without this
+  // the scoped 'codex' run below reads the developer's real local corpus. Point it
+  // at an empty temp root and restore in teardown.
+  savedCodexHome = process.env['CODEX_HOME']
+  process.env['CODEX_HOME'] = join(tmpDir, 'codex-home')
+  await mkdir(join(tmpDir, 'codex-home', 'sessions'), { recursive: true })
 })
 
 afterEach(async () => {
   clearSessionCache()
+  if (savedCodexHome === undefined) delete process.env['CODEX_HOME']
+  else process.env['CODEX_HOME'] = savedCodexHome
   await rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -37,29 +46,38 @@ async function writeClaudeSession(): Promise<void> {
 }
 
 describe('provider-scoped run and the whole-cache completeness marker', () => {
-  // `it.fails` on purpose: this pins CURRENT behaviour, which is wrong, without
-  // turning the suite red while the defect is still open. When the stamp learns
-  // about scope, this test starts passing and vitest will fail it here — that is
-  // the signal to drop `.fails` and keep it as a normal regression test.
+  // `it.fails` pins current (wrong) behaviour without turning the suite red while the
+  // defect is open. When the stamp learns about scope this starts passing, vitest reports
+  // "Expect test to fail", and that is the signal to drop `.fails` and land the guard.
   it.fails('does not stamp the cache complete when providers were left out of scope', async () => {
     await writeClaudeSession()
 
-    // A scoped run: discovery is filtered to `codex`, and the loop over cached
-    // providers skips every name that is not the filter. Claude's session on disk
-    // is therefore never read by this run.
+    // Scoped to 'codex': discovery is filtered and the cached-provider loop skips every
+    // other name, so the claude session on disk is never read by this run.
     await parseAllSessions(undefined, 'codex')
 
     const raw = await readCacheOnDisk()
-    const claudeFiles = Object.keys(raw?.providers?.claude?.files ?? {})
 
-    // Premise of the test: claude really was left unscanned. If this fails the
-    // scoped run read it anyway and the rest proves nothing.
-    expect(claudeFiles.length).toBe(0)
+    // Premise: claude really was left unscanned. If this fails the scoped run read it
+    // anyway and the rest proves nothing.
+    expect(Object.keys(raw?.providers?.claude?.files ?? {}).length).toBe(0)
 
-    // The finding: `complete` is a whole-cache marker, and the stamp at the end of
-    // runParseInner is guarded on readOnly / wasComplete / deferredForFirstPaint —
-    // not on whether the run was scoped. A cache stamped complete here claims a
-    // corpus this run never looked at.
+    // The finding: the stamp at the end of runParseInner is guarded on
+    // readOnly / wasComplete / deferredForFirstPaint — not on whether the run was scoped.
     expect(raw?.complete ?? false).toBe(false)
+  })
+
+  it('a subsequent full run repairs the cache — the mislabel is transient, not persistent', async () => {
+    // Honouring the maintainer review: an ordinary all-provider refresh rediscovers the
+    // omitted provider, so the wrong flag does not strand it forever. Pinning the bound
+    // keeps the claim accurate.
+    await writeClaudeSession()
+
+    await parseAllSessions(undefined, 'codex')      // scoped: claude unscanned
+    clearSessionCache()
+    await parseAllSessions()                         // full refresh: claude rediscovered
+
+    const raw = await readCacheOnDisk()
+    expect(Object.keys(raw?.providers?.claude?.files ?? {}).length).toBeGreaterThan(0)
   })
 })
