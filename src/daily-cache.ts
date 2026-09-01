@@ -1034,6 +1034,15 @@ function isPartialSurvival(date: string, baseline: ProviderDaySlice, fresh: Prov
   return date < settleCutoff && fresh.calls < baseline.calls
 }
 
+/// The read path's rule: keep whichever derivation explains MORE calls, on
+/// every date, with ties going to the baseline. Unlike the write path this is
+/// not deciding what to freeze, so it has no reason to prefer a thinner slice
+/// on a recent day — but it is also not the place a re-pricing lands, so an
+/// equal-call slice leaves the durable value alone.
+function baselineExplainsMore(baseline: ProviderDaySlice, fresh: ProviderDaySlice): boolean {
+  return fresh.calls <= baseline.calls
+}
+
 /// Index `freshUnderOldTz` (the same parse re-aggregated under the cache's OLD
 /// tzKey) by date then provider, so the merge can subtract exactly what the
 /// fresh parse still explains under the old bucketing.
@@ -1088,7 +1097,14 @@ export function mergeDayEntries(
   /// baseline wins on settled days (`isPartialSurvival`). The adoption union
   /// leaves it off - both sides are cache generations there and the newer
   /// schema deliberately wins per (date, provider).
-  guardPartialSurvival = false,
+  ///
+  /// `'prefer-richer'` is the read-path union's rule (`unionDaysForPeriod`):
+  /// on EVERY date, keep the slice explaining more calls, ties to the baseline.
+  /// That path is choosing what to REPORT, not what to freeze, so a thinner
+  /// derivation is never the better answer there — while the write path still
+  /// lets a recent day shrink, on the grounds that a still-settling day is
+  /// defined by its fresh parse.
+  guardPartialSurvival: boolean | 'prefer-richer' = false,
   /// Providers whose baseline slices were recorded under an accounting where a
   /// call meant something else, so a shrink is not evidence of source loss for
   /// this one re-derivation (see PENDING_REDERIVE_PROVIDERS). Only consulted
@@ -1141,7 +1157,10 @@ export function mergeDayEntries(
         }
       }
       if (existingSlice && hasSliceData(existingSlice) && !residual) {
-        if (!guardPartialSurvival || pendingRederive?.has(provider) || !isPartialSurvival(day.date, slice, existingSlice, settleCutoff)) continue
+        const keepBaseline = guardPartialSurvival === 'prefer-richer'
+          ? baselineExplainsMore(slice, existingSlice)
+          : isPartialSurvival(day.date, slice, existingSlice, settleCutoff)
+        if (!guardPartialSurvival || pendingRederive?.has(provider) || !keepBaseline) continue
         // The baseline holds more evidence than the sources can still produce:
         // swap the fresh slice back out for it (inverse of addSliceIntoDay, so
         // the day's totals and nested maps stay reconciled with its slices).
