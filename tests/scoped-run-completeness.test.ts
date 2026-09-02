@@ -46,10 +46,10 @@ async function writeClaudeSession(): Promise<void> {
 }
 
 describe('provider-scoped run and the whole-cache completeness marker', () => {
-  // `it.fails` pins current (wrong) behaviour without turning the suite red while the
-  // defect is open. When the stamp learns about scope this starts passing, vitest reports
-  // "Expect test to fail", and that is the signal to drop `.fails` and land the guard.
-  it.fails('does not stamp the cache complete when providers were left out of scope', async () => {
+  // Regression for #912: the stamp now learns about scope. A run scoped to one provider
+  // must not mark the whole cache complete while a provider it skipped still has sessions
+  // on disk it never scanned.
+  it('does not stamp the cache complete when providers were left out of scope', async () => {
     await writeClaudeSession()
 
     // Scoped to 'codex': discovery is filtered and the cached-provider loop skips every
@@ -62,8 +62,8 @@ describe('provider-scoped run and the whole-cache completeness marker', () => {
     // anyway and the rest proves nothing.
     expect(Object.keys(raw?.providers?.claude?.files ?? {}).length).toBe(0)
 
-    // The finding: the stamp at the end of runParseInner is guarded on
-    // readOnly / wasComplete / deferredForFirstPaint — not on whether the run was scoped.
+    // The guard: the stamp at the end of runParseInner refuses to mark the whole cache
+    // complete when a skipped provider (claude here) still has discoverable sessions.
     expect(raw?.complete ?? false).toBe(false)
   })
 

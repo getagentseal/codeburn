@@ -5491,7 +5491,24 @@ async function runParseInner(
   // it keeps the normal stamp.
   const deferredForFirstPaint = firstPaintDeferredThisRun > 0
   const wasComplete = isCacheComplete(diskCache)
-  if (!readOnly && !wasComplete && !deferredForFirstPaint) diskCache.complete = true
+  // A provider-scoped run walks only its own provider's sessions, so it never
+  // saw whatever the providers it skipped hold on disk. Stamping the WHOLE
+  // cache complete off that partial view writes a wrong "done" to disk (#912):
+  // per the marker's own contract above, a complete cache stops being re-read
+  // as cold, so the unscanned providers are not revisited and the gap stops
+  // looking like a gap. The guard is conditioned on real on-disk data, not on
+  // scoping alone: when every provider the run skipped has NO discoverable
+  // sessions, the scoped run really did see the whole corpus (a claude-only
+  // machine, and exactly what the warm-refresh snapshot tests rely on), so the
+  // stamp is correct and stands. Discovery here is a bounded directory walk,
+  // not a parse — the scoping win (skipping the other providers' PARSE) holds.
+  const scopedRun = !!providerFilter && providerFilter !== 'all'
+  let skippedProviderHasSessions = false
+  if (scopedRun && !readOnly && !wasComplete && !deferredForFirstPaint) {
+    const corpusSources = await discoverAllSessions()
+    skippedProviderHasSessions = corpusSources.some(s => s.provider !== providerFilter)
+  }
+  if (!readOnly && !wasComplete && !deferredForFirstPaint && !skippedProviderHasSessions) diskCache.complete = true
   if (!readOnly && (isCacheDirty(diskCache) || (!wasComplete && !deferredForFirstPaint))) {
     try {
       const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
