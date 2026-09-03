@@ -286,11 +286,16 @@ describe('Spend', () => {
   it('maps stacked segments to the expected model series classes', async () => {
     const payload = makePayload(new Date())
     payload.history.daily = [
-      daily('2026-07-10', 25, [
+      daily('2026-07-10', 50, [
         { name: 'claude-opus-4', cost: 5 },
+        { name: 'claude-fable-1', cost: 5 },
         { name: 'claude-sonnet-5', cost: 5 },
         { name: 'claude-haiku-4', cost: 5 },
-        { name: 'gpt-5.5-codex', cost: 5 },
+        { name: 'gpt-5.6-sol', cost: 5 },
+        { name: 'gpt-5.6-terra', cost: 5 },
+        { name: 'gpt-5.6-luna', cost: 5 },
+        { name: 'gemini-3.1-pro-preview', cost: 5 },
+        { name: 'gemini-3.5-flash', cost: 5 },
         { name: 'mystery-model', cost: 5 },
       ]),
     ]
@@ -301,15 +306,15 @@ describe('Spend', () => {
     const { container } = render(<Spend period="week" provider="all" />)
     expect(await screen.findByLabelText('Daily spend by model')).toBeInTheDocument()
 
-    expect(container.querySelector('.sbars .s-opus')).toBeInTheDocument()
-    expect(container.querySelector('.sbars .s-son')).toBeInTheDocument()
-    expect(container.querySelector('.sbars .s-hai')).toBeInTheDocument()
-    expect(container.querySelector('.sbars .s-gpt')).toBeInTheDocument()
+    expect(container.querySelector('.sbars .s-flagship')).toBeInTheDocument()
+    expect(container.querySelector('.sbars .s-premium')).toBeInTheDocument()
+    expect(container.querySelector('.sbars .s-balanced')).toBeInTheDocument()
+    expect(container.querySelector('.sbars .s-fast')).toBeInTheDocument()
     expect(container.querySelector('.sbars .s-other')).toBeInTheDocument()
-    expect(screen.getByText('Opus')).toBeInTheDocument()
-    expect(screen.getByText('Sonnet')).toBeInTheDocument()
-    expect(screen.getByText('Haiku')).toBeInTheDocument()
-    expect(screen.getByText('GPT / Codex')).toBeInTheDocument()
+    expect(screen.getByText('Flagship')).toBeInTheDocument()
+    expect(screen.getByText('Premium')).toBeInTheDocument()
+    expect(screen.getByText('Balanced')).toBeInTheDocument()
+    expect(screen.getByText('Fast')).toBeInTheDocument()
     expect(screen.getByText('Other')).toBeInTheDocument()
     expect(screen.queryByText('Opus 4.8')).not.toBeInTheDocument()
     expect(screen.queryByText('Sonnet 5')).not.toBeInTheDocument()
@@ -334,7 +339,7 @@ describe('Spend', () => {
     const opusRibbon = container.querySelector('[data-testid="sankey-ribbon"][data-model="claude-opus-4-20260701"]')
     expect(opusRibbon?.getAttribute('stroke')).toBe('url(#sankey-claude-opus-4-20260701)')
     const opusStop = container.querySelector('linearGradient[id="sankey-claude-opus-4-20260701"] stop')
-    expect(opusStop?.getAttribute('stop-color')).toBe('var(--s-opus)')
+    expect(opusStop?.getAttribute('stop-color')).toBe('var(--s-flagship)')
     const otherNode = container.querySelector('[data-testid="sankey-node"][data-node-id="__other__"]')
     expect(otherNode?.getAttribute('fill')).toBe('var(--s-other)')
   })
