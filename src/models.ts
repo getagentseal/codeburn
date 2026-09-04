@@ -477,6 +477,23 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // Cursor's "fast" routing variant of GPT-5 is the same model behind a
   // lower-latency endpoint; price as base GPT-5 until LiteLLM tracks it.
   'gpt-5-fast':                     'gpt-5',
+  'gpt-5-4':                       'gpt-5.4',
+  'gpt-5-4-mini':                  'gpt-5.4-mini',
+  'gpt-5-4-nano':                  'gpt-5.4-nano',
+  'gpt-5-4-pro':                   'gpt-5.4-pro',
+  'gpt-5-4-mini-2026-03-17':       'gpt-5.4-mini',
+  'gpt-5-3-codex':                 'gpt-5.3-codex',
+  'gpt-5-2-codex':                 'gpt-5.2-codex',
+  'gpt-5-1-codex-max':             'gpt-5.1-codex-max',
+  'gpt-5-1-codex':                 'gpt-5.1-codex',
+  'gpt-4-1':                       'gpt-4.1',
+  'gpt-4-1-mini':                  'gpt-4.1-mini',
+  'gpt-4-1-nano':                  'gpt-4.1-nano',
+  'gpt-4-1-2025-04-14':             'gpt-4.1',
+  'capi-cus-ptuc-h100-ib-gpt-5-mini-2025-08-07': 'gpt-5-mini-2025-08-07',
+  'capi-noe-ptuc-h200-ib-gpt-5-mini-2025-08-07': 'gpt-5-mini-2025-08-07',
+  'gemini-3-1-pro-preview':        'gemini-3.1-pro-preview',
+  'gemini-2-5-pro':                'gemini-2.5-pro',
   'gpt-4.1':                        'gpt-4.1',
   'gpt-5.2-low':                    'gpt-5',
   'gpt-5.1-codex-high':             'gpt-5.3-codex',
@@ -1235,8 +1252,8 @@ const autoModelNames: Record<string, string> = {
   'cursor-auto': 'Cursor (auto)',
   'cursor-agent-auto': 'Cursor (auto)',
   'copilot-auto': 'Copilot (auto)',
-  'copilot-openai-auto': 'Copilot (OpenAI)',
-  'copilot-anthropic-auto': 'Copilot (Anthropic)',
+  'copilot-openai-auto': 'Copilot (OpenAI auto)',
+  'copilot-anthropic-auto': 'Copilot (Anthropic auto)',
   'ibm-bob-auto': 'IBM Bob (auto)',
   'kiro-auto': 'Kiro (auto)',
   'quickdesk-auto': 'Quick Desktop (auto)',
@@ -1264,24 +1281,39 @@ const SHORT_NAMES: Record<string, string> = {
   'gpt-5.4-pro': 'GPT-5.4 Pro',
   'gpt-5.4-nano': 'GPT-5.4 Nano',
   'gpt-5.4-mini': 'GPT-5.4 Mini',
+  'gpt-5-4-mini': 'GPT-5.4 Mini',
   'gpt-5.4': 'GPT-5.4',
+  'gpt-5-4': 'GPT-5.4',
   'gpt-5.3-codex-spark': 'GPT-5.3 Codex Spark',
   'gpt-5.3-codex': 'GPT-5.3 Codex',
+  'gpt-5-3-codex': 'GPT-5.3 Codex',
   'gpt-5.3': 'GPT-5.3',
   'gpt-5.2-pro': 'GPT-5.2 Pro',
   'gpt-5.2-low': 'GPT-5.2 Low',
+  'gpt-5.2-codex': 'GPT-5.2 Codex',
+  'gpt-5-2-codex': 'GPT-5.2 Codex',
   'gpt-5.2': 'GPT-5.2',
+  'gpt-5.1-codex-max': 'GPT-5.1 Codex Max',
+  'gpt-5-1-codex-max': 'GPT-5.1 Codex Max',
   'gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
   'gpt-5.1-codex': 'GPT-5.1 Codex',
+  'gpt-5-1-codex': 'GPT-5.1 Codex',
   'gpt-5.1': 'GPT-5.1',
+  'gpt-5-codex': 'GPT-5 Codex',
   'gpt-5-pro': 'GPT-5 Pro',
   'gpt-5-nano': 'GPT-5 Nano',
   'gpt-5-mini': 'GPT-5 Mini',
   'gpt-5': 'GPT-5',
   'gemini-3.5-flash': 'Gemini 3.5 Flash',
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
+  'gemini-3-1-pro-preview': 'Gemini 3.1 Pro',
+  'gemini-3.1-pro': 'Gemini 3.1 Pro',
   'gemini-3-flash-preview': 'Gemini 3 Flash',
+  'gemini-3-flash': 'Gemini 3 Flash',
+  'gemini-3-pro-preview': 'Gemini 3 Pro',
+  'gemini-3-pro': 'Gemini 3 Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-2-5-pro': 'Gemini 2.5 Pro',
   'gemini-2.5-flash': 'Gemini 2.5 Flash',
   'kimi-k2-thinking-turbo': 'Kimi K2 Thinking Turbo',
   'kimi-k2-thinking': 'Kimi K2 Thinking',
@@ -1301,6 +1333,7 @@ const SHORT_NAMES: Record<string, string> = {
   'deepseek-coder-max': 'DeepSeek Coder Max',
   'deepseek-coder': 'DeepSeek Coder',
   'deepseek-r1': 'DeepSeek R1',
+  'o3-mini': 'o3-mini',
   'o4-mini': 'o4-mini',
   'o3': 'o3',
   'MiniMax-M2.7-highspeed': 'MiniMax M2.7 Highspeed',
@@ -1374,9 +1407,19 @@ function deriveClaudeShortName(canonical: string): string | undefined {
   return `${CLAUDE_FAMILY[family]} ${major}${minor ? `.${minor}` : ''}`
 }
 
+function deriveGeminiShortName(canonical: string): string | undefined {
+  const m = canonical.match(/^gemini-([\d.]+)-(pro|flash|ultra|nano)(?:-.*)?$/i)
+  if (!m) return undefined
+  const [, ver, tier] = m
+  const tierName = tier.charAt(0).toUpperCase() + tier.slice(1).toLowerCase()
+  return `Gemini ${ver} ${tierName}`
+}
+
 function lookupShortName(id: string): string | undefined {
   const claude = deriveClaudeShortName(id)
   if (claude) return claude
+  const gemini = deriveGeminiShortName(id)
+  if (gemini) return gemini
   for (const [key, name] of SORTED_SHORT_NAMES) {
     if (id === key || id.startsWith(key + '-')) return name
   }

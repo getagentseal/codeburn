@@ -2314,6 +2314,7 @@ describe.skipIf(!isSqliteAvailable())('copilot provider - session-store parsing'
       }),
     ])
 
+    if (process.platform === 'win32') return
     const { chmod } = await import('fs/promises')
     await chmod(deniedDir, 0o000)
     try {
@@ -3248,6 +3249,172 @@ describe('copilot provider - JetBrains dedup key stability across store rewrites
   })
 })
 
+describe('copilot provider - legacy JSON format', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'copilot-legacy-'))
+  })
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('parses legacy JSON session with string message and markdownContent response', async () => {
+    const session = {
+      sessionId: 'sess-json-001',
+      creationDate: 1718000000000,
+      requests: [
+        {
+          requestId: 'req-1',
+          message: 'explain quantum physics',
+          modelId: 'copilot/gpt-4o',
+          response: [
+            {
+              kind: 'markdownContent',
+              content: { value: 'Quantum physics is...' }
+            }
+          ]
+        }
+      ]
+    }
+
+    const filePath = join(tmpDir, 'session-1.json')
+    await writeFile(filePath, JSON.stringify(session))
+
+    const source = { path: filePath, project: 'test-project', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.provider).toBe('copilot')
+    expect(calls[0]!.model).toBe('gpt-4o')
+    expect(calls[0]!.userMessage).toBe('explain quantum physics')
+    expect(calls[0]!.inputTokens).toBeGreaterThan(0)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
+  it('infers model when modelId is missing on the request', async () => {
+    const session = {
+      requests: [
+        {
+          requestId: 'req-1',
+          message: 'hello',
+          response: [
+            {
+              kind: 'toolInvocationSerialized',
+              toolCallId: 'tooluse_abc123',
+              toolId: 'read_file'
+            }
+          ]
+        }
+      ]
+    }
+
+    const filePath = join(tmpDir, 'session-2.json')
+    await writeFile(filePath, JSON.stringify(session))
+
+    const source = { path: filePath, project: 'test-project', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('copilot-anthropic-auto')
+  })
+
+  it('extracts thinking/reasoning text and reasoning tokens', async () => {
+    const session = {
+      requests: [
+        {
+          requestId: 'req-1',
+          message: 'solve this',
+          modelId: 'copilot/claude-sonnet-4.5',
+          response: [
+            {
+              kind: 'thinking',
+              value: 'Let me analyze the problem step by step.'
+            },
+            {
+              kind: 'markdownContent',
+              content: { value: 'The solution is 42.' }
+            }
+          ]
+        }
+      ]
+    }
+
+    const filePath = join(tmpDir, 'session-3.json')
+    await writeFile(filePath, JSON.stringify(session))
+
+    const source = { path: filePath, project: 'test-project', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.reasoningTokens).toBeGreaterThan(0)
+    expect(calls[0]!.outputTokens).toBeGreaterThan(0)
+  })
+
+  it('extracts tool result content from serialized tool invocations', async () => {
+    const base64Data = Buffer.from('simulated file read content', 'utf8').toString('base64')
+    const session = {
+      requests: [
+        {
+          requestId: 'req-1',
+          message: 'read file',
+          modelId: 'copilot/gpt-4o',
+          response: [
+            {
+              kind: 'toolInvocationSerialized',
+              toolId: 'read_file',
+              resultDetails: {
+                output: {
+                  type: 'data',
+                  mimeType: 'text/plain',
+                  base64Data: base64Data
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+    const filePath = join(tmpDir, 'session-4.json')
+    await writeFile(filePath, JSON.stringify(session))
+
+    const source = { path: filePath, project: 'test-project', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    // inputTokens should include the message + decoded base64 tool result (approx 7 + 7 tokens)
+    expect(calls[0]!.inputTokens).toBe(10)
+  })
+
+  it('uses exact root token properties when present', async () => {
+    const session = {
+      requests: [
+        {
+          requestId: 'req-1',
+          message: 'hello',
+          modelId: 'copilot/gpt-4o',
+          promptTokens: 100,
+          completionTokens: 200
+        }
+      ]
+    }
+
+    const filePath = join(tmpDir, 'session-5.json')
+    await writeFile(filePath, JSON.stringify(session))
+
+    const source = { path: filePath, project: 'test-project', provider: 'copilot' }
+    const calls: ParsedProviderCall[] = []
+    for await (const call of copilot.createSessionParser(source, new Set()).parse()) calls.push(call)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(100)
+    expect(calls[0]!.outputTokens).toBe(200)
+    expect(calls[0]!.costIsEstimated).toBe(false)
+  })
+})
 // ═══════════════════════════════════════════════════════════════════════════
 // Dedup-key shapes are a CACHE contract, not an implementation detail
 // ═══════════════════════════════════════════════════════════════════════════

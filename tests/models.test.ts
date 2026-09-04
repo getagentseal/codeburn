@@ -1399,3 +1399,34 @@ describe('calculateCost verbose unknown-model warning', () => {
     expect(text).not.toMatch(/Map it with: codeburn model-alias/)
   })
 })
+
+describe('Copilot and dot-versioned model resolution', () => {
+  it('resolves Claude dot and dash versions to their full version names', () => {
+    expect(getShortModelName('claude-sonnet-4.6')).toBe('Sonnet 4.6')
+    expect(getShortModelName('claude-sonnet-4-6')).toBe('Sonnet 4.6')
+    expect(getShortModelName('claude-opus-4.7')).toBe('Opus 4.7')
+    expect(getShortModelName('claude-opus-4-7')).toBe('Opus 4.7')
+    expect(getShortModelName('claude-haiku-4.5')).toBe('Haiku 4.5')
+    expect(getShortModelName('claude-haiku-4-5')).toBe('Haiku 4.5')
+  })
+
+  it('resolves date-stamped and cluster-prefixed models to their base canonical IDs', () => {
+    expect(resolveCanonicalModelId('gpt-4-1-2025-04-14')).toBe('gpt-4.1')
+    expect(resolveCanonicalModelId('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5')
+    expect(resolveCanonicalModelId('capi-cus-ptuc-h100-ib-gpt-5-mini-2025-08-07')).toBe('gpt-5-mini-2025-08-07')
+    expect(resolveCanonicalModelId('capi-noe-ptuc-h200-ib-gpt-5-mini-2025-08-07')).toBe('gpt-5-mini-2025-08-07')
+  })
+
+  it('resolves model display names for Codex and Gemini variants', () => {
+    expect(getShortModelName('gpt-5.2-codex')).toBe('GPT-5.2 Codex')
+    expect(getShortModelName('gpt-5-2-codex')).toBe('GPT-5.2 Codex')
+    expect(getShortModelName('gpt-5.1-codex-max')).toBe('GPT-5.1 Codex Max')
+    expect(getShortModelName('gpt-5-1-codex-max')).toBe('GPT-5.1 Codex Max')
+    expect(getShortModelName('gemini-3-pro-preview')).toBe('Gemini 3 Pro')
+    expect(getShortModelName('gemini-3-pro')).toBe('Gemini 3 Pro')
+    expect(getShortModelName('gemini-3.1-pro-preview')).toBe('Gemini 3.1 Pro')
+    expect(getShortModelName('gemini-3.1-pro')).toBe('Gemini 3.1 Pro')
+    expect(getShortModelName('o3-mini')).toBe('o3-mini')
+  })
+})
+
