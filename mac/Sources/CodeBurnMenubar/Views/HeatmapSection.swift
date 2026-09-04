@@ -15,18 +15,20 @@ private let yyyymmdd: DateFormatter = {
     return f
 }()
 
+// Display formatters follow the UI locale ("Mon May 4" / "5月4日 周一");
+// only the yyyy-MM-dd parser above must stay POSIX.
 private let prettyDayFormat: DateFormatter = {
     let f = DateFormatter()
-    f.dateFormat = "EEE MMM d"
-    f.locale = Locale(identifier: "en_US_POSIX")
+    f.locale = .current
+    f.setLocalizedDateFormatFromTemplate("EEEMMMd")
     return f
 }()
 
 private let mmmDayFormat: DateFormatter = {
     let f = DateFormatter()
-    f.dateFormat = "MMM d"
-    f.locale = Locale(identifier: "en_US_POSIX")
+    f.locale = .current
     f.timeZone = .current
+    f.setLocalizedDateFormatFromTemplate("MMMd")
     return f
 }()
 
@@ -115,7 +117,7 @@ private struct InsightPillSwitcher: View {
                     Button {
                         selected = mode
                     } label: {
-                        Text(mode.rawValue)
+                        Text(LR(mode.rawValue))
                             .font(.system(size: 11, weight: .medium))
                             .fixedSize()
                             .foregroundStyle(selected == mode ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
@@ -201,24 +203,24 @@ private struct TrendInsight: View {
             .zIndex(1)
 
             HStack(spacing: 14) {
-                MiniStat(label: "Avg/day", value: formatValue(avgValue, useTokens: useTokens))
-                MiniStat(label: "Peak", value: peakLabel(peakValue, metric: metric, useTokens: useTokens))
-                MiniStat(label: "Yesterday", value: yesterdayValue.map { formatValue($0, useTokens: useTokens) } ?? "—")
+                MiniStat(label: L("Avg/day"), value: formatValue(avgValue, useTokens: useTokens))
+                MiniStat(label: L("Peak"), value: peakLabel(peakValue, metric: metric, useTokens: useTokens))
+                MiniStat(label: L("Yesterday"), value: yesterdayValue.map { formatValue($0, useTokens: useTokens) } ?? "—")
             }
         }
     }
 
     private func formatHero(useTokens: Bool, tokens: Double, dollars: Double) -> String {
-        useTokens ? "\(formatTokens(tokens)) tokens" : dollars.asCurrency()
+        useTokens ? L("\(formatTokens(tokens)) tokens") : dollars.asCurrency()
     }
 
     private func formatValue(_ v: Double, useTokens: Bool) -> String {
-        useTokens ? "\(formatTokens(v)) tok" : v.asCompactCurrency()
+        useTokens ? L("\(formatTokens(v)) tok") : v.asCompactCurrency()
     }
 
     private func peakLabel(_ peak: TrendBar?, metric: (TrendBar) -> Double, useTokens: Bool) -> String {
         guard let peak, metric(peak) > 0 else { return "—" }
-        return "\(formatValue(metric(peak), useTokens: useTokens)) on \(shortDate(peak.date))"
+        return L("\(formatValue(metric(peak), useTokens: useTokens)) on \(shortDate(peak.date))")
     }
 
     private func formatTokens(_ n: Double) -> String {
@@ -609,9 +611,9 @@ private struct ContributionHeatmapInsight: View {
                     .animation(.easeInOut(duration: 0.12), value: hoveredDayID)
 
                 HStack(spacing: 14) {
-                    MiniStat(label: "Peak day", value: stats.peakLabel)
-                    MiniStat(label: "Avg active", value: stats.avgActive.asCompactCurrency())
-                    MiniStat(label: "Streak", value: "\(stats.currentStreak)d")
+                    MiniStat(label: L("Peak day"), value: stats.peakLabel)
+                    MiniStat(label: L("Avg active"), value: stats.avgActive.asCompactCurrency())
+                    MiniStat(label: L("Streak"), value: L("\(stats.currentStreak)d"))
                 }
             }
         }
@@ -626,10 +628,10 @@ private struct ContributionHeatmapInsight: View {
 
     private func weekdayLabel(for index: Int) -> String {
         switch index {
-        case 0: return "Mon"
-        case 2: return "Wed"
-        case 4: return "Fri"
-        case 6: return "Sun"
+        case 0: return L("Mon")
+        case 2: return L("Wed")
+        case 4: return L("Fri")
+        case 6: return L("Sun")
         default: return ""
         }
     }
@@ -692,8 +694,8 @@ private struct ContributionDayDetail: View {
 
             Spacer(minLength: 8)
 
-            DetailMetric(label: "Calls", value: calls)
-            DetailMetric(label: "Tokens", value: tokens)
+            DetailMetric(label: L("Calls"), value: calls)
+            DetailMetric(label: L("Tokens"), value: tokens)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -708,14 +710,14 @@ private struct ContributionDayDetail: View {
         // The header already shows the period total and active-day count, so
         // the resting state is a short hover hint — not a duplicate of those
         // (and not the full sentence that previously overflowed and truncated).
-        guard let day else { return "Daily detail" }
+        guard let day else { return L("Daily detail") }
         return prettyDate(day.date)
     }
 
     private var value: String {
-        guard let day else { return "Hover a day" }
-        if day.isFuture { return "Future day" }
-        if day.cost <= 0 && day.calls == 0 { return "No tracked usage" }
+        guard let day else { return L("Hover a day") }
+        if day.isFuture { return L("Future day") }
+        if day.cost <= 0 && day.calls == 0 { return L("No tracked usage") }
         return day.cost.asCompactCurrency()
     }
 
@@ -769,9 +771,9 @@ struct ContributionDay: Identifiable, Equatable {
     var totalTokens: Int { inputTokens + outputTokens }
 
     @MainActor var helpText: String {
-        if isFuture { return "\(prettyDate(date)): future day" }
-        if cost <= 0 && calls == 0 { return "\(prettyDate(date)): no tracked usage" }
-        return "\(prettyDate(date)): \(cost.asCompactCurrency()), \(calls) calls, \(formatTokensForContribution(totalTokens)) tokens"
+        if isFuture { return L("\(prettyDate(date)): future day") }
+        if cost <= 0 && calls == 0 { return L("\(prettyDate(date)): no tracked usage") }
+        return L("\(prettyDate(date)): \(cost.asCompactCurrency()), \(calls) calls, \(formatTokensForContribution(totalTokens)) tokens")
     }
 }
 
@@ -853,7 +855,7 @@ func buildContributionWeeks(
     let total = active.reduce(0.0) { $0 + $1.cost }
     let avg = active.isEmpty ? 0 : total / Double(active.count)
     let peak = active.max(by: { $0.cost < $1.cost })
-    let peakLabel = peak.map { "\($0.cost.asCompactCurrency()) on \(shortContributionDate($0.date))" } ?? "—"
+    let peakLabel = peak.map { L("\($0.cost.asCompactCurrency()) on \(shortContributionDate($0.date))") } ?? "—"
 
     var streak = 0
     for day in days.reversed() {
@@ -921,9 +923,9 @@ private struct ForecastInsight: View {
             }
 
             HStack(spacing: 14) {
-                ForecastStat(label: "Avg/day (this wk)", value: stats.weekAvg.asCompactCurrency())
-                ForecastStat(label: "Yesterday", value: stats.yesterday.asCompactCurrency())
-                ForecastStat(label: "Last 7d", value: stats.weekTotal.asCompactCurrency())
+                ForecastStat(label: L("Avg/day (this wk)"), value: stats.weekAvg.asCompactCurrency())
+                ForecastStat(label: L("Yesterday"), value: stats.yesterday.asCompactCurrency())
+                ForecastStat(label: L("Last 7d"), value: stats.weekTotal.asCompactCurrency())
             }
 
             if let prevTotal = stats.previousMonthTotal {
@@ -940,10 +942,10 @@ private struct ForecastInsight: View {
     }
 
     private func comparisonText(projection: Double, previous: Double) -> String {
-        guard previous > 0 else { return "no prior month" }
+        guard previous > 0 else { return L("no prior month") }
         let diff = ((projection - previous) / previous) * 100
         let sign = diff >= 0 ? "+" : ""
-        return "\(sign)\(String(format: "%.0f", diff))% vs last month (\(previous.asCompactCurrency()))"
+        return L("\(sign)\(String(format: "%.0f", diff))% vs last month (\(previous.asCompactCurrency()))")
     }
 }
 
@@ -1037,10 +1039,10 @@ private struct PulseInsight: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                PulseTile(label: "Cache hit", value: cacheHitText, color: Theme.brandAccent)
-                PulseTile(label: "1-shot", value: oneShotText, color: oneShotColor)
+                PulseTile(label: L("Cache hit"), value: cacheHitText, color: Theme.brandAccent)
+                PulseTile(label: L("1-shot"), value: oneShotText, color: oneShotColor)
                 PulseTile(
-                    label: "Cost / session",
+                    label: L("Cost / session"),
                     value: payload.current.sessions > 0
                         ? (payload.current.cost / Double(payload.current.sessions)).asCompactCurrency()
                         : "—",
@@ -1178,8 +1180,8 @@ private struct OptimizeSavingsBadge: View {
     private func captionText(findingCount: Int, savingsUSD: Double) -> String {
         let tokens = savingsUSD / 9.0 * 1_000_000  // ~$9/M effective tokens (Sonnet-weighted approx)
         let tokensLabel = formatTokens(tokens)
-        let plural = findingCount == 1 ? "finding" : "findings"
-        return "Save ~\(savingsUSD.asCompactCurrency()) / ~\(tokensLabel) tokens · \(findingCount) \(plural)"
+        let plural = findingCount == 1 ? L("finding") : L("findings")
+        return L("Save ~\(savingsUSD.asCompactCurrency()) / ~\(tokensLabel) tokens · \(findingCount) \(plural)")
     }
 
     private func openOptimize() {
@@ -1204,18 +1206,18 @@ private struct StatsInsight: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 8) {
-                    StatRow(label: "Favorite model", value: stats.favoriteModel)
-                    StatRow(label: "Active days (month)", value: stats.activeDaysFraction)
-                    StatRow(label: "Most active day", value: stats.mostActiveDay)
-                    StatRow(label: "Peak day spend", value: stats.peakDaySpend)
+                    StatRow(label: L("Favorite model"), value: stats.favoriteModel)
+                    StatRow(label: L("Active days (month)"), value: stats.activeDaysFraction)
+                    StatRow(label: L("Most active day"), value: stats.mostActiveDay)
+                    StatRow(label: L("Peak day spend"), value: stats.peakDaySpend)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    StatRow(label: "Sessions today", value: "\(payload.current.sessions)")
-                    StatRow(label: "Calls today", value: payload.current.calls.asThousandsSeparated())
-                    StatRow(label: "Current streak", value: stats.currentStreak)
-                    StatRow(label: "Longest streak", value: stats.longestStreak)
+                    StatRow(label: L("Sessions today"), value: "\(payload.current.sessions)")
+                    StatRow(label: L("Calls today"), value: payload.current.calls.asThousandsSeparated())
+                    StatRow(label: L("Current streak"), value: stats.currentStreak)
+                    StatRow(label: L("Longest streak"), value: stats.longestStreak)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1314,7 +1316,7 @@ private struct RetryTaxSection: View {
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 if let rpe = model.retriesPerEdit {
-                                    Text(String(format: "%.1f ret/edit", rpe))
+                                    Text(L("\(String(format: "%.1f", rpe)) ret/edit"))
                                         .font(.system(size: 9))
                                         .foregroundStyle(.quaternary)
                                         .padding(.trailing, 8)
@@ -1583,7 +1585,7 @@ private struct RoutingWasteSection: View {
                                     .font(.system(size: 9.5, weight: .medium))
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text(String(format: "$%.2f/edit", model.costPerEdit))
+                                Text(L("\(String(format: "$%.2f", model.costPerEdit))/edit"))
                                     .font(.system(size: 9))
                                     .foregroundStyle(.quaternary)
                                     .padding(.trailing, 8)
@@ -1691,8 +1693,8 @@ private struct AllStats {
         activeDaysFraction: activeDaysFraction,
         mostActiveDay: mostActiveDay,
         peakDaySpend: peakDaySpend,
-        currentStreak: currentStreak == 0 ? "—" : "\(currentStreak) days",
-        longestStreak: longestStreak == 0 ? "—" : "\(longestStreak) days",
+        currentStreak: currentStreak == 0 ? "—" : L("\(currentStreak) days"),
+        longestStreak: longestStreak == 0 ? "—" : L("\(longestStreak) days"),
         lifetimeTotal: lifetimeTotal,
         historyDayCount: history.count
     )
@@ -1715,21 +1717,21 @@ private struct PlanInsight: View {
             switch store.subscriptionLoadState {
             case .notBootstrapped, .dormant:
                 PlanConnectView(
-                    title: "Connect Claude subscription",
-                    message: "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically."
+                    title: L("Connect Claude subscription"),
+                    message: L("CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically.")
                 ) { Task { await store.bootstrapSubscription() } }
             case .bootstrapping:
-                PlanLoadingView(message: "Reading Claude credentials...")
+                PlanLoadingView(message: L("Reading Claude credentials..."))
             case .loading:
                 if let usage {
                     loadedBody(usage: usage)
                 } else {
-                    PlanLoadingView(message: "Reading Claude credentials...")
+                    PlanLoadingView(message: L("Reading Claude credentials..."))
                 }
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Claude credentials found",
-                    message: "Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again."
+                    title: L("No Claude credentials found"),
+                    message: L("Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again.")
                 ) { Task { await store.bootstrapSubscription() } }
             case .failed:
                 PlanFailedView(
@@ -1740,20 +1742,20 @@ private struct PlanInsight: View {
                     loadedBody(usage: usage)
                 } else {
                     PlanFailedView(
-                        error: store.subscriptionError ?? "Anthropic temporarily unreachable. Retrying."
+                        error: store.subscriptionError ?? L("Anthropic temporarily unreachable. Retrying.")
                     ) { refreshSubscriptionThroughAppDelegate() }
                 }
             case let .terminalFailure(reason):
                 PlanReconnectView(
-                    title: "Reconnect Claude",
+                    title: L("Reconnect Claude"),
                     reason: reason,
-                    fallback: "Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect."
+                    fallback: L("Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect.")
                 ) { Task { await store.bootstrapSubscription() } }
             case .loaded:
                 if let usage {
                     loadedBody(usage: usage)
                 } else {
-                    PlanLoadingView(message: "Reading Claude credentials...")
+                    PlanLoadingView(message: L("Reading Claude credentials..."))
                 }
             }
         }
@@ -1784,19 +1786,19 @@ private struct PlanInsight: View {
 
             VStack(spacing: 8) {
                 if let p = usage.fiveHourPercent {
-                    UtilizationRow(label: "5-hour window", percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
+                    UtilizationRow(label: L("5-hour window"), percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
                 }
                 if let p = usage.sevenDayPercent {
-                    UtilizationRow(label: "7-day total", percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
+                    UtilizationRow(label: L("7-day total"), percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
                 }
                 if let p = usage.sevenDayOpusPercent {
-                    UtilizationRow(label: "7-day Opus", percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projections["seven_day_opus"])
+                    UtilizationRow(label: L("7-day Opus"), percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projections["seven_day_opus"])
                 }
                 if let p = usage.sevenDaySonnetPercent {
-                    UtilizationRow(label: "7-day Sonnet", percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projections["seven_day_sonnet"])
+                    UtilizationRow(label: L("7-day Sonnet"), percent: p, resetsAt: usage.sevenDaySonnetResetsAt, projection: projections["seven_day_sonnet"])
                 }
                 ForEach(usage.scopedWeekly, id: \.label) { scoped in
-                    UtilizationRow(label: "7-day \(scoped.label)", percent: scoped.percent, resetsAt: scoped.resetsAt, projection: projections["scoped_\(scoped.label)"])
+                    UtilizationRow(label: L("7-day \(scoped.label)"), percent: scoped.percent, resetsAt: scoped.resetsAt, projection: projections["scoped_\(scoped.label)"])
                 }
             }
 
@@ -2022,21 +2024,21 @@ private struct CodexPlanInsight: View {
             switch store.codexLoadState {
             case .notBootstrapped, .dormant:
                 PlanConnectView(
-                    title: "Connect ChatGPT subscription",
-                    message: "CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically."
+                    title: L("Connect ChatGPT subscription"),
+                    message: L("CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically.")
                 ) { Task { await store.bootstrapCodex() } }
             case .bootstrapping:
-                PlanLoadingView(message: "Reading Codex CLI credentials...")
+                PlanLoadingView(message: L("Reading Codex CLI credentials..."))
             case .loading:
                 if let usage = store.codexUsage {
                     loadedBody(usage: usage)
                 } else {
-                    PlanLoadingView(message: "Reading Codex CLI credentials...")
+                    PlanLoadingView(message: L("Reading Codex CLI credentials..."))
                 }
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Codex credentials found",
-                    message: "Sign in with Codex first: run `codex login` in your terminal. Then click Try Again."
+                    title: L("No Codex credentials found"),
+                    message: L("Sign in with Codex first: run `codex login` in your terminal. Then click Try Again.")
                 ) { Task { await store.bootstrapCodex() } }
             case .failed:
                 PlanFailedView(
@@ -2047,20 +2049,20 @@ private struct CodexPlanInsight: View {
                     loadedBody(usage: usage)
                 } else {
                     PlanFailedView(
-                        error: store.codexError ?? "ChatGPT temporarily unreachable. Retrying."
+                        error: store.codexError ?? L("ChatGPT temporarily unreachable. Retrying.")
                     ) { Task { await store.refreshCodex() } }
                 }
             case let .terminalFailure(reason):
                 PlanReconnectView(
-                    title: "Reconnect Codex",
+                    title: L("Reconnect Codex"),
                     reason: reason,
-                    fallback: "Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect."
+                    fallback: L("Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect.")
                 ) { Task { await store.bootstrapCodex() } }
             case .loaded:
                 if let usage = store.codexUsage {
                     loadedBody(usage: usage)
                 } else {
-                    PlanLoadingView(message: "Reading Codex CLI credentials...")
+                    PlanLoadingView(message: L("Reading Codex CLI credentials..."))
                 }
             }
         }
@@ -2082,7 +2084,7 @@ private struct CodexPlanInsight: View {
             }
             if let primary = usage.primary {
                 UtilizationRow(
-                    label: "\(primary.windowLabel) window",
+                    label: L("\(LR(primary.windowLabel)) window"),
                     percent: primary.usedPercent,
                     resetsAt: primary.resetsAt,
                     projection: pace(for: primary)
@@ -2090,7 +2092,7 @@ private struct CodexPlanInsight: View {
             }
             if let secondary = usage.secondary {
                 UtilizationRow(
-                    label: "\(secondary.windowLabel) window",
+                    label: L("\(LR(secondary.windowLabel)) window"),
                     percent: secondary.usedPercent,
                     resetsAt: secondary.resetsAt,
                     projection: pace(for: secondary)
@@ -2101,7 +2103,7 @@ private struct CodexPlanInsight: View {
             ForEach(Array(usage.additionalLimits.enumerated()), id: \.offset) { _, limit in
                 if let p = limit.primary, p.usedPercent > 0 {
                     UtilizationRow(
-                        label: "\(limit.name) · \(p.windowLabel)",
+                        label: "\(limit.name) · \(LR(p.windowLabel))",
                         percent: p.usedPercent,
                         resetsAt: p.resetsAt,
                         projection: pace(for: p)
@@ -2109,7 +2111,7 @@ private struct CodexPlanInsight: View {
                 }
                 if let s = limit.secondary, s.usedPercent > 0 {
                     UtilizationRow(
-                        label: "\(limit.name) · \(s.windowLabel)",
+                        label: "\(limit.name) · \(LR(s.windowLabel))",
                         percent: s.usedPercent,
                         resetsAt: s.resetsAt,
                         projection: pace(for: s)
@@ -2194,9 +2196,9 @@ private struct CodexPlanInsight: View {
     }
 
     private func resetCreditsLabel(_ resets: CodexUsage.ResetCredits) -> String {
-        let count = "\(resets.availableCount) available"
+        let count = L("\(resets.availableCount) available")
         guard let next = resets.nextExpiresAt else { return count }
-        return "\(count) · next expires \(relativeReset(next))"
+        return L("\(count) · next expires \(relativeReset(next))")
     }
 
     private func relativeReset(_ date: Date) -> String {
@@ -2217,30 +2219,30 @@ private struct KimiPlanInsight: View {
             switch KimiQuotaPresentation.planContent(loadState: store.kimiLoadState, hasUsage: store.kimiUsage != nil) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Kimi Code credentials found",
-                    message: "Sign in with the Kimi CLI first. Then click Try Again."
+                    title: L("No Kimi Code credentials found"),
+                    message: L("Sign in with the Kimi CLI first. Then click Try Again.")
                 ) { Task { await store.bootstrapKimi() } }
             case .loading:
-                PlanLoadingView(message: "Reading Kimi Code credentials...")
+                PlanLoadingView(message: L("Reading Kimi Code credentials..."))
             case .failed:
                 PlanFailedView(
                     error: store.kimiError
                 ) { Task { await store.refreshKimi() } }
             case .transientFailed:
                 PlanFailedView(
-                    error: store.kimiError ?? "Kimi temporarily unreachable. Retrying."
+                    error: store.kimiError ?? L("Kimi temporarily unreachable. Retrying.")
                 ) { Task { await store.refreshKimi() } }
             case let .reconnect(reason):
                 PlanReconnectView(
-                    title: "Refresh Kimi Code login",
+                    title: L("Refresh Kimi Code login"),
                     reason: reason,
-                    fallback: "Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect."
+                    fallback: L("Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect.")
                 ) { Task { await store.bootstrapKimi() } }
             case let .usage(idle):
                 if let usage = store.kimiUsage {
                     loadedBody(usage: usage, idle: idle)
                 } else {
-                    PlanLoadingView(message: "Reading Kimi Code credentials...")
+                    PlanLoadingView(message: L("Reading Kimi Code credentials..."))
                 }
             }
         }
@@ -2262,7 +2264,7 @@ private struct KimiPlanInsight: View {
             }
             if let primary = usage.primary {
                 UtilizationRow(
-                    label: "\(primary.label) window",
+                    label: L("\(LR(primary.label)) window"),
                     percent: primary.usedPercent,
                     resetsAt: primary.resetsAt,
                     projection: nil
@@ -2270,7 +2272,7 @@ private struct KimiPlanInsight: View {
             }
             ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
                 UtilizationRow(
-                    label: "\(window.label) window",
+                    label: L("\(LR(window.label)) window"),
                     percent: window.usedPercent,
                     resetsAt: window.resetsAt,
                     projection: nil
@@ -2328,30 +2330,30 @@ private struct GeminiPlanInsight: View {
             switch GeminiQuotaPresentation.planContent(loadState: store.geminiLoadState, hasUsage: store.geminiUsage != nil) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Gemini credentials found",
-                    message: "Sign in with the Gemini CLI first. Then click Try Again."
+                    title: L("No Gemini credentials found"),
+                    message: L("Sign in with the Gemini CLI first. Then click Try Again.")
                 ) { Task { await store.bootstrapGemini() } }
             case .loading:
-                PlanLoadingView(message: "Reading Gemini credentials...")
+                PlanLoadingView(message: L("Reading Gemini credentials..."))
             case .failed:
                 PlanFailedView(
                     error: store.geminiError
                 ) { Task { await store.refreshGemini() } }
             case .transientFailed:
                 PlanFailedView(
-                    error: store.geminiError ?? "Gemini temporarily unreachable. Retrying."
+                    error: store.geminiError ?? L("Gemini temporarily unreachable. Retrying.")
                 ) { Task { await store.refreshGemini() } }
             case let .reconnect(reason):
                 PlanReconnectView(
-                    title: "Refresh Gemini login",
+                    title: L("Refresh Gemini login"),
                     reason: reason,
-                    fallback: "Your Gemini login has expired. Run the Gemini CLI once to refresh it, then click Reconnect."
+                    fallback: L("Your Gemini login has expired. Run the Gemini CLI once to refresh it, then click Reconnect.")
                 ) { Task { await store.bootstrapGemini() } }
             case let .usage(idle):
                 if let usage = store.geminiUsage {
                     loadedBody(usage: usage, idle: idle)
                 } else {
-                    PlanLoadingView(message: "Reading Gemini credentials...")
+                    PlanLoadingView(message: L("Reading Gemini credentials..."))
                 }
             }
         }
@@ -2373,7 +2375,7 @@ private struct GeminiPlanInsight: View {
             }
             ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
                 UtilizationRow(
-                    label: window.label,
+                    label: LR(window.label),
                     percent: window.usedPercent,
                     resetsAt: window.resetsAt,
                     projection: nil
@@ -2420,30 +2422,30 @@ private struct CopilotPlanInsight: View {
             switch CopilotQuotaPresentation.planContent(loadState: store.copilotLoadState, hasUsage: store.copilotUsage != nil) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Copilot credentials found",
-                    message: "Sign in via an editor's Copilot plugin first. Then click Try Again."
+                    title: L("No Copilot credentials found"),
+                    message: L("Sign in via an editor's Copilot plugin first. Then click Try Again.")
                 ) { Task { await store.bootstrapCopilot() } }
             case .loading:
-                PlanLoadingView(message: "Reading Copilot credentials...")
+                PlanLoadingView(message: L("Reading Copilot credentials..."))
             case .failed:
                 PlanFailedView(
                     error: store.copilotError
                 ) { Task { await store.refreshCopilot() } }
             case .transientFailed:
                 PlanFailedView(
-                    error: store.copilotError ?? "GitHub temporarily unreachable. Retrying."
+                    error: store.copilotError ?? L("GitHub temporarily unreachable. Retrying.")
                 ) { Task { await store.refreshCopilot() } }
             case let .reconnect(reason):
                 PlanReconnectView(
-                    title: "Refresh Copilot login",
+                    title: L("Refresh Copilot login"),
                     reason: reason,
-                    fallback: "Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect."
+                    fallback: L("Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect.")
                 ) { Task { await store.bootstrapCopilot() } }
             case let .usage(idle):
                 if let usage = store.copilotUsage {
                     loadedBody(usage: usage, idle: idle)
                 } else {
-                    PlanLoadingView(message: "Reading Copilot credentials...")
+                    PlanLoadingView(message: L("Reading Copilot credentials..."))
                 }
             }
         }
@@ -2460,7 +2462,7 @@ private struct CopilotPlanInsight: View {
             }
             ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
                 UtilizationRow(
-                    label: window.label,
+                    label: LR(window.label),
                     percent: window.usedPercent,
                     resetsAt: window.resetsAt,
                     projection: nil
@@ -2502,30 +2504,30 @@ private struct AntigravityPlanInsight: View {
             switch AntigravityQuotaPresentation.planContent(loadState: store.antigravityLoadState, hasUsage: store.antigravityUsage != nil) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No local Antigravity server found",
-                    message: "Start the Antigravity app, then click Try Again."
+                    title: L("No local Antigravity server found"),
+                    message: L("Start the Antigravity app, then click Try Again.")
                 ) { Task { await store.bootstrapAntigravity() } }
             case .loading:
-                PlanLoadingView(message: "Probing the local Antigravity server...")
+                PlanLoadingView(message: L("Probing the local Antigravity server..."))
             case .failed:
                 PlanFailedView(
                     error: store.antigravityError
                 ) { Task { await store.refreshAntigravity() } }
             case .transientFailed:
                 PlanFailedView(
-                    error: store.antigravityError ?? "Local Antigravity server unreachable. Retrying."
+                    error: store.antigravityError ?? L("Local Antigravity server unreachable. Retrying.")
                 ) { Task { await store.refreshAntigravity() } }
             case let .reconnect(reason):
                 PlanReconnectView(
-                    title: "Reconnect Antigravity",
+                    title: L("Reconnect Antigravity"),
                     reason: reason,
-                    fallback: "Start the Antigravity app, then click Reconnect."
+                    fallback: L("Start the Antigravity app, then click Reconnect.")
                 ) { Task { await store.bootstrapAntigravity() } }
             case let .usage(idle):
                 if let usage = store.antigravityUsage {
                     loadedBody(usage: usage, idle: idle)
                 } else {
-                    PlanLoadingView(message: "Probing the local Antigravity server...")
+                    PlanLoadingView(message: L("Probing the local Antigravity server..."))
                 }
             }
         }
@@ -2547,7 +2549,7 @@ private struct AntigravityPlanInsight: View {
             }
             ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
                 UtilizationRow(
-                    label: window.label,
+                    label: LR(window.label),
                     percent: window.usedPercent,
                     resetsAt: window.resetsAt,
                     projection: nil
@@ -2665,25 +2667,25 @@ private struct ProjectionCaption: View {
         // ETA after it, and neither on windows flagged compact.
         if let delta = projection.deltaPercent {
             if abs(delta) <= 2 {
-                return projection.compact ? "On pace" : "On pace: \(projected) at reset"
+                return projection.compact ? L("On pace") : L("On pace: \(projected) at reset")
             }
             let stage = delta > 0
-                ? String(format: "%.0f%% in deficit", delta)
-                : String(format: "%.0f%% in reserve", -delta)
+                ? L("\(String(format: "%.0f%%", delta)) in deficit")
+                : L("\(String(format: "%.0f%%", -delta)) in reserve")
             if projection.compact { return stage }
             if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return "\(stage) · hits 100% \(relativeReset(hit))"
+                return L("\(stage) · hits 100% \(relativeReset(hit))")
             }
-            return "\(stage) · \(projected) at reset"
+            return L("\(stage) · \(projected) at reset")
         }
         switch projection.source {
         case .linear:
             if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return "On pace: \(projected) at reset · hits 100% \(relativeReset(hit))"
+                return L("On pace: \(projected) at reset · hits 100% \(relativeReset(hit))")
             }
-            return "On pace: \(projected) at reset"
+            return L("On pace: \(projected) at reset")
         case .historicalBaseline:
-            return "Based on last cycle: \(projected)"
+            return L("Based on last cycle: \(projected)")
         }
     }
 }
@@ -2715,13 +2717,13 @@ private struct UtilizationBar: View {
 
 private func relativeReset(_ date: Date) -> String {
     let interval = date.timeIntervalSinceNow
-    if interval <= 0 { return "now" }
+    if interval <= 0 { return L("now") }
     let hours = interval / 3600
     if hours < 1 {
         let minutes = Int(ceil(interval / 60))
-        return "in \(minutes)m"
+        return L("in \(minutes)m")
     }
-    if hours < 24 { return "in \(Int(ceil(hours)))h" }
+    if hours < 24 { return L("in \(Int(ceil(hours)))h") }
     let days = Int(ceil(hours / 24))
-    return "in \(days)d"
+    return L("in \(days)d")
 }

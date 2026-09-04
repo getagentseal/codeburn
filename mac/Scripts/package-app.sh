@@ -49,6 +49,11 @@ cp "${BUILT_BINARY}" "${BUNDLE}/Contents/MacOS/${EXECUTABLE_NAME}"
 cp "${ICON_SOURCE}" "${BUNDLE}/Contents/Resources/menubar-logo.png"
 cp "${ROOT}/LICENSE" "${BUNDLE}/Contents/Resources/LICENSE.txt"
 cp "${ROOT}/THIRD_PARTY_NOTICES.md" "${BUNDLE}/Contents/Resources/THIRD_PARTY_NOTICES.md"
+# Localizations live in the main bundle: SwiftUI's Text("…") and String(localized:)
+# look keys up in Bundle.main, not in the SwiftPM resource bundle.
+for LPROJ in "${MAC_DIR}/Sources/CodeBurnMenubar/Resources/"*.lproj; do
+  [[ -d "${LPROJ}" ]] && cp -R "${LPROJ}" "${BUNDLE}/Contents/Resources/"
+done
 
 # SwiftPM emits target resources as a sibling bundle; Bundle.module traps at
 # runtime if it is missing from Contents/Resources, so ship it when present.
@@ -80,6 +85,11 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleDisplayName</key>
     <string>CodeBurn Menubar</string>
     <key>CFBundleExecutable</key>

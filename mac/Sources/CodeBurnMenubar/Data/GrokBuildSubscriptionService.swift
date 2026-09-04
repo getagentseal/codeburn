@@ -136,21 +136,21 @@ enum GrokBuildSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                "Run `grok login`, then click Retry."
+                L("Run `grok login`, then click Retry.")
             case .expiredSession:
-                "The Grok Build login has expired. Run `grok login`, then click Retry."
+                L("The Grok Build login has expired. Run `grok login`, then click Retry.")
             case .credentialDataUnreadable:
-                "Could not read Grok Build's local login. Run `grok login` again, then click Retry."
+                L("Could not read Grok Build's local login. Run `grok login` again, then click Retry.")
             case .authenticationRejected:
-                "Grok rejected the current Grok Build login. Run `grok login`, then click Retry."
+                L("Grok rejected the current Grok Build login. Run `grok login`, then click Retry.")
             case .rateLimited:
-                "Grok rate-limited the quota request."
+                L("Grok rate-limited the quota request.")
             case .providerUnavailable:
-                "Grok quota is temporarily unavailable."
+                L("Grok quota is temporarily unavailable.")
             case .parseFailure:
-                "Grok returned an unrecognized quota response."
+                L("Grok returned an unrecognized quota response.")
             case .network:
-                "Network error fetching Grok quota."
+                L("Network error fetching Grok quota.")
             }
         }
     }
@@ -386,10 +386,10 @@ enum GrokBuildSubscriptionService {
     }
 
     private static func windowLabel(resetsAt: Date?, now: Date) -> String {
-        guard let resetsAt else { return "Credits" }
+        guard let resetsAt else { return L("Credits") }
         let days = Int((resetsAt.timeIntervalSince(now) / 86_400).rounded())
-        if (4...12).contains(days) { return "Weekly" }
-        if (20...45).contains(days) { return "Monthly" }
-        return "Credits"
+        if (4...12).contains(days) { return L("Weekly") }
+        if (20...45).contains(days) { return L("Monthly") }
+        return L("Credits")
     }
 }

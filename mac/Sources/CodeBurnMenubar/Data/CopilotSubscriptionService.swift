@@ -59,21 +59,19 @@ enum CopilotSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "No GitHub Copilot credentials found. Usage tracking still works. "
-                    + "To show live quota, sign in with the Copilot CLI, run gh auth login, "
-                    + "or paste a GitHub token in Settings."
+                return L("No GitHub Copilot credentials found. Usage tracking still works. To show live quota, sign in with the Copilot CLI, run gh auth login, or paste a GitHub token in Settings.")
             case .tokenRejected:
-                return "GitHub rejected the Copilot token found on this Mac. It will be retried once you sign in again."
+                return L("GitHub rejected the Copilot token found on this Mac. It will be retried once you sign in again.")
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
-                return "GitHub rate-limited the Copilot quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date()))."
+                return L("GitHub rate-limited the Copilot quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date())).")
             case let .usageHTTPError(code):
-                return "Copilot quota fetch failed (HTTP \(code)). Sign in to Copilot again, then Reconnect."
+                return L("Copilot quota fetch failed (HTTP \(code)). Sign in to Copilot again, then Reconnect.")
             case .usageDecodeFailed:
-                return "Copilot quota response was malformed."
+                return L("Copilot quota response was malformed.")
             case let .network(err):
-                return "Network error: \(err.localizedDescription)"
+                return L("Network error: \(err.localizedDescription)")
             }
         }
 
@@ -404,9 +402,9 @@ enum CopilotSubscriptionService {
         // alias rather than trusting one spelling.
         let root = parsed as? [String: Any] ?? [:]
         let snapshots = (root["quota_snapshots"] ?? root["quotaSnapshots"]) as? [String: Any]
-        let premium = window(label: "Premium requests",
+        let premium = window(label: L("Premium requests"),
                              snapshot: snapshots?["premium_interactions"] ?? snapshots?["premiumInteractions"])
-        let chat = window(label: "Chat", snapshot: snapshots?["chat"])
+        let chat = window(label: L("Chat"), snapshot: snapshots?["chat"])
         return CopilotUsage(
             details: [premium, chat].compactMap { $0 },
             plan: planLabel(root["copilot_plan"] ?? root["copilotPlan"]),
@@ -445,8 +443,8 @@ enum CopilotSubscriptionService {
         guard let raw = (value as? String)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
         let lower = raw.lowercased()
         let known = [
-            "free": "Free", "individual": "Individual", "pro": "Pro", "business": "Business",
-            "enterprise": "Enterprise", "for_educators": "Educators", "for-educators": "Educators",
+            "free": L("Free"), "individual": L("Individual"), "pro": L("Pro"), "business": L("Business"),
+            "enterprise": L("Enterprise"), "for_educators": L("Educators"), "for-educators": L("Educators"),
         ]
         if let label = known[lower] { return label }
         return lower

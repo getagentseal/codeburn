@@ -94,8 +94,7 @@ final class CapacityDockProviderQuotaService {
             }
         default:
             throw CapacityDockProviderFetchFailure(
-                message: "\(provider.displayName) does not have a CodeBurn live quota adapter yet. "
-                    + "Remove it from the dock or choose a supported provider.",
+                message: L("\(provider.displayName) does not have a CodeBurn live quota adapter yet. Remove it from the dock or choose a supported provider."),
                 disposition: .terminal
             )
         }

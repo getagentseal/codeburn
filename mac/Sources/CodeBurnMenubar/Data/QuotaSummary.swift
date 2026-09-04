@@ -61,11 +61,15 @@ struct QuotaSummary: Equatable {
         if let primary, !candidates.contains(primary) {
             candidates.append(primary)
         }
-        func firstMatching(_ needle: String) -> Window? {
-            candidates.first { $0.label.range(of: needle, options: .caseInsensitive) != nil }
+        // Labels may already be localized by the service that built them, so
+        // match the English source text and its Simplified Chinese rendering.
+        func firstMatching(_ needles: [String]) -> Window? {
+            candidates.first { window in
+                needles.contains { window.label.range(of: $0, options: .caseInsensitive) != nil }
+            }
         }
-        if let weekly = firstMatching("week") { return weekly }
-        if let monthly = firstMatching("month") { return monthly }
+        if let weekly = firstMatching(["week", "周"]) { return weekly }
+        if let monthly = firstMatching(["month", "月"]) { return monthly }
         return candidates.max { lhs, rhs in lhs.percent < rhs.percent }
     }
 }
@@ -77,11 +81,11 @@ enum CapacityDockConnectionAction: String, Equatable, Sendable {
     case connect = "Connect"
     case reconnect = "Reconnect"
 
-    var title: String { rawValue }
+    var title: String { LR(rawValue) }
 
     func title(for provider: CapacityDockProvider) -> String {
         if provider.catalogEntry.authMethods == [.apiTokenOrCloudCredentials] {
-            return "Add API Key"
+            return L("Add API Key")
         }
         return title
     }
@@ -101,13 +105,13 @@ extension QuotaSummary.Window {
     var resetsInLabel: String {
         guard let resetsAt else { return "" }
         let seconds = max(0, resetsAt.timeIntervalSinceNow)
-        if seconds < 60 { return "now" }
+        if seconds < 60 { return L("now") }
         let minutes = Int(seconds / 60)
         let hours = minutes / 60
         let days = hours / 24
-        if days > 0 { return "\(days)d \(hours % 24)h" }
-        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
-        return "\(minutes)m"
+        if days > 0 { return L("\(days)d \(hours % 24)h") }
+        if hours > 0 { return L("\(hours)h \(minutes % 60)m") }
+        return L("\(minutes)m")
     }
 
     var percentLabel: String {

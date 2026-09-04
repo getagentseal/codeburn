@@ -56,9 +56,9 @@ enum AntigravitySubscriptionService {
         var errorDescription: String? {
             switch self {
             case .disconnected:
-                return "No running Antigravity language server found. Start the Antigravity app, then click Reconnect."
+                return L("No running Antigravity language server found. Start the Antigravity app, then click Reconnect.")
             case let .network(err):
-                return "Local probe failed: \(err.localizedDescription)"
+                return L("Local probe failed: \(err.localizedDescription)")
             }
         }
     }

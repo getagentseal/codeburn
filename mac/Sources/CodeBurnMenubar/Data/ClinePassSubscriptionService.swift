@@ -37,17 +37,17 @@ enum ClinePassSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "Enter a ClinePass API key or token, then press Save & Connect."
+                return L("Enter a ClinePass API key or token, then press Save & Connect.")
             case .authenticationRejected:
-                return "ClinePass rejected this API key."
+                return L("ClinePass rejected this API key.")
             case .rateLimited:
-                return "ClinePass rate-limited the quota request."
+                return L("ClinePass rate-limited the quota request.")
             case .providerUnavailable:
-                return "ClinePass is temporarily unavailable."
+                return L("ClinePass is temporarily unavailable.")
             case .parseFailure:
-                return "ClinePass quota response was malformed."
+                return L("ClinePass quota response was malformed.")
             case .network:
-                return "Network error fetching ClinePass quota."
+                return L("Network error fetching ClinePass quota.")
             }
         }
     }
@@ -139,9 +139,9 @@ enum ClinePassSubscriptionService {
             }
             let label: String
             switch type {
-            case "five_hour": label = "5-hour"
-            case "weekly": label = "Weekly"
-            case "monthly": label = "Monthly"
+            case "five_hour": label = L("5-hour")
+            case "weekly": label = L("Weekly")
+            case "monthly": label = L("Monthly")
             default: continue
             }
             guard let percentUsed = jsonNumber(limit["percentUsed"]) else {

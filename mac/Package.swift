@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "CodeBurnMenubar",
+    defaultLocalization: "en",
     platforms: [
         // macOS 14 (Sonoma) is the floor: matches Info.plist LSMinimumSystemVersion,
         // the CLI install guard (MIN_MACOS_MAJOR=14), and mac/README. The earlier .v15
@@ -18,7 +19,12 @@ let package = Package(
             name: "CodeBurnMenubar",
             path: "Sources/CodeBurnMenubar",
             resources: [
-                .process("Resources/ProviderIcons")
+                .process("Resources/ProviderIcons"),
+                // Localizable.strings per language. package-app.sh also copies the
+                // .lproj folders into the .app's Contents/Resources so SwiftUI's
+                // main-bundle lookups (Text("…"), String(localized:)) find them.
+                .process("Resources/en.lproj"),
+                .process("Resources/zh-Hans.lproj")
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")

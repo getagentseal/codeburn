@@ -251,7 +251,7 @@ private struct AgentTab: View {
         } label: {
             VStack(spacing: 3) {
                 HStack(spacing: 5) {
-                    Text(filter.rawValue)
+                    Text(LR(filter.rawValue))
                         .font(.system(size: 11.5, weight: .medium))
                         .tracking(-0.05)
                     if let cost, cost > 0 {
@@ -370,9 +370,9 @@ private struct QuotaDetailPopover: View {
 
     private var disconnectedMessage: String {
         switch quota.providerFilter {
-        case .codex:  return "Sign in with `codex` (ChatGPT mode) to track quota."
-        case .claude: return "Sign in to Claude Code to track quota."
-        default:      return "Sign in to track quota."
+        case .codex:  return L("Sign in with `codex` (ChatGPT mode) to track quota.")
+        case .claude: return L("Sign in to Claude Code to track quota.")
+        default:      return L("Sign in to track quota.")
         }
     }
 
@@ -449,7 +449,7 @@ private struct QuotaDetailRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(window.label)
+            Text(LR(window.label))
                 .font(.system(size: 10.5))
                 .frame(width: 92, alignment: .leading)
             GeometryReader { geo in

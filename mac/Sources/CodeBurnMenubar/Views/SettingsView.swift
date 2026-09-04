@@ -107,7 +107,7 @@ struct SettingsView: View {
 
             List(selection: selection) {
                 Section {
-                    SettingsSidebarPaneRow(pane: "general", title: "General", systemImage: "gearshape.fill", color: .gray)
+                    SettingsSidebarPaneRow(pane: "general", title: L("General"), systemImage: "gearshape.fill", color: .gray)
                     SettingsSidebarAboutRow()
                 }
                 Section {
@@ -134,10 +134,10 @@ struct SettingsView: View {
 
     private var currentPaneTitle: String {
         switch selection.wrappedValue {
-        case "general": return "General"
-        case "about": return "About"
+        case "general": return L("General")
+        case "about": return L("About")
         default:
-            return providers.first { $0.id == selection.wrappedValue }?.name ?? "Settings"
+            return providers.first { $0.id == selection.wrappedValue }?.name ?? L("Settings")
         }
     }
 
@@ -330,7 +330,7 @@ private struct SettingsWindowStyleAccessor: NSViewRepresentable {
 }
 
 private final class SettingsWindowStyleView: NSView {
-    var paneTitle = "Settings"
+    var paneTitle = L("Settings")
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -411,8 +411,9 @@ private struct GeneralSettingsTab: View {
         let customEmpty = store.isTokenMetric
             ? (tokenCustom && store.dailyTokenBudget == 0)
             : (costCustom && store.dailyBudget == 0)
-        if customEmpty { return "Enter an amount above, or the alert stays off." }
-        return "Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget."
+        if customEmpty { return L("Enter an amount above, or the alert stays off.") }
+        let metric = store.isTokenMetric ? L("tokens") : L("cost")
+        return L("Flame icon turns yellow when today's \(metric) pass the daily budget.")
     }
 
     var body: some View {
@@ -436,6 +437,15 @@ private struct GeneralSettingsTab: View {
                     Text("Credits (Codex)").tag(DisplayMetric.credits)
                     Text("Icon Only").tag(DisplayMetric.iconOnly)
                 }
+                Picker("Icon color", selection: Binding(
+                    get: { MenubarIconStyle.current },
+                    set: { MenubarIconStyle.select($0) }
+                )) {
+                    ForEach(MenubarIconStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.menu)
                 Picker("Period", selection: Binding(
                     get: { store.menubarPeriod },
                     set: { store.setMenubarPeriod($0) }
@@ -450,7 +460,7 @@ private struct GeneralSettingsTab: View {
                     set: { store.setMenubarScope($0) }
                 )) {
                     ForEach(MenubarScope.allCases) { scope in
-                        Text(scope.rawValue).tag(scope)
+                        Text(LR(scope.rawValue)).tag(scope)
                     }
                 }
                 .pickerStyle(.menu)
@@ -459,10 +469,12 @@ private struct GeneralSettingsTab: View {
                     set: { store.accentPreset = $0 }
                 )) {
                     ForEach(AccentPreset.allCases) { preset in
-                        Text(preset.rawValue).tag(preset)
+                        Text(LR(preset.rawValue)).tag(preset)
                     }
                 }
             }
+
+            LanguageSettingsSection()
 
             CapacityDockSettingsSection()
 
@@ -487,7 +499,7 @@ private struct GeneralSettingsTab: View {
                     set: { preferredTerminalRaw = $0.rawValue }
                 )) {
                     ForEach(PreferredTerminal.allCases) { terminal in
-                        Text(terminal.isInstalled ? terminal.label : "\(terminal.label) (not installed)")
+                        Text(terminal.isInstalled ? terminal.label : L("\(terminal.label) (not installed)"))
                             .tag(terminal)
                     }
                 }
@@ -618,6 +630,16 @@ private struct CapacityDockSettingsSection: View {
                 get: { snapshot.isEnabled },
                 set: { CapacityDockPreferences.setEnabled($0) }
             ))
+
+            Toggle("Auto-hide at screen edge", isOn: Binding(
+                get: { snapshot.isAutoHideEnabled },
+                set: { CapacityDockPreferences.setAutoHide($0) }
+            ))
+            .disabled(snapshot.dockedEdge == nil)
+            Text("Tucks the dock into the edge it is attached to and slides it out when the pointer reaches that edge. Only applies while the dock is snapped to an edge.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !enabledEligibleProviders.isEmpty {
                 Picker("Resting provider", selection: Binding(
@@ -833,14 +855,14 @@ private struct ClaudeConnectionRow: View {
 
     private var stateTitle: String {
         switch store.subscriptionLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load plan data"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load plan data")
         }
     }
 
@@ -848,15 +870,15 @@ private struct ClaudeConnectionRow: View {
         switch store.subscriptionLoadState {
         case .loaded:
             if let tier = store.subscription?.tier.displayName {
-                return "Plan: \(tier)"
+                return L("Plan: \(tier)")
             }
-            return "Live quota tracked from Anthropic."
-        case .terminalFailure: return "Open Claude Code in your terminal and type `/login`, then click Reconnect."
-        case .transientFailure: return store.subscriptionError ?? "Anthropic rate-limited; auto-retrying."
+            return L("Live quota tracked from Anthropic.")
+        case .terminalFailure: return L("Open Claude Code in your terminal and type `/login`, then click Reconnect.")
+        case .transientFailure: return store.subscriptionError ?? L("Anthropic rate-limited; auto-retrying.")
         case .bootstrapping: return "macOS may ask permission to read your credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from Anthropic."
-        case .notBootstrapped, .noCredentials: return "Click Connect to read your Claude Code credentials and start tracking quota."
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from Anthropic.")
+        case .notBootstrapped, .noCredentials: return L("Click Connect to read your Claude Code credentials and start tracking quota.")
         case .failed: return store.subscriptionError ?? ""
         }
     }
@@ -943,8 +965,8 @@ private struct ClaudeConfigDirsSection: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
-        panel.prompt = "Add"
-        panel.message = "Choose one or more Claude config directories (each containing a `projects` folder)."
+        panel.prompt = L("Add")
+        panel.message = L("Choose one or more Claude config directories (each containing a `projects` folder).")
         guard panel.runModal() == .OK else { return }
 
         let added = panel.urls.map { $0.path }
@@ -1040,14 +1062,14 @@ private struct CodexConnectionRow: View {
 
     private var stateTitle: String {
         switch store.codexLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Codex quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Codex quota")
         }
     }
 
@@ -1055,23 +1077,23 @@ private struct CodexConnectionRow: View {
         switch store.codexLoadState {
         case .loaded:
             if let plan = store.codexUsage?.plan.displayName {
-                return "Plan: \(plan)"
+                return L("Plan: \(plan)")
             }
-            return "Live quota tracked from chatgpt.com."
+            return L("Live quota tracked from chatgpt.com.")
         case .terminalFailure:
             // Be specific about the cause: the message we already surface in
             // codexError will say "API-key mode" if that's the situation, so
             // the generic "run codex login" hint covers both cases.
             if let err = store.codexError, err.lowercased().contains("api-key") {
-                return "Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking."
+                return L("Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking.")
             }
-            return "Run `codex login` in your terminal to sign in again, then click Reconnect."
-        case .transientFailure: return store.codexError ?? "ChatGPT rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.codex/auth.json."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from chatgpt.com."
+            return L("Run `codex login` in your terminal to sign in again, then click Reconnect.")
+        case .transientFailure: return store.codexError ?? L("ChatGPT rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.codex/auth.json.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from chatgpt.com.")
         case .notBootstrapped, .noCredentials:
-            return "Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json."
+            return L("Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json.")
         case .failed: return store.codexError ?? ""
         }
     }
@@ -1174,29 +1196,29 @@ private struct KimiConnectionRow: View {
 
     private var stateTitle: String {
         switch store.kimiLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Kimi quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Kimi quota")
         }
     }
 
     private var stateDetail: String {
         switch store.kimiLoadState {
         case .loaded:
-            return "Live quota tracked from api.kimi.com."
+            return L("Live quota tracked from api.kimi.com.")
         case .terminalFailure:
-            return "Run the Kimi CLI once to refresh your login, then click Reconnect."
-        case .transientFailure: return store.kimiError ?? "Kimi rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.kimi-code credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from api.kimi.com."
+            return L("Run the Kimi CLI once to refresh your login, then click Reconnect.")
+        case .transientFailure: return store.kimiError ?? L("Kimi rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.kimi-code credentials.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from api.kimi.com.")
         case .notBootstrapped, .noCredentials:
-            return "Sign in with the Kimi CLI first, then click Connect."
+            return L("Sign in with the Kimi CLI first, then click Connect.")
         case .failed: return store.kimiError ?? ""
         }
     }
@@ -1299,14 +1321,14 @@ private struct GeminiConnectionRow: View {
 
     private var stateTitle: String {
         switch store.geminiLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Gemini quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Gemini quota")
         }
     }
 
@@ -1314,17 +1336,17 @@ private struct GeminiConnectionRow: View {
         switch store.geminiLoadState {
         case .loaded:
             if let plan = store.geminiUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: \(plan)")
             }
-            return "Live quota tracked from Google Code Assist."
+            return L("Live quota tracked from Google Code Assist.")
         case .terminalFailure:
-            return "Run the Gemini CLI once to refresh your login, then click Reconnect."
-        case .transientFailure: return store.geminiError ?? "Gemini rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.gemini credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from Google Code Assist."
+            return L("Run the Gemini CLI once to refresh your login, then click Reconnect.")
+        case .transientFailure: return store.geminiError ?? L("Gemini rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.gemini credentials.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from Google Code Assist.")
         case .notBootstrapped, .noCredentials:
-            return "Sign in with the Gemini CLI first, then click Connect."
+            return L("Sign in with the Gemini CLI first, then click Connect.")
         case .failed: return store.geminiError ?? ""
         }
     }
@@ -1482,14 +1504,14 @@ private struct CopilotConnectionRow: View {
 
     private var stateTitle: String {
         switch store.copilotLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Copilot quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Copilot quota")
         }
     }
 
@@ -1497,17 +1519,17 @@ private struct CopilotConnectionRow: View {
         switch store.copilotLoadState {
         case .loaded:
             if let plan = store.copilotUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: \(plan)")
             }
-            return "Live quota tracked from api.github.com."
+            return L("Live quota tracked from api.github.com.")
         case .terminalFailure:
-            return "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect."
-        case .transientFailure: return store.copilotError ?? "GitHub rate-limited; auto-retrying."
-        case .bootstrapping: return "Looking for a GitHub token on this Mac."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from api.github.com."
+            return L("Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect.")
+        case .transientFailure: return store.copilotError ?? L("GitHub rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Looking for a GitHub token on this Mac.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from api.github.com.")
         case .notBootstrapped, .noCredentials:
-            return "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect."
+            return L("Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect.")
         case .failed: return store.copilotError ?? ""
         }
     }
@@ -1610,14 +1632,14 @@ private struct AntigravityConnectionRow: View {
 
     private var stateTitle: String {
         switch store.antigravityLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Antigravity quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Antigravity quota")
         }
     }
 
@@ -1625,19 +1647,19 @@ private struct AntigravityConnectionRow: View {
         switch store.antigravityLoadState {
         case .loaded:
             if let plan = store.antigravityUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: \(plan)")
             }
-            return "Live quota tracked from the local Antigravity server."
+            return L("Live quota tracked from the local Antigravity server.")
         case .terminalFailure:
-            return "Start the Antigravity app, then click Reconnect."
-        case .transientFailure: return store.antigravityError ?? "Local probe failed; auto-retrying."
-        case .bootstrapping: return "Probing the local Antigravity language server."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to probe the local Antigravity server."
+            return L("Start the Antigravity app, then click Reconnect.")
+        case .transientFailure: return store.antigravityError ?? L("Local probe failed; auto-retrying.")
+        case .bootstrapping: return L("Probing the local Antigravity language server.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to probe the local Antigravity server.")
         case .notBootstrapped:
-            return "Start the Antigravity app first, then click Connect."
+            return L("Start the Antigravity app first, then click Connect.")
         case .noCredentials:
-            return "No local Antigravity server found. Start the Antigravity app, then click Reconnect."
+            return L("No local Antigravity server found. Start the Antigravity app, then click Reconnect.")
         case .failed: return store.antigravityError ?? ""
         }
     }
@@ -1916,22 +1938,22 @@ private struct GenericProviderConnectionSections: View {
     }
 
     private var connectionTitle: String {
-        guard hasLiveAdapter else { return "Quota adapter not available" }
-        if isLoading { return "Connecting…" }
-        guard let summary else { return "Not connected" }
+        guard hasLiveAdapter else { return L("Quota adapter not available") }
+        if isLoading { return L("Connecting…") }
+        guard let summary else { return L("Not connected") }
         switch summary.connection {
-        case .connected: return "Connected"
-        case .loading: return "Connecting…"
-        case .stale: return "Refreshing…"
-        case .transientFailure: return "Retrying"
-        case .terminalFailure: return "Reconnect required"
-        case .disconnected: return "Not connected"
+        case .connected: return L("Connected")
+        case .loading: return L("Connecting…")
+        case .stale: return L("Refreshing…")
+        case .transientFailure: return L("Retrying")
+        case .terminalFailure: return L("Reconnect required")
+        case .disconnected: return L("Not connected")
         }
     }
 
     private var connectionDetail: String {
         guard hasLiveAdapter else {
-            return "\(provider.displayName) is catalogued, but CodeBurn cannot fetch its live quota yet."
+            return L("\(provider.displayName) is catalogued, but CodeBurn cannot fetch its live quota yet.")
         }
         if let error = store.capacityDockProviderErrors[provider.id], !error.isEmpty {
             return "\(error) \(ProviderConnectionGuidance.instruction(for: provider))"
@@ -1945,9 +1967,9 @@ private struct GenericProviderConnectionSections: View {
             return "\(reason) \(instruction)"
         }
         if let source = summary.footerLines.first(where: { $0.hasPrefix("Source:") }) {
-            return source
+            return LR(source)
         }
-        return isConnected ? "Live quota is available to Capacity Dock." : "Waiting for quota data."
+        return isConnected ? L("Live quota is available to Capacity Dock.") : L("Waiting for quota data.")
     }
 
     private var connectionIcon: String {
@@ -1979,8 +2001,8 @@ private struct GenericProviderConnectionSections: View {
 
     private var primaryConnectionButtonTitle: String {
         switch submissionAction {
-        case .saveAndConnect: return "Save & Connect"
-        case .connect, .requiresCredential: return summary == nil ? "Connect" : "Retry"
+        case .saveAndConnect: return L("Save & Connect")
+        case .connect, .requiresCredential: return summary == nil ? L("Connect") : L("Retry")
         }
     }
 
@@ -2016,11 +2038,11 @@ private struct GenericProviderConnectionSections: View {
 
     private func sourceTitle(_ source: ProviderReferenceSourceMode) -> String {
         switch source {
-        case .automatic: "Automatic"
-        case .web: "Browser session"
-        case .cli: "CLI"
-        case .oauth: "OAuth"
-        case .api: "API"
+        case .automatic: L("Automatic")
+        case .web: L("Browser session")
+        case .cli: L("CLI")
+        case .oauth: L("OAuth")
+        case .api: L("API")
         }
     }
 
@@ -2122,7 +2144,7 @@ private struct DevinSettingsTab: View {
         guard let rate = parsedRate else { return }
         CLIDevinConfig.persistAcuUsdRate(rate)
         rateText = Self.format(rate)
-        statusText = "Saved. Refresh CodeBurn to recalculate Devin cost."
+        statusText = L("Saved. Refresh CodeBurn to recalculate Devin cost.")
     }
 
     private static func format(_ value: Double) -> String {
@@ -2180,11 +2202,11 @@ private struct AboutSettingsTab: View {
                     url: "https://github.com/getagentseal/codeburn")
                 AboutLinkRow(
                     icon: "globe",
-                    title: "Website",
+                    title: L("Website"),
                     url: "https://codeburn.app")
                 AboutLinkRow(
                     icon: "exclamationmark.bubble",
-                    title: "Issues",
+                    title: L("Issues"),
                     url: "https://github.com/getagentseal/codeburn/issues")
             } header: {
                 Text("Links")
@@ -2271,5 +2293,48 @@ enum AboutFlameImage {
             }
         }
         return nil
+    }
+}
+
+/// UI language picker. macOS applies a per-app language choice only on the
+/// next launch, so the section offers a relaunch button once the selection
+/// differs from the language the running process resolved to.
+private struct LanguageSettingsSection: View {
+    @State private var selection = AppLanguage.current
+
+    private var needsRelaunch: Bool {
+        let target = selection == .system ? nil : selection
+        return target != nil ? target != AppLanguage.effective : AppLanguage.current != .system
+    }
+
+    var body: some View {
+        Section("Language") {
+            Picker("Language", selection: Binding(
+                get: { selection },
+                set: { language in
+                    selection = language
+                    AppLanguage.select(language)
+                }
+            )) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if needsRelaunch {
+                HStack(spacing: 10) {
+                    Text("Relaunch CodeBurn to apply the new language.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Relaunch Now") { AppLanguage.relaunch() }
+                }
+            } else {
+                Text("Follows the macOS system language unless you pick one here.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }

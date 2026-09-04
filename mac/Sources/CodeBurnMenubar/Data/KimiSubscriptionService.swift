@@ -51,17 +51,18 @@ enum KimiSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "No Kimi Code credentials found. Sign in with the Kimi CLI first."
+                return L("No Kimi Code credentials found. Sign in with the Kimi CLI first.")
             case .tokenExpired:
-                return "Kimi Code login expired. Run the Kimi CLI once to refresh, then try again."
+                return L("Kimi Code login expired. Run the Kimi CLI once to refresh, then try again.")
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
-                return "Kimi rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date()))."
+                return L("Kimi rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date())).")
             case let .usageHTTPError(code, body):
-                return "Kimi quota fetch failed (HTTP \(code))\(body.map { ": \($0)" } ?? "")"
-            case .usageDecodeFailed: return "Kimi quota response was malformed."
-            case let .network(err): return "Network error: \(err.localizedDescription)"
+                let suffix = body.map { ": \($0)" } ?? ""
+                return L("Kimi quota fetch failed (HTTP \(code))\(suffix)")
+            case .usageDecodeFailed: return L("Kimi quota response was malformed.")
+            case let .network(err): return L("Network error: \(err.localizedDescription)")
             }
         }
 
@@ -259,7 +260,7 @@ enum KimiSubscriptionService {
         let root = try JSONDecoder().decode(ResponseDTO.self, from: data)
         // The top-level usage envelope is the account's weekly quota (its
         // reset lands ~7 days out), so label it like Claude's weekly window.
-        let primary = makeWindow(label: "Weekly", dto: root.usage)
+        let primary = makeWindow(label: L("Weekly"), dto: root.usage)
         let details: [KimiUsage.Window] = (root.limits ?? []).compactMap { limit in
             guard let dto = limit.detail else { return nil }
             let label = windowLabel(duration: limit.window?.duration?.value, timeUnit: limit.window?.timeUnit)
@@ -302,7 +303,7 @@ enum KimiSubscriptionService {
     /// ("TIME_UNIT_MINUTE", duration 300) as well as plain ones ("hour"),
     /// so normalize first; sub-hour durations roll up to hours when exact.
     private static func windowLabel(duration: Double?, timeUnit: String?) -> String {
-        guard let duration, let rawUnit = timeUnit else { return "Rate Limit" }
+        guard let duration, let rawUnit = timeUnit else { return L("Rate Limit") }
         var unit = rawUnit.lowercased()
         if unit.hasPrefix("time_unit_") { unit = String(unit.dropFirst("time_unit_".count)) }
         var d = duration
@@ -312,14 +313,14 @@ enum KimiSubscriptionService {
         }
         let i = Int(d)
         switch unit {
-        case "minute", "minutes": return i == 1 ? "Minutely" : "\(i)-min"
-        case "hour", "hours":   return i == 1 ? "Hourly" : "\(i)-hour"
+        case "minute", "minutes": return i == 1 ? L("Minutely") : L("\(i)-min")
+        case "hour", "hours":   return i == 1 ? L("Hourly") : L("\(i)-hour")
         case "day", "days":
-            if i == 1 { return "Daily" }
-            if i == 7 { return "Weekly" }
-            return "\(i)-day"
-        case "week", "weeks":   return i == 1 ? "Weekly" : "\(i)-week"
-        case "month", "months": return i == 1 ? "Monthly" : "\(i)-month"
+            if i == 1 { return L("Daily") }
+            if i == 7 { return L("Weekly") }
+            return L("\(i)-day")
+        case "week", "weeks":   return i == 1 ? L("Weekly") : L("\(i)-week")
+        case "month", "months": return i == 1 ? L("Monthly") : L("\(i)-month")
         default:                return "\(i) \(unit)"
         }
     }

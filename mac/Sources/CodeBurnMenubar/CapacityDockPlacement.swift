@@ -106,6 +106,19 @@ enum CapacityDockPlacement {
         )
     }
 
+    /// Auto-hide: slide a docked rail beyond its screen edge so only `peek`
+    /// points remain visible as a hover target.
+    static func tuckedFrame(_ frame: CGRect, edge: CapacityDockEdge, peek: CGFloat) -> CGRect {
+        var result = frame
+        switch edge {
+        case .right: result.origin.x += max(0, frame.width - peek)
+        case .left: result.origin.x -= max(0, frame.width - peek)
+        case .top: result.origin.y += max(0, frame.height - peek)
+        case .bottom: result.origin.y -= max(0, frame.height - peek)
+        }
+        return result
+    }
+
     static func normalizedHorizontalOffset(
         railFrame: CGRect,
         visibleFrame: CGRect

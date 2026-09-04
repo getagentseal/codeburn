@@ -38,21 +38,21 @@ enum CursorSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "Sign in to the Cursor app, then click Retry."
+                return L("Sign in to the Cursor app, then click Retry.")
             case .expiredSession:
-                return "The Cursor app session is expired or invalid. Sign in again, then click Retry."
+                return L("The Cursor app session is expired or invalid. Sign in again, then click Retry.")
             case .authenticationRejected:
-                return "Cursor rejected the current app session. Sign in again, then click Retry."
+                return L("Cursor rejected the current app session. Sign in again, then click Retry.")
             case .appDataUnreadable:
-                return "Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry."
+                return L("Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry.")
             case .rateLimited:
-                return "Cursor rate-limited the quota request."
+                return L("Cursor rate-limited the quota request.")
             case .providerUnavailable:
-                return "Cursor is temporarily unavailable."
+                return L("Cursor is temporarily unavailable.")
             case .parseFailure:
-                return "Cursor returned an unrecognized quota response."
+                return L("Cursor returned an unrecognized quota response.")
             case .network:
-                return "Network error fetching Cursor quota."
+                return L("Network error fetching Cursor quota.")
             }
         }
     }
@@ -163,21 +163,21 @@ enum CursorSubscriptionService {
         guard let monthlyPercent else { throw FetchError.parseFailure }
 
         let reset = parseDate(summary.billingCycleEnd)
-        let primary = QuotaSummary.Window(label: "Monthly", percent: monthlyPercent, resetsAt: reset)
+        let primary = QuotaSummary.Window(label: L("Monthly"), percent: monthlyPercent, resetsAt: reset)
         var details = [primary]
         if let autoPercent {
-            details.append(QuotaSummary.Window(label: "Auto", percent: autoPercent, resetsAt: reset))
+            details.append(QuotaSummary.Window(label: L("Auto"), percent: autoPercent, resetsAt: reset))
         }
         if let apiPercent {
-            details.append(QuotaSummary.Window(label: "API", percent: apiPercent, resetsAt: reset))
+            details.append(QuotaSummary.Window(label: L("API"), percent: apiPercent, resetsAt: reset))
         }
         if let onDemand = summary.individualUsage?.onDemand,
            onDemand.enabled != false,
            let percent = ratio(used: onDemand.used, limit: onDemand.limit) {
-            details.append(QuotaSummary.Window(label: "On-demand", percent: percent, resetsAt: reset))
+            details.append(QuotaSummary.Window(label: L("On-demand"), percent: percent, resetsAt: reset))
         }
         if let percent = ratio(used: pooled?.used, limit: pooled?.limit) {
-            details.append(QuotaSummary.Window(label: "Team pool", percent: percent, resetsAt: reset))
+            details.append(QuotaSummary.Window(label: L("Team pool"), percent: percent, resetsAt: reset))
         }
 
         return QuotaSummary(
@@ -250,12 +250,12 @@ enum CursorSubscriptionService {
             return nil
         }
         switch value.lowercased() {
-        case "pro": return "Pro"
-        case "pro_plus", "pro plus": return "Pro Plus"
-        case "business": return "Business"
-        case "enterprise": return "Enterprise"
-        case "hobby", "free": return "Hobby"
-        case "ultra": return "Ultra"
+        case "pro": return L("Pro")
+        case "pro_plus", "pro plus": return L("Pro Plus")
+        case "business": return L("Business")
+        case "enterprise": return L("Enterprise")
+        case "hobby", "free": return L("Hobby")
+        case "ultra": return L("Ultra")
         default: return value
         }
     }

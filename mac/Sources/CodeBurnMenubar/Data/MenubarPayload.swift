@@ -105,8 +105,8 @@ struct LiveSession: Codable, Sendable, Identifiable {
         guard let started = Self.parseISO8601(startedAt) else { return "" }
         let minutes = Int(max(0, now.timeIntervalSince(started)) / 60)
         let hours = minutes / 60
-        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
-        return "\(minutes)m"
+        if hours > 0 { return L("\(hours)h \(minutes % 60)m") }
+        return L("\(minutes)m")
     }
 
     /// The CLI stamps milliseconds; the plain formatter rejects those, so try the

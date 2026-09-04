@@ -8,6 +8,9 @@ enum MenubarScope: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// Localized label for display; rawValue stays the stable identifier.
+    var displayName: String { LR(rawValue) }
+
     var cliArg: String {
         switch self {
         case .local: "local"

@@ -94,17 +94,17 @@ enum ClaudeCredentialStore {
         var errorDescription: String? {
             switch self {
             case .bootstrapNoSource:
-                return "No Claude credentials found. Sign in with `claude` first."
+                return L("No Claude credentials found. Sign in with `claude` first.")
             case .bootstrapDecodeFailed:
-                return "Claude credentials are malformed."
+                return L("Claude credentials are malformed.")
             case let .keychainWriteFailed(status):
-                return "Could not write to keychain (status \(status))."
+                return L("Could not write to keychain (status \(Int(status))).")
             case let .keychainReadFailed(status):
-                return "Could not read from keychain (status \(status))."
+                return L("Could not read from keychain (status \(Int(status))).")
             case .noRefreshToken:
-                return "No refresh token available; reconnect required."
+                return L("No refresh token available; reconnect required.")
             case .sourceTokenStale:
-                return "Waiting for the Claude CLI to refresh its token."
+                return L("Waiting for the Claude CLI to refresh its token.")
             }
         }
 

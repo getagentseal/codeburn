@@ -24,6 +24,9 @@ final class CapacityDockController {
     private var pointerInsideRail = false
     private var pointerInsideDetail = false
     private var hoveredRowProvider: CapacityDockProvider?
+    /// True while the resting rail is tucked beyond its screen edge (auto-hide).
+    /// Hover then keys off the visible sliver rather than the rail silhouette.
+    private var railIsTucked = false
     private var dragStartFrame: CGRect?
     private var dragVisibleFrame: CGRect?
     private var dragScreenFrame: CGRect?
@@ -944,20 +947,43 @@ final class CapacityDockController {
             anchoredAxisCoordinate: anchoredAxisCoordinate,
             expansionAnchor: model.expansionAnchor
         )
-        let target = CapacityDockMotion.pixelAlignedRailFrame(
+        let alignedTarget = CapacityDockMotion.pixelAlignedRailFrame(
             rawTarget,
             backingScale: screen.backingScaleFactor,
             dockedEdge: model.dockedEdge,
             expansionAnchor: model.expansionAnchor,
             isVertical: model.isVertical
         )
+        // Auto-hide: a resting docked rail parks beyond the edge, leaving a
+        // thin sliver on screen as the hover target that slides it back out.
+        let shouldTuck = model.preferences.isAutoHideEnabled
+            && model.dockedEdge != nil
+            && !wantsExpandedPresentation
+            && !model.interaction.isDragging
+        let target: CGRect = if shouldTuck, let dockedEdge = model.dockedEdge {
+            CapacityDockPlacement.tuckedFrame(
+                alignedTarget,
+                edge: dockedEdge,
+                peek: CapacityDockMetrics.autoHidePeek(scale: model.scale)
+            )
+        } else {
+            alignedTarget
+        }
+        railIsTucked = shouldTuck
         lastKnownRailTop = target.maxY
-        let transaction = CapacityDockMotion.railTransaction(
+        var transaction = CapacityDockMotion.railTransaction(
             fromFrame: railPanel.frame,
             toFrame: target,
             attachmentFrom: model.attachmentProgress,
             attachmentTo: targetAttachment
         )
+        // A single-provider rail keeps its size when it tucks or slides out, so
+        // the pure translation must still animate as an expand/collapse.
+        if transaction == .immediate,
+           model.preferences.isAutoHideEnabled,
+           railPanel.frame.origin != target.origin {
+            transaction = wantsExpandedPresentation ? .railExpand : .railCollapse
+        }
         if animate,
            !model.interaction.isDragging,
            railPanel.isVisible,
@@ -1251,6 +1277,10 @@ final class CapacityDockController {
 
     private func railContains(screenPoint: CGPoint) -> Bool {
         guard let railPanel, railPanel.frame.contains(screenPoint) else { return false }
+        // Tucked rail: only a sliver is on screen and the silhouette's rounded
+        // corners would leave almost nothing to hover, so the whole visible
+        // strip counts as the rail.
+        if railIsTucked { return true }
         let local = swiftUILocalPoint(screenPoint, in: railPanel.frame)
         return CapacityDockRailShape(
             bodyWidth: model.railWidth,
@@ -1457,6 +1487,12 @@ private final class CapacityDockPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// Auto-hide parks the rail partly beyond the screen edge; AppKit must not
+    /// pull it back on screen.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 
     func makeContentTransparent() {
         contentView?.wantsLayer = true

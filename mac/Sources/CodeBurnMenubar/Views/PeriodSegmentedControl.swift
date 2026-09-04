@@ -11,7 +11,7 @@ struct PeriodSegmentedControl: View {
                 Button {
                     store.switchTo(period: period)
                 } label: {
-                    Text(period.rawValue)
+                    Text(LR(period.rawValue))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .frame(maxWidth: .infinity)
@@ -65,7 +65,7 @@ private struct CalendarPopover: View {
     @State private var pending: Set<String> = []
 
     private let calendar = Calendar.current
-    private let weekdays = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    private let weekdays = [L("Mo"), L("Tu"), L("We"), L("Th"), L("Fr"), L("Sa"), L("Su")]
     private let cellSize: CGFloat = 30
 
     var body: some View {
@@ -185,7 +185,8 @@ private struct CalendarPopover: View {
 
     private var monthYearLabel: String {
         let f = DateFormatter()
-        f.dateFormat = "MMMM yyyy"
+        f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("yyyyMMMM")
         return f.string(from: displayMonth)
     }
 
@@ -195,9 +196,9 @@ private struct CalendarPopover: View {
     }
 
     private var selectionSummary: String {
-        if pending.isEmpty { return "Pick dates" }
-        if pending.count == 1 { return "1 day" }
-        return "\(pending.count) days"
+        if pending.isEmpty { return L("Pick dates") }
+        if pending.count == 1 { return L("1 day") }
+        return L("\(pending.count) days")
     }
 
     private func shiftMonth(_ delta: Int) {

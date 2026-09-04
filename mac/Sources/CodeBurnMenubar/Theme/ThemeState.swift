@@ -14,6 +14,9 @@ enum AccentPreset: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Localized label for display; rawValue stays the persisted identifier.
+    var displayName: String { LR(rawValue) }
+
     /// Apple macOS dark-mode system accent colors (NSColor.system*).
     var base: Color {
         switch self {

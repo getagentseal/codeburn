@@ -6,7 +6,7 @@ struct ActivitySection: View {
 
     var body: some View {
         CollapsibleSection(
-            caption: "Activity",
+            caption: L("Activity"),
             isExpanded: $isExpanded,
             trailing: {
                 HStack(spacing: 8) {
@@ -38,7 +38,7 @@ struct ActivityRow: View {
             FixedBar(fraction: activity.cost / maxCost)
                 .frame(width: 56, height: 6)
 
-            Text(activity.name)
+            Text(LR(activity.name))
                 .font(.system(size: 12.5, weight: .medium))
                 .frame(maxWidth: .infinity, alignment: .leading)
 

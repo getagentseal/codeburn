@@ -48,19 +48,19 @@ enum GeminiSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "No Gemini credentials found. Sign in with the Gemini CLI first."
+                return L("No Gemini credentials found. Sign in with the Gemini CLI first.")
             case .tokenExpired:
-                return "Gemini login expired. Run the Gemini CLI once to refresh, then try again."
+                return L("Gemini login expired. Run the Gemini CLI once to refresh, then try again.")
             case .accountTierRetired:
-                return "Google retired Gemini CLI OAuth for this account tier. Use Antigravity."
+                return L("Google retired Gemini CLI OAuth for this account tier. Use Antigravity.")
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
-                return "Gemini rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date()))."
+                return L("Gemini rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date())).")
             case let .usageHTTPError(code):
-                return "Gemini quota fetch failed (HTTP \(code))."
+                return L("Gemini quota fetch failed (HTTP \(code)).")
             case let .network(err):
-                return "Network error: \(err.localizedDescription)"
+                return L("Network error: \(err.localizedDescription)")
             }
         }
 
@@ -298,10 +298,10 @@ enum GeminiSubscriptionService {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
-        if lower == "standard-tier" { return "Paid" }
-        if lower == "legacy-tier" { return "Legacy" }
+        if lower == "standard-tier" { return L("Paid") }
+        if lower == "legacy-tier" { return L("Legacy") }
         if lower.contains("free") {
-            return workspaceClaim(idToken: credential.idToken) ? "Workspace" : "Free"
+            return workspaceClaim(idToken: credential.idToken) ? L("Workspace") : L("Free")
         }
         return trimmed
     }

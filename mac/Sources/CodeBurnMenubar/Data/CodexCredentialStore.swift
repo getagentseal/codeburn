@@ -89,21 +89,22 @@ enum CodexCredentialStore {
         var errorDescription: String? {
             switch self {
             case .bootstrapNoSource:
-                return "No Codex credentials found at ~/.codex/auth.json. Run `codex` to sign in."
+                return L("No Codex credentials found at ~/.codex/auth.json. Run `codex` to sign in.")
             case .bootstrapDecodeFailed:
-                return "Codex credentials are malformed."
+                return L("Codex credentials are malformed.")
             case .bootstrapNotChatGPT:
-                return "Codex is in API-key mode; live quota tracking is only available for ChatGPT subscriptions."
+                return L("Codex is in API-key mode; live quota tracking is only available for ChatGPT subscriptions.")
             case let .fileWriteFailed(message):
-                return "Could not write to local cache: \(message)"
+                return L("Could not write to local cache: \(message)")
             case let .refreshHTTPError(code, body):
-                return "Codex token refresh failed (HTTP \(code))\(body.map { ": \($0)" } ?? "")"
+                let suffix = body.map { ": \($0)" } ?? ""
+                return L("Codex token refresh failed (HTTP \(code))\(suffix)")
             case let .refreshNetworkError(err):
-                return "Codex token refresh network error: \(err.localizedDescription)"
+                return L("Codex token refresh network error: \(err.localizedDescription)")
             case .refreshDecodeFailed:
-                return "Codex token refresh response was malformed."
+                return L("Codex token refresh response was malformed.")
             case .noRefreshToken:
-                return "No refresh token available; reconnect required."
+                return L("No refresh token available; reconnect required.")
             }
         }
 
@@ -337,7 +338,7 @@ enum CodexCredentialStore {
               roundTrip.idToken == record.idToken,
               roundTrip.accountId == record.accountId
         else {
-            throw StoreError.fileWriteFailed("keychain read-back mismatch")
+            throw StoreError.fileWriteFailed(L("keychain read-back mismatch"))
         }
         tryUnlinkLegacyAfterVerifiedKeychain()
     }

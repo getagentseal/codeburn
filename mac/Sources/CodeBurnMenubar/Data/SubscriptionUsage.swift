@@ -11,12 +11,12 @@ struct SubscriptionUsage: Sendable, Equatable {
 
         var displayName: String {
             switch self {
-            case .pro: "Pro"
-            case .max5x: "Max 5x"
-            case .max20x: "Max 20x"
-            case .team: "Team"
-            case .enterprise: "Enterprise"
-            case .unknown: "Subscription"
+            case .pro: L("Pro")
+            case .max5x: L("Max 5x")
+            case .max20x: L("Max 20x")
+            case .team: L("Team")
+            case .enterprise: L("Enterprise")
+            case .unknown: L("Subscription")
             }
         }
     }

@@ -112,6 +112,7 @@ struct ContributionHeatmapTests {
         #expect(stats.activeDays == 2)
         #expect(stats.avgActive == 6)
         #expect(stats.currentStreak == 1)
-        #expect(stats.peakLabel.contains("Jun 3"))
+        // The peak day is rendered in the UI locale ("Jun 3" / "6月3日").
+        #expect(stats.peakLabel.contains("Jun 3") || stats.peakLabel.contains("6月3日"))
     }
 }

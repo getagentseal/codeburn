@@ -21,16 +21,17 @@ enum CodexSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .notBootstrapped:
-                return "Connect Codex in Settings to start tracking quota."
+                return L("Connect Codex in Settings to start tracking quota.")
             case let .bootstrapFailed(err): return err.errorDescription
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
-                return "ChatGPT rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date()))."
+                return L("ChatGPT rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date())).")
             case let .usageHTTPError(code, body):
-                return "Codex quota fetch failed (HTTP \(code))\(body.map { ": \($0)" } ?? "")"
-            case .usageDecodeFailed: return "Codex quota response was malformed."
-            case let .network(err): return "Network error: \(err.localizedDescription)"
+                let suffix = body.map { ": \($0)" } ?? ""
+                return L("Codex quota fetch failed (HTTP \(code))\(suffix)")
+            case .usageDecodeFailed: return L("Codex quota response was malformed.")
+            case let .network(err): return L("Network error: \(err.localizedDescription)")
             case let .credential(err): return err.errorDescription
             }
         }

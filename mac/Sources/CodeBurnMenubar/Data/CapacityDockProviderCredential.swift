@@ -40,7 +40,7 @@ enum CapacityDockProviderCredentialStoreError: LocalizedError, Equatable {
     case timedOut
 
     var errorDescription: String? {
-        "Keychain did not respond. Unlock your login keychain, then reopen this provider or re-enter its credential."
+        L("Keychain did not respond. Unlock your login keychain, then reopen this provider or re-enter its credential.")
     }
 }
 

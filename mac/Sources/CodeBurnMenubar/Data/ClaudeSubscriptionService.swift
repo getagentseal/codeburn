@@ -22,19 +22,20 @@ enum ClaudeSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .notBootstrapped:
-                return "Connect Claude in the Plan tab to start tracking quota."
+                return L("Connect Claude in the Plan tab to start tracking quota.")
             case let .bootstrapFailed(err):
                 return err.errorDescription
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
-                return "Anthropic rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date()))."
+                return L("Anthropic rate-limited the quota endpoint. Retrying \(f.localizedString(for: retryAt, relativeTo: Date())).")
             case let .usageHTTPError(code, body):
-                return "Quota fetch failed (HTTP \(code))\(body.map { ": \($0)" } ?? "")"
+                let suffix = body.map { ": \($0)" } ?? ""
+                return L("Quota fetch failed (HTTP \(code))\(suffix)")
             case .usageDecodeFailed:
-                return "Quota response was malformed."
+                return L("Quota response was malformed.")
             case let .network(err):
-                return "Network error: \(err.localizedDescription)"
+                return L("Network error: \(err.localizedDescription)")
             case let .credential(err):
                 return err.errorDescription
             }

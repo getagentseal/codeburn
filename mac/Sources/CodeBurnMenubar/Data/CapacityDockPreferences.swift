@@ -113,8 +113,8 @@ enum CapacityDockTheme: String, CaseIterable, Sendable {
 
     var displayName: String {
         switch self {
-        case .graphite: "Graphite"
-        case .liquidGlass: "Liquid Glass"
+        case .graphite: L("Graphite")
+        case .liquidGlass: L("Liquid Glass")
         }
     }
 }
@@ -125,8 +125,8 @@ enum CapacityDockGaugeShape: String, CaseIterable, Sendable {
 
     var displayName: String {
         switch self {
-        case .circle: "Circle"
-        case .squircle: "Squircle"
+        case .circle: L("Circle")
+        case .squircle: L("Squircle")
         }
     }
 }
@@ -182,6 +182,7 @@ enum CapacityDockPreferences {
     static let themeKey = "CodeBurnCapacityDockTheme"
     static let gaugeShapeKey = "CodeBurnCapacityDockGaugeShape"
     static let manualSelectionKey = "CodeBurnCapacityDockManualSelection"
+    static let autoHideKey = "CodeBurnCapacityDockAutoHide"
 
     static let defaultProvider: CapacityDockProvider = .codex
     static let supportedProviders = CapacityDockProvider.allCases
@@ -200,6 +201,9 @@ enum CapacityDockPreferences {
         let scale: Double
         let theme: CapacityDockTheme
         let gaugeShape: CapacityDockGaugeShape
+        /// Tuck the docked rail into its screen edge while resting and slide
+        /// it out when the pointer reaches the edge. Ignored for floating rails.
+        var isAutoHideEnabled: Bool = false
     }
 
     static func load(defaults: UserDefaults = .standard) -> Snapshot {
@@ -257,8 +261,14 @@ enum CapacityDockPreferences {
             theme: defaults.string(forKey: themeKey)
                 .flatMap(CapacityDockTheme.init(rawValue:)) ?? .graphite,
             gaugeShape: defaults.string(forKey: gaugeShapeKey)
-                .flatMap(CapacityDockGaugeShape.init(rawValue:)) ?? .squircle
+                .flatMap(CapacityDockGaugeShape.init(rawValue:)) ?? .squircle,
+            isAutoHideEnabled: defaults.bool(forKey: autoHideKey)
         )
+    }
+
+    static func setAutoHide(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: autoHideKey)
+        notifyChanged()
     }
 
     static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {

@@ -24,12 +24,12 @@ enum ProviderAuthMethod: String, Codable, CaseIterable, Hashable, Sendable {
 
     var title: String {
         switch self {
-        case .localAppOrCLI: "Installed app or CLI"
-        case .oauth: "OAuth"
-        case .apiTokenOrCloudCredentials: "API or cloud credentials"
-        case .cookieOrWebSession: "Browser session"
-        case .localhost: "Localhost service"
-        case .none: "No sign-in required"
+        case .localAppOrCLI: L("Installed app or CLI")
+        case .oauth: L("OAuth")
+        case .apiTokenOrCloudCredentials: L("API or cloud credentials")
+        case .cookieOrWebSession: L("Browser session")
+        case .localhost: L("Localhost service")
+        case .none: L("No sign-in required")
         }
     }
 }
@@ -164,39 +164,39 @@ enum ProviderConnectionGuidance {
     static func instruction(for provider: CapacityDockProvider) -> String {
         let methods = provider.catalogEntry.authMethods
         if methods == [.apiTokenOrCloudCredentials] {
-            return "Enter an API key or token below, then press Save & Connect."
+            return L("Enter an API key or token below, then press Save & Connect.")
         }
         if methods == [.cookieOrWebSession] {
-            return "Sign in to \(provider.displayName) in a supported browser, then click Retry."
+            return L("Sign in to \(provider.displayName) in a supported browser, then click Retry.")
         }
         if methods.contains(.localAppOrCLI) {
-            return "Sign in with the \(provider.displayName) app or CLI, then click Retry."
+            return L("Sign in with the \(provider.displayName) app or CLI, then click Retry.")
         }
         if methods.contains(.oauth) {
-            return "Complete \(provider.displayName) OAuth, then click Retry."
+            return L("Complete \(provider.displayName) OAuth, then click Retry.")
         }
         if methods.contains(.localhost) {
-            return "Start the local \(provider.displayName) service, then click Retry."
+            return L("Start the local \(provider.displayName) service, then click Retry.")
         }
         if methods.contains(.apiTokenOrCloudCredentials) {
-            return "Enter the required API or cloud credentials below, then press Save & Connect."
+            return L("Enter the required API or cloud credentials below, then press Save & Connect.")
         }
         if methods.contains(.cookieOrWebSession) {
-            return "Sign in to \(provider.displayName) in a supported browser, then click Retry."
+            return L("Sign in to \(provider.displayName) in a supported browser, then click Retry.")
         }
-        return "No sign-in is required. Click Retry to refresh quota."
+        return L("No sign-in is required. Click Retry to refresh quota.")
     }
 
     static func dockInstruction(for provider: CapacityDockProvider) -> String {
         let methods = provider.catalogEntry.authMethods
         if methods == [.apiTokenOrCloudCredentials] {
-            return "Add an API key or token in Provider Settings."
+            return L("Add an API key or token in Provider Settings.")
         }
         if methods.contains(.apiTokenOrCloudCredentials),
            !methods.contains(.localAppOrCLI),
            !methods.contains(.cookieOrWebSession),
            !methods.contains(.oauth) {
-            return "Add the required API or cloud credentials in Provider Settings."
+            return L("Add the required API or cloud credentials in Provider Settings.")
         }
         return instruction(for: provider)
     }

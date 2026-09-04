@@ -25,10 +25,10 @@ struct ToolingSection: View {
         let combined = skillsAndAgents
         let hasAny = !current.tools.isEmpty || !combined.isEmpty || !current.mcpServers.isEmpty
         if hasAny {
-            CollapsibleSection(caption: "Tooling", isExpanded: $isExpanded) {
+            CollapsibleSection(caption: L("Tooling"), isExpanded: $isExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
                     if !current.tools.isEmpty {
-                        ToolingSubsection(title: "Tools") {
+                        ToolingSubsection(title: L("Tools")) {
                             let maxCalls = current.tools.map(\.calls).max() ?? 1
                             ForEach(current.tools, id: \.name) { t in
                                 CallsRow(name: t.name, calls: t.calls, maxCalls: maxCalls)
@@ -36,7 +36,7 @@ struct ToolingSection: View {
                         }
                     }
                     if !combined.isEmpty {
-                        ToolingSubsection(title: "Skills & Agents") {
+                        ToolingSubsection(title: L("Skills & Agents")) {
                             let maxCost = max(combined.map(\.cost).max() ?? 0.01, 0.01)
                             ForEach(combined, id: \.name) { d in
                                 CostRow(name: d.name, cost: d.cost, count: d.uses, countLabel: "uses", maxCost: maxCost)
@@ -44,7 +44,7 @@ struct ToolingSection: View {
                         }
                     }
                     if !current.mcpServers.isEmpty {
-                        ToolingSubsection(title: "MCP Servers") {
+                        ToolingSubsection(title: L("MCP Servers")) {
                             let maxCalls = current.mcpServers.map(\.calls).max() ?? 1
                             ForEach(current.mcpServers, id: \.name) { m in
                                 CallsRow(name: m.name, calls: m.calls, maxCalls: maxCalls)

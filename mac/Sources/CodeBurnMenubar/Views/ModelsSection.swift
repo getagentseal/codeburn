@@ -13,7 +13,7 @@ struct ModelsSection: View {
 
     var body: some View {
         CollapsibleSection(
-            caption: "Models",
+            caption: L("Models"),
             isExpanded: $isExpanded,
             trailing: {
                 HStack(spacing: 8) {
@@ -92,15 +92,15 @@ private struct TokensLine: View {
         HStack(spacing: 4) {
             Text("Tokens")
                 .foregroundStyle(.tertiary)
-            Text(formatTokens(t.inputTokens) + " in")
+            Text(L("\(formatTokens(t.inputTokens)) in"))
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text(formatTokens(t.outputTokens) + " out")
+            Text(L("\(formatTokens(t.outputTokens)) out"))
                 .foregroundStyle(.secondary)
             Text("·")
                 .foregroundStyle(.tertiary)
-            Text(cacheHit + "% cache hit")
+            Text(L("\(cacheHit)% cache hit"))
                 .foregroundStyle(.secondary)
             Spacer()
         }

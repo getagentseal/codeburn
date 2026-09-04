@@ -110,3 +110,17 @@ Sourced from `~/codeburn-menubar-mac-swiftui.html`. Warm terracotta-ember palett
 - Surface (dark): `#1C1816`
 
 SF Mono for currency values; SF Pro Rounded for hero.
+
+## Localization
+
+UI strings live in `Sources/CodeBurnMenubar/Resources/<lang>.lproj/Localizable.strings`
+(`en.lproj` is the source of truth; `zh-Hans.lproj` is the first translation). SwiftUI
+views that take a `LocalizedStringKey` literal (`Text("…")`, `Button("…")`, …) resolve
+their English text as the key automatically; plain `String` values go through `L("…")`
+(string interpolation becomes format placeholders) and labels that arrive at runtime
+from the CLI payload go through `LR(…)`, both in `Sources/CodeBurnMenubar/Localization.swift`.
+Settings › General › Language overrides the system language per app.
+
+Helper scripts in `Scripts/l10n/`: `extract_keys.py` lists the UI strings found in the
+sources, and `merge_strings.py` merges translation fragments into both `.strings` files
+and reports keys that still lack a translation.

@@ -45,6 +45,7 @@ enum CapacityDockMetrics {
     private static let baseProviderIconSize: CGFloat = 26
     private static let basePercentageTextSize: CGFloat = 17
     private static let baseDetailWidth: CGFloat = 350
+    private static let baseAutoHidePeek: CGFloat = 16
 
     /// Every dock dimension lands on a whole point. Fractional sizes (85%
     /// of 88 is 74.8) made SwiftUI's fitted content disagree with the
@@ -68,6 +69,8 @@ enum CapacityDockMetrics {
     static func ringLabelSpacing(scale: CGFloat) -> CGFloat { points(baseRingLabelSpacing, scale) }
     static func providerIconSize(scale: CGFloat) -> CGFloat { points(baseProviderIconSize, scale) }
     static func percentageTextSize(scale: CGFloat) -> CGFloat { points(basePercentageTextSize, scale) }
+    /// Visible sliver of an auto-hidden rail; the hover target that slides it out.
+    static func autoHidePeek(scale: CGFloat) -> CGFloat { points(baseAutoHidePeek, scale) }
     static func detailWidth(scale: CGFloat) -> CGFloat { points(baseDetailWidth, scale) }
 
     static func railHeight(providerCount: Int, alongPad: CGFloat, scale: CGFloat) -> CGFloat {
@@ -929,7 +932,7 @@ struct CapacityDockDetailView: View {
             sectionCaption("Today", trailing: nil)
             HStack(alignment: .center, spacing: 8 * s) {
                 HStack(alignment: .firstTextBaseline, spacing: 5 * s) {
-                    Text(today.cost.asUSD())
+                    Text(today.cost.asCompactCurrency())
                         .font(.system(size: 17, weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(Color.capacityDockText)
@@ -1039,7 +1042,7 @@ struct CapacityDockDetailView: View {
     private func budgetLine() -> some View {
         let spend = store.capacityDockToday?.cost ?? 0
         let budget = store.activeDailyBudget
-        Text(budget > 0 ? "today \(spend.asUSD()) of \(budget.asUSD())" : "no budget set")
+        Text(budget > 0 ? L("today \(spend.asCompactCurrency()) of \(budget.asCompactCurrency())") : L("no budget set"))
             .font(.system(size: 11))
             .monospacedDigit()
             .foregroundStyle(Color.capacityDockText.opacity(0.6))

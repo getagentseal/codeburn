@@ -29,13 +29,13 @@ enum KeychainCredentialCacheError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case let .readFailed(service, status):
-            return "Keychain read failed for \(service) (status \(status))."
+            return L("Keychain read failed for \(service) (status \(status)).")
         case let .writeFailed(service, status):
-            return "Keychain write failed for \(service) (status \(status))."
+            return L("Keychain write failed for \(service) (status \(status)).")
         case let .deleteFailed(service, status):
-            return "Keychain delete failed for \(service) (status \(status))."
+            return L("Keychain delete failed for \(service) (status \(status)).")
         case .unavailable:
-            return "Keychain unavailable. Unlock your login keychain to refresh quota."
+            return L("Keychain unavailable. Unlock your login keychain to refresh quota.")
         }
     }
 

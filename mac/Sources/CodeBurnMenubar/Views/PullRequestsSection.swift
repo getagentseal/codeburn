@@ -13,7 +13,7 @@ struct PullRequestsSection: View {
             VStack(spacing: 0) {
                 Divider().opacity(0.5)
                 VStack(alignment: .leading, spacing: 6) {
-                    SectionCaption(text: "Pull requests")
+                    SectionCaption(text: L("Pull requests"))
                     ForEach(rows, id: \.url) { row in
                         HStack(spacing: 8) {
                             Text(row.label)

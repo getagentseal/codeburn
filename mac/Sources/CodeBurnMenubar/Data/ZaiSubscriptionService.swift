@@ -32,17 +32,17 @@ enum ZaiSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                "Sign in to Z.ai with Pi, or enter a Coding Plan API key and press Save & Connect."
+                L("Sign in to Z.ai with Pi, or enter a Coding Plan API key and press Save & Connect.")
             case .authenticationRejected:
-                "Z.ai rejected this API key."
+                L("Z.ai rejected this API key.")
             case .rateLimited:
-                "Z.ai rate-limited the quota request."
+                L("Z.ai rate-limited the quota request.")
             case .providerUnavailable:
-                "Z.ai is temporarily unavailable."
+                L("Z.ai is temporarily unavailable.")
             case .parseFailure:
-                "Z.ai returned an unrecognized quota response."
+                L("Z.ai returned an unrecognized quota response.")
             case .network:
-                "Network error fetching Z.ai quota."
+                L("Network error fetching Z.ai quota.")
             }
         }
     }
@@ -128,10 +128,13 @@ enum ZaiSubscriptionService {
                   let count = jsonNumber(limit["number"]) else { continue }
 
             let label: String
+            let isWeekly: Bool
             if unit == 3, count == 5 {
-                label = "5-hour"
+                label = L("5-hour")
+                isWeekly = false
             } else if unit == 6, count == 1 {
-                label = "Weekly"
+                label = L("Weekly")
+                isWeekly = true
             } else {
                 continue
             }
@@ -149,7 +152,7 @@ enum ZaiSubscriptionService {
                 percent: min(1, max(0, usedPercent / 100)),
                 resetsAt: parseReset(limit["nextResetTime"])
             )
-            if label == "Weekly" { weekly = window } else { fiveHour = window }
+            if isWeekly { weekly = window } else { fiveHour = window }
         }
 
         let details = [fiveHour, weekly].compactMap { $0 }

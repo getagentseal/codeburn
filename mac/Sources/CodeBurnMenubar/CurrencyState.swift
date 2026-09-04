@@ -29,7 +29,12 @@ final class CurrencyState: Sendable {
         if let r = rate, r.isFinite, r >= minValidFXRate, r <= maxValidFXRate {
             self.rate = r
         }
+        // The status item title is rendered from a cached payload and is not
+        // recomputed when only the FX rate changes; tell it to redraw.
+        NotificationCenter.default.post(name: Self.didChange, object: nil)
     }
+
+    static let didChange = Notification.Name("com.codeburn.currencyStateDidChange")
 
     nonisolated static func symbolForCode(_ code: String) -> String {
         // Some locales return "US$" for USD or "CA$" for CAD via NumberFormatter. Prefer the

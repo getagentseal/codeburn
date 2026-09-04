@@ -138,25 +138,25 @@ private struct TipItem: Identifiable {
     let cacheHit = payload.current.cacheHitPercent
     if cacheHit >= 80 {
         wins.append(TipItem(
-            text: "Cache hit at \(Int(cacheHit))% — most prompts reuse cache",
+            text: L("Cache hit at \(Int(cacheHit))% — most prompts reuse cache"),
             trailing: nil
         ))
     }
     if let oneShot = payload.current.oneShotRate, oneShot >= 0.75 {
         wins.append(TipItem(
-            text: "\(Int(oneShot * 100))% one-shot — edits landing first try",
+            text: L("\(Int(oneShot * 100))% one-shot — edits landing first try"),
             trailing: nil
         ))
     }
     if let delta = stats.weekDeltaPercent, delta < -10 {
         wins.append(TipItem(
-            text: "Spend down \(Int(abs(delta)))% vs last 7 days",
+            text: L("Spend down \(Int(abs(delta)))% vs last 7 days"),
             trailing: nil
         ))
     }
     if stats.activeStreakDays >= 5 {
         wins.append(TipItem(
-            text: "\(stats.activeStreakDays)-day usage streak",
+            text: L("\(stats.activeStreakDays)-day usage streak"),
             trailing: nil
         ))
     }
@@ -174,33 +174,33 @@ private struct TipItem: Identifiable {
     var risks: [TipItem] = []
     if let delta = stats.weekDeltaPercent, delta > 25 {
         risks.append(TipItem(
-            text: "Spend up \(Int(delta))% vs prior 7 days",
+            text: L("Spend up \(Int(delta))% vs prior 7 days"),
             trailing: nil
         ))
     }
     if cacheHit > 0 && cacheHit < 50 {
         risks.append(TipItem(
-            text: "Cache hit only \(Int(cacheHit))% — paying for cold prompts",
+            text: L("Cache hit only \(Int(cacheHit))% — paying for cold prompts"),
             trailing: nil
         ))
     }
     if let oneShot = payload.current.oneShotRate, oneShot < 0.5 {
         risks.append(TipItem(
-            text: "\(Int(oneShot * 100))% one-shot — lots of iteration",
+            text: L("\(Int(oneShot * 100))% one-shot — lots of iteration"),
             trailing: nil
         ))
     }
     if let projected = stats.projectedMonth, let prevMonth = stats.previousMonthTotal, projected > prevMonth * 1.3 {
         risks.append(TipItem(
-            text: "On pace for \(projected.asCompactCurrency()) this month (+\(Int(((projected - prevMonth) / prevMonth) * 100))% vs last)",
+            text: L("On pace for \(projected.asCompactCurrency()) this month (+\(Int(((projected - prevMonth) / prevMonth) * 100))% vs last)"),
             trailing: nil
         ))
     }
 
     return [
-        TipGroup(label: "What's working", icon: "checkmark.circle.fill", color: Theme.brandAccent, items: wins),
-        TipGroup(label: "What to improve", icon: "arrow.up.right.circle.fill", color: Theme.brandAccent, items: improvements),
-        TipGroup(label: "Risks", icon: "exclamationmark.triangle.fill", color: Theme.brandAccent, items: risks),
+        TipGroup(label: L("What's working"), icon: "checkmark.circle.fill", color: Theme.brandAccent, items: wins),
+        TipGroup(label: L("What to improve"), icon: "arrow.up.right.circle.fill", color: Theme.brandAccent, items: improvements),
+        TipGroup(label: L("Risks"), icon: "exclamationmark.triangle.fill", color: Theme.brandAccent, items: risks),
     ]
 }
 

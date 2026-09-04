@@ -33,7 +33,7 @@ struct MenuBarContent: View {
                         ScopeSegmentedControl()
                         Divider().opacity(0.5)
                         if isFilteredEmpty {
-                            EmptyProviderState(provider: store.selectedProvider, periodLabel: store.selectionLabel)
+                            EmptyProviderState(provider: store.selectedProvider, periodLabel: LR(store.selectionLabel))
                         } else {
                             HeatmapSection()
                                 .padding(.horizontal, 14)
@@ -62,12 +62,12 @@ struct MenuBarContent: View {
                     if let err = store.lastError {
                         FetchErrorOverlay(
                             error: err,
-                            periodLabel: store.selectionLabel,
+                            periodLabel: LR(store.selectionLabel),
                             retry: { Task { await store.refresh(includeOptimize: false, force: true, showLoading: true) } }
                         )
                         .transition(.opacity)
                     } else {
-                        BurnLoadingOverlay(periodLabel: store.selectionLabel)
+                        BurnLoadingOverlay(periodLabel: LR(store.selectionLabel))
                             .transition(.opacity)
                             .task {
                                 var delay: Duration = .seconds(8)
@@ -144,7 +144,7 @@ private struct ScopeSegmentedControl: View {
                     Button {
                         store.switchTo(scope: scope)
                     } label: {
-                        Text(scope.rawValue)
+                        Text(LR(scope.rawValue))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                             .frame(maxWidth: .infinity)
@@ -181,7 +181,7 @@ private struct ClaudeConfigPicker: View {
     private var selectedLabel: String {
         guard let selected = store.selectedClaudeConfigSourceId,
               let option = store.claudeConfigOptions.first(where: { $0.id == selected }) else {
-            return "All"
+            return L("All")
         }
         return option.label
     }
@@ -456,9 +456,9 @@ private struct QuotaWarningRow: View {
             // Reads "Claude over limit (105%)" when any provider exceeds the
             // quota cap, instead of the awkward "Claude 105% of quota used".
             if case .danger = status.severity {
-                return "\(status.warnings[0].name) over limit (\(Int(status.warnings[0].percent.rounded()))%)"
+                return L("\(status.warnings[0].name) over limit (\(Int(status.warnings[0].percent.rounded()))%)")
             }
-            return "\(parts[0]) of quota used"
+            return L("\(parts[0]) of quota used")
         }
         return parts.joined(separator: " · ")
     }
@@ -504,7 +504,7 @@ private struct AccentPicker: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(preset.rawValue)
+                        .accessibilityLabel(LR(preset.rawValue))
                     }
                 }
                 .padding(.horizontal, 6)
@@ -613,7 +613,7 @@ struct CLIUpdateBanner: View {
                 Button {
                     updateChecker.performFullUpdate()
                 } label: {
-                    Text(updateChecker.isUpdating ? "Updating..." : "Update now")
+                    Text(updateChecker.isUpdating ? L("Updating...") : L("Update now"))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.blue)
                 }

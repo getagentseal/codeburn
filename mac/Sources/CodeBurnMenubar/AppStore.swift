@@ -123,7 +123,7 @@ final class AppStore {
     /// The cost budget is defined in USD (matching the "$" presets and field), so
     /// it is not run through the display-currency conversion here.
     var dailyBudgetLabel: String {
-        isTokenMetric ? "\(activeDailyBudget.asCompactTokens()) tokens" : activeDailyBudget.asUSD()
+        isTokenMetric ? L("\(activeDailyBudget.asCompactTokens()) tokens") : activeDailyBudget.asUSD()
     }
 
     var isLoading: Bool { loadingCountsByKey.values.contains { $0 > 0 } }
@@ -412,9 +412,9 @@ final class AppStore {
 
     var selectionLabel: String {
         if selectedDays.count > 1, let first = selectedDays.min(), let last = selectedDays.max() {
-            return "\(selectedDays.count) days (\(first) .. \(last))"
+            return L("\(selectedDays.count) days (\(first) .. \(last))")
         }
-        return selectedDay.map { "Day (\($0))" } ?? selectedPeriod.rawValue
+        return selectedDay.map { L("Day (\($0))") } ?? selectedPeriod.displayName
     }
 
     var trendPeriod: Period {
@@ -839,7 +839,7 @@ final class AppStore {
             loadingStartedAtByKey[key] = nil
             forceFinishInFlight(for: key)
             if cache[key] == nil {
-                lastErrorByKey[key] = "Refresh took longer than expected. CodeBurn will keep retrying in the background."
+                lastErrorByKey[key] = L("Refresh took longer than expected. CodeBurn will keep retrying in the background.")
             }
         }
         for (key, slot) in staleInFlight {
@@ -1048,7 +1048,7 @@ final class AppStore {
     }
 
     func setRecoveryExhausted(for label: String) {
-        lastErrorByKey[currentKey] = "Could not load \(label). Check that the codeburn CLI is installed and working."
+        lastErrorByKey[currentKey] = L("Could not load \(label). Check that the codeburn CLI is installed and working.")
     }
 
     @discardableResult
@@ -1437,7 +1437,7 @@ final class AppStore {
             // Nothing was removed, so nothing is disconnected. Leave the
             // connected state exactly as it was — the bootstrap flag is still
             // set, Disconnect stays available, and the banner says to retry.
-            subscriptionError = "Could not fully remove the local Claude credential cache. Disconnect again to retry."
+            subscriptionError = L("Could not fully remove the local Claude credential cache. Disconnect again to retry.")
             return
         }
         subscription = nil
@@ -1510,7 +1510,7 @@ final class AppStore {
         guard result.isSuccess else {
             // Nothing removed means nothing disconnected; keep state intact so
             // Disconnect stays available for a retry.
-            codexError = "Could not fully remove the local Codex credential cache. Disconnect again to retry."
+            codexError = L("Could not fully remove the local Codex credential cache. Disconnect again to retry.")
             return
         }
         codexUsage = nil
@@ -2053,7 +2053,7 @@ final class AppStore {
                     planLabel: summary.planLabel,
                     footerLines: summary.footerLines + (
                         capacityDockProviderErrors[provider.id]
-                            .map { ["Refresh failed: \($0)"] } ?? []
+                            .map { [L("Refresh failed: \($0)")] } ?? []
                     )
                 )
             }
@@ -2243,21 +2243,21 @@ final class AppStore {
         var details: [QuotaSummary.Window] = []
         if let usage = subscription {
             if let pct = usage.fiveHourPercent {
-                details.append(.init(label: "5-hour", percent: pct / 100, resetsAt: usage.fiveHourResetsAt))
+                details.append(.init(label: L("5-hour"), percent: pct / 100, resetsAt: usage.fiveHourResetsAt))
             }
             if let pct = usage.sevenDayPercent {
-                let weekly = QuotaSummary.Window(label: "Weekly", percent: pct / 100, resetsAt: usage.sevenDayResetsAt)
+                let weekly = QuotaSummary.Window(label: L("Weekly"), percent: pct / 100, resetsAt: usage.sevenDayResetsAt)
                 primary = weekly
                 details.append(weekly)
             }
             if let pct = usage.sevenDayOpusPercent {
-                details.append(.init(label: "Weekly · Opus", percent: pct / 100, resetsAt: usage.sevenDayOpusResetsAt))
+                details.append(.init(label: L("Weekly · Opus"), percent: pct / 100, resetsAt: usage.sevenDayOpusResetsAt))
             }
             if let pct = usage.sevenDaySonnetPercent {
-                details.append(.init(label: "Weekly · Sonnet", percent: pct / 100, resetsAt: usage.sevenDaySonnetResetsAt))
+                details.append(.init(label: L("Weekly · Sonnet"), percent: pct / 100, resetsAt: usage.sevenDaySonnetResetsAt))
             }
             for scoped in usage.scopedWeekly {
-                details.append(.init(label: "Weekly · \(scoped.label)", percent: scoped.percent / 100, resetsAt: scoped.resetsAt))
+                details.append(.init(label: L("Weekly · \(scoped.label)"), percent: scoped.percent / 100, resetsAt: scoped.resetsAt))
             }
         }
         let plan = subscription?.tier.displayName
@@ -2335,10 +2335,10 @@ final class AppStore {
             if !inCredits { formatter.currencyCode = "USD" }
             let fallback = inCredits ? "\(Int(balance.rounded()))" : "$\(balance)"
             let formatted = formatter.string(from: NSNumber(value: balance)) ?? fallback
-            footerLines.append("Credits remaining · \(formatted)")
+            footerLines.append(L("Credits remaining · \(formatted)"))
         }
         if codexUsage?.creditLimit == nil, codexUsage?.creditsUnlimited == true {
-            footerLines.append("Credits · Unlimited")
+            footerLines.append(L("Credits · Unlimited"))
         }
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: footerLines)
     }
@@ -2543,25 +2543,25 @@ enum SupportedCurrency: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .USD: "US Dollar"
-        case .GBP: "British Pound"
-        case .EUR: "Euro"
-        case .AUD: "Australian Dollar"
-        case .CAD: "Canadian Dollar"
-        case .NZD: "New Zealand Dollar"
-        case .JPY: "Japanese Yen"
-        case .CNY: "Chinese Yuan"
-        case .CHF: "Swiss Franc"
-        case .INR: "Indian Rupee"
-        case .BRL: "Brazilian Real"
-        case .SEK: "Swedish Krona"
-        case .SGD: "Singapore Dollar"
-        case .HKD: "Hong Kong Dollar"
-        case .KRW: "South Korean Won"
-        case .MXN: "Mexican Peso"
-        case .ZAR: "South African Rand"
-        case .DKK: "Danish Krone"
-        case .RON: "Romanian Leu"
+        case .USD: L("US Dollar")
+        case .GBP: L("British Pound")
+        case .EUR: L("Euro")
+        case .AUD: L("Australian Dollar")
+        case .CAD: L("Canadian Dollar")
+        case .NZD: L("New Zealand Dollar")
+        case .JPY: L("Japanese Yen")
+        case .CNY: L("Chinese Yuan")
+        case .CHF: L("Swiss Franc")
+        case .INR: L("Indian Rupee")
+        case .BRL: L("Brazilian Real")
+        case .SEK: L("Swedish Krona")
+        case .SGD: L("Singapore Dollar")
+        case .HKD: L("Hong Kong Dollar")
+        case .KRW: L("South Korean Won")
+        case .MXN: L("Mexican Peso")
+        case .ZAR: L("South African Rand")
+        case .DKK: L("Danish Krone")
+        case .RON: L("Romanian Leu")
         }
     }
 }
@@ -2599,6 +2599,9 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case zcode = "ZCode"
 
     var id: String { rawValue }
+
+    /// Localized label for display; rawValue stays the stable identifier.
+    var displayName: String { LR(rawValue) }
 
     var providerKeys: [String] {
         switch self {
@@ -2685,6 +2688,9 @@ enum InsightMode: String, CaseIterable, Identifiable {
     case stats = "Stats"
     case optimize = "Optimize"
     var id: String { rawValue }
+
+    /// Localized label for display; rawValue stays the stable identifier.
+    var displayName: String { LR(rawValue) }
 }
 
 enum Period: String, CaseIterable, Identifiable {
@@ -2699,6 +2705,9 @@ enum Period: String, CaseIterable, Identifiable {
     case lifetime = "Life"
 
     var id: String { rawValue }
+
+    /// Localized label for display; rawValue stays the stable identifier.
+    var displayName: String { LR(rawValue) }
 
     /// Maps to the CLI's `--period` argument values.
     var cliArg: String {
@@ -2716,12 +2725,12 @@ enum Period: String, CaseIterable, Identifiable {
 
     var menubarMetricLabel: String {
         switch self {
-        case .today: "Today"
-        case .sevenDays: "Week"
-        case .thirtyDays: "30 Days"
-        case .month: "Month"
-        case .all: "6 Months"
-        case .lifetime: "Lifetime"
+        case .today: L("Today")
+        case .sevenDays: L("Week")
+        case .thirtyDays: L("30 Days")
+        case .month: L("Month")
+        case .all: L("6 Months")
+        case .lifetime: L("Lifetime")
         }
     }
 
@@ -2759,13 +2768,13 @@ enum Period: String, CaseIterable, Identifiable {
     func menubarSuffix(compact: Bool) -> String {
         switch self {
         case .today: ""
-        case .sevenDays: compact ? "/wk" : " / wk"
-        case .thirtyDays: compact ? "/30d" : " / 30d"
-        case .month: compact ? "/mo" : " / mo"
-        case .all: compact ? "/6mo" : " / 6mo"
+        case .sevenDays: compact ? L("/wk") : L(" / wk")
+        case .thirtyDays: compact ? L("/30d") : L(" / 30d")
+        case .month: compact ? L("/mo") : L(" / mo")
+        case .all: compact ? L("/6mo") : L(" / 6mo")
         // lifetime is a panel-only period (never a menubar metric, see
         // menubarMetricCases), but the switch must stay exhaustive.
-        case .lifetime: compact ? "/life" : " / life"
+        case .lifetime: compact ? L("/life") : L(" / life")
         }
     }
 }

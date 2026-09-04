@@ -121,14 +121,23 @@ struct HeroSection: View {
     }
 
     private var caption: String {
-        let label = store.payload.current.label.isEmpty ? store.selectedPeriod.rawValue : store.payload.current.label
+        let label = localizedPeriodLabel(store.payload.current.label.isEmpty ? store.selectedPeriod.rawValue : store.payload.current.label)
         if combinedUsage != nil {
-            return "Combined · \(label)"
+            return L("Combined · \(label)")
         }
         if !store.isDayMode && store.selectedPeriod == .today {
             return "\(label) · \(todayDate)"
         }
         return label
+    }
+
+    /// CLI period labels arrive as English text ("Last 7 Days", "Today (2026-09-03)").
+    /// Plain labels are looked up as-is; day-prefixed forms localize their prefix.
+    private func localizedPeriodLabel(_ raw: String) -> String {
+        for prefix in ["Today", "Yesterday"] where raw.hasPrefix(prefix + " (") {
+            return LR(prefix) + String(raw.dropFirst(prefix.count))
+        }
+        return LR(raw)
     }
 
     /// Local-model savings caption shown beneath the hero amount when the
@@ -140,12 +149,13 @@ struct HeroSection: View {
         guard combinedUsage == nil else { return nil }
         let savings = store.payload.current.localModelSavings.totalUSD
         guard savings > 0 else { return nil }
-        return "Saved \(savings.asCurrency()) with local models"
+        return L("Saved \(savings.asCurrency()) with local models")
     }
 
     private var todayDate: String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE MMM d"
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("EEEMMMd")
         return formatter.string(from: Date())
     }
 }
@@ -213,12 +223,12 @@ private struct CombinedDeviceBreakdown: View {
                             .font(.system(size: device.error == nil ? 5 : 9, weight: .semibold))
                             .foregroundStyle(device.error == nil ? Color.secondary.opacity(0.75) : Theme.semanticWarning)
                             .frame(width: 10)
-                        Text(device.local ? "\(device.name) · local" : device.name)
+                        Text(device.local ? L("\(device.name) · local") : device.name)
                             .font(.system(size: 10.5, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer(minLength: 6)
-                        Text(device.error == nil ? device.cost.asCurrency() : "Unavailable")
+                        Text(device.error == nil ? device.cost.asCurrency() : L("Unavailable"))
                             .font(.system(size: 10.5))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)

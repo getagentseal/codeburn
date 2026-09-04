@@ -17,23 +17,23 @@ struct CodexUsage: Sendable, Equatable {
 
         var displayName: String {
             switch self {
-            case .guest: "Guest"
-            case .free: "Free"
-            case .go: "Go"
-            case .plus: "Plus"
-            case .pro: "Pro"
-            case .prolite: "Pro Lite"
-            case .freeWorkspace: "Free Workspace"
-            case .team: "Team"
-            case .business: "Business"
-            case .education: "Education"
-            case .quorum: "Quorum"
-            case .k12: "K-12"
-            case .enterprise: "Enterprise"
-            case .edu: "Edu"
+            case .guest: L("Guest")
+            case .free: L("Free")
+            case .go: L("Go")
+            case .plus: L("Plus")
+            case .pro: L("Pro")
+            case .prolite: L("Pro Lite")
+            case .freeWorkspace: L("Free Workspace")
+            case .team: L("Team")
+            case .business: L("Business")
+            case .education: L("Education")
+            case .quorum: L("Quorum")
+            case .k12: L("K-12")
+            case .enterprise: L("Enterprise")
+            case .edu: L("Edu")
             case let .unknown(raw):
                 raw.isEmpty
-                    ? "Subscription"
+                    ? L("Subscription")
                     : raw.replacingOccurrences(of: "_", with: " ")
                          .replacingOccurrences(of: "-", with: " ")
                          .capitalized
@@ -105,8 +105,8 @@ struct CodexUsage: Sendable, Equatable {
             func text(_ value: Double) -> String {
                 formatter.string(from: NSNumber(value: value)) ?? "\(Int(value.rounded()))"
             }
-            let base = "Monthly usage limit · \(text(used)) / \(text(limit)) credits"
-            return reached ? "\(base) · limit reached" : base
+            let base = L("Monthly usage limit · \(text(used)) / \(text(limit)) credits")
+            return reached ? L("\(base) · limit reached") : base
         }
 
         var shortLabel: String {
