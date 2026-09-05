@@ -111,4 +111,34 @@ final class KimiUsageParsingTests: XCTestCase {
         """.data(using: .utf8)!
         XCTAssertThrowsError(try KimiSubscriptionService.parseUsage(data: json))
     }
+
+    func testCodePlanAPIKeyFetchesWithoutCLICredentials() async throws {
+        KimiSubscriptionService.disconnect()
+        defer { KimiSubscriptionService.disconnect() }
+        let json = """
+        {"usage": {"limit": 100, "used": 25, "remaining": 75}}
+        """.data(using: .utf8)!
+        let deps = KimiSubscriptionService.Dependencies(
+            fetch: { request in
+                guard request.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-code-plan-key" else {
+                    throw URLError(.userAuthenticationRequired)
+                }
+                return (
+                    json,
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                )
+            },
+            readFile: { _ in nil },
+            credentialsURL: URL(fileURLWithPath: "/missing/kimi-code.json"),
+            deviceIDURL: URL(fileURLWithPath: "/missing/device-id"),
+            now: { Date(timeIntervalSince1970: 1_700_000_000) }
+        )
+
+        let usage = try await KimiSubscriptionService.refresh(
+            apiKey: "  synthetic-code-plan-key  ",
+            deps: deps
+        )
+
+        XCTAssertEqual(usage.primary?.usedPercent ?? -1, 25, accuracy: 0.001)
+    }
 }

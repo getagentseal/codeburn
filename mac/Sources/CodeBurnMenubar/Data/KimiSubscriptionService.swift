@@ -31,18 +31,44 @@ struct KimiUsage: Sendable, Equatable {
     let fetchedAt: Date
 }
 
-/// Mirror of CodexSubscriptionService for Kimi Code. Reads the CLI's
-/// credential file directly (~/.kimi-code/credentials/kimi-code.json) —
-/// no keychain bootstrap, no OAuth refresh. Tokens are short-lived
-/// (~15 min) and only the Kimi CLI refreshes them, so an expired token is
-/// a terminal state: the UI tells the user to run the CLI once.
+/// Kimi Code quota client. A user-supplied Code Plan API key takes priority;
+/// otherwise it reads the CLI credential file directly. CLI tokens are
+/// short-lived and only the Kimi CLI refreshes them.
 enum KimiSubscriptionService {
     private static let usageURL = URL(string: "https://api.kimi.com/coding/v1/usages")!
     private static let usageBlockedUntilKey = "codeburn.kimi.usage.blockedUntil"
+    static let providerID = "kimi"
+
+    struct Dependencies: Sendable {
+        var fetch: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+        var readFile: @Sendable (URL) -> Data?
+        var credentialsURL: URL
+        var deviceIDURL: URL
+        var now: @Sendable () -> Date
+
+        static let live: Dependencies = {
+            let home = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
+                ?? NSHomeDirectory() + "/.kimi-code"
+            return Dependencies(
+                fetch: { request in
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw FetchError.usageHTTPError(-1, nil)
+                    }
+                    return (data, http)
+                },
+                readFile: { FileManager.default.contents(atPath: $0.path) },
+                credentialsURL: URL(fileURLWithPath: home + "/credentials/kimi-code.json"),
+                deviceIDURL: URL(fileURLWithPath: home + "/device_id"),
+                now: { Date() }
+            )
+        }()
+    }
 
     enum FetchError: Error, LocalizedError {
         case noCredentials
         case tokenExpired
+        case apiKeyRejected
         case rateLimited(retryAt: Date)
         case usageHTTPError(Int, String?)
         case usageDecodeFailed
@@ -51,9 +77,11 @@ enum KimiSubscriptionService {
         var errorDescription: String? {
             switch self {
             case .noCredentials:
-                return "No Kimi Code credentials found. Sign in with the Kimi CLI first."
+                return "No Kimi Code credentials found. Save a Code Plan API key or sign in with the Kimi CLI."
             case .tokenExpired:
                 return "Kimi Code login expired. Run the Kimi CLI once to refresh, then try again."
+            case .apiKeyRejected:
+                return "Kimi Code rejected this API key. Check the Code Plan key saved in Settings."
             case let .rateLimited(retryAt):
                 let f = RelativeDateTimeFormatter()
                 f.unitsStyle = .short
@@ -66,9 +94,10 @@ enum KimiSubscriptionService {
         }
 
         var isTerminal: Bool {
-            if case .tokenExpired = self { return true }
-            if case .noCredentials = self { return true }
-            return false
+            switch self {
+            case .noCredentials, .tokenExpired, .apiKeyRejected: return true
+            case .rateLimited, .usageHTTPError, .usageDecodeFailed, .network: return false
+            }
         }
 
         var rateLimitRetryAt: Date? {
@@ -102,34 +131,26 @@ enum KimiSubscriptionService {
         }
     }
 
-    private static var credentialsURL: URL {
-        let home = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
-            ?? NSHomeDirectory() + "/.kimi-code"
-        return URL(fileURLWithPath: home + "/credentials/kimi-code.json")
-    }
-
     static var hasCredential: Bool {
-        FileManager.default.fileExists(atPath: credentialsURL.path)
+        FileManager.default.fileExists(atPath: Dependencies.live.credentialsURL.path)
     }
 
     /// Returns the access token only when it is still fresh (60s skew).
     /// Throws noCredentials / tokenExpired otherwise.
-    private static func freshToken() throws -> String {
-        guard let data = FileManager.default.contents(atPath: credentialsURL.path),
+    private static func freshToken(deps: Dependencies) throws -> String {
+        guard let data = deps.readFile(deps.credentialsURL),
               let cred = try? JSONDecoder().decode(CredentialFile.self, from: data),
               !cred.accessToken.isEmpty else {
             throw FetchError.noCredentials
         }
-        guard cred.expiresAt > Date().timeIntervalSince1970 + 60 else {
+        guard cred.expiresAt > deps.now().timeIntervalSince1970 + 60 else {
             throw FetchError.tokenExpired
         }
         return cred.accessToken
     }
 
-    private static func deviceId() -> String? {
-        let home = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
-            ?? NSHomeDirectory() + "/.kimi-code"
-        guard let data = FileManager.default.contents(atPath: home + "/device_id"),
+    private static func deviceId(deps: Dependencies) -> String? {
+        guard let data = deps.readFile(deps.deviceIDURL),
               let id = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !id.isEmpty else { return nil }
         return id
@@ -137,11 +158,18 @@ enum KimiSubscriptionService {
 
     // MARK: - Fetch
 
-    static func refresh() async throws -> KimiUsage {
-        if let until = usageBlockedUntil(), until > Date() {
+    static func refresh(apiKey: String? = nil, deps: Dependencies = .live) async throws -> KimiUsage {
+        if let until = usageBlockedUntil(), until > deps.now() {
             throw FetchError.rateLimited(retryAt: until)
         }
-        let token = try freshToken()
+        let configuredKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesAPIKey = configuredKey?.isEmpty == false
+        let token: String
+        if let configuredKey, !configuredKey.isEmpty {
+            token = configuredKey
+        } else {
+            token = try freshToken(deps: deps)
+        }
 
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
@@ -149,21 +177,23 @@ enum KimiSubscriptionService {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("CodeBurn", forHTTPHeaderField: "User-Agent")
-        // Kimi server expects these platform headers.
-        request.setValue("kimi_code_cli", forHTTPHeaderField: "X-Msh-Platform")
-        if let deviceId = deviceId() {
-            request.setValue(deviceId, forHTTPHeaderField: "X-Msh-Device-Id")
+        // These identify the CLI credential path. A Code Plan API key needs
+        // only bearer authentication, matching Kimi's API contract.
+        if !usesAPIKey {
+            request.setValue("kimi_code_cli", forHTTPHeaderField: "X-Msh-Platform")
+            if let deviceId = deviceId(deps: deps) {
+                request.setValue(deviceId, forHTTPHeaderField: "X-Msh-Device-Id")
+            }
         }
 
         let data: Data
-        let response: URLResponse
+        let http: HTTPURLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, http) = try await deps.fetch(request)
+        } catch let error as FetchError {
+            throw error
         } catch {
             throw FetchError.network(error)
-        }
-        guard let http = response as? HTTPURLResponse else {
-            throw FetchError.usageHTTPError(-1, nil)
         }
 
         switch http.statusCode {
@@ -177,9 +207,7 @@ enum KimiSubscriptionService {
                 throw FetchError.usageDecodeFailed
             }
         case 401, 403:
-            // We don't self-refresh; surface as terminal so the UI prompts
-            // the user to run the CLI.
-            throw FetchError.tokenExpired
+            throw usesAPIKey ? FetchError.apiKeyRejected : FetchError.tokenExpired
         case 429:
             let retryAfter = parseRetryAfterHeader(http.value(forHTTPHeaderField: "Retry-After"))
             let until = recordUsageRateLimit(retryAfterSeconds: retryAfter)

@@ -150,10 +150,12 @@ final class AppStore {
 
     var kimiUsage: KimiUsage?
     var kimiError: String?
-    // No keychain dance for Kimi — "connected" just means the CLI's
-    // credential file exists, so we start dormant and auto-activate on the
-    // first refresh tick.
-    var kimiLoadState: SubscriptionLoadState = KimiSubscriptionService.hasCredential ? .dormant : .notBootstrapped
+    // A provider-scoped Keychain key or the CLI credential makes Kimi eligible
+    // for prompt-free background activation.
+    var kimiLoadState: SubscriptionLoadState = (
+        KimiSubscriptionService.hasCredential
+            || CapacityDockProviderCredentialPresence.contains(KimiSubscriptionService.providerID)
+    ) ? .dormant : .notBootstrapped
 
     var geminiUsage: GeminiUsage?
     var geminiError: String?
@@ -1537,16 +1539,26 @@ final class AppStore {
 
     // MARK: - Kimi Code
 
-    /// Unlike Claude/Codex there is no keychain bootstrap: reading the CLI's
-    /// credential file is prompt-free, so the first refresh tick activates
-    /// the dormant state automatically.
+    /// A saved Code Plan API key wins; the CLI's short-lived token remains the
+    /// fallback for existing users who have not configured one.
+    private func fetchKimiUsage() async throws -> KimiUsage {
+        let apiKey: String?
+        if CapacityDockProviderCredentialPresence.contains(KimiSubscriptionService.providerID) {
+            apiKey = try await capacityDockCredentialLoader(KimiSubscriptionService.providerID)
+                .sanitizedOverride.apiKey
+        } else {
+            apiKey = nil
+        }
+        return try await KimiSubscriptionService.refresh(apiKey: apiKey)
+    }
+
     func bootstrapKimi() async {
         // Capture the generation before the await so a disconnect that lands
         // mid-fetch cannot be resurrected into .loaded when the fetch returns.
         let gen = kimiRefreshGen
         kimiLoadState = .bootstrapping
         do {
-            let usage = try await KimiSubscriptionService.refresh()
+            let usage = try await fetchKimiUsage()
             guard gen == kimiRefreshGen else { return }
             kimiUsage = usage
             kimiError = nil
@@ -1571,14 +1583,15 @@ final class AppStore {
             await bootstrapKimi()
             return kimiLoadState == .loaded
         }
-        guard KimiSubscriptionService.hasCredential else {
+        guard KimiSubscriptionService.hasCredential
+            || CapacityDockProviderCredentialPresence.contains(KimiSubscriptionService.providerID) else {
             if kimiLoadState != .notBootstrapped { kimiLoadState = .notBootstrapped }
             return false
         }
         let gen = kimiRefreshGen
         if kimiUsage == nil { kimiLoadState = .loading }
         do {
-            let usage = try await KimiSubscriptionService.refresh()
+            let usage = try await fetchKimiUsage()
             guard gen == kimiRefreshGen else { return false }
             kimiUsage = usage
             kimiError = nil
@@ -2375,6 +2388,9 @@ final class AppStore {
                 let row = QuotaSummary.Window(label: w.label, percent: w.usedPercent / 100, resetsAt: w.resetsAt)
                 if primary == nil { primary = row }
                 details.append(row)
+            }
+            if usage.primary != nil, details.count > 1 {
+                details.append(details.removeFirst())
             }
         }
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: kimiUsage?.plan ?? "Kimi Code", footerLines: [])

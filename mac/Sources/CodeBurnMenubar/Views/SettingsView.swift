@@ -1115,8 +1115,9 @@ private struct KimiSettingsTab: View {
             Section("Connection") {
                 KimiConnectionRow()
             }
+            KimiAPIKeySection()
             Section {
-                Text("Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect.")
+                Text("CodeBurn uses your saved Kimi Code Plan API key when present, then falls back to the Kimi CLI credential in `~/.kimi-code/credentials/kimi-code.json`. The API key stays in your login Keychain. The CLI file is read-only and never copied.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
@@ -1125,6 +1126,80 @@ private struct KimiSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+private struct KimiAPIKeySection: View {
+    @Environment(AppStore.self) private var store
+    @State private var apiKey = ""
+    @State private var isSaving = false
+    @State private var errorText: String?
+
+    var body: some View {
+        Section {
+            SecureField("Kimi Code API key", text: $apiKey)
+            HStack {
+                Button("Save & Connect", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isSaving || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Clear Key", action: clear)
+                    .disabled(isSaving || !CapacityDockProviderCredentialPresence.contains(KimiSubscriptionService.providerID))
+                if isSaving {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            Link("Create a Kimi Code API key", destination: URL(string: "https://www.kimi.com/code/console")!)
+            if let errorText {
+                Text(errorText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Kimi Code Plan API key")
+        } footer: {
+            Text("Optional. A saved key avoids the Kimi CLI's short-lived login token and is used only to read quota from api.kimi.com.")
+                .font(.system(size: 11))
+        }
+    }
+
+    private func save() {
+        let raw = apiKey
+        isSaving = true
+        errorText = nil
+        Task {
+            defer { isSaving = false }
+            do {
+                try await store.saveCapacityDockCredential(
+                    CapacityDockProviderCredential(sourceMode: "api", apiKey: raw),
+                    for: .kimiCode
+                )
+                apiKey = ""
+                KimiSubscriptionService.disconnect()
+                await store.bootstrapKimi()
+            } catch {
+                errorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func clear() {
+        isSaving = true
+        errorText = nil
+        Task {
+            defer { isSaving = false }
+            do {
+                try await CapacityDockProviderCredentialStore.removeAsync(
+                    for: KimiSubscriptionService.providerID
+                )
+                apiKey = ""
+                store.disconnectKimi()
+                if KimiSubscriptionService.hasCredential {
+                    await store.bootstrapKimi()
+                }
+            } catch {
+                errorText = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -1190,13 +1265,13 @@ private struct KimiConnectionRow: View {
         case .loaded:
             return "Live quota tracked from api.kimi.com."
         case .terminalFailure:
-            return "Run the Kimi CLI once to refresh your login, then click Reconnect."
+            return store.kimiError ?? "Check your saved API key or refresh the Kimi CLI login, then click Reconnect."
         case .transientFailure: return store.kimiError ?? "Kimi rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.kimi-code credentials."
+        case .bootstrapping: return "Checking the saved API key, then Kimi CLI credentials."
         case .loading: return "Background refresh in progress."
         case .dormant: return "Tap Load Quota to fetch live usage from api.kimi.com."
         case .notBootstrapped, .noCredentials:
-            return "Sign in with the Kimi CLI first, then click Connect."
+            return "Paste a Kimi Code Plan API key below, or sign in with the Kimi CLI, then click Connect."
         case .failed: return store.kimiError ?? ""
         }
     }
@@ -1215,7 +1290,7 @@ private struct KimiConnectionRow: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working.")
+                    Text("CodeBurn will stop tracking Kimi Code quota. Your saved API key and ~/.kimi-code credentials are untouched.")
                 }
         case .terminalFailure, .noCredentials, .failed:
             Button("Reconnect") { Task { await store.bootstrapKimi() } }
