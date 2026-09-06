@@ -1147,7 +1147,14 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // the previous `> 0` clause. The null sentinel ensures the FIRST
           // event always passes (so a session that never reports cumulative
           // doesn't lose its opening turn).
-          if (prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
+          // The comparison may ONLY run when the session actually reports a
+          // cumulative total: a session that omits total_token_usage reads
+          // cumulativeTotal=0 on EVERY event, so comparing would drop every
+          // genuine event after the first (undercount). Resend dedup for
+          // such sessions happens via the last_token_usage-keyed dedup key
+          // below instead.
+          const reportsCumulative = info.total_token_usage !== undefined
+          if (reportsCumulative && prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
           prevCumulativeTotal = cumulativeTotal
 
           const last = info.last_token_usage
@@ -1227,7 +1234,18 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // are computed against a running `prev` that the fork advances
           // differently once the 5s cutoff skips some replays, so a delta-based
           // key would spuriously diverge on a replay and double-count it.
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+          // A session that omits total_token_usage has no cumulative figures
+          // to key on (all such keys collapse to the same all-zeros key and
+          // would drop every event after the first). Key those on the
+          // last_token_usage content instead: a resend/replay repeats the
+          // same per-request figures verbatim and still collides, while
+          // genuinely different work at the same session stays distinct.
+          // Two genuine requests with byte-identical usage in one session
+          // would collide (a rare undercount), but the all-zeros key drops
+          // ALL of them today, so this is strictly better.
+          const dedupKey = info.total_token_usage
+            ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+            : `codex:${forkedFromId || sessionId}:last:${last?.input_tokens ?? 0}:${last?.cached_input_tokens ?? 0}:${last?.output_tokens ?? 0}:${last?.reasoning_output_tokens ?? 0}`
 
           // A drop here can only be a byte-identical replay: the
           // prevCumulativeTotal guard above already discards a repeated
