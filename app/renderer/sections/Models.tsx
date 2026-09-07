@@ -287,7 +287,10 @@ function ModelsByTaskTable({ rows, onAddAlias, onInvestigate }: {
 function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow; onAddAlias: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
-  const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
+  // Token columns are observed usage, not a pricing artifact: a model with no
+  // pricing entry still burned real input/output/cache-read tokens, so they
+  // render regardless. Only cost/saved collapse to dashes behind the alias
+  // affordance — there is no attributed cost to show for them.
   const dotStyle = {
     display: 'inline-block',
     background: seriesColorForModel(row.modelDisplayName || row.model),
@@ -313,9 +316,9 @@ function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow
         <span style={{ ...providerTagStyle, display: 'block', marginTop: 2, paddingLeft: 16 }}>{row.providerDisplayName}</span>
       </td>
       <td className={cellClass}>{fmtInt(row.calls)}</td>
-      <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.outputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.cacheReadTokens)}</td>
+      <td>{formatCompact(row.inputTokens)}</td>
+      <td>{formatCompact(row.outputTokens)}</td>
+      <td>{formatCompact(row.cacheReadTokens)}</td>
       <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>
@@ -362,7 +365,6 @@ function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportR
 function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
-  const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
 
   return (
     <tr className="model-task-row">
@@ -372,9 +374,10 @@ function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestiga
         ) : row.category ?? 'general'}
       </td>
       <td className={cellClass}>{fmtInt(row.calls)}</td>
-      <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.outputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.cacheReadTokens)}</td>
+      {/* Observed usage renders even for unpriced models — see ModelTableRow. */}
+      <td>{formatCompact(row.inputTokens)}</td>
+      <td>{formatCompact(row.outputTokens)}</td>
+      <td>{formatCompact(row.cacheReadTokens)}</td>
       <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>
