@@ -258,7 +258,20 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
   let cost = 0, savingsUSD = 0, calls = 0, sessions = 0
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number }> = {}
+  // Per-model token counts, normalized the same way the day entries were
+  // written (output already billable — day-aggregator folds reasoning in per
+  // call). Merge keys stay the raw ids here; the payload resolves display
+  // names later (buildTopModels), so both aggregation paths land in the same
+  // rows as cost.
+  const modelTotals: Record<string, {
+    calls: number
+    cost: number
+    savingsUSD: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+  }> = {}
 
   for (const d of days) {
     cost += d.cost
@@ -271,10 +284,17 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
     cacheWriteTokens += d.cacheWriteTokens
 
     for (const [name, m] of Object.entries(d.models)) {
-      const acc = modelTotals[name] ?? { calls: 0, cost: 0, savingsUSD: 0 }
+      const acc = modelTotals[name] ?? {
+        calls: 0, cost: 0, savingsUSD: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      }
       acc.calls += m.calls
       acc.cost += m.cost
       acc.savingsUSD += (m.savingsUSD ?? 0)
+      acc.inputTokens += m.inputTokens
+      acc.outputTokens += m.outputTokens
+      acc.cacheReadTokens += m.cacheReadTokens
+      acc.cacheWriteTokens += m.cacheWriteTokens
       modelTotals[name] = acc
     }
     for (const [cat, c] of Object.entries(d.categories)) {
@@ -303,6 +323,9 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, ...d })),
+      .map(([name, d]) => ({
+        name,
+        ...d,
+      })),
   }
 }

@@ -28,7 +28,27 @@ export type PeriodData = {
   /// non-menubar PeriodData producers don't have to compute it.
   codexCredits?: number
   categories: Array<{ name: string; cost: number; savingsUSD: number; turns: number; editTurns: number; oneShotTurns: number }>
-  models: Array<{ name: string; cost: number; savingsUSD: number; calls: number; estimatedCostUSD?: number }>
+  models: Array<{
+    name: string
+    cost: number
+    savingsUSD: number
+    calls: number
+    estimatedCostUSD?: number
+    /// Per-model token counts for the period, normalized exactly like the
+    /// headline totals: billable output (reasoning tokens are added only
+    /// where the provider reports them separately from output — where output
+    /// already includes them they are never added twice), `cacheReadTokens`
+    /// = reused input, `cacheWriteTokens` kept separate so the two are never
+    /// summed. The attributed cost already includes cache pricing; the counts
+    /// never restate or rescale it. Optional so PeriodData producers
+    /// predating the field keep compiling; a consumer must render absent
+    /// counts as unknown — never as zero, and never substitute the
+    /// period-wide totals.
+    inputTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }>
   /// Models with usage in the period whose pricing lookup fails against the
   /// current tables (#638): their calls contribute $0 to `cost`. Optional so
   /// PeriodData producers that predate the field keep compiling.
@@ -284,6 +304,15 @@ export type MenubarPayload = {
       /// Estimated portion of this model's `cost`; > 0 marks the row as priced
       /// from estimated tokens. Optional for payload back-compat.
       estimatedCostUSD?: number
+      /// Per-model token counts, same normalization as `PeriodData.models`:
+      /// billable output, cache read = reused input, cache write separate.
+      /// Add-only and optional — omitted when the period carries no count for
+      /// the row (an older producer, or any contributing legacy row without
+      /// counts), so a consumer must render absence as unknown, never as zero.
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
     }>
     /// See PeriodData.unpricedModels: usage priced at $0 for lack of pricing
     /// data. Empty when every model in the period resolved a price. Optional
@@ -480,25 +509,64 @@ function buildTopActivities(categories: PeriodData['categories']): MenubarPayloa
   }))
 }
 
+/// Per-model token counts merged alongside cost. A `undefined` accumulator is
+/// "unknown", not zero: a legacy row that predates the counts must not turn the
+/// merged row into a plausible-looking 0, so one unknown contributor marks the
+/// merged count unknown and the field is omitted from the payload.
+const MODEL_COUNT_KEYS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
+type ModelCountKey = (typeof MODEL_COUNT_KEYS)[number]
+
+function mergeCount(target: { counts: Partial<Record<ModelCountKey, number>>; unknown: Set<ModelCountKey> }, key: ModelCountKey, value: number | undefined): void {
+  // Once a contributor without this count has been seen, the merged count is
+  // unknown for good — later contributors must not resurrect a partial sum.
+  if (value === undefined) {
+    target.unknown.add(key)
+    delete target.counts[key]
+    return
+  }
+  if (target.unknown.has(key)) return
+  target.counts[key] = (target.counts[key] ?? 0) + value
+}
+
 function buildTopModels(models: PeriodData['models']): MenubarPayload['current']['topModels'] {
   // Day entries key models by the raw provider id (day-aggregator), so resolve
   // display names here — the menubar shows "Kimi K3" rather than "k3". Ids that
-  // collapse to one display name (e.g. k3 and kimi-k3) merge into a single row.
-  const merged = new Map<string, { cost: number; calls: number; savingsUSD: number; estimatedCostUSD: number }>()
+  // collapse to one display name (e.g. k3 and kimi-k3) merge into a single row,
+  // and their token counts merge under the same grouping as cost.
+  const merged = new Map<string, {
+    cost: number
+    calls: number
+    savingsUSD: number
+    estimatedCostUSD: number
+    counts: Partial<Record<ModelCountKey, number>>
+    unknown: Set<ModelCountKey>
+  }>()
   for (const m of models) {
     if (m.name === SYNTHETIC_MODEL_NAME) continue
     const name = getShortModelName(m.name)
-    const acc = merged.get(name) ?? { cost: 0, calls: 0, savingsUSD: 0, estimatedCostUSD: 0 }
+    const acc = merged.get(name) ?? { cost: 0, calls: 0, savingsUSD: 0, estimatedCostUSD: 0, counts: {}, unknown: new Set<ModelCountKey>() }
     acc.cost += m.cost
     acc.calls += m.calls
     acc.savingsUSD += m.savingsUSD ?? 0
     acc.estimatedCostUSD += m.estimatedCostUSD ?? 0
+    for (const key of MODEL_COUNT_KEYS) mergeCount(acc, key, m[key])
     merged.set(name, acc)
   }
   return [...merged.entries()]
     .sort(([, a], [, b]) => b.cost - a.cost)
     .slice(0, TOP_MODELS_LIMIT)
-    .map(([name, d]) => ({ name, cost: d.cost, calls: d.calls, savingsUSD: d.savingsUSD, savingsBaselineModel: '', estimatedCostUSD: d.estimatedCostUSD }))
+    .map(([name, d]) => ({
+      name,
+      cost: d.cost,
+      calls: d.calls,
+      savingsUSD: d.savingsUSD,
+      savingsBaselineModel: '',
+      estimatedCostUSD: d.estimatedCostUSD,
+      ...(d.counts.inputTokens === undefined ? {} : { inputTokens: d.counts.inputTokens }),
+      ...(d.counts.outputTokens === undefined ? {} : { outputTokens: d.counts.outputTokens }),
+      ...(d.counts.cacheReadTokens === undefined ? {} : { cacheReadTokens: d.counts.cacheReadTokens }),
+      ...(d.counts.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: d.counts.cacheWriteTokens }),
+    }))
 }
 
 function buildOptimize(optimize: OptimizeResult | null): MenubarPayload['optimize'] {

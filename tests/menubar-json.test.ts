@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { buildMenubarPayload, type CombinedUsage, type LocalModelSavings, type PeriodData, type ProviderCost } from '../src/menubar-json.js'
+import { getShortModelName } from '../src/models.js'
 import type { OptimizeResult } from '../src/optimize.js'
 
 function emptyPeriod(label: string): PeriodData {
@@ -182,6 +183,88 @@ describe('buildMenubarPayload', () => {
     expect(k2.cost).toBeCloseTo(0.06)
     expect(payload.current.topModels.find(m => m.name === 'k3')).toBeUndefined()
     expect(payload.current.topModels.find(m => m.name === 'k3-agent')).toBeUndefined()
+  })
+
+  it('merges per-model token counts under the same display-name grouping as cost', () => {
+    const period: PeriodData = {
+      label: 'Today',
+      cost: 0, calls: 0, sessions: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      categories: [],
+      models: [
+        { name: 'k3', cost: 2.5, calls: 78, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 400 },
+        { name: 'kimi-k3', cost: 0.5, calls: 2, inputTokens: 10, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 40 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const kimiK3 = payload.current.topModels.find(m => m.name === 'Kimi K3')!
+    expect(kimiK3.inputTokens).toBe(1010)
+    expect(kimiK3.outputTokens).toBe(220)
+    expect(kimiK3.cacheReadTokens).toBe(3030)
+    expect(kimiK3.cacheWriteTokens).toBe(440)
+  })
+
+  it('keeps known-zero per-model counts as zeros instead of dashes or drops', () => {
+    const period: PeriodData = {
+      label: 'Today',
+      cost: 0, calls: 0, sessions: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      categories: [],
+      models: [
+        { name: 'k3', cost: 0, calls: 3, inputTokens: 0, outputTokens: 0, cacheReadTokens: 500, cacheWriteTokens: 0 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const row = payload.current.topModels[0]!
+    expect(row.inputTokens).toBe(0)
+    expect(row.outputTokens).toBe(0)
+    expect(row.cacheReadTokens).toBe(500)
+    expect(row.cacheWriteTokens).toBe(0)
+  })
+
+  it('omits per-model counts for a row any legacy contributor without counts folded into', () => {
+    // A period assembled from older rows that never carried counts must not
+    // grow a plausible-looking partial sum: unknown stays absent.
+    const period: PeriodData = {
+      label: 'Today',
+      cost: 0, calls: 0, sessions: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      categories: [],
+      models: [
+        { name: 'k3', cost: 2.5, calls: 78, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 400 },
+        { name: 'kimi-k3', cost: 0.5, calls: 2 },
+        { name: 'kimi-for-coding', cost: 0.06, calls: 13, inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 8 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const merged = payload.current.topModels.find(m => m.name === 'Kimi K3')!
+    expect(merged.inputTokens).toBeUndefined()
+    expect(merged.outputTokens).toBeUndefined()
+    expect(merged.cacheReadTokens).toBeUndefined()
+    expect(merged.cacheWriteTokens).toBeUndefined()
+    // A row whose every contributor carried counts keeps them.
+    const intact = payload.current.topModels.find(m => m.name === getShortModelName('kimi-for-coding'))!
+    expect(intact.inputTokens).toBe(5)
+    expect(intact.outputTokens).toBe(6)
+    expect(intact.cacheReadTokens).toBe(7)
+    expect(intact.cacheWriteTokens).toBe(8)
+  })
+
+  it('keeps merged counts unknown regardless of the order contributors arrive in', () => {
+    const period: PeriodData = {
+      label: 'Today',
+      cost: 0, calls: 0, sessions: 0,
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      categories: [],
+      models: [
+        { name: 'kimi-k3', cost: 0.5, calls: 2 },
+        { name: 'k3', cost: 2.5, calls: 78, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 3000, cacheWriteTokens: 400 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const merged = payload.current.topModels.find(m => m.name === 'Kimi K3')!
+    expect(merged.inputTokens).toBeUndefined()
+    expect(merged.cacheWriteTokens).toBeUndefined()
   })
 
   it('caps topActivities at 20 so all task categories can surface', () => {

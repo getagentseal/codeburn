@@ -465,16 +465,25 @@ type AggregatedModel = {
   name: string
   cost: number
   calls: number
-  // Absent in provider-filtered mode: `current.topModels` carries no per-model
-  // token counts, so the table shows "—" rather than a misleading zero.
+  // Absent when the payload carries no count for the row (an older CLI, or a
+  // row whose contributing legacy data lacked counts): the table shows "—"
+  // rather than a misleading zero.
   inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
 function topModelsToAggregated(models: MenubarPayload['current']['topModels']): AggregatedModel[] {
   return models
-    .map(model => ({ name: model.name, cost: model.cost, calls: model.calls }))
+    .map(model => ({
+      name: model.name,
+      cost: model.cost,
+      calls: model.calls,
+      ...(model.inputTokens === undefined ? {} : { inputTokens: model.inputTokens }),
+      ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
+      ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
+    }))
     .sort((a, b) => b.cost - a.cost)
 }
 
@@ -510,6 +519,8 @@ function ModelsTable({ models }: { models: AggregatedModel[] }) {
             <th>Model</th>
             <th className="num">Input tok</th>
             <th className="num">Output tok</th>
+            {/* Reused input tokens: prompts the provider served from cache. */}
+            <th className="num" title="Reused input tokens served from the provider's cache">Cache read</th>
             <th className="num">Cost</th>
             <th className="num">Calls</th>
           </tr>
@@ -520,6 +531,7 @@ function ModelsTable({ models }: { models: AggregatedModel[] }) {
               <td className="ov-model-name">{model.name}</td>
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
+              <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
               <td className="num mono">{formatUsd(model.cost)}</td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
@@ -787,9 +799,16 @@ export function OverviewContent({
         periodDaily[0] && periodDaily[0].date < defaultChartStart ? periodDaily[0].date : defaultChartStart,
         localDateKey(now),
       )
-  // Provider-filtered history.daily has empty topModels, so source the models
-  // table from current.topModels (already period/range/provider-scoped) instead.
-  const models = provider !== 'all'
+  // Models this period come from `current.topModels` — period/range/provider-
+  // scoped by the CLI, and (on CLIs that emit per-model counts) carrying input/
+  // output/cache-read counts for every model in the period, including days
+  // whose per-day top-5 history list no longer names them. history.daily is
+  // the fallback for payloads from older CLIs: its rows know input/output but
+  // not cache read, so the cache column shows "—" there.
+  const topModelsCarryCounts = data.current.topModels.some(model =>
+    model.inputTokens !== undefined || model.outputTokens !== undefined,
+  )
+  const models = provider !== 'all' || topModelsCarryCounts
     ? topModelsToAggregated(data.current.topModels)
     : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
   const recent14 = data.history.daily.slice(-14)
