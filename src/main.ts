@@ -58,7 +58,13 @@ const { version } = require('../package.json')
 // v5: providerDetails carries per-provider tokens and sessions, which a v4
 // record predates — the dock glance would read a provider as having no token
 // breakdown purely because the snapshot was written before this build.
-const STATUS_SNAPSHOT_RENDER_VERSION = 5
+// v6: current.topModels rows carry per-model input/output/cache-read/write
+// counts, which a v5 record predates — the Models sections would show no
+// per-model token breakdown purely because the snapshot was written before
+// this build. A v5 record is treated as a miss (one real recompute per
+// query), then the fresh record is served; daily/session caches are separate
+// version domains and are not touched.
+const STATUS_SNAPSHOT_RENDER_VERSION = 6
 const STATUS_SNAPSHOT_SEMANTIC_KEY = `${version}:render-${STATUS_SNAPSHOT_RENDER_VERSION}:daily-${DAILY_CACHE_VERSION}`
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
 import { CodexThroughputReader, newestCodexSession, renderCodexThroughput } from './codex-throughput.js'
