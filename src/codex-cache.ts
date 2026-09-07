@@ -43,7 +43,8 @@ import type { ParsedProviderCall } from './providers/types.js'
 // v15: builtin alias prices `codex-auto-review` (#1047). Exact-hit cache
 // entries still hold the pre-alias $0; bump so unchanged rollouts reprice.
 // Must be max(main v14 #1092, this)+1 — #1092 spent v14 on MCP/skills.
-export const CODEX_CACHE_VERSION = 15
+// Missing cumulative usage no longer collapses distinct records.
+export const CODEX_CACHE_VERSION = 16
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
   return `codex-results.v${version}.json`
