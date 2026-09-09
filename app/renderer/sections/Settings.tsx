@@ -11,8 +11,9 @@ import { clearPolledMemo, usePolled } from '../hooks/usePolled'
 import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { version as appVersion } from '../../package.json'
 import { readDailyBudget } from '../lib/budget'
-import { formatConverted, formatUsd } from '../lib/format'
+import { formatConverted, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { projectMatches, projectPattern } from '../lib/projectMatch'
 import { shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
@@ -25,9 +26,9 @@ import { ToastHost } from '../components/ToastHost'
 import { rateLimitedNote } from './Plans'
 import { SharingPane } from './SettingsSharing'
 import { CapacityDockPane, MenuBarPane } from './SettingsTray'
-import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
+import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProjectFilter, ProjectRow, ProjectsReport, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
 
-export type SettingsPane = 'general' | 'providers' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy' | 'sharing' | 'menubar' | 'dock'
+export type SettingsPane = 'general' | 'providers' | 'projects' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy' | 'sharing' | 'menubar' | 'dock'
 type Pane = SettingsPane
 type Theme = 'system' | 'light' | 'dark'
 
@@ -62,6 +63,7 @@ function writeSetting(key: string, value: string): void {
 const RAIL_ITEMS: Array<{ id: Pane; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <><line x1="4" y1="8" x2="20" y2="8" /><circle cx="9" cy="8" r="2.2" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="15" cy="16" r="2.2" /></> },
   { id: 'providers', label: 'Providers', icon: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></> },
+  { id: 'projects', label: 'Projects', icon: <><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4L11 8.5h8.5A1.5 1.5 0 0 1 21 10v7.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" /><path d="M9 14l2 2 4-4" /></> },
   { id: 'aliases', label: 'Model aliases', icon: <><path d="M20 12l-8 8-9-9V3h8z" /><circle cx="7.5" cy="7.5" r="1.4" /></> },
   { id: 'pricing', label: 'Pricing', icon: <><circle cx="12" cy="12" r="9" /><path d="M14.5 9a2.5 2.5 0 0 0-2.5-1.6c-1.5 0-2.5.8-2.5 2s1 1.6 2.5 2 2.5.9 2.5 2-1 2-2.5 2A2.5 2.5 0 0 1 9.5 15" /><line x1="12" y1="6" x2="12" y2="18" /></> },
   { id: 'plans', label: 'Plans', icon: <><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></> },
@@ -126,7 +128,7 @@ function ConfirmButton({ label, prompt, onConfirm }: { label: string; prompt: st
   )
 }
 
-export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, scope = 'local', onScopeChange }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void }) {
+export function Settings({ period, refreshToken = 0, onNavigate, initialPane, claudeConfigs, claudeConfigSource = null, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken?: number; onNavigate?: (section: Section) => void; initialPane?: SettingsPane; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource?: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
   const [pane, setPane] = useState<Pane>(initialPane ?? 'general')
   // The tray app's own two panes, Windows only, each shown only while its switch in the
   // sidebar corner is on: there is nothing to configure about a tray app that is not running,
@@ -156,8 +158,9 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
           ))}
         </nav>
         <main className="set-pane">
-          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} />}
+          {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />}
           {pane === 'providers' && <ProvidersPane period={period} refreshToken={refreshToken} />}
+          {pane === 'projects' && <ProjectsPane period={period} refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'pricing' && <PricingPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
@@ -174,7 +177,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
   )
 }
 
-function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, onConfigMutated, scope = 'local', onScopeChange }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void }) {
+function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, onConfigMutated, scope = 'local', onScopeChange, projectFiltered = false }: { period: Period; refreshToken: number; claudeConfigs?: ClaudeConfigSelector; claudeConfigSource: string | null; onConfigMutated?: () => void; scope?: Scope; onScopeChange?: (scope: string) => void; projectFiltered?: boolean }) {
   const [currencyNonce, setCurrencyNonce] = useState(0)
   const plans = usePolled<StatusJson>(() => codeburn.getPlans(period), [period, refreshToken, currencyNonce], {
     memoKey: reportMemoKey('plans', period),
@@ -251,7 +254,7 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
             <button className="set-text-button" onClick={() => { trackEvent('settings_change', { setting: 'currency', value: 'USD' }); void codeburn.resetCurrency().then(finishCurrency) }}>Reset to USD</button>
           </span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-period">Default period<small>Applied on next launch.</small></label><span className="r"><Dropdown id="settings-period" ariaLabel="Default period" value={defaultPeriod} options={[{ value: 'today', label: 'Today' }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: 'Month' }, { value: 'all', label: 'All' }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value); trackEvent('settings_change', { setting: 'defaultPeriod', value }) }} width={92} /></span></div>
-          <div className="about-row"><label className="tx" htmlFor="settings-scope">Scope<small>Combined aggregates usage across every paired device, like the menubar. Local shows this device only.</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel="Scope" value={scope} options={[{ value: 'local', label: 'Local' }, { value: 'combined', label: 'Combined' }]} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
+          <div className="about-row"><label className="tx" htmlFor="settings-scope">Scope<small>{projectFiltered ? 'Local only while the Projects pane hides something: paired devices report their usage unfiltered, so a combined total would carry the hidden projects.' : 'Combined aggregates usage across every paired device, like the menubar. Local shows this device only.'}</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel="Scope" value={scope} options={projectFiltered ? [{ value: 'local', label: 'Local' }] : [{ value: 'local', label: 'Local' }, { value: 'combined', label: 'Combined' }]} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-refresh">Refresh every<small>Runs automatically at this interval. Press {shortcutLabel('R')} to refresh sooner.</small></label><span className="r"><Dropdown id="settings-refresh" ariaLabel="Refresh every" value={cadence.value} options={REFRESH_OPTIONS.map(option => ({ value: option.value, label: option.label }))} onChange={cadence.setValue} width={124} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-budget">Daily budget<small>Warns at 80%, alerts at 100%.</small></label><span className="r"><Dropdown id="settings-budget" ariaLabel="Daily budget" value={budgetKind} options={[{ value: 'off', label: 'Off' }, { value: 'usd', label: 'USD amount' }, { value: 'tokens', label: 'Tokens' }]} onChange={value => { const kind = value as 'off' | 'usd' | 'tokens'; setBudgetKind(kind); persistBudget(kind, budgetInput) }} width={120} />{budgetKind !== 'off' && <input className="set-input" type="text" inputMode="decimal" aria-label="Daily budget amount" placeholder={budgetKind === 'usd' ? 'USD' : 'tokens'} value={budgetInput} onChange={event => { setBudgetInput(event.target.value); persistBudget(budgetKind, event.target.value) }} style={{ width: 90 }} />}</span></div>
           {budgetError && <p className="set-action-msg error">{budgetError}</p>}
@@ -277,6 +280,91 @@ function ProvidersPane({ period, refreshToken }: { period: Period; refreshToken:
   return <section className="set-p on">
     <div><h3 className="set-h">Providers</h3><p className="set-sub">codeburn auto-detects coding tools from local session files. No setup needed.</p></div>
     {overview.error ? <SettingsErrorText error={overview.error} /> : !overview.data ? <p className="set-cap">Loading detected providers…</p> : providers.length === 0 ? <p className="set-cap">No providers detected.</p> : providers.map(entry => <div className="card" key={entry.id}><div className="set-prov-head"><ProviderLogo provider={entry.id} /><span className="set-prov-name">{entry.label}</span><span className="set-status"><span className="set-dot ok" />Detected · {formatUsd(entry.cost)}</span></div></div>)}
+  </section>
+}
+
+const NO_PROJECT_FILTER: ProjectFilter = { project: [], exclude: [] }
+
+function projectVisible(project: ProjectRow, filter: ProjectFilter): boolean {
+  if (filter.exclude.some(pattern => projectMatches(project, pattern))) return false
+  return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
+}
+
+function ProjectsPane({ period, refreshToken, onConfigMutated }: { period: Period; refreshToken: number; onConfigMutated?: () => void }) {
+  const [actionNonce, setActionNonce] = useState(0)
+  const [pattern, setPattern] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  // Not keyed on refreshToken: `report` is the heaviest fetch in the app, and a
+  // toggle cannot change an unfiltered list.
+  const report = usePolled<ProjectsReport>(() => codeburn.getUnfilteredProjects(period), [period], { memoKey: `projects|${period}` })
+  const saved = usePolled<ProjectFilter>(() => codeburn.getProjectFilter(), [refreshToken, actionNonce])
+  const filter = saved.data ?? NO_PROJECT_FILTER
+  const projects = report.data?.projects ?? []
+
+  // One write at a time, or a second click drops the first.
+  const apply = (next: ProjectFilter, clearInput = false): void => {
+    if (busy) return
+    setBusy(true)
+    void codeburn.setProjectFilter(next).then(() => {
+      setError('')
+      if (clearInput) setPattern('')
+      setActionNonce(value => value + 1)
+      clearPolledMemo()
+      onConfigMutated?.()
+    }).catch(() => setError('Could not save the project filter'))
+      .finally(() => setBusy(false))
+  }
+
+  const toggle = (project: ProjectRow, visible: boolean): void => {
+    if (visible) {
+      // Widen the include list too, or it would keep hiding what was just shown.
+      const exclude = filter.exclude.filter(entry => !projectMatches(project, entry))
+      const include = filter.project.length > 0 && !filter.project.some(entry => projectMatches(project, entry))
+        ? [...filter.project, projectPattern(project)]
+        : filter.project
+      apply({ project: include, exclude })
+      return
+    }
+    // Exclude wins over include in the CLI, so hiding is always one append.
+    apply({ ...filter, exclude: [...filter.exclude, projectPattern(project)] })
+  }
+
+  const orphans = report.data ? filter.exclude.filter(entry => !projects.some(project => projectMatches(project, entry))) : []
+  const hiddenCount = projects.filter(project => !projectVisible(project, filter)).length
+
+  return <section className="set-p on">
+    <div><h3 className="set-h">Projects</h3><p className="set-sub">Choose which projects the app shows. Everything else keeps being tracked, and is only hidden from these screens.</p></div>
+    {filter.project.length > 0 && <div className="card"><div className="about-row">
+      <span className="tx">Showing only projects matching <span className="set-mono">{filter.project.join(', ')}</span></span>
+      <button className="btnp r" disabled={busy} onClick={() => apply({ ...filter, project: [] })}>Show all</button>
+    </div></div>}
+    <div className="card"><div className="about-sec set-last-sec">
+      {report.error ? <SettingsErrorText error={report.error} />
+        : saved.error ? <SettingsErrorText error={saved.error} />
+        : !report.data || !saved.data ? <p className="set-cap">Loading projects…</p>
+        : projects.length === 0 ? <p className="set-cap">No projects detected in this period.</p>
+        : projects.map(project => {
+          const visible = projectVisible(project, filter)
+          const pattern_ = projectPattern(project)
+          return <div className="about-row" key={pattern_}>
+            <span className="tx set-mono">{shortenProjectPath(project.path || project.name, 2)}<small>{pattern_}</small></span>
+            <span className="r set-status"><span className="set-cap">{formatConverted(project.cost)} · {project.sessions} sessions</span></span>
+            <button type="button" role="switch" aria-checked={visible} aria-label={`Show ${pattern_}`} className={visible ? 'switch on' : 'switch'} disabled={busy} onClick={() => toggle(project, !visible)}><span className="switch-knob" /></button>
+          </div>
+        })}
+      {orphans.map(entry => <div className="about-row" key={`orphan-${entry}`}>
+        <span className="tx set-mono">{entry}</span>
+        <span className="r set-status">matches nothing detected</span>
+        <button className="btnp" disabled={busy} onClick={() => apply({ ...filter, exclude: filter.exclude.filter(value => value !== entry) })}>Remove</button>
+      </div>)}
+      <div className="set-filter-form">
+        <input aria-label="Hide projects matching" className="set-input set-mono" placeholder="hide projects matching…" value={pattern} onChange={event => setPattern(event.target.value)} />
+        <button className="btnp btnp-primary" disabled={busy || !pattern.trim() || filter.exclude.includes(pattern.trim())} onClick={() => apply({ ...filter, exclude: [...filter.exclude, pattern.trim()] }, true)}>Hide</button>
+      </div>
+      {error && <p className="set-action-msg error">{error}</p>}
+    </div></div>
+    <p className="set-cap">{hiddenCount === 0 ? 'Nothing is hidden. ' : `${hiddenCount} project${hiddenCount === 1 ? '' : 's'} hidden. `}A full path hides just that project and anything inside it. A plain word hides everything it appears in, so “my-company” also covers its worktrees.</p>
   </section>
 }
 

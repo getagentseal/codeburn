@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   getIdentity: vi.fn(),
   cliStatus: vi.fn(),
   getPriceOverrides: vi.fn(),
+  getProjectFilter: vi.fn<() => Promise<{ project: string[]; exclude: string[] }>>(),
   getAliases: vi.fn(),
   setCurrency: vi.fn(),
   resetCurrency: vi.fn(),
@@ -152,6 +153,7 @@ function installDefaultMocks() {
     findings: [],
   })
   mocks.getModels.mockResolvedValue([])
+  mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: [] })
   mocks.getSessions.mockResolvedValue([])
   mocks.getCompareModels.mockResolvedValue([])
   mocks.getQuota.mockResolvedValue([
@@ -478,6 +480,22 @@ describe('App shortcuts', () => {
     localStorage.setItem('codeburn.scope', 'combined')
     render(<App />)
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+  })
+
+  it('never boots a filtered session into combined scope, and collapses the stored setting', async () => {
+    localStorage.setItem('codeburn.scope', 'combined')
+    localStorage.setItem('codeburn.projectFiltered', '1')
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
+    render(<App />)
+    // Local from the first poll: a combined total would carry the hidden project.
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all'))
+    expect(mocks.getOverview).not.toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined')
+    await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
+  })
+
+  it('records the filter for the next boot when the pane is empty', async () => {
+    render(<App />)
+    await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('0'))
   })
 
   it('builds the provider picker from providerDetails so display-name providers round-trip their internal id', async () => {

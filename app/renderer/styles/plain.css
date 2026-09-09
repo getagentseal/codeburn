@@ -386,6 +386,8 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .set-price-form .set-price-model { flex: 1 1 150px; }
 .set-price-form .set-input { flex: 1 1 82px; min-width: 0; }
 .set-price-form .btnp { flex: 0 0 auto; margin-left: auto; }
+.set-filter-form { display: flex; gap: 8px; align-items: center; margin-top: 2px; padding-top: 11px; border-top: 1px solid var(--line2); }
+.set-filter-form .set-input { flex: 1 1 auto; }
 .set-input { border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font: inherit; font-size: 11.5px; background: var(--panel); color: var(--ink); min-width: 0; }
 .set-input:focus-visible { border-color: var(--accent); outline: 1px solid var(--accent); }
 .btnp { font-size: var(--fs-meta); font-weight: var(--fw-medium); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; background: var(--panel); cursor: pointer; }

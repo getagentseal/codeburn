@@ -221,6 +221,15 @@ function persistScope(scope: Scope): void {
   try { globalThis.localStorage?.setItem('codeburn.scope', scope) } catch { /* storage can be unavailable */ }
 }
 
+/// Boot mirror of the main-process filter, which arrives after the first poll.
+function initialProjectFiltered(): boolean {
+  try { return globalThis.localStorage?.getItem('codeburn.projectFiltered') === '1' } catch { return false }
+}
+
+function persistProjectFiltered(active: boolean): void {
+  try { globalThis.localStorage?.setItem('codeburn.projectFiltered', active ? '1' : '0') } catch { /* storage can be unavailable */ }
+}
+
 function providerName(provider: string): string {
   if (provider === 'all') return 'All providers'
   return provider
@@ -274,8 +283,12 @@ function AppMain() {
   const detectedProviders = providerCatalog.entries
   const [customRange, setCustomRange] = useState<DateRange | null>(null)
   const [claudeConfigSource, setClaudeConfigSource] = useState<string | null>(initialConfigSource)
-  const [scope, setScopeState] = useState<Scope>(initialScope)
+  const [requestedScope, setScopeState] = useState<Scope>(initialScope)
   const [refreshToken, setRefreshToken] = useState(0)
+  const [projectFiltered, setProjectFiltered] = useState(initialProjectFiltered)
+  // Combined reports unfiltered paired-device usage, so a project filter would
+  // come back inside the aggregate. The filter wins, from the first poll.
+  const scope: Scope = projectFiltered ? 'local' : requestedScope
   const [now, setNow] = useState(() => Date.now())
   const [, setCurrencyTick] = useState(0)
   const [snapshotRevision, setSnapshotRevision] = useState(0)
@@ -673,6 +686,28 @@ function AppMain() {
     setProvider(value)
   }
 
+  // Re-read on config invalidation: another window can save the pane too.
+  useEffect(() => {
+    let cancelled = false
+    void Promise.resolve().then(() => codeburn.getProjectFilter())
+      .then(filter => {
+        if (cancelled) return
+        const active = filter.project.length > 0 || filter.exclude.length > 0
+        setProjectFiltered(active)
+        persistProjectFiltered(active)
+      })
+      .catch(() => { /* an older preload has no getProjectFilter to honour */ })
+    return () => { cancelled = true }
+  }, [snapshotRevision])
+
+  // Collapse the stored preference too, so clearing the filter later starts
+  // from local instead of silently restoring a combined view.
+  useEffect(() => {
+    if (!projectFiltered || requestedScope !== 'combined') return
+    setScopeState('local')
+    persistScope('local')
+  }, [projectFiltered, requestedScope])
+
   // Combined scope reports unfiltered, all-provider usage across paired devices,
   // so switching to it resets the provider filter and Claude-config scope (which
   // the CLI would otherwise reject), mirroring the menubar's setMenubarScope.
@@ -722,7 +757,7 @@ function AppMain() {
         {section === 'plans' ? (
           <Plans period={period} refreshToken={refreshToken} onNavigate={navigate} ready={ready} />
         ) : section === 'settings' ? (
-          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} />
+          <Settings period={period} refreshToken={refreshToken} onNavigate={navigate} initialPane={settingsPane} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />
         ) : section === 'plugins' ? (
           <PluginsSection />
         ) : (

@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'node',
+    env: { CODEBURN_APP_FILTER: '' },
     globals: false,
     setupFiles: ['./renderer/test/setup.ts'],
     include: ['renderer/**/*.test.{ts,tsx}', 'electron/**/*.test.ts', 'scripts/**/*.test.ts'],

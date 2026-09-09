@@ -1,4 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type MenuItemConstructorOptions } from 'electron'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { CliError, DESKTOP_COLD_TIMEOUT_MS, PROGRESS_LINE_PREFIX, reapOrphanServe, resolveCodeburnPath, shutdownAll, spawnCli, spawnCliAction, startServe, type ActionResult, type SpawnPriority } from './cli'
@@ -126,6 +128,94 @@ const NO_UPDATE_STATUS: UpdateStatus = { currentVersion: '', latestVersion: null
 
 function providerArgs(provider: string | undefined): string[] {
   return provider && provider !== 'all' ? ['--provider', provider] : []
+}
+
+/** Include/exclude patterns scoping every CLI fetch the app makes. */
+export type ProjectFilter = { project: string[]; exclude: string[] }
+
+const EMPTY_PROJECT_FILTER: ProjectFilter = { project: [], exclude: [] }
+
+// A file rather than a build-time constant so it toggles without rebuilding,
+// and it lives here, not in renderer storage, because this is where the argv is
+// assembled. Re-read whenever the file changes, so a hand edit lands.
+let appFilterCache: { path: string; stamp: string; filter: ProjectFilter } | null = null
+
+/**
+ * CODEBURN_APP_FILTER overrides the location; an empty string disables the
+ * filter outright, which is what the test suite sets so a filter file in the
+ * developer's own home cannot reach the assertions.
+ */
+function appFilterPath(): string | null {
+  const override = process.env.CODEBURN_APP_FILTER
+  if (override !== undefined) return override.trim() === '' ? null : override
+  return path.join(os.homedir(), '.config', 'codeburn', 'app-filter.json')
+}
+
+/// Drops blanks and duplicates. A leading "-" is KEPT: Claude encodes a project
+/// directory as "-Users-me-Web-thing", which is most real projects.
+function normalizePatterns(value: unknown): string[] {
+  // A hand-edit writes one pattern as a bare string; dropping it would unhide.
+  const entries = typeof value === 'string' ? [value] : value
+  if (!Array.isArray(entries)) return []
+  const patterns = new Set<string>()
+  for (const entry of entries) {
+    if (typeof entry !== 'string') continue
+    const pattern = entry.trim()
+    if (pattern === '') continue
+    patterns.add(pattern)
+  }
+  return [...patterns]
+}
+
+function normalizeProjectFilter(value: unknown): ProjectFilter {
+  const raw = (value ?? {}) as { project?: unknown; exclude?: unknown }
+  return { project: normalizePatterns(raw.project), exclude: normalizePatterns(raw.exclude) }
+}
+
+export function readProjectFilter(): ProjectFilter {
+  const filterPath = appFilterPath()
+  if (filterPath === null) return EMPTY_PROJECT_FILTER
+  // mtime alone misses a same-tick rewrite and a cp -p / git checkout restore.
+  let stamp: string
+  try {
+    const stat = fs.statSync(filterPath)
+    stamp = `${stat.mtimeMs}:${stat.size}:${stat.ino}`
+  } catch {
+    appFilterCache = null
+    return EMPTY_PROJECT_FILTER
+  }
+  if (appFilterCache?.path === filterPath && appFilterCache.stamp === stamp) return appFilterCache.filter
+  try {
+    const filter = normalizeProjectFilter(JSON.parse(fs.readFileSync(filterPath, 'utf8')))
+    appFilterCache = { path: filterPath, stamp, filter }
+    return filter
+  } catch {
+    // Unreadable or half-written: keep the last filter, never unhide.
+    return appFilterCache?.path === filterPath ? appFilterCache.filter : EMPTY_PROJECT_FILTER
+  }
+}
+
+/** Persists the filter and returns what actually landed, normalization included. */
+export function writeProjectFilter(value: unknown): ProjectFilter {
+  const filter = normalizeProjectFilter(value)
+  const filterPath = appFilterPath()
+  // CODEBURN_APP_FILTER='' disables the filter outright: there is no file to
+  // write, and the empty filter is what every later read will report.
+  if (filterPath === null) return EMPTY_PROJECT_FILTER
+  fs.mkdirSync(path.dirname(filterPath), { recursive: true })
+  fs.writeFileSync(filterPath, JSON.stringify(filter, null, 2) + '\n')
+  appFilterCache = null
+  return filter
+}
+
+// `--opt=value`, never `--opt value`: a pattern routinely starts with "-", and
+// as a separate argv entry that parses as another flag.
+function projectArgs(): string[] {
+  const { project, exclude } = readProjectFilter()
+  const args: string[] = []
+  for (const name of project) args.push(`--project=${name}`)
+  for (const name of exclude) args.push(`--exclude=${name}`)
+  return args
 }
 
 type DateRange = { from: string; to: string }
@@ -322,11 +412,17 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
   // combined alongside --provider/--project/--exclude (paired devices report
   // unfiltered usage), so the provider filter is dropped in that mode. The
   // caller (renderer) forces provider='all' when combined, so nothing is lost.
+  // A project filter cannot be dropped the same way: the hidden projects would
+  // come back inside the combined total. The renderer already picks local while
+  // a filter is set; this keeps a stale caller off the rejected argv.
   const buildOverviewArgs = (period: string, provider: string, range?: DateRange, configSource?: string | null, scope?: string): string[] => {
     const vScopeValue = vScope(scope)
+    const filterArgs = projectArgs()
+    const combined = vScopeValue === 'combined' && filterArgs.length === 0
     return [
       'status', '--format', 'menubar-json', '--period', vPeriod(period), '--no-timeline',
-      ...(vScopeValue === 'combined' ? ['--scope', 'combined'] : providerArgs(vProvider(provider))),
+      ...(combined ? ['--scope', 'combined'] : providerArgs(vProvider(provider))),
+      ...filterArgs,
       ...rangeArgs(vRange(range)), ...configSourceArgs(vConfigSource(configSource)),
     ]
   }
@@ -375,30 +471,55 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     // Timeline variant for the Spend punchcard only: identical payload WITH
     // history.timeline (every other fetch keeps --no-timeline lean).
     'codeburn:getTimeline': run((period: string, provider: string, range?: DateRange) => [
-      'status', '--format', 'menubar-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'status', '--format', 'menubar-json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ]),
+    // Unfiltered like combined scope: a plan is billed on every project.
     'codeburn:getPlans': run((period: string) => ['status', '--format', 'json', '--period', vPeriod(period)], 1),
     'codeburn:getActReport': run(() => ['act', 'report', '--json']),
     'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
-      'models', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...(byTask ? ['--by-task'] : []), ...rangeArgs(vRange(range)),
+      'models', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...(byTask ? ['--by-task'] : []),
+      ...rangeArgs(vRange(range)),
     ], 4),
     'codeburn:getSessions': run((period: string, provider: string, range?: DateRange) => [
-      'sessions', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'sessions', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
-      'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
+      'compare', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
     ], 2),
     'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
-      'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), '--model-a', vToken(modelA), '--model-b', vToken(modelB),
+      'compare', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      '--model-a', vToken(modelA), '--model-b', vToken(modelB),
     ]),
     'codeburn:getYield': run((period: string, provider: string, range?: DateRange) => [
-      'yield', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'yield', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getSpendFlow': run((period: string, provider: string, range?: DateRange) => [
-      'spend', '--format', 'flow-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'spend', '--format', 'flow-json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getOptimizeReport': run((period: string, provider: string, range?: DateRange) => [
-      'optimize', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'optimize', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getDevices': run((period: string) => ['devices', '--format', 'json', '--period', vPeriod(period)]),
     'codeburn:getDevicesScan': run(() => ['devices', 'scan', '--format', 'json']),
@@ -407,9 +528,20 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getAliases': run(() => ['model-alias', '--list', '--format', 'json']),
     'codeburn:getProxyPaths': run(() => ['proxy-path', '--list', '--format', 'json']),
     'codeburn:getAudit': run((period: string, provider: string, range?: DateRange) => [
-      'audit', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+      'audit', '--format', 'json', '--period', vPeriod(period),
+      ...providerArgs(vProvider(provider)),
+      ...projectArgs(),
+      ...rangeArgs(vRange(range)),
     ]),
     'codeburn:getPriceOverrides': run(() => ['price-override', '--list', '--format', 'json']),
+    'codeburn:getProjectFilter': async () => ({ ok: true, value: readProjectFilter() }),
+    'codeburn:setProjectFilter': async (filter?: unknown) => {
+      try { return { ok: true, value: writeProjectFilter(filter) } }
+      catch (error) { return { ok: false, error: { kind: 'nonzero', message: sanitizeError(error) } } }
+    },
+    // Deliberately NOT scoped by projectArgs(): the Projects pane builds its
+    // checklist from this, so it has to see the projects the filter is hiding.
+    'codeburn:getUnfilteredProjects': run((period: string) => ['report', '--format', 'json', '--period', vPeriod(period)]),
     'codeburn:setCurrency': runAction((code: string) => ['currency', vCurrency(code)]),
     'codeburn:resetCurrency': runAction(() => ['currency', '--reset']),
     'codeburn:addAlias': runAction((from: string, to: string) => ['model-alias', vToken(from), vToken(to)]),
@@ -421,6 +553,7 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:resetPlan': runAction((provider: string) => ['plan', 'reset', '--provider', vProvider(provider)]),
     'codeburn:exportData': runAction((format: string, provider: string, outPath: string) => [
       'export', '-f', vToken(format), '-o', vOutPath(outPath), '--provider', vProvider(provider),
+      ...projectArgs(),
     ]),
     'codeburn:cliStatus': async () => {
       const p = deps.resolveCodeburnPath()
