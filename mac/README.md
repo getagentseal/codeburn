@@ -8,6 +8,26 @@ Native Swift + SwiftUI menubar app. The codeburn menubar surface.
 - Swift 6.0+ toolchain (bundled with Xcode 16 or standalone)
 - `codeburn` CLI installed globally (`npm install -g codeburn`)
 
+## Language
+
+The app ships English and Simplified Chinese (`zh-Hans`) and follows your system
+language: no setting inside CodeBurn, because macOS already owns this choice. To
+use a different language for CodeBurn than for the rest of the system, open
+System Settings > General > Language & Region, scroll to Applications, and add
+CodeBurn Menubar there.
+
+Strings live in `Sources/CodeBurnMenubar/Resources/<locale>.lproj/Localizable.strings`
+and are reached through `L(_:)` / `L(_:_:)` (see `Localization.swift`). The key
+*is* the English copy, so an untranslated string shows correct English rather
+than an identifier, and `en.lproj` is an identity table.
+
+To add a language, copy `en.lproj` to `<locale>.lproj`, translate the values,
+then add the locale in three places that must stay in step: `.process` in
+`Package.swift`, `CFBundleLocalizations` in both `Scripts/package-app.sh` and
+`Scripts/build-local.sh`, and `L10n.supportedLocalizations`.
+`LocalizationCatalogTests` fails if they disagree, if a key is missing from
+either table, if a value is blank, or if the format specifiers do not match.
+
 ## Install (end users)
 
 One command:
@@ -82,6 +102,9 @@ mac/
 ├── Sources/CodeBurnMenubar/
 │   ├── CodeBurnApp.swift             @main + MenuBarExtra scene
 │   ├── AppStore.swift                @Observable store + enums
+│   ├── Localization.swift            L(_:) lookups against the module bundle
+│   ├── Resources/en.lproj/           Localizable.strings (identity table)
+│   ├── Resources/zh-Hans.lproj/      Localizable.strings (简体中文)
 │   ├── Data/MenubarPayload.swift     Codable payload types + placeholder
 │   ├── Theme/Theme.swift             Design tokens (warm terracotta palette)
 │   └── Views/MenuBarContent.swift    Popover layout + footer action bar

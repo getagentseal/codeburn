@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added (macOS)
+- **The macOS menubar app speaks Simplified Chinese, and follows your system language to decide.** Every user-facing string in the popover, the Capacity Dock, the status-item menu, the update alerts and all of Settings now resolves through a `Localizable.strings` catalog shipped for `en` and `zh-Hans` with no third-party library: 533 keys, whose key *is* the English copy, so an untranslated string degrades to correct English rather than a visible identifier. AppKit picks the table from the user's preferred languages, and `CFBundleLocalizations` in both packaging scripts puts CodeBurn under System Settings > Language & Region so the language can be overridden for this app alone. Enum raw values that double as persistence or cache keys (`Period`, `MenubarScope`, `InsightMode`, `AccentPreset`, `ProviderFilter`) keep their raw value and gained a separate display label, so nothing a user has saved changes meaning. Three display-only date formatters that were pinned to `en_US_POSIX` with fixed patterns now follow the locale, and the calendar popover's weekday row comes from the locale's own symbols, so a Chinese UI reads `2026年9月` and `一 二 三` rather than `September 2026` and `Mo Tu We`. Provider, model and plan names, units, currency codes, shell commands and anything the `codeburn` CLI itself produces stay verbatim in every locale. Adding a language is now one more `.lproj`; a test fails the build if the two tables disagree on keys, leave a value blank, or disagree on format specifiers. This covers the menubar half of #1219 only, not the CLI output or the web dashboard. (#1219)
+
 ## 0.9.24 - 2026-09-04
 
 ### Added
