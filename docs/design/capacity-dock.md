@@ -101,6 +101,13 @@ V1 does not include:
   countdown. The most constrained available window supplies the ring value;
   this matches the reference's glance-first use and avoids understating a
   provider whose secondary window is closer to exhaustion.
+- Under that, one line says whether the window lasts: `Lasts until reset`,
+  `Runs out in 2d 8h`, or `Won't last until reset` on windows of 6 hours or
+  less, where a linear run-out ETA is not defensible. It is the same projection
+  the Plan tab's pace caption uses, and it is silent early in a window, on an
+  exhausted window, without a reset time, or when the window's label implies no
+  length. Its height is reserved whether or not a column has a verdict, because
+  the panel's frame is computed rather than fitted.
 - Stale or retrying data remains visible and is labeled/dimmed. A terminal
   authentication/configuration failure provides a Connect/Reconnect action in
   the bubble itself. Network, rate-limit, parse, and provider outages remain

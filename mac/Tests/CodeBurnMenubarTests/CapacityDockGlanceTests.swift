@@ -208,14 +208,14 @@ struct CapacityDockGlanceTests {
                 + CapacityDockGlance.todayHeight
                 + CapacityDockGlance.windowsHeight
         )
-        // 44 header + 83 sessions + 81 today + 77 windows
-        #expect(full == 285)
+        // 44 header + 83 sessions + 81 today + 91 windows
+        #expect(full == 299)
         // The panel opens and closes on the same 16pt inset it uses sideways.
         let headerParts: CGFloat = CapacityDockGlance.contentInset + 20 + 8
         #expect(CapacityDockGlance.headerHeight == headerParts)
         #expect(
             CapacityDockGlance.windowsHeight
-                == CapacityDockGlance.sectionPadTop + 53 + CapacityDockGlance.contentInset
+                == CapacityDockGlance.sectionPadTop + 67 + CapacityDockGlance.contentInset
         )
         // Today is three stacked lines (13 + 3 + 13 + 3 + 12) inside its padding.
         #expect(CapacityDockGlance.todayContentHeight == 44)
@@ -223,7 +223,7 @@ struct CapacityDockGlanceTests {
         // Past four sessions the list scrolls, so the panel stops growing.
         let capped = height(4, hasToday: true, windows: three)
         #expect(height(12, hasToday: true, windows: three) == capped)
-        #expect(capped == 44 + CapacityDockGlance.sessionsHeight(count: 4) + 81 + 77)
+        #expect(capped == 44 + CapacityDockGlance.sessionsHeight(count: 4) + 81 + 91)
         // Each section is independently droppable.
         #expect(full - height(nil, hasToday: true, windows: three) == CapacityDockGlance.sessionsHeight(count: 1))
         #expect(full - height(1, hasToday: false, windows: three) == CapacityDockGlance.todayHeight)

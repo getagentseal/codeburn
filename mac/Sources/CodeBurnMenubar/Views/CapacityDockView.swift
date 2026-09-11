@@ -138,8 +138,12 @@ enum CapacityDockGlance {
     /// Three stacked lines, 13 + 13 + 12, with two 3pt gaps. Taller than the
     /// 17pt burned figure beside it, so it sets the row.
     static let todayContentHeight: CGFloat = 44
-    /// 8 top + 24 percent + 2 + 13 label + 2 + 12 reset + 16 bottom.
-    static let windowsHeight: CGFloat = 77
+    /// A 9.5pt verdict's line box. Reserved on every window column whether or
+    /// not that column has a verdict to print, so the panel keeps one height
+    /// while the projection crosses in and out of silence (#1215).
+    static let verdictLine: CGFloat = 12
+    /// 8 top + 24 percent + 2 + 13 label + 2 + 12 reset + 2 + 12 verdict + 16 bottom.
+    static let windowsHeight: CGFloat = 91
     /// 8 top + one secondary line + 16 bottom.
     static let windowsEmptyHeight: CGFloat = 37
     /// The staleness or reconnect line under the header. It is a section like any
@@ -1012,6 +1016,7 @@ struct CapacityDockDetailView: View {
         alignment: HorizontalAlignment
     ) -> some View {
         let s = model.detailScale
+        let verdict = window.paceVerdict()
         VStack(alignment: alignment, spacing: 0) {
             PercentGaugeText(
                 label: window.percentLabel,
@@ -1031,6 +1036,19 @@ struct CapacityDockDetailView: View {
                 .foregroundStyle(Color.capacityDockText.opacity(0.3))
                 .lineLimit(1)
                 .frame(height: 12 * s)
+                .padding(.top, 2 * s)
+            // Will this window last to its reset (#1215)? The panel's height is
+            // computed rather than fitted, so the line keeps its box even when
+            // there is no verdict: a column that went quiet must not resize the
+            // bubble under the pointer.
+            Text(verdict?.text ?? "")
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(verdict?.willOverflow == true
+                    ? AnyShapeStyle(Color.orange)
+                    : AnyShapeStyle(Color.capacityDockText.opacity(0.45)))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(height: CapacityDockGlance.verdictLine * s)
                 .padding(.top, 2 * s)
         }
         .frame(

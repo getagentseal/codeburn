@@ -447,28 +447,46 @@ private struct QuotaDetailPopover: View {
 private struct QuotaDetailRow: View {
     let window: QuotaSummary.Window
 
+    /// The label column's width. The verdict hangs under the bar, so it is
+    /// indented by this plus the row's own spacing.
+    private static let labelWidth: CGFloat = 92
+    private static let rowSpacing: CGFloat = 8
+
     var body: some View {
-        HStack(spacing: 8) {
-            Text(window.label)
-                .font(.system(size: 10.5))
-                .frame(width: 92, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.secondary.opacity(0.18))
-                    Capsule()
-                        .fill(barColor)
-                        .frame(width: max(2, geo.size.width * CGFloat(min(max(window.percent, 0), 1))))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: Self.rowSpacing) {
+                Text(window.label)
+                    .font(.system(size: 10.5))
+                    .frame(width: Self.labelWidth, alignment: .leading)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.secondary.opacity(0.18))
+                        Capsule()
+                            .fill(barColor)
+                            .frame(width: max(2, geo.size.width * CGFloat(min(max(window.percent, 0), 1))))
+                    }
+                }
+                .frame(height: 4)
+                Text(window.percentLabel)
+                    .font(.codeMono(size: 10.5, weight: .medium))
+                    .frame(width: 36, alignment: .trailing)
+                if !window.resetsInLabel.isEmpty {
+                    Text(window.resetsInLabel)
+                        .font(.codeMono(size: 10))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 50, alignment: .trailing)
                 }
             }
-            .frame(height: 4)
-            Text(window.percentLabel)
-                .font(.codeMono(size: 10.5, weight: .medium))
-                .frame(width: 36, alignment: .trailing)
-            if !window.resetsInLabel.isEmpty {
-                Text(window.resetsInLabel)
-                    .font(.codeMono(size: 10))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 50, alignment: .trailing)
+            // Will this window last to its reset (#1215)? The card's height is
+            // fitted, so a silent verdict collapses rather than leaving a gap.
+            if let verdict = window.paceVerdict() {
+                Text(verdict.text)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(verdict.willOverflow
+                        ? AnyShapeStyle(Color.orange)
+                        : AnyShapeStyle(.tertiary))
+                    .lineLimit(1)
+                    .padding(.leading, Self.labelWidth + Self.rowSpacing)
             }
         }
     }

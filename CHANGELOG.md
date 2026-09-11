@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added (macOS)
+- **The Capacity Dock and the agent-tab quota card now say whether a window will last to its reset, not just when it resets.** Each quota window gets one line under the bar: `Lasts until reset` while the linear projection lands at or under 100% at reset, `Runs out in 2d 8h` when it overflows on a window long enough for a whole-window rate to be defensible, and `Won't last until reset` when it overflows on a window of 6 hours or less, which keeps the run-out ETA suppressed there rather than crying wolf over one burst. The verdict is the same projection the Plan tab's deficit/reserve caption uses, so the two surfaces cannot disagree, and it stays silent in the first 3% of a window, on an exhausted window, with no reset time, or when the window's own label does not imply a length (a Copilot premium-requests bucket, say). The dock reserves the line's height whether or not a column has a verdict, so a projection crossing in or out of silence cannot resize the bubble under the pointer. (#1215)
+
 ## 0.9.24 - 2026-09-04
 
 ### Added

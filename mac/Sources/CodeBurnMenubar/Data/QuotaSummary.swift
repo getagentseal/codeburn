@@ -100,14 +100,24 @@ extension QuotaSummary.Window {
     /// Human-readable countdown like "2h 11m" or "3d 14h" or "now".
     var resetsInLabel: String {
         guard let resetsAt else { return "" }
-        let seconds = max(0, resetsAt.timeIntervalSinceNow)
-        if seconds < 60 { return "now" }
-        let minutes = Int(seconds / 60)
-        let hours = minutes / 60
-        let days = hours / 24
-        if days > 0 { return "\(days)d \(hours % 24)h" }
-        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
-        return "\(minutes)m"
+        return QuotaPace.countdownLabel(seconds: resetsAt.timeIntervalSinceNow)
+    }
+
+    /// One-line pace verdict drawn under the bar in the Capacity Dock and the
+    /// agent-tab hover card (#1215). Nil means say nothing: no reset time, a
+    /// label with no inferable window length, too early in the window, the
+    /// window already exhausted, or clock skew — see `QuotaPace`.
+    func paceVerdict(now: Date = Date()) -> QuotaPace.Verdict? {
+        guard let windowSeconds = QuotaPace.inferredWindowSeconds(
+            label: label,
+            resetsAt: resetsAt
+        ) else { return nil }
+        return QuotaPace.verdict(
+            usedPercent: percent * 100,
+            resetsAt: resetsAt,
+            windowSeconds: windowSeconds,
+            now: now
+        )
     }
 
     var percentLabel: String {
