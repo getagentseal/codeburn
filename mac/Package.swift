@@ -30,7 +30,8 @@ let package = Package(
                 // `L(_:)` / `Bundle.module`, never `Bundle.main`: the strings
                 // live in the SwiftPM resource bundle inside Contents/Resources,
                 // not at the app bundle's resource root.
-                .process("Resources/en.lproj")
+                .process("Resources/en.lproj"),
+                .process("Resources/zh-Hans.lproj")
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")

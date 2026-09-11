@@ -21,7 +21,7 @@ import Foundation
 /// English stays the development language: a key with no translation renders
 /// as correct English rather than a visible identifier, and `en.lproj` is an
 /// identity table kept only so the bundle advertises `en` as a localization
-/// and so the catalog can be diffed against a translation.
+/// and so `LocalizationCatalogTests` can diff the two tables.
 ///
 /// # What is not translated
 ///
@@ -32,15 +32,15 @@ import Foundation
 /// and currency keep going through the locale-aware formatters they already
 /// used — `L(_:_:)` only substitutes already-formatted values.
 enum L10n {
-    /// The bundle that carries the `<locale>.lproj` tables.
+    /// The bundle that carries `en.lproj` / `zh-Hans.lproj`.
     static let bundle: Bundle = .module
 
     /// Table name, i.e. `Localizable.strings`.
     static let table = "Localizable"
 
     /// Locales shipped today. Mirrored by `CFBundleLocalizations` in the two
-    /// packaging scripts once a second language exists.
-    static let supportedLocalizations = ["en"]
+    /// packaging scripts and asserted by `LocalizationCatalogTests`.
+    static let supportedLocalizations = ["en", "zh-Hans"]
 }
 
 /// Localized copy for `key`, falling back to the key (its English text) when a
