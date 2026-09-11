@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added (macOS)
+- **The Capacity Dock gauge can report the short usage window instead of the weekly one, without expanding the dock.** The resting rail shows one number per provider, and that number was always the weekly (else monthly) billing window. Clicking the provider already resting in the rail now switches its gauge to the provider's short rolling window — Claude's 5-hour limit, Codex's 5-hour or daily window, any `Hourly`, `Daily` or session row an adapter reports — and clicking again switches back. The choice is stored per provider under `CodeBurnCapacityDockGlanceWindows`, so Claude can sit on its 5-hour window while Codex stays weekly, and it survives relaunch. A per-model row such as `Weekly · Opus` is never read as a short window, a provider that reports only one window keeps the plain click-to-pin behaviour, and a stored horizon the provider stops reporting falls back to the window it does report rather than blanking the gauge to `--`. The rail's geometry is untouched, VoiceOver and keyboard users get the switch as a named action on the provider cell with the window named in the cell's value, and Escape or a click outside still unpins the dock. (#1243)
+
 ## 0.9.24 - 2026-09-04
 
 ### Added

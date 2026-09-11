@@ -348,6 +348,7 @@ struct CapacityDockView: View {
     let model: CapacityDockViewModel
     let quota: (CapacityDockProvider) -> QuotaSummary?
     let onProviderClick: (CapacityDockProvider) -> Void
+    let onSwitchGlanceWindow: (CapacityDockProvider) -> Void
     let onHide: () -> Void
     let onDock: (CapacityDockEdge) -> Void
     let onDragChanged: (CGPoint, CGSize) -> Void
@@ -371,7 +372,9 @@ struct CapacityDockView: View {
                     quota: quota(provider),
                     scale: model.scale,
                     gaugeShape: model.preferences.gaugeShape,
-                    onClick: { onProviderClick(provider) }
+                    glanceWindow: model.preferences.glanceWindow(for: provider),
+                    onClick: { onProviderClick(provider) },
+                    onSwitchGlanceWindow: { onSwitchGlanceWindow(provider) }
                 )
                 .frame(
                     width: model.isVertical ? model.railWidth : model.rowHeight,
@@ -468,9 +471,13 @@ private struct CapacityDockProviderRow: View {
     let quota: QuotaSummary?
     let scale: CGFloat
     let gaugeShape: CapacityDockGaugeShape
+    let glanceWindow: CapacityDockGlanceWindowKind
     let onClick: () -> Void
+    let onSwitchGlanceWindow: () -> Void
 
-    private var headline: QuotaSummary.Window? { quota?.headlineWindow }
+    private var headline: QuotaSummary.Window? {
+        CapacityDockGlanceWindow.resolvedWindow(preferred: glanceWindow, quota: quota)
+    }
     private var percent: Double? { headline?.percent }
 
     var body: some View {
@@ -526,8 +533,40 @@ private struct CapacityDockProviderRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(provider.displayName) usage")
-        .accessibilityValue(headline?.percentLabel ?? "Unknown")
-        .accessibilityHint("Click to keep Capacity Dock expanded")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint(accessibilityHint)
+        // The gauge is the switch, and a click is a pointer gesture. Keyboard
+        // and VoiceOver users reach the same horizon change through a named
+        // action on the row. It is offered unconditionally because quota
+        // arrives asynchronously, and an action that appears and disappears as
+        // the first fetch lands is worse than one that no-ops for a provider
+        // with a single window.
+        .accessibilityAction(named: switchActionName, onSwitchGlanceWindow)
+    }
+
+    private var isSwitchable: Bool {
+        CapacityDockGlanceWindow.isSwitchable(quota: quota)
+    }
+
+    /// Names the horizon as well as the number: the ring looks identical
+    /// whichever window feeds it, so the window is the part a screen reader
+    /// has to say out loud.
+    private var accessibilityValue: String {
+        guard let headline else { return "Unknown" }
+        return "\(headline.label) \(headline.percentLabel)"
+    }
+
+    private var accessibilityHint: String {
+        isSwitchable
+            ? "Click to switch between this provider's usage windows"
+            : "Click to keep Capacity Dock expanded"
+    }
+
+    private var switchActionName: String {
+        let next = CapacityDockGlanceWindow.next(after: glanceWindow, quota: quota)
+        let label = CapacityDockGlanceWindow.window(next, quota: quota)?.label
+            ?? next.displayName
+        return "Show \(label) usage"
     }
 
     private var headlinePercentColor: Color {

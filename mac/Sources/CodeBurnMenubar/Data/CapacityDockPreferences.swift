@@ -181,6 +181,7 @@ enum CapacityDockPreferences {
     static let scaleKey = "CodeBurnCapacityDockScale"
     static let themeKey = "CodeBurnCapacityDockTheme"
     static let gaugeShapeKey = "CodeBurnCapacityDockGaugeShape"
+    static let glanceWindowsKey = "CodeBurnCapacityDockGlanceWindows"
     static let manualSelectionKey = "CodeBurnCapacityDockManualSelection"
 
     static let defaultProvider: CapacityDockProvider = .codex
@@ -200,6 +201,14 @@ enum CapacityDockPreferences {
         let scale: Double
         let theme: CapacityDockTheme
         let gaugeShape: CapacityDockGaugeShape
+        /// Which quota horizon each provider's gauge reports, keyed by provider
+        /// id. Sparse: an absent provider uses the billing horizon, which is
+        /// what the dock has always shown.
+        let glanceWindows: [String: CapacityDockGlanceWindowKind]
+
+        func glanceWindow(for provider: CapacityDockProvider) -> CapacityDockGlanceWindowKind {
+            glanceWindows[provider.rawValue] ?? .billing
+        }
     }
 
     static func load(defaults: UserDefaults = .standard) -> Snapshot {
@@ -257,7 +266,10 @@ enum CapacityDockPreferences {
             theme: defaults.string(forKey: themeKey)
                 .flatMap(CapacityDockTheme.init(rawValue:)) ?? .graphite,
             gaugeShape: defaults.string(forKey: gaugeShapeKey)
-                .flatMap(CapacityDockGaugeShape.init(rawValue:)) ?? .squircle
+                .flatMap(CapacityDockGaugeShape.init(rawValue:)) ?? .squircle,
+            glanceWindows: normalizedGlanceWindows(
+                defaults.dictionary(forKey: glanceWindowsKey)
+            )
         )
     }
 
@@ -400,6 +412,48 @@ enum CapacityDockPreferences {
     ) {
         defaults.set(gaugeShape.rawValue, forKey: gaugeShapeKey)
         notifyChanged()
+    }
+
+    /// Records which horizon one provider's gauge reports. Stored per provider
+    /// rather than as one dock-wide switch because the providers are
+    /// independent questions: a user can watch Claude's 5-hour window while
+    /// keeping Codex on its weekly one.
+    static func setGlanceWindow(
+        _ kind: CapacityDockGlanceWindowKind,
+        for provider: CapacityDockProvider,
+        defaults: UserDefaults = .standard
+    ) {
+        var stored = storedGlanceWindows(defaults: defaults)
+        guard stored[provider.rawValue] != kind.rawValue else { return }
+        stored[provider.rawValue] = kind.rawValue
+        defaults.set(stored, forKey: glanceWindowsKey)
+        notifyChanged()
+    }
+
+    private static func storedGlanceWindows(defaults: UserDefaults) -> [String: String] {
+        var stored: [String: String] = [:]
+        for (identifier, value) in defaults.dictionary(forKey: glanceWindowsKey) ?? [:] {
+            guard let value = value as? String else { continue }
+            stored[identifier] = value
+        }
+        return stored
+    }
+
+    /// Drops entries a newer or older build cannot make sense of — an unknown
+    /// provider id, a horizon this build does not have — so a foreign value in
+    /// the domain cannot decide what the gauge shows.
+    private static func normalizedGlanceWindows(
+        _ stored: [String: Any]?
+    ) -> [String: CapacityDockGlanceWindowKind] {
+        guard let stored else { return [:] }
+        var normalized: [String: CapacityDockGlanceWindowKind] = [:]
+        for (identifier, value) in stored {
+            guard CapacityDockProvider(rawValue: identifier) != nil,
+                  let rawValue = value as? String,
+                  let kind = CapacityDockGlanceWindowKind(rawValue: rawValue) else { continue }
+            normalized[identifier] = kind
+        }
+        return normalized
     }
 
     private static func normalizedProviders(rawIdentifiers: [String]?) -> [CapacityDockProvider] {
