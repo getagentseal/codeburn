@@ -4,6 +4,8 @@
 // "Temporarily unavailable". These tests pin endpoint derivation, which host is
 // picked out of a credential file, and that a host we cannot address fails
 // naming that host instead of sending the credential to dotcom.
+import path from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -23,7 +25,13 @@ function usageResponse(): Response {
   return new Response(usageBody, { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
 
-/** Serves one credential file and records every URL the adapter requests. */
+/**
+ * Serves one credential file, keyed by file name, and records every URL the
+ * adapter requests. The adapter joins the directory and the file name with
+ * `path.join`, so the separator is a backslash on Windows: the name has to come
+ * out with `path.basename` rather than by splitting on `/`, or every lookup
+ * misses there and the credential reads as absent.
+ */
 function deps(files: Record<string, string>, respond: (url: string) => Response | Promise<Response> = () => usageResponse()) {
   const urls: string[] = []
   const tokens: (string | null)[] = []
@@ -32,10 +40,7 @@ function deps(files: Record<string, string>, respond: (url: string) => Response 
     tokens,
     options: {
       configDirs: ['/copilot'],
-      readFile: async (filePath: string) => {
-        const name = filePath.split('/').pop() ?? ''
-        return files[name] ?? null
-      },
+      readFile: async (filePath: string) => files[path.basename(filePath)] ?? null,
       fetch: (async (url: string, init?: RequestInit) => {
         urls.push(String(url))
         const headers = new Headers(init?.headers)
