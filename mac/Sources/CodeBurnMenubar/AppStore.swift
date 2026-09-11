@@ -2573,27 +2573,29 @@ final class AppStore {
 enum SupportedCurrency: String, CaseIterable, Identifiable {
     case USD, GBP, EUR, AUD, CAD, NZD, JPY, CNY, CHF, INR, BRL, SEK, SGD, HKD, KRW, MXN, ZAR, DKK, RON
     var id: String { rawValue }
+    /// "USD · US Dollar" — the code is never translated, the name is.
+    var pickerLabel: String { "\(rawValue) · \(displayName)" }
     var displayName: String {
         switch self {
-        case .USD: "US Dollar"
-        case .GBP: "British Pound"
-        case .EUR: "Euro"
-        case .AUD: "Australian Dollar"
-        case .CAD: "Canadian Dollar"
-        case .NZD: "New Zealand Dollar"
-        case .JPY: "Japanese Yen"
-        case .CNY: "Chinese Yuan"
-        case .CHF: "Swiss Franc"
-        case .INR: "Indian Rupee"
-        case .BRL: "Brazilian Real"
-        case .SEK: "Swedish Krona"
-        case .SGD: "Singapore Dollar"
-        case .HKD: "Hong Kong Dollar"
-        case .KRW: "South Korean Won"
-        case .MXN: "Mexican Peso"
-        case .ZAR: "South African Rand"
-        case .DKK: "Danish Krone"
-        case .RON: "Romanian Leu"
+        case .USD: L("US Dollar")
+        case .GBP: L("British Pound")
+        case .EUR: L("Euro")
+        case .AUD: L("Australian Dollar")
+        case .CAD: L("Canadian Dollar")
+        case .NZD: L("New Zealand Dollar")
+        case .JPY: L("Japanese Yen")
+        case .CNY: L("Chinese Yuan")
+        case .CHF: L("Swiss Franc")
+        case .INR: L("Indian Rupee")
+        case .BRL: L("Brazilian Real")
+        case .SEK: L("Swedish Krona")
+        case .SGD: L("Singapore Dollar")
+        case .HKD: L("Hong Kong Dollar")
+        case .KRW: L("South Korean Won")
+        case .MXN: L("Mexican Peso")
+        case .ZAR: L("South African Rand")
+        case .DKK: L("Danish Krone")
+        case .RON: L("Romanian Leu")
         }
     }
 }
@@ -2631,6 +2633,12 @@ enum ProviderFilter: String, CaseIterable, Identifiable {
     case zcode = "ZCode"
 
     var id: String { rawValue }
+
+    /// Tab and empty-state label. Provider names are product names and stay
+    /// verbatim; only the synthetic "All" filter is translated.
+    var displayLabel: String {
+        self == .all ? L("All") : rawValue
+    }
 
     var providerKeys: [String] {
         switch self {
@@ -2717,6 +2725,19 @@ enum InsightMode: String, CaseIterable, Identifiable {
     case stats = "Stats"
     case optimize = "Optimize"
     var id: String { rawValue }
+
+    /// Tab label. `rawValue` stays the persisted identity.
+    var displayLabel: String {
+        switch self {
+        case .plan: L("Plan")
+        case .trend: L("Trend")
+        case .forecast: L("Forecast")
+        case .calendar: L("Calendar")
+        case .pulse: L("Pulse")
+        case .stats: L("Stats")
+        case .optimize: L("Optimize")
+        }
+    }
 }
 
 enum Period: String, CaseIterable, Identifiable {
@@ -2731,6 +2752,19 @@ enum Period: String, CaseIterable, Identifiable {
     case lifetime = "Life"
 
     var id: String { rawValue }
+
+    /// Segment label. `rawValue` stays the stable identity used for `id` and
+    /// for cache keys.
+    var displayLabel: String {
+        switch self {
+        case .today: L("Today")
+        case .sevenDays: L("7D")
+        case .thirtyDays: L("30D")
+        case .month: L("Month")
+        case .all: L("6M")
+        case .lifetime: L("Life")
+        }
+    }
 
     /// Maps to the CLI's `--period` argument values.
     var cliArg: String {
@@ -2748,12 +2782,12 @@ enum Period: String, CaseIterable, Identifiable {
 
     var menubarMetricLabel: String {
         switch self {
-        case .today: "Today"
-        case .sevenDays: "Week"
-        case .thirtyDays: "30 Days"
-        case .month: "Month"
-        case .all: "6 Months"
-        case .lifetime: "Lifetime"
+        case .today: L("Today")
+        case .sevenDays: L("Week")
+        case .thirtyDays: L("30 Days")
+        case .month: L("Month")
+        case .all: L("6 Months")
+        case .lifetime: L("Lifetime")
         }
     }
 

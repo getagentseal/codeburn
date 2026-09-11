@@ -113,8 +113,8 @@ enum CapacityDockTheme: String, CaseIterable, Sendable {
 
     var displayName: String {
         switch self {
-        case .graphite: "Graphite"
-        case .liquidGlass: "Liquid Glass"
+        case .graphite: L("Graphite")
+        case .liquidGlass: L("Liquid Glass")
         }
     }
 }
@@ -125,8 +125,8 @@ enum CapacityDockGaugeShape: String, CaseIterable, Sendable {
 
     var displayName: String {
         switch self {
-        case .circle: "Circle"
-        case .squircle: "Squircle"
+        case .circle: L("Circle")
+        case .squircle: L("Squircle")
         }
     }
 }

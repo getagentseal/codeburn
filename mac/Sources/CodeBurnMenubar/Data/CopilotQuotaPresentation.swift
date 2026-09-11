@@ -31,16 +31,20 @@ enum CopilotQuotaPresentation {
         case usage(idle: Bool)
     }
 
-    static let noCredentialsPlanTitle = "No Copilot credentials found"
-    static let noCredentialsPlanMessage =
-        "Sign in via an editor's Copilot plugin first. Then click Try Again."
-    static let disconnectedPlanTitle = "Copilot quota tracking disconnected"
-    static let disconnectedPlanMessage =
-        "Your Copilot credentials are untouched. Click Connect to resume."
-    static let noCredentialsSettingsDetail =
-        "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect."
-    static let disconnectedSettingsDetail =
-        "Quota tracking disconnected. Credentials are untouched. Click Connect to resume."
+    static var noCredentialsPlanTitle: String { L("No Copilot credentials found") }
+    static var noCredentialsPlanMessage: String {
+        L("Sign in via an editor's Copilot plugin first. Then click Try Again.")
+    }
+    static var disconnectedPlanTitle: String { L("Copilot quota tracking disconnected") }
+    static var disconnectedPlanMessage: String {
+        L("Your Copilot credentials are untouched. Click Connect to resume.")
+    }
+    static var noCredentialsSettingsDetail: String {
+        L("Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect.")
+    }
+    static var disconnectedSettingsDetail: String {
+        L("Quota tracking disconnected. Credentials are untouched. Click Connect to resume.")
+    }
 
     static func planContent(
         loadState: SubscriptionLoadState,

@@ -107,7 +107,7 @@ struct SettingsView: View {
 
             List(selection: selection) {
                 Section {
-                    SettingsSidebarPaneRow(pane: "general", title: "General", systemImage: "gearshape.fill", color: .gray)
+                    SettingsSidebarPaneRow(pane: "general", title: L("General"), systemImage: "gearshape.fill", color: .gray)
                     SettingsSidebarAboutRow()
                 }
                 Section {
@@ -117,9 +117,9 @@ struct SettingsView: View {
                     }
                 } header: {
                     HStack(spacing: 4) {
-                        Text("Providers")
+                        Text(L("Providers"))
                         Spacer()
-                        Text("\(providers.filter(\.isConnected).count) on")
+                        Text(L("%lld on", providers.filter(\.isConnected).count))
                             .foregroundStyle(.tertiary)
                             .monospacedDigit()
                             .padding(.trailing, 10)
@@ -134,10 +134,10 @@ struct SettingsView: View {
 
     private var currentPaneTitle: String {
         switch selection.wrappedValue {
-        case "general": return "General"
-        case "about": return "About"
+        case "general": return L("General")
+        case "about": return L("About")
         default:
-            return providers.first { $0.id == selection.wrappedValue }?.name ?? "Settings"
+            return providers.first { $0.id == selection.wrappedValue }?.name ?? L("Settings")
         }
     }
 
@@ -207,7 +207,7 @@ private struct SettingsSidebarAboutRow: View {
         HStack(spacing: 8) {
             // Standard info glyph in a chip, matching the General row's style.
             SettingsIconChip(systemImage: "info.circle.fill", color: .gray)
-            Text("About")
+            Text(L("About"))
         }
         .tag("about")
     }
@@ -267,7 +267,7 @@ private struct SettingsSidebarSearchField: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
 
-            TextField("Search providers", text: $searchText)
+            TextField(L("Search providers"), text: $searchText)
                 .textFieldStyle(.plain)
 
             if !searchText.isEmpty {
@@ -276,7 +276,7 @@ private struct SettingsSidebarSearchField: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("Clear")
+                        .accessibilityLabel(L("Clear"))
                 }
                 .buttonStyle(.plain)
             }
@@ -330,7 +330,7 @@ private struct SettingsWindowStyleAccessor: NSViewRepresentable {
 }
 
 private final class SettingsWindowStyleView: NSView {
-    var paneTitle = "Settings"
+    var paneTitle = L("Settings")
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -414,32 +414,34 @@ private struct GeneralSettingsTab: View {
         let customEmpty = store.isTokenMetric
             ? (tokenCustom && store.dailyTokenBudget == 0)
             : (costCustom && store.dailyBudget == 0)
-        if customEmpty { return "Enter an amount above, or the alert stays off." }
-        return "Flame icon turns yellow when today's \(store.isTokenMetric ? "tokens" : "cost") pass the daily budget."
+        if customEmpty { return L("Enter an amount above, or the alert stays off.") }
+        return store.isTokenMetric
+            ? L("Flame icon turns yellow when today's tokens pass the daily budget.")
+            : L("Flame icon turns yellow when today's cost pass the daily budget.")
     }
 
     var body: some View {
         Form {
-            Section("Display") {
-                Picker("Currency", selection: Binding(
+            Section(L("Display")) {
+                Picker(L("Currency"), selection: Binding(
                     get: { store.currency },
                     set: { applyCurrency(code: $0) }
                 )) {
                     ForEach(SupportedCurrency.allCases) { currency in
-                        Text("\(currency.rawValue) · \(currency.displayName)").tag(currency.rawValue)
+                        Text(currency.pickerLabel).tag(currency.rawValue)
                     }
                 }
-                Picker("Metric", selection: Binding(
+                Picker(L("Metric"), selection: Binding(
                     get: { store.displayMetric },
                     set: { store.displayMetric = $0 }
                 )) {
-                    Text("Cost ($)").tag(DisplayMetric.cost)
-                    Text("Tokens (↑↓)").tag(DisplayMetric.tokens)
-                    Text("Total Tokens").tag(DisplayMetric.totalTokens)
-                    Text("Credits (Codex)").tag(DisplayMetric.credits)
-                    Text("Icon Only").tag(DisplayMetric.iconOnly)
+                    Text(L("Cost ($)")).tag(DisplayMetric.cost)
+                    Text(L("Tokens (↑↓)")).tag(DisplayMetric.tokens)
+                    Text(L("Total Tokens")).tag(DisplayMetric.totalTokens)
+                    Text(L("Credits (Codex)")).tag(DisplayMetric.credits)
+                    Text(L("Icon Only")).tag(DisplayMetric.iconOnly)
                 }
-                Picker("Period", selection: Binding(
+                Picker(L("Period"), selection: Binding(
                     get: { store.menubarPeriod },
                     set: { store.setMenubarPeriod($0) }
                 )) {
@@ -448,29 +450,29 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Picker("Scope", selection: Binding(
+                Picker(L("Scope"), selection: Binding(
                     get: { store.menubarScope },
                     set: { store.setMenubarScope($0) }
                 )) {
                     ForEach(MenubarScope.allCases) { scope in
-                        Text(scope.rawValue).tag(scope)
+                        Text(scope.displayLabel).tag(scope)
                     }
                 }
                 .pickerStyle(.menu)
-                Picker("Accent", selection: Binding(
+                Picker(L("Accent"), selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }
                 )) {
                     ForEach(AccentPreset.allCases) { preset in
-                        Text(preset.rawValue).tag(preset)
+                        Text(preset.displayLabel).tag(preset)
                     }
                 }
             }
 
             CapacityDockSettingsSection()
 
-            Section("Usage Refresh") {
-                Picker("Update every", selection: Binding(
+            Section(L("Usage Refresh")) {
+                Picker(L("Update every"), selection: Binding(
                     get: { UsageRefreshCadence(rawValue: usageRefreshSeconds) ?? .default },
                     set: { usageRefreshSeconds = $0.rawValue }
                 )) {
@@ -479,40 +481,40 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Text("How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now.")
+                Text(L("How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
-            Section("Updates") {
-                Toggle("Notify me about updates", isOn: $notifyAboutUpdates)
-                Text("Posts a notification when a new CodeBurn release is available. Click it to install.")
+            Section(L("Updates")) {
+                Toggle(L("Notify me about updates"), isOn: $notifyAboutUpdates)
+                Text(L("Posts a notification when a new CodeBurn release is available. Click it to install."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
-            Section("Terminal") {
-                Picker("Open commands in", selection: Binding(
+            Section(L("Terminal")) {
+                Picker(L("Open commands in"), selection: Binding(
                     get: { PreferredTerminal(rawValue: preferredTerminalRaw) ?? .default },
                     set: { preferredTerminalRaw = $0.rawValue }
                 )) {
                     ForEach(PreferredTerminal.allCases) { terminal in
-                        Text(terminal.isInstalled ? terminal.label : "\(terminal.label) (not installed)")
+                        Text(terminal.isInstalled ? terminal.label : L("%@ (not installed)", terminal.label))
                             .tag(terminal)
                     }
                 }
                 .pickerStyle(.menu)
-                Text("Where Full Report and Optimize open. If the chosen app isn't installed CodeBurn falls back to Terminal; if that's missing too the command runs in the background. Only terminals that can script a command into a live window are listed.")
+                Text(L("Where Full Report and Optimize open. If the chosen app isn't installed CodeBurn falls back to Terminal; if that's missing too the command runs in the background. Only terminals that can script a command into a live window are listed."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
 
-            Section("Alerts") {
+            Section(L("Alerts")) {
                 // The budget tracks whatever the menubar metric shows: dollars for
                 // the Cost metric, tokens for the Tokens / Total Tokens metrics.
                 // "Custom…" reveals a field for an exact amount.
                 if store.isTokenMetric {
-                    Picker("Daily budget", selection: Binding(
+                    Picker(L("Daily budget"), selection: Binding(
                         get: { tokenCustom ? -1.0 : store.dailyTokenBudget },
                         set: { sel in
                             if sel < 0 {
@@ -524,26 +526,26 @@ private struct GeneralSettingsTab: View {
                             }
                         }
                     )) {
-                        Text("Off").tag(0.0)
+                        Text(L("Off")).tag(0.0)
                         Text("1M").tag(1_000_000.0)
                         Text("5M").tag(5_000_000.0)
                         Text("10M").tag(10_000_000.0)
                         Text("25M").tag(25_000_000.0)
                         Text("50M").tag(50_000_000.0)
                         Text("100M").tag(100_000_000.0)
-                        Text("Custom…").tag(-1.0)
+                        Text(L("Custom…")).tag(-1.0)
                     }
                     if tokenCustom {
                         HStack {
-                            TextField("Amount", text: $tokenText)
+                            TextField(L("Amount"), text: $tokenText)
                                 .multilineTextAlignment(.trailing)
                                 .onSubmit { applyTokenBudget() }
                                 .onChange(of: tokenText) { _, _ in applyTokenBudget() }
-                            Text("M tokens").foregroundStyle(.secondary)
+                            Text(L("M tokens")).foregroundStyle(.secondary)
                         }
                     }
                 } else {
-                    Picker("Daily budget", selection: Binding(
+                    Picker(L("Daily budget"), selection: Binding(
                         get: { costCustom ? -1.0 : store.dailyBudget },
                         set: { sel in
                             if sel < 0 {
@@ -555,18 +557,18 @@ private struct GeneralSettingsTab: View {
                             }
                         }
                     )) {
-                        Text("Off").tag(0.0)
+                        Text(L("Off")).tag(0.0)
                         Text("$25").tag(25.0)
                         Text("$50").tag(50.0)
                         Text("$100").tag(100.0)
                         Text("$200").tag(200.0)
                         Text("$500").tag(500.0)
-                        Text("Custom…").tag(-1.0)
+                        Text(L("Custom…")).tag(-1.0)
                     }
                     if costCustom {
                         HStack {
                             Text("$").foregroundStyle(.secondary)
-                            TextField("Amount", text: $costText)
+                            TextField(L("Amount"), text: $costText)
                                 .multilineTextAlignment(.trailing)
                                 .onSubmit { applyCostBudget() }
                                 .onChange(of: costText) { _, _ in applyCostBudget() }
@@ -623,14 +625,14 @@ private struct CapacityDockSettingsSection: View {
     }
 
     var body: some View {
-        Section("Capacity Dock") {
-            Toggle("Show Capacity Dock", isOn: Binding(
+        Section(L("Capacity Dock")) {
+            Toggle(L("Show Capacity Dock"), isOn: Binding(
                 get: { snapshot.isEnabled },
                 set: { CapacityDockPreferences.setEnabled($0) }
             ))
 
             if !enabledEligibleProviders.isEmpty {
-                Picker("Resting provider", selection: Binding(
+                Picker(L("Resting provider"), selection: Binding(
                     get: {
                         enabledEligibleProviders.contains(snapshot.preferredProvider)
                             ? snapshot.preferredProvider
@@ -646,7 +648,7 @@ private struct CapacityDockSettingsSection: View {
             }
 
             HStack(spacing: 10) {
-                Text("Size")
+                Text(L("Size"))
                 Slider(
                     value: Binding(
                         get: { snapshot.scale },
@@ -655,14 +657,14 @@ private struct CapacityDockSettingsSection: View {
                     in: CapacityDockPreferences.scaleRange,
                     step: 0.05
                 )
-                .accessibilityLabel("Capacity Dock size")
+                .accessibilityLabel(L("Capacity Dock size"))
                 Text("\(Int((snapshot.scale * 100).rounded()))%")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(width: 38, alignment: .trailing)
             }
 
-            Picker("Appearance", selection: Binding(
+            Picker(L("Appearance"), selection: Binding(
                 get: { snapshot.theme },
                 set: { CapacityDockPreferences.setTheme($0) }
             )) {
@@ -672,7 +674,7 @@ private struct CapacityDockSettingsSection: View {
             }
             .pickerStyle(.menu)
 
-            Picker("Gauge shape", selection: Binding(
+            Picker(L("Gauge shape"), selection: Binding(
                 get: { snapshot.gaugeShape },
                 set: { CapacityDockPreferences.setGaugeShape($0) }
             )) {
@@ -682,13 +684,13 @@ private struct CapacityDockSettingsSection: View {
             }
             .pickerStyle(.menu)
 
-            Text("Dock providers")
+            Text(L("Dock providers"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
 
             if manageableProviders.isEmpty {
-                Text("Connect a provider from its sidebar page to make it available here.")
+                Text(L("Connect a provider from its sidebar page to make it available here."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -708,7 +710,7 @@ private struct CapacityDockSettingsSection: View {
                         }
                         Text(provider.displayName)
                         if !store.capacityDockProviderIsConnected(provider) {
-                            Text("Needs attention")
+                            Text(L("Needs attention"))
                                 .font(.system(size: 10))
                                 .foregroundStyle(.red)
                         }
@@ -722,7 +724,7 @@ private struct CapacityDockSettingsSection: View {
                 ))
             }
 
-            Text("Connected providers and anything already shown in the dock appear here, so a provider can always be removed even if its connection later fails.")
+            Text(L("Connected providers and anything already shown in the dock appear here, so a provider can always be removed even if its connection later fails."))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -758,20 +760,20 @@ private struct ClaudeSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Connection") {
+            Section(L("Connection")) {
                 ClaudeConnectionRow()
             }
             Section {
                 ClaudeConfigDirsSection()
             } header: {
-                Text("Config Directories")
+                Text(L("Config Directories"))
             } footer: {
-                Text("Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list.")
+                Text(L("Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            Section("Quota Refresh") {
-                Picker("Update every", selection: Binding(
+            Section(L("Quota Refresh")) {
+                Picker(L("Update every"), selection: Binding(
                     get: { SubscriptionRefreshCadence.current },
                     set: { SubscriptionRefreshCadence.current = $0 }
                 )) {
@@ -780,10 +782,10 @@ private struct ClaudeSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
-                Text("Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand.")
+                Text(L("Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Button("Refresh Now") {
+                Button(L("Refresh Now")) {
                     if let delegate = NSApp.delegate as? AppDelegate {
                         delegate.refreshSubscriptionNow()
                     } else {
@@ -843,14 +845,14 @@ private struct ClaudeConnectionRow: View {
 
     private var stateTitle: String {
         switch store.subscriptionLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load plan data"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load plan data")
         }
     }
 
@@ -858,15 +860,15 @@ private struct ClaudeConnectionRow: View {
         switch store.subscriptionLoadState {
         case .loaded:
             if let tier = store.subscription?.tier.displayName {
-                return "Plan: \(tier)"
+                return L("Plan: %@", tier)
             }
-            return "Live quota tracked from Anthropic."
-        case .terminalFailure: return "Open Claude Code in your terminal and type `/login`, then click Reconnect."
-        case .transientFailure: return store.subscriptionError ?? "Anthropic rate-limited; auto-retrying."
-        case .bootstrapping: return "macOS may ask permission to read your credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from Anthropic."
-        case .notBootstrapped, .noCredentials: return "Click Connect to read your Claude Code credentials and start tracking quota."
+            return L("Live quota tracked from Anthropic.")
+        case .terminalFailure: return L("Open Claude Code in your terminal and type `/login`, then click Reconnect.")
+        case .transientFailure: return store.subscriptionError ?? L("Anthropic rate-limited; auto-retrying.")
+        case .bootstrapping: return L("macOS may ask permission to read your credentials.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from Anthropic.")
+        case .notBootstrapped, .noCredentials: return L("Click Connect to read your Claude Code credentials and start tracking quota.")
         case .failed: return store.subscriptionError ?? ""
         }
     }
@@ -875,26 +877,26 @@ private struct ClaudeConnectionRow: View {
     private var actionButton: some View {
         switch store.subscriptionLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Claude?",
+                    L("Disconnect Claude?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectSubscription()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your Claude Code credential is untouched. Claude Code keeps working.")
+                    Text(L("CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your Claude Code credential is untouched. Claude Code keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapSubscription() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapSubscription() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.activateClaudeFromDormant() } }
+            Button(L("Load Quota")) { Task { await store.activateClaudeFromDormant() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapSubscription() } }
+            Button(L("Connect")) { Task { await store.bootstrapSubscription() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -911,7 +913,7 @@ private struct ClaudeConfigDirsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if dirs.isEmpty {
-                Text("No extra directories. Tracking the default `~/.claude`.")
+                Text(L("No extra directories. Tracking the default `~/.claude`."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } else {
@@ -933,7 +935,7 @@ private struct ClaudeConfigDirsSection: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Remove")
+                        .help(L("Remove"))
                     }
                 }
             }
@@ -941,7 +943,7 @@ private struct ClaudeConfigDirsSection: View {
             Button {
                 addDirectory()
             } label: {
-                Label("Add Directory…", systemImage: "plus")
+                Label(L("Add Directory…"), systemImage: "plus")
             }
             .controlSize(.small)
         }
@@ -953,8 +955,8 @@ private struct ClaudeConfigDirsSection: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
-        panel.prompt = "Add"
-        panel.message = "Choose one or more Claude config directories (each containing a `projects` folder)."
+        panel.prompt = L("Add")
+        panel.message = L("Choose one or more Claude config directories (each containing a `projects` folder).")
         guard panel.runModal() == .OK else { return }
 
         let added = panel.urls.map { $0.path }
@@ -992,11 +994,11 @@ private struct CodexSettingsTab: View {
                 CodexConnectionRow()
             }
             Section {
-                Text("Codex live-quota tracking follows the authoritative `~/.codex/auth.json` session directly and does not create a second Keychain copy. A legacy CodeBurn Keychain item, when present, is read only as a migration fallback. Only ChatGPT-mode auth (Plus / Pro / Team / Business / Edu / Enterprise) is supported. API-key users are billed per request and have a different reporting surface. Credit-metered workspaces report no rate-limit windows, so their monthly credit allowance is shown instead.")
+                Text(L("Codex live-quota tracking follows the authoritative `~/.codex/auth.json` session directly and does not create a second Keychain copy. A legacy CodeBurn Keychain item, when present, is read only as a migration fallback. Only ChatGPT-mode auth (Plus / Pro / Team / Business / Edu / Enterprise) is supported. API-key users are billed per request and have a different reporting surface. Credit-metered workspaces report no rate-limit windows, so their monthly credit allowance is shown instead."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -1050,14 +1052,14 @@ private struct CodexConnectionRow: View {
 
     private var stateTitle: String {
         switch store.codexLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Codex quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Codex quota")
         }
     }
 
@@ -1065,23 +1067,23 @@ private struct CodexConnectionRow: View {
         switch store.codexLoadState {
         case .loaded:
             if let plan = store.codexUsage?.plan.displayName {
-                return "Plan: \(plan)"
+                return L("Plan: %@", plan)
             }
-            return "Live quota tracked from chatgpt.com."
+            return L("Live quota tracked from chatgpt.com.")
         case .terminalFailure:
             // Be specific about the cause: the message we already surface in
             // codexError will say "API-key mode" if that's the situation, so
             // the generic "run codex login" hint covers both cases.
             if let err = store.codexError, err.lowercased().contains("api-key") {
-                return "Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking."
+                return L("Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking.")
             }
-            return "Run `codex login` in your terminal to sign in again, then click Reconnect."
-        case .transientFailure: return store.codexError ?? "ChatGPT rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.codex/auth.json."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from chatgpt.com."
+            return L("Run `codex login` in your terminal to sign in again, then click Reconnect.")
+        case .transientFailure: return store.codexError ?? L("ChatGPT rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.codex/auth.json.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from chatgpt.com.")
         case .notBootstrapped, .noCredentials:
-            return "Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json."
+            return L("Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json.")
         case .failed: return store.codexError ?? ""
         }
     }
@@ -1090,26 +1092,26 @@ private struct CodexConnectionRow: View {
     private var actionButton: some View {
         switch store.codexLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Codex?",
+                    L("Disconnect Codex?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectCodex()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your ~/.codex/auth.json is untouched. Codex CLI keeps working.")
+                    Text(L("CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your ~/.codex/auth.json is untouched. Codex CLI keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapCodex() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapCodex() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.activateCodexFromDormant() } }
+            Button(L("Load Quota")) { Task { await store.activateCodexFromDormant() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapCodex() } }
+            Button(L("Connect")) { Task { await store.bootstrapCodex() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -1122,15 +1124,15 @@ private struct CodexConnectionRow: View {
 private struct KimiSettingsTab: View {
     var body: some View {
         Form {
-            Section("Connection") {
+            Section(L("Connection")) {
                 KimiConnectionRow()
             }
             Section {
-                Text("Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect.")
+                Text(L("Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -1184,29 +1186,29 @@ private struct KimiConnectionRow: View {
 
     private var stateTitle: String {
         switch store.kimiLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Kimi quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Kimi quota")
         }
     }
 
     private var stateDetail: String {
         switch store.kimiLoadState {
         case .loaded:
-            return "Live quota tracked from api.kimi.com."
+            return L("Live quota tracked from api.kimi.com.")
         case .terminalFailure:
-            return "Run the Kimi CLI once to refresh your login, then click Reconnect."
-        case .transientFailure: return store.kimiError ?? "Kimi rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.kimi-code credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from api.kimi.com."
+            return L("Run the Kimi CLI once to refresh your login, then click Reconnect.")
+        case .transientFailure: return store.kimiError ?? L("Kimi rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.kimi-code credentials.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from api.kimi.com.")
         case .notBootstrapped, .noCredentials:
-            return "Sign in with the Kimi CLI first, then click Connect."
+            return L("Sign in with the Kimi CLI first, then click Connect.")
         case .failed: return store.kimiError ?? ""
         }
     }
@@ -1215,26 +1217,26 @@ private struct KimiConnectionRow: View {
     private var actionButton: some View {
         switch store.kimiLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Kimi Code?",
+                    L("Disconnect Kimi Code?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectKimi()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working.")
+                    Text(L("CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapKimi() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapKimi() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.bootstrapKimi() } }
+            Button(L("Load Quota")) { Task { await store.bootstrapKimi() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapKimi() } }
+            Button(L("Connect")) { Task { await store.bootstrapKimi() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -1247,15 +1249,15 @@ private struct KimiConnectionRow: View {
 private struct GeminiSettingsTab: View {
     var body: some View {
         Form {
-            Section("Connection") {
+            Section(L("Connection")) {
                 GeminiConnectionRow()
             }
             Section {
-                Text("Gemini live-quota tracking reads `~/.gemini/oauth_creds.json` read-only. Nothing is copied or stored, and tokens stay in memory. If the connection shows as expired, run the Gemini CLI once to refresh your login, then click Reconnect.")
+                Text(L("Gemini live-quota tracking reads `~/.gemini/oauth_creds.json` read-only. Nothing is copied or stored, and tokens stay in memory. If the connection shows as expired, run the Gemini CLI once to refresh your login, then click Reconnect."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -1309,14 +1311,14 @@ private struct GeminiConnectionRow: View {
 
     private var stateTitle: String {
         switch store.geminiLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Gemini quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Gemini quota")
         }
     }
 
@@ -1324,17 +1326,17 @@ private struct GeminiConnectionRow: View {
         switch store.geminiLoadState {
         case .loaded:
             if let plan = store.geminiUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: %@", plan)
             }
-            return "Live quota tracked from Google Code Assist."
+            return L("Live quota tracked from Google Code Assist.")
         case .terminalFailure:
-            return "Run the Gemini CLI once to refresh your login, then click Reconnect."
-        case .transientFailure: return store.geminiError ?? "Gemini rate-limited; auto-retrying."
-        case .bootstrapping: return "Reading ~/.gemini credentials."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from Google Code Assist."
+            return L("Run the Gemini CLI once to refresh your login, then click Reconnect.")
+        case .transientFailure: return store.geminiError ?? L("Gemini rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Reading ~/.gemini credentials.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from Google Code Assist.")
         case .notBootstrapped, .noCredentials:
-            return "Sign in with the Gemini CLI first, then click Connect."
+            return L("Sign in with the Gemini CLI first, then click Connect.")
         case .failed: return store.geminiError ?? ""
         }
     }
@@ -1343,26 +1345,26 @@ private struct GeminiConnectionRow: View {
     private var actionButton: some View {
         switch store.geminiLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Gemini?",
+                    L("Disconnect Gemini?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectGemini()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working.")
+                    Text(L("CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapGemini() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapGemini() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.bootstrapGemini() } }
+            Button(L("Load Quota")) { Task { await store.bootstrapGemini() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapGemini() } }
+            Button(L("Connect")) { Task { await store.bootstrapGemini() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -1375,16 +1377,16 @@ private struct GeminiConnectionRow: View {
 private struct CopilotSettingsTab: View {
     var body: some View {
         Form {
-            Section("Connection") {
+            Section(L("Connection")) {
                 CopilotConnectionRow()
             }
             CopilotTokenSection()
             Section {
-                Text("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token.")
+                Text(L("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -1402,12 +1404,12 @@ private struct CopilotTokenSection: View {
 
     var body: some View {
         Section {
-            SecureField("GitHub token", text: $token)
+            SecureField(L("GitHub token"), text: $token)
             HStack {
-                Button("Save & Connect") { save(token) }
+                Button(L("Save & Connect")) { save(token) }
                     .buttonStyle(.borderedProminent)
                     .disabled(isSaving || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Clear Token") { save("") }
+                Button(L("Clear Token")) { save("") }
                     .disabled(isSaving)
                 if isSaving {
                     ProgressView().controlSize(.small)
@@ -1419,9 +1421,9 @@ private struct CopilotTokenSection: View {
                     .foregroundStyle(.red)
             }
         } header: {
-            Text("Paste a token")
+            Text(L("Paste a token"))
         } footer: {
-            Text("Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota.")
+            Text(L("Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota."))
                 .font(.system(size: 11))
         }
     }
@@ -1492,14 +1494,14 @@ private struct CopilotConnectionRow: View {
 
     private var stateTitle: String {
         switch store.copilotLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Login refresh required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Copilot quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Login refresh required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Copilot quota")
         }
     }
 
@@ -1507,15 +1509,15 @@ private struct CopilotConnectionRow: View {
         switch store.copilotLoadState {
         case .loaded:
             if let plan = store.copilotUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: %@", plan)
             }
-            return "Live quota tracked from api.github.com."
+            return L("Live quota tracked from api.github.com.")
         case .terminalFailure:
-            return "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect."
-        case .transientFailure: return store.copilotError ?? "GitHub rate-limited; auto-retrying."
-        case .bootstrapping: return "Looking for a GitHub token on this Mac."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to fetch live usage from api.github.com."
+            return L("Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect.")
+        case .transientFailure: return store.copilotError ?? L("GitHub rate-limited; auto-retrying.")
+        case .bootstrapping: return L("Looking for a GitHub token on this Mac.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to fetch live usage from api.github.com.")
         case .notBootstrapped:
             return CopilotQuotaPresentation.settingsNotConnectedDetail(
                 explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: store.copilotQuotaRuntime.defaults)
@@ -1530,26 +1532,26 @@ private struct CopilotConnectionRow: View {
     private var actionButton: some View {
         switch store.copilotLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Copilot?",
+                    L("Disconnect Copilot?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectCopilot()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working.")
+                    Text(L("CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.connectCopilot() } }
+            Button(L("Reconnect")) { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.connectCopilot() } }
+            Button(L("Load Quota")) { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.connectCopilot() } }
+            Button(L("Connect")) { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -1562,15 +1564,15 @@ private struct CopilotConnectionRow: View {
 private struct AntigravitySettingsTab: View {
     var body: some View {
         Form {
-            Section("Connection") {
+            Section(L("Connection")) {
                 AntigravityConnectionRow()
             }
             Section {
-                Text("Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect.")
+                Text(L("Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -1624,14 +1626,14 @@ private struct AntigravityConnectionRow: View {
 
     private var stateTitle: String {
         switch store.antigravityLoadState {
-        case .loaded: return "Connected"
-        case let .terminalFailure(reason): return reason ?? "Reconnect required"
-        case .transientFailure: return "Backing off"
-        case .bootstrapping: return "Connecting…"
-        case .loading: return "Refreshing…"
-        case .dormant: return "Ready"
-        case .notBootstrapped, .noCredentials: return "Not connected"
-        case .failed: return "Couldn't load Antigravity quota"
+        case .loaded: return L("Connected")
+        case let .terminalFailure(reason): return reason ?? L("Reconnect required")
+        case .transientFailure: return L("Backing off")
+        case .bootstrapping: return L("Connecting…")
+        case .loading: return L("Refreshing…")
+        case .dormant: return L("Ready")
+        case .notBootstrapped, .noCredentials: return L("Not connected")
+        case .failed: return L("Couldn't load Antigravity quota")
         }
     }
 
@@ -1639,19 +1641,19 @@ private struct AntigravityConnectionRow: View {
         switch store.antigravityLoadState {
         case .loaded:
             if let plan = store.antigravityUsage?.plan {
-                return "Plan: \(plan)"
+                return L("Plan: %@", plan)
             }
-            return "Live quota tracked from the local Antigravity server."
+            return L("Live quota tracked from the local Antigravity server.")
         case .terminalFailure:
-            return "Start the Antigravity app, then click Reconnect."
-        case .transientFailure: return store.antigravityError ?? "Local probe failed; auto-retrying."
-        case .bootstrapping: return "Probing the local Antigravity language server."
-        case .loading: return "Background refresh in progress."
-        case .dormant: return "Tap Load Quota to probe the local Antigravity server."
+            return L("Start the Antigravity app, then click Reconnect.")
+        case .transientFailure: return store.antigravityError ?? L("Local probe failed; auto-retrying.")
+        case .bootstrapping: return L("Probing the local Antigravity language server.")
+        case .loading: return L("Background refresh in progress.")
+        case .dormant: return L("Tap Load Quota to probe the local Antigravity server.")
         case .notBootstrapped:
-            return "Start the Antigravity app first, then click Connect."
+            return L("Start the Antigravity app first, then click Connect.")
         case .noCredentials:
-            return "No local Antigravity server found. Start the Antigravity app, then click Reconnect."
+            return L("No local Antigravity server found. Start the Antigravity app, then click Reconnect.")
         case .failed: return store.antigravityError ?? ""
         }
     }
@@ -1660,26 +1662,26 @@ private struct AntigravityConnectionRow: View {
     private var actionButton: some View {
         switch store.antigravityLoadState {
         case .loaded, .transientFailure, .loading:
-            Button("Disconnect") { showDisconnectConfirm = true }
+            Button(L("Disconnect")) { showDisconnectConfirm = true }
                 .confirmationDialog(
-                    "Disconnect Antigravity?",
+                    L("Disconnect Antigravity?"),
                     isPresented: $showDisconnectConfirm
                 ) {
-                    Button("Disconnect", role: .destructive) {
+                    Button(L("Disconnect"), role: .destructive) {
                         store.disconnectAntigravity()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text("CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working.")
+                    Text(L("CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapAntigravity() } }
+            Button(L("Reconnect")) { Task { await store.bootstrapAntigravity() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.bootstrapAntigravity() } }
+            Button(L("Load Quota")) { Task { await store.bootstrapAntigravity() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapAntigravity() } }
+            Button(L("Connect")) { Task { await store.bootstrapAntigravity() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)
@@ -1805,13 +1807,13 @@ private struct GenericProviderConnectionSections: View {
                     }
                     Spacer()
                     if !hasLiveAdapter {
-                        Text("Not yet supported")
+                        Text(L("Not yet supported"))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                     } else if isLoading {
                         ProgressView().controlSize(.small)
                     } else if isConnected {
-                        Button("Disconnect", role: .destructive) {
+                        Button(L("Disconnect"), role: .destructive) {
                             Task {
                                 do {
                                     try await store.disconnectCapacityDockProvider(provider)
@@ -1831,15 +1833,15 @@ private struct GenericProviderConnectionSections: View {
                 }
                 .padding(.vertical, 4)
             } header: {
-                Text("Connection")
+                Text(L("Connection"))
             } footer: {
                 Text(hasLiveAdapter
-                    ? "Automatic connection uses the provider's existing app, CLI, OAuth, browser session, or environment credentials first. CodeBurn does not copy those source credentials into its Keychain."
-                    : "Authentication methods are listed for reference. A native CodeBurn quota adapter is required before this provider can connect to Capacity Dock.")
+                    ? L("Automatic connection uses the provider's existing app, CLI, OAuth, browser session, or environment credentials first. CodeBurn does not copy those source credentials into its Keychain.")
+                    : L("Authentication methods are listed for reference. A native CodeBurn quota adapter is required before this provider can connect to Capacity Dock."))
                     .font(.system(size: 11))
             }
 
-            Section("Authentication methods") {
+            Section(L("Authentication methods")) {
                 ForEach(authMethods, id: \.self) { method in
                     Label(method.title, systemImage: authIcon(method))
                         .font(.system(size: 11.5))
@@ -1848,7 +1850,7 @@ private struct GenericProviderConnectionSections: View {
 
             if hasLiveAdapter {
                 Section {
-                Picker("Source", selection: $editor.credential.sourceMode) {
+                Picker(L("Source"), selection: $editor.credential.sourceMode) {
                     ForEach(sourceModes, id: \.self) { source in
                         Text(sourceTitle(source)).tag(source.rawValue)
                     }
@@ -1856,13 +1858,13 @@ private struct GenericProviderConnectionSections: View {
                 .pickerStyle(.menu)
 
                 if supportsAPIKey {
-                    SecureField("API key or token", text: $editor.credential.apiKey)
+                    SecureField(L("API key or token"), text: $editor.credential.apiKey)
                 }
 
                 HStack {
-                    Button("Save & Connect") { saveAndConnect() }
+                    Button(L("Save & Connect")) { saveAndConnect() }
                         .buttonStyle(.borderedProminent)
-                    Button("Clear Override") {
+                    Button(L("Clear Override")) {
                         Task {
                             do {
                                 try await store.disconnectCapacityDockProvider(provider)
@@ -1880,7 +1882,7 @@ private struct GenericProviderConnectionSections: View {
                     if credentialIsLoading {
                         ProgressView()
                             .controlSize(.small)
-                            .accessibilityLabel("Loading saved provider credential")
+                            .accessibilityLabel(L("Loading saved provider credential"))
                     }
                 }
 
@@ -1890,15 +1892,15 @@ private struct GenericProviderConnectionSections: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("Connection override")
+                Text(L("Connection override"))
             } footer: {
-                Text("Overrides are optional and are saved only when you press Save & Connect. Secret values use one CodeBurn-owned Keychain item for this provider; background reads suppress authentication UI.")
+                Text(L("Overrides are optional and are saved only when you press Save & Connect. Secret values use one CodeBurn-owned Keychain item for this provider; background reads suppress authentication UI."))
                     .font(.system(size: 11))
             }
             .disabled(credentialIsLoading)
             } else if CapacityDockProviderCredentialPresence.contains(provider.id) {
                 Section {
-                    Button("Remove saved override", role: .destructive) {
+                    Button(L("Remove saved override"), role: .destructive) {
                         Task {
                             do {
                                 try await store.disconnectCapacityDockProvider(provider)
@@ -1917,9 +1919,9 @@ private struct GenericProviderConnectionSections: View {
                             .foregroundStyle(.red)
                     }
                 } header: {
-                    Text("Saved data")
+                    Text(L("Saved data"))
                 } footer: {
-                    Text("This credential predates a live CodeBurn quota adapter and is not treated as a connection.")
+                    Text(L("This credential predates a live CodeBurn quota adapter and is not treated as a connection."))
                         .font(.system(size: 11))
                 }
             }
@@ -1930,22 +1932,22 @@ private struct GenericProviderConnectionSections: View {
     }
 
     private var connectionTitle: String {
-        guard hasLiveAdapter else { return "Quota adapter not available" }
-        if isLoading { return "Connecting…" }
-        guard let summary else { return "Not connected" }
+        guard hasLiveAdapter else { return L("Quota adapter not available") }
+        if isLoading { return L("Connecting…") }
+        guard let summary else { return L("Not connected") }
         switch summary.connection {
-        case .connected: return "Connected"
-        case .loading: return "Connecting…"
-        case .stale: return "Refreshing…"
-        case .transientFailure: return "Retrying"
-        case .terminalFailure: return "Reconnect required"
-        case .disconnected: return "Not connected"
+        case .connected: return L("Connected")
+        case .loading: return L("Connecting…")
+        case .stale: return L("Refreshing…")
+        case .transientFailure: return L("Retrying")
+        case .terminalFailure: return L("Reconnect required")
+        case .disconnected: return L("Not connected")
         }
     }
 
     private var connectionDetail: String {
         guard hasLiveAdapter else {
-            return "\(provider.displayName) is catalogued, but CodeBurn cannot fetch its live quota yet."
+            return L("%@ is catalogued, but CodeBurn cannot fetch its live quota yet.", provider.displayName)
         }
         if let error = store.capacityDockProviderErrors[provider.id], !error.isEmpty {
             return "\(error) \(ProviderConnectionGuidance.instruction(for: provider))"
@@ -1961,7 +1963,7 @@ private struct GenericProviderConnectionSections: View {
         if let source = summary.footerLines.first(where: { $0.hasPrefix("Source:") }) {
             return source
         }
-        return isConnected ? "Live quota is available to Capacity Dock." : "Waiting for quota data."
+        return isConnected ? L("Live quota is available to Capacity Dock.") : L("Waiting for quota data.")
     }
 
     private var connectionIcon: String {
@@ -1993,8 +1995,8 @@ private struct GenericProviderConnectionSections: View {
 
     private var primaryConnectionButtonTitle: String {
         switch submissionAction {
-        case .saveAndConnect: return "Save & Connect"
-        case .connect, .requiresCredential: return summary == nil ? "Connect" : "Retry"
+        case .saveAndConnect: return L("Save & Connect")
+        case .connect, .requiresCredential: return summary == nil ? L("Connect") : L("Retry")
         }
     }
 
@@ -2030,11 +2032,11 @@ private struct GenericProviderConnectionSections: View {
 
     private func sourceTitle(_ source: ProviderReferenceSourceMode) -> String {
         switch source {
-        case .automatic: "Automatic"
-        case .web: "Browser session"
-        case .cli: "CLI"
-        case .oauth: "OAuth"
-        case .api: "API"
+        case .automatic: L("Automatic")
+        case .web: L("Browser session")
+        case .cli: L("CLI")
+        case .oauth: L("OAuth")
+        case .api: L("API")
         }
     }
 
@@ -2088,21 +2090,21 @@ private struct DevinSettingsTab: View {
         Form {
             GenericProviderConnectionSections(provider: CapacityDockProvider(rawValue: "devin")!)
 
-            Section("ACU Conversion") {
+            Section(L("ACU Conversion")) {
                 HStack(alignment: .center, spacing: 10) {
-                    Text("USD per ACU")
+                    Text(L("USD per ACU"))
                     Spacer()
                     TextField("", text: $rateText)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 96)
-                        .accessibilityLabel("USD per ACU")
+                        .accessibilityLabel(L("USD per ACU"))
                     Text("USD")
                         .foregroundStyle(.secondary)
                         .frame(width: 36, alignment: .leading)
                 }
 
-                Button("Save") {
+                Button(L("Save")) {
                     saveRate()
                 }
                 .buttonStyle(.borderedProminent)
@@ -2116,11 +2118,11 @@ private struct DevinSettingsTab: View {
             }
 
             Section {
-                Text("CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost.")
+                Text(L("CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
-                Text("How it works")
+                Text(L("How it works"))
             }
         }
         .formStyle(.grouped)
@@ -2136,7 +2138,7 @@ private struct DevinSettingsTab: View {
         guard let rate = parsedRate else { return }
         CLIDevinConfig.persistAcuUsdRate(rate)
         rateText = Self.format(rate)
-        statusText = "Saved. Refresh CodeBurn to recalculate Devin cost."
+        statusText = L("Saved. Refresh CodeBurn to recalculate Devin cost.")
     }
 
     private static func format(_ value: Double) -> String {
@@ -2169,8 +2171,8 @@ private struct AboutSettingsTab: View {
             }
 
             Section {
-                LabeledContent("Version \(versionString)") {
-                    Button("Check for Updates") {
+                LabeledContent(L("Version %@", versionString)) {
+                    Button(L("Check for Updates")) {
                         Task { await updateChecker.check() }
                     }
                 }
@@ -2179,31 +2181,31 @@ private struct AboutSettingsTab: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else if updateChecker.updateAvailable, let latest = updateChecker.latestVersion {
-                    Text("\(AppVersion.display(latest)) is available. Choose Check for Updates in the CodeBurn menu to install it.")
+                    Text(L("%@ is available. Choose Check for Updates in the CodeBurn menu to install it.", AppVersion.display(latest)))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Updates")
+                Text(L("Updates"))
             }
 
             Section {
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
-                    title: "GitHub",
+                    title: L("GitHub"),
                     url: "https://github.com/getagentseal/codeburn")
                 AboutLinkRow(
                     icon: "globe",
-                    title: "Website",
+                    title: L("Website"),
                     url: "https://codeburn.app")
                 AboutLinkRow(
                     icon: "exclamationmark.bubble",
-                    title: "Issues",
+                    title: L("Issues"),
                     url: "https://github.com/getagentseal/codeburn/issues")
             } header: {
-                Text("Links")
+                Text(L("Links"))
             } footer: {
-                Text("© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License.")
+                Text(L("© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License."))
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
             }
@@ -2229,9 +2231,9 @@ private struct AboutSettingsTab: View {
             VStack(spacing: 2) {
                 Text("CodeBurn")
                     .font(.title3).fontWeight(.semibold)
-                Text("Version \(versionString)")
+                Text(L("Version %@", versionString))
                     .foregroundStyle(.secondary)
-                Text("Your AI Bill, Itemized")
+                Text(L("Your AI Bill, Itemized"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

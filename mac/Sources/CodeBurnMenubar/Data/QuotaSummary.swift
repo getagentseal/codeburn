@@ -77,11 +77,16 @@ enum CapacityDockConnectionAction: String, Equatable, Sendable {
     case connect = "Connect"
     case reconnect = "Reconnect"
 
-    var title: String { rawValue }
+    var title: String {
+        switch self {
+        case .connect: L("Connect")
+        case .reconnect: L("Reconnect")
+        }
+    }
 
     func title(for provider: CapacityDockProvider) -> String {
         if provider.catalogEntry.authMethods == [.apiTokenOrCloudCredentials] {
-            return "Add API Key"
+            return L("Add API Key")
         }
         return title
     }
@@ -101,13 +106,14 @@ extension QuotaSummary.Window {
     var resetsInLabel: String {
         guard let resetsAt else { return "" }
         let seconds = max(0, resetsAt.timeIntervalSinceNow)
-        if seconds < 60 { return "now" }
+        if seconds < 60 { return L("now") }
         let minutes = Int(seconds / 60)
         let hours = minutes / 60
         let days = hours / 24
-        if days > 0 { return "\(days)d \(hours % 24)h" }
-        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
-        return "\(minutes)m"
+        // d/h/m are unit abbreviations; zh-Hans uses 天/小时/分.
+        if days > 0 { return L("%lldd %lldh", days, hours % 24) }
+        if hours > 0 { return L("%lldh %lldm", hours, minutes % 60) }
+        return L("%lldm", minutes)
     }
 
     var percentLabel: String {

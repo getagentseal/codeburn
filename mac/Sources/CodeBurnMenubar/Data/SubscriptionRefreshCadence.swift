@@ -15,11 +15,11 @@ enum SubscriptionRefreshCadence: Int, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .manual: return "Manual"
-        case .oneMinute: return "1 minute"
-        case .twoMinutes: return "2 minutes"
-        case .fiveMinutes: return "5 minutes"
-        case .fifteenMinutes: return "15 minutes"
+        case .manual: return L("Manual")
+        case .oneMinute: return L("1 minute")
+        case .twoMinutes: return L("2 minutes")
+        case .fiveMinutes: return L("5 minutes")
+        case .fifteenMinutes: return L("15 minutes")
         }
     }
 

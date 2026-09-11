@@ -13,15 +13,15 @@ struct ModelsSection: View {
 
     var body: some View {
         CollapsibleSection(
-            caption: "Models",
+            caption: L("Models"),
             isExpanded: $isExpanded,
             trailing: {
                 HStack(spacing: 8) {
-                    Text("Cost").frame(minWidth: 54, alignment: .trailing)
+                    Text(L("Cost")).frame(minWidth: 54, alignment: .trailing)
                     if showSavings {
-                        Text("Saved").frame(minWidth: 54, alignment: .trailing)
+                        Text(L("Saved")).frame(minWidth: 54, alignment: .trailing)
                     }
-                    Text("Calls").frame(minWidth: 52, alignment: .trailing)
+                    Text(L("Calls")).frame(minWidth: 52, alignment: .trailing)
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.tertiary)
@@ -90,17 +90,17 @@ private struct TokensLine: View {
         let cacheHit = String(format: "%.0f", t.cacheHitPercent)
 
         HStack(spacing: 4) {
-            Text("Tokens")
+            Text(L("Tokens"))
                 .foregroundStyle(.tertiary)
-            Text(formatTokens(t.inputTokens) + " in")
+            Text(L("%@ in", formatTokens(t.inputTokens)))
                 .foregroundStyle(.secondary)
-            Text("·")
+            Text(verbatim: "·")
                 .foregroundStyle(.tertiary)
-            Text(formatTokens(t.outputTokens) + " out")
+            Text(L("%@ out", formatTokens(t.outputTokens)))
                 .foregroundStyle(.secondary)
-            Text("·")
+            Text(verbatim: "·")
                 .foregroundStyle(.tertiary)
-            Text(cacheHit + "% cache hit")
+            Text(L("%@%% cache hit", cacheHit))
                 .foregroundStyle(.secondary)
             Spacer()
         }

@@ -33,7 +33,7 @@ struct AgentTabStrip: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(canMoveBackward ? Color.primary : Color.secondary.opacity(0.35))
                         .disabled(!canMoveBackward)
-                        .help("Show previous providers")
+                        .help(L("Show previous providers"))
                     }
 
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -84,7 +84,7 @@ struct AgentTabStrip: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(canMoveForward ? Color.primary : Color.secondary.opacity(0.35))
                         .disabled(!canMoveForward)
-                        .help("Show next providers")
+                        .help(L("Show next providers"))
                     }
                 }
                 .onAppear {
@@ -357,7 +357,7 @@ private struct QuotaDetailPopover: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             case .loading where quota.details.isEmpty:
-                Text("Loading…")
+                Text(L("Loading…"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             default:
@@ -370,23 +370,23 @@ private struct QuotaDetailPopover: View {
 
     private var disconnectedMessage: String {
         switch quota.providerFilter {
-        case .codex:  return "Sign in with `codex` (ChatGPT mode) to track quota."
-        case .claude: return "Sign in to Claude Code to track quota."
-        default:      return "Sign in to track quota."
+        case .codex:  return L("Sign in with `codex` (ChatGPT mode) to track quota.")
+        case .claude: return L("Sign in to Claude Code to track quota.")
+        default:      return L("Sign in to track quota.")
         }
     }
 
     private var rowsCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Text("\(quota.providerFilter.rawValue) usage")
+                Text(L("%@ usage", quota.providerFilter.displayLabel))
                     .font(.system(size: 11, weight: .semibold))
                 if case .stale = quota.connection {
-                    Text("stale")
+                    Text(L("stale"))
                         .font(.system(size: 9.5))
                         .foregroundStyle(.secondary)
                 } else if case .transientFailure = quota.connection {
-                    Text("retrying")
+                    Text(L("retrying"))
                         .font(.system(size: 9.5))
                         .foregroundStyle(.orange)
                 }
