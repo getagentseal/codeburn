@@ -85,6 +85,20 @@ final class AppStore {
     var displayMetric: DisplayMetric = DisplayMetric(rawValue: UserDefaults.standard.string(forKey: "CodeBurnDisplayMetric") ?? "") ?? .cost {
         didSet { UserDefaults.standard.set(displayMetric.rawValue, forKey: "CodeBurnDisplayMetric") }
     }
+    /// Optional second menu-bar line. Off by default, so the status item keeps
+    /// rendering exactly the historical single-row title until asked otherwise.
+    var menubarSecondRowEnabled: Bool = MenubarRowPreferences.load().isSecondRowEnabled {
+        didSet { MenubarRowPreferences.setSecondRowEnabled(menubarSecondRowEnabled) }
+    }
+    var menubarSecondRowMetric: MenubarSecondRowMetric = MenubarRowPreferences.load().secondRowMetric {
+        didSet { MenubarRowPreferences.setSecondRowMetric(menubarSecondRowMetric) }
+    }
+    var menubarRowSettings: MenubarRowSettings {
+        MenubarRowSettings(
+            isSecondRowEnabled: menubarSecondRowEnabled,
+            secondRowMetric: menubarSecondRowMetric
+        )
+    }
     var dailyBudget: Double = UserDefaults.standard.double(forKey: "CodeBurnDailyBudget") {
         didSet { UserDefaults.standard.set(dailyBudget, forKey: "CodeBurnDailyBudget") }
     }
@@ -2031,6 +2045,54 @@ final class AppStore {
     var capacityDockToday: CurrentBlock? {
         if menubarPeriod == .today, let payload = menubarPayload { return payload.current }
         return todayPayload?.current
+    }
+
+    /// Connected providers that report a headline quota window, as plain values.
+    /// Bounded on purpose: the six adapters with a native quota path, plus the
+    /// CodeBurn-owned adapters whose summary has already been fetched. Nothing
+    /// here starts a fetch, so the menu-bar title stays a pure read.
+    var menubarQuotaCandidates: [MenubarQuotaCandidate] {
+        var candidates: [MenubarQuotaCandidate] = []
+        var seen: Set<String> = []
+
+        func append(label: String, summary: QuotaSummary?) {
+            guard let summary,
+                  summary.connection == .connected || summary.connection == .stale,
+                  let window = summary.headlineWindow,
+                  window.percent.isFinite,
+                  seen.insert(label).inserted else { return }
+            candidates.append(
+                MenubarQuotaCandidate(
+                    label: label,
+                    percentUsed: window.percent,
+                    resetsAt: window.resetsAt
+                )
+            )
+        }
+
+        for provider in CapacityDockPreferences.supportedProviders {
+            guard let filter = provider.legacyFilter else { continue }
+            append(label: provider.displayName, summary: quotaSummary(for: filter))
+        }
+        for (id, summary) in capacityDockProviderSummaries {
+            guard let provider = CapacityDockProvider(rawValue: id) else { continue }
+            append(label: provider.displayName, summary: summary)
+        }
+        return candidates
+    }
+
+    /// Plain-value snapshot the second menu-bar row formats. Reads only figures
+    /// the app already keeps for the popover.
+    var menubarRowSnapshot: MenubarRowSnapshot {
+        let today = capacityDockToday
+        return MenubarRowSnapshot(
+            quota: MenubarQuotaRowSelection.primary(from: menubarQuotaCandidates),
+            todayCost: today?.cost,
+            todayTotalTokens: today.map { $0.inputTokens + $0.outputTokens },
+            activeSessionCount: menubarPayload?.liveSessions?.sessions.count,
+            currencySymbol: CurrencyState.shared.symbol,
+            currencyRate: CurrencyState.shared.rate
+        )
     }
 
     /// Today's totals for ONE provider's glance card. The card is provider

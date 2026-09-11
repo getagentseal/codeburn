@@ -457,6 +457,26 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
+                // Optional second menu-bar line. Off by default, so the status
+                // item keeps its existing single-row figure untouched.
+                Toggle("Second row", isOn: Binding(
+                    get: { store.menubarSecondRowEnabled },
+                    set: { store.menubarSecondRowEnabled = $0 }
+                ))
+                if store.menubarSecondRowEnabled {
+                    Picker("Second row shows", selection: Binding(
+                        get: { store.menubarSecondRowMetric },
+                        set: { store.menubarSecondRowMetric = $0 }
+                    )) {
+                        ForEach(MenubarSecondRowMetric.allCases) { metric in
+                            Text(metric.settingsLabel).tag(metric)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }

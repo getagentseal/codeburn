@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added (macOS)
+- **The macOS menubar item can show a second line.** Settings → General → Display gains a "Second row" switch, off by default, and a picker for what that line shows: quota remaining with its reset countdown for whichever connected provider is nearest its limit, today's all-provider cost, today's total tokens, or the number of running sessions. Both lines render as one attributed title at 9pt with their line height clamped to 10pt, so the pair fits the standard 22pt menu bar, and the second line hides itself whenever its metric has no data yet, leaving the existing single-row figure exactly as it was. This is a deliberately small first slice of the multi-row layout request: no layout editor, no presets, no live preview, no per-item provider or period scoping. The setting persists as `CodeBurnMenubarSecondRowEnabled` and `CodeBurnMenubarSecondRowMetric` in the app's own defaults domain alongside the existing menubar period, scope and metric keys. (#1252)
+
 ## 0.9.24 - 2026-09-04
 
 ### Added

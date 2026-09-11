@@ -332,6 +332,15 @@ defaults write org.agentseal.codeburn-menubar CodeBurnMenubarCompact -bool true
 
 Relaunch the app to apply. To revert: `defaults delete org.agentseal.codeburn-menubar CodeBurnMenubarCompact`.
 
+**Second row** adds an optional smaller line under the menubar figure. Turn it on in Settings → General → Display and pick what it shows: quota remaining with its reset countdown (for whichever connected provider is nearest its limit), today's cost, today's tokens, or running sessions. It is off by default, and the line hides itself while the chosen metric has no data, so the item falls back to its single-row figure. From Terminal:
+
+```bash
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarSecondRowEnabled -bool true
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarSecondRowMetric -string todayCost
+```
+
+Allowed metric values are `quotaRemaining`, `todayCost`, `todayTokens`, and `activeSessions`. Relaunch the app to apply external defaults changes.
+
 **Refresh cadence** is set in Settings under Usage Refresh. Auto (the default) refreshes every 30 seconds on AC power and backs off on battery, in Low Power Mode, and while the display sleeps; fixed 1, 5, or 15 minute cadences and a Manual mode (refresh only when you open the popover or click Refresh Now) are also available. From Terminal:
 
 ```bash

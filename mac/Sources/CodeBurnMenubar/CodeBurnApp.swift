@@ -979,6 +979,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             // currency switch instead of waiting for the next 30s payload tick.
             _ = self.store.currency
             _ = self.store.displayMetric
+            // Second-row settings: the title has to re-render the moment the
+            // toggle or its metric changes, not on the next payload tick.
+            _ = self.store.menubarSecondRowEnabled
+            _ = self.store.menubarSecondRowMetric
             _ = self.store.dailyBudget
             _ = self.store.dailyTokenBudget
             // Read the derived flag so the flame re-tints when today's usage
@@ -1237,8 +1241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     /// menubar text point size. With no tint it stays a template image so the system
     /// auto-adapts to the menu bar; a tint returns a recolored non-template copy for
     /// the budget/quota warning states.
-    private static func menubarFlameImage(tint: NSColor?) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: menubarTitleFontSize, weight: .medium)
+    private static func menubarFlameImage(
+        tint: NSColor?,
+        pointSize: CGFloat = menubarTitleFontSize
+    ) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
         guard let symbol = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: "CodeBurn")?
             .withSymbolConfiguration(config) else { return nil }
         guard let tint else {
@@ -1255,6 +1262,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         return recolored
     }
 
+    /// Typography for one rendering of the status-item title. `singleRow` holds
+    /// the historical constants, so the off state of the second-row setting
+    /// produces exactly the string this app has always rendered.
+    private struct MenubarTitleStyle {
+        let fontSize: CGFloat
+        let attachmentPointSize: CGFloat
+        let baselineOffset: CGFloat
+        let attachmentVerticalOffset: CGFloat
+
+        static let singleRow = MenubarTitleStyle(
+            fontSize: menubarTitleFontSize,
+            attachmentPointSize: menubarTitleFontSize,
+            baselineOffset: -1.0,
+            attachmentVerticalOffset: -3
+        )
+        static let twoRow = MenubarTitleStyle(
+            fontSize: MenubarRowTypography.twoRowFontSize,
+            attachmentPointSize: MenubarRowTypography.twoRowAttachmentPointSize,
+            baselineOffset: MenubarRowTypography.twoRowBaselineOffset,
+            attachmentVerticalOffset: MenubarRowTypography.twoRowAttachmentVerticalOffset
+        )
+    }
+
+    /// The button cell's single-line state as AppKit handed it to us, captured
+    /// before the two-row path ever touches it so turning the second row back
+    /// off restores the original rendering rather than a guessed default.
+    private var defaultTitleUsesSingleLineMode: Bool?
+    private var defaultTitleWraps: Bool?
+
     private func refreshStatusButton() {
         guard let button = statusItem.button else { return }
         // Skip while the popover is anchored to this button. Rewriting the
@@ -1269,7 +1305,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         button.image = nil
         button.imagePosition = .noImage
 
-        let font = NSFont.monospacedDigitSystemFont(ofSize: menubarTitleFontSize, weight: .regular)
+        // nil whenever the setting is off or the chosen metric has no data, in
+        // which case the title falls back to the single-row composition.
+        let secondRow = MenubarRowFormatter.secondRow(
+            settings: store.menubarRowSettings,
+            snapshot: store.menubarRowSnapshot
+        )
+        applyTitleLineMode(to: button, multiline: secondRow != nil)
+        button.attributedTitle = composeStatusTitle(
+            style: secondRow == nil ? .singleRow : .twoRow,
+            secondRow: secondRow
+        )
+
+        let menubarPeriod = store.menubarPeriod
+        if let shortfall = store.menubarBadgeDeviceShortfall {
+            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel) · \(shortfall.reachable) of \(shortfall.total) devices reporting"
+        } else {
+            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
+        }
+
+        persistBadgeStatusFile()
+    }
+
+    /// A multi-line attributed title only renders once the cell stops forcing a
+    /// single line. Both states are applied explicitly so toggling the setting
+    /// at runtime never leaves the cell in the other mode.
+    private func applyTitleLineMode(to button: NSStatusBarButton, multiline: Bool) {
+        guard let cell = button.cell else { return }
+        if defaultTitleUsesSingleLineMode == nil {
+            defaultTitleUsesSingleLineMode = cell.usesSingleLineMode
+            defaultTitleWraps = cell.wraps
+        }
+        if multiline {
+            cell.usesSingleLineMode = false
+            cell.wraps = true
+        } else {
+            cell.usesSingleLineMode = defaultTitleUsesSingleLineMode ?? false
+            cell.wraps = defaultTitleWraps ?? false
+        }
+    }
+
+    /// Composes the status-item title. With `secondRow` nil this is the original
+    /// single-row string, byte for byte; with a second row it renders the same
+    /// first line at the two-row point size and appends the extra line under a
+    /// paragraph style that clamps both lines into the menu bar's height.
+    private func composeStatusTitle(
+        style: MenubarTitleStyle,
+        secondRow: String?
+    ) -> NSAttributedString {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: style.fontSize, weight: .regular)
         // Tint the flame based on the worst-affected connected provider's quota.
         // Normal (<70%) keeps the template (auto white-on-dark / black-on-light);
         // warning/critical/danger override with a fixed palette color so the
@@ -1279,12 +1363,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         if tint == nil, store.isOverDailyBudget {
             tint = NSColor.systemYellow
         }
-        let flame = Self.menubarFlameImage(tint: tint)
+        let flame = Self.menubarFlameImage(tint: tint, pointSize: style.attachmentPointSize)
 
         let attachment = NSTextAttachment()
         attachment.image = flame
         if let size = flame?.size {
-            attachment.bounds = CGRect(x: 0, y: -3, width: size.width, height: size.height)
+            attachment.bounds = CGRect(
+                x: 0,
+                y: style.attachmentVerticalOffset,
+                width: size.width,
+                height: size.height
+            )
         }
 
         let menubarPeriod = store.menubarPeriod
@@ -1324,7 +1413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                     : " " + (cost?.asCompactCurrency() ?? fallback) + suffix
             }
 
-            var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: -1.0]
+            var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: style.baselineOffset]
             if !hasPayload {
                 textAttrs[.foregroundColor] = NSColor.secondaryLabelColor
             }
@@ -1337,21 +1426,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 let marker = " · \(shortfall.reachable)/\(shortfall.total)"
                 let markerAttrs: [NSAttributedString.Key: Any] = [
                     .font: font,
-                    .baselineOffset: -1.0,
+                    .baselineOffset: style.baselineOffset,
                     .foregroundColor: NSColor.secondaryLabelColor,
                 ]
                 composed.append(NSAttributedString(string: marker, attributes: markerAttrs))
             }
         }
 
-        button.attributedTitle = composed
-        if let shortfall = store.menubarBadgeDeviceShortfall {
-            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel) · \(shortfall.reachable) of \(shortfall.total) devices reporting"
-        } else {
-            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
-        }
+        guard let secondRow else { return composed }
 
-        persistBadgeStatusFile()
+        var secondRowAttrs: [NSAttributedString.Key: Any] = [.font: font]
+        if style.baselineOffset != 0 {
+            secondRowAttrs[.baselineOffset] = style.baselineOffset
+        }
+        composed.append(NSAttributedString(string: "\n" + secondRow, attributes: secondRowAttrs))
+
+        // Centre both lines against each other and clamp their height: the
+        // status item is only as tall as the menu bar, and an unclamped 9pt
+        // line box (with its natural leading) pushes the pair past 22pt, which
+        // AppKit resolves by clipping the second line away.
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+        paragraph.lineSpacing = 0
+        paragraph.paragraphSpacing = 0
+        paragraph.minimumLineHeight = MenubarRowTypography.twoRowLineHeight
+        paragraph.maximumLineHeight = MenubarRowTypography.twoRowLineHeight
+        composed.addAttribute(
+            .paragraphStyle,
+            value: paragraph,
+            range: NSRange(location: 0, length: composed.length)
+        )
+        return composed
     }
 
     private var lastWrittenBadgeGenerated: String?
