@@ -217,11 +217,17 @@ enum MenubarRowFormatter {
 /// The inline flame has to shrink too, and by more than the text does: a
 /// paragraph style clamps *text* line height but not an attachment, so a flame
 /// whose image is taller than the clamp drags line one — and the whole title —
-/// past the menu bar. These numbers were measured with
-/// `NSAttributedString.boundingRect` over every first-row and second-row
-/// combination the app renders; all of them come out at exactly
-/// `twoRowMeasuredHeight`. Raising the font size, the line height or the flame's
-/// point size breaks that, so change them together and re-measure.
+/// past the menu bar. `twoRowAttachmentBounds` is what actually holds that line,
+/// by scaling the image down to the clamp rather than trusting a point size to
+/// produce an image of a particular height.
+///
+/// The height AppKit then reports is *not* identical across macOS releases: the
+/// same composition measures 20pt on macOS 26 and 21pt on the CI runner,
+/// because SF Symbol metrics and line rounding move between releases. So the
+/// contract here is a fit, not an exact number — the pair has to fit the bar,
+/// and has to still look like two clamped lines rather than a collapsed one.
+/// AppKit's button cell centres whatever it measures inside the status item, so
+/// nothing needs to know the exact figure to place the rows.
 enum MenubarRowTypography {
     /// The historical single-row text size, for reference in tests.
     static let singleRowFontSize: CGFloat = 13
@@ -229,18 +235,43 @@ enum MenubarRowTypography {
     static let twoRowLineHeight: CGFloat = 10
     static let standardMenuBarThickness: CGFloat = 22
     static let twoRowBaselineOffset: CGFloat = 0
-    /// 8pt renders a 10pt-tall flame, which the -3pt offset seats inside the
-    /// clamped first line instead of pushing it taller.
+    /// Asks for a flame around the clamped line height; `twoRowAttachmentBounds`
+    /// is what guarantees it, since the rendered image size for a point size is
+    /// the system's business and has changed between releases.
     static let twoRowAttachmentPointSize: CGFloat = 8
     static let twoRowAttachmentVerticalOffset: CGFloat = -3
 
     static var twoRowTextHeight: CGFloat { twoRowLineHeight * 2 }
 
-    /// The height AppKit actually lays the two rows out at.
-    static let twoRowMeasuredHeight: CGFloat = 20
+    /// The tallest the pair may lay out: any more and the menu bar clips a row.
+    static let twoRowMaximumHeight: CGFloat = standardMenuBarThickness
+    /// A floor, so a lost paragraph clamp or a dropped second line is caught as
+    /// a regression instead of passing as "fits".
+    static let twoRowMinimumHeight: CGFloat = 18
 
-    /// True when both clamped lines fit inside a menu bar of this thickness.
-    static func fitsMenuBar(thickness: CGFloat = standardMenuBarThickness) -> Bool {
-        thickness > 0 && twoRowMeasuredHeight <= thickness
+    /// The box the inline flame occupies on the first line. The image is scaled
+    /// down to the clamped line height — never up — and seated by
+    /// `twoRowAttachmentVerticalOffset`, so a release whose SF Symbols render
+    /// taller than the one these numbers were measured on cannot push the title
+    /// out of the menu bar.
+    static func twoRowAttachmentBounds(imageSize: CGSize) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
+        let height = min(imageSize.height, twoRowLineHeight)
+        let width = imageSize.width * (height / imageSize.height)
+        return CGRect(x: 0, y: twoRowAttachmentVerticalOffset, width: width, height: height)
+    }
+
+    /// True when a measured two-row layout fits a menu bar of this thickness.
+    static func fitsMenuBar(
+        measuredHeight: CGFloat,
+        thickness: CGFloat = standardMenuBarThickness
+    ) -> Bool {
+        thickness > 0 && measuredHeight > 0 && measuredHeight <= thickness
+    }
+
+    /// True when a measured height is a plausible two-row layout: tall enough to
+    /// be two clamped lines, short enough for the standard bar.
+    static func isExpectedTwoRowHeight(_ measuredHeight: CGFloat) -> Bool {
+        measuredHeight >= twoRowMinimumHeight && measuredHeight <= twoRowMaximumHeight
     }
 }

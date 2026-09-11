@@ -1270,19 +1270,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         let attachmentPointSize: CGFloat
         let baselineOffset: CGFloat
         let attachmentVerticalOffset: CGFloat
+        /// Two rows only. The single row has the whole menu bar to itself, so its
+        /// flame keeps the image size the system hands back, exactly as before.
+        let clampsAttachmentToLineHeight: Bool
 
         static let singleRow = MenubarTitleStyle(
             fontSize: menubarTitleFontSize,
             attachmentPointSize: menubarTitleFontSize,
             baselineOffset: -1.0,
-            attachmentVerticalOffset: -3
+            attachmentVerticalOffset: -3,
+            clampsAttachmentToLineHeight: false
         )
         static let twoRow = MenubarTitleStyle(
             fontSize: MenubarRowTypography.twoRowFontSize,
             attachmentPointSize: MenubarRowTypography.twoRowAttachmentPointSize,
             baselineOffset: MenubarRowTypography.twoRowBaselineOffset,
-            attachmentVerticalOffset: MenubarRowTypography.twoRowAttachmentVerticalOffset
+            attachmentVerticalOffset: MenubarRowTypography.twoRowAttachmentVerticalOffset,
+            clampsAttachmentToLineHeight: true
         )
+
+        func attachmentBounds(imageSize: CGSize) -> CGRect {
+            guard clampsAttachmentToLineHeight else {
+                return CGRect(
+                    x: 0,
+                    y: attachmentVerticalOffset,
+                    width: imageSize.width,
+                    height: imageSize.height
+                )
+            }
+            return MenubarRowTypography.twoRowAttachmentBounds(imageSize: imageSize)
+        }
     }
 
     /// The button cell's single-line state as AppKit handed it to us, captured
@@ -1368,12 +1385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         let attachment = NSTextAttachment()
         attachment.image = flame
         if let size = flame?.size {
-            attachment.bounds = CGRect(
-                x: 0,
-                y: style.attachmentVerticalOffset,
-                width: size.width,
-                height: size.height
-            )
+            attachment.bounds = style.attachmentBounds(imageSize: size)
         }
 
         let menubarPeriod = store.menubarPeriod

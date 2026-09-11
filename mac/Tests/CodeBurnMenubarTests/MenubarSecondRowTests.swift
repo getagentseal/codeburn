@@ -288,25 +288,62 @@ struct MenubarSecondRowTests {
     func twoRowsFitMenuBar() {
         #expect(MenubarRowTypography.standardMenuBarThickness == 22)
         #expect(MenubarRowTypography.twoRowTextHeight == 20)
-        // The measured layout height must still equal the clamped text height:
-        // anything larger means the inline flame is dragging line one taller.
-        #expect(MenubarRowTypography.twoRowMeasuredHeight == MenubarRowTypography.twoRowTextHeight)
-        #expect(MenubarRowTypography.fitsMenuBar())
-        #expect(MenubarRowTypography.fitsMenuBar(thickness: 20))
-        #expect(!MenubarRowTypography.fitsMenuBar(thickness: 19))
-        #expect(!MenubarRowTypography.fitsMenuBar(thickness: 0))
+        #expect(MenubarRowTypography.twoRowMaximumHeight == MenubarRowTypography.standardMenuBarThickness)
+        #expect(MenubarRowTypography.twoRowMinimumHeight < MenubarRowTypography.twoRowTextHeight)
+        #expect(MenubarRowTypography.fitsMenuBar(measuredHeight: 20))
+        #expect(MenubarRowTypography.fitsMenuBar(measuredHeight: 21))
+        #expect(MenubarRowTypography.fitsMenuBar(measuredHeight: 20, thickness: 20))
+        #expect(!MenubarRowTypography.fitsMenuBar(measuredHeight: 20, thickness: 19))
+        #expect(!MenubarRowTypography.fitsMenuBar(measuredHeight: 23))
+        #expect(!MenubarRowTypography.fitsMenuBar(measuredHeight: 20, thickness: 0))
+        #expect(!MenubarRowTypography.fitsMenuBar(measuredHeight: 0))
+        // The exact figure moves between macOS releases (20pt on macOS 26, 21pt
+        // on the CI runner), so only the band is a contract.
+        #expect(MenubarRowTypography.isExpectedTwoRowHeight(20))
+        #expect(MenubarRowTypography.isExpectedTwoRowHeight(21))
+        #expect(!MenubarRowTypography.isExpectedTwoRowHeight(23))
+        #expect(!MenubarRowTypography.isExpectedTwoRowHeight(11))
         // The two-row text must be smaller than the single-row figure, or the
         // pair cannot be centred inside the menu bar at all.
         #expect(MenubarRowTypography.twoRowFontSize < MenubarRowTypography.singleRowFontSize)
         #expect(MenubarRowTypography.twoRowFontSize <= MenubarRowTypography.twoRowLineHeight)
-        // The flame is clamped by nothing, so it must be requested smaller than
-        // the text and seated back inside the line by a negative offset.
+        // The flame is clamped by nothing the paragraph style does, so it must be
+        // requested smaller than the text and seated by a negative offset.
         #expect(MenubarRowTypography.twoRowAttachmentPointSize < MenubarRowTypography.twoRowFontSize)
         #expect(MenubarRowTypography.twoRowAttachmentVerticalOffset < 0)
     }
 
-    @Test("the two rows AppKit lays out measure 20pt for every row combination")
-    func twoRowsMeasureTwentyPoints() {
+    @Test("the flame is scaled into the clamped line, never past it")
+    func attachmentBoundsClampToLineHeight() {
+        let clamp = MenubarRowTypography.twoRowLineHeight
+        let offset = MenubarRowTypography.twoRowAttachmentVerticalOffset
+
+        // An image at or under the clamp keeps its size.
+        let small = MenubarRowTypography.twoRowAttachmentBounds(imageSize: CGSize(width: 8, height: 10))
+        #expect(small == CGRect(x: 0, y: offset, width: 8, height: 10))
+
+        // A release whose SF Symbols render taller is scaled down, aspect kept,
+        // so line one cannot grow past its clamp.
+        let tall = MenubarRowTypography.twoRowAttachmentBounds(imageSize: CGSize(width: 12, height: 15))
+        #expect(tall.height == clamp)
+        #expect(tall.width == 8)
+        #expect(tall.origin.y == offset)
+
+        // Degenerate sizes produce an empty box rather than a division by zero.
+        #expect(MenubarRowTypography.twoRowAttachmentBounds(imageSize: .zero) == .zero)
+        #expect(MenubarRowTypography.twoRowAttachmentBounds(imageSize: CGSize(width: 8, height: 0)) == .zero)
+
+        // Whatever the image, the box never exceeds the clamp.
+        for height in stride(from: CGFloat(1), through: 40, by: 1) {
+            let bounds = MenubarRowTypography.twoRowAttachmentBounds(
+                imageSize: CGSize(width: height * 0.8, height: height)
+            )
+            #expect(bounds.height <= clamp)
+        }
+    }
+
+    @Test("the two rows AppKit lays out fit the menu bar for every row combination")
+    func twoRowsFitTheMenuBarForEveryRowCombination() {
         // Same composition the status item renders: an inline flame attachment at
         // the two-row point size, the badge text, then the second row under a
         // paragraph style that clamps both line heights.
@@ -324,12 +361,7 @@ struct MenubarSecondRowTests {
             let attachment = NSTextAttachment()
             attachment.image = flame
             if let size = flame?.size {
-                attachment.bounds = CGRect(
-                    x: 0,
-                    y: MenubarRowTypography.twoRowAttachmentVerticalOffset,
-                    width: size.width,
-                    height: size.height
-                )
+                attachment.bounds = MenubarRowTypography.twoRowAttachmentBounds(imageSize: size)
             }
             let composed = NSMutableAttributedString()
             composed.append(NSAttributedString(attachment: attachment))
@@ -353,13 +385,17 @@ struct MenubarSecondRowTests {
             ).height
         }
 
+        // The figure AppKit reports is release-dependent (20pt on macOS 26, 21pt
+        // on the CI runner), and nothing positions the rows off it — the button
+        // cell centres whatever it measures. So the contract is the band: it has
+        // to fit the bar, and it has to still be two clamped lines.
         let firstRows = [" $12.34", " ↑1.2M ↓340K / wk", " 2.4M / mo", ""]
         let secondRows = ["Claude 42% left · 3h 12m", "$0.00 today", "12 sess", "1.5M tok today"]
         for first in firstRows {
             for second in secondRows {
                 let height = measuredHeight(first: first, second: second)
-                #expect(height == MenubarRowTypography.twoRowMeasuredHeight)
-                #expect(height <= MenubarRowTypography.standardMenuBarThickness)
+                #expect(MenubarRowTypography.fitsMenuBar(measuredHeight: height))
+                #expect(MenubarRowTypography.isExpectedTwoRowHeight(height))
             }
         }
     }
