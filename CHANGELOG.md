@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Copilot live quota works for GitHub Enterprise Cloud enterprises on a `*.ghe.com` host.** Both readers hardcoded `https://api.github.com/copilot_internal/user` and threw away the host their credential came from, so a data-residency enterprise signed in on `<tenant>.ghe.com` could only ever report `available: false` with "Temporarily unavailable". A discovered credential now carries its host — `hosts.json` is keyed by host and newer `apps.json` files key by `<host>:<app id>` — and the request follows it: `api.github.com` for `github.com` and for any rung that carries no host of its own (an app-name `apps.json` key, `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, `gh auth token`, a pasted token), and `https://api.<tenant>.ghe.com/copilot_internal/user` for an enterprise host. The token and the host always come from the same entry, with `github.com` preferred when several hosts are signed in and otherwise the first `.ghe.com` tenant in sorted order; a host neither rule can address, such as a self-hosted GitHub Enterprise Server install, fails with a message naming that host instead of sending the credential to dotcom, and unreachable-host and HTTP failures name the host that was tried. The macOS Settings connection row now says which host answered. (#1286)
+
 ## 0.9.24 - 2026-09-04
 
 ### Added

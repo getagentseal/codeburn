@@ -1380,7 +1380,7 @@ private struct CopilotSettingsTab: View {
             }
             CopilotTokenSection()
             Section {
-                Text("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token.")
+                Text("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
@@ -1506,10 +1506,10 @@ private struct CopilotConnectionRow: View {
     private var stateDetail: String {
         switch store.copilotLoadState {
         case .loaded:
-            if let plan = store.copilotUsage?.plan {
-                return "Plan: \(plan)"
-            }
-            return "Live quota tracked from api.github.com."
+            return CopilotQuotaPresentation.connectedSettingsDetail(
+                plan: store.copilotUsage?.plan,
+                apiHost: store.copilotUsage?.apiHost ?? CopilotHostEndpoint.defaultAPIHost
+            )
         case .terminalFailure:
             return "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect."
         case .transientFailure: return store.copilotError ?? "GitHub rate-limited; auto-retrying."

@@ -315,8 +315,9 @@ surfaces, add a reader with a captured fixture.)
 ## Live quota (Copilot subscription)
 
 Separate from the log parser above: the macOS menubar reads live quota from
-`GET https://api.github.com/copilot_internal/user` with a GitHub token. Usage
-tracking never needs this token; only the quota bars do.
+`GET https://api.github.com/copilot_internal/user` with a GitHub token — or from
+the tenant's own host on GitHub Enterprise Cloud, see below. Usage tracking
+never needs this token; only the quota bars do.
 
 `mac/Sources/CodeBurnMenubar/Data/CopilotSubscriptionService.swift` walks an
 ordered, read-only chain and takes the first token it finds. Every rung
@@ -354,6 +355,30 @@ approximates rung 4 with an installed `gh` binary.
 
 The Electron surface (`app/electron/quota/copilot.ts`) still implements only
 rung 1.
+
+### GitHub Enterprise Cloud hosts (`*.ghe.com`)
+
+The endpoint is not fixed to dotcom. GitHub Enterprise Cloud with data
+residency puts an enterprise on its own hostname, `<tenant>.ghe.com`, whose API
+lives at `api.<tenant>.ghe.com`, and a token minted there is not valid on
+api.github.com. So a credential carries the host it was read from —
+`hosts.json` is keyed by host, and newer `apps.json` files key by
+`<host>:<app id>` — and the request goes to
+`https://api.<tenant>.ghe.com/copilot_internal/user` for an enterprise host and
+to `https://api.github.com/copilot_internal/user` for `github.com` or for any
+rung that carries no host of its own (an app-name `apps.json` key, the
+environment variables, `gh auth token`, a pasted token). The token and the host
+always come from the same entry: with several hosts signed in, `github.com`
+wins, otherwise the first `.ghe.com` tenant in sorted order, so the pick is
+stable across reads; with exactly one, that host is used. A host neither rule
+can address — a self-hosted GitHub Enterprise Server install, which CodeBurn
+does not support — fails with a message naming that host rather than falling
+back to api.github.com, because dotcom would reject the credential anyway and
+must never receive it. Unreachable-host and HTTP failures name the host tried,
+so the symptom is no longer a bare "Temporarily unavailable". Settings shows
+which host answered in the Copilot connection row. `CopilotHostEndpoint`
+(macOS) and the exported helpers in `src/quota/copilot.ts` (CLI) hold the
+derivation and the host pick.
 
 ## Caching
 

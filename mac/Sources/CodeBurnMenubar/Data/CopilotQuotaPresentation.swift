@@ -65,6 +65,15 @@ enum CopilotQuotaPresentation {
         }
     }
 
+    /// Settings connection-row detail for a loaded snapshot. It always names
+    /// the host that answered, so a GitHub Enterprise Cloud tenant can see its
+    /// own `api.<tenant>.ghe.com` endpoint rather than a dotcom claim (#1286).
+    static func connectedSettingsDetail(plan: String?, apiHost: String) -> String {
+        let host = apiHost.isEmpty ? CopilotHostEndpoint.defaultAPIHost : apiHost
+        guard let plan, !plan.isEmpty else { return "Live quota tracked from \(host)." }
+        return "Plan: \(plan). Live quota tracked from \(host)."
+    }
+
     static func settingsNotConnectedDetail(explicitlyDisconnected: Bool) -> String {
         explicitlyDisconnected ? disconnectedSettingsDetail : noCredentialsSettingsDetail
     }
