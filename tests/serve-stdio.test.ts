@@ -172,6 +172,7 @@ describe('codeburn serve --stdio', () => {
       [316, ['spend', '--format', 'flow-json', '--period', 'today']],
       [317, ['optimize', '--format', 'json', '--period', 'today']],
       [318, ['audit', '--format', 'json', '--period', 'today']],
+      [319, ['report', '--format', 'json', '--period', 'today']],
     ]
     for (const [id, args] of commands) {
       expect(await request(id, args)).toMatchObject({ ok: true })
@@ -191,10 +192,23 @@ describe('codeburn serve --stdio', () => {
       [336, ['spend', '--format', 'flow-json', '--period', 'today', '--project', '/nope']],
       [337, ['optimize', '--format', 'json', '--period', 'today', '--exclude', '/nope']],
       [338, ['audit', '--format', 'json', '--period', 'today', '--project', '/nope']],
+      [339, ['report', '--format', 'json', '--period', 'today', '--exclude', '/nope']],
     ]
     for (const [id, args] of commands) {
       expect(await request(id, args)).toMatchObject({ ok: true })
     }
+  }, 60_000)
+
+  // `report` is the interactive dashboard on every format but json, and a TUI
+  // inside a child whose stdout is the wire would write frames nobody can read.
+  // Only its JSON form is servable; the rest is refused and falls back to a
+  // one-shot spawn, which is where an interactive dashboard belongs.
+  it('serves the JSON report but refuses its interactive form', async () => {
+    expect(await request(340, ['report', '--format', 'json', '--period', 'today'])).toMatchObject({ ok: true })
+    expect(await request(341, ['report', '--period', 'today'])).toMatchObject({ ok: false, refused: true })
+    expect(await request(342, ['report', '--format', 'tui', '--period', 'today'])).toMatchObject({ ok: false, refused: true })
+    // --refresh only paces the dashboard, so it is not part of the served surface.
+    expect(await request(343, ['report', '--format', 'json', '--period', 'today', '--refresh', '60'])).toMatchObject({ ok: false, refused: true })
   }, 60_000)
 
   it('survives a malformed request line and keeps serving', async () => {

@@ -922,6 +922,20 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(files.serveEnvFile)).toBe('1')
   })
 
+  // The Projects pane's unfiltered list is the heaviest read in the app, and it
+  // was the one panel query that could not ride the resident child: `report` was
+  // in neither routing table, so every open paid a node boot plus a full
+  // session-cache parse and held one of the two run slots while it did.
+  it('routes the JSON report through the resident child instead of a cold spawn', async () => {
+    const files = fakeResidentBin()
+    startServe()
+
+    const result = await spawnCli(['report', '--format', 'json', '--period', 'lifetime'], { timeoutMs: 5_000 }) as { via: string }
+
+    expect(result).toMatchObject({ via: 'serve' })
+    expect(readMaybe(files.oneShotsFile)).toBe('')
+  })
+
   it('forwards serve progress frames through the read onStderr callback', async () => {
     fakeResidentBin()
     startServe()

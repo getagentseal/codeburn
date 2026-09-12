@@ -76,8 +76,14 @@ type ServeOptionKind = 'flag' | 'value'
 // than a shared denylist. If a command later gains a write-capable option it
 // remains a normal one-shot CLI action until it is explicitly reviewed here.
 // The entries mirror the Commander definitions in main.ts. In particular,
-// optimize omits its apply-only surface (--apply, --yes, --dry-run, --only).
+// optimize omits its apply-only surface (--apply, --yes, --dry-run, --only),
+// and report omits --refresh, which only paces the interactive dashboard.
 const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOptionKind>>>> = {
+  report: {
+    '-p': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
+    '--to': 'value', '--provider': 'value', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
+  },
   status: {
     '--format': 'value', '--scope': 'value', '--provider': 'value', '--project': 'value',
     '--exclude': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
@@ -158,6 +164,11 @@ function allowed(args: string[]): boolean {
     const value = args[++i]
     if (value === undefined || value.startsWith('-')) return false
   }
+
+  // `report` is the interactive dashboard on every format but json, and a TUI
+  // cannot run in a resident child whose stdout is the wire. Its JSON form is
+  // the only servable one; the rest is refused and falls back to a one-shot.
+  if (first === 'report' && readServeOption(args, '--format') !== 'json') return false
   return true
 }
 
