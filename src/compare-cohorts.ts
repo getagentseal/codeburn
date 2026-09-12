@@ -26,6 +26,7 @@ import { isBehavioralCall } from './behavioral-weight.js'
 import { callBillableOutputTokens } from './session-output.js'
 import { getShortModelName, isExpectedFreeModel } from './models.js'
 import { aggregateModelStats, findModelStat, type ModelStats } from './compare-stats.js'
+import { spendProjectIdentity } from './spend-flow.js'
 
 // The CLI's cohort branch resolves these through this one dynamic import; both
 // are the classic module's own implementations (single identity source).
@@ -162,7 +163,9 @@ export function extractCohortObservations(
         let cacheWriteTokens = 0
         let tokensReported = false
         for (const call of turn.assistantCalls) {
-          if (call.model !== model || !isBehavioralCall(call)) continue
+          // Supplementary accounting is weightless for requests, but retains
+          // real cost and tokens attributable to this observation's model.
+          if (call.model !== model) continue
           cost += call.costUSD
           const callInput = call.usage.inputTokens
           const callOutput = call.usage.outputTokens
@@ -363,7 +366,7 @@ export type CohortFacets = {
    *  picker shows, so both Compare modes agree on which models exist. */
   models: ModelStats[]
   /** Canonical project identities of the population. */
-  projects: Array<{ project: string; projectPath: string; sessions: number; costUSD: number }>
+  projects: Array<{ id: string; project: string; projectPath: string; sessions: number; costUSD: number }>
   categories: Array<{ id: TaskCategory; label: string }>
 }
 
@@ -417,14 +420,15 @@ export function buildCohortComparison(
 }
 
 export function buildCohortFacets(projects: ProjectSummary[]): CohortFacets {
-  const projectMap = new Map<string, { project: string; projectPath: string; sessions: number; costUSD: number }>()
+  const projectMap = new Map<string, { id: string; project: string; projectPath: string; sessions: number; costUSD: number }>()
   for (const p of projects) {
-    const existing = projectMap.get(p.project)
+    const { id } = spendProjectIdentity(p)
+    const existing = projectMap.get(id)
     if (existing) {
       existing.sessions += p.sessions.length
       existing.costUSD += p.totalCostUSD
     } else {
-      projectMap.set(p.project, { project: p.project, projectPath: p.projectPath, sessions: p.sessions.length, costUSD: p.totalCostUSD })
+      projectMap.set(id, { id, project: p.project, projectPath: p.projectPath, sessions: p.sessions.length, costUSD: p.totalCostUSD })
     }
   }
   return {
@@ -433,6 +437,14 @@ export function buildCohortFacets(projects: ProjectSummary[]): CohortFacets {
     projects: [...projectMap.values()].sort((a, b) => b.costUSD - a.costUSD),
     categories: cohortCategoryOptions(),
   }
+}
+
+/** Desktop selections name exact project identities. Keep the public CLI's
+ * loose --project patterns independent of this explicit selection. */
+export function selectCohortProjects(projects: ProjectSummary[], ids: readonly string[] = []): ProjectSummary[] {
+  if (ids.length === 0) return projects
+  const selected = new Set(ids)
+  return projects.filter(project => selected.has(spendProjectIdentity(project).id))
 }
 
 export function renderCohortJson(report: CohortComparisonReport | CohortFacets): string {

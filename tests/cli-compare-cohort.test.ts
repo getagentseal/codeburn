@@ -172,6 +172,31 @@ describe('compare --format cohort-json', () => {
     expect(report.modelB.stats.observationCount).toBe(0)
   })
 
+  it('selects an exact project id while preserving loose --project matching', async () => {
+    const home = await seedHome()
+    const siblingPath = '/Users/gone/alpha-backend'
+    const siblingDir = join(home, '.claude', 'projects', '-Users-gone-alpha-backend')
+    await mkdir(siblingDir, { recursive: true })
+    await writeFile(join(siblingDir, 's-sibling.jsonl'), [
+      userLine('s-sibling', siblingPath, 10),
+      assistantLine('s-sibling', siblingPath, OPUS, 9),
+    ].join('\n') + '\n')
+    const args = ['compare', '--format', 'cohort-json', '--period', '30days', '--model-a', OPUS, '--model-b', SONNET]
+    const exact = runCli([...args, '--project-id=/Users/gone/alpha'], home)
+    expect(exact.status).toBe(0)
+    const report = JSON.parse(exact.stdout) as CohortReport
+    expect(report.modelA.stats.observationCount).toBe(2)
+    expect(report.modelA.observations.every(o => o.project === '-Users-gone-alpha')).toBe(true)
+    const loose = runCli([...args, '--project', 'alpha'], home)
+    expect(loose.status).toBe(0)
+    expect(JSON.parse(loose.stdout).modelA.stats.observationCount).toBe(3)
+    const oneModel = runCli([...args, '--project-id=/Users/gone/alpha-backend'], home)
+    expect(oneModel.status).toBe(0)
+    const oneModelReport = JSON.parse(oneModel.stdout) as CohortReport
+    expect(oneModelReport.modelA.stats.observationCount).toBe(1)
+    expect(oneModelReport.modelB.stats.observationCount).toBe(0)
+  })
+
   it('rejects an unknown category with a usable message', async () => {
     const home = await seedHome()
     const result = runCli(['compare', '--format', 'cohort-json', '--period', '30days', '--category', 'not-a-category'], home)

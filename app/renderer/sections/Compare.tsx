@@ -385,7 +385,7 @@ function CohortCompare({
   const facets = usePolled(
     () => codeburn.getCompareCohortModels(period, provider, range ?? undefined),
     [period, provider, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('cohortmodels', period, provider, range) },
+    { enabled: ready, memoKey: reportMemoKey('cohortmodels-v2', period, provider, range) },
   )
 
   const [modelA, setModelA] = useState<string | null>(null)
@@ -402,7 +402,7 @@ function CohortCompare({
     // filtering silently: fall back to "all".
     setProject(current => {
       if (!current) return ''
-      return facets.data?.projects.some(p => p.project === current) ? current : ''
+      return facets.data?.projects.some(p => p.id === current) ? current : ''
     })
   }, [facets.data])
 
@@ -411,7 +411,7 @@ function CohortCompare({
     [period, provider, modelA, modelB, range?.from, range?.to, project, category, refreshToken],
     {
       enabled: ready && !!modelA && !!modelB && modelA !== modelB,
-      memoKey: reportMemoKey('cohort', period, provider, range, `${modelA}|${modelB}|${project}|${category}`),
+      memoKey: reportMemoKey('cohort-v2', period, provider, range, JSON.stringify([modelA, modelB, project, category])),
     },
   )
 
@@ -461,7 +461,7 @@ function CohortCompare({
           id="cohort-project"
           ariaLabel="Cohort project"
           value={project}
-          options={[{ value: '', label: 'All projects' }, ...facets.data.projects.map(p => ({ value: p.project, label: shortenProjectPath(p.project) }))]}
+          options={[{ value: '', label: 'All projects' }, ...facets.data.projects.map(p => ({ value: p.id, label: shortenProjectPath(p.id) }))]}
           onChange={setProject}
         />
         <Dropdown

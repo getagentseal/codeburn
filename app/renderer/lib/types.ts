@@ -690,7 +690,7 @@ export type CohortComparisonReport = {
 export type CohortFacets = {
   kind: 'cohort-facets'
   models: ModelStats[]
-  projects: Array<{ project: string; projectPath: string; sessions: number; costUSD: number }>
+  projects: Array<{ id: string; project: string; projectPath: string; sessions: number; costUSD: number }>
   categories: Array<{ id: string; label: string }>
 }
 
@@ -854,7 +854,7 @@ export interface CodeburnBridge {
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   /** Cohort mode facets: models, canonical projects, activity categories. */
   getCompareCohortModels(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<CohortFacets>
-  /** Cohort mode report for two models over an explicit selection. */
+  /** Cohort mode report; projects contains exact ids from CohortFacets. */
   getCompareCohort(period: Period, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string, background?: boolean): Promise<CohortComparisonReport>
   getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>
   getSpendFlow(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpendFlow>

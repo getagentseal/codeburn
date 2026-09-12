@@ -2248,9 +2248,14 @@ program
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--category <category>', 'cohort-json only: keep edit-turn observations of one activity category')
+  .option('--project-id <id>', 'cohort-json only: exact canonical project identity (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare')
     assertFormat(opts.format, ['tui', 'json', 'cohort-json'], 'compare')
+    if (opts.projectId.length > 0 && opts.format !== 'cohort-json') {
+      process.stderr.write('codeburn compare: --project-id requires --format cohort-json.\n')
+      process.exit(1)
+    }
     await loadPricing()
     const customRange = parseDateRangeFlags(opts.from, opts.to)
     const { range, label } = customRange
@@ -2258,10 +2263,10 @@ program
       : getDateRange(opts.period)
     if (opts.format === 'cohort-json') {
       if (opts.category !== undefined) assertCategory(opts.category)
-      const { aggregateModelStats, buildCohortComparison, buildCohortFacets, findModelStat, renderCohortJson } = await import('./compare-cohorts.js')
+      const { aggregateModelStats, buildCohortComparison, buildCohortFacets, findModelStat, renderCohortJson, selectCohortProjects } = await import('./compare-cohorts.js')
       const parsed = await parseAllSessions(range, opts.provider)
       await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
-      const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+      const projects = selectCohortProjects(filterProjectsByName(parsed, opts.project, opts.exclude), opts.projectId)
 
       // Without --model-a/--model-b the cohort format answers the FACET query:
       // the models, canonical project identities, and activity categories the
@@ -2274,7 +2279,9 @@ program
         process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
         process.exit(1)
       }
-      const models = aggregateModelStats(projects)
+      // Resolve against the same period/provider population as the desktop
+      // model picker. A selected project may have zero work for either model.
+      const models = aggregateModelStats(parsed)
       const modelA = findModelStat(models, opts.modelA)
       const modelB = findModelStat(models, opts.modelB)
       if (!modelA) {

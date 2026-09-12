@@ -16,6 +16,8 @@ on the same kind of work, over a population you can inspect?**
   calls inside the turn*. A session that used several models never transfers the
   cost of one model to another, and no session total is attributed to a
   "dominant" model.
+  Supplementary accounting for that model remains part of its cost and token
+  totals, without adding observations or changing behavioral ownership.
 * Edit turns whose behavioral calls span **two or more models** are excluded
   from both cohorts, counted, and shown with their combined cost.
 * An edit turn with no behavioral model call at all is excluded the same way.
@@ -61,6 +63,11 @@ codeburn compare --format cohort-json \
   [--project <name|path>]... [--exclude <name|path>]... \
   [--category coding]
 ```
+
+The desktop project picker uses the facet's canonical `id` and passes it as
+`--project-id=<id>` (repeatable, `cohort-json` only). This selects exactly one
+identity, so selecting `/work/app` cannot also include `/work/app-backend`.
+The CLI's existing `--project` option continues to accept loose name patterns.
 
 The **volume band** narrows the population to observations inside a token range
 (output, input, or the context proxy). A band explicitly excludes — and counts —

@@ -183,8 +183,9 @@ const facets = {
   kind: 'cohort-facets' as const,
   models: [modelA, modelB],
   projects: [
-    { project: '/work/app', projectPath: '/work/app', sessions: 1, costUSD: 10 },
-    { project: '/work/kit', projectPath: '/work/kit', sessions: 1, costUSD: 5 },
+    { id: '/work/app', project: '-work-app', projectPath: '/work/app', sessions: 1, costUSD: 10 },
+    { id: '/work/app-backend', project: '-work-app-backend', projectPath: '/work/app-backend', sessions: 1, costUSD: 5 },
+    { id: '/work/kit', project: '-work-kit', projectPath: '/work/kit', sessions: 1, costUSD: 5 },
   ],
   categories: [
     { id: 'coding', label: 'Coding' },

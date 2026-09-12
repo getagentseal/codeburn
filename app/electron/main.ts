@@ -165,17 +165,17 @@ function vToken(value: string): string {
   if (value.startsWith('-')) throw new CliError('bad-args', 'argument must not start with "-"')
   return value
 }
-// Project filter patterns reach the CLI as repeatable --project values. An
-// absolute path starts with "/", a loose word must not start with "-" (that
-// would read as a flag); anything else is refused before it becomes argv.
-function vProjectPatterns(projects: string[] | undefined): string[] {
+// Exact identities from the cohort facet report, not loose CLI patterns.
+// Keep the value attached to its flag so label-only ids starting with "-"
+// remain data; NUL is invalid in process argv.
+function vProjectIds(projects: string[] | undefined): string[] {
   if (!projects || projects.length === 0) return []
   for (const pattern of projects) {
-    if (typeof pattern !== 'string' || pattern.length === 0 || pattern.startsWith('-')) {
-      throw new CliError('bad-args', 'invalid project pattern')
+    if (typeof pattern !== 'string' || pattern.length === 0 || pattern.includes('\0')) {
+      throw new CliError('bad-args', 'invalid project identity')
     }
   }
-  return projects.flatMap(pattern => ['--project', pattern])
+  return projects.map(id => `--project-id=${id}`)
 }
 // Activity categories for the cohort selection: the ids behind the CLI's
 // --category (src/types.ts CATEGORY_LABELS keys). Duplicated here because the
@@ -416,14 +416,14 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     ]),
     // Cohort mode: the facet query (models/projects/categories) and the report
     // for two models over an explicit selection. Same `compare` command, new
-    // cohort-json format; --project stays repeatable, category is one id.
+    // cohort-json format; project identities are exact, category is one id.
     'codeburn:getCompareCohortModels': run((period: string, provider: string, range?: DateRange) => [
       'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getCompareCohort': run((period: string, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string) => [
       'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
       '--model-a', vToken(modelA), '--model-b', vToken(modelB), ...rangeArgs(vRange(range)),
-      ...(vProjectPatterns(projects)), ...(category ? ['--category', vCategory(category)] : []),
+      ...(vProjectIds(projects)), ...(category ? ['--category', vCategory(category)] : []),
     ], 7),
     'codeburn:getYield': run((period: string, provider: string, range?: DateRange) => [
       'yield', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),

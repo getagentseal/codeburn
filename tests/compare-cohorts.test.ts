@@ -8,6 +8,7 @@ import {
   extractCohortObservations,
   linearPercentile,
   medianOf,
+  selectCohortProjects,
   type CohortObservation,
 } from '../src/compare-cohorts.js'
 import { findModelStat } from '../src/compare-stats.js'
@@ -143,6 +144,21 @@ describe('percentile convention (pinned)', () => {
 // ————— Observation extraction —————
 
 describe('extractCohortObservations', () => {
+  it('retains supplementary spend and tokens without giving it behavioral ownership', () => {
+    const turn = makeTurn('opus-4-6', 1, { inputTokens: 100 })
+    turn.assistantCalls.push({
+      ...turn.assistantCalls[0]!, costUSD: 9, supplementaryAccounting: true,
+      usage: { ...turn.assistantCalls[0]!.usage, inputTokens: 900 },
+    }, {
+      ...turn.assistantCalls[0]!, model: 'sonnet-5', costUSD: 7, supplementaryAccounting: true,
+    })
+    const { perModel, exclusions } = extractCohortObservations({ projects: [makeProject('s1', [turn])] })
+    expect(perModel.get('opus-4-6')).toHaveLength(1)
+    expect(perModel.get('opus-4-6')![0]).toMatchObject({ costUSD: 10, inputTokens: 1000 })
+    expect(perModel.has('sonnet-5')).toBe(false)
+    expect(exclusions.multiModelTurns).toEqual([])
+  })
+
   it('owns an edit turn by its single behavioral model and attributes only that model\'s cost', () => {
     // One turn: opus behavioral call ($0.10) + sonnet behavioral call ($0.05)
     // would be MULTI-model; here instead: opus call costs 0.10, a second call
@@ -226,6 +242,19 @@ describe('extractCohortObservations', () => {
 })
 
 // ————— Cost semantics: unknown ≠ zero —————
+
+describe('canonical cohort project selection', () => {
+  it('keeps same-label projects distinct and selects exact identities without prefix matching', () => {
+    const projects = ['/work/app', '/work/app-backend', '/other/app'].map((projectPath, i) => ({
+      ...makeProject(`s${i}`, [makeTurn('opus-4-6', i + 1)], 'app'), projectPath,
+    }))
+    const facets = buildCohortFacets(projects)
+    expect(facets.projects.map(p => p.id).sort()).toEqual(projects.map(p => p.projectPath).sort())
+    expect(selectCohortProjects(projects, ['/work/app'])).toEqual([projects[0]])
+    expect(selectCohortProjects(projects, ['/work/app', '/other/app'])).toEqual([projects[0], projects[2]])
+    expect(selectCohortProjects(projects, ['app'])).toEqual([])
+  })
+})
 
 describe('unknown cost handling', () => {
   it('marks an unpriced model\'s $0 observations as unknown and keeps them out of cost stats but in retry stats', () => {
