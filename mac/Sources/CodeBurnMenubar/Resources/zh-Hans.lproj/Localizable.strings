@@ -1,0 +1,623 @@
+/* CodeBurn Menubar — 简体中文 (zh-Hans).
+ *
+ * Keys are the English development copy; see en.lproj/Localizable.strings for
+ * the conventions. Format specifiers (%@, %lld, %%) must stay identical to the
+ * English entry, in the same order — LocalizationCatalogTests fails the build
+ * otherwise, because a mismatch is a crash or a wrong number at runtime.
+ *
+ * Untranslated on purpose: provider, model and plan names (Claude, Codex,
+ * Gemini, Opus, Sonnet, Antigravity…), units, currency codes, shell commands
+ * and file paths, and anything the `codeburn` CLI produces.
+ */
+
+
+/* MARK: Currencies, filters, periods and insight tabs */
+"US Dollar" = "美元";
+"British Pound" = "英镑";
+"Euro" = "欧元";
+"Australian Dollar" = "澳元";
+"Canadian Dollar" = "加元";
+"New Zealand Dollar" = "新西兰元";
+"Japanese Yen" = "日元";
+"Chinese Yuan" = "人民币";
+"Swiss Franc" = "瑞士法郎";
+"Indian Rupee" = "印度卢比";
+"Brazilian Real" = "巴西雷亚尔";
+"Swedish Krona" = "瑞典克朗";
+"Singapore Dollar" = "新加坡元";
+"Hong Kong Dollar" = "港元";
+"South Korean Won" = "韩元";
+"Mexican Peso" = "墨西哥比索";
+"South African Rand" = "南非兰特";
+"Danish Krone" = "丹麦克朗";
+"Romanian Leu" = "罗马尼亚列伊";
+"All" = "全部";
+"Plan" = "套餐";
+"Trend" = "趋势";
+"Forecast" = "预测";
+"Calendar" = "日历";
+"Pulse" = "效率";
+"Stats" = "统计";
+"Optimize" = "优化";
+"Today" = "今天";
+"7D" = "7天";
+"30D" = "30天";
+"Month" = "本月";
+"6M" = "6个月";
+"Life" = "累计";
+"Week" = "本周";
+"30 Days" = "30 天";
+"6 Months" = "6 个月";
+"Lifetime" = "累计";
+
+/* MARK: Scope toggle */
+"Local" = "本机";
+"Combined" = "合并";
+
+/* MARK: Accent presets */
+"Ember" = "余烬";
+"Blue" = "蓝色";
+"Purple" = "紫色";
+"Pink" = "粉色";
+"Red" = "红色";
+"Orange" = "橙色";
+"Yellow" = "黄色";
+"Green" = "绿色";
+"Graphite" = "石墨色";
+
+/* MARK: Session counts */
+"Older session logs may be unavailable." = "较早的会话日志可能不可用。";
+"Session identities are unavailable across devices." = "跨设备无法识别会话身份。";
+"Session count unavailable" = "会话数不可用";
+"At least 1 session" = "至少 1 个会话";
+"At least %lld sessions" = "至少 %lld 个会话";
+"1 session" = "1 个会话";
+"%lld sessions" = "%lld 个会话";
+"Unavailable" = "不可用";
+"≥%lld sess" = "≥%lld 会话";
+"%lld sess" = "%lld 会话";
+
+/* MARK: Quota windows and reset countdowns */
+"Connect" = "连接";
+"Reconnect" = "重新连接";
+"Add API Key" = "添加 API 密钥";
+"now" = "现在";
+"%lldd %lldh" = "%lld 天 %lld 小时";
+"%lldh %lldm" = "%lld 小时 %lld 分";
+"%lldm" = "%lld 分";
+
+/* MARK: Usage refresh cadence */
+"Auto (2m, less on battery)" = "自动（2 分钟，使用电池时更慢）";
+"Manual" = "手动";
+"1 minute" = "1 分钟";
+"5 minutes" = "5 分钟";
+"15 minutes" = "15 分钟";
+
+/* MARK: Quota refresh cadence */
+"2 minutes" = "2 分钟";
+
+/* MARK: Capacity Dock appearance */
+"Liquid Glass" = "液态玻璃";
+"Circle" = "圆形";
+"Squircle" = "圆角方形";
+
+/* MARK: Provider connection guidance */
+"Installed app or CLI" = "已安装的应用或命令行工具";
+"OAuth" = "OAuth";
+"API or cloud credentials" = "API 或云凭证";
+"Browser session" = "浏览器会话";
+"Localhost service" = "本地服务";
+"No sign-in required" = "无需登录";
+"Enter an API key or token below, then press Save & Connect." = "在下方输入 API 密钥或令牌，然后点按“存储并连接”。";
+"Sign in to %@ in a supported browser, then click Retry." = "在受支持的浏览器中登录 %@，然后点按“重试”。";
+"Sign in with the %@ app or CLI, then click Retry." = "通过 %@ 应用或命令行工具登录，然后点按“重试”。";
+"Complete %@ OAuth, then click Retry." = "完成 %@ 的 OAuth 授权，然后点按“重试”。";
+"Start the local %@ service, then click Retry." = "启动本地 %@ 服务，然后点按“重试”。";
+"Enter the required API or cloud credentials below, then press Save & Connect." = "在下方填入所需的 API 或云凭证，然后点按“存储并连接”。";
+"No sign-in is required. Click Retry to refresh quota." = "无需登录。点按“重试”即可刷新配额。";
+"Add an API key or token in Provider Settings." = "请在服务商设置中添加 API 密钥或令牌。";
+"Add the required API or cloud credentials in Provider Settings." = "请在服务商设置中填入所需的 API 或云凭证。";
+
+/* MARK: Provider reconnect copy */
+"Reconnect %@" = "重新连接 %@";
+"Claude Code credentials need to be refreshed." = "Claude Code 凭证需要刷新。";
+"Open Claude Code in your terminal and type `/login`, then click Reconnect." = "在终端中打开 Claude Code 并输入 `/login`，然后点按“重新连接”。";
+"Codex credentials need to be refreshed." = "Codex 凭证需要刷新。";
+"Run `codex login` in your terminal, then click Reconnect." = "在终端中运行 `codex login`，然后点按“重新连接”。";
+"Kimi Code credentials need to be refreshed." = "Kimi Code 凭证需要刷新。";
+"Run the Kimi CLI once to refresh your login, then click Reconnect." = "运行一次 Kimi 命令行工具以刷新登录，然后点按“重新连接”。";
+"Gemini credentials need to be refreshed." = "Gemini 凭证需要刷新。";
+"Run the Gemini CLI once to refresh your login, then click Reconnect." = "运行一次 Gemini 命令行工具以刷新登录，然后点按“重新连接”。";
+"Copilot credentials need to be refreshed." = "Copilot 凭证需要刷新。";
+"Sign in with the Copilot CLI, an editor plugin, or `gh auth login`, then click Reconnect." = "通过 Copilot 命令行工具、编辑器插件或 `gh auth login` 登录，然后点按“重新连接”。";
+"The local Antigravity service is unavailable." = "本地 Antigravity 服务不可用。";
+"Start the Antigravity app, then click Reconnect." = "启动 Antigravity 应用，然后点按“重新连接”。";
+"%@ credentials need to be refreshed." = "%@ 凭证需要刷新。";
+"Sign in to %@ again, then retry." = "请重新登录 %@，然后重试。";
+
+/* MARK: Copilot quota copy */
+"No Copilot credentials found" = "未找到 Copilot 凭证";
+"Sign in via an editor's Copilot plugin first. Then click Try Again." = "请先通过编辑器的 Copilot 插件登录，然后点按“再试一次”。";
+"Copilot quota tracking disconnected" = "已断开 Copilot 配额跟踪";
+"Your Copilot credentials are untouched. Click Connect to resume." = "你的 Copilot 凭证不会受到影响。点按“连接”即可恢复。";
+"Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect." = "用量跟踪仍然有效。如需实时配额，请通过 Copilot 命令行工具或 gh auth login 登录，或在下方粘贴令牌，然后点按“连接”。";
+"Quota tracking disconnected. Credentials are untouched. Click Connect to resume." = "已断开配额跟踪。凭证不会受到影响。点按“连接”即可恢复。";
+
+/* MARK: Updates */
+"Update Check Failed" = "检查更新失败";
+"CLI Update Failed" = "命令行工具更新失败";
+"Menubar Update Failed" = "菜单栏应用更新失败";
+"CodeBurn could not check GitHub for updates." = "CodeBurn 无法从 GitHub 检查更新。";
+"CodeBurn could not update the CLI." = "CodeBurn 无法更新命令行工具。";
+"CodeBurn could not update the menubar app." = "CodeBurn 无法更新菜单栏应用。";
+"Click to retry the update check." = "点按以重新检查更新。";
+"Click to retry the update." = "点按以重新尝试更新。";
+"Updating..." = "正在更新…";
+"Update" = "更新";
+"Update the CLI and menubar to the latest release" = "将命令行工具和菜单栏应用更新到最新版本";
+"CodeBurn %@ available" = "CodeBurn %@ 可用";
+"App and CLI %@ updates are ready. Click to install." = "应用与命令行工具 %@ 更新已就绪。点按以安装。";
+"Click to install the update." = "点按以安装更新。";
+"CodeBurn CLI %@ available" = "CodeBurn 命令行工具 %@ 可用";
+"Could not find the package manager for %@. Run “%@” manually, then try again." = "找不到 %@ 对应的包管理器。请手动运行“%@”，然后重试。";
+"the CLI" = "命令行工具";
+"CLI update failed (exit %lld)" = "命令行工具更新失败（退出码 %lld）";
+"Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again." = "你的 codeburn 命令行工具（%@）版本过旧，无法更新菜单栏应用。请先运行“%@”，然后重试。";
+"Update failed (exit %lld)" = "更新失败（退出码 %lld）";
+"GitHub returned HTTP %lld." = "GitHub 返回 HTTP %lld。";
+"No mac-v release with a menubar zip and checksum was found." = "未找到包含菜单栏 zip 与校验和的 mac-v 版本。";
+
+/* MARK: Terminal picker */
+"Terminal (macOS default)" = "终端（macOS 默认）";
+
+/* MARK: Status-item menu, tooltip and update alerts */
+"%@ credits" = "%@ 点数";
+"CodeBurn %@ · %lld of %lld devices reporting" = "CodeBurn %@ · %lld/%lld 台设备已上报";
+"Settings…" = "设置…";
+"Capacity Dock Settings…" = "容量 Dock 设置…";
+"Refresh Now" = "立即刷新";
+"Check for Updates" = "检查更新";
+"About CodeBurn" = "关于 CodeBurn";
+"Quit CodeBurn" = "退出 CodeBurn";
+"Today · no usage yet" = "今天 · 暂无用量";
+"1 call" = "1 次调用";
+"%lld calls" = "%lld 次调用";
+"Today · %@ · %@" = "今天 · %@ · %@";
+"CodeBurn Settings" = "CodeBurn 设置";
+"Update Available" = "有可用更新";
+"%@ is available (you have %@)." = "%@ 已发布（你当前为 %@）。";
+"%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force" = "%@ 你的 codeburn 命令行工具版本过旧，无法安装。请先运行：\n\n%@\n\n然后：\n\ncodeburn menubar --force";
+"%@ Run:\n\ncodeburn menubar --force" = "%@ 运行：\n\ncodeburn menubar --force";
+"Up to Date" = "已是最新版本";
+"You're on the latest version (%@)." = "你已使用最新版本（%@）。";
+"OK" = "好";
+
+/* MARK: Popover chrome, header, footer and banners */
+"This total may be incomplete." = "此总计可能不完整。";
+"Claude config" = "Claude 配置";
+"No %@ data for %@" = "%@ 在%@没有数据";
+"Couldn't load %@" = "无法载入%@";
+"Retry" = "重试";
+"Loading %@…" = "正在载入%@…";
+"Your AI Bill, Itemized" = "你的 AI 账单，逐项明细";
+"%@ over limit (%lld%%)" = "%@ 已超限（%lld%%）";
+"%@ of quota used" = "已用配额 %@";
+"Change accent color" = "更改主题色";
+"CLI %@ available" = "命令行工具 %@ 可用";
+"Update now" = "立即更新";
+"Update the CLI (and the menubar if one is available) automatically" = "自动更新命令行工具（以及可用的菜单栏应用）";
+"Copy update command to clipboard" = "将更新命令复制到剪贴板";
+"Enjoying CodeBurn?" = "喜欢 CodeBurn 吗？";
+"Star us on GitHub" = "在 GitHub 上点个 Star";
+"Hide this banner" = "隐藏此横幅";
+"CSV (folder)" = "CSV（文件夹）";
+"JSON" = "JSON";
+"Export" = "导出";
+"Full Report" = "完整报告";
+
+/* MARK: Hero section */
+"%@ call" = "%@ 次调用";
+"%@ calls" = "%@ 次调用";
+"Daily budget of %@ exceeded" = "已超出每日预算 %@";
+"Combined unavailable · showing local" = "合并数据不可用 · 显示本机数据";
+"Combined · %@" = "合并 · %@";
+"Saved %@ with local models" = "使用本地模型节省了 %@";
+"%lld of %lld devices" = "%lld/%lld 台设备";
+"%@ · local" = "%@ · 本机";
+
+/* MARK: Period strip and date picker */
+"Clear" = "清除";
+"Done" = "完成";
+"Pick dates" = "选择日期";
+"1 day" = "1 天";
+"%lld days" = "%lld 天";
+
+/* MARK: Provider tab strip and quota popover */
+"Show previous providers" = "显示上一组服务商";
+"Show next providers" = "显示下一组服务商";
+"Loading…" = "正在载入…";
+"Sign in with `codex` (ChatGPT mode) to track quota." = "使用 `codex`（ChatGPT 模式）登录以跟踪配额。";
+"Sign in to Claude Code to track quota." = "登录 Claude Code 以跟踪配额。";
+"Sign in to track quota." = "登录以跟踪配额。";
+"%@ usage" = "%@ 用量";
+"stale" = "已过期";
+"retrying" = "正在重试";
+
+/* MARK: Activity section */
+"Activity" = "活动";
+"Cost" = "花费";
+"Turns" = "轮次";
+"1-shot" = "一次通过";
+
+/* MARK: Models section */
+"Models" = "模型";
+"Saved" = "已节省";
+"Calls" = "调用";
+"Tokens" = "Token";
+"%@ in" = "输入 %@";
+"%@ out" = "输出 %@";
+"%@%% cache hit" = "缓存命中 %@%%";
+
+/* MARK: Pull requests section */
+"Pull requests" = "拉取请求";
+
+/* MARK: Tooling section */
+"Tooling" = "工具链";
+"Tools" = "工具";
+"Skills & Agents" = "技能与子代理";
+"MCP Servers" = "MCP 服务器";
+
+/* MARK: Tips section */
+"Tips for you" = "为你的建议";
+"%lld signals" = "%lld 条信号";
+"Open Full Optimize" = "打开完整优化报告";
+"Cache hit at %lld%% — most prompts reuse cache" = "缓存命中率 %lld%% — 多数提示复用了缓存";
+"%lld%% one-shot — edits landing first try" = "一次通过率 %lld%% — 编辑大多一次成功";
+"Spend down %lld%% vs last 7 days" = "支出较前 7 天下降 %lld%%";
+"%lld-day usage streak" = "已连续使用 %lld 天";
+"Spend up %lld%% vs prior 7 days" = "支出较前 7 天上升 %lld%%";
+"Cache hit only %lld%% — paying for cold prompts" = "缓存命中率仅 %lld%% — 正在为冷提示付费";
+"%lld%% one-shot — lots of iteration" = "一次通过率 %lld%% — 反复修改较多";
+"On pace for %@ this month (+%lld%% vs last)" = "按当前速度本月将达 %@（较上月 +%lld%%）";
+"What's working" = "做得好的";
+"What to improve" = "可以改进的";
+"Risks" = "风险";
+
+/* MARK: Insight tabs (trend, calendar, forecast, pulse, stats, optimize, plan) */
+"Last %lld days" = "最近 %lld 天";
+"%@%% vs prior %lldd" = "%@%% 较前 %lld 天";
+"Avg/day" = "日均";
+"Peak" = "峰值";
+"Yesterday" = "昨天";
+"%@ tokens" = "%@ Token";
+"%@ on %@" = "%@（%@）";
+"Daily activity" = "每日活动";
+"%lld active days" = "%lld 个活跃日";
+"Peak day" = "峰值日";
+"Avg active" = "活跃日均值";
+"Streak" = "连续天数";
+"%lldd" = "%lld 天";
+"Mon" = "一";
+"Wed" = "三";
+"Fri" = "五";
+"Sun" = "日";
+"Daily detail" = "每日明细";
+"Hover a day" = "悬停查看某天";
+"Future day" = "未来日期";
+"No tracked usage" = "无跟踪到的用量";
+"%@: future day" = "%@：未来日期";
+"%@: no tracked usage" = "%@：无跟踪到的用量";
+"%@: %@, %lld calls, %@ tokens" = "%@：%@，%lld 次调用，%@ Token";
+"Month-to-date" = "本月至今";
+"On pace for" = "预计本月";
+"Avg/day (this wk)" = "日均（本周）";
+"Last 7d" = "最近 7 天";
+"no prior month" = "无上月数据";
+"%@%% vs last month (%@)" = "%@%% 较上月（%@）";
+"Cache hit" = "缓存命中";
+"Cost / session" = "每会话花费";
+"Cost/edit" = "每次编辑花费";
+"Save ~%@ / ~%@ tokens · 1 finding" = "可省约 %@ / 约 %@ Token · 1 项建议";
+"Save ~%@ / ~%@ tokens · %lld findings" = "可省约 %@ / 约 %@ Token · %lld 项建议";
+"Favorite model" = "最常用模型";
+"Active days (month)" = "活跃天数（本月）";
+"Most active day" = "最活跃的一天";
+"Peak day spend" = "峰值日支出";
+"Sessions" = "会话";
+"Current streak" = "当前连续";
+"Longest streak" = "最长连续";
+"Tracked spend (last %lld days)" = "已跟踪支出（最近 %lld 天）";
+"Costliest session" = "花费最高的会话";
+"Retry tax" = "重试成本";
+"%lld retries across %lld edits" = "%lld 次重试，涉及 %lld 次编辑";
+"%@ ret/edit" = "%@ 次重试/编辑";
+"Hides session details" = "隐藏会话详情";
+"Shows session details" = "显示会话详情";
+"Expanded" = "已展开";
+"Collapsed" = "已折叠";
+"  %lld call" = "  %lld 次调用";
+"  %lld calls" = "  %lld 次调用";
+"Potential savings" = "潜在节省";
+"%lld%% of spend" = "占支出 %lld%%";
+"could be optimized" = "可以优化";
+"Routing waste" = "路由浪费";
+"vs %@ @ %@/edit" = "对比 %@（%@/次编辑）";
+"Connect Claude subscription" = "连接 Claude 订阅";
+"CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically." = "CodeBurn 只会读取一次你的 Claude Code 凭证，macOS 会请求授权。之后实时配额条会显示在 Claude 标签旁并自动更新。";
+"Reading Claude credentials..." = "正在读取 Claude 凭证…";
+"No Claude credentials found" = "未找到 Claude 凭证";
+"Sign in with Claude Code first: open `claude` in your terminal and type `/login`. Then click Try Again." = "请先登录 Claude Code：在终端中打开 `claude` 并输入 `/login`，然后点按“再试一次”。";
+"Anthropic temporarily unreachable. Retrying." = "暂时无法连接 Anthropic，正在重试。";
+"Reconnect Claude" = "重新连接 Claude";
+"Your Claude session has expired. Open Claude Code in your terminal and type `/login`, then click Reconnect." = "你的 Claude 会话已过期。在终端中打开 Claude Code 并输入 `/login`，然后点按“重新连接”。";
+"Resets %@" = "%@重置";
+"5-hour window" = "5 小时窗口";
+"7-day total" = "7 天总计";
+"7-day Opus" = "7 天 Opus";
+"7-day Sonnet" = "7 天 Sonnet";
+"7-day %@" = "7 天 %@";
+"Try Again" = "再试一次";
+"Couldn't load plan data" = "无法载入套餐数据";
+"Connect ChatGPT subscription" = "连接 ChatGPT 订阅";
+"CodeBurn will read your Codex CLI credentials once. After that, the live quota bar shows next to the Codex tab and updates automatically." = "CodeBurn 只会读取一次你的 Codex 命令行工具凭证。之后实时配额条会显示在 Codex 标签旁并自动更新。";
+"Reading Codex CLI credentials..." = "正在读取 Codex 命令行工具凭证…";
+"No Codex credentials found" = "未找到 Codex 凭证";
+"Sign in with Codex first: run `codex login` in your terminal. Then click Try Again." = "请先登录 Codex：在终端中运行 `codex login`，然后点按“再试一次”。";
+"ChatGPT temporarily unreachable. Retrying." = "暂时无法连接 ChatGPT，正在重试。";
+"Reconnect Codex" = "重新连接 Codex";
+"Your ChatGPT session has expired. Run `codex login` in your terminal, then click Reconnect." = "你的 ChatGPT 会话已过期。在终端中运行 `codex login`，然后点按“重新连接”。";
+"%@ window" = "%@ 窗口";
+"Credits" = "点数";
+"Unlimited" = "无限制";
+"Limit resets" = "限额重置";
+"%lld available" = "%lld 个可用";
+"%@ · next expires %@" = "%@ · 下一个将于%@过期";
+"No Kimi Code credentials found" = "未找到 Kimi Code 凭证";
+"Sign in with the Kimi CLI first. Then click Try Again." = "请先通过 Kimi 命令行工具登录，然后点按“再试一次”。";
+"Reading Kimi Code credentials..." = "正在读取 Kimi Code 凭证…";
+"Kimi temporarily unreachable. Retrying." = "暂时无法连接 Kimi，正在重试。";
+"Refresh Kimi Code login" = "刷新 Kimi Code 登录";
+"Kimi Code tokens are short-lived. Run the Kimi CLI once to refresh your login, then click Reconnect." = "Kimi Code 的令牌有效期很短。运行一次 Kimi 命令行工具以刷新登录，然后点按“重新连接”。";
+"Parallel sessions" = "并行会话";
+"Login idle. Run the Kimi CLI to refresh." = "登录已闲置。运行 Kimi 命令行工具以刷新。";
+"as of %@" = "截至 %@";
+"No Gemini credentials found" = "未找到 Gemini 凭证";
+"Sign in with the Gemini CLI first. Then click Try Again." = "请先通过 Gemini 命令行工具登录，然后点按“再试一次”。";
+"Reading Gemini credentials..." = "正在读取 Gemini 凭证…";
+"Gemini temporarily unreachable. Retrying." = "暂时无法连接 Gemini，正在重试。";
+"Refresh Gemini login" = "刷新 Gemini 登录";
+"Your Gemini login has expired. Run the Gemini CLI once to refresh it, then click Reconnect." = "你的 Gemini 登录已过期。运行一次 Gemini 命令行工具以刷新，然后点按“重新连接”。";
+"Login idle. Run the Gemini CLI to refresh." = "登录已闲置。运行 Gemini 命令行工具以刷新。";
+"Reading Copilot credentials..." = "正在读取 Copilot 凭证…";
+"GitHub temporarily unreachable. Retrying." = "暂时无法连接 GitHub，正在重试。";
+"Refresh Copilot login" = "刷新 Copilot 登录";
+"Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect." = "你的 Copilot 登录已过期。请重新通过编辑器的 Copilot 插件登录，然后点按“重新连接”。";
+"Login idle. Sign in via an editor's Copilot plugin to refresh." = "登录已闲置。通过编辑器的 Copilot 插件登录以刷新。";
+"No local Antigravity server found" = "未找到本地 Antigravity 服务";
+"Start the Antigravity app, then click Try Again." = "启动 Antigravity 应用，然后点按“再试一次”。";
+"Probing the local Antigravity server..." = "正在探测本地 Antigravity 服务…";
+"Local Antigravity server unreachable. Retrying." = "无法连接本地 Antigravity 服务，正在重试。";
+"Reconnect Antigravity" = "重新连接 Antigravity";
+"Server disconnected. Start the Antigravity app to refresh." = "服务已断开。启动 Antigravity 应用以刷新。";
+"On pace" = "符合节奏";
+"On pace: %@ at reset" = "符合节奏：重置时 %@";
+"%@%% in deficit" = "超出 %@%%";
+"%@%% in reserve" = "结余 %@%%";
+"%@ · hits 100%% %@" = "%@ · %@达到 100%%";
+"%@ · %@ at reset" = "%@ · 重置时 %@";
+"On pace: %@ at reset · hits 100%% %@" = "符合节奏：重置时 %@ · %@达到 100%%";
+"Based on last cycle: %@" = "按上一周期估算：%@";
+"in %lldm" = "%lld 分钟后";
+"in %lldh" = "%lld 小时后";
+"in %lldd" = "%lld 天后";
+
+/* MARK: Capacity Dock */
+"Dock to Edge" = "停靠到边缘";
+"Left" = "左侧";
+"Right" = "右侧";
+"Top" = "顶部";
+"Bottom" = "底部";
+"Hide Capacity Dock" = "隐藏容量 Dock";
+"Capacity Dock" = "容量 Dock";
+"Unknown" = "未知";
+"Click to keep Capacity Dock expanded" = "点按以保持容量 Dock 展开";
+"Click to switch between this provider's usage windows" = "点按以在该服务商的用量周期之间切换";
+/* 服务商单元格的 VoiceOver 操作。周期名称来自服务商，保持原样。 */
+"Show %@ usage" = "显示 %@ 用量";
+"none running" = "无运行中";
+"1 running" = "1 个运行中";
+"%lld running" = "%lld 个运行中";
+"%@ left" = "剩余 %@";
+"burned" = "已消耗";
+"today %@ of %@" = "今天 %@ / %@";
+"no budget set" = "未设置预算";
+"Refreshing…" = "正在刷新…";
+"Last known usage · refreshing" = "最近已知用量 · 正在刷新";
+"Last known usage · retrying" = "最近已知用量 · 正在重试";
+"Not connected" = "未连接";
+"Reconnect required" = "需要重新连接";
+
+/* MARK: Settings */
+"General" = "通用";
+"Providers" = "服务商";
+"%lld on" = "%lld 个已开启";
+"About" = "关于";
+"Settings" = "设置";
+"Search providers" = "搜索服务商";
+"Enter an amount above, or the alert stays off." = "请在上方输入金额，否则提醒不会生效。";
+"Flame icon turns yellow when today's tokens pass the daily budget." = "当今天的 Token 超过每日预算时，火焰图标会变为黄色。";
+"Flame icon turns yellow when today's cost pass the daily budget." = "当今天的花费超过每日预算时，火焰图标会变为黄色。";
+"Display" = "显示";
+"Currency" = "货币";
+"Metric" = "指标";
+"Cost ($)" = "花费（$）";
+"Tokens (↑↓)" = "Token（↑↓）";
+"Total Tokens" = "Token 总计";
+"Credits (Codex)" = "点数（Codex）";
+"Icon Only" = "仅图标";
+"Period" = "时间范围";
+"Scope" = "范围";
+"Accent" = "主题色";
+"Usage Refresh" = "用量刷新";
+"Update every" = "更新间隔";
+"How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now." = "菜单栏数字重新读取本机会话数据的频率。“自动”在接通电源时每 30 秒刷新一次，使用电池时会放慢；“手动”仅在你打开弹窗或点按“立即刷新”时刷新。";
+"Updates" = "更新";
+"Notify me about updates" = "有更新时通知我";
+"Posts a notification when a new CodeBurn release is available. Click it to install." = "当有新的 CodeBurn 版本发布时发送通知。点按通知即可安装。";
+"Terminal" = "终端";
+"Open commands in" = "命令打开方式";
+"%@ (not installed)" = "%@（未安装）";
+"Where Full Report and Optimize open. If the chosen app isn't installed CodeBurn falls back to Terminal; if that's missing too the command runs in the background. Only terminals that can script a command into a live window are listed." = "“完整报告”和“优化”的打开位置。如果所选应用未安装，CodeBurn 会回退到“终端”；若“终端”也不存在，命令将在后台运行。此处仅列出能够将命令写入活动窗口的终端。";
+"Alerts" = "提醒";
+"Daily budget" = "每日预算";
+"Off" = "关闭";
+"Custom…" = "自定义…";
+"Amount" = "金额";
+"M tokens" = "百万 Token";
+"Show Capacity Dock" = "显示容量 Dock";
+"Resting provider" = "默认服务商";
+"Size" = "大小";
+"Capacity Dock size" = "容量 Dock 大小";
+"Appearance" = "外观";
+"Gauge shape" = "仪表形状";
+"Dock providers" = "Dock 中的服务商";
+"Connect a provider from its sidebar page to make it available here." = "请在边栏的服务商页面中连接服务商，它才会出现在这里。";
+"Needs attention" = "需要处理";
+"Connected providers and anything already shown in the dock appear here, so a provider can always be removed even if its connection later fails." = "已连接的服务商以及已显示在 Dock 中的项目都会列在这里，因此即使某个服务商之后连接失败，也始终可以将其移除。";
+"Connection" = "连接";
+"Config Directories" = "配置目录";
+"Aggregate usage across multiple Claude config directories (e.g. work and personal accounts). Leave empty to track just the default `~/.claude`. The `CLAUDE_CONFIG_DIRS` environment variable, if set, overrides this list." = "汇总多个 Claude 配置目录（例如工作与个人账户）的用量。留空则仅跟踪默认的 `~/.claude`。如果设置了 `CLAUDE_CONFIG_DIRS` 环境变量，它会覆盖此列表。";
+"Quota Refresh" = "配额刷新";
+"Anthropic rate-limits this endpoint per account. 2 minutes is plenty for the 5-hour and weekly windows; pick Manual if you only want updates on demand." = "Anthropic 会按账户对该接口限流。对于 5 小时和每周窗口，2 分钟已经足够；如果只想按需更新，请选择“手动”。";
+"Connected" = "已连接";
+"Backing off" = "正在退避";
+"Connecting…" = "正在连接…";
+"Ready" = "就绪";
+"Plan: %@" = "套餐：%@";
+"Live quota tracked from Anthropic." = "实时配额来自 Anthropic。";
+"Anthropic rate-limited; auto-retrying." = "Anthropic 已限流，正在自动重试。";
+"macOS may ask permission to read your credentials." = "macOS 可能会请求读取你的凭证的权限。";
+"Background refresh in progress." = "正在后台刷新。";
+"Tap Load Quota to fetch live usage from Anthropic." = "点按“载入配额”以从 Anthropic 获取实时用量。";
+"Click Connect to read your Claude Code credentials and start tracking quota." = "点按“连接”以读取你的 Claude Code 凭证并开始跟踪配额。";
+"Disconnect" = "断开连接";
+"Disconnect Claude?" = "要断开 Claude 连接吗？";
+"Cancel" = "取消";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your Claude Code credential is untouched. Claude Code keeps working." = "CodeBurn 将停止跟踪配额，并清除其连接状态以及任何旧版凭证缓存。你的 Claude Code 凭证不会受到影响，Claude Code 仍可正常使用。";
+"Load Quota" = "载入配额";
+"No extra directories. Tracking the default `~/.claude`." = "没有额外目录，正在跟踪默认的 `~/.claude`。";
+"Remove" = "移除";
+"Add Directory…" = "添加目录…";
+"Add" = "添加";
+"Choose one or more Claude config directories (each containing a `projects` folder)." = "选择一个或多个 Claude 配置目录（每个目录都应包含 `projects` 文件夹）。";
+"Codex live-quota tracking follows the authoritative `~/.codex/auth.json` session directly and does not create a second Keychain copy. A legacy CodeBurn Keychain item, when present, is read only as a migration fallback. Only ChatGPT-mode auth (Plus / Pro / Team / Business / Edu / Enterprise) is supported. API-key users are billed per request and have a different reporting surface. Credit-metered workspaces report no rate-limit windows, so their monthly credit allowance is shown instead." = "Codex 实时配额跟踪直接沿用权威的 `~/.codex/auth.json` 会话，不会创建第二份钥匙串副本。若存在旧版 CodeBurn 钥匙串项目，仅作为迁移回退读取。仅支持 ChatGPT 模式认证（Plus / Pro / Team / Business / Edu / Enterprise）。使用 API 密钥的用户按请求计费，报告方式不同。按点数计量的工作区不报告限流窗口，因此会改为显示其每月点数额度。";
+"How it works" = "工作原理";
+"Couldn't load Codex quota" = "无法载入 Codex 配额";
+"Live quota tracked from chatgpt.com." = "实时配额来自 chatgpt.com。";
+"Codex is in API-key mode. Run `codex login` and choose a ChatGPT plan to enable quota tracking." = "Codex 处于 API 密钥模式。运行 `codex login` 并选择 ChatGPT 套餐以启用配额跟踪。";
+"Run `codex login` in your terminal to sign in again, then click Reconnect." = "在终端中运行 `codex login` 重新登录，然后点按“重新连接”。";
+"ChatGPT rate-limited; auto-retrying." = "ChatGPT 已限流，正在自动重试。";
+"Reading ~/.codex/auth.json." = "正在读取 ~/.codex/auth.json。";
+"Tap Load Quota to fetch live usage from chatgpt.com." = "点按“载入配额”以从 chatgpt.com 获取实时用量。";
+"Click Connect to read your Codex CLI credentials. If Connect fails, run `codex login` in your terminal first to create ~/.codex/auth.json." = "点按“连接”以读取你的 Codex 命令行工具凭证。如果连接失败，请先在终端中运行 `codex login` 以创建 ~/.codex/auth.json。";
+"Disconnect Codex?" = "要断开 Codex 连接吗？";
+"CodeBurn will stop tracking quota and clear its connection state plus any legacy credential cache. Your ~/.codex/auth.json is untouched. Codex CLI keeps working." = "CodeBurn 将停止跟踪配额，并清除其连接状态以及任何旧版凭证缓存。你的 ~/.codex/auth.json 不会受到影响，Codex 命令行工具仍可正常使用。";
+"Kimi Code live-quota tracking reads `~/.kimi-code/credentials/kimi-code.json` directly. Nothing is copied or stored. Access tokens are short-lived (~15 minutes) and only the Kimi CLI refreshes them, so if the connection shows as expired, run the Kimi CLI once and click Reconnect." = "Kimi Code 实时配额跟踪直接读取 `~/.kimi-code/credentials/kimi-code.json`，不会复制或存储任何内容。访问令牌有效期很短（约 15 分钟），且只有 Kimi 命令行工具会刷新它们；因此若连接显示为已过期，请运行一次 Kimi 命令行工具，然后点按“重新连接”。";
+"Login refresh required" = "需要刷新登录";
+"Couldn't load Kimi quota" = "无法载入 Kimi 配额";
+"Live quota tracked from api.kimi.com." = "实时配额来自 api.kimi.com。";
+"Kimi rate-limited; auto-retrying." = "Kimi 已限流，正在自动重试。";
+"Reading ~/.kimi-code credentials." = "正在读取 ~/.kimi-code 凭证。";
+"Tap Load Quota to fetch live usage from api.kimi.com." = "点按“载入配额”以从 api.kimi.com 获取实时用量。";
+"Sign in with the Kimi CLI first, then click Connect." = "请先通过 Kimi 命令行工具登录，然后点按“连接”。";
+"Disconnect Kimi Code?" = "要断开 Kimi Code 连接吗？";
+"CodeBurn will stop tracking Kimi Code quota. Your ~/.kimi-code credentials are untouched. The Kimi CLI keeps working." = "CodeBurn 将停止跟踪 Kimi Code 配额。你的 ~/.kimi-code 凭证不会受到影响，Kimi 命令行工具仍可正常使用。";
+"Gemini live-quota tracking reads `~/.gemini/oauth_creds.json` read-only. Nothing is copied or stored, and tokens stay in memory. If the connection shows as expired, run the Gemini CLI once to refresh your login, then click Reconnect." = "Gemini 实时配额跟踪以只读方式读取 `~/.gemini/oauth_creds.json`，不会复制或存储任何内容，令牌仅保留在内存中。若连接显示为已过期，请运行一次 Gemini 命令行工具以刷新登录，然后点按“重新连接”。";
+"Couldn't load Gemini quota" = "无法载入 Gemini 配额";
+"Live quota tracked from Google Code Assist." = "实时配额来自 Google Code Assist。";
+"Gemini rate-limited; auto-retrying." = "Gemini 已限流，正在自动重试。";
+"Reading ~/.gemini credentials." = "正在读取 ~/.gemini 凭证。";
+"Tap Load Quota to fetch live usage from Google Code Assist." = "点按“载入配额”以从 Google Code Assist 获取实时用量。";
+"Sign in with the Gemini CLI first, then click Connect." = "请先通过 Gemini 命令行工具登录，然后点按“连接”。";
+"Disconnect Gemini?" = "要断开 Gemini 连接吗？";
+"CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working." = "CodeBurn 将停止跟踪 Gemini 配额。你的 ~/.gemini 凭证不会受到影响，Gemini 命令行工具仍可正常使用。";
+"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com." = "Copilot 实时配额跟踪以只读方式读取这台 Mac 上已有的 GitHub 令牌，不会复制或存储任何内容。CodeBurn 会依次查看 `~/.config/github-copilot` 中的编辑器插件文件、Copilot 命令行工具的 `~/.copilot` 文件、COPILOT_GITHUB_TOKEN、GH_TOKEN 和 GITHUB_TOKEN 环境变量、`gh auth token`，最后是你在下方粘贴的令牌。用量跟踪无需这些内容，只有实时配额条才需要令牌。为 GitHub Enterprise Cloud 主机找到的凭证，只会向该租户自己的 API（api.<tenant>.ghe.com）查询，绝不会发送到 api.github.com。";
+"GitHub token" = "GitHub 令牌";
+"Save & Connect" = "存储并连接";
+"Clear Token" = "清除令牌";
+"Paste a token" = "粘贴令牌";
+"Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota." = "可选，仅当这台 Mac 上没有其他已登录来源时才需要。一个具有 \"Plan: Read-only\" 权限的细粒度个人访问令牌即可。该令牌保存在 CodeBurn 自己的钥匙串项目中，且仅用于读取你的 Copilot 配额。";
+"Couldn't load Copilot quota" = "无法载入 Copilot 配额";
+"Live quota tracked from %@." = "实时配额来自 %@。";
+"Plan: %@. Live quota tracked from %@." = "套餐：%@。实时配额来自 %@。";
+"Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "请通过 Copilot 命令行工具、编辑器的 Copilot 插件或 gh auth login 重新登录，然后点按“重新连接”。";
+"GitHub rate-limited; auto-retrying." = "GitHub 已限流，正在自动重试。";
+"Looking for a GitHub token on this Mac." = "正在这台 Mac 上查找 GitHub 令牌。";
+"Tap Load Quota to fetch live usage from api.github.com." = "点按“载入配额”以从 api.github.com 获取实时用量。";
+"Disconnect Copilot?" = "要断开 Copilot 连接吗？";
+"CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working." = "CodeBurn 将停止跟踪 Copilot 配额。它读取过的所有凭证都不会受到影响，你的 Copilot 客户端仍可正常使用。";
+"Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect." = "Antigravity 实时配额跟踪仅通过 127.0.0.1 与 Antigravity 应用的本地语言服务通信。没有任何数据离开这台机器，也不会读取凭证文件。若显示为已断开，请启动 Antigravity 应用，然后点按“重新连接”。";
+"Couldn't load Antigravity quota" = "无法载入 Antigravity 配额";
+"Live quota tracked from the local Antigravity server." = "实时配额来自本地 Antigravity 服务。";
+"Local probe failed; auto-retrying." = "本地探测失败，正在自动重试。";
+"Probing the local Antigravity language server." = "正在探测本地 Antigravity 语言服务。";
+"Tap Load Quota to probe the local Antigravity server." = "点按“载入配额”以探测本地 Antigravity 服务。";
+"Start the Antigravity app first, then click Connect." = "请先启动 Antigravity 应用，然后点按“连接”。";
+"No local Antigravity server found. Start the Antigravity app, then click Reconnect." = "未找到本地 Antigravity 服务。启动 Antigravity 应用，然后点按“重新连接”。";
+"Disconnect Antigravity?" = "要断开 Antigravity 连接吗？";
+"CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working." = "CodeBurn 将停止跟踪 Antigravity 配额。不会从磁盘读取或写入任何内容，Antigravity 应用仍可正常使用。";
+"Not yet supported" = "暂不支持";
+"Automatic connection uses the provider's existing app, CLI, OAuth, browser session, or environment credentials first. CodeBurn does not copy those source credentials into its Keychain." = "自动连接会优先使用服务商已有的应用、命令行工具、OAuth、浏览器会话或环境凭证。CodeBurn 不会把这些来源凭证复制到自己的钥匙串中。";
+"Authentication methods are listed for reference. A native CodeBurn quota adapter is required before this provider can connect to Capacity Dock." = "此处列出的认证方式仅供参考。该服务商需要原生的 CodeBurn 配额适配器，才能连接到容量 Dock。";
+"Authentication methods" = "认证方式";
+"Source" = "来源";
+"API key or token" = "API 密钥或令牌";
+"Clear Override" = "清除覆盖设置";
+"Loading saved provider credential" = "正在载入已存储的服务商凭证";
+"Connection override" = "连接覆盖设置";
+"Overrides are optional and are saved only when you press Save & Connect. Secret values use one CodeBurn-owned Keychain item for this provider; background reads suppress authentication UI." = "覆盖设置是可选的，仅在你点按“存储并连接”时才会保存。机密值会为该服务商使用一个由 CodeBurn 拥有的钥匙串项目；后台读取不会弹出认证界面。";
+"Remove saved override" = "移除已存储的覆盖设置";
+"Saved data" = "已存储的数据";
+"This credential predates a live CodeBurn quota adapter and is not treated as a connection." = "此凭证早于 CodeBurn 的实时配额适配器，不会被视为一个连接。";
+"Quota adapter not available" = "配额适配器不可用";
+"Retrying" = "正在重试";
+"%@ is catalogued, but CodeBurn cannot fetch its live quota yet." = "%@ 已收录，但 CodeBurn 还无法获取其实时配额。";
+"Live quota is available to Capacity Dock." = "实时配额已可供容量 Dock 使用。";
+"Waiting for quota data." = "正在等待配额数据。";
+"Automatic" = "自动";
+"CLI" = "命令行工具";
+"API" = "API";
+"ACU Conversion" = "ACU 换算";
+"USD per ACU" = "每 ACU 美元";
+"Save" = "存储";
+"CodeBurn reads Devin ACU usage from local transcripts only after this rate is configured, then multiplies each step by the rate before reporting cost." = "只有在配置了此汇率之后，CodeBurn 才会从本地记录中读取 Devin 的 ACU 用量，并在报告花费前将每一步乘以该汇率。";
+"Saved. Refresh CodeBurn to recalculate Devin cost." = "已存储。刷新 CodeBurn 以重新计算 Devin 花费。";
+"Version %@" = "版本 %@";
+"%@ is available. Choose Check for Updates in the CodeBurn menu to install it." = "%@ 已发布。在 CodeBurn 菜单中选择“检查更新”即可安装。";
+"GitHub" = "GitHub";
+"Website" = "网站";
+"Issues" = "问题反馈";
+"Links" = "链接";
+"© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License." = "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT 许可证。";
+
+/* MARK: Menubar second row (#1252) */
+"Second row" = "第二行";
+"Second row shows" = "第二行显示";
+"Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data." = "在菜单栏数字下方添加一行较小的文字。“剩余配额”会跟踪最接近限额的已连接服务商。当所选指标暂无数据时，该行会自动隐藏。";
+"Quota remaining" = "剩余配额";
+"Today's cost" = "今日花费";
+"Today's tokens" = "今日 Token";
+"Active sessions" = "活跃会话";
+/* 菜单栏空间有限，这几条要尽量短。金额、Token 数和服务商名称都已在代码中格式化，
+   此处只翻译它们周围的文字；tok 是单位，保持原样。重置倒计时复用上方弹窗的
+   `%lldd %lldh` / `%lldh %lldm` / `%lldm` 三个键。 */
+"%@ today" = "今日 %@";
+"%@ tok today" = "今日 %@ tok";
+"%lld%% left" = "剩余 %lld%%";
+"%@ %lld%% left" = "%@ 剩余 %lld%%";
+
+/* MARK: Codex credit limit */
+"Monthly usage limit" = "每月用量上限";
+"Monthly usage limit · limit reached" = "每月用量上限 · 已达上限";
+"Monthly usage limit · %@ / %@ credits" = "每月用量上限 · %@ / %@ 点数";
+"%@ · limit reached" = "%@ · 已达上限";

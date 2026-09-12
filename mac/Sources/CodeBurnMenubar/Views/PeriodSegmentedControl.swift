@@ -11,7 +11,7 @@ struct PeriodSegmentedControl: View {
                 Button {
                     store.switchTo(period: period)
                 } label: {
-                    Text(period.rawValue)
+                    Text(period.displayLabel)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .frame(maxWidth: .infinity)
@@ -65,7 +65,13 @@ private struct CalendarPopover: View {
     @State private var pending: Set<String> = []
 
     private let calendar = Calendar.current
-    private let weekdays = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+    /// Monday-first, from the current locale's own very-short weekday symbols
+    /// (Sunday-indexed), so zh-Hans renders 一…日 without a translation key.
+    private let weekdays: [String] = {
+        let symbols = Calendar.current.veryShortWeekdaySymbols
+        guard symbols.count == 7 else { return symbols }
+        return Array(symbols[1...]) + [symbols[0]]
+    }()
     private let cellSize: CGFloat = 30
 
     var body: some View {
@@ -128,7 +134,7 @@ private struct CalendarPopover: View {
 
             HStack(spacing: 8) {
                 if !pending.isEmpty {
-                    Button("Clear") {
+                    Button(L("Clear")) {
                         pending = []
                     }
                     .font(.system(size: 11, weight: .medium))
@@ -153,7 +159,7 @@ private struct CalendarPopover: View {
                     }
                     isPresented = false
                 } label: {
-                    Text("Done")
+                    Text(L("Done"))
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
@@ -185,7 +191,8 @@ private struct CalendarPopover: View {
 
     private var monthYearLabel: String {
         let f = DateFormatter()
-        f.dateFormat = "MMMM yyyy"
+        // Localized template, not a fixed pattern: zh-Hans wants "2026年9月".
+        f.setLocalizedDateFormatFromTemplate("MMMM yyyy")
         return f.string(from: displayMonth)
     }
 
@@ -195,9 +202,9 @@ private struct CalendarPopover: View {
     }
 
     private var selectionSummary: String {
-        if pending.isEmpty { return "Pick dates" }
-        if pending.count == 1 { return "1 day" }
-        return "\(pending.count) days"
+        if pending.isEmpty { return L("Pick dates") }
+        if pending.count == 1 { return L("1 day") }
+        return L("%lld days", pending.count)
     }
 
     private func shiftMonth(_ delta: Int) {

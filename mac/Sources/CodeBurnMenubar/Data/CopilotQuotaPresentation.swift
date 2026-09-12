@@ -31,16 +31,20 @@ enum CopilotQuotaPresentation {
         case usage(idle: Bool)
     }
 
-    static let noCredentialsPlanTitle = "No Copilot credentials found"
-    static let noCredentialsPlanMessage =
-        "Sign in via an editor's Copilot plugin first. Then click Try Again."
-    static let disconnectedPlanTitle = "Copilot quota tracking disconnected"
-    static let disconnectedPlanMessage =
-        "Your Copilot credentials are untouched. Click Connect to resume."
-    static let noCredentialsSettingsDetail =
-        "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect."
-    static let disconnectedSettingsDetail =
-        "Quota tracking disconnected. Credentials are untouched. Click Connect to resume."
+    static var noCredentialsPlanTitle: String { L("No Copilot credentials found") }
+    static var noCredentialsPlanMessage: String {
+        L("Sign in via an editor's Copilot plugin first. Then click Try Again.")
+    }
+    static var disconnectedPlanTitle: String { L("Copilot quota tracking disconnected") }
+    static var disconnectedPlanMessage: String {
+        L("Your Copilot credentials are untouched. Click Connect to resume.")
+    }
+    static var noCredentialsSettingsDetail: String {
+        L("Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect.")
+    }
+    static var disconnectedSettingsDetail: String {
+        L("Quota tracking disconnected. Credentials are untouched. Click Connect to resume.")
+    }
 
     static func planContent(
         loadState: SubscriptionLoadState,
@@ -70,8 +74,10 @@ enum CopilotQuotaPresentation {
     /// own `api.<tenant>.ghe.com` endpoint rather than a dotcom claim (#1286).
     static func connectedSettingsDetail(plan: String?, apiHost: String) -> String {
         let host = apiHost.isEmpty ? CopilotHostEndpoint.defaultAPIHost : apiHost
-        guard let plan, !plan.isEmpty else { return "Live quota tracked from \(host)." }
-        return "Plan: \(plan). Live quota tracked from \(host)."
+        // The host is an API hostname and the plan comes from GitHub; both are
+        // substituted verbatim, only the sentence around them is translated.
+        guard let plan, !plan.isEmpty else { return L("Live quota tracked from %@.", host) }
+        return L("Plan: %@. Live quota tracked from %@.", plan, host)
     }
 
     static func settingsNotConnectedDetail(explicitlyDisconnected: Bool) -> String {

@@ -105,12 +105,14 @@ struct CodexUsage: Sendable, Equatable {
             func text(_ value: Double) -> String {
                 formatter.string(from: NSNumber(value: value)) ?? "\(Int(value.rounded()))"
             }
-            let base = "Monthly usage limit · \(text(used)) / \(text(limit)) credits"
-            return reached ? "\(base) · limit reached" : base
+            // The two figures are already grouped by the formatter above, so
+            // they are substituted formatted and only the sentence is translated.
+            let base = L("Monthly usage limit · %@ / %@ credits", text(used), text(limit))
+            return reached ? L("%@ · limit reached", base) : base
         }
 
         var shortLabel: String {
-            reached ? "Monthly usage limit · limit reached" : "Monthly usage limit"
+            reached ? L("Monthly usage limit · limit reached") : L("Monthly usage limit")
         }
     }
 

@@ -21,7 +21,7 @@ struct MenuBarContent: View {
                     VStack(spacing: 0) {
                         HeroSection()
                         if store.selectedPayloadMayBeIncomplete {
-                            Text("This total may be incomplete.")
+                            Text(L("This total may be incomplete."))
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.secondary.opacity(0.75))
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,7 +144,7 @@ private struct ScopeSegmentedControl: View {
                     Button {
                         store.switchTo(scope: scope)
                     } label: {
-                        Text(scope.rawValue)
+                        Text(scope.displayLabel)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                             .frame(maxWidth: .infinity)
@@ -181,7 +181,7 @@ private struct ClaudeConfigPicker: View {
     private var selectedLabel: String {
         guard let selected = store.selectedClaudeConfigSourceId,
               let option = store.claudeConfigOptions.first(where: { $0.id == selected }) else {
-            return "All"
+            return L("All")
         }
         return option.label
     }
@@ -195,7 +195,7 @@ private struct ClaudeConfigPicker: View {
                     if store.selectedClaudeConfigSourceId == nil {
                         Image(systemName: "checkmark")
                     }
-                    Text("All")
+                    Text(L("All"))
                 }
             }
 
@@ -237,7 +237,7 @@ private struct ClaudeConfigPicker: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize(horizontal: true, vertical: false)
-        .help("Claude config")
+        .help(L("Claude config"))
     }
 }
 
@@ -250,7 +250,7 @@ private struct EmptyProviderState: View {
             Image(systemName: "tray")
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
-            Text("No \(provider.rawValue) data for \(periodLabel)")
+            Text(L("No %@ data for %@", provider.displayLabel, periodLabel))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -277,7 +277,7 @@ private struct FetchErrorOverlay: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 28))
                     .foregroundStyle(Theme.brandAccent)
-                Text("Couldn't load \(periodLabel)")
+                Text(L("Couldn't load %@", periodLabel))
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(displayError)
@@ -286,7 +286,7 @@ private struct FetchErrorOverlay: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 280)
                     .lineLimit(3)
-                Button("Retry", action: retry)
+                Button(L("Retry"), action: retry)
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.brandAccent)
                     .controlSize(.small)
@@ -323,7 +323,7 @@ private struct BurnLoadingOverlay: View {
 
             VStack(spacing: 14) {
                 BurnFlame(size: flameSize, fillProgress: fillProgress, glowing: glowing)
-                Text("Loading \(periodLabel)…")
+                Text(L("Loading %@…", periodLabel))
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -406,7 +406,7 @@ private struct Header: View {
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
                     FlameWordmark()
-                    Text("Your AI Bill, Itemized")
+                    Text(L("Your AI Bill, Itemized"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                 }
@@ -456,9 +456,13 @@ private struct QuotaWarningRow: View {
             // Reads "Claude over limit (105%)" when any provider exceeds the
             // quota cap, instead of the awkward "Claude 105% of quota used".
             if case .danger = status.severity {
-                return "\(status.warnings[0].name) over limit (\(Int(status.warnings[0].percent.rounded()))%)"
+                return L(
+                    "%@ over limit (%lld%%)",
+                    status.warnings[0].name,
+                    Int(status.warnings[0].percent.rounded())
+                )
             }
-            return "\(parts[0]) of quota used"
+            return L("%@ of quota used", parts[0])
         }
         return parts.joined(separator: " · ")
     }
@@ -504,7 +508,7 @@ private struct AccentPicker: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(preset.rawValue)
+                        .accessibilityLabel(preset.displayLabel)
                     }
                 }
                 .padding(.horizontal, 6)
@@ -530,7 +534,7 @@ private struct AccentPicker: View {
                     )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Change accent color")
+            .accessibilityLabel(L("Change accent color"))
             .padding(.leading, 4)
         }
     }
@@ -606,20 +610,20 @@ struct CLIUpdateBanner: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.blue)
 
-                Text("CLI \(updateChecker.latestCliVersion ?? "") available")
+                Text(L("CLI %@ available", updateChecker.latestCliVersion ?? ""))
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.primary)
 
                 Button {
                     updateChecker.performFullUpdate()
                 } label: {
-                    Text(updateChecker.isUpdating ? "Updating..." : "Update now")
+                    Text(updateChecker.isUpdating ? L("Updating...") : L("Update now"))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.blue)
                 }
                 .buttonStyle(.plain)
                 .disabled(updateChecker.isUpdating)
-                .help("Update the CLI (and the menubar if one is available) automatically")
+                .help(L("Update the CLI (and the menubar if one is available) automatically"))
 
                 Button {
                     NSPasteboard.general.clearContents()
@@ -634,7 +638,7 @@ struct CLIUpdateBanner: View {
                     .foregroundStyle(.blue)
                 }
                 .buttonStyle(.plain)
-                .help("Copy update command to clipboard")
+                .help(L("Copy update command to clipboard"))
 
                 Spacer(minLength: 0)
             }
@@ -669,9 +673,9 @@ struct StarBanner: View {
                     NSWorkspace.shared.open(starBannerGitHubURL)
                 } label: {
                     HStack(spacing: 4) {
-                        Text("Enjoying CodeBurn?")
+                        Text(L("Enjoying CodeBurn?"))
                             .foregroundStyle(.primary)
-                        Text("Star us on GitHub")
+                        Text(L("Star us on GitHub"))
                             .foregroundStyle(Theme.brandAccent)
                             .underline(true, pattern: .solid)
                     }
@@ -692,7 +696,7 @@ struct StarBanner: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Hide this banner")
+                .help(L("Hide this banner"))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -717,9 +721,9 @@ struct FooterBar: View {
                         applyCurrency(code: currency.rawValue)
                     } label: {
                         if currency.rawValue == store.currency {
-                            Label("\(currency.displayName) (\(currency.rawValue))", systemImage: "checkmark")
+                            Label(currency.pickerLabel, systemImage: "checkmark")
                         } else {
-                            Text("\(currency.displayName) (\(currency.rawValue))")
+                            Text(currency.pickerLabel)
                         }
                     }
                 }
@@ -745,10 +749,10 @@ struct FooterBar: View {
             .disabled(store.isLoading)
 
             Menu {
-                Button("CSV (folder)") { runExport(format: .csv) }
-                Button("JSON") { runExport(format: .json) }
+                Button(L("CSV (folder)")) { runExport(format: .csv) }
+                Button(L("JSON")) { runExport(format: .json) }
             } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
+                Label(L("Export"), systemImage: "square.and.arrow.down")
                     .font(.system(size: 11, weight: .medium))
                     .labelStyle(.titleAndIcon)
             }
@@ -765,7 +769,7 @@ struct FooterBar: View {
                 .foregroundStyle(.tertiary)
 
             Button { openReport() } label: {
-                Label("Full Report", systemImage: "terminal")
+                Label(L("Full Report"), systemImage: "terminal")
                     .font(.system(size: 11, weight: .semibold))
                     .labelStyle(.titleAndIcon)
             }

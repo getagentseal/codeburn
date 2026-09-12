@@ -6,13 +6,13 @@ struct ActivitySection: View {
 
     var body: some View {
         CollapsibleSection(
-            caption: "Activity",
+            caption: L("Activity"),
             isExpanded: $isExpanded,
             trailing: {
                 HStack(spacing: 8) {
-                    Text("Cost").frame(minWidth: 54, alignment: .trailing)
-                    Text("Turns").frame(minWidth: 52, alignment: .trailing)
-                    Text("1-shot").frame(minWidth: 44, alignment: .trailing)
+                    Text(L("Cost")).frame(minWidth: 54, alignment: .trailing)
+                    Text(L("Turns")).frame(minWidth: 52, alignment: .trailing)
+                    Text(L("1-shot")).frame(minWidth: 44, alignment: .trailing)
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.tertiary)

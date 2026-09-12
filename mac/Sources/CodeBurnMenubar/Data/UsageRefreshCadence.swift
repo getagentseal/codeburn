@@ -18,11 +18,11 @@ enum UsageRefreshCadence: Int, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .auto: return "Auto (2m, less on battery)"
-        case .manual: return "Manual"
-        case .oneMinute: return "1 minute"
-        case .fiveMinutes: return "5 minutes"
-        case .fifteenMinutes: return "15 minutes"
+        case .auto: return L("Auto (2m, less on battery)")
+        case .manual: return L("Manual")
+        case .oneMinute: return L("1 minute")
+        case .fiveMinutes: return L("5 minutes")
+        case .fifteenMinutes: return L("15 minutes")
         }
     }
 

@@ -22,24 +22,24 @@ enum UpdateFailureStage: Equatable {
 
     var badgeLabel: String {
         switch self {
-        case .check: "Update Check Failed"
-        case .cliUpdate: "CLI Update Failed"
-        case .menubarUpdate: "Menubar Update Failed"
+        case .check: L("Update Check Failed")
+        case .cliUpdate: L("CLI Update Failed")
+        case .menubarUpdate: L("Menubar Update Failed")
         }
     }
 
     var summary: String {
         switch self {
-        case .check: "CodeBurn could not check GitHub for updates."
-        case .cliUpdate: "CodeBurn could not update the CLI."
-        case .menubarUpdate: "CodeBurn could not update the menubar app."
+        case .check: L("CodeBurn could not check GitHub for updates.")
+        case .cliUpdate: L("CodeBurn could not update the CLI.")
+        case .menubarUpdate: L("CodeBurn could not update the menubar app.")
         }
     }
 
     var retryHelp: String {
         switch self {
-        case .check: "Click to retry the update check."
-        case .cliUpdate, .menubarUpdate: "Click to retry the update."
+        case .check: L("Click to retry the update check.")
+        case .cliUpdate, .menubarUpdate: L("Click to retry the update.")
         }
     }
 }
@@ -80,13 +80,13 @@ final class UpdateChecker {
     var updateFailureStage: UpdateFailureStage?
 
     var updateBadgeLabel: String {
-        if isUpdating { return "Updating..." }
-        return updateFailureStage?.badgeLabel ?? "Update"
+        if isUpdating { return L("Updating...") }
+        return updateFailureStage?.badgeLabel ?? L("Update")
     }
 
     var updateHelpText: String {
         guard let error = updateError, let stage = updateFailureStage else {
-            return "Update the CLI and menubar to the latest release"
+            return L("Update the CLI and menubar to the latest release")
         }
         return "\(stage.summary)\n\n\(error)\n\n\(stage.retryHelp)"
     }
@@ -199,11 +199,11 @@ final class UpdateChecker {
     nonisolated static func updateNotificationCopy(appVersion: String?, cliVersion: String?) -> (title: String, body: String)? {
         switch (appVersion, cliVersion) {
         case let (app?, cli?):
-            return ("CodeBurn \(AppVersion.display(app)) available", "App and CLI \(AppVersion.display(cli)) updates are ready. Click to install.")
+            return (L("CodeBurn %@ available", AppVersion.display(app)), L("App and CLI %@ updates are ready. Click to install.", AppVersion.display(cli)))
         case let (app?, nil):
-            return ("CodeBurn \(AppVersion.display(app)) available", "Click to install the update.")
+            return (L("CodeBurn %@ available", AppVersion.display(app)), L("Click to install the update."))
         case let (nil, cli?):
-            return ("CodeBurn CLI \(AppVersion.display(cli)) available", "Click to install the update.")
+            return (L("CodeBurn CLI %@ available", AppVersion.display(cli)), L("Click to install the update."))
         case (nil, nil):
             return nil
         }
@@ -286,7 +286,11 @@ final class UpdateChecker {
             guard let argv = Self.cliUpdateInvocation(cliPath: cliPath), let bin = argv.first else {
                 isUpdating = false
                 updateFailureStage = .cliUpdate
-                updateError = "Could not find the package manager for \(cliPath.isEmpty ? "the CLI" : cliPath). Run \u{201C}\(cliUpdateCommand)\u{201D} manually, then try again."
+                updateError = L(
+                "Could not find the package manager for %@. Run “%@” manually, then try again.",
+                cliPath.isEmpty ? L("the CLI") : cliPath,
+                cliUpdateCommand
+            )
                 return
             }
             let process = Process()
@@ -298,7 +302,7 @@ final class UpdateChecker {
                     if status != 0 {
                         self.isUpdating = false
                         self.updateFailureStage = .cliUpdate
-                        self.updateError = stderr.isEmpty ? "CLI update failed (exit \(status))" : stderr
+                        self.updateError = stderr.isEmpty ? L("CLI update failed (exit %lld)", status) : stderr
                         NSLog("CodeBurn: CLI update failed (exit \(status)): \(stderr)")
                         return
                     }
@@ -353,7 +357,11 @@ final class UpdateChecker {
         installedCliVersion = Self.queryInstalledCliVersion()
         if cliTooOldForUpdate {
             updateFailureStage = .menubarUpdate
-            updateError = "Your codeburn CLI (\(AppVersion.display(installedCliVersion ?? ""))) is too old to update the menubar. Run “\(cliUpdateCommand)” first, then try again."
+            updateError = L(
+                "Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again.",
+                AppVersion.display(installedCliVersion ?? ""),
+                cliUpdateCommand
+            )
             return
         }
         isUpdating = true
@@ -389,7 +397,7 @@ final class UpdateChecker {
                 self.isUpdating = false
                 if proc.terminationStatus != 0 {
                     self.updateFailureStage = .menubarUpdate
-                    self.updateError = stderr.isEmpty ? "Update failed (exit \(proc.terminationStatus))" : stderr
+                    self.updateError = stderr.isEmpty ? L("Update failed (exit %lld)", proc.terminationStatus) : stderr
                     NSLog("CodeBurn: update failed (exit \(proc.terminationStatus)): \(stderr)")
                 } else {
                     self.latestVersion = nil
@@ -429,8 +437,8 @@ enum UpdateCheckError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case let .http(status): "GitHub returned HTTP \(status)."
-        case .missingMenubarAsset: "No mac-v release with a menubar zip and checksum was found."
+        case let .http(status): L("GitHub returned HTTP %lld.", status)
+        case .missingMenubarAsset: L("No mac-v release with a menubar zip and checksum was found.")
         }
     }
 }

@@ -14,6 +14,21 @@ enum AccentPreset: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Accessibility / picker label. `rawValue` stays the persisted identity.
+    var displayLabel: String {
+        switch self {
+        case .ember:    L("Ember")
+        case .blue:     L("Blue")
+        case .purple:   L("Purple")
+        case .pink:     L("Pink")
+        case .red:      L("Red")
+        case .orange:   L("Orange")
+        case .yellow:   L("Yellow")
+        case .green:    L("Green")
+        case .graphite: L("Graphite")
+        }
+    }
+
     /// Apple macOS dark-mode system accent colors (NSColor.system*).
     var base: Color {
         switch self {

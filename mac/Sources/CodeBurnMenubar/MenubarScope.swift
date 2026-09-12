@@ -8,6 +8,15 @@ enum MenubarScope: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// What the scope toggle shows. `rawValue` stays the stable identity used
+    /// for `id`; only this is translated.
+    var displayLabel: String {
+        switch self {
+        case .local: L("Local")
+        case .combined: L("Combined")
+        }
+    }
+
     var cliArg: String {
         switch self {
         case .local: "local"

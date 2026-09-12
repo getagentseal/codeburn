@@ -107,6 +107,21 @@ mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp "${BIN}" "${BUNDLE}/Contents/MacOS/${EXE}"
 cp "${ICON_SOURCE}" "${BUNDLE}/Contents/Resources/menubar-logo.png"
 
+# SwiftPM emits target resources as a sibling bundle of the executable, and
+# `Bundle.module` resolves it from Contents/Resources. Without it the app traps
+# on first icon load and no Localizable.strings table is reachable, so every
+# string falls back to its English key. Mirrors package-app.sh:53-58.
+# The arm64 bin path is enough: the bundle is arch-independent.
+SPM_BIN_PATH="$(cd "${SCRATCH}" && "${SWIFT}" build -c release --arch arm64 --show-bin-path)"
+SPM_RESOURCE_BUNDLE="${SPM_BIN_PATH}/${EXE}_${EXE}.bundle"
+if [[ -d "${SPM_RESOURCE_BUNDLE}" ]]; then
+  cp -R "${SPM_RESOURCE_BUNDLE}" "${BUNDLE}/Contents/Resources/"
+else
+  echo "✗ Resource bundle missing at ${SPM_RESOURCE_BUNDLE}" >&2
+  echo "  Bundle.module would trap at launch; aborting." >&2
+  exit 1
+fi
+
 ICONSET="${SCRATCH}/AppIcon.iconset"; mkdir -p "${ICONSET}"
 for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" "128:128x128" \
             "256:128x128@2x" "256:256x256" "512:256x256@2x" "512:512x512"; do
@@ -121,6 +136,8 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <!-- Keep in sync with package-app.sh and Package.swift's localizations. -->
+    <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string></array>
     <key>CFBundleDisplayName</key><string>CodeBurn Menubar</string>
     <key>CFBundleExecutable</key><string>${EXE}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>

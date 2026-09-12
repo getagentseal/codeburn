@@ -19,10 +19,10 @@ enum MenubarSecondRowMetric: String, CaseIterable, Identifiable, Sendable {
     /// Settings picker label.
     var settingsLabel: String {
         switch self {
-        case .quotaRemaining: "Quota remaining"
-        case .todayCost: "Today's cost"
-        case .todayTokens: "Today's tokens"
-        case .activeSessions: "Active sessions"
+        case .quotaRemaining: L("Quota remaining")
+        case .todayCost: L("Today's cost")
+        case .todayTokens: L("Today's tokens")
+        case .activeSessions: L("Active sessions")
         }
     }
 }
@@ -161,10 +161,11 @@ enum MenubarRowFormatter {
         case .todayCost:
             guard let cost = snapshot.todayCost, cost.isFinite else { return nil }
             let converted = cost * snapshot.currencyRate
-            return String(format: "\(snapshot.currencySymbol)%.2f today", converted)
+            let amount = String(format: "\(snapshot.currencySymbol)%.2f", converted)
+            return L("%@ today", amount)
         case .todayTokens:
             guard let tokens = snapshot.todayTotalTokens else { return nil }
-            return "\(compactTokens(Double(tokens))) tok today"
+            return L("%@ tok today", compactTokens(Double(tokens)))
         case .activeSessions:
             guard let count = snapshot.activeSessionCount else { return nil }
             // Live sessions are identity-derived, so the exact phrasing applies.
@@ -179,7 +180,9 @@ enum MenubarRowFormatter {
         guard let quota, quota.percentUsed.isFinite else { return nil }
         let remaining = min(max(1 - quota.percentUsed, 0), 1)
         let percent = Int((remaining * 100).rounded())
-        var row = quota.label.isEmpty ? "\(percent)% left" : "\(quota.label) \(percent)% left"
+        var row = quota.label.isEmpty
+            ? L("%lld%% left", percent)
+            : L("%@ %lld%% left", quota.label, percent)
         if let countdown = resetCountdown(quota.resetsAt, now: now) {
             row += " · \(countdown)"
         }
@@ -191,13 +194,14 @@ enum MenubarRowFormatter {
     static func resetCountdown(_ resetsAt: Date?, now: Date) -> String? {
         guard let resetsAt else { return nil }
         let seconds = max(0, resetsAt.timeIntervalSince(now))
-        if seconds < 60 { return "now" }
+        if seconds < 60 { return L("now") }
         let minutes = Int(seconds / 60)
         let hours = minutes / 60
         let days = hours / 24
-        if days > 0 { return "\(days)d \(hours % 24)h" }
-        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
-        return "\(minutes)m"
+        // d/h/m are unit abbreviations; zh-Hans uses 天/小时/分.
+        if days > 0 { return L("%lldd %lldh", days, hours % 24) }
+        if hours > 0 { return L("%lldh %lldm", hours, minutes % 60) }
+        return L("%lldm", minutes)
     }
 
     /// Menu-bar token shorthand, matching `Double.asCompactTokens()`. Kept here

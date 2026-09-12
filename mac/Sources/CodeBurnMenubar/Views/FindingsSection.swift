@@ -21,12 +21,12 @@ struct FindingsSection: View {
                             Image(systemName: "lightbulb.fill")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Theme.brandAccent)
-                            Text("Tips for you")
+                            Text(L("Tips for you"))
                                 .font(.system(size: 12.5, weight: .semibold))
                                 .foregroundStyle(.primary)
                         }
                         Spacer()
-                        Text("\(groups.flatMap { $0.items }.count) signals")
+                        Text(L("%lld signals", groups.flatMap { $0.items }.count))
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         Image(systemName: "chevron.right")
@@ -52,7 +52,7 @@ struct FindingsSection: View {
                                 openOptimize()
                             } label: {
                                 HStack(spacing: 4) {
-                                    Text("Open Full Optimize")
+                                    Text(L("Open Full Optimize"))
                                         .font(.system(size: 11.5, weight: .semibold))
                                     Image(systemName: "arrow.forward")
                                         .font(.system(size: 9, weight: .semibold))
@@ -138,25 +138,25 @@ private struct TipItem: Identifiable {
     let cacheHit = payload.current.cacheHitPercent
     if cacheHit >= 80 {
         wins.append(TipItem(
-            text: "Cache hit at \(Int(cacheHit))% — most prompts reuse cache",
+            text: L("Cache hit at %lld%% — most prompts reuse cache", Int(cacheHit)),
             trailing: nil
         ))
     }
     if let oneShot = payload.current.oneShotRate, oneShot >= 0.75 {
         wins.append(TipItem(
-            text: "\(Int(oneShot * 100))% one-shot — edits landing first try",
+            text: L("%lld%% one-shot — edits landing first try", Int(oneShot * 100)),
             trailing: nil
         ))
     }
     if let delta = stats.weekDeltaPercent, delta < -10 {
         wins.append(TipItem(
-            text: "Spend down \(Int(abs(delta)))% vs last 7 days",
+            text: L("Spend down %lld%% vs last 7 days", Int(abs(delta))),
             trailing: nil
         ))
     }
     if stats.activeStreakDays >= 5 {
         wins.append(TipItem(
-            text: "\(stats.activeStreakDays)-day usage streak",
+            text: L("%lld-day usage streak", stats.activeStreakDays),
             trailing: nil
         ))
     }
@@ -174,33 +174,33 @@ private struct TipItem: Identifiable {
     var risks: [TipItem] = []
     if let delta = stats.weekDeltaPercent, delta > 25 {
         risks.append(TipItem(
-            text: "Spend up \(Int(delta))% vs prior 7 days",
+            text: L("Spend up %lld%% vs prior 7 days", Int(delta)),
             trailing: nil
         ))
     }
     if cacheHit > 0 && cacheHit < 50 {
         risks.append(TipItem(
-            text: "Cache hit only \(Int(cacheHit))% — paying for cold prompts",
+            text: L("Cache hit only %lld%% — paying for cold prompts", Int(cacheHit)),
             trailing: nil
         ))
     }
     if let oneShot = payload.current.oneShotRate, oneShot < 0.5 {
         risks.append(TipItem(
-            text: "\(Int(oneShot * 100))% one-shot — lots of iteration",
+            text: L("%lld%% one-shot — lots of iteration", Int(oneShot * 100)),
             trailing: nil
         ))
     }
     if let projected = stats.projectedMonth, let prevMonth = stats.previousMonthTotal, projected > prevMonth * 1.3 {
         risks.append(TipItem(
-            text: "On pace for \(projected.asCompactCurrency()) this month (+\(Int(((projected - prevMonth) / prevMonth) * 100))% vs last)",
+            text: L("On pace for %@ this month (+%lld%% vs last)", projected.asCompactCurrency(), Int(((projected - prevMonth) / prevMonth) * 100)),
             trailing: nil
         ))
     }
 
     return [
-        TipGroup(label: "What's working", icon: "checkmark.circle.fill", color: Theme.brandAccent, items: wins),
-        TipGroup(label: "What to improve", icon: "arrow.up.right.circle.fill", color: Theme.brandAccent, items: improvements),
-        TipGroup(label: "Risks", icon: "exclamationmark.triangle.fill", color: Theme.brandAccent, items: risks),
+        TipGroup(label: L("What's working"), icon: "checkmark.circle.fill", color: Theme.brandAccent, items: wins),
+        TipGroup(label: L("What to improve"), icon: "arrow.up.right.circle.fill", color: Theme.brandAccent, items: improvements),
+        TipGroup(label: L("Risks"), icon: "exclamationmark.triangle.fill", color: Theme.brandAccent, items: risks),
     ]
 }
 

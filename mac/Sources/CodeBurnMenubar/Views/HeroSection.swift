@@ -41,7 +41,7 @@ struct HeroSection: View {
                         .monospacedDigit()
                         .foregroundStyle(.tertiary)
                     } else {
-                        Text("\(totals.calls.asThousandsSeparated()) \(totals.calls == 1 ? "call" : "calls")")
+                        Text(totals.calls == 1 ? L("%@ call", totals.calls.asThousandsSeparated()) : L("%@ calls", totals.calls.asThousandsSeparated()))
                             .font(.system(size: 11))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
@@ -62,7 +62,7 @@ struct HeroSection: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text("Daily budget of \(store.dailyBudgetLabel) exceeded")
+                    Text(L("Daily budget of %@ exceeded", store.dailyBudgetLabel))
                         .font(.system(size: 11, weight: .medium))
                 }
                 .foregroundStyle(.orange)
@@ -75,7 +75,7 @@ struct HeroSection: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text("Combined unavailable · showing local")
+                    Text(L("Combined unavailable · showing local"))
                         .font(.system(size: 11, weight: .medium))
                 }
                 .foregroundStyle(.secondary)
@@ -126,7 +126,7 @@ struct HeroSection: View {
     private var caption: String {
         let label = store.payload.current.label.isEmpty ? store.selectedPeriod.rawValue : store.payload.current.label
         if combinedUsage != nil {
-            return "Combined · \(label)"
+            return L("Combined · %@", label)
         }
         if !store.isDayMode && store.selectedPeriod == .today {
             return "\(label) · \(todayDate)"
@@ -143,12 +143,14 @@ struct HeroSection: View {
         guard combinedUsage == nil else { return nil }
         let savings = store.payload.current.localModelSavings.totalUSD
         guard savings > 0 else { return nil }
-        return "Saved \(savings.asCurrency()) with local models"
+        return L("Saved %@ with local models", savings.asCurrency())
     }
 
     private var todayDate: String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE MMM d"
+        // Localized template, not a fixed pattern: zh-Hans wants "9月11日周五",
+        // not "Fri Sep 11".
+        formatter.setLocalizedDateFormatFromTemplate("EEE MMM d")
         return formatter.string(from: Date())
     }
 }
@@ -209,7 +211,7 @@ private struct CombinedDeviceBreakdown: View {
             HStack(spacing: 4) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: 10))
-                Text("\(usage.combined.reachableCount) of \(usage.combined.deviceCount) devices")
+                Text(L("%lld of %lld devices", usage.combined.reachableCount, usage.combined.deviceCount))
                     .font(.system(size: 11, weight: .medium))
             }
             .foregroundStyle(.secondary)
@@ -221,12 +223,12 @@ private struct CombinedDeviceBreakdown: View {
                             .font(.system(size: device.error == nil ? 5 : 9, weight: .semibold))
                             .foregroundStyle(device.error == nil ? Color.secondary.opacity(0.75) : Theme.semanticWarning)
                             .frame(width: 10)
-                        Text(device.local ? "\(device.name) · local" : device.name)
+                        Text(device.local ? L("%@ · local", device.name) : device.name)
                             .font(.system(size: 10.5, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer(minLength: 6)
-                        Text(device.error == nil ? device.cost.asCurrency() : "Unavailable")
+                        Text(device.error == nil ? device.cost.asCurrency() : L("Unavailable"))
                             .font(.system(size: 10.5))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)

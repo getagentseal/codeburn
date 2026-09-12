@@ -80,6 +80,15 @@ cat > "${BUNDLE}/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <!-- Advertises the localizations shipped in the SwiftPM resource bundle
+         (Sources/CodeBurnMenubar/Resources/<locale>.lproj). Without this the
+         app does not appear under System Settings > Language & Region > per-app
+         language, so users could not override the system language for it. -->
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleDisplayName</key>
     <string>CodeBurn Menubar</string>
     <key>CFBundleExecutable</key>

@@ -23,7 +23,7 @@ enum PreferredTerminal: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .terminal: return "Terminal (macOS default)"
+        case .terminal: return L("Terminal (macOS default)")
         case .iTerm2: return "iTerm2"
         }
     }
