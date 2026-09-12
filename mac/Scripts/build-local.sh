@@ -41,28 +41,51 @@ BUNDLE="${APPS}/${EXE}.app"
 
 trap 'rm -rf "${SCRATCH}"' EXIT
 
-# --- locate a Swift 6.x toolchain -------------------------------------------
-TC=""
+# --- toolchain + SDK selection ----------------------------------------------
+# Two supported configurations:
+#   1. Full Xcode installed, use its SDK. REQUIRED on macOS 15+ SDKs, where
+#      SwiftUI's @State is a macro whose plugin (libSwiftUIMacros.dylib) ships
+#      ONLY inside Xcode. The Command Line Tools do not carry it, so a CLT-only
+#      build of any SwiftUI view fails with "external macro implementation type
+#      'SwiftUIMacros.StateMacro' could not be found".
+#   2. Command Line Tools with the macOS 14 SDK plus a swift.org toolchain.
+#      That SDK's SwiftUI lacks the @MainActor annotations later SDKs added,
+#      which is what the source patching below exists for.
+SWIFT=""
 for cand in "${HOME}/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain" \
             "${HOME}/Library/Developer/Toolchains/swift-latest.xctoolchain" \
             /Library/Developer/Toolchains/swift-latest.xctoolchain; do
-  [[ -x "${cand}/usr/bin/swift" ]] && { TC="${cand}"; break; }
+  [[ -x "${cand}/usr/bin/swift" ]] && { SWIFT="${cand}/usr/bin/swift"; break; }
 done
-if [[ -z "${TC}" ]]; then
-  echo "✗ No swift.org Swift 6.x toolchain found in ~/Library/Developer/Toolchains/." >&2
-  echo "  Install one from https://www.swift.org/install/macos/ (Swift 6.2)." >&2
+[[ -n "${SWIFT}" ]] || SWIFT="$(command -v swift || true)"
+if [[ -z "${SWIFT}" ]]; then
+  echo "✗ No swift compiler found (no swift.org toolchain, no swift on PATH)." >&2
   exit 1
 fi
-SWIFT="${TC}/usr/bin/swift"
-export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+
+# Prefer Xcode's SDK when present: its SwiftUI and its macro plugins are a
+# matched pair. Mixing an Xcode plugin with a CLT SDK expands @State into
+# calls the SDK does not declare (e.g. State._makeStorage_v0).
+XCODE_SDK="/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+if [[ -d "${XCODE_SDK}" ]]; then
+  export SDKROOT="${XCODE_SDK}"
+else
+  export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+fi
+SDK_VERSION="$(plutil -extract Version raw "${SDKROOT}/SDKSettings.plist" 2>/dev/null \
+               || xcrun --sdk macosx --show-sdk-version)"
+
+PATCH_MAINACTOR=0
 case "${SDK_VERSION}" in
-  14.*) ;;
+  14.*) PATCH_MAINACTOR=1 ;;
   *)
-    echo "✗ Active SDK is macOS ${SDK_VERSION}, not 14.x, xcode-select is likely" >&2
-    echo "  pointed at a newer Xcode instead of the Command Line Tools. Run:" >&2
-    echo "    sudo xcode-select -s /Library/Developer/CommandLineTools" >&2
-    exit 1
+    if [[ ! -d "/Applications/Xcode.app" ]]; then
+      echo "✗ Active SDK is macOS ${SDK_VERSION}, whose SwiftUI needs a macro" >&2
+      echo "  plugin that only full Xcode ships. Install Xcode:" >&2
+      echo "    mas install 497799835" >&2
+      echo "  or point xcode-select at a macOS 14 SDK for the legacy path." >&2
+      exit 1
+    fi
     ;;
 esac
 echo "▸ Toolchain : $("${SWIFT}" --version | head -1)"
@@ -73,6 +96,7 @@ echo "▸ Staging sources in ${SCRATCH}..."
 # Tests/ is copied only so the manifest's testTarget path resolves; `swift build`
 # (product only) never compiles it, so it needs no @MainActor patching.
 cp -R "${MAC_DIR}/Sources" "${MAC_DIR}/Tests" "${MAC_DIR}/Package.swift" "${SCRATCH}/"
+if (( PATCH_MAINACTOR )); then
 find "${SCRATCH}/Sources" -name "*.swift" -print0 | while IFS= read -r -d '' f; do
   # Slurp mode ([^{]* spans newlines) so this also catches multi-line generic
   # struct headers and `extension X: View` conformances, not just the
@@ -83,21 +107,18 @@ find "${SCRATCH}/Sources" -name "*.swift" -print0 | while IFS= read -r -d '' f; 
     s/\@MainActor\n\@MainActor\n/\@MainActor\n/g;
   ' "$f"
 done
+else
+  echo "▸ SDK ${SDK_VERSION} already annotates SwiftUI, skipping @MainActor patch."
+fi
 
-# --- build each arch separately, then lipo into one universal binary --------
-# `swift build --arch arm64 --arch x86_64` together shells out to xcbuild,
-# which the Command Line Tools doesn't ship, each arch alone stays on the
-# plain SwiftPM build path, so build twice and merge with lipo instead.
-BINS=()
-for arch in arm64 x86_64; do
-  echo "▸ Building ${arch} release..."
-  ( cd "${SCRATCH}" && "${SWIFT}" build -c release --arch "${arch}" )
-  bin="$(cd "${SCRATCH}" && "${SWIFT}" build -c release --arch "${arch}" --show-bin-path)/${EXE}"
-  [[ -x "${bin}" ]] || { echo "✗ ${arch} build produced no binary" >&2; exit 1; }
-  BINS+=("${bin}")
-done
-BIN="${SCRATCH}/${EXE}-universal"
-lipo -create -output "${BIN}" "${BINS[@]}"
+# --- build one universal binary ---------------------------------------------
+# A single two-arch invocation goes through xcbuild and already emits a fat
+# binary, so there is nothing left for lipo to merge.
+echo "▸ Building universal release..."
+( cd "${SCRATCH}" && "${SWIFT}" build -c release --arch arm64 --arch x86_64 )
+PRODUCTS="$(cd "${SCRATCH}" && "${SWIFT}" build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+BIN="${PRODUCTS}/${EXE}"
+[[ -x "${BIN}" ]] || { echo "✗ build produced no binary at ${BIN}" >&2; exit 1; }
 
 # --- assemble the .app bundle ------------------------------------------------
 echo "▸ Assembling ${BUNDLE}..."
@@ -106,6 +127,13 @@ rm -rf "${BUNDLE}"
 mkdir -p "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources"
 cp "${BIN}" "${BUNDLE}/Contents/MacOS/${EXE}"
 cp "${ICON_SOURCE}" "${BUNDLE}/Contents/Resources/menubar-logo.png"
+
+# SwiftPM emits target resources as a separate .bundle that Bundle.module
+# resolves from the app's Resources dir. Without it the app dies immediately
+# with "unable to find bundle named CodeBurnMenubar_CodeBurnMenubar".
+for rb in "${PRODUCTS}"/*.bundle; do
+  [[ -d "${rb}" ]] && cp -R "${rb}" "${BUNDLE}/Contents/Resources/"
+done
 
 ICONSET="${SCRATCH}/AppIcon.iconset"; mkdir -p "${ICONSET}"
 for spec in "16:16x16" "32:16x16@2x" "32:32x32" "64:32x32@2x" "128:128x128" \
