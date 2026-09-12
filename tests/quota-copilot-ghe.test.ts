@@ -12,6 +12,9 @@ import {
   copilotAPIHost,
   copilotUsageEndpoint,
   fetchCopilotQuota,
+  ghConfigPaths,
+  ghCopilotCredential,
+  ghCredentialsFromConfig,
   normalizeCopilotHost,
   preferredCopilotHost,
 } from '../src/quota/copilot.js'
@@ -32,7 +35,11 @@ function usageResponse(): Response {
  * out with `path.basename` rather than by splitting on `/`, or every lookup
  * misses there and the credential reads as absent.
  */
-function deps(files: Record<string, string>, respond: (url: string) => Response | Promise<Response> = () => usageResponse()) {
+function deps(
+  files: Record<string, string>,
+  respond: (url: string) => Response | Promise<Response> = () => usageResponse(),
+  env: NodeJS.ProcessEnv = {},
+) {
   const urls: string[] = []
   const tokens: (string | null)[] = []
   return {
@@ -40,6 +47,10 @@ function deps(files: Record<string, string>, respond: (url: string) => Response 
     tokens,
     options: {
       configDirs: ['/copilot'],
+      // The environment and gh rungs are inert unless a test supplies them, so
+      // a shell that exports GH_TOKEN cannot change what these tests read.
+      env,
+      ghConfigPaths: ['/gh/hosts.yml'],
       readFile: async (filePath: string) => files[path.basename(filePath)] ?? null,
       fetch: (async (url: string, init?: RequestInit) => {
         urls.push(String(url))
@@ -168,5 +179,124 @@ describe('Copilot quota on an Enterprise Cloud host', () => {
     const result = await fetchCopilotQuota(harness.options)
     expect(result.quota.connection).toBe('transientFailure')
     expect(result.quota.footerLines[0]).toContain('api.acme.ghe.com')
+  })
+})
+
+// The rungs that carry no host of their own were always sent to api.github.com,
+// so an enterprise-only credential got a 401 and a terminal failure (#1306).
+// GH_HOST names the host of an environment token, and gh's hosts.yml carries
+// the token and its host in the same entry.
+describe('gh hosts.yml parsing', () => {
+  const config = [
+    '# gh config',
+    '---',
+    'github.com:',
+    '    users:',
+    '        octocat:',
+    '            oauth_token: gho_dotcom',
+    '    git_protocol: https',
+    '    oauth_token: gho_dotcom',
+    'acme.ghe.com:',
+    '    users:',
+    '        octocat:',
+    '            oauth_token: gho_tenant',
+    '',
+  ].join('\n')
+
+  it('reads each top-level host with the first token inside its block', () => {
+    expect(ghCredentialsFromConfig(config)).toEqual([
+      { token: 'gho_dotcom', host: 'github.com' },
+      { token: 'gho_tenant', host: 'acme.ghe.com' },
+    ])
+  })
+
+  it('ignores comments, blank lines, CRLF endings and quoted keys', () => {
+    expect(ghCredentialsFromConfig('"ACME.ghe.com":\r\n    oauth_token: "gho_quoted"\r\n')).toEqual([
+      { token: 'gho_quoted', host: 'acme.ghe.com' },
+    ])
+    expect(ghCredentialsFromConfig('')).toEqual([])
+    // A host block with no token is not a credential.
+    expect(ghCredentialsFromConfig('acme.ghe.com:\n    user: octocat\n')).toEqual([])
+    // An indented key is never read as a host.
+    expect(ghCredentialsFromConfig('    acme.ghe.com:\n        oauth_token: gho_x\n')).toEqual([])
+  })
+
+  it('picks the host gh itself would read the token for', () => {
+    // A single login is used as-is, GH_HOST wins over the file, and dotcom
+    // wins when several are signed in - gh's own fallback.
+    expect(ghCopilotCredential('acme.ghe.com:\n    oauth_token: gho_tenant\n'))
+      .toEqual({ token: 'gho_tenant', host: 'acme.ghe.com' })
+    expect(ghCopilotCredential(config)).toEqual({ token: 'gho_dotcom', host: 'github.com' })
+    expect(ghCopilotCredential(config, 'acme.ghe.com')).toEqual({ token: 'gho_tenant', host: 'acme.ghe.com' })
+    // GH_HOST naming a host gh has no login for yields nothing, as gh would.
+    expect(ghCopilotCredential(config, 'other.ghe.com')).toBeNull()
+    expect(ghCopilotCredential('')).toBeNull()
+  })
+
+  it('follows gh\'s own config-directory order', () => {
+    expect(ghConfigPaths('darwin', { GH_CONFIG_DIR: '/opt/ghcfg', XDG_CONFIG_HOME: '/xdg' }, '/Users/dev'))
+      .toEqual([path.join('/opt/ghcfg', 'hosts.yml')])
+    expect(ghConfigPaths('darwin', { XDG_CONFIG_HOME: '/xdg' }, '/Users/dev'))
+      .toEqual([path.join('/xdg', 'gh', 'hosts.yml')])
+    expect(ghConfigPaths('darwin', {}, '/Users/dev')).toEqual([path.join('/Users/dev', '.config', 'gh', 'hosts.yml')])
+    expect(ghConfigPaths('win32', { APPDATA: 'C:\\Users\\dev\\AppData\\Roaming' }, 'C:\\Users\\dev')).toEqual([
+      path.join('C:\\Users\\dev\\AppData\\Roaming', 'GitHub CLI', 'hosts.yml'),
+      path.join('C:\\Users\\dev', '.config', 'gh', 'hosts.yml'),
+    ])
+  })
+})
+
+describe('Copilot rungs that used to carry no host', () => {
+  it('sends an environment token to the host GH_HOST names', async () => {
+    const harness = deps({}, () => usageResponse(), { GH_TOKEN: 'gho_env', GH_HOST: 'acme.ghe.com' })
+    const result = await fetchCopilotQuota(harness.options)
+    expect(harness.urls).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+    expect(harness.tokens).toEqual(['token gho_env'])
+    expect(result.quota.footerLines).toEqual(['Source: api.acme.ghe.com'])
+  })
+
+  it('keeps an environment token on dotcom when GH_HOST is unset', async () => {
+    const harness = deps({}, () => usageResponse(), { COPILOT_GITHUB_TOKEN: 'gho_env' })
+    await fetchCopilotQuota(harness.options)
+    expect(harness.urls).toEqual(['https://api.github.com/copilot_internal/user'])
+  })
+
+  it('sends a gh login to the host gh recorded for it', async () => {
+    const harness = deps({ 'hosts.yml': 'acme.ghe.com:\n    oauth_token: gho_ghcli\n' })
+    await fetchCopilotQuota(harness.options)
+    expect(harness.urls).toEqual(['https://api.acme.ghe.com/copilot_internal/user'])
+    expect(harness.tokens).toEqual(['token gho_ghcli'])
+  })
+
+  it('keeps the plugin files ahead of the environment and gh', async () => {
+    const harness = deps(
+      {
+        'hosts.json': JSON.stringify({ 'github.com': { oauth_token: 'gho_plugin' } }),
+        'hosts.yml': 'acme.ghe.com:\n    oauth_token: gho_ghcli\n',
+      },
+      () => usageResponse(),
+      { GH_TOKEN: 'gho_env', GH_HOST: 'other.ghe.com' },
+    )
+    await fetchCopilotQuota(harness.options)
+    expect(harness.urls).toEqual(['https://api.github.com/copilot_internal/user'])
+    expect(harness.tokens).toEqual(['token gho_plugin'])
+  })
+
+  it('reports disconnected when no rung holds a token', async () => {
+    const harness = deps({ 'hosts.yml': 'acme.ghe.com:\n    user: octocat\n' })
+    const result = await fetchCopilotQuota(harness.options)
+    expect(result.quota.connection).toBe('disconnected')
+    expect(harness.urls).toEqual([])
+  })
+
+  it.each([
+    ['GH_HOST', {}, { GH_TOKEN: 'gho_env', GH_HOST: 'evil.com?.ghe.com' }],
+    ['gh hosts.yml', { 'hosts.yml': 'evil.com?.ghe.com:\n    oauth_token: gho_ghcli\n' }, {}],
+  ] as const)('refuses a crafted host from %s without building a request', async (_source, files, env) => {
+    const harness = deps(files as Record<string, string>, () => usageResponse(), env)
+    const result = await fetchCopilotQuota(harness.options)
+    expect(harness.urls).toEqual([])
+    expect(result.quota.connection).toBe('terminalFailure')
+    expect(result.quota.footerLines[0]).toContain('evil.com?.ghe.com')
   })
 })

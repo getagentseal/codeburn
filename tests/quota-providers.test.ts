@@ -67,7 +67,12 @@ describe('Copilot quota', () => {
   })
 
   it('reports disconnected when no plugin token is on disk', async () => {
-    const result = await fetchCopilotQuota({ fetch: neverFetch as unknown as typeof fetch, readFile: noFile })
+    const result = await fetchCopilotQuota({
+      fetch: neverFetch as unknown as typeof fetch,
+      readFile: noFile,
+      env: {},
+      ghConfigPaths: [],
+    })
     expect(result.quota.connection).toBe('disconnected')
   })
 })

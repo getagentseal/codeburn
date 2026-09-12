@@ -334,12 +334,21 @@ tolerates an absent, locked, or malformed source and falls through:
    (`gho_`, `ghu_`, `ghp_`, `ghs_`, `github_pat_`). `ghr_` refresh tokens are
    skipped: the usage endpoint rejects them.
 3. `COPILOT_GITHUB_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`, matching the
-   Copilot CLI's own order. A GUI-launched app rarely inherits these.
+   Copilot CLI's own order, with `GH_HOST` read from the same environment as
+   the host those tokens belong to. A GUI-launched app rarely inherits these.
 4. `gh auth token`, which resolves keyring vs `~/.config/gh/hosts.yml` itself.
-   The binary is located the same way `CodeburnCLI` locates codeburn.
+   The binary is located the same way `CodeburnCLI` locates codeburn. The host
+   is read from that same `hosts.yml` (`GH_CONFIG_DIR`, then
+   `XDG_CONFIG_HOME/gh`, then `~/.config/gh`) rather than by spawning
+   `gh auth status`: gh writes the file for every login, keyring-backed ones
+   included, so a file read answers without a second subprocess. The pick
+   mirrors gh's own: `GH_HOST`, else the single configured host, else
+   `github.com`.
 5. A token the user pastes into Settings, stored in CodeBurn's own
-   provider-scoped keychain item. A fine-grained personal access token with the
-   `Plan: Read-only` permission is enough.
+   provider-scoped keychain item together with the host typed beside it. A
+   fine-grained personal access token with the `Plan: Read-only` permission is
+   enough. Settings refuses a host no endpoint can be derived from at the
+   field, so an unaddressable host never reaches the keychain record.
 
 The Copilot CLI's own keychain item (generic password service `copilot-cli`)
 is deliberately **not** read. It is written by a Node keyring library, so
@@ -353,8 +362,14 @@ Rung 4 costs a process spawn, so its answer is cached for `probeCacheTTL`
 `hasCredential` is the cheap eligibility answer and never spawns: it
 approximates rung 4 with an installed `gh` binary.
 
-The Electron surface (`app/electron/quota/copilot.ts`) still implements only
-rung 1.
+The CLI (`src/quota/copilot.ts`) implements rungs 1, 3 and 4 — the sources a
+CLI can reach — in that order, so `codeburn quota` and the Windows Capacity
+Dock follow the same host each rung names. Its rung 4 reads the `oauth_token`
+out of `hosts.yml` instead of spawning gh, so the token and the host come from
+one entry; a keyring-backed gh login has no token in that file and falls
+through. Rung 5 is macOS-only: it lives in that app's keychain item, which has
+no CLI equivalent. The Electron surface (`app/electron/quota/copilot.ts`) still
+implements only rung 1.
 
 ### GitHub Enterprise Cloud hosts (`*.ghe.com`)
 
@@ -365,16 +380,24 @@ api.github.com. So a credential carries the host it was read from —
 `hosts.json` is keyed by host, and newer `apps.json` files key by
 `<host>:<app id>` — and the request goes to
 `https://api.<tenant>.ghe.com/copilot_internal/user` for an enterprise host and
-to `https://api.github.com/copilot_internal/user` for `github.com` or for any
-rung that carries no host of its own (an app-name `apps.json` key, the
-environment variables, `gh auth token`, a pasted token). The token and the host
+to `https://api.github.com/copilot_internal/user` for `github.com` or for a
+source that genuinely carries none (an app-name `apps.json` key, an
+environment token with no `GH_HOST`, a gh login with no `hosts.yml` entry, a
+pasted token saved before the host field existed). Every rung can name a
+tenant: the credential files are keyed by host, the environment rung reads
+`GH_HOST`, the gh rung reads gh's `hosts.yml`, and the pasted rung saves the
+host beside the token (#1306). The token and the host
 always come from the same entry: with several hosts signed in, `github.com`
 wins, otherwise the first `.ghe.com` tenant in sorted order, so the pick is
 stable across reads; with exactly one, that host is used. A host neither rule
 can address — a self-hosted GitHub Enterprise Server install, which CodeBurn
 does not support — fails with a message naming that host rather than falling
 back to api.github.com, because dotcom would reject the credential anyway and
-must never receive it. Unreachable-host and HTTP failures name the host tried,
+must never receive it. Every host source is untrusted text, `GH_HOST`, gh's
+`hosts.yml` keys and the pasted host included: the normalized host is
+character-validated before any URL is built, because a value like
+`evil.com?.ghe.com` passes the `.ghe.com` suffix check but would build a URL
+whose host is `api.evil.com` and hand it the Authorization header. Unreachable-host and HTTP failures name the host tried,
 so the symptom is no longer a bare "Temporarily unavailable". Settings shows
 which host answered in the Copilot connection row. `CopilotHostEndpoint`
 (macOS) and the exported helpers in `src/quota/copilot.ts` (CLI) hold the

@@ -18,6 +18,13 @@
 // name). The plugins write those under ~/.config/github-copilot on macOS and
 // Linux but under %LOCALAPPDATA%\github-copilot on Windows, so the directory
 // is resolved per platform. Read-only; no new storage.
+//
+// Two further rungs mirror the macOS chain so `codeburn quota` reports what the
+// menubar reports (#1306), and both carry a host of their own rather than
+// assuming dotcom: COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN paired with
+// GH_HOST, then gh's own hosts.yml, whose entries carry the token and the host
+// together. gh is never spawned: one file read answers, and a keyring-backed
+// gh login simply has no token in that file and falls through.
 import os from 'node:os'
 import path from 'node:path'
 
@@ -27,6 +34,10 @@ import type { QuotaProvider, QuotaWindow } from './types.js'
 export const COPILOT_DEFAULT_HOST = 'github.com'
 export const COPILOT_DEFAULT_API_HOST = 'api.github.com'
 const ENTERPRISE_CLOUD_SUFFIX = '.ghe.com'
+/** Honoured in the order the Copilot CLI honours them. */
+export const COPILOT_TOKEN_ENV_NAMES = ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'] as const
+/** The variable gh and the Copilot CLI read to target a host other than dotcom. */
+export const COPILOT_HOST_ENV_NAME = 'GH_HOST'
 const USAGE_PATH = '/copilot_internal/user'
 const HEADERS = {
   Accept: 'application/json',
@@ -118,6 +129,88 @@ export type CopilotDeps = {
   /** Ordered credential directories; the first file that yields a token wins. */
   configDirs: string[]
   readFile: typeof readSecureFile
+  /** Read for the environment rung's token and its GH_HOST. */
+  env: NodeJS.ProcessEnv
+  /** Ordered gh `hosts.yml` candidates; the first that yields a token wins. */
+  ghConfigPaths: string[]
+}
+
+/**
+ * gh's `hosts.yml`: GH_CONFIG_DIR wins, then XDG_CONFIG_HOME/gh, then the
+ * platform default - `%APPDATA%\GitHub CLI` on Windows, `~/.config/gh`
+ * elsewhere, with the POSIX path kept as a second Windows candidate for a
+ * config written from an MSYS-style shell.
+ */
+export function ghConfigPaths(
+  platform: string = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): string[] {
+  const configDir = env['GH_CONFIG_DIR']?.trim()
+  if (configDir) return [path.join(configDir, 'hosts.yml')]
+  const xdg = env['XDG_CONFIG_HOME']?.trim()
+  if (xdg) return [path.join(xdg, 'gh', 'hosts.yml')]
+  const posix = path.join(home, '.config', 'gh', 'hosts.yml')
+  if (platform !== 'win32') return [posix]
+  const appData = env['APPDATA']?.trim() || path.join(home, 'AppData', 'Roaming')
+  return [path.join(appData, 'GitHub CLI', 'hosts.yml'), posix]
+}
+
+function unquote(value: string): string {
+  return value.trim().replace(/^["']|["']$/g, '')
+}
+
+/**
+ * The logins gh's `hosts.yml` holds a token for, in file order. Hosts are its
+ * top-level keys - the only lines starting in column zero - and the token is
+ * the first `oauth_token` inside that host's block, so the pair always comes
+ * from the same entry. This is a key scan, not a YAML parser, and every key is
+ * passed on untrusted to be validated where the URL is built.
+ */
+export function ghCredentialsFromConfig(text: string): CopilotCredential[] {
+  const found: CopilotCredential[] = []
+  let host: string | null = null
+  let token: string | null = null
+  const flush = (): void => {
+    if (host && token) found.push({ token, host })
+  }
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.replace(/\r$/, '')
+    if (!line.trim() || line.trimStart().startsWith('#')) continue
+    if (/^\s/.test(line)) {
+      // Indented: part of the current host's block. Keep the first token in it.
+      if (host && !token) {
+        const match = /^\s+oauth_token:\s*(\S.*)$/.exec(line)
+        if (match?.[1]) token = unquote(match[1])
+      }
+      continue
+    }
+    flush()
+    host = null
+    token = null
+    if (line.startsWith('-')) continue
+    const colon = line.indexOf(':')
+    if (colon === -1) continue
+    host = normalizeCopilotHost(unquote(line.slice(0, colon)))
+  }
+  flush()
+  return found
+}
+
+/**
+ * The gh login `codeburn quota` should read, picked the way gh picks the host
+ * for `gh auth token`: GH_HOST first, otherwise the single configured host,
+ * otherwise dotcom. A GH_HOST with no matching entry yields nothing, exactly as
+ * gh would find no token there.
+ */
+export function ghCopilotCredential(text: string, envHost?: string | null): CopilotCredential | null {
+  const entries = ghCredentialsFromConfig(text)
+  if (entries.length === 0) return null
+  const wanted = normalizeCopilotHost(envHost)
+  if (wanted) return entries.find(entry => entry.host === wanted) ?? null
+  const preferred = preferredCopilotHost(entries.map(entry => entry.host))
+  if (!preferred) return null
+  return entries.find(entry => (normalizeCopilotHost(entry.host) ?? COPILOT_DEFAULT_HOST) === preferred) ?? null
 }
 
 /**
@@ -141,7 +234,13 @@ export function copilotConfigDirs(
 // Resolved per call rather than once at import so a caller (and the tests) can
 // change the platform or the environment the paths are derived from.
 function defaultDeps(): CopilotDeps {
-  return { fetch: globalThis.fetch, configDirs: copilotConfigDirs(), readFile: readSecureFile }
+  return {
+    fetch: globalThis.fetch,
+    configDirs: copilotConfigDirs(),
+    readFile: readSecureFile,
+    env: process.env,
+    ghConfigPaths: ghConfigPaths(),
+  }
 }
 
 function empty(connection: QuotaProvider['connection'], footerLines: string[] = []): QuotaProvider {
@@ -182,6 +281,39 @@ async function credentialFromFiles(deps: CopilotDeps): Promise<CopilotCredential
     }
   }
   return null
+}
+
+/** GH_HOST names the host the environment's token belongs to (#1306). */
+function credentialFromEnv(deps: CopilotDeps): CopilotCredential | null {
+  for (const name of COPILOT_TOKEN_ENV_NAMES) {
+    const token = deps.env[name]?.trim()
+    if (token) return { token, host: normalizeCopilotHost(deps.env[COPILOT_HOST_ENV_NAME]) }
+  }
+  return null
+}
+
+async function credentialFromGhConfig(deps: CopilotDeps): Promise<CopilotCredential | null> {
+  for (const candidate of deps.ghConfigPaths) {
+    try {
+      const raw = await deps.readFile(candidate, 64 * 1024)
+      if (!raw) continue
+      const credential = ghCopilotCredential(raw, deps.env[COPILOT_HOST_ENV_NAME])
+      if (credential) return credential
+    } catch {
+      // An unreadable or over-permissive config falls through.
+    }
+  }
+  return null
+}
+
+/**
+ * Ordered, read-only credential chain, mirroring the macOS rung order for the
+ * sources a CLI can reach: the editor-plugin files, then the environment, then
+ * gh's own config. The pasted-token rung is macOS-only - it lives in that app's
+ * Keychain item, which has no CLI equivalent.
+ */
+async function readCredential(deps: CopilotDeps): Promise<CopilotCredential | null> {
+  return (await credentialFromFiles(deps)) ?? credentialFromEnv(deps) ?? (await credentialFromGhConfig(deps))
 }
 
 function windowOf(label: string, snapshot: unknown): QuotaWindow | null {
@@ -246,7 +378,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
   // host was tried instead of a bare "Temporarily unavailable".
   let apiHost = COPILOT_DEFAULT_API_HOST
   try {
-    let credential = await credentialFromFiles(deps)
+    let credential = await readCredential(deps)
     if (!credential) return { quota: empty('disconnected') }
     const endpointFor = (value: CopilotCredential): string | null => copilotUsageEndpoint(value.host)
     let endpoint = endpointFor(credential)
@@ -261,7 +393,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
     if (response.status === 401) {
       // An active editor session rotates this token; re-read once before
       // giving up so we don't report a failure the disk already fixed.
-      const reread = await credentialFromFiles(deps)
+      const reread = await readCredential(deps)
       if (!reread || reread.token === credential.token) return { quota: empty('transientFailure') }
       credential = reread
       const rereadEndpoint = endpointFor(credential)

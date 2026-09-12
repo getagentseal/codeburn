@@ -72,6 +72,8 @@ describe('Copilot quota on Windows', () => {
         seen.push(String((init.headers as Record<string, string>)['Authorization']))
         return usageResponse()
       }) as unknown as typeof fetch,
+      env: {},
+      ghConfigPaths: [],
     })
 
     expect(result.quota.connection).toBe('connected')
@@ -96,6 +98,8 @@ describe('Copilot quota on Windows', () => {
         seen.push(String((init.headers as Record<string, string>)['Authorization']))
         return usageResponse()
       }) as unknown as typeof fetch,
+      env: {},
+      ghConfigPaths: [],
     })
 
     expect(result.quota.connection).toBe('connected')
@@ -115,6 +119,8 @@ describe('Copilot quota on Windows', () => {
     const result = await fetchCopilotQuota({
       fetch: (() => { throw new Error('the test must not reach the network') }) as unknown as typeof fetch,
       configDirs: copilotConfigDirs('darwin', process.env, root),
+      env: {},
+      ghConfigPaths: [],
     })
 
     expect(result.quota.connection).toBe('disconnected')
