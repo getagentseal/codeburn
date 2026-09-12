@@ -4,6 +4,7 @@ import Testing
 
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private let week: TimeInterval = 7 * 24 * 3600
+private let eighteenHours: TimeInterval = 18 * 3600
 private let fiveHours: TimeInterval = 5 * 3600
 private let weekSeconds = 7 * 24 * 3600
 
@@ -45,27 +46,27 @@ private let afterEarlyReset = reading(percent: 0, resetsIn: week)
 @Suite("Early quota reset detection")
 struct EarlyQuotaResetDetectorTests {
     @Test("A reset time that jumps to a new cycle before the old one ended is an early reset")
-    func resetTimeJumpIsDetected() {
-        let event = EarlyQuotaResetDetector.detect(
+    func resetTimeJumpIsDetected() throws {
+        let event = try #require(EarlyQuotaResetDetector.detect(
             previous: beforeEarlyReset, current: afterEarlyReset, context: context()
-        )
-        #expect(event?.signal == .resetMovedForward)
-        #expect(event?.earlyBySeconds == 18 * 3600)
-        #expect(event?.percentBefore == 80)
-        #expect(event?.percentAfter == 0)
-        #expect(event?.notificationBody == "Claude's weekly limit reset 18h early. You're back to 100%.")
-        #expect(event?.noticeText == "Weekly limit reset 18h early")
+        ))
+        #expect(event.signal == .resetMovedForward)
+        #expect(event.earlyBySeconds == eighteenHours)
+        #expect(event.percentBefore == 80.0)
+        #expect(event.percentAfter == 0.0)
+        #expect(event.notificationBody == "Claude's weekly limit reset 18h early. You're back to 100%.")
+        #expect(event.noticeText == "Weekly limit reset 18h early")
     }
 
     @Test("Usage emptying while the reset time stands still is an early reset")
-    func percentDropIsDetected() {
-        let event = EarlyQuotaResetDetector.detect(
-            previous: reading(percent: 92, resetsIn: 18 * 3600, observedAgo: 300),
-            current: reading(percent: 1, resetsIn: 18 * 3600),
+    func percentDropIsDetected() throws {
+        let event = try #require(EarlyQuotaResetDetector.detect(
+            previous: reading(percent: 92, resetsIn: eighteenHours, observedAgo: 300),
+            current: reading(percent: 1, resetsIn: eighteenHours),
             context: context()
-        )
-        #expect(event?.signal == .usageDropped)
-        #expect(event?.earlyBySeconds == 18 * 3600)
+        ))
+        #expect(event.signal == .usageDropped)
+        #expect(event.earlyBySeconds == eighteenHours)
     }
 
     @Test("Both signals describe the same cut-short cycle, so they coalesce to one identity")
