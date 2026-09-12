@@ -1,18 +1,18 @@
-import { behavioralCallCount } from './behavioral-weight.js'
+import { isBehavioralCall } from './behavioral-weight.js'
 import { dateKey } from './day-aggregator.js'
 import { spendProjectIdentity } from './spend-flow.js'
 import type { ProjectSummary, SessionSummary } from './types.js'
-import { modelBreakdownKey } from './session-output.js'
+import { callBillableOutputTokens, inferSessionProvider, modelBreakdownKey } from './session-output.js'
 import type { SessionRow } from './sessions-report.js'
 
 /// One attributed slice of a session's in-range spend. Segments PARTITION the
-/// session: every turn lands in exactly one segment (consecutive turns with the
+/// session: every call lands in exactly one segment (consecutive calls with the
 /// same day/category/branch/PR-set are merged), so summing segment costs over a
 /// session reproduces the session's row cost, and summing a single dimension's
 /// contributions over all segments reconciles that dimension's aggregate.
 ///
-///   day      — local YYYY-MM-DD of the turn (same bucketing as history.daily);
-///              '' when the turn carries no usable timestamp.
+///   day      — local YYYY-MM-DD of the call (same bucketing as history.daily),
+///              falling back to its turn when the call timestamp is unusable.
 ///   category — the turn's task category, or null when unclassified.
 ///   branch   — the git branch carried forward across the session's turns
 ///              (same reconstruction as aggregateByBranch); null before the
@@ -33,6 +33,9 @@ export type ContributionSegment = {
   category: string | null
   branch: string | null
   models: Record<string, number>
+  /// Actual request/token counts for each model, independent of its price.
+  /// Optional only for compatibility with previously cached payloads.
+  modelUsage?: Record<string, { calls: number; inputTokens: number; outputTokens: number }>
   prs: string[]
   /// True when this segment's PR set is the legacy whole-session even split
   /// (transcript expired before per-turn capture). Absent otherwise.
@@ -69,27 +72,12 @@ export type SessionDrillRow = SessionRow & {
   contributions?: SessionContributions
 }
 
-type WorkableTurn = {
-  timestamp?: string
-  gitBranch?: string
-  prRefs?: string[]
-  category?: string
-  assistantCalls: Array<{
-    costUSD: number
-    savingsUSD?: number
-    model?: string
-    provider?: string
-    timestamp?: string
-    usage: { inputTokens: number; outputTokens: number }
-  }>
-}
-
 const UNKNOWN_MODEL_KEY = ''
 
 /// The session's local-day key for a turn, mirroring the day aggregator's
 /// bucketing order (turn timestamp, then the first call's). '' when neither is
 /// a real timestamp so an unparseable turn can never masquerade as a date.
-function turnDayKey(turn: WorkableTurn, fallback: string): string {
+function turnDayKey(turn: SessionSummary['turns'][number], fallback: string): string {
   const iso = turn.timestamp || turn.assistantCalls[0]?.timestamp || fallback
   if (!iso) return ''
   const key = dateKey(iso)
@@ -118,55 +106,43 @@ export function buildSessionContributions(session: SessionSummary): SessionContr
   let sawTurnRefs = false
   let currentBranch: string | null = null
 
-  for (const turn of session.turns as WorkableTurn[]) {
+  for (const turn of session.turns) {
     if (turn.prRefs?.length) { currentPrs = turn.prRefs; sawTurnRefs = true }
     if (turn.gitBranch) currentBranch = turn.gitBranch
 
-    let cost = 0
-    let savings = 0
-    let inputTokens = 0
-    let outputTokens = 0
-    const models = new Map<string, number>()
-    for (const call of turn.assistantCalls) {
-      cost += call.costUSD
-      savings += call.savingsUSD ?? 0
-      inputTokens += call.usage?.inputTokens ?? 0
-      outputTokens += call.usage?.outputTokens ?? 0
-      const key = modelKeyFor(call)
-      models.set(key, (models.get(key) ?? 0) + call.costUSD)
-    }
-    const calls = behavioralCallCount(turn.assistantCalls as SessionSummary['turns'][number]['assistantCalls'])
-
-    if (cost === 0 && calls === 0 && savings === 0 && inputTokens === 0 && outputTokens === 0) continue
-
     const prs = currentPrs ?? []
-    const day = turnDayKey(turn, session.firstTimestamp)
+    const turnDay = turnDayKey(turn, session.firstTimestamp)
     const category = turn.category ?? null
-
-    // Merge into the previous segment when every partition key matches, so a
-    // long run of same-context turns stays one segment in the payload.
-    const last = segments.at(-1)
-    if (last && last.day === day && last.category === category && last.branch === currentBranch && prsKey(last.prs) === prsKey(prs)) {
-      last.cost += cost
-      last.calls += calls
-      last.savingsUSD += savings
-      last.inputTokens += inputTokens
-      last.outputTokens += outputTokens
-      for (const [model, value] of models) last.models[model] = (last.models[model] ?? 0) + value
-      continue
+    for (const call of turn.assistantCalls) {
+      const cost = call.costUSD
+      const savings = call.savingsUSD ?? 0
+      const inputTokens = call.usage.inputTokens
+      const outputTokens = callBillableOutputTokens(call)
+      const calls = isBehavioralCall(call) ? 1 : 0
+      if (cost === 0 && calls === 0 && savings === 0 && inputTokens === 0 && outputTokens === 0) continue
+      const day = Number.isNaN(new Date(call.timestamp).getTime()) ? turnDay : dateKey(call.timestamp)
+      const key = modelKeyFor(call)
+      let segment = segments.at(-1)
+      if (!segment || segment.day !== day || segment.category !== category || segment.branch !== currentBranch || prsKey(segment.prs) !== prsKey(prs)) {
+        segment = {
+          day, category, branch: currentBranch, prs,
+          models: Object.create(null), modelUsage: Object.create(null),
+          cost: 0, calls: 0, savingsUSD: 0, inputTokens: 0, outputTokens: 0,
+        }
+        segments.push(segment)
+      }
+      segment.cost += cost
+      segment.calls += calls
+      segment.savingsUSD += savings
+      segment.inputTokens += inputTokens
+      segment.outputTokens += outputTokens
+      segment.models[key] = (segment.models[key] ?? 0) + cost
+      const usage = segment.modelUsage![key] ?? { calls: 0, inputTokens: 0, outputTokens: 0 }
+      usage.calls += calls
+      usage.inputTokens += inputTokens
+      usage.outputTokens += outputTokens
+      segment.modelUsage![key] = usage
     }
-    segments.push({
-      day,
-      category,
-      branch: currentBranch,
-      models: Object.fromEntries(models),
-      prs,
-      cost,
-      calls,
-      savingsUSD: savings,
-      inputTokens,
-      outputTokens,
-    })
   }
 
   // Legacy fallback, mirroring attributeSessionPrSpend: a session whose
@@ -185,20 +161,21 @@ export function buildSessionContributions(session: SessionSummary): SessionContr
 
 /// Attach `contributions` (and the identity/lineage integration fields) to the
 /// default session rows. `rows` must be the exact `aggregateSessions(projects)`
-/// output: both walk `projects` in the same order, so the arrays zip
-/// row-to-session; the sessionId+project check guards against any future
-/// ordering drift, and a mismatch degrades to un-annotated rows rather than
-/// wrong attribution.
+/// output. Provider, project label and session id locate a candidate; ambiguous
+/// identities (including identical labels at different paths) stay unannotated
+/// because plain SessionRow does not carry a canonical project path.
 export function withContributions(rows: SessionRow[], projects: ProjectSummary[]): SessionDrillRow[] {
-  const drillSessions = new Map<string, { session: SessionSummary; projectId: string }>()
+  const drillSessions = new Map<string, { session: SessionSummary; projectId: string } | null>()
+  const keyFor = (provider: string, project: string, sessionId: string) => JSON.stringify([provider, project, sessionId])
   for (const project of projects) {
     const projectId = spendProjectIdentity({ project: project.project, projectPath: project.projectPath }).id
     for (const session of project.sessions) {
-      drillSessions.set(`${session.sessionId}\u0000${session.project || project.project}`, { session, projectId })
+      const key = keyFor(inferSessionProvider(session), session.project || project.project, session.sessionId)
+      drillSessions.set(key, drillSessions.has(key) ? null : { session, projectId })
     }
   }
   return rows.map(row => {
-    const found = drillSessions.get(`${row.sessionId}\u0000${row.project}`)
+    const found = drillSessions.get(keyFor(row.provider, row.project, row.sessionId))
     const drill: SessionDrillRow = { ...row, projectId: found?.projectId }
     if (found) {
       const { session } = found

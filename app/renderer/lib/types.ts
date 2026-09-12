@@ -564,7 +564,7 @@ export type SessionRow = {
 // ————— src/session-contributions.ts (drill-through, `sessions --contributions`) —————
 
 /** One attributed slice of a session's in-range spend. Segments PARTITION the
- *  session (every turn lands in exactly one), so summing a single dimension
+ *  session (every call lands in exactly one), so summing a single dimension
  *  over all segments reconciles that dimension's aggregate exactly. `prs` is
  *  the turn's ACTIVE PR set carried forward like the by-PR attribution: []
  *  means unattributed, and a multi-PR set is listed whole (attributing to one
@@ -576,6 +576,8 @@ export type ContributionSegment = {
   /** Short model name -> attributed cost (same key family as modelBreakdown).
    *  Sums to `cost`; the unattributable remainder rides under ''. */
   models: Record<string, number>
+  /** Per-model request/token counts; absent in old cached reports. */
+  modelUsage?: Record<string, { calls: number; inputTokens: number; outputTokens: number }>
   prs: string[]
   /** True when the PR set is the legacy whole-session even split (transcript
    *  expired before per-turn capture); absent otherwise. */

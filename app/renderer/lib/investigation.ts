@@ -215,17 +215,13 @@ function segmentMatchesDimensions(segment: ContributionSegment, filters: Investi
  * Session-level dimensions (providers/projects/sessions) gate the whole row.
  * Segment dimensions (days/models/categories/branches/PRs) intersect WITH them
  * and with each other: within a segment each dimension contributes its share of
- * the segment cost — day/category/branch are per-segment values (0 or 1), model
- * and PR are fractions (selected-model cost / segment cost, |PR-set ∩ selected| /
- * |PR-set|). Multiplying shares keeps every dimension reconcilable: summing a
- * single dimension's contributions over the full population reproduces that
- * dimension's aggregate exactly.
+ * each segment — day/category/branch gate it, models select actual accounting
+ * totals, and PRs apply their existing even-share attribution. Model prices
+ * never stand in for request or token counts.
  */
 export function contributeRow(row: SessionDrillRow, filters: InvestigationFilters): IncludedRow | null {
   // Session-level gates first: they apply to the row as a whole.
-  if (filters.providers.length > 0 && !filters.providers.includes(row.provider)) return null
-  if (filters.projects.length > 0 && !filters.projects.some(project => rowMatchesProject(row, project))) return null
-  if (filters.sessions.length > 0 && !filters.sessions.some(s => s.provider === row.provider && s.sessionId === row.sessionId)) return null
+  if (!rowMatchesSessionDimensions(row, filters)) return null
 
   // Only session-level dimensions are active: the row contributes its totals.
   if (!segmentDimensionsActive(filters)) {
@@ -235,21 +231,29 @@ export function contributeRow(row: SessionDrillRow, filters: InvestigationFilter
   // Segment dimensions need segments; a row without them is honestly
   // unattributable (reported in the summary), never silently zero-valued
   // inside the list.
-  if (!row.contributions) return null
+  if (!canAttribute(row, filters)) return null
 
   let cost = 0
   let calls = 0
   let tokens = 0
-  for (const segment of row.contributions.segments) {
+  for (const segment of row.contributions!.segments) {
     if (!segmentMatchesDimensions(segment, filters)) continue
     if (filters.branches.length > 0 && !(segment.branch !== null && filters.branches.some(b => b.branch === segment.branch && rowMatchesProject(row, b.project)))) continue
     let share = 1
+    let segmentCost = segment.cost
+    let segmentCalls = segment.calls
+    let segmentTokens = segment.inputTokens + segment.outputTokens
     if (filters.models.length > 0) {
-      // A zero-cost segment has no honest model split: it cannot claim a share.
-      if (segment.cost <= EPSILON) continue
-      let selectedModelCost = 0
-      for (const model of filters.models) selectedModelCost += segment.models[model] ?? 0
-      share *= selectedModelCost / segment.cost
+      segmentCost = 0
+      segmentCalls = 0
+      segmentTokens = 0
+      for (const model of new Set(filters.models)) {
+        const usage = segment.modelUsage![model]
+        if (!usage) continue
+        segmentCost += segment.models[model] ?? 0
+        segmentCalls += usage.calls
+        segmentTokens += usage.inputTokens + usage.outputTokens
+      }
     }
     if (filters.prs.length > 0) {
       if (segment.prs.length === 0) continue
@@ -259,12 +263,25 @@ export function contributeRow(row: SessionDrillRow, filters: InvestigationFilter
       share *= hits / segment.prs.length
     }
     if (share <= EPSILON) continue
-    cost += segment.cost * share
-    calls += segment.calls * share
-    tokens += (segment.inputTokens + segment.outputTokens) * share
+    cost += segmentCost * share
+    calls += segmentCalls * share
+    tokens += segmentTokens * share
   }
   if (cost <= EPSILON && calls <= EPSILON && tokens <= EPSILON) return null
   return { row, cost, calls, tokens }
+}
+
+function rowMatchesSessionDimensions(row: SessionDrillRow, filters: InvestigationFilters): boolean {
+  return (filters.providers.length === 0 || filters.providers.includes(row.provider))
+    && (filters.projects.length === 0 || filters.projects.some(project => rowMatchesProject(row, project)))
+    && (filters.sessions.length === 0 || filters.sessions.some(s => s.provider === row.provider && s.sessionId === row.sessionId))
+}
+
+function canAttribute(row: SessionDrillRow, filters: InvestigationFilters): boolean {
+  if (!row.contributions) return false
+  // Older reports have model costs only. Exclude them with an explicit
+  // coverage count instead of inventing counts or mixing partial accounting.
+  return filters.models.length === 0 || row.contributions.segments.every(segment => segment.modelUsage !== undefined)
 }
 
 /** Apply the selection over the FULL population (call this before any
@@ -282,7 +299,7 @@ export function applyInvestigation(rows: SessionDrillRow[], filters: Investigati
       // A row the session-level gates allowed but that cannot attribute to the
       // active segment dimensions (no contribution segments) — counted so the
       // UI can disclose it instead of silently dropping spend.
-      if (segmentDimensionsActive(filters) && !row.contributions) unattributable++
+      if (rowMatchesSessionDimensions(row, filters) && segmentDimensionsActive(filters) && !canAttribute(row, filters)) unattributable++
       continue
     }
     included.push(contribution)

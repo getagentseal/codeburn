@@ -205,7 +205,7 @@ export function Sessions({
       ? codeburn.getSessionsContributions(period, provider, fetchRange)
       : codeburn.getSessionsContributions(period, provider),
     [period, provider, fetchRange?.from, fetchRange?.to, refreshToken],
-    { enabled: ready && investigating, memoKey: reportMemoKey('sessioncontrib', period, provider, fetchRange) },
+    { enabled: ready && investigating, memoKey: reportMemoKey('sessioncontrib-v2', period, provider, fetchRange) },
   )
 
   const report = investigating ? contributionReport : plainReport

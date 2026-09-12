@@ -209,6 +209,7 @@ describe('contribution math', () => {
       cost: 0.9,
       contributions: { segments: [segment({
         models: { 'Sonnet 4.5': 0.3, 'GPT-5.5': 0.6 },
+        modelUsage: { 'Sonnet 4.5': { calls: 1, inputTokens: 100, outputTokens: 20 }, 'GPT-5.5': { calls: 1, inputTokens: 200, outputTokens: 40 } },
         cost: 0.9,
       })] },
     })
@@ -231,6 +232,29 @@ describe('contribution math', () => {
     // Provider AND category: only the matching provider's category spend.
     const andResult = applyInvestigation([claude, codex], withFilterValue(providerFilters('codex'), 'categories', 'coding'))
     expect(andResult.cost).toBeCloseTo(0.9, 10)
+  })
+
+  it('uses actual per-model requests and tokens, including zero-cost usage', () => {
+    const subject = row({ sessionId: 'priced-differently', cost: 10, contributions: { segments: [segment({
+      cost: 10, calls: 3, inputTokens: 1050,
+      models: { expensive: 9, cheap: 1, free: 0 },
+      modelUsage: {
+        expensive: { calls: 1, inputTokens: 100, outputTokens: 0 },
+        cheap: { calls: 1, inputTokens: 900, outputTokens: 0 },
+        free: { calls: 1, inputTokens: 50, outputTokens: 0 },
+      },
+    })] } })
+    expect(applyInvestigation([subject], modelFilters(['expensive']))).toMatchObject({ cost: 9, calls: 1, tokens: 100 })
+    expect(applyInvestigation([subject], modelFilters(['free']))).toMatchObject({ cost: 0, calls: 1, tokens: 50 })
+    expect(applyInvestigation([subject], modelFilters(['expensive', 'cheap', 'free']))).toMatchObject({ cost: 10, calls: 3, tokens: 1050 })
+  })
+
+  it('discloses old model payloads without counting rows excluded by provider', () => {
+    const legacy = row({ sessionId: 'legacy', cost: 2, contributions: { segments: [segment({ cost: 2, models: { old: 2 } })] } })
+    const otherProvider = row({ sessionId: 'other', provider: 'codex', cost: 3 })
+    const result = applyInvestigation([legacy, otherProvider], withFilterValue(modelFilters(['old']), 'providers', 'claude'))
+    expect(result.included).toEqual([])
+    expect(result.unattributable).toBe(1)
   })
 
   it('rows without contribution segments are excluded and disclosed, not silently zero', () => {

@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { buildSessionContributions, withContributions } from '../src/session-contributions.js'
 import { aggregateSessions } from '../src/sessions-report.js'
 import { dateKey } from '../src/day-aggregator.js'
+import { aggregateProjectsIntoDays } from '../src/day-aggregator.js'
 import type { ClassifiedTurn, ParsedApiCall, ProjectSummary, SessionSummary, TokenUsage } from '../src/types.js'
 import { CLEARED, REDIRECTED } from './setup/env-isolation-vars.js'
 
@@ -95,6 +96,36 @@ const DAY1 = '2026-09-10T10:00:00.000Z'
 const DAY2 = '2026-09-11T10:00:00.000Z'
 
 describe('session contribution segments', () => {
+  it('reconciles a single midnight-straddling turn with daily call accounting', () => {
+    const before = new Date(2026, 8, 10, 23, 59).toISOString()
+    const after = new Date(2026, 8, 11, 0, 1).toISOString()
+    const session = sessionWith([turn({ timestamp: before, assistantCalls: [
+      call({ timestamp: before, costUSD: 3 }),
+      call({ timestamp: after, costUSD: 5 }),
+    ] })])
+    const segments = buildSessionContributions(session).segments
+    const daily = aggregateProjectsIntoDays([projectOf(session)])
+    expect(segments.map(s => [s.day, s.cost, s.calls])).toEqual([
+      ['2026-09-10', 3, 1], ['2026-09-11', 5, 1],
+    ])
+    expect(segments.map(s => [s.day, s.cost])).toEqual(daily.map(d => [d.date, d.cost]))
+  })
+
+  it('retains per-model counts independently of price and supplementary accounting', () => {
+    const session = sessionWith([turn({ timestamp: DAY1, assistantCalls: [
+      call({ timestamp: DAY1, model: 'claude-opus-4-6', costUSD: 9, usage: usage(100, 0) }),
+      call({ timestamp: DAY1, model: 'claude-sonnet-4-5', costUSD: 1, usage: usage(900, 0) }),
+      call({ timestamp: DAY1, model: 'claude-opus-4-6', costUSD: 2, usage: usage(50, 0), supplementaryAccounting: true }),
+      call({ timestamp: DAY1, model: 'free-model', costUSD: 0, usage: usage(75, 0) }),
+    ] })])
+    const segment = buildSessionContributions(session).segments[0]!
+    expect(segment.modelUsage!['Opus 4.6']).toEqual({ calls: 1, inputTokens: 150, outputTokens: 0 })
+    expect(segment.modelUsage!['Sonnet 4.5']).toEqual({ calls: 1, inputTokens: 900, outputTokens: 0 })
+    expect(Object.values(segment.modelUsage!).reduce((sum, value) => sum + value.calls, 0)).toBe(3)
+    expect(Object.values(segment.modelUsage!).reduce((sum, value) => sum + value.inputTokens, 0)).toBe(1125)
+    expect(segment.models['Opus 4.6']).toBe(11)
+  })
+
   it('partition a session across days: sum(segments.cost) == session cost', () => {
     const session = sessionWith([
       turn({ timestamp: DAY1, category: 'coding', assistantCalls: [call({ costUSD: 0.4, timestamp: DAY1 })] }),
@@ -245,6 +276,25 @@ describe('session contribution segments', () => {
 })
 
 describe('withContributions', () => {
+  it('keeps same-id sessions in different providers separate regardless of row order', () => {
+    const claude = sessionWith([turn({ timestamp: DAY1, assistantCalls: [call({ timestamp: DAY1, costUSD: 2, provider: 'claude' })] })])
+    const codex = sessionWith([turn({ timestamp: DAY1, assistantCalls: [call({ timestamp: DAY1, costUSD: 9, provider: 'codex' })] })])
+    const projects = [{ ...projectOf(claude), sessions: [claude, codex] }]
+    const result = withContributions(aggregateSessions(projects).reverse(), projects)
+    expect(result.map(r => [r.provider, r.cost, r.contributions!.segments[0]!.cost])).toEqual([
+      ['codex', 9, 9], ['claude', 2, 2],
+    ])
+  })
+
+  it('leaves ambiguous same-provider identities unannotated instead of overwriting', () => {
+    const first = sessionWith([turn({ timestamp: DAY1, assistantCalls: [call({ timestamp: DAY1, costUSD: 2 })] })])
+    const second = sessionWith([turn({ timestamp: DAY1, assistantCalls: [call({ timestamp: DAY1, costUSD: 9 })] })])
+    const projects = [projectOf(first), { ...projectOf(second), projectPath: '/different/path' }]
+    const result = withContributions(aggregateSessions(projects), projects)
+    expect(result.map(r => r.cost)).toEqual([2, 9])
+    expect(result.every(r => r.contributions === undefined)).toBe(true)
+  })
+
   it('zip rows to sessions in aggregateSessions order and attach lineage fields', () => {
     const session = sessionWith(
       [turn({ timestamp: DAY1, assistantCalls: [call({ costUSD: 0.5, timestamp: DAY1 })] })],

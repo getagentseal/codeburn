@@ -44,6 +44,13 @@ attributed per turn, the rows carry the by-PR report's `~` even-split marker.
 Sessions that cannot be attributed to the selection (no per-turn detail
 survived for them) are excluded and counted in the summary ("N sessions could
 not be attributed") instead of being silently dropped or zero-valued.
+The same disclosure applies to ambiguous session identities and old cached
+reports without per-model usage when a model filter is active.
+
+Days follow each call's timestamp, so a turn crossing midnight contributes to
+both days. Model filters use the model's actual calls and tokens, independently
+of its cost; free models retain their usage. Supplementary accounting retains
+cost and tokens without adding requests.
 
 ## Drawer, history, and focus
 
@@ -66,8 +73,8 @@ not be attributed") instead of being silently dropped or zero-valued.
 The renderer stays a pure view over CLI JSON. The drill-through report is
 `codeburn sessions --format json --contributions` — the same session rows and
 the same `--project`/`--exclude`/`--provider` filtering semantics as the plain
-report, plus per-session `contribution.segments` (turn-granular slices with
-day, category, git branch, model, and active PR set) and canonical identities
+report, plus per-session `contributions.segments` (call-day slices with
+category, git branch, model costs and usage, and active PR set) and canonical identities
 (`projectId`, `provider`, `sessionId`). Transcripts never cross the IPC
 boundary; the report is fetched only while a selection is active, and every
 chip combination is computed client-side over the full fetched population.
