@@ -5,6 +5,11 @@ import Foundation
 struct CapacityDockProviderCredential: Codable, Equatable, Sendable {
     var sourceMode: String = ProviderReferenceSourceMode.automatic.rawValue
     var apiKey: String = ""
+    /// GitHub host a pasted Copilot token belongs to, empty for dotcom. It
+    /// lives in the same record as the token so the two can never drift apart:
+    /// the host a credential is sent to always comes from the entry that
+    /// carried the token (#1306). Unused by the other providers.
+    var host: String = ""
 
     var resolvedSourceMode: ProviderReferenceSourceMode {
         ProviderReferenceSourceMode(rawValue: sourceMode) ?? .automatic
@@ -21,7 +26,8 @@ struct CapacityDockProviderCredential: Codable, Equatable, Sendable {
     var sanitizedOverride: CapacityDockProviderCredentialOverride {
         CapacityDockProviderCredentialOverride(
             sourceMode: resolvedSourceMode,
-            apiKey: cleaned(apiKey)
+            apiKey: cleaned(apiKey),
+            host: cleaned(host)
         )
     }
 
@@ -31,9 +37,32 @@ struct CapacityDockProviderCredential: Codable, Equatable, Sendable {
     }
 }
 
+/// Decoding is hand-written, and lives in an extension so the memberwise
+/// initializer survives. Swift's synthesized `init(from:)` ignores a property's
+/// default value and throws on a missing key, so adding any field to this
+/// record would make every credential saved before it unreadable — for every
+/// provider, not just the one that gained the field.
+extension CapacityDockProviderCredential {
+    private enum CodingKeys: String, CodingKey {
+        case sourceMode, apiKey, host
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sourceMode: try container.decodeIfPresent(String.self, forKey: .sourceMode)
+                ?? ProviderReferenceSourceMode.automatic.rawValue,
+            apiKey: try container.decodeIfPresent(String.self, forKey: .apiKey) ?? "",
+            host: try container.decodeIfPresent(String.self, forKey: .host) ?? ""
+        )
+    }
+}
+
 struct CapacityDockProviderCredentialOverride: Equatable, Sendable {
     var sourceMode: ProviderReferenceSourceMode
     var apiKey: String?
+    /// Only Copilot populates this; see `CapacityDockProviderCredential.host`.
+    var host: String?
 }
 
 enum CapacityDockProviderCredentialStoreError: LocalizedError, Equatable {

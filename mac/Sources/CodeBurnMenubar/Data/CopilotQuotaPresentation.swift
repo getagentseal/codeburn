@@ -78,6 +78,29 @@ enum CopilotQuotaPresentation {
         explicitlyDisconnected ? disconnectedSettingsDetail : noCredentialsSettingsDetail
     }
 
+    /// Settings connection-row detail before anything has been fetched. It
+    /// used to promise `api.github.com`, which is wrong for every enterprise
+    /// tenant now that each rung can carry its own host (#1306): with no
+    /// answer yet there is no host to name, so it names one only when a
+    /// previous snapshot already proved which host answers.
+    static func dormantSettingsDetail(apiHost: String?) -> String {
+        guard let apiHost, !apiHost.isEmpty, apiHost != CopilotHostEndpoint.defaultAPIHost else {
+            return "Tap Load Quota to fetch live usage from GitHub."
+        }
+        return "Tap Load Quota to fetch live usage from \(apiHost)."
+    }
+
+    /// Why a host typed next to the pasted token cannot be used, or nil when
+    /// it can. Rejecting it in Settings turns what would otherwise be a
+    /// terminal fetch failure into an answer at the field the user typed —
+    /// and keeps an unaddressable host out of the Keychain record entirely.
+    static func pastedHostRejection(_ raw: String) -> String? {
+        let host = CopilotHostEndpoint.normalize(raw) ?? CopilotHostEndpoint.defaultHost
+        guard CopilotHostEndpoint.apiHost(for: host) == nil else { return nil }
+        return "CodeBurn cannot read Copilot quota for \(host). "
+            + "Use github.com or a GitHub Enterprise Cloud host (*.ghe.com)."
+    }
+
     /// Snapshot age past which a loaded view stamps an "as of <time>" caption,
     /// so a bar can never silently masquerade as current.
     static let stalenessThreshold: TimeInterval = 10 * 60
