@@ -458,6 +458,15 @@ function assertFormat(value: string, allowed: readonly string[], command: string
   }
 }
 
+/** Task-category ids (types.ts CATEGORY_LABELS keys), shared with `--task`. */
+function assertCategory(value: string): void {
+  if (value in CATEGORY_LABELS) return
+  process.stderr.write(
+    `codeburn: unknown category "${value}". Valid values: ${Object.keys(CATEGORY_LABELS).join(', ')}.\n`
+  )
+  process.exit(1)
+}
+
 type AliasRow = { from: string; to: string }
 
 function toAliasRows(aliases: Record<string, string>): AliasRow[] {
@@ -2231,16 +2240,57 @@ program
   .description('Compare two AI models side-by-side')
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', 'all')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
-  .option('--format <format>', 'Output format: tui, json', 'tui')
+  .option('--format <format>', 'Output format: tui, json, cohort-json', 'tui')
   .option('--model-a <model>', 'First model to compare')
   .option('--model-b <model>', 'Second model to compare')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
+  .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
+  .option('--category <category>', 'cohort-json only: keep edit-turn observations of one activity category')
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare')
-    assertFormat(opts.format, ['tui', 'json'], 'compare')
+    assertFormat(opts.format, ['tui', 'json', 'cohort-json'], 'compare')
     await loadPricing()
-    const { range, label } = getDateRange(opts.period)
+    const customRange = parseDateRangeFlags(opts.from, opts.to)
+    const { range, label } = customRange
+      ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
+      : getDateRange(opts.period)
+    if (opts.format === 'cohort-json') {
+      if (opts.category !== undefined) assertCategory(opts.category)
+      const { aggregateModelStats, buildCohortComparison, buildCohortFacets, findModelStat, renderCohortJson } = await import('./compare-cohorts.js')
+      const parsed = await parseAllSessions(range, opts.provider)
+      await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+      const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+
+      // Without --model-a/--model-b the cohort format answers the FACET query:
+      // the models, canonical project identities, and activity categories the
+      // desktop cohort pickers are built from (one parse, one contract).
+      if (!opts.modelA && !opts.modelB) {
+        process.stdout.write(renderCohortJson(buildCohortFacets(projects)) + '\n')
+        return
+      }
+      if (!opts.modelA || !opts.modelB) {
+        process.stderr.write('codeburn compare: --model-a and --model-b must be provided together.\n')
+        process.exit(1)
+      }
+      const models = aggregateModelStats(projects)
+      const modelA = findModelStat(models, opts.modelA)
+      const modelB = findModelStat(models, opts.modelB)
+      if (!modelA) {
+        process.stderr.write(`codeburn compare: model not found: "${opts.modelA}".\n`)
+        process.exit(1)
+      }
+      if (!modelB) {
+        process.stderr.write(`codeburn compare: model not found: "${opts.modelB}".\n`)
+        process.exit(1)
+      }
+      process.stdout.write(renderCohortJson(buildCohortComparison(
+        projects, modelA.model, modelB.model, label, opts.provider,
+        { category: opts.category as TaskCategory | undefined, from: opts.from ?? null, to: opts.to ?? null },
+      )) + '\n')
+      return
+    }
     if (opts.format === 'json') {
       const { aggregateModelStats, buildCompareJson, findModelStat, renderCompareJson, scanSelfCorrections } = await import('./compare-stats.js')
       const parsed = await parseAllSessions(range, opts.provider)
