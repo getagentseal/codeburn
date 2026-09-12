@@ -394,7 +394,7 @@ describe('App shortcuts', () => {
     render(<App />)
 
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
-    expect(screen.getByText(`${mod}1-8`)).toBeInTheDocument()
+    expect(screen.getByText(`${mod}1-8,9`)).toBeInTheDocument()
     expect(screen.getAllByText(`${mod},`).length).toBeGreaterThan(0)
     expect(screen.getByText(`${mod}R`)).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()

@@ -156,6 +156,25 @@ function vRange(range: DateRange | undefined): DateRange | undefined {
   }
   return range
 }
+/**
+ * Drill-down contribution key (canonical project path or model id). Unlike
+ * vToken, a leading '-' is legal here: Claude sanitizes project paths by
+ * replacing separators with '-' (e.g. `/work/pricing` → `-work-pricing`), and
+ * the key is only ever emitted in the VALUE position of `--key`/`--dimension`
+ * pairs, where Commander binds the next token as the value — a dash-leading
+ * value cannot inject a flag through the argv array (no shell involved).
+ * Empty and NUL are still rejected.
+ */
+function vContributionKey(value: string): string {
+  if (!value || value.includes('\0')) throw new CliError('bad-args', 'invalid contribution key')
+  return value
+}
+/** vRange for channels where the range is REQUIRED (compare periods). */
+function vRequiredRange(range: DateRange | undefined, name: string): DateRange {
+  const v = vRange(range)
+  if (!v) throw new CliError('bad-args', `missing ${name} date range`)
+  return v
+}
 function vCurrency(code: string): string {
   if (!/^[A-Z]{3}$/.test(code)) throw new CliError('bad-args', 'invalid currency code')
   return code
@@ -391,6 +410,24 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), '--model-a', vToken(modelA), '--model-b', vToken(modelB),
     ]),
+    // Compare periods (B minus A). Both ranges are REQUIRED local YYYY-MM-DD
+    // key pairs; the renderer computes the 7v7 default so argv stays explicit.
+    'codeburn:getPeriodCompare': run((rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean) => [
+      'compare-periods', '--format', 'json',
+      '--from-a', vRequiredRange(rangeA, 'A').from, '--to-a', vRequiredRange(rangeA, 'A').to,
+      '--from-b', vRequiredRange(rangeB, 'B').from, '--to-b', vRequiredRange(rangeB, 'B').to,
+      ...providerArgs(vProvider(provider)),
+    ], 3),
+    'codeburn:getPeriodCompareSessions': run((rangeA: DateRange, rangeB: DateRange, provider: string, dimension: string, key: string) => {
+      if (dimension !== 'project' && dimension !== 'model') throw new CliError('bad-args', 'invalid drill-down dimension')
+      return [
+        'compare-periods', '--format', 'sessions',
+        '--from-a', vRequiredRange(rangeA, 'A').from, '--to-a', vRequiredRange(rangeA, 'A').to,
+        '--from-b', vRequiredRange(rangeB, 'B').from, '--to-b', vRequiredRange(rangeB, 'B').to,
+        ...providerArgs(vProvider(provider)),
+        '--dimension', dimension, '--key', vContributionKey(key),
+      ]
+    }),
     'codeburn:getYield': run((period: string, provider: string, range?: DateRange) => [
       'yield', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),

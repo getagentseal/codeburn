@@ -31,6 +31,7 @@ import { Models } from './sections/Models'
 import { Sessions } from './sections/Sessions'
 import { PullRequestsContent } from './sections/PullRequests'
 import { Compare } from './sections/Compare'
+import { PeriodCompare } from './sections/PeriodCompare'
 import { Plans } from './sections/Plans'
 import { Settings, type SettingsPane } from './sections/Settings'
 import { SpendContent } from './sections/Spend'
@@ -125,6 +126,7 @@ const SECTION_TITLES: Record<Section, string> = {
   optimize: 'Optimize',
   models: 'Models',
   compare: 'Compare',
+  periods: 'Compare periods',
   plans: 'Plans',
   settings: 'Settings',
   plugins: 'Plugins',
@@ -618,6 +620,14 @@ function AppMain() {
     trackEvent('section_view', { section: next })
   }, [])
 
+  // Navigation adapter for Compare periods' contribution drill-down (until the
+  // goal-8 navigation lands): opens the existing Sessions section scoped to the
+  // requested range via the app's own custom-range state.
+  const inspectRange = useCallback((range: DateRange) => {
+    setCustomRange(range)
+    navigate('sessions')
+  }, [navigate])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isModifierChord(event)) return
@@ -629,6 +639,7 @@ function AppMain() {
       else if (key === '5') navigate('optimize')
       else if (key === '6') navigate('models')
       else if (key === '7') navigate('compare')
+      else if (key === '9') navigate('periods')
       else if (key === '8') navigate('plans')
       else if (key === ',') navigate('settings')
       else if (key === 'r') refreshVisible()
@@ -757,6 +768,8 @@ function AppMain() {
                 <Models period={period} provider={provider} range={customRange} refreshToken={refreshToken} onNavigate={navigate} ready={ready} />
               ) : section === 'compare' ? (
                 <Compare period={period} provider={provider} range={customRange} refreshToken={refreshToken} ready={ready} />
+              ) : section === 'periods' ? (
+                <PeriodCompare provider={provider} refreshToken={refreshToken} ready={ready} onInspectRange={inspectRange} />
               ) : (
                 <SectionPlaceholder title={SECTION_TITLES[section]} />
               )}
@@ -767,7 +780,7 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: shortcutLabel('1-8'), label: 'Navigate' },
+              { k: shortcutLabel('1-8,9'), label: 'Navigate' },
               { k: shortcutLabel(','), label: 'Settings' },
               { k: shortcutLabel('R'), label: 'Refresh' },
             ]}

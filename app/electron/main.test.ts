@@ -43,6 +43,8 @@ const CHANNELS = [
   'codeburn:getSessions',
   'codeburn:getCompareModels',
   'codeburn:getCompare',
+  'codeburn:getPeriodCompare',
+  'codeburn:getPeriodCompareSessions',
   'codeburn:getYield',
   'codeburn:getSpendFlow',
   'codeburn:getOptimizeReport',
@@ -98,6 +100,12 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getCompareModels', args: ['month', 'codex'], argv: ['compare', '--format', 'json', '--period', 'month', '--provider', 'codex'] },
   { channel: 'codeburn:getCompare', args: ['month', 'all', 'model-a', 'model-b'], argv: ['compare', '--format', 'json', '--period', 'month', '--model-a', 'model-a', '--model-b', 'model-b'] },
+  { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'claude'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--provider', 'claude'] },
+  { channel: 'codeburn:getPeriodCompare', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all'], argv: ['compare-periods', '--format', 'json', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14'] },
+  { channel: 'codeburn:getPeriodCompareSessions', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all', 'project', '/work/app'], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--dimension', 'project', '--key', '/work/app'] },
+  // Claude sanitizes project paths to dash-leading slugs; the key rides in the
+  // VALUE position of --key, so a dash-leading key must survive validation.
+  { channel: 'codeburn:getPeriodCompareSessions', args: [{ from: '2026-07-01', to: '2026-07-07' }, { from: '2026-07-08', to: '2026-07-14' }, 'all', 'project', '-work-pricing'], argv: ['compare-periods', '--format', 'sessions', '--from-a', '2026-07-01', '--to-a', '2026-07-07', '--from-b', '2026-07-08', '--to-b', '2026-07-14', '--dimension', 'project', '--key', '-work-pricing'] },
   { channel: 'codeburn:getYield', args: ['today', 'all'], argv: ['yield', '--format', 'json', '--period', 'today'] },
   { channel: 'codeburn:getYield', args: ['today', 'claude'], argv: ['yield', '--format', 'json', '--period', 'today', '--provider', 'claude'] },
   { channel: 'codeburn:getSpendFlow', args: ['month', 'openai'], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--provider', 'openai'] },
