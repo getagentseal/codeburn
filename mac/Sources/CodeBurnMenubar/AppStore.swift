@@ -175,6 +175,13 @@ final class AppStore {
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
+    /// Early quota resets seen for each provider, keyed by dock provider id, and
+    /// this Mac's own record of how early past resets landed. Both are derived
+    /// from data already on disk on the existing refresh lifecycle — no polling
+    /// of its own, no network (#725).
+    var earlyResetEvents: [String: EarlyQuotaResetEvent] = [:]
+    var earlyResetHistory: [EarlyQuotaResetHistory.Summary] = []
+    @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
 
     var codexUsage: CodexUsage?
     var codexError: String?
@@ -1507,7 +1514,7 @@ final class AppStore {
             subscription = usage
             subscriptionError = nil
             subscriptionLoadState = .loaded
-            await captureSnapshots(for: usage)
+            await captureSnapshots(for: usage, baselineIsTrusted: false)
         } catch let err as ClaudeSubscriptionService.FetchError {
             applyFetchError(err)
         } catch {
@@ -1533,6 +1540,11 @@ final class AppStore {
             }
             return false
         }
+        // Read before `beginClaudeQuotaRefresh` moves the state to `.loading`;
+        // with a refresh already in flight the restore state is the real one.
+        let stateBeforeFetch = claudeRefreshInFlightRequest == nil
+            ? subscriptionLoadState
+            : (claudeRefreshRestoreState ?? subscriptionLoadState)
         let token = beginClaudeQuotaRefresh()
         do {
             guard let usage = try await claudeQuotaFetcher() else {
@@ -1552,7 +1564,10 @@ final class AppStore {
             subscriptionError = nil
             subscriptionLoadState = .loaded
             finishClaudeQuotaRefresh(token)
-            await captureSnapshots(for: usage)
+            await captureSnapshots(
+                for: usage,
+                baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
+            )
             return true
         } catch let err as ClaudeSubscriptionService.FetchError {
             guard isCurrentClaudeQuotaRefresh(token) else { return false }
@@ -1604,6 +1619,9 @@ final class AppStore {
         subscriptionError = nil
         subscriptionLoadState = .notBootstrapped
         capacityEstimates = [:]
+        earlyResetEvents[CapacityDockProvider.claude.rawValue] = nil
+        earlyResetHistory = []
+        earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.claude.rawValue)
         Task.detached { await SubscriptionSnapshotStore.clearAll() }
         // Notify the AppDelegate to clear its cadence-loop anchor so the next
         // reconnect doesn't measure against a pre-disconnect timestamp.
@@ -2108,6 +2126,22 @@ final class AppStore {
         // Cap length so a runaway server body cannot fill stderr.
         if cleaned.count > 240 { cleaned = String(cleaned.prefix(240)) + "…" }
         return cleaned
+    }
+
+    /// The early-reset band for one dock provider, while it is still recent.
+    func capacityDockEarlyResetNotice(
+        for provider: CapacityDockProvider,
+        now: Date = Date()
+    ) -> EarlyQuotaResetEvent? {
+        guard let event = earlyResetEvents[provider.rawValue] else { return nil }
+        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
+    }
+
+    /// This Mac's own early-reset pattern for the provider's windows, for the
+    /// quota hover card. Only Claude persists the snapshots this is derived from.
+    func earlyResetHistoryCaptions(for filter: ProviderFilter) -> [String] {
+        guard filter == .claude else { return [] }
+        return earlyResetHistory.map(\.caption)
     }
 
     /// Snapshot of live quota state for a given provider. Returns nil when the user
@@ -2794,7 +2828,7 @@ final class AppStore {
     /// when the current window has just reset and projection from current data isn't meaningful.
     /// Also computes the effective_tokens consumed inside each 7-day window from local history,
     /// which the CapacityEstimator uses to derive the absolute token capacity per tier.
-    private func captureSnapshots(for usage: SubscriptionUsage) async {
+    private func captureSnapshots(for usage: SubscriptionUsage, baselineIsTrusted: Bool) async {
         let now = Date()
         let history = payload.history.daily
 
@@ -2805,6 +2839,13 @@ final class AppStore {
             ("seven_day_opus", usage.sevenDayOpusPercent, usage.sevenDayOpusResetsAt, nil),
             ("seven_day_sonnet", usage.sevenDaySonnetPercent, usage.sevenDaySonnetResetsAt, nil),
         ]
+        await detectEarlyResets(
+            captures: captures.map { ($0.key, $0.percent, $0.resetsAt) },
+            planLabel: usage.tier.displayName,
+            baselineIsTrusted: baselineIsTrusted,
+            now: now
+        )
+
         for capture in captures {
             guard let percent = capture.percent, let resetsAt = capture.resetsAt else { continue }
             await SubscriptionSnapshotStore.record(SubscriptionSnapshot(
@@ -2817,6 +2858,71 @@ final class AppStore {
         }
 
         await refreshCapacityEstimates()
+        await refreshEarlyResetHistory()
+    }
+
+    /// Hand this fetch's windows to the early-reset monitor, which compares them
+    /// against the previous fetch's readings and announces at most one event.
+    /// A window the API did not report this time is passed as absent rather than
+    /// omitted, so a window that comes and goes never reads as a reset.
+    private func detectEarlyResets(
+        captures: [(key: String, percent: Double?, resetsAt: Date?)],
+        planLabel: String?,
+        baselineIsTrusted: Bool,
+        now: Date
+    ) async {
+        let provider = CapacityDockProvider.claude
+        let observations = captures.map { capture in
+            EarlyQuotaResetMonitor.Observation(
+                windowKey: capture.key,
+                windowName: EarlyQuotaResetFormat.claudeWindowName(forKey: capture.key),
+                windowSeconds: Self.claudeWindowSeconds(forKey: capture.key),
+                reading: {
+                    guard let percent = capture.percent, let resetsAt = capture.resetsAt else { return nil }
+                    return EarlyQuotaResetReading(percent: percent, resetsAt: resetsAt, observedAt: now)
+                }()
+            )
+        }
+        await earlyQuotaResetMonitor.record(
+            providerID: provider.rawValue,
+            providerName: provider.displayName,
+            planLabel: planLabel,
+            baselineIsTrusted: baselineIsTrusted,
+            observations: observations,
+            now: now
+        )
+        earlyResetEvents[provider.rawValue] = earlyQuotaResetMonitor.visibleEvent(
+            providerID: provider.rawValue,
+            now: now
+        )
+    }
+
+    /// Claude's rate-limit windows are fixed lengths, the same durations the
+    /// pace captions project against.
+    private static func claudeWindowSeconds(forKey key: String) -> Int? {
+        switch key {
+        case "five_hour": QuotaPacePresentation.claudeFiveHourSeconds
+        case "seven_day", "seven_day_opus", "seven_day_sonnet": QuotaPacePresentation.claudeSevenDaySeconds
+        default: nil
+        }
+    }
+
+    /// Re-derive the "past resets came this early" captions from the snapshots
+    /// already on disk. Local only: no network, no external feed.
+    private func refreshEarlyResetHistory() async {
+        var summaries: [EarlyQuotaResetHistory.Summary] = []
+        for key in ["seven_day", "seven_day_opus", "seven_day_sonnet"] {
+            let snapshots = await SubscriptionSnapshotStore.snapshots(for: key)
+            if let summary = EarlyQuotaResetHistory.summarize(
+                snapshots: snapshots,
+                windowKey: key,
+                windowName: EarlyQuotaResetFormat.claudeWindowName(forKey: key),
+                windowSeconds: Self.claudeWindowSeconds(forKey: key)
+            ) {
+                summaries.append(summary)
+            }
+        }
+        earlyResetHistory = summaries
     }
 
     /// Sum effective tokens (input + 5*output + cache_creation + 0.1*cache_read) across the
@@ -2982,6 +3088,21 @@ enum SubscriptionLoadState: Sendable, Equatable {
     case failed           // generic non-recoverable failure
     case terminalFailure(reason: String?)  // refresh-token invalid; user must reconnect
     case transientFailure(retryAt: Date?)  // 429 / network blip; backing off automatically
+}
+
+extension SubscriptionLoadState {
+    /// Whether the reading stored before this fetch can be compared against it.
+    /// A provider coming back from a terminal failure, a fresh bootstrap or no
+    /// credentials has a baseline from the far side of a gap, where stale state
+    /// looks like a jump. `.dormant` is a launch state, not a gap: its baseline
+    /// is the last successful fetch, and the skew, plan and new-cycle guards
+    /// still apply to it.
+    var earlyResetBaselineIsTrusted: Bool {
+        switch self {
+        case .loaded, .loading, .dormant, .failed, .transientFailure: true
+        case .notBootstrapped, .bootstrapping, .noCredentials, .terminalFailure: false
+        }
+    }
 }
 
 enum DisplayMetric: String {
