@@ -2579,11 +2579,11 @@ program
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
-  .option('--format <format>', 'Output format: flow-json', 'flow-json')
+  .option('--format <format>', 'Output format: flow-json, branch-json', 'flow-json')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
-    assertFormat(opts.format, ['flow-json'], 'spend')
+    assertFormat(opts.format, ['flow-json', 'branch-json'], 'spend')
     assertProvider(opts.provider, 'spend')
     const { computeSpendFlow } = await import('./spend-flow.js')
     await loadPricing()
@@ -2599,6 +2599,13 @@ program
       }
     } else {
       range = getDateRange(opts.period).range
+    }
+
+    if (opts.format === 'branch-json') {
+      // Spend per canonical project x branch (the desktop "By branch" lens).
+      const { computeBranchSpend } = await import('./branch-spend.js')
+      console.log(JSON.stringify(await computeBranchSpend(range, opts.provider, opts.project, opts.exclude)))
+      return
     }
 
     console.log(JSON.stringify(await computeSpendFlow(range, opts.provider, opts.project, opts.exclude)))
