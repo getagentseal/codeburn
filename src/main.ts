@@ -13,7 +13,7 @@ import { convertCost, formatCost } from './currency.js'
 import { renderStatusBar } from './format.js'
 import { DAILY_CACHE_VERSION, toDateString } from './daily-cache.js'
 import { dateKey } from './day-aggregator.js'
-import { sessionModelBillableOutputTokens } from './session-output.js'
+import { sessionModelBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { isBehavioralCall } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
@@ -668,6 +668,7 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     .sort(([, a], [, b]) => (b.cost + b.savings) - (a.cost + a.savings))
     .map(([cat, d]) => ({
       category: CATEGORY_LABELS[cat as TaskCategory] ?? cat,
+      rawCategory: cat,
       cost: convertCost(d.cost),
       savings: convertCost(d.savings),
       turns: d.turns,
@@ -722,6 +723,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
     .flatMap(p => p.sessions.map(s => ({
       project: p.project,
       sessionId: s.sessionId,
+      provider: inferSessionProvider(s),
+      projectKey: s.project || p.project,
       date: s.firstTimestamp ? dateKey(s.firstTimestamp) : null,
       cost: convertCost(s.totalCostUSD),
       savings: convertCost(s.totalSavingsUSD),
@@ -2444,12 +2447,17 @@ program
   .option('--format <format>', 'Output format: table, json', 'table')
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
+  .option('--contributions', 'JSON only: attach per-session contribution segments (day, category, branch, model, PR) to each row')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
+    if (opts.contributions && (opts.byPr || opts.byWorkUnit || opts.format !== 'json')) {
+      process.stderr.write('codeburn: --contributions requires plain --format json (no --by-pr/--by-work-unit)\n')
+      process.exit(1)
+    }
     const { aggregateSessions, buildPrAttribution, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } = await import('./sessions-report.js')
     const wantsInteractive = opts.format === 'table' && !opts.byPr && !opts.byWorkUnit && opts.pager !== false && process.stdin.isTTY === true && process.stdout.isTTY === true
     if (wantsInteractive) setInteractiveScanUI()
@@ -2519,6 +2527,11 @@ program
       return
     }
     const rows = aggregateSessions(projects)
+    if (opts.contributions) {
+      const { withContributions } = await import('./session-contributions.js')
+      process.stdout.write(JSON.stringify(withContributions(rows, projects), null, 2) + '\n')
+      return
+    }
     if (opts.byWorkUnit) {
       const { resolveWorkUnits } = await import('./work-units.js')
       const { inferSessionProvider } = await import('./session-output.js')

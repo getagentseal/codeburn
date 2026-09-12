@@ -98,6 +98,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
     '--project': 'value', '--exclude': 'value',
+    '--contributions': 'flag',
   },
   compare: {
     '-p': 'value', '--period': 'value', '--provider': 'value', '--format': 'value',

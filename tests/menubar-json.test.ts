@@ -19,8 +19,7 @@ function emptyPeriod(label: string): PeriodData {
 }
 
 describe('buildMenubarPayload', () => {
-  it('emits the full schema with current-period metrics and iso timestamp', () => {
-    const period: PeriodData = {
+  it('emits the full schema with current-period metrics and iso timestamp', () => {    const period: PeriodData = {
       label: '7 Days',
       cost: 1248.01,
       calls: 11231,
@@ -44,6 +43,33 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.sessions).toBe(97)
     expect(payload.current.inputTokens).toBe(19100)
     expect(payload.current.outputTokens).toBe(675600)
+  })
+
+  it('carries drill-through session identity (sessionId, provider) into topSessions and project sessionDetails', () => {
+    const period: PeriodData = {
+      ...emptyPeriod('7 Days'),
+      projects: [{
+        id: '/abs/project-a',
+        name: 'project-a',
+        cost: 5,
+        savingsUSD: 0,
+        sessions: 1,
+        sessionDetails: [{
+          cost: 5, savingsUSD: 0, calls: 3, inputTokens: 100, outputTokens: 20,
+          date: '2026-09-10',
+          models: [{ name: 'Sonnet 4.5', cost: 5, savingsUSD: 0 }],
+          sessionId: 'session-a1',
+          provider: 'claude',
+        }],
+      }],
+      topSessions: [{
+        project: 'project-a', cost: 5, savingsUSD: 0, calls: 3, date: '2026-09-10',
+        sessionId: 'session-a1', provider: 'claude',
+      }],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    expect(payload.current.topSessions[0]).toMatchObject({ sessionId: 'session-a1', provider: 'claude', project: 'project-a' })
+    expect(payload.current.topProjects[0]!.sessionDetails[0]).toMatchObject({ sessionId: 'session-a1', provider: 'claude' })
   })
 
   it('passes the pull-requests payload (models, categories, cap remainder) through verbatim', () => {
