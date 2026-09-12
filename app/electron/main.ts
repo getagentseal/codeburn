@@ -381,6 +381,15 @@ type Handler = (...args: any[]) => Promise<Envelope>
  * shell) and returns a result envelope. Pure + injectable so the wiring is
  * unit-testable without launching Electron.
  */
+/**
+ * The line `codeburn export` prints only after a file or folder is written
+ * (src/main.ts, the `Exported (<label>) to: <path>` log). An empty export
+ * prints `No usage data found.` and still exits 0, so the exit code alone
+ * cannot tell the two apart.
+ */
+const EXPORT_SAVED_MARKER = 'Exported ('
+const EXPORT_NOTHING_WRITTEN = 'Nothing to export: no usage in the export window, or the project filter hides all of it.'
+
 export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, resolveCodeburnPath, getQuota, emitProgress: broadcastProgress, telemetry: telemetryInstance, getUpdateStatus: () => updateChecker ? updateChecker.getStatus() : Promise.resolve(NO_UPDATE_STATUS), companion: companion }): Record<string, Handler> {
   const emitProgress = deps.emitProgress ?? (() => {})
   const telemetry = deps.telemetry ?? null
@@ -601,10 +610,25 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:removeDevice': runAction((name: string) => ['devices', 'rm', vToken(name)]),
     'codeburn:setPlan': runAction((id: string, provider: string) => ['plan', 'set', vToken(id), '--provider', vProvider(provider)]),
     'codeburn:resetPlan': runAction((provider: string) => ['plan', 'reset', '--provider', vProvider(provider)]),
-    'codeburn:exportData': runAction((format: string, provider: string, outPath: string) => [
-      'export', '-f', vToken(format), '-o', vOutPath(outPath), '--provider', vProvider(provider),
-      ...projectArgs(),
-    ]),
+    // Not plain runAction: `export` prints prose and exits 0 when every period
+    // came back empty, and a filter that hides every project now makes that
+    // reachable from a click. The exit code would toast "Exported to <folder>"
+    // over a folder the CLI never created, so success reads the saved-path line
+    // the CLI prints only after a write.
+    'codeburn:exportData': async (format: string, provider: string, outPath: string) => {
+      try {
+        const result = await deps.spawnCliAction([
+          'export', '-f', vToken(format), '-o', vOutPath(outPath), '--provider', vProvider(provider),
+          ...projectArgs(),
+        ])
+        if (result.ok && !result.stdout.includes(EXPORT_SAVED_MARKER)) {
+          return { ok: true, value: { ...result, ok: false, stderr: EXPORT_NOTHING_WRITTEN } }
+        }
+        return { ok: true, value: { ...result, stderr: sanitizeError(result.stderr) } }
+      } catch (err) {
+        return { ok: false, error: toEnvelopeError(err) }
+      }
+    },
     'codeburn:cliStatus': async () => {
       const p = deps.resolveCodeburnPath()
       return { ok: true, value: { found: p !== null, path: p } }

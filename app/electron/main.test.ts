@@ -1049,6 +1049,27 @@ describe('project filter', () => {
     })
   })
 
+  // `codeburn export` prints prose and exits 0 when every period is empty, which
+  // an exclude list covering every project now makes reachable from a click.
+  it('reports an export that wrote nothing as a failure', async () => {
+    await withFilterFile(async () => {
+      writeProjectFilter({ project: [], exclude: ['my-company'] })
+      const spawnCliAction = vi.fn(async () => ({ ok: true, stdout: '\n  No usage data found.\n', stderr: '', code: 0 }))
+      const handlers = createBridgeHandlers(deps({ spawnCli: vi.fn(), spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      const res = await handlers['codeburn:exportData']!('csv', 'all', '/tmp/out')
+      expect(res).toMatchObject({ ok: true, value: { ok: false, stderr: expect.stringMatching(/Nothing to export/) } })
+    })
+  })
+
+  it('keeps an export that named a saved path successful', async () => {
+    await withFilterFile(async () => {
+      const spawnCliAction = vi.fn(async () => ({ ok: true, stdout: '\n  Exported (Today + 7 Days + 30 Days) to: /tmp/out\n', stderr: '', code: 0 }))
+      const handlers = createBridgeHandlers(deps({ spawnCli: vi.fn(), spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      const res = await handlers['codeburn:exportData']!('csv', 'all', '/tmp/out')
+      expect(res).toMatchObject({ ok: true, value: { ok: true } })
+    })
+  })
+
   it('persists nothing while the filter is disabled by env', () => {
     const previous = process.env.CODEBURN_APP_FILTER
     process.env.CODEBURN_APP_FILTER = ''
