@@ -805,6 +805,14 @@ export function OverviewContent({
   // whose per-day top-5 history list no longer names them. history.daily is
   // the fallback for payloads from older CLIs: its rows know input/output but
   // not cache read, so the cache column shows "—" there.
+  //
+  // TRADE-OFF, all-provider view: the previous `aggregateModels` source was
+  // uncapped (a union over each day's top-5), whereas `current.topModels` is
+  // capped at the CLI's TOP_MODELS_LIMIT of 20 rows. All-provider therefore
+  // gains that cap here. Accepted: the union it replaces was itself truncated
+  // per day, so its rows past the top few were already partial sums, and 20
+  // period-accurate rows beat an unbounded list of per-day leftovers. Raising
+  // the cap is a payload-size decision for the CLI, not this table.
   const topModelsCarryCounts = data.current.topModels.some(model =>
     model.inputTokens !== undefined || model.outputTokens !== undefined,
   )

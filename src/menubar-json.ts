@@ -513,6 +513,19 @@ function buildTopActivities(categories: PeriodData['categories']): MenubarPayloa
 /// "unknown", not zero: a legacy row that predates the counts must not turn the
 /// merged row into a plausible-looking 0, so one unknown contributor marks the
 /// merged count unknown and the field is omitted from the payload.
+///
+/// KNOWN GAP: on the durable (daily-cache) path this guard cannot fire today.
+/// `ModelDayStats` types the four counts as required numbers and daily-cache's
+/// `sanitizeModels` runs every field through `num()`, which turns a missing
+/// value into a known `0`. A day carried forward from a generation that
+/// predates the counts therefore contributes an exact zero and the period row
+/// under-reports as if it were complete, instead of going unknown here. Making
+/// it reachable means widening `ModelDayStats` to optional counts and teaching
+/// every daily-cache arithmetic site (fold, subtract, reduce) plus
+/// `buildPeriodDataFromDays` to propagate absence — a durable-cache contract
+/// change, tracked separately. The guard stays because the PeriodData contract
+/// already types these counts optional: fresh-session and plugin-sourced rows
+/// may legitimately omit them.
 const MODEL_COUNT_KEYS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const
 type ModelCountKey = (typeof MODEL_COUNT_KEYS)[number]
 
