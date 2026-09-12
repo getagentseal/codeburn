@@ -160,11 +160,21 @@ function normalizePatterns(value: unknown): string[] {
   const patterns = new Set<string>()
   for (const entry of entries) {
     if (typeof entry !== 'string') continue
-    const pattern = entry.trim()
+    const pattern = expandTilde(entry.trim())
     if (pattern === '') continue
     patterns.add(pattern)
   }
   return [...patterns]
+}
+
+/// A pattern typed into the pane has no shell behind it, so "~/work/app" is
+/// expanded here, on the way in and on the way out of the file. The renderer
+/// has no home directory of its own, and a tilde it cannot resolve would make
+/// its switches disagree with the argv this process writes.
+function expandTilde(pattern: string): string {
+  const raw = pattern.replace(/\\/g, '/')
+  if (raw !== '~' && !raw.startsWith('~/')) return pattern
+  return os.homedir().replace(/\\/g, '/') + raw.slice(1)
 }
 
 function normalizeProjectFilter(value: unknown): ProjectFilter {

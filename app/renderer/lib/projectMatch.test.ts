@@ -1,3 +1,5 @@
+import { homedir } from 'node:os'
+
 import { describe, expect, it } from 'vitest'
 
 import { matchesProjectPattern } from '../../../src/parser.js'
@@ -14,6 +16,7 @@ const PROJECTS = [
   { name: 'unc', path: '\\\\Server\\Share\\Vault' },
   { name: 'stripped', path: 'root/vault' },
   { name: 'stripped-ui', path: 'root/vault-ui' },
+  { name: 'home-proj', path: `${homedir().replace(/\\/g, '/')}/work/my-company` },
   { name: 'encoded', path: '' },
   { name: '-Users-me-Web-thing', path: '' },
 ]
@@ -24,6 +27,9 @@ const PATTERNS = [
   'root/vault', 'me/work', '/', '//', '', '-Users-me-Web', 'thing', '/nope',
 ]
 
+// A tilde is absent on purpose: the main process expands it on the way in and
+// out of the filter file (see normalizePatterns), so a pattern reaching the
+// renderer is already a path it can resolve.
 describe('projectMatch parity with the CLI', () => {
   it('agrees with matchesProjectPattern on every pattern and project', () => {
     for (const project of PROJECTS) {

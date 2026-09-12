@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
@@ -861,6 +862,18 @@ describe('project filter', () => {
     await withFilterFile(() => {
       expect(writeProjectFilter({ project: ['  my-company  ', 'my-company', '', '-Users-me-Web-my-company', 7], exclude: 7 }))
         .toEqual({ project: ['my-company', '-Users-me-Web-my-company'], exclude: [] })
+    })
+  })
+
+  it('expands a leading ~ so the pane and the CLI resolve the same path', async () => {
+    await withFilterFile(filterPath => {
+      const home = homedir().replace(/\\/g, '/')
+      expect(writeProjectFilter({ project: ['~/work/app'], exclude: ['~'] }))
+        .toEqual({ project: [`${home}/work/app`], exclude: [home] })
+      // Also on the way out: the file can be hand-edited with a tilde the
+      // renderer has no way to resolve.
+      writeFileSync(filterPath, JSON.stringify({ exclude: ['~/work/other'] }))
+      expect(readProjectFilter()).toEqual({ project: [], exclude: [`${home}/work/other`] })
     })
   })
 
