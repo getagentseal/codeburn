@@ -18,7 +18,9 @@ import { isBehavioralCall } from './behavioral-weight.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import type { AppliedFix } from './act/types.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
-import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, type DurablePeriod } from './usage-aggregator.js'
+import { buildPeriodData, buildMenubarPayloadForRange, buildDurablePeriod, getDailyCacheConfigHash, type DurablePeriod } from './usage-aggregator.js'
+import { aggregateProjectsIntoDays } from './day-aggregator.js'
+import { buildPeriodDiffReport, defaultSevenDayRanges, diffSessions, dayKeyToRange, historyBasis, localRangeInfo } from './period-diff.js'
 import { loadStatusSnapshot, saveStatusSnapshot } from './session-cache.js'
 import { renderDashboard } from './dashboard.js'
 import { renderOverview } from './overview.js'
@@ -2287,6 +2289,122 @@ program
       }
     }
     await renderCompare(range, opts.provider, opts.modelA, opts.modelB, opts.project, opts.exclude)
+  })
+
+program
+  .command('compare-periods')
+  .description('Compare usage and cost between two periods (B minus A: B is analyzed, A is the reference)')
+  .option('--from-a <date>', 'Reference period A start (YYYY-MM-DD)')
+  .option('--to-a <date>', 'Reference period A end (YYYY-MM-DD)')
+  .option('--from-b <date>', 'Analyzed period B start (YYYY-MM-DD)')
+  .option('--to-b <date>', 'Analyzed period B end (YYYY-MM-DD)')
+  .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--format <format>', 'Output format: json, sessions', 'json')
+  .option('--dimension <dimension>', 'Drill-down dimension for --format sessions: project, model')
+  .option('--key <key>', 'Canonical contribution key for --format sessions (project path or model id from the report)')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
+  .option('--no-with-history', 'Skip the durable daily-history cross-check (aggregate-only carried days)')
+  .action(async (opts) => {
+    assertProvider(opts.provider, 'compare-periods')
+    assertFormat(opts.format, ['json', 'sessions'], 'compare-periods')
+
+    // Explicit ranges must come as two complete pairs; otherwise the default
+    // horizon is the last seven complete local days (B) vs the seven before
+    // (A). Same local-date conventions as --from/--to everywhere else.
+    const flagsGiven = [opts.fromA, opts.toA, opts.fromB, opts.toB].filter(v => v !== undefined)
+    let keyRangeA: DateRange
+    let keyRangeB: DateRange
+    if (flagsGiven.length > 0) {
+      if (flagsGiven.length !== 4) {
+        process.stderr.write('codeburn compare-periods: --from-a/--to-a/--from-b/--to-b must be provided together.\n')
+        process.exit(1)
+      }
+      const a = parseDateRangeFlags(opts.fromA, opts.toA)
+      const b = parseDateRangeFlags(opts.fromB, opts.toB)
+      if (!a || !b) {
+        process.stderr.write('codeburn compare-periods: --from-a/--to-a/--from-b/--to-b must be valid YYYY-MM-DD dates.\n')
+        process.exit(1)
+      }
+      keyRangeA = a
+      keyRangeB = b
+    } else {
+      const defaults = defaultSevenDayRanges()
+      keyRangeA = dayKeyToRange(defaults.A.from, defaults.A.to)
+      keyRangeB = dayKeyToRange(defaults.B.from, defaults.B.to)
+    }
+
+    if (opts.format === 'sessions') {
+      const dimension = opts.dimension
+      if (dimension !== 'project' && dimension !== 'model') {
+        process.stderr.write('codeburn compare-periods: --dimension must be "project" or "model" for --format sessions.\n')
+        process.exit(1)
+      }
+      if (!opts.key) {
+        process.stderr.write('codeburn compare-periods: --key is required for --format sessions.\n')
+        process.exit(1)
+      }
+      await loadPricing()
+      const [projectsA, projectsB] = await Promise.all([
+        parseAllSessions(keyRangeA, opts.provider),
+        parseAllSessions(keyRangeB, opts.provider),
+      ])
+      process.stdout.write(JSON.stringify({
+        dimension,
+        key: opts.key,
+        provider: opts.provider,
+        rangeA: localRangeInfo(keyRangeA),
+        rangeB: localRangeInfo(keyRangeB),
+        sessions: diffSessions(projectsA, projectsB, dimension, opts.key),
+      }, null, 2) + '\n')
+      return
+    }
+
+    await loadPricing()
+    const [parsedA, parsedB] = await Promise.all([
+      parseAllSessions(keyRangeA, opts.provider),
+      parseAllSessions(keyRangeB, opts.provider),
+    ])
+    await reportUnmatchedProjectPatterns([...parsedA, ...parsedB], opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(keyRangeB))
+    const projectsA = filterProjectsByName(parsedA, opts.project, opts.exclude)
+    const projectsB = filterProjectsByName(parsedB, opts.project, opts.exclude)
+
+    // Cross-check the durable daily history so usage whose sources aged off
+    // disk (aggregate-only carried days) is visible instead of silently
+    // missing from a transcript-based report. Best-effort: an unavailable
+    // daily cache degrades to the report's explicit "detail only" basis note.
+    let history
+    if (opts.withHistory) {
+      try {
+        const { ensureCacheHydrated } = await import('./daily-cache.js')
+        const cache = await ensureCacheHydrated(
+          range => parseAllSessions(range, 'all'),
+          aggregateProjectsIntoDays,
+          getDailyCacheConfigHash(),
+          isSessionHydrationComplete,
+        )
+        history = historyBasis(
+          cache,
+          localRangeInfo(keyRangeA),
+          localRangeInfo(keyRangeB),
+          opts.provider,
+          aggregateProjectsIntoDays(projectsA),
+          aggregateProjectsIntoDays(projectsB),
+        )
+      } catch (err) {
+        process.stderr.write(`codeburn compare-periods: daily history check skipped (${err instanceof Error ? err.message : String(err)}).\n`)
+      }
+    }
+
+    const report = buildPeriodDiffReport({
+      provider: opts.provider,
+      rangeA: localRangeInfo(keyRangeA),
+      rangeB: localRangeInfo(keyRangeB),
+      projectsA,
+      projectsB,
+      history,
+    })
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n')
   })
 
 program
