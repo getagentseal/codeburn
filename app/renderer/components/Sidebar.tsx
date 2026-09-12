@@ -6,7 +6,7 @@ import type { CompanionStatus } from '../lib/types'
 import { AboutModal, SOCIALS } from './AboutModal'
 import { FlameMark } from './FlameMark'
 
-export type Section = 'overview' | 'sessions' | 'pullRequests' | 'spend' | 'optimize' | 'models' | 'compare' | 'plans' | 'settings' | 'plugins'
+export type Section = 'overview' | 'sessions' | 'pullRequests' | 'spend' | 'optimize' | 'models' | 'compare' | 'periods' | 'plans' | 'settings' | 'plugins'
 
 export const NAV_ITEMS: Array<{ id: Section; label: string; key: string; icon: ReactNode }> = [
   { id: 'overview', label: 'Overview', key: '1', icon: (
@@ -29,6 +29,9 @@ export const NAV_ITEMS: Array<{ id: Section; label: string; key: string; icon: R
   ) },
   { id: 'compare', label: 'Compare', key: '7', icon: (
     <svg viewBox="0 0 24 24"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>
+  ) },
+  { id: 'periods', label: 'Compare periods', key: '9', icon: (
+    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="7" height="14" rx="1"/><rect x="14" y="9" width="7" height="10" rx="1"/><path d="M3 3v18M14 3v18" opacity="0.4"/></svg>
   ) },
   { id: 'plans', label: 'Plans', key: '8', icon: (
     <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></svg>
