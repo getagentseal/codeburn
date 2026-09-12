@@ -989,7 +989,7 @@ describe('codeburn status --format menubar-json', () => {
 
       const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all', '--no-optimize']
 
-      // First run writes a snapshot under the current (v7) semantic key.
+      // First run writes a snapshot under the current semantic key.
       const first = runCli(args, home)
       expect(first.status, `stderr: ${first.stderr}`).toBe(0)
 
@@ -1208,6 +1208,79 @@ describe('codeburn status --format menubar-json', () => {
 
       const dailyAfter = readdirSync(cacheDir).filter(f => /^daily-cache\.v\d+\.json$/.test(f))
       expect(dailyAfter).toEqual(dailyFiles)
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('recomputes over a pre-change snapshot so topModels carry token counts, then reuses the fresh record without re-invalidating', async () => {
+    // The per-model token counts changed the payload's rendering semantics
+    // without changing the envelope. A snapshot written by the pre-change
+    // binary carries the same corpus fingerprint and query key, so a record
+    // that predates the fields must be rejected by the semantic key (one real
+    // recompute), after which the fresh record is served as-is — the third
+    // identical call must neither rebuild nor rewrite the snapshot.
+    const home = await mkdtemp(join(tmpdir(), 'codeburn-menubar-token-render-'))
+
+    try {
+      const projectDir = join(home, '.claude', 'projects', 'myapp')
+      await mkdir(projectDir, { recursive: true })
+      const now = new Date()
+      const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      const base = new Date(Math.max(todayUtcMidnight, now.getTime() - 2 * 3600_000))
+      const ts = (offset: number) => new Date(base.getTime() + offset).toISOString().replace(/\.\d+Z$/, 'Z')
+      await writeFile(
+        join(projectDir, 'session.jsonl'),
+        [userLine('s1', ts(0)), assistantLine('s1', ts(60_000), 'msg-1')].join('\n'),
+      )
+
+      const args = ['status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all', '--no-optimize']
+      const first = runCli(args, home)
+      expect(first.status, `stderr: ${first.stderr}`).toBe(0)
+      const seeded = JSON.parse(first.stdout) as { current: { topModels: Array<Record<string, unknown>> } }
+      expect(seeded.current.topModels[0]?.inputTokens).toBe(500)
+
+      const snapshotFiles = findSnapshotFiles(join(home, '.cache', 'codeburn'))
+      expect(snapshotFiles).toHaveLength(1)
+      const record = JSON.parse(await readFile(snapshotFiles[0]!, 'utf-8')) as {
+        semanticKey: string
+        payload: { current: { topModels: unknown[] } }
+      }
+      // Rewind the record to the pre-change contract: the IMMEDIATELY previous
+      // render revision, topModels rows without any token counts. Deriving the
+      // tag keeps the plant meaningful — a hard-coded older literal would also
+      // be rejected by revisions this change did not introduce, so the case
+      // would stop proving that THIS bump is what invalidates the record.
+      record.semanticKey = record.semanticKey.replace(/:render-\d+:/, PREVIOUS_RENDER_TAG)
+      record.payload.current.topModels = [
+        { name: 'Legacy Snapshot Model', cost: 9.99, calls: 4, savingsUSD: 0, savingsBaselineModel: '' },
+      ]
+      await writeFile(snapshotFiles[0]!, JSON.stringify(record))
+
+      const second = runCli(args, home)
+      expect(second.status, `stderr: ${second.stderr}`).toBe(0)
+      const payload = JSON.parse(second.stdout) as {
+        current: { topModels: Array<{ name: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }> }
+      }
+      expect(payload.current.topModels.map(model => model.name)).not.toContain('Legacy Snapshot Model')
+      expect(payload.current.topModels[0]).toMatchObject({
+        inputTokens: 500,
+        outputTokens: 50,
+        // The helper's usage carries no cache traffic: a KNOWN zero, which the
+        // pre-change record could not have expressed at all.
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      })
+
+      const freshRecord = await readFile(snapshotFiles[0]!, 'utf-8')
+      expect(JSON.parse(freshRecord).semanticKey).toContain(CURRENT_RENDER_TAG)
+      const third = runCli(args, home)
+      expect(third.status, `stderr: ${third.stderr}`).toBe(0)
+      expect(JSON.parse(third.stdout)).toEqual(payload)
+      // No repeated invalidation: a warm record is served, not rebuilt or
+      // rewritten (loadStatusSnapshot only persists settle-window bookkeeping
+      // on a corpus mismatch, and saveStatusSnapshot only runs on a miss).
+      expect(await readFile(snapshotFiles[0]!, 'utf-8')).toBe(freshRecord)
     } finally {
       await rm(home, { recursive: true, force: true })
     }

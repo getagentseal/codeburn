@@ -638,8 +638,55 @@ describe('Overview', () => {
     expect(rows[1]).toHaveTextContent('$120.00')
     expect(rows[1]).toHaveTextContent('240')
     expect(rows[2]).toHaveTextContent('claude-opus-4')
-    // current.topModels carries no per-model tokens → both token cells show a dash.
-    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(2)
+    // This legacy-shaped payload carries no per-model counts → all three token
+    // cells (input, output, cache read) show a dash.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(3)
+  })
+
+  it('prefers current.topModels for the models table when the payload carries per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // New-CLI payload: per-model counts ride on current.topModels, including
+    // cache read. history.daily still carries different (per-day, truncated)
+    // aggregates that the table must NOT fall back to.
+    payload.current.topModels = [
+      { name: 'claude-opus-4', cost: 200, savingsUSD: 0, savingsBaselineModel: '', calls: 100, inputTokens: 1_200_000, outputTokens: 340_000, cacheReadTokens: 56_000_000, cacheWriteTokens: 7_000 },
+      { name: 'claude-haiku-4', cost: 4, savingsUSD: 0, savingsBaselineModel: '', calls: 12, inputTokens: 0, outputTokens: 0, cacheReadTokens: 900, cacheWriteTokens: 0 },
+    ]
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    expect(within(modelsTable).getByRole('columnheader', { name: 'Cache read' })).toBeInTheDocument()
+    const rows = within(modelsTable).getAllByRole('row')
+    // Counts come from current.topModels (1.2M in), not the daily aggregation (40M in).
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2M')
+    expect(rows[1]).toHaveTextContent('340K')
+    expect(rows[1]).toHaveTextContent('56M')
+    expect(within(modelsTable).queryByText('40M')).not.toBeInTheDocument()
+    // Known zeros stay zeros: haiku's fresh input/output render as 0, its cache
+    // read as the real 900.
+    expect(within(rows[2] as HTMLElement).getAllByText('0')).toHaveLength(2)
+    expect(within(rows[2] as HTMLElement).getByText('900')).toBeInTheDocument()
+  })
+
+  it('falls back to aggregating history.daily when the payload predates per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // Legacy all-provider payload: current.topModels has no counts, history.daily
+    // does (input/output only — the CLI never emitted per-model cache read there).
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    const rows = within(modelsTable).getAllByRole('row')
+    // Input/output still come from the daily aggregation (30 days × 40M/2M) ...
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2B')
+    expect(rows[1]).toHaveTextContent('60M')
+    // ... and the absent per-model cache read shows as a dash, not zero.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(1)
   })
 
   it('suppresses the week-over-week signal and MTD card for a custom range', async () => {

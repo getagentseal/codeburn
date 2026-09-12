@@ -173,6 +173,15 @@ export type MenubarPayload = {
       savingsUSD: number
       savingsBaselineModel: string
       calls: number
+      // Per-model token counts (src/menubar-json.ts buildTopModels): billable
+      // output, cache read = reused input, cache write separate. Optional:
+      // older CLIs omit them, and a row whose contributing legacy data lacked
+      // counts omits them even on a new CLI. Absent means unknown — render a
+      // dash, never zero, and never substitute a period-wide figure.
+      inputTokens?: number
+      outputTokens?: number
+      cacheReadTokens?: number
+      cacheWriteTokens?: number
     }>
     unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
     localModelSavings: LocalModelSavings

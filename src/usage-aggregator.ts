@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, billableOutputTokens } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -19,7 +19,7 @@ import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-sna
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
-import { callBillableOutputTokens, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
@@ -118,12 +118,32 @@ function cacheReadForProviderDays(days: DailyEntry[], provider: string): Pick<Pr
 export function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number; estimatedCostUSD: number; tokens: number }> = {}
+  const modelTotals: Record<string, {
+    calls: number
+    cost: number
+    savingsUSD: number
+    estimatedCostUSD: number
+    tokens: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+  }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
     inputTokens += sess.totalInputTokens
-    outputTokens += sessionBillableOutputTokens(sess)
+    // Per-model output uses the same billable-output rule as the headline:
+    // reasoning tokens are added only where the provider reports them
+    // separately from output (never twice where output already includes
+    // them, #1075). modelBreakdown's raw token counters cannot be summed
+    // for display without it. A bucket no surviving call maps to falls
+    // back to its own counters under the session's provider.
+    //
+    // One walk yields both: the headline total and the per-model split come
+    // out of the same pass over this session's assistant calls.
+    const { total: sessionOut, byModel: sessionModelOut } = sessionBillableOutput(sess)
+    outputTokens += sessionOut
     cacheReadTokens += sess.totalCacheReadTokens
     cacheWriteTokens += sess.totalCacheWriteTokens
     for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
@@ -135,12 +155,17 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       catTotals[cat].oneShotTurns += d.oneShotTurns
     }
     for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0 }
-      modelTotals[model].calls += d.calls
-      modelTotals[model].cost += d.costUSD
-      modelTotals[model].savingsUSD += d.savingsUSD
-      modelTotals[model].estimatedCostUSD += d.estimatedCostUSD ?? 0
-      modelTotals[model].tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
+      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0, savingsUSD: 0, estimatedCostUSD: 0, tokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      const acc = modelTotals[model]
+      acc.calls += d.calls
+      acc.cost += d.costUSD
+      acc.savingsUSD += d.savingsUSD
+      acc.estimatedCostUSD += d.estimatedCostUSD ?? 0
+      acc.tokens += d.tokens.inputTokens + d.tokens.outputTokens + d.tokens.cacheReadInputTokens + d.tokens.cacheCreationInputTokens
+      acc.inputTokens += d.tokens.inputTokens
+      acc.outputTokens += sessionModelOut[model] ?? billableOutputTokens(inferSessionProvider(sess), d.tokens.outputTokens, d.tokens.reasoningTokens)
+      acc.cacheReadTokens += d.tokens.cacheReadInputTokens
+      acc.cacheWriteTokens += d.tokens.cacheCreationInputTokens
     }
   }
 
@@ -165,7 +190,17 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, calls: d.calls, cost: d.cost, savingsUSD: d.savingsUSD, estimatedCostUSD: d.estimatedCostUSD })),
+      .map(([name, d]) => ({
+        name,
+        calls: d.calls,
+        cost: d.cost,
+        savingsUSD: d.savingsUSD,
+        estimatedCostUSD: d.estimatedCostUSD,
+        inputTokens: d.inputTokens,
+        outputTokens: d.outputTokens,
+        cacheReadTokens: d.cacheReadTokens,
+        cacheWriteTokens: d.cacheWriteTokens,
+      })),
     unpricedModels,
     workflow: {
       corrections: corrections.corrections,
