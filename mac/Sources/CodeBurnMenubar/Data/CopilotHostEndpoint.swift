@@ -16,13 +16,18 @@ import Foundation
 /// GHES install today, and guessing that shape for any unrecognized host would
 /// send credentials to a host we never verified serves this endpoint.
 enum CopilotHostEndpoint {
-    /// Assumed for every credential source that carries no host of its own
-    /// (`apps.json` entries keyed by app name, the environment variables,
-    /// `gh auth token`, and a token pasted into Settings).
+    /// Assumed for every credential source that still carries no host of its
+    /// own: an `apps.json` entry keyed by app name, an environment token with
+    /// no `GH_HOST`, a `gh` login this machine has no `hosts.yml` for, and a
+    /// pasted token saved before the host field existed.
     static let defaultHost = "github.com"
     static let defaultAPIHost = "api.github.com"
     /// GitHub Enterprise Cloud with data residency.
     static let enterpriseCloudSuffix = ".ghe.com"
+    /// The variable `gh` and the Copilot CLI read to target a host other than
+    /// dotcom. It sits next to `GH_TOKEN` / `GITHUB_TOKEN` in the same
+    /// environment, so the environment rung reads both (#1306).
+    static let hostEnvironmentName = "GH_HOST"
     private static let usagePath = "/copilot_internal/user"
 
     /// Bare lowercased hostname. Tolerates surrounding whitespace, a scheme, a
@@ -87,5 +92,74 @@ enum CopilotHostEndpoint {
         if normalized.contains(defaultHost) { return defaultHost }
         let enterprise = normalized.filter { $0.hasSuffix(enterpriseCloudSuffix) }.sorted()
         return enterprise.first ?? normalized.sorted().first
+    }
+
+    // MARK: - `gh` hosts (#1306)
+
+    /// The GitHub hosts `gh` is logged in to, read out of its `hosts.yml`.
+    ///
+    /// That file is a mapping of host to per-host settings, so the hosts are
+    /// exactly its top-level keys — the only lines that start in column zero.
+    /// This is a key scan, not a YAML parser: nothing below the first level is
+    /// read, and every key is passed on untrusted, to be validated where the
+    /// URL is built.
+    static func hostsFromGhConfig(_ text: String) -> [String] {
+        var hosts: [String] = []
+        // Split on `isNewline`, not on "\n": Swift reads CRLF as a single
+        // grapheme, so splitting on "\n" leaves a CRLF file as one long line.
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = String(rawLine)
+            // Anything indented belongs to a host's block; `#` is a comment and
+            // `-` starts a document marker or a sequence entry, neither of
+            // which is a host.
+            guard let first = line.first, !first.isWhitespace, first != "#", first != "-" else { continue }
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = line[..<colon]
+                .trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            guard let host = normalize(key), !hosts.contains(host) else { continue }
+            hosts.append(host)
+        }
+        return hosts
+    }
+
+    /// The host a `gh auth token` answer belongs to, or nil for dotcom.
+    ///
+    /// It mirrors how `gh` itself picks the host that command reads: `GH_HOST`
+    /// wins, otherwise the single host in `hosts.yml`, otherwise dotcom — which
+    /// is what `preferredHost(among:)` already computes. Where the two could
+    /// disagree (several tenants and no dotcom entry) `gh` resolves to dotcom,
+    /// finds no token there and yields nothing, so the rung never fires with a
+    /// host the token does not belong to.
+    ///
+    /// Resolved from the config file rather than by spawning `gh auth status`:
+    /// `gh` writes `hosts.yml` for every login, keyring-backed ones included,
+    /// so a file read answers without a second subprocess.
+    static func ghHost(environmentHost: String?, hostsConfig: String?) -> String? {
+        if let host = normalize(environmentHost) { return host }
+        guard let hostsConfig else { return nil }
+        let hosts = hostsFromGhConfig(hostsConfig)
+        guard !hosts.isEmpty else { return nil }
+        return preferredHost(among: hosts.map { Optional($0) })
+    }
+
+    /// Where `gh` keeps `hosts.yml`: `GH_CONFIG_DIR` wins, then
+    /// `XDG_CONFIG_HOME/gh`, then `~/.config/gh`, matching `gh`'s own order.
+    static func ghHostsFileURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: String = NSHomeDirectory()
+    ) -> URL {
+        func directory(_ name: String) -> String? {
+            guard let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }
+        if let configDir = directory("GH_CONFIG_DIR") {
+            return URL(fileURLWithPath: configDir).appendingPathComponent("hosts.yml")
+        }
+        if let xdg = directory("XDG_CONFIG_HOME") {
+            return URL(fileURLWithPath: xdg).appendingPathComponent("gh/hosts.yml")
+        }
+        return URL(fileURLWithPath: homeDirectory).appendingPathComponent(".config/gh/hosts.yml")
     }
 }

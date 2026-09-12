@@ -30,9 +30,11 @@ struct CopilotUsage: Sendable, Equatable {
 /// dotcom (#1286).
 struct CopilotCredential: Sendable, Equatable {
     let token: String
-    /// Host the token was read from, or nil when the source carries none
-    /// (`apps.json` keyed by app name, the environment variables, `gh`, or a
-    /// token pasted into Settings), which is dotcom.
+    /// Host the token was read from, or nil when the source carries none,
+    /// which is dotcom. Every rung can carry one: the credential files are
+    /// keyed by host, the environment rung reads `GH_HOST`, the `gh` rung
+    /// resolves the host of the login that answered, and a pasted token is
+    /// saved with the host typed next to it (#1306).
     let host: String?
 
     init(token: String, host: String? = nil) {
@@ -139,12 +141,16 @@ enum CopilotSubscriptionService {
         var appsURL: URL
         /// The Copilot CLI's config directory (~/.copilot).
         var copilotDirURL: URL
+        /// `gh`'s `hosts.yml`, read only to learn which host the `gh` rung's
+        /// token belongs to. Never a token source: `gh auth token` owns that.
+        var ghHostsURL: URL = CopilotHostEndpoint.ghHostsFileURL()
         var environment: @Sendable (String) -> String?
         /// `gh auth token`. Uncached: the service owns the caching so tests can
         /// drive the probe directly.
         var ghAuthToken: @Sendable () -> String?
-        /// Token the user pasted into CodeBurn's own Copilot settings.
-        var savedToken: @Sendable () -> String?
+        /// Token the user pasted into CodeBurn's own Copilot settings, with
+        /// the host saved beside it.
+        var savedCredential: @Sendable () -> CopilotCredential?
         var now: @Sendable () -> Date
 
         static let live = Deps(
@@ -159,9 +165,10 @@ enum CopilotSubscriptionService {
             hostsURL: URL(fileURLWithPath: NSHomeDirectory() + "/.config/github-copilot/hosts.json"),
             appsURL: URL(fileURLWithPath: NSHomeDirectory() + "/.config/github-copilot/apps.json"),
             copilotDirURL: URL(fileURLWithPath: NSHomeDirectory() + "/.copilot"),
+            ghHostsURL: CopilotHostEndpoint.ghHostsFileURL(),
             environment: { ProcessInfo.processInfo.environment[$0] },
             ghAuthToken: { runGhAuthToken() },
-            savedToken: { savedCopilotToken() },
+            savedCredential: { savedCopilotCredential() },
             now: { Date() }
         )
     }
@@ -191,9 +198,14 @@ enum CopilotSubscriptionService {
     /// 1. legacy editor-plugin files: `hosts.json` then `apps.json` (both
     ///    carry the GitHub host the token belongs to)
     /// 2. `~/.copilot/config.json` then `~/.copilot/settings.json`
-    /// 3. `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`
-    /// 4. `gh auth token`
-    /// 5. a token pasted into CodeBurn's Copilot settings
+    /// 3. `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, with `GH_HOST`
+    ///    as the host those tokens belong to
+    /// 4. `gh auth token`, with the host taken from `gh`'s own `hosts.yml`
+    /// 5. a token pasted into CodeBurn's Copilot settings, with the host saved
+    ///    beside it
+    ///
+    /// Every rung can therefore name a GitHub Enterprise Cloud tenant; only a
+    /// source that genuinely carries no host falls back to dotcom (#1306).
     ///
     /// The Copilot CLI's own Keychain item (service `copilot-cli`) is
     /// deliberately not read: it is written by a Node keyring library, so
@@ -212,11 +224,26 @@ enum CopilotSubscriptionService {
                let token = tokenFromCopilotCLIJSON(data) { return CopilotCredential(token: token) }
         }
         for name in environmentTokenNames {
-            if let token = nonEmpty(deps.environment(name)) { return CopilotCredential(token: token) }
+            if let token = nonEmpty(deps.environment(name)) {
+                return CopilotCredential(
+                    token: token,
+                    host: nonEmpty(deps.environment(CopilotHostEndpoint.hostEnvironmentName)))
+            }
         }
-        if let token = cachedGhToken(deps: deps) { return CopilotCredential(token: token) }
-        guard let token = nonEmpty(deps.savedToken()) else { return nil }
-        return CopilotCredential(token: token)
+        if let token = cachedGhToken(deps: deps) {
+            return CopilotCredential(token: token, host: ghHost(deps: deps))
+        }
+        return deps.savedCredential()
+    }
+
+    /// Host of the login `gh auth token` answered for. Read from `hosts.yml`
+    /// rather than by spawning `gh auth status`: the `gh` rung already costs
+    /// one process, and `gh` writes that file for every login.
+    private static func ghHost(deps: Deps) -> String? {
+        let config = deps.readFile(deps.ghHostsURL).flatMap { String(data: $0, encoding: .utf8) }
+        return CopilotHostEndpoint.ghHost(
+            environmentHost: deps.environment(CopilotHostEndpoint.hostEnvironmentName),
+            hostsConfig: config)
     }
 
     /// Reads the `oauth_token` entries out of a credential map and picks one
@@ -388,10 +415,14 @@ enum CopilotSubscriptionService {
     }
 
     /// Gated on the non-secret presence index so the common "nothing pasted"
-    /// case never touches Keychain at all.
-    private static func savedCopilotToken() -> String? {
+    /// case never touches Keychain at all. The host comes out of the same
+    /// record as the token, so the two cannot drift; a record saved before the
+    /// host field existed carries none and stays dotcom.
+    private static func savedCopilotCredential() -> CopilotCredential? {
         guard CapacityDockProviderCredentialPresence.contains(providerID) else { return nil }
-        return (try? CapacityDockProviderCredentialStore.load(for: providerID))?.sanitizedOverride.apiKey
+        let override = (try? CapacityDockProviderCredentialStore.load(for: providerID))?.sanitizedOverride
+        guard let token = nonEmpty(override?.apiKey) else { return nil }
+        return CopilotCredential(token: token, host: override?.host)
     }
 
     // MARK: - Fetch
