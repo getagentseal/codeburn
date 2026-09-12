@@ -151,10 +151,28 @@ Composite tiers (`enterprise_cbp_usage_based`, `self_serve_business_usage_based`
 ### Reset credits
 
 `rate_limit_reset_credits` is carried inline on the usage payload
-(`available_count`). The dedicated `GET /wham/rate-limit-reset-credits`
-endpoint is only called when the inline block is absent. It is the sole source
-of per-credit `expires_at` values, so the "next expires" caption is omitted on
-the inline path.
+(`available_count`, and sometimes `applicable_available_count` — how many can be
+applied right now). The dedicated `GET /wham/rate-limit-reset-credits` endpoint
+is only called when the inline block is absent or non-zero. It is the sole
+source of the per-credit list — `id`, `reset_type`, `status`, `granted_at`,
+`expires_at` — so the "next expires" caption and the "latest grant" caption are
+both omitted on the inline path.
+
+**Banked resets.** OpenAI sometimes grants an account an extra reset out of
+band. A credit whose identity (`id`, else its raw `granted_at`) has not been
+seen before is a new grant, and the menubar notifies once per credit. The seen
+set lives in `codex-banked-resets.json` in the CodeBurn cache directory, written
+the same way `subscription-snapshots.json` is. Rules that matter: the first
+observation is a baseline, a disappearing credit was spent and is not an event,
+and an absent or malformed credits payload is *no opinion* — never an empty
+account — so a failed fetch cannot cause a re-announcement on reconnect. The CLI
+reads the same inventory from the inline block only; it never calls the
+companion endpoint.
+
+Nothing in the payload distinguishes a granted-but-not-yet-usable credit from a
+usable one: there is no `available_at`, no pending status, and `granted_at` has
+only ever been observed in the past. The earliest warning CodeBurn can give from
+this source is therefore "it just landed", not "it lands at 5pm".
 
 ## When fixing a bug here
 

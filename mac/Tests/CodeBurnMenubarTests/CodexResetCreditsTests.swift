@@ -67,6 +67,101 @@ final class CodexResetCreditsTests: XCTestCase {
         XCTAssertNil(result?.nextExpiresAt)
     }
 
+    func testGrantsCarryIdentityTypeAndGrantTime() {
+        let result = parse(#"""
+        {
+          "credits": [
+            {"id": "c1", "reset_type": "weekly", "status": "available",
+             "granted_at": "2027-01-02T00:00:00Z", "expires_at": "2027-01-25T12:00:00Z"},
+            {"id": "c3", "reset_type": "weekly", "status": "redeemed",
+             "granted_at": "2026-06-01T00:00:00Z"}
+          ],
+          "available_count": 1,
+          "applicable_available_count": 1
+        }
+        """#)
+        // Only available credits become grants: a redeemed one is spent history.
+        XCTAssertEqual(result?.grants.map(\.id), ["c1"])
+        XCTAssertEqual(result?.grants.first?.resetType, "weekly")
+        XCTAssertEqual(result?.grants.first?.grantedAt,
+                       ISO8601DateFormatter().date(from: "2027-01-02T00:00:00Z"))
+        XCTAssertEqual(result?.applicableAvailableCount, 1)
+    }
+
+    func testApplicableCountIsUnknownRatherThanZeroWhenAbsent() {
+        XCTAssertNil(parse(#"{"credits": [], "available_count": 0}"#)?.applicableAvailableCount)
+        XCTAssertNil(parse(#"{"credits": [], "available_count": 0, "applicable_available_count": -1}"#)?
+            .applicableAvailableCount)
+        XCTAssertEqual(parse(#"{"credits": [], "available_count": 0, "applicable_available_count": 0}"#)?
+            .applicableAvailableCount, 0)
+    }
+
+    func testGrantedAtIsTheIdentityWhenNoIdIsPresent() {
+        let result = parse(#"""
+        {
+          "credits": [{"status": "available", "granted_at": "2027-01-02T00:00:00Z"}],
+          "available_count": 1
+        }
+        """#)
+        XCTAssertEqual(result?.grants.map(\.id), ["2027-01-02T00:00:00Z"])
+    }
+
+    func testCreditWithNoStableIdentityIsNotAGrant() {
+        let result = parse(#"{"credits": [{"status": "available"}], "available_count": 1}"#)
+        // Still counted — the server said one is available — but never announced,
+        // because a second unidentifiable credit could not be told from this one.
+        XCTAssertEqual(result?.availableCount, 1)
+        XCTAssertTrue(result?.grants.isEmpty == true)
+    }
+
+    func testLatestGrantIgnoresCreditsThatCannotSayWhenTheyLanded() {
+        let result = parse(#"""
+        {
+          "credits": [
+            {"id": "c1", "status": "available", "granted_at": "2027-01-02T00:00:00Z"},
+            {"id": "c2", "status": "available", "granted_at": "2027-01-04T00:00:00Z"},
+            {"id": "c3", "status": "available"}
+          ],
+          "available_count": 3
+        }
+        """#)
+        XCTAssertEqual(result?.latestGrant?.id, "c2")
+    }
+
+    func testInlineBlockCarriesBothCounts() {
+        let usage = #"""
+        {"plan_type": "plus",
+         "rate_limit_reset_credits": {"available_count": 2, "applicable_available_count": 1}}
+        """#
+        let inline = CodexSubscriptionService.inlineResetCredits(data: Data(usage.utf8), now: now)
+        XCTAssertEqual(inline?.availableCount, 2)
+        XCTAssertEqual(inline?.applicableAvailableCount, 1)
+        // Non-zero, so the companion fetch still runs: the inline block has no
+        // per-credit list to detect a new grant from.
+        XCTAssertNil(CodexSubscriptionService.inlineResetCreditsShortcut(data: Data(usage.utf8)))
+    }
+
+    func testUsagePayloadFillsInAMissingApplicableCount() throws {
+        let usage = #"""
+        {"plan_type": "plus",
+         "rate_limit_reset_credits": {"available_count": 2, "applicable_available_count": 1}}
+        """#
+        // The companion endpoint answered without an applicable count; the usage
+        // payload we already hold has one.
+        let fromEndpoint = CodexUsage.ResetCredits(availableCount: 2, grants: [])
+        let decoded = try CodexSubscriptionService.decodeUsage(
+            data: Data(usage.utf8), resetCredits: fromEndpoint
+        )
+        XCTAssertEqual(decoded.resetCredits?.applicableAvailableCount, 1)
+
+        // An authoritative count from the endpoint is never overwritten.
+        let authoritative = CodexUsage.ResetCredits(availableCount: 2, applicableAvailableCount: 2)
+        let kept = try CodexSubscriptionService.decodeUsage(
+            data: Data(usage.utf8), resetCredits: authoritative
+        )
+        XCTAssertEqual(kept.resetCredits?.applicableAvailableCount, 2)
+    }
+
     func testMalformedDocumentReturnsNil() {
         XCTAssertNil(parse("not json"))
         XCTAssertNil(parse(#"{"credits": "wrong-shape"}"#))

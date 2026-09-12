@@ -27,6 +27,9 @@ export type QuotaCommandProvider = {
   plan?: string
   windows: QuotaCommandWindow[]
   error?: string
+  /** Provider facts that are not a window, such as Codex's limit-reset credits.
+   *  Printed under the provider's rows and carried in `--format json`. */
+  notes?: string[]
 }
 
 export type QuotaReport = { providers: QuotaCommandProvider[] }
@@ -81,6 +84,7 @@ export function toCommandProvider(id: ProviderName, name: string, quota: QuotaPr
     ...(quota.planLabel ? { plan: quota.planLabel } : {}),
     windows: toWindows(quota),
     ...(error ? { error } : {}),
+    ...(quota.notes?.length ? { notes: quota.notes } : {}),
   }
 }
 
@@ -119,11 +123,14 @@ export function renderQuotaTable(report: QuotaReport, opts: { color?: boolean } 
     const title = provider.plan ? `${provider.name} (${provider.plan})` : provider.name
     if (provider.windows.length === 0) {
       rows.push([title, provider.error ?? 'Not connected', '', ''])
+      // A provider with no readable window can still hold a fact worth saying.
+      for (const note of provider.notes ?? []) rows.push(['', note, '', ''])
       continue
     }
     provider.windows.forEach((window, index) => {
       rows.push([index === 0 ? title : '', window.label, `${window.usedPct}%`, resetLabel(window.resetsAt)])
     })
+    for (const note of provider.notes ?? []) rows.push(['', note, '', ''])
   }
   const columns = [{ header: 'Provider' }, { header: 'Window' }, { header: 'Used', right: true }, { header: 'Resets' }]
   return renderTable(columns, rows, { color: opts.color })
