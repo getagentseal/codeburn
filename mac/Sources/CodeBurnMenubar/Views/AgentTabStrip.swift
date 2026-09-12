@@ -345,6 +345,7 @@ private struct AgentTabQuotaBar: View {
 }
 
 private struct QuotaDetailPopover: View {
+    @Environment(AppStore.self) private var store
     let quota: QuotaSummary
 
     var body: some View {
@@ -418,6 +419,17 @@ private struct QuotaDetailPopover: View {
             }
             ForEach(Array(quota.details.enumerated()), id: \.offset) { index, w in
                 QuotaDetailRow(window: w, paceLine: paceLines[index])
+            }
+            // What this Mac has seen of the provider's own reset timing, next to
+            // the pace captions. Derived from the snapshots already on disk.
+            let earlyResetLines = store.earlyResetHistoryCaptions(for: quota.providerFilter)
+            if !earlyResetLines.isEmpty {
+                ForEach(Array(earlyResetLines.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .help("Derived from this Mac's own record of past quota windows for this provider. Local only — nothing is fetched to produce it.")
+                }
             }
             if !quota.footerLines.isEmpty {
                 Divider()

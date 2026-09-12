@@ -87,11 +87,15 @@ enum CapacityDockMetrics {
         sessionCount: Int?,
         hasToday: Bool,
         tailEdge: CapacityDockEdge,
-        scale: CGFloat
+        scale: CGFloat,
+        hasEarlyResetNotice: Bool = false
     ) -> CGFloat {
         guard let quota else { return 186 * scale }
         // Each section carries its own padding, so the panel adds none.
         var height = CapacityDockGlance.headerHeight
+        // The early-reset band is a notice like the staleness line, with the
+        // same padded height, and can sit alongside it.
+        if hasEarlyResetNotice { height += CapacityDockGlance.noticeHeight }
         // The tail only eats vertical room when it points up or down.
         if !tailEdge.isVertical { height += CapacityDockGlance.tailAllowance }
         if let sessionCount { height += CapacityDockGlance.sessionsHeight(count: sessionCount) }
@@ -827,6 +831,9 @@ struct CapacityDockDetailView: View {
             if !CapacityDockGlance.drawsNotice(quota.connection) {
                 connectionLabel(quota.connection, provider: provider)
             }
+            if let earlyReset = store.capacityDockEarlyResetNotice(for: provider) {
+                earlyResetNoticeSection(earlyReset)
+            }
             if let sessions = store.capacityDockLiveSessions(for: provider) {
                 sessionsSection(sessions).dividerBelow()
             }
@@ -865,6 +872,29 @@ struct CapacityDockDetailView: View {
                 .padding(.horizontal, CapacityDockGlance.contentInset * s)
                 .dividerBelow()
         }
+    }
+
+    /// A vendor reset one of this provider's windows ahead of schedule. Drawn as
+    /// a notice band with the staleness line's inset, padding and divider, and
+    /// reserved in `CapacityDockMetrics.detailHeight` the same way, for
+    /// `EarlyQuotaResetNotice.visibleSeconds` after the reset was seen.
+    @ViewBuilder
+    private func earlyResetNoticeSection(_ event: EarlyQuotaResetEvent) -> some View {
+        let s = model.detailScale
+        Text(event.noticeText)
+            .font(.system(size: 10))
+            .foregroundStyle(.green.opacity(0.86))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .help(event.noticeHelpText)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(event.noticeText)
+            .accessibilityHint(event.noticeHelpText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 6 * s)
+            .padding(.bottom, 8 * s)
+            .padding(.horizontal, CapacityDockGlance.contentInset * s)
+            .dividerBelow()
     }
 
     @ViewBuilder

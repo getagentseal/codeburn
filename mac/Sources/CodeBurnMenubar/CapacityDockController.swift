@@ -144,7 +144,8 @@ final class CapacityDockController {
             sessionCount: store.capacityDockLiveSessions(for: provider)?.count,
             hasToday: store.capacityDockToday(for: provider) != nil,
             tailEdge: model.detailTailEdge,
-            scale: model.detailScale
+            scale: model.detailScale,
+            hasEarlyResetNotice: store.capacityDockEarlyResetNotice(for: provider) != nil
         )
     }
 

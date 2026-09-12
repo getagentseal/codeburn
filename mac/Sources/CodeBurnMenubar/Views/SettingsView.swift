@@ -391,6 +391,9 @@ private struct GeneralSettingsTab: View {
     @AppStorage(UpdateNotificationPreference.defaultsKey)
     private var notifyAboutUpdates: Bool = true
 
+    @AppStorage(EarlyQuotaResetPreference.defaultsKey)
+    private var notifyAboutEarlyResets: Bool = true
+
     private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
     private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
 
@@ -507,6 +510,13 @@ private struct GeneralSettingsTab: View {
             Section("Updates") {
                 Toggle("Notify me about updates", isOn: $notifyAboutUpdates)
                 Text("Posts a notification when a new CodeBurn release is available. Click it to install.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Quota Alerts") {
+                Toggle("Notify me when a quota resets early", isOn: $notifyAboutEarlyResets)
+                Text("Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back. The Capacity Dock shows the same notice for 12 hours either way.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
