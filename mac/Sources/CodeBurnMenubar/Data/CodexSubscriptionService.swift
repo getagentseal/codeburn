@@ -339,40 +339,74 @@ enum CodexSubscriptionService {
     }
 
     /// Reset-credit inventory carried inline on the usage payload. Nil means
-    /// absent.
-    static func inlineResetCredits(data: Data) -> CodexUsage.ResetCredits? {
+    /// absent. The inline block has carried no per-credit list in anything we
+    /// have observed, but it is decoded through the same parser so that if one
+    /// ever appears the inline path reports grants too — same response, no extra
+    /// request.
+    static func inlineResetCredits(data: Data, now: Date = Date()) -> CodexUsage.ResetCredits? {
         struct InlineDTO: Decodable {
-            struct Block: Decodable { let available_count: Int? }
-            let rate_limit_reset_credits: Block?
+            let rate_limit_reset_credits: ResetCreditsDTO?
         }
-        guard let count = (try? JSONDecoder().decode(InlineDTO.self, from: data))?
-            .rate_limit_reset_credits?.available_count, count >= 0
+        guard let block = (try? JSONDecoder().decode(InlineDTO.self, from: data))?.rate_limit_reset_credits
         else { return nil }
-        return CodexUsage.ResetCredits(availableCount: count, nextExpiresAt: nil)
+        return makeResetCredits(block, now: now)
+    }
+
+    /// The reset-credits document, in both the places it is served: as the body
+    /// of `/wham/rate-limit-reset-credits` and as the `rate_limit_reset_credits`
+    /// block inline on `/wham/usage`.
+    struct ResetCreditsDTO: Decodable {
+        struct CreditDTO: Decodable {
+            let id: String?
+            let reset_type: String?
+            let status: String?
+            let granted_at: String?
+            let expires_at: String?
+        }
+        let credits: [CreditDTO]?
+        let available_count: Int?
+        /// How many of the available credits can be applied right now. Absent on
+        /// some shapes; absent is unknown, not zero.
+        let applicable_available_count: Int?
     }
 
     /// Internal (not private) so tests can drive it with fixture payloads.
     /// Returns nil on any unexpected shape — the caller treats nil as
     /// "feature unavailable", never as an error.
     static func parseResetCredits(data: Data, now: Date = Date()) -> CodexUsage.ResetCredits? {
-        struct CreditDTO: Decodable {
-            let status: String?
-            let expires_at: String?
-        }
-        struct ResponseDTO: Decodable {
-            let credits: [CreditDTO]?
-            let available_count: Int?
-        }
-        guard let root = try? JSONDecoder().decode(ResponseDTO.self, from: data),
-              let count = root.available_count, count >= 0 else {
-            return nil
-        }
-        let nextExpiry = (root.credits ?? [])
-            .filter { ($0.status ?? "").lowercased() == "available" }
+        guard let root = try? JSONDecoder().decode(ResetCreditsDTO.self, from: data) else { return nil }
+        return makeResetCredits(root, now: now)
+    }
+
+    /// Server counts are authoritative; everything else is derived from the
+    /// credits the payload actually lists.
+    private static func makeResetCredits(_ root: ResetCreditsDTO, now: Date) -> CodexUsage.ResetCredits? {
+        guard let count = root.available_count, count >= 0 else { return nil }
+        let available = (root.credits ?? []).filter { ($0.status ?? "").lowercased() == "available" }
+        let nextExpiry = available
             .compactMap { $0.expires_at.flatMap(parseISO8601) }
             .filter { $0 > now }
             .min()
-        return CodexUsage.ResetCredits(availableCount: count, nextExpiresAt: nextExpiry)
+        // Identity first, and only then a grant: a credit we cannot name is a
+        // credit we could re-announce on every refresh.
+        let grants: [CodexUsage.ResetCredits.Grant] = available.compactMap { credit in
+            let identity = [credit.id, credit.granted_at]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+            guard let identity else { return nil }
+            return .init(
+                id: identity,
+                resetType: credit.reset_type,
+                grantedAt: credit.granted_at.flatMap(parseISO8601)
+            )
+        }
+        let applicable = root.applicable_available_count.flatMap { $0 >= 0 ? $0 : nil }
+        return CodexUsage.ResetCredits(
+            availableCount: count,
+            applicableAvailableCount: applicable,
+            grants: grants,
+            nextExpiresAt: nextExpiry
+        )
     }
 
     /// chatgpt.com serializes these timestamps as ISO-8601, sometimes with
@@ -389,6 +423,11 @@ enum CodexSubscriptionService {
     /// Internal (not private) so tests can drive it with fixture payloads.
     static func decodeUsage(data: Data, resetCredits: CodexUsage.ResetCredits? = nil) throws -> CodexUsage {
         let root = try JSONDecoder().decode(UsageDTO.self, from: data)
+        // The companion endpoint does not always carry
+        // `applicable_available_count`; the usage payload we are already holding
+        // sometimes does. Fill it in from there rather than from a second
+        // request, and only when the authoritative source said nothing.
+        let credits = mergedApplicableCount(resetCredits, usageData: data)
         let additional: [CodexUsage.AdditionalLimit] = (root.additional_rate_limits ?? []).compactMap { dto in
             guard let name = dto.limit_name, !name.isEmpty else { return nil }
             return CodexUsage.AdditionalLimit(
@@ -409,8 +448,24 @@ enum CodexSubscriptionService {
             hasCredits: root.credits?.hasCredits ?? false,
             creditsUnlimited: root.credits?.unlimited ?? false,
             creditLimit: makeCreditLimit(limitDTO, reached: root.spend_control?.reached ?? false),
-            resetCredits: resetCredits,
+            resetCredits: credits,
             fetchedAt: Date()
+        )
+    }
+
+    private static func mergedApplicableCount(
+        _ credits: CodexUsage.ResetCredits?,
+        usageData: Data
+    ) -> CodexUsage.ResetCredits? {
+        guard let credits, credits.applicableAvailableCount == nil,
+              let inline = inlineResetCredits(data: usageData),
+              let applicable = inline.applicableAvailableCount
+        else { return credits }
+        return CodexUsage.ResetCredits(
+            availableCount: credits.availableCount,
+            applicableAvailableCount: applicable,
+            grants: credits.grants,
+            nextExpiresAt: credits.nextExpiresAt
         )
     }
 
