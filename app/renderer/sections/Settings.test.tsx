@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   getPriceOverrides: vi.fn<() => Promise<PriceOverrideList>>(),
   getProjectFilter: vi.fn<() => Promise<ProjectFilter>>(),
   setProjectFilter: vi.fn<(filter: ProjectFilter) => Promise<ProjectFilter>>(),
-  getUnfilteredProjects: vi.fn<(period: string) => Promise<ProjectsReport>>(),
+  getUnfilteredProjects: vi.fn<() => Promise<ProjectsReport>>(),
   setPriceOverride: vi.fn<(model: string, rates: PriceRates) => Promise<ActionResult>>(),
   removePriceOverride: vi.fn<(model: string) => Promise<ActionResult>>(),
   setCurrency: vi.fn<(code: string) => Promise<ActionResult>>(),
@@ -171,6 +171,28 @@ describe('Settings', () => {
     expect(await screen.findByText('matches nothing detected')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove' }))
     expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: [] })
+  })
+
+  // A filter has no period, so neither can the list it is checked against. The
+  // period on screen used to key this fetch, which made a pattern excluding a
+  // dormant project read as an orphan next to a Remove button.
+  it('asks for one project list for the whole history, not one per period on screen', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="today" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledWith()
+  })
+
+  it('keeps the project list across a period change instead of refetching it', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<Settings period="today" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledTimes(1)
+    rerender(<Settings period="month" />)
+    expect(await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })).toBeInTheDocument()
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledTimes(1)
   })
 
   it('switches panes from the rail and renders the completed Plans pane', async () => {

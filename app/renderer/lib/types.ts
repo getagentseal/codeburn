@@ -777,7 +777,7 @@ export interface CodeburnBridge {
   getProjectFilter(): Promise<ProjectFilter>
   setProjectFilter(filter: ProjectFilter): Promise<ProjectFilter>
   /** Every project that exists, filter NOT applied: the Projects pane's checklist. */
-  getUnfilteredProjects(period: Period): Promise<ProjectsReport>
+  getUnfilteredProjects(): Promise<ProjectsReport>
   setPriceOverride(model: string, rates: PriceRates): Promise<ActionResult>
   removePriceOverride(model: string): Promise<ActionResult>
   setCurrency(code: string): Promise<ActionResult>

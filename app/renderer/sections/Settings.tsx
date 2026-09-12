@@ -160,7 +160,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
         <main className="set-pane">
           {pane === 'general' && <GeneralPane period={period} refreshToken={refreshToken} claudeConfigs={claudeConfigs} claudeConfigSource={claudeConfigSource} onConfigMutated={onConfigMutated} scope={scope} onScopeChange={onScopeChange} projectFiltered={projectFiltered} />}
           {pane === 'providers' && <ProvidersPane period={period} refreshToken={refreshToken} />}
-          {pane === 'projects' && <ProjectsPane period={period} refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
+          {pane === 'projects' && <ProjectsPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'aliases' && <AliasesPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'pricing' && <PricingPane refreshToken={refreshToken} onConfigMutated={onConfigMutated} />}
           {pane === 'plans' && <PlansPane period={period} refreshToken={refreshToken} onNavigate={onNavigate} onConfigMutated={onConfigMutated} />}
@@ -290,14 +290,23 @@ function projectVisible(project: ProjectRow, filter: ProjectFilter): boolean {
   return filter.project.length === 0 || filter.project.some(pattern => projectMatches(project, pattern))
 }
 
-function ProjectsPane({ period, refreshToken, onConfigMutated }: { period: Period; refreshToken: number; onConfigMutated?: () => void }) {
+function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number; onConfigMutated?: () => void }) {
   const [actionNonce, setActionNonce] = useState(0)
   const [pattern, setPattern] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  // Not keyed on refreshToken: `report` is the heaviest fetch in the app, and a
-  // toggle cannot change an unfiltered list.
-  const report = usePolled<ProjectsReport>(() => codeburn.getUnfilteredProjects(period), [period], { memoKey: `projects|${period}` })
+  // Lifetime, and not the period on screen: the filter applies to every screen
+  // and every horizon, so a list bounded to the visible period would call a live
+  // exclude an orphan and leave "Nothing is hidden." under hidden projects.
+  //
+  // Not keyed on refreshToken, and never on an interval: `report` is the
+  // heaviest fetch in the app, a toggle cannot change an unfiltered list, and
+  // the only thing that can is a project appearing, which the next open picks
+  // up. The memo key goes through reportMemoKey like every other pane's.
+  const report = usePolled<ProjectsReport>(() => codeburn.getUnfilteredProjects(), [], {
+    memoKey: reportMemoKey('projects', 'lifetime'),
+    intervalMs: null,
+  })
   const saved = usePolled<ProjectFilter>(() => codeburn.getProjectFilter(), [refreshToken, actionNonce])
   const filter = saved.data ?? NO_PROJECT_FILTER
   const projects = report.data?.projects ?? []
@@ -343,7 +352,7 @@ function ProjectsPane({ period, refreshToken, onConfigMutated }: { period: Perio
       {report.error ? <SettingsErrorText error={report.error} />
         : saved.error ? <SettingsErrorText error={saved.error} />
         : !report.data || !saved.data ? <p className="set-cap">Loading projects…</p>
-        : projects.length === 0 ? <p className="set-cap">No projects detected in this period.</p>
+        : projects.length === 0 ? <p className="set-cap">No projects detected yet.</p>
         : projects.map(project => {
           const visible = projectVisible(project, filter)
           const pattern_ = projectPattern(project)

@@ -584,7 +584,14 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     },
     // Deliberately NOT scoped by projectArgs(): the Projects pane builds its
     // checklist from this, so it has to see the projects the filter is hiding.
-    'codeburn:getUnfilteredProjects': run((period: string) => ['report', '--format', 'json', '--period', vPeriod(period)]),
+    //
+    // Lifetime, and NOT the period on screen. A filter scopes every screen and
+    // every horizon at once, so a list bounded to the visible period hides the
+    // projects a pattern is actually excluding: the pane would print "matches
+    // nothing detected" beside a live exclude, offer to remove it, and count it
+    // out of "N projects hidden". `all` is capped at six months, so `lifetime`
+    // is the only horizon that can answer for the whole filter.
+    'codeburn:getUnfilteredProjects': run(() => ['report', '--format', 'json', '--period', 'lifetime']),
     'codeburn:setCurrency': runAction((code: string) => ['currency', vCurrency(code)]),
     'codeburn:resetCurrency': runAction(() => ['currency', '--reset']),
     'codeburn:addAlias': runAction((from: string, to: string) => ['model-alias', vToken(from), vToken(to)]),

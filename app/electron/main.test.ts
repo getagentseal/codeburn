@@ -128,7 +128,7 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getAudit', args: ['month', 'claude'], argv: ['audit', '--format', 'json', '--period', 'month', '--provider', 'claude'] },
   { channel: 'codeburn:getAudit', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['audit', '--format', 'json', '--period', '30days', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getPriceOverrides', args: [], argv: ['price-override', '--list', '--format', 'json'] },
-  { channel: 'codeburn:getUnfilteredProjects', args: ['month'], argv: ['report', '--format', 'json', '--period', 'month'] },
+  { channel: 'codeburn:getUnfilteredProjects', args: [], argv: ['report', '--format', 'json', '--period', 'lifetime'] },
   { channel: 'codeburn:setPriceOverride', args: ['unpriced/test-model', { input: 0.27, output: 1.1 }], argv: ['price-override', 'unpriced/test-model', '--input', '0.27', '--output', '1.1'] },
   { channel: 'codeburn:setPriceOverride', args: ['unpriced/test-model', { input: 0.27, output: 1.1, cacheRead: 0.03, cacheCreation: 0.42 }], argv: ['price-override', 'unpriced/test-model', '--input', '0.27', '--output', '1.1', '--cache-read', '0.03', '--cache-creation', '0.42'] },
   { channel: 'codeburn:removePriceOverride', args: ['unpriced/test-model'], argv: ['price-override', '--remove', 'unpriced/test-model'] },
@@ -832,8 +832,21 @@ describe('project filter', () => {
       writeProjectFilter({ project: [], exclude: ['my-company'] })
       const { spawnCli, spawnCliAction, calls } = fakeSpawn()
       const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
-      await handlers['codeburn:getUnfilteredProjects']!('30days')
-      expect(calls[0]).toEqual(['report', '--format', 'json', '--period', '30days'])
+      await handlers['codeburn:getUnfilteredProjects']!()
+      expect(calls[0]).toEqual(['report', '--format', 'json', '--period', 'lifetime'])
+    })
+  })
+
+  // A filter has no period: a pattern excluding a project that was last touched
+  // months ago is live on every screen. Asking for anything narrower than
+  // lifetime returns a list that pattern is missing from, and the pane reads
+  // that absence as "this exclude matches nothing".
+  it('asks for the whole history, never the period on screen', async () => {
+    await withFilterFile(async () => {
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      await handlers['codeburn:getUnfilteredProjects']!('today')
+      expect(calls[0]).toEqual(['report', '--format', 'json', '--period', 'lifetime'])
     })
   })
 
