@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { homedir, tmpdir } from 'os'
 import zlib from 'zlib'
 
 import { createDshProvider, readZstdLines } from '../../src/providers/dsh.js'
-import { calculateCost } from '../../src/models.js'
+import { billableOutputTokens, calculateCost } from '../../src/models.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
 // DSH session logs are concatenations of INDEPENDENT zstd frames (one per
@@ -118,6 +118,51 @@ async function writePlainSession(projectDirName: string, sessionDirName: string,
   return filePath
 }
 
+async function writeVersionedSession(
+  version: 1 | 2 | 3,
+  projectDirName: string,
+  sessionDirName: string,
+  lines: string[],
+  compressed = false,
+) {
+  const dir = join(tmpDir, 'sessions', projectDirName, sessionDirName)
+  await mkdir(dir, { recursive: true })
+  const suffix = compressed ? '.zstd' : ''
+  const filePath = join(dir, `session.v${version}.jsonl${suffix}`)
+  if (compressed && zstdCompress) {
+    const split = Math.max(1, Math.floor(lines.length / 2))
+    const frames = [lines.slice(0, split), lines.slice(split)]
+      .filter(batch => batch.length > 0)
+      .map(batch => zstdCompress(Buffer.from(batch.join('\n') + '\n')))
+    await writeFile(filePath, Buffer.concat(frames))
+  } else {
+    await writeFile(filePath, lines.join('\n') + '\n')
+  }
+  return filePath
+}
+
+// Released layouts checked against deepseek-ai/deepseek-harness at
+// c291e7961a515f6d7af9304e7fd1d257929aef26:
+// packages/session/session-format-v0-to-v1/src/codec.ts (v1),
+// packages/session/session-format-v1-to-v2/src/codec.ts (v2), and
+// packages/session/session-format-v2-to-v3/src/codec.ts (v3).
+// Embedded usage and retry settlements follow packages/llm/token-meter/src/usage-projection.ts.
+function versionedHeader(version: 1 | 2 | 3, opts: { id?: string; cwd?: string; isSeeded?: boolean } = {}) {
+  return JSON.stringify({
+    type: 'session',
+    version,
+    id: opts.id ?? `session-v${version}`,
+    createdAt: 1786707336131,
+    cwd: opts.cwd ?? '/home/u/proj',
+    ...(version <= 1 ? {} : { isSeeded: opts.isSeeded ?? false }),
+    delegationDepth: 0,
+  })
+}
+
+function embeddedUsage(usage: Record<string, number>, time: number) {
+  return [{ type: 'chunk', time, chunk: { type: 'usage', usage } }]
+}
+
 async function parseAll(provider: ReturnType<typeof createDshProvider>, filePath: string): Promise<ParsedProviderCall[]> {
   const source = { path: filePath, project: 'myproject', provider: 'dsh' }
   const calls: ParsedProviderCall[] = []
@@ -158,6 +203,133 @@ describe('dsh provider - session discovery', () => {
     expect(sessions[0]!.project).toBe('proj')
   })
 
+  it('discovers a v3 session log', async () => {
+    const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-v3')
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      join(dir, 'session.v3.jsonl'),
+      JSON.stringify({
+        type: 'session',
+        version: 3,
+        id: 'session-v3',
+        createdAt: 1786707336131,
+        cwd: '/home/u/proj',
+      }) + '\n',
+    )
+
+    const sessions = await createDshProvider(tmpDir).discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(join(dir, 'session.v3.jsonl'))
+  })
+
+  it('selects only the highest generation when migrated logs coexist', async () => {
+    const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-migrated')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'session.jsonl'), sessionHeader({ id: 'session-migrated' }) + '\n')
+    await writeFile(join(dir, 'session.v2.jsonl'), versionedHeader(2, { id: 'session-migrated' }) + '\n')
+    await writeFile(join(dir, 'session.v3.jsonl'), versionedHeader(3, { id: 'session-migrated' }) + '\n')
+
+    const sessions = await createDshProvider(tmpDir).discoverSessions()
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(join(dir, 'session.v3.jsonl'))
+  })
+
+  it('does not fall back when the highest generation is corrupt or unknown', async () => {
+    const corrupt = join(tmpDir, 'sessions', '--home-u-proj--', 'session-corrupt')
+    const unknown = join(tmpDir, 'sessions', '--home-u-proj--', 'session-unknown')
+    await mkdir(corrupt, { recursive: true })
+    await mkdir(unknown, { recursive: true })
+    await writeFile(join(corrupt, 'session.jsonl'), sessionHeader({ id: 'session-corrupt' }) + '\n')
+    await writeFile(join(corrupt, 'session.v3.jsonl'), '{broken\n')
+    await writeFile(join(unknown, 'session.jsonl'), sessionHeader({ id: 'session-unknown' }) + '\n')
+    await writeFile(join(unknown, 'session.v4.jsonl'), JSON.stringify({ type: 'session', version: 4 }) + '\n')
+
+    expect(await createDshProvider(tmpDir).discoverSessions()).toEqual([])
+  })
+
+  it('rejects a filename/header generation mismatch and counts it as skipped', async () => {
+    await writeVersionedSession(3, '--home-u-proj--', 'session-mismatch', [versionedHeader(2)])
+
+    const skipped: number[] = []
+    expect(await createDshProvider(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
+    expect(skipped).toEqual([3])
+  })
+
+  it('counts an unreadable header as skipped', async () => {
+    const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-unreadable')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'session.v3.jsonl'), '{broken\n')
+
+    const skipped: number[] = []
+    expect(await createDshProvider(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
+    expect(skipped).toEqual([3])
+  })
+
+  it('orders generations numerically, not lexically', async () => {
+    const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-v10')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'session.v3.jsonl'), versionedHeader(3, { id: 'session-v10' }) + '\n')
+    await writeFile(join(dir, 'session.v10.jsonl'), JSON.stringify({ type: 'session', version: 10 }) + '\n')
+
+    const skipped: number[] = []
+    expect(await createDshProvider(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
+    expect(skipped).toEqual([10])
+  })
+
+  it('reads session.v0 as the unversioned generation and session.v03 as generation 3', async () => {
+    const zero = join(tmpDir, 'sessions', '--home-u-proj--', 'session-v0')
+    const padded = join(tmpDir, 'sessions', '--home-u-proj--', 'session-v03')
+    await mkdir(zero, { recursive: true })
+    await mkdir(padded, { recursive: true })
+    await writeFile(join(zero, 'session.v0.jsonl'), sessionHeader({ id: 'session-v0', cwd: '/home/u/proj' }) + '\n')
+    await writeFile(join(padded, 'session.v03.jsonl'), versionedHeader(3, { id: 'session-v03' }) + '\n')
+
+    const sessions = await createDshProvider(tmpDir).discoverSessions()
+
+    expect(sessions.map(s => s.path).sort()).toEqual([join(padded, 'session.v03.jsonl'), join(zero, 'session.v0.jsonl')].sort())
+  })
+
+  it.each([
+    ['session.v03.jsonl', 3],
+    ['session.v99999999999999999999.jsonl', 1e20],
+  ])('skips and counts a session whose generation filename %s is ambiguous', async (name, expected) => {
+    const dir = join(tmpDir, 'sessions', '--home-u-proj--', 'session-ambiguous')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'session.v3.jsonl'), versionedHeader(3, { id: 'session-ambiguous' }) + '\n')
+    await writeFile(join(dir, name), versionedHeader(3, { id: 'session-ambiguous' }) + '\n')
+
+    const skipped: number[] = []
+    expect(await createDshProvider(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
+    expect(skipped).toEqual([expected])
+  })
+
+  it('explains missing zstd support once instead of naming every compressed log', async () => {
+    for (const id of ['one', 'two', 'three', 'four', 'five']) {
+      const dir = join(tmpDir, 'sessions', '--home-u-proj--', id)
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, 'session.v3.jsonl.zstd'), 'not zstd')
+    }
+    const zlibExports = zlib as unknown as Record<string, unknown>
+    const original = zlibExports['zstdDecompressSync']
+    delete zlibExports['zstdDecompressSync']
+    const warnings = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      vi.resetModules()
+      const { createDshProvider: create } = await import('../../src/providers/dsh.js')
+      const skipped: number[] = []
+      expect(await create(tmpDir).discoverSessions(v => { skipped.push(v) })).toEqual([])
+      expect(skipped).toEqual([3, 3, 3, 3, 3])
+      expect(warnings.mock.calls.map(([m]) => String(m)))
+        .toEqual(['codeburn: DSH sessions need Node >= 22.15 (zstd support); skipping DSH usage.\n'])
+    } finally {
+      warnings.mockRestore()
+      if (original !== undefined) zlibExports['zstdDecompressSync'] = original
+      vi.resetModules()
+    }
+  })
+
   it('returns empty for a non-existent home', async () => {
     const provider = createDshProvider('/nonexistent/dsh/home')
     expect(await provider.discoverSessions()).toEqual([])
@@ -170,7 +342,7 @@ describe('dsh provider - session discovery', () => {
   })
 
   it('DSH_HOME relocates discovery; an empty string is treated as unset', async () => {
-    const home = join(tmpDir, 'dsh-home')
+    const home = join(tmpDir, 'dsh home-café')
     await mkdir(join(home, 'sessions', '--x--', 'session-env'), { recursive: true })
     await writeFile(
       join(home, 'sessions', '--x--', 'session-env', 'session.jsonl'),
@@ -205,6 +377,300 @@ describe('dsh provider - session discovery', () => {
 })
 
 describe('dsh provider - parsing', () => {
+  it('counts failed and successful attempts from the official-validated retry fixture', async () => {
+    const content = await readFile(join(import.meta.dirname, '../fixtures/dsh/v3-retry.jsonl'), 'utf8')
+    const path = await writeVersionedSession(3, '--fixture--', 'fixture-retry', content.trim().split('\n'))
+    const calls = await parseAll(createDshProvider(tmpDir), path)
+    expect(calls.map(call => [call.inputTokens, call.outputTokens, call.reasoningTokens])).toEqual([[10, 4, 2], [100, 20, 8]])
+    expect(calls.every(call => call.model === 'deepseek-v4-flash')).toBe(true)
+    expect(calls.reduce((sum, call) => sum + call.inputTokens + billableOutputTokens('dsh', call.outputTokens, call.reasoningTokens)
+      + call.cacheReadInputTokens + call.cacheCreationInputTokens, 0)).toBe(174)
+  })
+
+  it.each(([0, 1, 2, 3] as const).flatMap(version => [false, true].map(retry => ({ version, retry }))))(
+    'replaces non-adjacent settlements per step in v$version (retry=$retry)', async ({ version, retry }) => {
+    const sample = (step: number, input: number) => version <= 1
+      ? chunkUsage(1, step, { inputTokens: input, outputTokens: 10 }, 1786707340000)
+      : JSON.stringify({ type: 'assistant/attempt', seq: step, time: 1786707340000,
+          data: { turn: 1, step, stream: embeddedUsage({ inputTokens: input, outputTokens: 10 }, 1786707340000) } })
+    const rows = [version === 0 ? sessionHeader() : versionedHeader(version),
+      sample(1, 100), sample(2, 200),
+      assistantMessage(1, 1, { inputTokens: 100, outputTokens: 10 }, 1786707340100),
+      ...(retry ? [JSON.stringify({ type: 'llm/retry-started', seq: 8, time: 1786707340150,
+        data: { turn: 1, step: 1, retryId: 'interleaved-retry', retry: 1 } }),
+      assistantMessage(1, 1, { inputTokens: 150, outputTokens: 10 }, 1786707340180)] : []),
+      assistantMessage(1, 2, { inputTokens: 200, outputTokens: 10 }, 1786707340200)]
+    const path = version === 0 ? await writePlainSession('--fixture--', 'interleaved', rows)
+      : await writeVersionedSession(version, '--fixture--', 'interleaved', rows)
+    const calls = await parseAll(createDshProvider(tmpDir), path)
+    expect(calls.map(call => call.inputTokens)).toEqual(retry ? [100, 150, 200] : [100, 200])
+  })
+
+  it.each([0, 1] as const)('retains non-fork v%s usage when only seedLength is present', async version => {
+    const rows = [JSON.stringify({ type: 'session', version, id: 'non-fork', seedLength: 4,
+      createdAt: 1786707340000, cwd: '/fixture/project', delegationDepth: 0 }),
+    ...[1, 2, 3, 4].map((step, seq) => JSON.stringify({ type: 'assistant/message', seq,
+      time: 1786707340000, data: { turn: 1, step, usage: { inputTokens: 100, outputTokens: 10 } } }))]
+    const path = version === 0 ? await writePlainSession('--fixture--', 'non-fork', rows)
+      : await writeVersionedSession(version, '--fixture--', 'non-fork', rows)
+    expect((await parseAll(createDshProvider(tmpDir), path)).map(call => call.inputTokens)).toEqual([100, 100, 100, 100])
+  })
+
+  it.each([0, 1, 2, 3] as const)('matches official DSH totals for the sanitized v%s fixture', async version => {
+    const content = await readFile(join(import.meta.dirname, `../fixtures/dsh/v${version}.jsonl`), 'utf8')
+    const lines = content.trim().split('\n')
+    const path = version === 0
+      ? await writePlainSession('--fixture--', 'fixture-session', lines)
+      : await writeVersionedSession(version, '--fixture--', 'fixture-session', lines)
+    const calls = await parseAll(createDshProvider(tmpDir), path)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, reasoningTokens: 8, cacheReadInputTokens: 30, cacheCreationInputTokens: 5 })
+    expect(billableOutputTokens('dsh', calls[0]!.outputTokens, calls[0]!.reasoningTokens)).toBe(20)
+  })
+  it('does not reuse the previous request context after a model change', async () => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-context-change', [
+      versionedHeader(3),
+      requestHeader('first-model'),
+      JSON.stringify({ type: 'request/context', seq: 1, time: 1786707337000, data: { model: 'first-model', provider: 'route' } }),
+      assistantMessage(1, 1, { inputTokens: 10, outputTokens: 1 }, 1786707340000),
+      requestHeader('second-model'),
+      JSON.stringify({ type: 'assistant/attempt', seq: 4, time: 1786707341000, data: {
+        turn: 1, step: 2, stream: embeddedUsage({ inputTokens: 20, outputTokens: 2 }, 1786707340900),
+      } }),
+    ])
+    expect((await parseAll(createDshProvider(tmpDir), filePath)).map(call => call.model)).toEqual(['first-model', 'second-model'])
+  })
+
+  it('keeps metered attempts when another attempt has no usage, without inventing a zero call', async () => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-missing-usage', [
+      versionedHeader(3),
+      assistantMessage(1, 1, { inputTokens: 10, outputTokens: 1 }, 1786707340000),
+      JSON.stringify({ type: 'assistant/attempt', seq: 2, time: 1786707341000, data: { turn: 1, step: 2, stream: [] } }),
+    ])
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      const calls = await parseAll(createDshProvider(tmpDir), filePath)
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ inputTokens: 10, outputTokens: 1, costIsEstimated: false })
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('attempt without usage'))
+    } finally {
+      stderr.mockRestore()
+    }
+  })
+
+  it.each([
+    { inputTokens: 10 },
+    { inputTokens: 10, outputTokens: 2, reasoningTokens: 3 },
+  ])('marks incomplete or inconsistent usage as estimated: %j', async (usage) => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-incomplete-usage', [
+      versionedHeader(3),
+      assistantMessage(1, 1, usage, 1786707340000),
+    ])
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ inputTokens: 10, outputTokens: 'outputTokens' in usage ? usage.outputTokens : 0, costIsEstimated: true })
+  })
+
+  it.each([1, 2, 3] as const)('uses only the usage layout belonging to format v%s', async (version) => {
+    // v1-to-v2 consumes top-level chunks and introduces settlement streams.
+    // A row from the other physical layout must not become an extra call.
+    const filePath = await writeVersionedSession(version, '--home-u-proj--', 'session-layout', [
+      versionedHeader(version),
+      chunkUsage(1, 1, { inputTokens: 10, outputTokens: 1 }, 1786707340000),
+      JSON.stringify({
+        type: 'assistant/attempt', seq: 4, time: 1786707341000,
+        data: { turn: 1, step: 2, stream: embeddedUsage({ inputTokens: 20, outputTokens: 2 }, 1786707340900) },
+      }),
+    ])
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls.map(call => [call.inputTokens, call.outputTokens])).toEqual(version === 1 ? [[10, 1]] : [[20, 2]])
+  })
+
+  it('keeps the released v1 top-level event layout compatible', async () => {
+    const filePath = await writeVersionedSession(1, '--home-u-proj--', 'session-v1', [
+      versionedHeader(1, { id: 'session-v1' }),
+      requestHeader('deepseek-v4-pro'),
+      assistantMessage(1, 1, { inputTokens: 111, outputTokens: 22 }, 1786707340000),
+    ])
+
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ model: 'deepseek-v4-pro', inputTokens: 111, outputTokens: 22 })
+  })
+
+  it.each([2, 3] as const)('reads v%s embedded streams and prefers message usage', async (version) => {
+    const filePath = await writeVersionedSession(version, '--home-u-proj--', `session-v${version}`, [
+      versionedHeader(version, { id: `session-v${version}` }),
+      JSON.stringify({
+        type: 'request/context', seq: 0, time: 1786707337000,
+        data: { provider: 'openai', model: 'requested-model' },
+      }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 1, time: 1786707340000, surfaceOp: 'append',
+        data: {
+          turn: 1,
+          step: 1,
+          message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'openai', model: 'served-model' } },
+          stream: embeddedUsage({ inputTokens: 90, outputTokens: 9 }, 1786707339900),
+          usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 30 },
+        },
+      }),
+    ])
+
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      model: 'served-model', inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 30,
+    })
+  })
+
+  it('counts each retry attempt and resolves failed-attempt models from request context', async () => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-retry', [
+      versionedHeader(3, { id: 'session-retry' }),
+      JSON.stringify({ type: 'turn/start', seq: 0, time: 1786707337000, data: { turn: 1 } }),
+      JSON.stringify({
+        type: 'request/header', seq: 1, time: 1786707337100,
+        data: { header: { config: { provider: 'configured', model: 'configured-model' } }, reason: 'initial' },
+      }),
+      JSON.stringify({
+        type: 'request/context', seq: 2, time: 1786707337200,
+        data: { provider: 'actual-route', model: 'attempt-model' },
+      }),
+      JSON.stringify({
+        type: 'assistant/attempt', seq: 3, time: 1786707338000,
+        data: { turn: 1, step: 1, stream: embeddedUsage({ inputTokens: 10, outputTokens: 1 }, 1786707337900) },
+      }),
+      JSON.stringify({
+        type: 'llm/retry-started', seq: 4, time: 1786707338100,
+        data: { retryId: 'retry-1', turn: 1, step: 1, retry: 1 },
+      }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 5, time: 1786707339000, surfaceOp: 'append',
+        data: {
+          turn: 1,
+          step: 1,
+          message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'actual-route', model: 'served-model' } },
+          stream: embeddedUsage({ inputTokens: 20, outputTokens: 2 }, 1786707338900),
+        },
+      }),
+    ])
+
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls.map(call => [call.model, call.inputTokens, call.outputTokens])).toEqual([
+      ['attempt-model', 10, 1],
+      ['served-model', 20, 2],
+    ])
+    expect(calls.map(call => call.deduplicationKey)).toEqual([
+      'dsh:session-retry:1:1',
+      'dsh:session-retry:1:1:attempt:2',
+    ])
+  })
+
+  it.each([2, 3] as const)('excludes the inherited prefix using the last tagged v%s end-seed marker', async (version) => {
+    const filePath = await writeVersionedSession(version, '--home-u-proj--', `session-v${version}-fork`, [
+      versionedHeader(version, { id: `session-v${version}-fork`, isSeeded: true }),
+      JSON.stringify({
+        type: 'request/context', seq: 0, time: 1786707336900,
+        data: { provider: 'deepseek', model: 'inherited-model' },
+      }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 1, time: 1786707337000, surfaceOp: 'append',
+        data: { turn: 1, step: 1, message: { role: 'assistant', content: [] }, usage: { inputTokens: 999, outputTokens: 99 }, stream: [] },
+      }),
+      JSON.stringify({ type: 'session/end-seed', seq: 2, time: 1786707337100, data: { inherited: true } }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 3, time: 1786707338000, surfaceOp: 'append',
+        data: { turn: 2, step: 1, message: { role: 'assistant', content: [] }, usage: { inputTokens: 500, outputTokens: 50 }, stream: [] },
+      }),
+      JSON.stringify({ type: 'session/end-seed', seq: 4, time: 1786707338100, data: { inherited: true } }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 5, time: 1786707339000, surfaceOp: 'append',
+        data: { turn: 3, step: 1, message: { role: 'assistant', content: [] }, usage: { inputTokens: 100, outputTokens: 10 }, stream: [] },
+      }),
+    ])
+
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ model: 'inherited-model', inputTokens: 100, outputTokens: 10 })
+  })
+
+  it('treats pi-ai API routes as the same normalized TokenUsage contract', async () => {
+    const routes = [
+      ['anthropic', 'claude-sonnet-4-5', 10],
+      ['openai-chat-completions', 'gpt-5.4', 20],
+      ['openai-responses', 'gpt-5.4-codex', 30],
+    ] as const
+    const rows = routes.flatMap(([provider, model, input], index) => [
+      JSON.stringify({ type: 'request/context', seq: index * 2, time: 1786707337000 + index, data: { provider, model } }),
+      JSON.stringify({
+        type: 'assistant/message', seq: index * 2 + 1, time: 1786707340000 + index, surfaceOp: 'append',
+        data: {
+          turn: 1, step: index + 1,
+          message: { role: 'assistant', content: [], source: { kind: 'model', provider, model } },
+          stream: embeddedUsage({ inputTokens: input, outputTokens: 5, cacheReadTokens: 3, cacheWriteTokens: 2 }, 1786707339000 + index),
+        },
+      }),
+    ])
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-routes', [
+      versionedHeader(3, { id: 'session-routes' }),
+      ...rows,
+    ])
+
+    const calls = await parseAll(createDshProvider(tmpDir), filePath)
+    expect(calls.map(call => [call.model, call.inputTokens, call.outputTokens, call.cacheReadInputTokens, call.cacheCreationInputTokens]))
+      .toEqual(routes.map(([, model, input]) => [model, input, 5, 3, 2]))
+  })
+
+  itZstd('decodes a versioned v3 log split across independent zstd frames', async () => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-v3-zstd', [
+      versionedHeader(3, { id: 'session-v3-zstd' }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 0, time: 1786707340000, surfaceOp: 'append',
+        data: { turn: 1, step: 1, message: { role: 'assistant', content: [] }, stream: embeddedUsage({ inputTokens: 12, outputTokens: 3 }, 1786707339900) },
+      }),
+    ], true)
+
+    expect((await parseAll(createDshProvider(tmpDir), filePath))[0]).toMatchObject({ inputTokens: 12, outputTokens: 3 })
+  })
+
+  itZstd('decodes every versioned generation from zstd', async () => {
+    for (const version of [1, 2, 3] as const) {
+      const settlement = version === 1
+        ? assistantMessage(1, 1, { inputTokens: version * 10, outputTokens: version }, 1786707340000)
+        : JSON.stringify({
+            type: 'assistant/message', seq: 0, time: 1786707340000, surfaceOp: 'append',
+            data: {
+              turn: 1, step: 1, message: { role: 'assistant', content: [] },
+              stream: embeddedUsage({ inputTokens: version * 10, outputTokens: version }, 1786707339900),
+            },
+          })
+      const filePath = await writeVersionedSession(version, '--home-u-proj--', `session-v${version}-zstd`, [
+        versionedHeader(version, { id: `session-v${version}-zstd` }),
+        settlement,
+      ], true)
+      expect((await parseAll(createDshProvider(tmpDir), filePath))[0])
+        .toMatchObject({ inputTokens: version * 10, outputTokens: version })
+    }
+  })
+
+  itZstd('ignores a torn trailing frame in a v3 log', async () => {
+    const filePath = await writeVersionedSession(3, '--home-u-proj--', 'session-v3-torn', [
+      versionedHeader(3, { id: 'session-v3-torn' }),
+      JSON.stringify({
+        type: 'assistant/message', seq: 0, time: 1786707340000, surfaceOp: 'append',
+        data: { turn: 1, step: 1, message: { role: 'assistant', content: [] }, usage: { inputTokens: 10, outputTokens: 1 }, stream: [] },
+      }),
+    ], true)
+    const original = await readFile(filePath)
+    const torn = zstdCompress!(Buffer.from(JSON.stringify({
+      type: 'assistant/message', seq: 1, time: 1786707341000, surfaceOp: 'append',
+      data: { turn: 1, step: 2, message: { role: 'assistant', content: [] }, usage: { inputTokens: 999, outputTokens: 99 }, stream: [] },
+    }) + '\n'))
+    await writeFile(filePath, Buffer.concat([original, torn.subarray(0, Math.floor(torn.length / 2))]))
+
+    expect((await parseAll(createDshProvider(tmpDir), filePath)).map(call => call.inputTokens)).toEqual([10])
+  })
+
   itZstd('decodes events spread across multiple independent zstd frames', async () => {
     const filePath = await writeZstdSession('--C-Users-test-myproject--', 'session-multi', [
       [sessionHeader({ id: 'session-multi', cwd: 'C:\\Users\\test\\myproject' })],
@@ -232,6 +698,7 @@ describe('dsh provider - parsing', () => {
     const calls = await parseAll(createDshProvider(tmpDir), filePath)
     expect(calls).toHaveLength(1)
     expect(calls[0]!.inputTokens).toBe(14981)
+    // Preserve raw output, including reasoning, for the shared billing rule.
     expect(calls[0]!.outputTokens).toBe(656)
     expect(calls[0]!.reasoningTokens).toBe(609)
     expect(calls[0]!.timestamp).toBe(new Date(1786707340050).toISOString())
@@ -275,16 +742,20 @@ describe('dsh provider - parsing', () => {
     expect(calls.map(c => c.model)).toEqual(['deepseek-v4-pro', 'deepseek-v4-pro', 'deepseek-v4-flash'])
   })
 
-  it('bills reasoning tokens at the output rate', async () => {
+  it('preserves inclusive reasoning and bills output once through the shared rule', async () => {
     const filePath = await writeZstdSession('--C-Users-test-myproject--', 'session-reason', [
       [sessionHeader({ id: 'session-reason' })],
       [requestHeader('deepseek-v4-pro')],
-      [assistantMessage(1, 1, { inputTokens: 1000, outputTokens: 100, cacheWriteTokens: 50, cacheReadTokens: 500, reasoningTokens: 400 }, 1786707340000)],
+      [assistantMessage(1, 1, { inputTokens: 1000, outputTokens: 100, cacheWriteTokens: 50, cacheReadTokens: 500, reasoningTokens: 40 }, 1786707340000)],
     ])
 
     const calls = await parseAll(createDshProvider(tmpDir), filePath)
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost('deepseek-v4-pro', 1000, 500, 50, 500, 0), 12)
+    expect(calls[0]).toMatchObject({ outputTokens: 100, reasoningTokens: 40 })
+    expect(billableOutputTokens('dsh', calls[0]!.outputTokens, calls[0]!.reasoningTokens)).toBe(100)
+    // DSH's TokenUsage reasoningTokens is informational detail already
+    // included in outputTokens, so the output bucket is billed exactly once.
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost('deepseek-v4-pro', 1000, 100, 50, 500, 0), 12)
   })
 
   it('collects mapped tools, skill names and bash commands from tool/call events', async () => {
@@ -443,8 +914,8 @@ describe('dsh provider - real log fidelity', () => {
       workingDirectory: '/home/u/proj',
     })
     expect(calls[1]).toMatchObject({ inputTokens: 168, outputTokens: 25, cacheReadInputTokens: 2816, reasoningTokens: 22 })
-    // Reasoning bills at the output rate, so it must not appear as input.
-    expect(calls[0]!.costUSD).toBe(calculateCost('deepseek-v4-flash', 2877, 90 + 18, 0, 0, 0))
+    // Reasoning is a subset of output, so it must not be added a second time.
+    expect(calls[0]!.costUSD).toBe(calculateCost('deepseek-v4-flash', 2877, 90, 0, 0, 0))
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
   })
 
@@ -464,6 +935,25 @@ describe('dsh provider - real log fidelity', () => {
 })
 
 describe('dsh provider - defensive reads', () => {
+  it.each([2, 3] as const)('rejects malformed interior JSON in v%s while preserving a torn tail', async (version) => {
+    const rows = [versionedHeader(version), assistantMessage(1, 1, { inputTokens: 10, outputTokens: 1 }, 1786707340000)]
+    const corrupt = await writeVersionedSession(version, '--home-u-proj--', 'session-interior', [
+      rows[0]!, '{broken', rows[1]!,
+    ])
+    const torn = await writeVersionedSession(version, '--home-u-proj--', 'session-tail', [...rows, '{broken'])
+    expect(await parseAll(createDshProvider(tmpDir), corrupt)).toEqual([])
+    expect(await parseAll(createDshProvider(tmpDir), torn)).toEqual([expect.objectContaining({ inputTokens: 10, outputTokens: 1 })])
+  })
+
+  it('does not accept a session header appearing after an unrelated first row', async () => {
+    const path = await writeVersionedSession(3, '--home-u-proj--', 'session-late-header', [
+      JSON.stringify({ type: 'turn/start', seq: 0, data: { turn: 1 } }),
+      versionedHeader(3),
+      assistantMessage(1, 1, { inputTokens: 10, outputTokens: 1 }, 1786707340000),
+    ])
+    expect(await parseAll(createDshProvider(tmpDir), path)).toEqual([])
+  })
+
   it('skips a log stamped with an unsupported session format version', async () => {
     const filePath = await writePlainSession('--home-u-proj--', 'session-future', [
       JSON.stringify({ type: 'session', version: 1, id: 'session-future', createdAt: 1786707336131, cwd: '/home/u/proj', delegationDepth: 0 }),
@@ -500,6 +990,11 @@ describe('dsh provider - defensive reads', () => {
       JSON.stringify({ type: 'agent/inbox/spliced', seq: 0, time: 1786707337000, data: { target: 'next-turn' } }),
       JSON.stringify({ type: 'reasoning-chunks', seq0: 1, time0: 1786707337100, data: { turn: 1, step: 1, index: 0, dt: [0], texts: ['a', 'b'] } }),
       '{ not json at all',
+      'null',
+      '42',
+      '[]',
+      JSON.stringify({ type: 'user/message', data: { source: { kind: 'user' }, content: {} } }),
+      JSON.stringify({ type: 'user/message', data: { source: { kind: 'user' }, content: [null] } }),
       '   ',
       chunkUsage(1, 1, { inputTokens: 100, outputTokens: 10 }, 1786707340000),
     ])

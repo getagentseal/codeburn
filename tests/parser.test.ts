@@ -35,18 +35,24 @@ let _synthOnParse: ((source: SessionSource) => void | Promise<void>) | null = nu
 vi.mock('../src/providers/index.js', async (importOriginal) => {
   type Mod = typeof import('../src/providers/index.js')
   const actual = await importOriginal<Mod>()
+  // Pass through for specific non-synthetic providers; inject synthetic
+  // sources only when filter is undefined/'all'/'test-synthetic'.
+  const discoverAllSessions = async (filter?: string): Promise<SessionSource[]> => {
+    if (filter && filter !== 'all' && filter !== 'test-synthetic') {
+      return actual.discoverAllSessions(filter)
+    }
+    const base = filter === 'test-synthetic'
+      ? []
+      : await actual.discoverAllSessions(filter)
+    return [..._synthSources, ...base]
+  }
   return {
     ...actual,
-    async discoverAllSessions(filter?: string) {
-      // Pass through for specific non-synthetic providers; inject synthetic
-      // sources only when filter is undefined/'all'/'test-synthetic'.
-      if (filter && filter !== 'all' && filter !== 'test-synthetic') {
-        return actual.discoverAllSessions(filter)
-      }
-      const base = filter === 'test-synthetic'
-        ? []
-        : await actual.discoverAllSessions(filter)
-      return [..._synthSources, ...base]
+    discoverAllSessions,
+    // What the parse path calls. The synthetic provider never fails discovery,
+    // so it carries the same sources and no failures.
+    async discoverAllSessionsWithFailures(filter?: string) {
+      return { sources: await discoverAllSessions(filter), failedProviders: [] }
     },
     async getProvider(name: string) {
       if (name === 'test-synthetic') {

@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { existsSync } from 'fs'
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { createHash } from 'crypto'
@@ -7,7 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-
 import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
-import { discoverAllSessions, getProvider } from './providers/index.js'
+import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -34,6 +35,7 @@ import {
   isCacheDirty,
   loadCache,
   markCacheDirty,
+  markProviderComplete,
   monthScopeForRange,
   reconcileFile,
   saveCache,
@@ -3170,6 +3172,10 @@ export function setInteractiveScanUI(active = true): void {
   interactiveScanUI = active
 }
 
+export function isInteractiveScanUI(): boolean {
+  return interactiveScanUI
+}
+
 // Machine-readable scan progress for the desktop app's first-run splash. Plain
 // CLI/terminal usage is untouched: emission is gated on CODEBURN_PROGRESS=1,
 // which only the app's cold-start warmup spawn sets. Each event is one
@@ -3492,7 +3498,10 @@ export async function parseProviderSources(
   try {
     for (const { source, fp } of changedSources) {
       if (dateRange) {
-        if (fp.mtimeMs < dateRange.start.getTime()) continue
+        if (fp.mtimeMs < dateRange.start.getTime()) {
+          dateFloorSkippedProviders.add(providerName)
+          continue
+        }
       }
       filesParsedFromSource++
 
@@ -4413,29 +4422,89 @@ export function setCachePutMeta(meta: { startMs: number; endMs: number; sig: str
   putMeta = meta
 }
 
+export function isRootedProjectPattern(pattern: string): boolean {
+  const raw = pattern.trim().replace(/\\/g, '/')
+  return raw.startsWith('/') || raw === '~' || raw.startsWith('~/') || /^[a-zA-Z]:\//.test(raw)
+}
+
+/// A quoted "~/proj" reaches us unexpanded, and so does one typed into a field
+/// with no shell behind it. Left as a loose word it would match nothing and say
+/// nothing, since no stored path contains a tilde.
+function expandTilde(pattern: string): string {
+  const raw = pattern.trim().replace(/\\/g, '/')
+  if (raw !== '~' && !raw.startsWith('~/')) return raw
+  return homedir().replace(/\\/g, '/') + raw.slice(1)
+}
+
+/// A pattern is normalized once and matched many times: the day cache runs the
+/// filter for every project of every day, and again per provider slice.
+type CompiledPattern = { rooted: true; anchor: string | null } | { rooted: false; needle: string }
+
+export type ProjectFilterTarget = { project: string; projectPath?: string }
+
+function compile(patterns: readonly string[]): CompiledPattern[] {
+  return patterns.map(pattern => isRootedProjectPattern(pattern)
+    ? { rooted: true as const, anchor: normalizeAbsProjectPathKey(expandTilde(pattern)) }
+    : { rooted: false as const, needle: pattern.toLowerCase() })
+}
+
+/// An absolute path names ONE project, so it anchors on a segment boundary (the
+/// isProxiedPath rule): "/a/proj" takes "/a/proj/sub" but not "/a/proj-ui-kit".
+/// Both sides key through normalizeAbsProjectPathKey (Windows casefolds, POSIX
+/// does not, #1260), and rootedness alone picks the branch, so "/" names none.
+function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string | null): boolean {
+  if (pattern.rooted) {
+    const anchor = pattern.anchor
+    return anchor !== null && key !== null && (key === anchor || key.startsWith(anchor + '/'))
+  }
+  return entry.project.toLowerCase().includes(pattern.needle)
+    || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
+}
+
+/// The filter as one closure: patterns are compiled here, so the caller can
+/// hold it across a loop, and include-then-exclude is composed in one place for
+/// the live parse and the day cache alike.
+export function makeProjectFilter(
+  include?: readonly string[],
+  exclude?: readonly string[],
+): (entry: ProjectFilterTarget) => boolean {
+  const inc = compile(include ?? [])
+  const exc = compile(exclude ?? [])
+  // The key costs a trim, a global replace and three regex passes. The day cache
+  // runs this per project, per day, per provider slice, so it is only paid when
+  // some pattern is rooted and can actually read it.
+  const needsKey = inc.some(p => p.rooted) || exc.some(p => p.rooted)
+  return entry => {
+    const key = needsKey ? normalizeAbsProjectPathKey(entry.projectPath ?? '') : null
+    if (inc.length > 0 && !inc.some(pattern => hit(entry, pattern, key))) return false
+    if (exc.length > 0 && exc.some(pattern => hit(entry, pattern, key))) return false
+    return true
+  }
+}
+
+export function matchesProjectPattern(project: ProjectFilterTarget, pattern: string): boolean {
+  return makeProjectFilter([pattern])(project)
+}
+
+/// Which rooted patterns name no project here? Each is tried on its own against
+/// the UNFILTERED list: judged inside filterProjectsByName instead, an earlier
+/// --project would mask a later one that selects the same project, and an
+/// --exclude would be tested against what --project had already removed.
+export function unmatchedRootedPatterns(projects: readonly ProjectFilterTarget[], patterns: readonly string[]): string[] {
+  return patterns.filter(pattern => {
+    if (!isRootedProjectPattern(pattern)) return false
+    return !projects.some(entry => matchesProjectPattern(entry, pattern))
+  })
+}
+
 export function filterProjectsByName(
   projects: ProjectSummary[],
   include?: string[],
   exclude?: string[],
 ): ProjectSummary[] {
-  let result = projects
-  if (include && include.length > 0) {
-    const patterns = include.map(s => s.toLowerCase())
-    result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return patterns.some(pat => name.includes(pat) || path.includes(pat))
-    })
-  }
-  if (exclude && exclude.length > 0) {
-    const patterns = exclude.map(s => s.toLowerCase())
-    result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
-    })
-  }
-  return result
+  if ((include?.length ?? 0) === 0 && (exclude?.length ?? 0) === 0) return projects
+  const matches = makeProjectFilter(include, exclude)
+  return projects.filter(matches)
 }
 
 function turnDayString(turn: ClassifiedTurn): string | null {
@@ -5162,6 +5231,13 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
 // new data, so the run must not report hydration complete even in write mode.
 let deferredRetryableSource = false
 
+// Providers for which this run left an uncached source unparsed because its
+// mtime predates the requested range. The scan still reached the end, but only
+// for sources modified since `dateRange.start` — which is exactly what the
+// per-provider completeness floor records, so a later WIDER query re-enters
+// cold hydration instead of trusting a cache that never saw those files.
+const dateFloorSkippedProviders = new Set<string>()
+
 // One command invocation that renders a dashboard asks for several ranges that
 // differ only in where they END — the scan range runs to end-of-day, the
 // durable headline re-anchors on its own `new Date()`. The exact-key memo needs
@@ -5337,8 +5413,8 @@ export function parseAllSessions(dateRange?: DateRange, providerFilter?: string)
   return withCodexCacheDirectory(codexCacheDir, () => parseAllSessionsInCacheScope(dateRange, providerFilter))
 }
 
-function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string): boolean {
-  if (!isCacheComplete(cache)) return false
+function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, sinceMs?: number): boolean {
+  if (!isCacheComplete(cache, providerFilter, sinceMs)) return false
   const sections = providerFilter && providerFilter !== 'all'
     ? ([[providerFilter, cache.providers[providerFilter]]] as const).filter((entry): entry is readonly [string, ProviderSection] => entry[1] != null)
     : Object.entries(cache.providers)
@@ -5348,7 +5424,7 @@ function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string):
 
 export async function isCompleteSessionSnapshotAvailable(dateRange: DateRange, providerFilter?: string): Promise<boolean> {
   const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end))
-  return canServeCompleteSnapshot(diskCache, providerFilter)
+  return canServeCompleteSnapshot(diskCache, providerFilter, dateRange.start.getTime())
 }
 
 async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
@@ -5396,11 +5472,12 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // a proxied key emitted under two providers the attribution can land on a
   // different provider than a full load would pick.
   const loadScope = dateRange ? monthScopeForRange(dateRange.start, dateRange.end) : undefined
+  const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
   let diskCache = await loadCache(loadScope)
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
-    process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache)}\n`)
+    process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
   }
 
   // Cold-hydration coordination (advisory, cross-process). Engages whenever the
@@ -5411,10 +5488,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // If another live process is already hydrating, wait for it, then reload the
   // now-warm cache instead of double-parsing. Never a correctness gate: on any
   // doubt it proceeds unlocked.
-  if (!isCacheComplete(diskCache)) {
+  if (!isCacheComplete(diskCache, providerFilter, rangeStartMs)) {
     const hydration = await beginColdHydration(true)
     if (hydration.waited) diskCache = await loadCache(loadScope)
-    const isCold = !isCacheComplete(diskCache)
+    const isCold = !isCacheComplete(diskCache, providerFilter, rangeStartMs)
     try {
       return await runParse(key, diskCache, dateRange, providerFilter, { isCold, burstSig, parseStartedAt })
     } finally {
@@ -5422,7 +5499,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
     }
   }
 
-  if (firstPaintPrefersCompleteSnapshot && canServeCompleteSnapshot(diskCache, providerFilter)) {
+  if (firstPaintPrefersCompleteSnapshot && canServeCompleteSnapshot(diskCache, providerFilter, rangeStartMs)) {
     return runParse(key, diskCache, dateRange, providerFilter, {
       readOnly: true,
       snapshotOnly: true,
@@ -5519,9 +5596,13 @@ async function runParseInner(
   readOnlyServedStale = false
   deferredRetryableSource = false
   firstPaintDeferredThisRun = 0
+  dateFloorSkippedProviders.clear()
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
-  const allSources = snapshotOnly ? [] : await discoverAllSessions(providerFilter)
+  const discovery = snapshotOnly
+    ? { sources: [], failedProviders: [] }
+    : await discoverAllSessionsWithFailures(providerFilter)
+  const allSources = discovery.sources
   traceTiming('discovery', ` sources=${allSources.length}`)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
@@ -5639,27 +5720,34 @@ async function runParseInner(
   // background fill) has to come back cold and finish the job. A floored run
   // that deferred NOTHING parsed exactly what an unfloored run would have, so
   // it keeps the normal stamp.
+  //
+  // What the stamp records is what this run actually WALKED, on both axes a
+  // scan can be scoped on (#912). A `--provider X` run saw X and nothing else,
+  // so it marks X's section and leaves the whole-cache flag — the one that
+  // vouches for providers with no section at all — to an unscoped run. A ranged
+  // run left every uncached source older than the range unparsed, so the
+  // providers that skipped one record the range start as their completeness
+  // floor rather than claiming all of history. And a provider whose discovery
+  // threw contributed an empty source list that means "unknown", not "empty",
+  // so it is not marked at all.
   const deferredForFirstPaint = firstPaintDeferredThisRun > 0
-  const wasComplete = isCacheComplete(diskCache)
-  // A provider-scoped run walks only its own provider's sessions, so it never
-  // saw whatever the providers it skipped hold on disk. Stamping the WHOLE
-  // cache complete off that partial view writes a wrong "done" to disk (#912):
-  // per the marker's own contract above, a complete cache stops being re-read
-  // as cold, so the unscanned providers are not revisited and the gap stops
-  // looking like a gap. The guard is conditioned on real on-disk data, not on
-  // scoping alone: when every provider the run skipped has NO discoverable
-  // sessions, the scoped run really did see the whole corpus (a claude-only
-  // machine, and exactly what the warm-refresh snapshot tests rely on), so the
-  // stamp is correct and stands. Discovery here is a bounded directory walk,
-  // not a parse — the scoping win (skipping the other providers' PARSE) holds.
+  const rangeStartMs = dateRange?.start.getTime()
   const scopedRun = !!providerFilter && providerFilter !== 'all'
-  let skippedProviderHasSessions = false
-  if (scopedRun && !readOnly && !wasComplete && !deferredForFirstPaint) {
-    const corpusSources = await discoverAllSessions()
-    skippedProviderHasSessions = corpusSources.some(s => s.provider !== providerFilter)
+  const discoveryFailed = new Set(discovery.failedProviders)
+  let completenessChanged = false
+  if (!readOnly && !deferredForFirstPaint) {
+    const walked = scopedRun ? [providerFilter!] : Object.keys(diskCache.providers)
+    for (const provider of walked) {
+      if (discoveryFailed.has(provider)) continue
+      const floor = dateFloorSkippedProviders.has(provider) ? rangeStartMs : undefined
+      if (markProviderComplete(diskCache, provider, floor)) completenessChanged = true
+    }
+    if (!scopedRun && discoveryFailed.size === 0 && diskCache.complete !== true) {
+      diskCache.complete = true
+      completenessChanged = true
+    }
   }
-  if (!readOnly && !wasComplete && !deferredForFirstPaint && !skippedProviderHasSessions) diskCache.complete = true
-  if (!readOnly && (isCacheDirty(diskCache) || (!wasComplete && !deferredForFirstPaint))) {
+  if (!readOnly && (isCacheDirty(diskCache) || completenessChanged)) {
     try {
       const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
       if (!published) throw new RefreshFenceLostError()

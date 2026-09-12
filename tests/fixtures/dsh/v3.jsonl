@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"fixture-session","createdAt":1786707340000,"cwd":"/fixture/project","delegationDepth":0,"isSeeded":false}
+{"type":"turn/start","data":{"turn":1},"seq":0,"time":1786707340000}
+{"type":"step/start","data":{"turn":1,"step":1},"seq":1,"time":1786707340000}
+{"type":"assistant/message","surfaceOp":"append","data":{"turn":1,"step":1,"message":{"id":"fixture-message","role":"assistant","content":[{"type":"text","text":"Done"}],"source":{"kind":"model","provider":"deepseek-official","model":"deepseek-v4-flash"}},"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":30,"cacheWriteTokens":5,"reasoningTokens":8},"stream":[{"type":"chunk","time":1786707340000,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":30,"cacheWriteTokens":5,"reasoningTokens":8}}}]},"seq":2,"time":1786707340000}
+{"type":"step/end","data":{"turn":1,"step":1},"seq":3,"time":1786707340000}
+{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}},"seq":4,"time":1786707340000}

@@ -96,6 +96,19 @@ struct CopilotQuotaPresentationTests {
         #expect(Presentation.settingsNotConnectedDetail(explicitlyDisconnected: false) == Presentation.noCredentialsSettingsDetail)
     }
 
+    @Test("the connected detail names the host that answered")
+    func connectedDetailNamesTheHost() {
+        #expect(
+            Presentation.connectedSettingsDetail(plan: "Enterprise", apiHost: "api.acme.ghe.com")
+                == "Plan: Enterprise. Live quota tracked from api.acme.ghe.com.")
+        #expect(
+            Presentation.connectedSettingsDetail(plan: nil, apiHost: "api.github.com")
+                == "Live quota tracked from api.github.com.")
+        #expect(
+            Presentation.connectedSettingsDetail(plan: "Pro", apiHost: "")
+                == "Plan: Pro. Live quota tracked from api.github.com.")
+    }
+
     @Test("a fresh snapshot is not stamped stale")
     func freshSnapshotIsNotStale() {
         let now = Date()

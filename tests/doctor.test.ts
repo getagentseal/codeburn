@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
 import { collectDoctorReport, renderDoctorTable, renderDoctorJson } from '../src/doctor.js'
 import { createCodexProvider } from '../src/providers/codex.js'
+import { createDshProvider } from '../src/providers/dsh.js'
 import { createOpenCodeProvider } from '../src/providers/opencode.js'
 import { emptyCache, type SessionCache } from '../src/session-cache.js'
 import type { Provider, ProbeRoot, SessionSource } from '../src/providers/types.js'
@@ -77,6 +78,49 @@ afterEach(async () => { await rm(tmpDir, { recursive: true, force: true }) })
 // ── Real-provider fixture-dir cases: found / empty / missing ───────────────
 
 describe('collectDoctorReport - codex fixture dirs', () => {
+  it('reports every DSH session skipped for an unknown highest generation', async () => {
+    const warnings = vi.spyOn(process.stderr, 'write')
+    try {
+      for (const id of ['first', 'second']) {
+        const dir = join(tmpDir, 'sessions', '--fixture--', id)
+        await mkdir(dir, { recursive: true })
+        await writeFile(join(dir, 'session.jsonl'), JSON.stringify({ type: 'session', version: 0 }))
+        await writeFile(join(dir, 'session.v99.jsonl'), 'unreadable future format')
+      }
+      const provider = createDshProvider(tmpDir)
+      const options = { providers: [provider], cache: emptyCache(), dailyCacheDays: [], launchers: [] }
+      for (let scan = 0; scan < 2; scan++) {
+        const report = await collectDoctorReport('dsh', options)
+        expect(only(report, 'dsh')).toMatchObject({ status: 'errors', skippedVersionCount: 2, candidatesFound: 0 })
+        expect(renderDoctorTable(report)).toContain('2 sessions skipped')
+        expect(JSON.parse(renderDoctorJson(report)).providers[0].skippedVersionCount).toBe(2)
+      }
+      expect(warnings.mock.calls.filter(([message]) => String(message).includes('session format version 99;'))).toHaveLength(1)
+    } finally {
+      warnings.mockRestore()
+    }
+  })
+  it('reports DSH sessions dropped for an unreadable or mismatched header', async () => {
+    const warnings = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      const unreadable = join(tmpDir, 'sessions', '--fixture--', 'unreadable')
+      const mismatch = join(tmpDir, 'sessions', '--fixture--', 'mismatch')
+      await mkdir(unreadable, { recursive: true })
+      await mkdir(mismatch, { recursive: true })
+      await writeFile(join(unreadable, 'session.v3.jsonl'), '{broken')
+      await writeFile(join(mismatch, 'session.v3.jsonl'), JSON.stringify({ type: 'session', version: 2 }))
+
+      const report = await collectDoctorReport('dsh', {
+        providers: [createDshProvider(tmpDir)], cache: emptyCache(), dailyCacheDays: [], launchers: [],
+      })
+
+      expect(only(report, 'dsh')).toMatchObject({ status: 'errors', skippedVersionCount: 2, candidatesFound: 0 })
+      expect(renderDoctorTable(report)).toContain('2 sessions skipped')
+    } finally {
+      warnings.mockRestore()
+    }
+  })
+
   it('found: a real session file yields an OK verdict and a parsed sample', async () => {
     await writeCodexSession(tmpDir)
     const provider = createCodexProvider(tmpDir)

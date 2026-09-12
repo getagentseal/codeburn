@@ -10,9 +10,9 @@ vi.mock('../src/providers/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/providers/index.js')>()
   return {
     ...actual,
-    discoverAllSessions: (...args: Parameters<typeof actual.discoverAllSessions>) => {
+    discoverAllSessionsWithFailures: (...args: Parameters<typeof actual.discoverAllSessionsWithFailures>) => {
       discoveries++
-      return actual.discoverAllSessions(...args)
+      return actual.discoverAllSessionsWithFailures(...args)
     },
   }
 })

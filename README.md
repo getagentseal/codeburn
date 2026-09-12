@@ -332,6 +332,15 @@ defaults write org.agentseal.codeburn-menubar CodeBurnMenubarCompact -bool true
 
 Relaunch the app to apply. To revert: `defaults delete org.agentseal.codeburn-menubar CodeBurnMenubarCompact`.
 
+**Second row** adds an optional smaller line under the menubar figure. Turn it on in Settings → General → Display and pick what it shows: quota remaining with its reset countdown (for whichever connected provider is nearest its limit), today's cost, today's tokens, or running sessions. It is off by default, and the line hides itself while the chosen metric has no data, so the item falls back to its single-row figure. From Terminal:
+
+```bash
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarSecondRowEnabled -bool true
+defaults write org.agentseal.codeburn-menubar CodeBurnMenubarSecondRowMetric -string todayCost
+```
+
+Allowed metric values are `quotaRemaining`, `todayCost`, `todayTokens`, and `activeSessions`. Relaunch the app to apply external defaults changes.
+
 **Refresh cadence** is set in Settings under Usage Refresh. Auto (the default) refreshes every 30 seconds on AC power and backs off on battery, in Low Power Mode, and while the display sleeps; fixed 1, 5, or 15 minute cadences and a Manual mode (refresh only when you open the popover or click Refresh Now) are also available. From Terminal:
 
 ```bash
@@ -653,7 +662,7 @@ codeburn month --project api --project web       # include multiple projects
 codeburn export --project inventory              # export only "inventory" project data
 ```
 
-Filter by provider, project name (case-insensitive substring), or exact date range. The `--project` and `--exclude` flags work on all commands and can be combined with `--provider`.
+Filter by provider, project, or exact date range. The `--project` and `--exclude` flags work on every reporting command and can be combined with `--provider`. A plain word matches a project's name or path as a case-insensitive substring, so `--project my-company` also covers `my-company-kit` and its worktrees. An absolute path selects that one project and anything inside it, so `--exclude /Users/me/work/my-company` leaves the sibling `/Users/me/work/my-company-kit` alone. A leading `~` is expanded against your home directory, so a quoted `'~/work/my-company'` selects the same project as the path the shell would have expanded. An absolute POSIX path is case-sensitive, the same rule that decides project identity everywhere else (`/Users/me/Vault` and `/Users/me/vault` are two projects); a Windows drive or UNC path folds case. An absolute path that matches no project in the period you asked for is reported on stderr, since it would otherwise leave a total that looks right.
 
 ```bash
 codeburn report --from 2026-04-01 --to 2026-04-10   # explicit window

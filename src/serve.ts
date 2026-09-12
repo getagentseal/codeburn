@@ -8,6 +8,7 @@ import { getDateRange } from './cli-date.js'
 import { getConfigFilePath } from './config.js'
 import type { ParseReuseValidation } from './parser.js'
 import { SERVE_HYDRATION_ENV } from './usage-aggregator.js'
+import { suppressProjectFilterWarnings } from './project-filter-warnings.js'
 
 // ---------------------------------------------------------------------------
 // codeburn serve --stdio: a resident query server for the desktop app.
@@ -75,8 +76,14 @@ type ServeOptionKind = 'flag' | 'value'
 // than a shared denylist. If a command later gains a write-capable option it
 // remains a normal one-shot CLI action until it is explicitly reviewed here.
 // The entries mirror the Commander definitions in main.ts. In particular,
-// optimize omits its apply-only surface (--apply, --yes, --dry-run, --only).
+// optimize omits its apply-only surface (--apply, --yes, --dry-run, --only),
+// and report omits --refresh, which only paces the interactive dashboard.
 const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOptionKind>>>> = {
+  report: {
+    '-p': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
+    '--to': 'value', '--provider': 'value', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
+  },
   status: {
     '--format': 'value', '--scope': 'value', '--provider': 'value', '--project': 'value',
     '--exclude': 'value', '--period': 'value', '--day': 'value', '--from': 'value',
@@ -91,29 +98,36 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--task': 'value', '--by-task': 'flag', '--by-agent': 'flag',
     '--top': 'value', '--min-cost': 'value', '--no-totals': 'flag', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
   },
   sessions: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
+    '--project': 'value', '--exclude': 'value',
   },
   compare: {
     '-p': 'value', '--period': 'value', '--provider': 'value', '--format': 'value',
     '--model-a': 'value', '--model-b': 'value',
+    '--project': 'value', '--exclude': 'value',
   },
   yield: {
     '-p': 'value', '--period': 'value', '--provider': 'value', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
   },
   spend: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
   },
   optimize: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value', '--json': 'flag',
+    '--project': 'value', '--exclude': 'value',
   },
   audit: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
     '--provider': 'value', '--format': 'value',
+    '--project': 'value', '--exclude': 'value',
   },
 }
 
@@ -150,6 +164,11 @@ function allowed(args: string[]): boolean {
     const value = args[++i]
     if (value === undefined || value.startsWith('-')) return false
   }
+
+  // `report` is the interactive dashboard on every format but json, and a TUI
+  // cannot run in a resident child whose stdout is the wire. Its JSON form is
+  // the only servable one; the rest is refused and falls back to a one-shot.
+  if (first === 'report' && readServeOption(args, '--format') !== 'json') return false
   return true
 }
 
@@ -382,6 +401,9 @@ async function startRootWatchers(): Promise<RootWatcherState | null> {
 }
 
 export async function runStdioServe(buildProgram: () => Command): Promise<void> {
+  // Every stderr write becomes a progress frame below, so the project-filter
+  // warning has to stay quiet for the life of this process.
+  suppressProjectFilterWarnings()
   // Panel bursts (the app fetching every panel for one period) reuse a parse
   // whose through-now range end differs by less than this window, instead of
   // re-running the discovery sweep per panel. Serve-only: one-shot CLI runs

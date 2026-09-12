@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useStdout } from 'ink'
 
 import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } from './compare-stats.js'
-import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, findModelStat, scanSelfCorrections } from './compare-stats.js'
+import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, findModelStat, projectSessionIds, scanSelfCorrections } from './compare-stats.js'
 import { formatCost } from './format.js'
-import { parseAllSessions, setInteractiveScanUI } from './parser.js'
+import { filterProjectsByName, parseAllSessions, setInteractiveScanUI } from './parser.js'
 import { getAllProviders } from './providers/index.js'
 import type { ProjectSummary, DateRange } from './types.js'
 import { patchStdoutForWindows } from './ink-win.js'
@@ -338,9 +338,12 @@ type CompareViewProps = {
   // validated to exist in `projects`' aggregated stats by the caller). When
   // set, comparison results load immediately instead of showing the picker.
   presetModels?: [string, string]
+  // `projects` is already project-filtered: scope the self-correction scan to
+  // its sessions instead of every session on the machine.
+  scopeToProjects?: boolean
 }
 
-export function CompareView({ projects, onBack, presetModels }: CompareViewProps) {
+export function CompareView({ projects, onBack, presetModels, scopeToProjects }: CompareViewProps) {
   const { exit } = useApp()
   const [phase, setPhase] = useState<'select' | 'loading' | 'results'>('select')
   const [models, setModels] = useState<ModelStats[]>(() => aggregateModelStats(projects))
@@ -426,7 +429,7 @@ export function CompareView({ projects, onBack, presetModels }: CompareViewProps
         const sessions = await p.discoverSessions()
         for (const s of sessions) dirs.push(s.path)
       }
-      const corrections = await scanSelfCorrections(dirs)
+      const corrections = await scanSelfCorrections(dirs, scopeToProjects ? projectSessionIds(projectsRef.current) : undefined)
       if (cancelled) return
 
       const currentProjects = projectsRef.current
@@ -509,7 +512,7 @@ export function CompareView({ projects, onBack, presetModels }: CompareViewProps
   )
 }
 
-export async function renderCompare(range: DateRange, provider: string, modelA?: string, modelB?: string): Promise<void> {
+export async function renderCompare(range: DateRange, provider: string, modelA?: string, modelB?: string, projectFilter?: string[], excludeFilter?: string[]): Promise<void> {
   // Interactive Ink UI: suppress the CLI scan-progress line for the whole
   // lifetime so it can't print over the rendered comparison. Plain CLI
   // commands still show progress.
@@ -521,7 +524,8 @@ export async function renderCompare(range: DateRange, provider: string, modelA?:
   }
 
   patchStdoutForWindows()
-  const projects = await parseAllSessions(range, provider)
+  const hasProjectFilter = (projectFilter?.length ?? 0) > 0 || (excludeFilter?.length ?? 0) > 0
+  const projects = filterProjectsByName(await parseAllSessions(range, provider), projectFilter, excludeFilter)
 
   // --model-a/--model-b: resolve up front (by canonical id or display name,
   // same lookup the JSON path uses) so the TUI jumps straight to results
@@ -545,7 +549,7 @@ export async function renderCompare(range: DateRange, provider: string, modelA?:
   const stopUserTimingGuard = startUserTimingGuard()
   try {
     const { waitUntilExit } = render(
-      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} />
+      <CompareView projects={projects} onBack={() => process.exit(0)} presetModels={presetModels} scopeToProjects={hasProjectFilter} />
     )
     await waitUntilExit()
   } finally {

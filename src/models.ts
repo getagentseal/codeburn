@@ -33,7 +33,9 @@ export type ModelCosts = {
 /// and nothing else, and its supplementary store-row/shutdown calls carry
 /// reasoningTokens with outputTokens 0 while the per-turn assistant.message call
 /// bills the full output, so adding reasoning on top bills it twice.
-const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot'])
+/// DSH TokenUsage includes reasoning in output too; see the pinned contract:
+/// https://github.com/deepseek-ai/deepseek-harness/blob/c291e7961a515f6d7af9304e7fd1d257929aef26/docs/subsystems/llm-streaming.md#tokenusage
+const REASONING_INCLUDED_IN_OUTPUT = new Set(['claude', 'codex', 'copilot', 'dsh'])
 
 /// Output tokens to bill and display for one call. Single source of truth so
 /// the pricing sites and the display sums can never disagree about whether a

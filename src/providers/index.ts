@@ -261,9 +261,9 @@ export const providers = coreProviders
 // provider per run, then skip it. Mirrors the parse-failure isolation already
 // used per-file in parser.ts.
 const warnedDiscoveryFailures = new Set<string>()
-export async function safeDiscoverSessions(provider: Provider): Promise<SessionSource[]> {
+async function discoverOne(provider: Provider): Promise<{ sources: SessionSource[]; failed: boolean }> {
   try {
-    return await provider.discoverSessions()
+    return { sources: await provider.discoverSessions(), failed: false }
   } catch (err) {
     if (!warnedDiscoveryFailures.has(provider.name)) {
       warnedDiscoveryFailures.add(provider.name)
@@ -272,16 +272,26 @@ export async function safeDiscoverSessions(provider: Provider): Promise<SessionS
         `codeburn: skipped ${provider.name} discovery after an error: ${msg}\n`
       )
     }
-    return []
+    return { sources: [], failed: true }
   }
 }
 
-export async function discoverAllSessions(
+export async function safeDiscoverSessions(provider: Provider): Promise<SessionSource[]> {
+  return (await discoverOne(provider)).sources
+}
+
+/** Names of the providers whose discovery threw, alongside the sources the rest
+ *  found. The empty list a failed provider contributes is indistinguishable
+ *  from "this provider has no sessions", and a caller that reads the first as
+ *  the second concludes it has seen a corpus it never saw. */
+export type SessionDiscovery = { sources: SessionSource[]; failedProviders: string[] }
+
+export async function discoverAllSessionsWithFailures(
   providerFilter?: string,
   // Injectable for tests so the isolation loop itself is exercised, not just
   // the helper. Defaults to the real registry.
   providerList?: Provider[],
-): Promise<SessionSource[]> {
+): Promise<SessionDiscovery> {
   const allProviders = providerList ?? await getAllProviders()
   const filtered = providerFilter && providerFilter !== 'all'
     ? allProviders.filter(p => p.name === providerFilter)
@@ -289,8 +299,18 @@ export async function discoverAllSessions(
   // Each provider's discovery is its own serial directory walk; run them
   // concurrently and concatenate in registry order so the result stays
   // byte-identical to the sequential version.
-  const perProvider = await Promise.all(filtered.map(provider => safeDiscoverSessions(provider)))
-  return perProvider.flat()
+  const perProvider = await Promise.all(filtered.map(discoverOne))
+  return {
+    sources: perProvider.flatMap(r => r.sources),
+    failedProviders: filtered.filter((_, i) => perProvider[i]!.failed).map(p => p.name),
+  }
+}
+
+export async function discoverAllSessions(
+  providerFilter?: string,
+  providerList?: Provider[],
+): Promise<SessionSource[]> {
+  return (await discoverAllSessionsWithFailures(providerFilter, providerList)).sources
 }
 
 export async function getProvider(name: string): Promise<Provider | undefined> {

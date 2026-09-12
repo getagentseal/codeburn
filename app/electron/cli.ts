@@ -685,7 +685,7 @@ async function runScheduledCli(
 //    used by a one-shot cold start;
 //  - any serve failure falls back to a normal spawn for that call;
 //  - three child deaths permanently disable serve for this app run.
-const SERVE_ROUTED = new Set(['status', 'models', 'sessions', 'compare', 'yield', 'spend', 'optimize', 'audit'])
+const SERVE_ROUTED = new Set(['status', 'models', 'sessions', 'compare', 'yield', 'spend', 'optimize', 'audit', 'report'])
 const SERVE_MAX_RESTARTS = 3
 
 type PendingServeRequest = {

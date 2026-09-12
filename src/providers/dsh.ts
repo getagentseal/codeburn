@@ -1,10 +1,10 @@
 import { open, readdir, readFile, stat } from 'fs/promises'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { homedir } from 'os'
 import zlib from 'zlib'
 
-import { MAX_SESSION_FILE_BYTES, readSessionFile } from '../fs-utils.js'
-import { calculateCost, getShortModelName } from '../models.js'
+import { MAX_SESSION_FILE_BYTES, readSessionFile, readSessionLines } from '../fs-utils.js'
+import { billableOutputTokens, calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -34,7 +34,8 @@ const ZSTD_MAGIC = 0xfd2fb528
 // the caller skips the WHOLE file rather than counting the frames it got to.
 const MAX_FRAME_DECODED_BYTES = 64 * 1024 * 1024
 
-const SESSION_FORMAT_VERSION = 0
+const SUPPORTED_SESSION_FORMAT_VERSIONS = new Set([0, 1, 2, 3])
+const SESSION_LOG_NAME = /^session(?:\.v(\d+))?\.jsonl(?:\.zstd)?$/u
 
 const MIN_REASONABLE_TIMESTAMP_MS = 1_000_000_000_000
 
@@ -46,6 +47,19 @@ function notice(message: string): void {
   if (noticed.has(message)) return
   noticed.add(message)
   process.stderr.write(message)
+}
+
+// A notice naming a file cannot dedup on its text: a systematic problem prints
+// one line per session and grows `noticed` without bound. Dedup on the kind
+// instead and show a few example paths.
+const PATH_NOTICE_EXAMPLES = 3
+const noticedPaths = new Map<string, number>()
+
+function noticePath(kind: string, detail: string): void {
+  const seen = (noticedPaths.get(kind) ?? 0) + 1
+  noticedPaths.set(kind, seen)
+  if (seen <= PATH_NOTICE_EXAMPLES) process.stderr.write(`codeburn: ${kind}: ${detail}\n`)
+  else if (seen === PATH_NOTICE_EXAMPLES + 1) process.stderr.write(`codeburn: ${kind}: further paths suppressed\n`)
 }
 
 type ZstdFrame = { start: number; end: number }
@@ -118,6 +132,7 @@ type DshEvent = {
   createdAt?: number
   parentSession?: string
   seedLength?: number
+  isSeeded?: boolean
   data?: {
     turn?: number
     step?: number
@@ -126,26 +141,31 @@ type DshEvent = {
     // `{ kind: 'user' }`, agent-injected context is `{ kind: 'plugin' }`.
     source?: { kind?: string }
     header?: { config?: { model?: string; provider?: string } }
+    provider?: string
+    model?: string
+    inherited?: boolean
     message?: { source?: { kind?: string; model?: string; provider?: string } }
     chunk?: { type?: string; usage?: DshUsage }
+    stream?: Array<{
+      type?: string
+      time?: number
+      chunk?: { type?: string; usage?: DshUsage }
+    }>
     usage?: DshUsage
     name?: string
     arguments?: string
   }
 }
 
-type StepBucket = {
+type UsageObservation = {
   usage: DshUsage
-  // A usage report from assistant/message is the final value for its
-  // (turn, step) and replaces an earlier assistant/chunk sample (the two are
-  // adjacent reports of the same API call, per dsh-token-meter's usage
-  // projection). Time follows the winning report.
-  final: boolean
   time?: number
-  // Model that produced this step: the reporting assistant/message's own
-  // `message.source` when it names one, else the most recent request/header
-  // config (a header can change the model mid-turn between steps).
   model: string
+  final: boolean
+}
+
+type StepBucket = {
+  observations: UsageObservation[]
   tools: string[]
   skills: string[]
   bashCommands: string[]
@@ -176,18 +196,40 @@ function mapToolName(raw: string): string {
 // straight into the global token totals and the persisted cache, where
 // `0 + [1, 2]` silently becomes "01,2". Same semantics as copilot.ts.
 function numberOrZero(raw: unknown): number {
-  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0
+  return typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0 ? raw : 0
+}
+
+function usageIsComplete(usage: DshUsage): boolean {
+  const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+  return count(usage.inputTokens) && count(usage.outputTokens)
+    && [usage.cacheReadTokens, usage.cacheWriteTokens, usage.reasoningTokens].every(value => value === undefined || count(value))
+    && (usage.reasoningTokens === undefined || usage.reasoningTokens <= usage.outputTokens)
 }
 
 // A log stamped with a version this parser was not written against is skipped
 // whole: a bump means an event's meaning changed, so reading it with today's
 // assumptions would report confident wrong numbers.
 function isReadableVersion(header: DshEvent): boolean {
-  if (header.version === SESSION_FORMAT_VERSION) return true
+  if (typeof header.version === 'number' && SUPPORTED_SESSION_FORMAT_VERSIONS.has(header.version)) return true
   // Keyed on the version, not the path: a DSH upgrade makes EVERY session
   // unreadable at once, and one line per session log is noise, not a report.
   notice(`codeburn: skipping DSH sessions written in session format version ${String(header.version)}; upgrade codeburn.\n`)
   return false
+}
+
+function generationFromPath(filePath: string): number | undefined {
+  const match = SESSION_LOG_NAME.exec(basename(filePath))
+  if (!match) return undefined
+  return match[1] === undefined ? 0 : Number(match[1])
+}
+
+function headerMatchesPath(header: DshEvent, filePath: string): boolean {
+  const generation = generationFromPath(filePath)
+  if (generation === undefined || header.version !== generation) {
+    noticePath('skipping DSH session log whose filename and header versions disagree', filePath)
+    return false
+  }
+  return isReadableVersion(header)
 }
 
 // DSH writes epoch milliseconds; promote a seconds-resolution value and reject
@@ -248,7 +290,7 @@ async function readEventLines(filePath: string): Promise<string[] | null> {
       // oversize guard readSessionFile applies to the uncompressed variant.
       const size = (await stat(filePath)).size
       if (size > MAX_SESSION_FILE_BYTES) {
-        notice(`codeburn: skipped oversize DSH session log ${filePath} (${size} bytes)\n`)
+        noticePath('skipped oversize DSH session log', `${filePath} (${size} bytes)`)
         return null
       }
       buffer = await readFile(filePath)
@@ -258,7 +300,7 @@ async function readEventLines(filePath: string): Promise<string[] | null> {
     try {
       return [...readZstdLines(buffer)]
     } catch (err) {
-      notice(`codeburn: skipped corrupt DSH session log ${filePath}: ${err instanceof Error ? err.message : err}\n`)
+      noticePath('skipped corrupt DSH session log', `${filePath}: ${err instanceof Error ? err.message : err}`)
       return null
     }
   }
@@ -308,8 +350,10 @@ async function readSessionHeader(filePath: string): Promise<DshEvent | null> {
       }).toString('utf-8')
       return text.split('\n').find(l => l.trim()) ?? null
     }
-    const content = await readSessionFile(filePath)
-    return content?.split('\n').find(l => l.trim()) ?? null
+    for await (const line of readSessionLines(filePath)) {
+      if (line.trim()) return line
+    }
+    return null
   }
 
   try {
@@ -317,13 +361,13 @@ async function readSessionHeader(filePath: string): Promise<DshEvent | null> {
     if (!line) return null
     const event = JSON.parse(line) as DshEvent
     if (event.type !== 'session') return null
-    return isReadableVersion(event) ? event : null
+    return event
   } catch {
     return null
   }
 }
 
-async function discoverSessionsInDir(sessionsDir: string): Promise<SessionSource[]> {
+async function discoverSessionsInDir(sessionsDir: string, onSkippedVersion?: (version: number) => void): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
 
   let projectDirs: string[]
@@ -350,21 +394,69 @@ async function discoverSessionsInDir(sessionsDir: string): Promise<SessionSource
       const sessionStat = await stat(sessionPath).catch(() => null)
       if (!sessionStat?.isDirectory()) continue
 
-      // Compressed log first; the uncompressed variant exists when
-      // compression=none. Never both for the same session.
-      let filePath: string | null = null
-      for (const name of ['session.jsonl.zstd', 'session.jsonl']) {
+      // DSH keeps migrated generations beside their immutable predecessors.
+      // Resolve the numerically highest canonical generation once per Session;
+      // never fall back to an older snapshot when that authoritative file is
+      // unknown or corrupt, since that would silently report stale usage.
+      const generationFiles: Array<{ path: string; version: number; compressed: boolean }> = []
+      const slots = new Set<string>()
+      let ambiguous: number | undefined
+      const names = await readdir(sessionPath).catch(() => [])
+      for (const name of names) {
+        const match = SESSION_LOG_NAME.exec(name)
+        if (!match) continue
+        const version = match[1] === undefined ? 0 : Number(match[1])
         const candidate = join(sessionPath, name)
         const fileStat = await stat(candidate).catch(() => null)
-        if (fileStat?.isFile()) {
-          filePath = candidate
-          break
+        if (!fileStat?.isFile()) continue
+        const compressed = name.endsWith('.zstd')
+        // `session.v0.jsonl` names the unversioned generation and
+        // `session.v03.jsonl` names generation 3, so two files can claim one
+        // generation; past 2^53 a generation cannot be ordered at all. Either
+        // way no canonical log can be resolved, and dropping the session
+        // silently is the omission #1281 was about.
+        const slot = `${version}:${String(compressed)}`
+        if (!Number.isSafeInteger(version) || slots.has(slot)) {
+          ambiguous ??= version
+          continue
         }
+        slots.add(slot)
+        generationFiles.push({ path: candidate, version, compressed })
       }
-      if (!filePath) continue
+      if (ambiguous !== undefined) {
+        onSkippedVersion?.(ambiguous)
+        noticePath('skipping DSH session whose generation filenames are ambiguous', sessionPath)
+        continue
+      }
+      generationFiles.sort((a, b) => b.version - a.version || Number(b.compressed) - Number(a.compressed))
+      const selected = generationFiles[0]
+      if (!selected) continue
+      const filePath = selected.path
+
+      if (!SUPPORTED_SESSION_FORMAT_VERSIONS.has(selected.version)) {
+        onSkippedVersion?.(selected.version)
+        notice(`codeburn: skipping DSH sessions written in session format version ${selected.version}; upgrade codeburn.\n`)
+        continue
+      }
+
+      // Without zstd every compressed header reads as unreadable, so say why
+      // once rather than naming every session log.
+      if (selected.compressed && !zstdDecompress) {
+        onSkippedVersion?.(selected.version)
+        notice('codeburn: DSH sessions need Node >= 22.15 (zstd support); skipping DSH usage.\n')
+        continue
+      }
 
       const header = await readSessionHeader(filePath)
-      if (!header) continue
+      if (!header) {
+        onSkippedVersion?.(selected.version)
+        noticePath('skipping unreadable DSH session header', filePath)
+        continue
+      }
+      if (!headerMatchesPath(header, filePath)) {
+        onSkippedVersion?.(selected.version)
+        continue
+      }
 
       const cwd = typeof header.cwd === 'string' && header.cwd.trim() ? header.cwd : dirName
       sources.push({ path: filePath, project: projectFromCwd(cwd, dirName), provider: 'dsh' })
@@ -384,55 +476,118 @@ function parseToolArguments(raw: string | undefined): Record<string, unknown> | 
   }
 }
 
+function usageFromStream(stream: NonNullable<DshEvent['data']>['stream']): DshUsage | undefined {
+  if (!Array.isArray(stream)) return undefined
+  for (let index = stream.length - 1; index >= 0; index -= 1) {
+    const record = stream[index]
+    if (record?.type === 'chunk' && record.chunk?.type === 'usage') return record.chunk.usage
+  }
+  return undefined
+}
+
+function emptyStepBucket(): StepBucket {
+  return { observations: [], tools: [], skills: [], bashCommands: [] }
+}
+
 function createParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const lines = await readEventLines(source.path)
       if (!lines) return
 
-      let sessionId = ''
-      let cwd = ''
-      let model = 'unknown'
+      const events: DshEvent[] = []
+      let corruptInterior = false
+      for (const [index, line] of lines.entries()) {
+        try {
+          const value: unknown = JSON.parse(line)
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            if (index === 0) return
+            corruptInterior = true
+            continue
+          }
+          events.push(value as DshEvent)
+        } catch {
+          if (index === 0) return
+          // A torn final append may be discarded. Malformed rows in the middle
+          // of a versioned log cannot justify a complete historical total.
+          if (index < lines.length - 1) corruptInterior = true
+        }
+      }
+
+      const header = events[0]
+      if (header?.type !== 'session' || !headerMatchesPath(header, source.path)) return
+      const formatVersion = header.version!
+      if (formatVersion >= 2 && corruptInterior) {
+        noticePath('skipping corrupt DSH session with malformed interior rows', source.path)
+        return
+      }
+
+      const sessionId = typeof header.id === 'string' ? header.id : ''
+      const cwd = typeof header.cwd === 'string' ? header.cwd : ''
+      let headerModel = 'unknown'
+      let contextModel = ''
       let currentTurn = 0
-      let sessionStart = ''
+      const sessionStart = isoTimestamp(header.createdAt, '')
       // Events a forked session inherited from its parent. They are a verbatim
       // copy of the parent's log, which codeburn parses as its own session, so
       // counting them here would bill the same calls twice.
-      let seedLength = 0
+      let inheritedCut = formatVersion <= 1 && typeof header.parentSession === 'string' && header.parentSession
+        && typeof header.seedLength === 'number'
+        ? header.seedLength - 1
+        : -1
+      if (formatVersion >= 2) {
+        const taggedCuts = events
+          .filter(event => event.type === 'session/end-seed' && event.data?.inherited === true && typeof event.seq === 'number')
+          .map(event => event.seq!)
+        if (header.isSeeded === true && taggedCuts.length === 0) {
+          noticePath('skipping corrupt seeded DSH session without an inherited end-seed marker', source.path)
+          return
+        }
+        if (header.isSeeded !== true && taggedCuts.length > 0) {
+          noticePath('skipping corrupt unseeded DSH session with an inherited end-seed marker', source.path)
+          return
+        }
+        inheritedCut = taggedCuts.at(-1) ?? -1
+      }
       const userMessageByTurn = new Map<number, string>()
       const buckets = new Map<string, StepBucket>()
+      const activeAttempts = new Map<string, number>()
 
-      for (const line of lines) {
-        let event: DshEvent
-        try {
-          event = JSON.parse(line) as DshEvent
-        } catch {
+      for (const event of events) {
+        if (event.type === 'session') {
           continue
         }
 
-        if (event.type === 'session') {
-          if (!isReadableVersion(event)) return
-          sessionId = event.id ?? sessionId
-          cwd = event.cwd ?? cwd
-          sessionStart = isoTimestamp(event.createdAt, sessionStart)
-          if (typeof event.parentSession === 'string' && event.parentSession && typeof event.seedLength === 'number') {
-            seedLength = event.seedLength
+        // Inherited request state can remain authoritative for the child's
+        // first local attempt even though inherited usage is not billable.
+        if (event.type === 'request/header') {
+          // Emitted at most once per request; steps after the last header
+          // inherit its config as their model.
+          const nextModel = event.data?.header?.config?.model
+          if (typeof nextModel === 'string' && nextModel) {
+            if (nextModel !== headerModel) contextModel = ''
+            headerModel = nextModel
           }
           continue
         }
 
-        if (typeof event.seq === 'number' && event.seq < seedLength) continue
+        if (event.type === 'request/context') {
+          const nextModel = event.data?.model
+          if (typeof nextModel === 'string' && nextModel) contextModel = nextModel
+          continue
+        }
+
+        if (typeof event.seq === 'number' && event.seq <= inheritedCut) continue
 
         if (event.type === 'turn/start') {
           currentTurn = event.data?.turn ?? currentTurn
           continue
         }
 
-        if (event.type === 'request/header') {
-          // Emitted at most once per request; steps after the last header
-          // inherit its config as their model.
-          const headerModel = event.data?.header?.config?.model
-          if (typeof headerModel === 'string' && headerModel) model = headerModel
+        if (event.type === 'llm/retry-started') {
+          const turn = event.data?.turn ?? currentTurn
+          const step = event.data?.step ?? 0
+          activeAttempts.delete(`${turn}:${step}`)
           continue
         }
 
@@ -442,8 +597,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           // is a useful preview.
           if (event.data?.source?.kind !== 'user') continue
           if (userMessageByTurn.has(currentTurn)) continue
-          const texts = (event.data?.content ?? [])
-            .filter(c => c.type === 'text' && typeof c.text === 'string' && c.text)
+          const content = event.data?.content
+          const texts = (Array.isArray(content) ? content : [])
+            .filter(c => c?.type === 'text' && typeof c.text === 'string' && c.text)
             .map(c => c.text!)
           if (texts.length > 0) userMessageByTurn.set(currentTurn, texts.join(' ').slice(0, 500))
           continue
@@ -453,11 +609,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           const turn = event.data?.turn ?? currentTurn
           const step = event.data?.step ?? 0
           const rawName = event.data?.name
-          if (!rawName) continue
+          if (typeof rawName !== 'string' || !rawName) continue
           const key = `${turn}:${step}`
           let bucket = buckets.get(key)
           if (!bucket) {
-            bucket = { usage: {}, final: false, model, tools: [], skills: [], bashCommands: [] }
+            bucket = emptyStepBucket()
             buckets.set(key, bucket)
           }
           bucket.tools.push(mapToolName(rawName))
@@ -475,35 +631,49 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         let isFinal = false
         // The model that actually served the call, when the message records it.
         // request/header only describes the request codeburn is about to see.
-        let reportedModel = model
-        if (event.type === 'assistant/chunk' && event.data?.chunk?.type === 'usage') {
+        let reportedModel = contextModel || headerModel
+        if (formatVersion <= 1 && event.type === 'assistant/chunk' && event.data?.chunk?.type === 'usage') {
           usage = event.data.chunk.usage
-        } else if (event.type === 'assistant/message' && event.data?.usage) {
-          usage = event.data.usage
+        } else if (event.type === 'assistant/message') {
+          usage = event.data?.usage ?? (formatVersion >= 2 ? usageFromStream(event.data?.stream) : undefined)
           isFinal = true
-          const messageModel = event.data.message?.source?.model
+          const messageModel = event.data?.message?.source?.model
           if (typeof messageModel === 'string' && messageModel) reportedModel = messageModel
+        } else if (formatVersion >= 2 && event.type === 'assistant/attempt') {
+          usage = usageFromStream(event.data?.stream)
+          isFinal = true
         } else {
           continue
         }
-        if (!usage) continue
-
         const turn = event.data?.turn ?? currentTurn
         const step = event.data?.step ?? 0
+        if (![turn, step].every(value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)) {
+          noticePath('skipping DSH usage with invalid attempt coordinates', source.path)
+          continue
+        }
         const key = `${turn}:${step}`
+        if (!usage) {
+          if (!activeAttempts.has(key)) {
+            noticePath('DSH session contains an attempt without usage; totals may be incomplete', source.path)
+          }
+          continue
+        }
         let bucket = buckets.get(key)
         if (!bucket) {
-          bucket = { usage: {}, final: false, model, tools: [], skills: [], bashCommands: [] }
+          bucket = emptyStepBucket()
           buckets.set(key, bucket)
         }
-        // A final report replaces an earlier sample; a late sample never
-        // overwrites a final one. The model snapshot follows the winning
-        // report (a header can change the model mid-turn between steps).
-        if (isFinal || !bucket.final) {
-          bucket.usage = usage
-          bucket.final = isFinal
-          bucket.time = event.time
-          bucket.model = reportedModel
+        const observation = { usage, time: event.time, model: reportedModel, final: isFinal }
+        // A different step cannot close this step's replacement slot. Only
+        // its own retry-started event makes the next observation additive.
+        const activeIndex = activeAttempts.get(key)
+        if (activeIndex !== undefined) {
+          if (!bucket.observations[activeIndex]?.final || isFinal) {
+            bucket.observations[activeIndex] = observation
+          }
+        } else {
+          bucket.observations.push(observation)
+          activeAttempts.set(key, bucket.observations.length - 1)
         }
       }
 
@@ -515,43 +685,54 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
       for (const key of sortedKeys) {
         const bucket = buckets.get(key)!
-        const input = numberOrZero(bucket.usage.inputTokens)
-        const output = numberOrZero(bucket.usage.outputTokens)
-        const cacheRead = numberOrZero(bucket.usage.cacheReadTokens)
-        const cacheWrite = numberOrZero(bucket.usage.cacheWriteTokens)
-        const reasoning = numberOrZero(bucket.usage.reasoningTokens)
-        if (input + output + cacheRead + cacheWrite + reasoning === 0) continue
+        for (let attempt = 0; attempt < bucket.observations.length; attempt += 1) {
+          const observation = bucket.observations[attempt]!
+          const input = numberOrZero(observation.usage.inputTokens)
+          const output = numberOrZero(observation.usage.outputTokens)
+          const cacheRead = numberOrZero(observation.usage.cacheReadTokens)
+          const cacheWrite = numberOrZero(observation.usage.cacheWriteTokens)
+          const reasoning = Math.min(numberOrZero(observation.usage.reasoningTokens), output)
+          const completeUsage = usageIsComplete(observation.usage)
+          if (!completeUsage) {
+            noticePath('DSH session contains incomplete or invalid usage; retained counts are estimated', source.path)
+          }
+          if (input + output + cacheRead + cacheWrite === 0) continue
 
-        const dedupKey = `dsh:${sessionId || source.path}:${key}`
-        if (seenKeys.has(dedupKey)) continue
-        seenKeys.add(dedupKey)
+          const attemptKey = attempt === 0 ? key : `${key}:attempt:${attempt + 1}`
+          const dedupKey = `dsh:${sessionId || source.path}:${attemptKey}`
+          if (seenKeys.has(dedupKey)) continue
+          seenKeys.add(dedupKey)
 
-        // DSH bills reasoning tokens at the output rate (same as Gemini).
-        const costUSD = calculateCost(bucket.model, input, output + reasoning, cacheWrite, cacheRead, 0)
-        const [turn] = key.split(':').map(Number)
+          // DSH TokenUsage defines reasoning as informational detail already
+          // included in outputTokens. Preserve raw output and use the same
+          // shared rule as cache rehydration and display (#1075).
+          const costUSD = calculateCost(observation.model, input, billableOutputTokens('dsh', output, reasoning), cacheWrite, cacheRead, 0)
+          const [turn] = key.split(':').map(Number)
 
-        yield {
-          provider: 'dsh',
-          model: bucket.model,
-          inputTokens: input,
-          outputTokens: output,
-          cacheCreationInputTokens: cacheWrite,
-          cacheReadInputTokens: cacheRead,
-          cachedInputTokens: cacheRead,
-          reasoningTokens: reasoning,
-          webSearchRequests: 0,
-          costUSD,
-          tools: [...new Set(bucket.tools)],
-          bashCommands: bucket.bashCommands,
-          skills: bucket.skills.length > 0 ? [...new Set(bucket.skills)] : undefined,
-          timestamp: isoTimestamp(bucket.time, sessionStart),
-          speed: 'standard',
-          deduplicationKey: dedupKey,
-          userMessage: userMessageByTurn.get(turn!) ?? '',
-          sessionId: sessionId || source.path,
-          project: cwd ? projectFromCwd(cwd, source.project) : source.project,
-          projectPath: cwd || undefined,
-          workingDirectory: cwd || undefined,
+          yield {
+            provider: 'dsh',
+            model: observation.model,
+            inputTokens: input,
+            outputTokens: output,
+            cacheCreationInputTokens: cacheWrite,
+            cacheReadInputTokens: cacheRead,
+            cachedInputTokens: cacheRead,
+            reasoningTokens: reasoning,
+            webSearchRequests: 0,
+            costUSD,
+            costIsEstimated: !completeUsage,
+            tools: attempt === bucket.observations.length - 1 ? [...new Set(bucket.tools)] : [],
+            bashCommands: attempt === bucket.observations.length - 1 ? bucket.bashCommands : [],
+            skills: attempt === bucket.observations.length - 1 && bucket.skills.length > 0 ? [...new Set(bucket.skills)] : undefined,
+            timestamp: isoTimestamp(observation.time, sessionStart),
+            speed: 'standard',
+            deduplicationKey: dedupKey,
+            userMessage: userMessageByTurn.get(turn!) ?? '',
+            sessionId: sessionId || source.path,
+            project: cwd ? projectFromCwd(cwd, source.project) : source.project,
+            projectPath: cwd || undefined,
+            workingDirectory: cwd || undefined,
+          }
         }
       }
     },
@@ -578,8 +759,8 @@ export function createDshProvider(dshHomeOverride?: string): Provider {
       return [{ path: sessionsDir, label: 'sessions' }]
     },
 
-    async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessionsInDir(sessionsDir)
+    async discoverSessions(onSkippedVersion): Promise<SessionSource[]> {
+      return discoverSessionsInDir(sessionsDir, onSkippedVersion)
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

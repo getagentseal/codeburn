@@ -3,6 +3,8 @@ import { Command, Option } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { findUnpricedModels, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
+import { cachedProjectIdentitiesForRange } from './daily-cache.js'
+import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
@@ -31,7 +33,7 @@ import { pairingCode } from './sharing/pairing.js'
 import { ShareController } from './sharing/share-controller.js'
 import { getSharingDir, loadRemotes, saveRemotes } from './sharing/store.js'
 import type { UsageQuery } from './sharing/share-server.js'
-import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, toPeriod, type Period } from './cli-date.js'
+import { formatDateRangeLabel, parseDateRangeFlags, parseDayFlag, parseDaysFlag, getDateRange, periodInfoFromQuery, toPeriod, type Period } from './cli-date.js'
 import { runOptimize } from './optimize.js'
 import { registerActCommands } from './act/cli.js'
 import { registerGuardCommands } from './guard/cli.js'
@@ -492,6 +494,7 @@ async function runJsonReport(period: Period, provider: string, project: string[]
   await loadPricing()
   const { range, label } = getDateRange(period)
   const durable = await buildDurablePeriod({ range, label }, { provider, project, exclude })
+  await reportUnmatchedProjectPatterns(durable.knownProjects, project, exclude)
   const report: ReturnType<typeof buildJsonReport> & { plan?: JsonPlanSummary; plans?: JsonPlanSummaryMap } = await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, period, durable))
   console.log(JSON.stringify(report, null, 2))
 }
@@ -816,6 +819,7 @@ program
         const label = daySelection?.label ?? formatDateRangeLabel(opts.from, opts.to)
         const periodKey = daySelection ? 'day' : 'custom'
         const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+        await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
         console.log(JSON.stringify(await attachPlanSummaries(buildJsonReport(durable.liveProjects, label, periodKey, durable)), null, 2))
       } else {
         await runJsonReport(period, opts.provider, opts.project, opts.exclude)
@@ -995,6 +999,7 @@ program
       ? { range: customRange, label: formatDateRangeLabel(opts.from, opts.to) }
       : getDateRange(period!)
     const durable = await buildDurablePeriod({ range, label }, { provider: opts.provider, project: opts.project, exclude: opts.exclude })
+    await reportUnmatchedProjectPatterns(durable.knownProjects, opts.project, opts.exclude)
     const projects = durable.liveProjects
     const config = await readConfig()
     const budget = isOverviewBudgetFilterActive(opts)
@@ -1072,6 +1077,11 @@ program
   .option('--no-open', 'Do not open the browser automatically')
   .action(async (opts) => {
     assertProvider(opts.provider, 'web')
+    if (opts.project.length > 0 || opts.exclude.length > 0) {
+      const { range } = periodInfoFromQuery({ period: opts.period, from: opts.from, to: opts.to }, 'today')
+      const parsed = await parseAllSessions(range, opts.provider)
+      await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+    }
     await runWebDashboard({
       period: opts.period,
       provider: opts.provider,
@@ -1274,6 +1284,7 @@ program
       const todayData = todayDurable.data
       const todayProjects = todayDurable.liveProjects
       const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
+      await reportUnmatchedProjectPatterns([...todayDurable.knownProjects, ...monthDurable.knownProjects], opts.project, opts.exclude)
       const monthData = monthDurable.data
       const monthProjects = monthDurable.liveProjects
       const { code, rate } = getCurrency()
@@ -1308,6 +1319,7 @@ program
 
     const todayDurable = await buildDurablePeriod(getDateRange('today'), { provider: pf, project: opts.project, exclude: opts.exclude })
     const monthDurable = await buildDurablePeriod(getDateRange('month'), { provider: pf, project: opts.project, exclude: opts.exclude })
+    await reportUnmatchedProjectPatterns([...todayDurable.knownProjects, ...monthDurable.knownProjects], opts.project, opts.exclude)
     console.log(renderStatusBar([], {
       today: { cost: todayDurable.data.cost, calls: todayDurable.data.calls },
       month: { cost: monthDurable.data.cost, calls: monthDurable.data.calls },
@@ -1365,7 +1377,14 @@ program
     assertProvider(opts.provider, 'export')
     await loadPricing()
     const pf = opts.provider
-    const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
+    // Both callers below pass a whole-period parse, so the first one is the
+    // widest list this command sees. The closure cannot await, so it only
+    // records; the report happens once the covered range is known.
+    let widestParse: ProjectSummary[] | null = null
+    const fp = (p: ProjectSummary[]) => {
+      widestParse ??= p
+      return filterProjectsByName(p, opts.project, opts.exclude)
+    }
     let customRange: DateRange | null = null
     try {
       customRange = parseDateRangeFlags(opts.from, opts.to)
@@ -1378,9 +1397,11 @@ program
     let periods: PeriodExport[]
     if (customRange) {
       periods = [{ label: formatDateRangeLabel(opts.from, opts.to), projects: fp(await parseAllSessions(customRange, pf)) }]
+      await reportUnmatchedProjectPatterns(widestParse ?? [], opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(customRange!))
       clearSessionCache()
     } else {
       const thirtyDayProjects = fp(await parseAllSessions(getDateRange('30days').range, pf))
+      await reportUnmatchedProjectPatterns(widestParse ?? [], opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(getDateRange('30days').range))
       clearSessionCache()
       periods = [
         { label: 'Today', projects: filterProjectsByDateRange(thirtyDayProjects, getDateRange('today').range) },
@@ -2041,6 +2062,8 @@ program
   .option('--dry-run', 'With --apply: print the plan and exit without changing anything')
   .option('--only <ids>', 'With --apply: restrict to a comma-separated list of finding ids')
   .option('--auto-revert', 'Undo applied fixes that measured no reduction (never CLAUDE.md rules)')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'optimize')
     const format = opts.json ? 'json' : opts.format
@@ -2063,7 +2086,9 @@ program
     } else {
       ({ range, label } = getDateRange(opts.period))
     }
-    const projects = await parseAllSessions(range, opts.provider)
+    const parsed = await parseAllSessions(range, opts.provider)
+    await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
     if (opts.apply) {
       const { runOptimizeApply } = await import('./act/optimize-apply.js')
       await runOptimizeApply(projects, range, { yes: opts.yes, dryRun: opts.dryRun, only: opts.only, provider: opts.provider })
@@ -2214,14 +2239,18 @@ program
   .option('--format <format>', 'Output format: tui, json', 'tui')
   .option('--model-a <model>', 'First model to compare')
   .option('--model-b <model>', 'Second model to compare')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'compare')
     assertFormat(opts.format, ['tui', 'json'], 'compare')
     await loadPricing()
     const { range, label } = getDateRange(opts.period)
     if (opts.format === 'json') {
-      const { aggregateModelStats, buildCompareJson, findModelStat, renderCompareJson, scanSelfCorrections } = await import('./compare-stats.js')
-      const projects = await parseAllSessions(range, opts.provider)
+      const { aggregateModelStats, buildCompareJson, findModelStat, projectSessionIds, renderCompareJson, scanSelfCorrections } = await import('./compare-stats.js')
+      const parsed = await parseAllSessions(range, opts.provider)
+      await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+      const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
       const models = aggregateModelStats(projects)
 
       const providers = await getAllProviders()
@@ -2230,7 +2259,8 @@ program
         const sessions = await provider.discoverSessions()
         for (const session of sessions) dirs.push(session.path)
       }
-      const corrections = await scanSelfCorrections(dirs)
+      const scope = opts.project.length > 0 || opts.exclude.length > 0 ? projectSessionIds(projects) : undefined
+      const corrections = await scanSelfCorrections(dirs, scope)
       for (const model of models) {
         model.selfCorrections = corrections.get(model.model) ?? 0
       }
@@ -2262,7 +2292,7 @@ program
         process.exit(1)
       }
     }
-    await renderCompare(range, opts.provider, opts.modelA, opts.modelB)
+    await renderCompare(range, opts.provider, opts.modelA, opts.modelB, opts.project, opts.exclude)
   })
 
 program
@@ -2273,6 +2303,8 @@ program
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'audit')
     const { aggregateAudit, renderAuditTable, renderAuditJson } = await import('./audit-report.js')
@@ -2290,7 +2322,9 @@ program
       range = getDateRange(opts.period).range
     }
 
-    const projects = await parseAllSessions(range, opts.provider)
+    const parsed = await parseAllSessions(range, opts.provider)
+    await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
     const rows = await aggregateAudit(projects)
 
     const fmt = (opts.format ?? 'table').toLowerCase()
@@ -2320,6 +2354,8 @@ program
   .option('--unpriced', 'Show only models with usage that currently price at $0')
   .option('--no-totals', 'Suppress the footer totals row')
   .option('--format <format>', 'Output format: table, markdown, json, csv', 'table')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'models')
     if (opts.byTask && opts.byAgent) {
@@ -2341,7 +2377,9 @@ program
       range = getDateRange(opts.period).range
     }
 
-    const projects = await parseAllSessions(range, opts.provider)
+    const parsed = await parseAllSessions(range, opts.provider)
+    await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
     const topN = typeof opts.top === 'number' && Number.isFinite(opts.top) ? opts.top : undefined
     let rows = await aggregateModels(projects, {
       byTask: !!opts.byTask,
@@ -2413,6 +2451,8 @@ program
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
   .option('--no-pager', 'Print the complete table directly instead of opening the interactive browser')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
@@ -2433,7 +2473,9 @@ program
       range = getDateRange(opts.period).range
     }
 
-    const projects = await parseAllSessions(range, opts.provider)
+    const parsed = await parseAllSessions(range, opts.provider)
+    await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
+    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
     if (opts.byPr) {
       const { rows: prRows, totals } = buildPrAttribution(projects)
       if (opts.format === 'json') {
@@ -2517,6 +2559,8 @@ program
   .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all, lifetime', 'week')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: text, json', 'text')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['text', 'json'], 'yield')
     assertProvider(opts.provider, 'yield')
@@ -2526,7 +2570,7 @@ program
     if (opts.format !== 'json') {
       console.log(`\n  Analyzing yield for ${label}...\n`)
     }
-    const summary = await computeYield(range, process.cwd(), opts.provider)
+    const summary = await computeYield(range, process.cwd(), opts.provider, opts.project, opts.exclude)
     if (opts.format === 'json') {
       console.log(JSON.stringify(buildYieldJsonReport(summary, label, range), null, 2))
       return
@@ -2542,6 +2586,8 @@ program
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
   .option('--format <format>', 'Output format: flow-json', 'flow-json')
+  .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
+  .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['flow-json'], 'spend')
     assertProvider(opts.provider, 'spend')
@@ -2561,7 +2607,7 @@ program
       range = getDateRange(opts.period).range
     }
 
-    console.log(JSON.stringify(await computeSpendFlow(range, opts.provider)))
+    console.log(JSON.stringify(await computeSpendFlow(range, opts.provider, opts.project, opts.exclude)))
   })
 
 program

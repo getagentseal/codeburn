@@ -14,6 +14,9 @@ const { parseAllSessionsMock } = vi.hoisted(() => ({
 
 vi.mock('../src/parser.js', () => ({
   parseAllSessions: parseAllSessionsMock,
+  filterProjectsByName: (projects: unknown[]) => projects,
+  unmatchedRootedPatterns: () => [],
+  isInteractiveScanUI: () => false,
 }))
 
 function git(cwd: string, args: string[], env: Record<string, string> = {}): string {

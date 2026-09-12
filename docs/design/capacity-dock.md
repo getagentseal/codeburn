@@ -74,6 +74,12 @@ V1 does not include:
   preference exists, prefer Codex, then Claude, then the first supported
   provider.
 - A missing or disconnected quota is `--`, never `0%`.
+- The gauge reports one quota horizon: the weekly (else monthly) billing window
+  by default, or the provider's short rolling window (5-hour, hourly, daily,
+  session) when the user has switched it. The choice is stored per provider, so
+  Claude can rest on its 5-hour window while Codex stays weekly, and a stored
+  horizon the provider stops reporting falls back to the one it does report
+  rather than blanking the gauge. Switching never changes the rail's size.
 - Interactive provider cells remain at least 84 points along the provider axis,
   comfortably above the macOS 20-point minimum and 28-point default control
   targets. The detail hierarchy follows macOS text styles at 17, 12, 11, and
@@ -86,6 +92,11 @@ V1 does not include:
 - Expanded content lists only the providers selected in Settings.
 - Clicking a provider makes it the preferred/resting provider and keeps the
   rail expanded for that interaction.
+- Clicking the provider that already rests in the rail switches its gauge to its
+  other quota horizon when it reports two, and keeps the rail pinned; a provider
+  with one window keeps the plain pin toggle. VoiceOver and keyboard users get
+  the same switch as a named accessibility action on the provider cell. Escape
+  and an outside click still unpin.
 - Leaving both rail and detail bubble collapses after a forgiving 180 ms grace
   period unless pinned.
 - An outside click or Escape unpins and collapses.
