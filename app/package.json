@@ -8,7 +8,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
     "build": "npm run build:electron && npm run build:renderer",
-    "dev": "npm run build:electron && concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "npm run build:electron && concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on tcp:127.0.0.1:5720 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5720 electron .\"",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "stage-cli": "npm --prefix .. run build:cli && node scripts/stage-cli.mjs",

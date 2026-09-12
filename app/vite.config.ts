@@ -45,6 +45,6 @@ export default defineConfig({
     __BUILD_SHA__: JSON.stringify(stamp.sha),
     __BUILD_DATE__: JSON.stringify(stamp.date),
   },
-  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  server: { host: '127.0.0.1', port: 5720, strictPort: true },
   build: { outDir: '../dist/renderer', emptyOutDir: true },
 })
