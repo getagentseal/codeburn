@@ -234,6 +234,10 @@ final class AppStore {
     @ObservationIgnored var codexQuotaBootstrapChecker: @Sendable () -> Bool = {
         CodexCredentialStore.isBootstrapCompleted
     }
+    /// Watches the reset-credit inventory that already rides every successful
+    /// Codex usage fetch and notices when OpenAI banks a new one. Injectable so
+    /// tests never touch the real notification centre or the cache directory.
+    @ObservationIgnored var codexBankedResetAnnouncer = CodexBankedResetAnnouncer()
     @ObservationIgnored var capacityDockCredentialLoader:
         @Sendable (String) async throws -> CapacityDockProviderCredential = {
             try await CapacityDockProviderCredentialStore.loadAsync(for: $0)
@@ -1619,6 +1623,7 @@ final class AppStore {
             codexUsage = usage
             codexError = nil
             codexLoadState = .loaded
+            await codexBankedResetAnnouncer.observe(usage.resetCredits)
         } catch let err as CodexSubscriptionService.FetchError {
             applyCodexFetchError(err)
         } catch {
@@ -1656,6 +1661,10 @@ final class AppStore {
             codexError = nil
             codexLoadState = .loaded
             finishCodexQuotaRefresh(token)
+            // After the refresh is finished, not inside it: announcing is a
+            // side-effect of a successful fetch and must not be able to hold the
+            // single-flight token open.
+            await codexBankedResetAnnouncer.observe(usage.resetCredits)
             return true
         } catch let err as CodexSubscriptionService.FetchError {
             guard isCurrentCodexQuotaRefresh(token) else { return false }
@@ -1697,6 +1706,10 @@ final class AppStore {
         codexUsage = nil
         codexError = nil
         codexLoadState = .notBootstrapped
+        // Same reason the snapshot store is wiped on the Claude side: a
+        // reconnect under a different account must baseline again rather than
+        // announce that account's entire inventory as new grants.
+        Task.detached { await CodexBankedResetStore.clearAll() }
         NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
     }
 
@@ -2651,6 +2664,12 @@ final class AppStore {
         }
         if codexUsage?.creditLimit == nil, codexUsage?.creditsUnlimited == true {
             footerLines.append("Credits · Unlimited")
+        }
+        // Limit-reset credits, banked ones included. Same sentence the Plan tab
+        // and `codeburn quota` print; omitted entirely when the account holds none.
+        if let resets = codexUsage?.resetCredits,
+           let line = CodexBankedResetPresentation.line(resets, now: Date()) {
+            footerLines.append(line)
         }
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: footerLines)
     }
