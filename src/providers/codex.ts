@@ -1142,13 +1142,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           }
 
           const cumulativeTotal = info.total_token_usage?.total_tokens ?? 0
-          // Dedup guard. Two consecutive events with cumulativeTotal=0 but
-          // non-empty last_token_usage would have been double-counted with
-          // the previous `> 0` clause. The null sentinel ensures the FIRST
-          // event always passes (so a session that never reports cumulative
-          // doesn't lose its opening turn).
-          if (prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
-          prevCumulativeTotal = cumulativeTotal
+          // Missing/null/partial cumulative data is not a repeated zero total.
+          const reportsCumulative = typeof info.total_token_usage?.total_tokens === 'number'
+            && Number.isFinite(info.total_token_usage.total_tokens)
+            && info.total_token_usage.total_tokens >= 0
+          if (reportsCumulative && prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
+          prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
 
           const last = info.last_token_usage
           let inputTokens = 0
@@ -1227,12 +1226,13 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // are computed against a running `prev` that the fork advances
           // differently once the 5s cutoff skips some replays, so a delta-based
           // key would spuriously diverge on a replay and double-count it.
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+          // Without cumulative identity, equal usage can be distinct requests.
+          // Use the physical record position: stable on cache resume/re-read,
+          // but deliberately do not guess cross-file replay identity.
+          const dedupKey = reportsCumulative
+            ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+            : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
-          // A drop here can only be a byte-identical replay: the
-          // prevCumulativeTotal guard above already discards a repeated
-          // running total, so nothing reaching this point ever loses real
-          // tokens -- no active-time rescaling needed (#1088 investigation).
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
 
