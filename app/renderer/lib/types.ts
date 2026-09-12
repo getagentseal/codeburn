@@ -599,6 +599,99 @@ export type CompareJsonReport = {
   workingStyle: WorkingStyleRow[]
 }
 
+// ---- Compare periods (period-diff; B minus A, A is the reference) ----
+// Mirrors the JSON emitted by `codeburn compare-periods --format json`
+// (src/period-diff.ts). Raw (unrounded) numbers; the UI formats.
+
+export type PeriodRangeInfo = { from: string; to: string; days: number }
+
+export type PeriodContribution = {
+  key: string
+  costA: number
+  costB: number
+  diff: number
+  /** diff / |costA| x 100; null when costA is 0 (the row is `new`). */
+  pct: number | null
+  status: 'new' | 'gone' | 'up' | 'down' | 'flat'
+  callsA: number
+  callsB: number
+}
+
+export type PeriodTotalsRow = {
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  savingsUSD: number
+  estimatedCostUSD: number
+}
+
+export type PeriodTotalsDiff = {
+  A: PeriodTotalsRow
+  B: PeriodTotalsRow
+  diff: PeriodTotalsRow
+  pct: Record<keyof PeriodTotalsRow, number | null>
+}
+
+export type NormalizedMetric = { a: number | null; b: number | null; diff: number | null; pct: number | null }
+
+export type AggregateDayRow = { date: string; historyCost: number; detailCost: number; aggregateOnly: number }
+
+export type PeriodHistoryBasis = {
+  historyCost: { A: number; B: number }
+  detailCost: { A: number; B: number }
+  days: { A: AggregateDayRow[]; B: AggregateDayRow[] }
+  aggregateOnly: { A: number; B: number }
+  basis: string
+}
+
+export type PeriodDiffReport = {
+  schema: 1
+  provider: string
+  rangeA: PeriodRangeInfo
+  rangeB: PeriodRangeInfo
+  overlapDays: number
+  durationDeltaDays: number
+  totals: PeriodTotalsDiff
+  projects: PeriodContribution[]
+  models: PeriodContribution[]
+  normalized: {
+    perDay: NormalizedMetric
+    per100Calls: NormalizedMetric
+    denominators: { perDay: string; per100Calls: string }
+  }
+  coverage: {
+    unpricedModelsA: Array<{ model: string; calls: number }>
+    unpricedModelsB: Array<{ model: string; calls: number }>
+    pricingCoverageA: number | null
+    pricingCoverageB: number | null
+  }
+  history?: PeriodHistoryBasis
+}
+
+export type PeriodSessionDiff = {
+  dimension: 'project' | 'model'
+  key: string
+  provider: string
+  rangeA: PeriodRangeInfo
+  rangeB: PeriodRangeInfo
+  sessions: Array<{
+    identity: string
+    provider: string
+    sessionId: string
+    project: string
+    title?: string
+    costA: number
+    costB: number
+    diff: number
+    callsA: number
+    callsB: number
+  }>
+}
+
 // ————— src/models.ts + src/audit-report.ts (audit --format json) —————
 
 /** Per-token rates used for pricing (src/models.ts ModelCosts). */
@@ -757,6 +850,10 @@ export interface CodeburnBridge {
   getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
   getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
+  /** Compare periods (B minus A). Both ranges are required local YYYY-MM-DD keys. */
+  getPeriodCompare(rangeA: DateRange, rangeB: DateRange, provider: string, background?: boolean): Promise<PeriodDiffReport>
+  /** Sessions behind one project/model contribution, joined across A and B. */
+  getPeriodCompareSessions(rangeA: DateRange, rangeB: DateRange, provider: string, dimension: 'project' | 'model', key: string): Promise<PeriodSessionDiff>
   getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>
   getSpendFlow(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpendFlow>
   getOptimizeReport(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<OptimizeJsonReport>
