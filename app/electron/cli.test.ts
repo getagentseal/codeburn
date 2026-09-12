@@ -473,25 +473,31 @@ describe('spawnCli', () => {
 })
 
 describe('no-output watchdog (timeoutMs bounds SILENCE, not total runtime)', () => {
-  /** Emits one progress byte every `everyMs` for `ticks` ticks, then the payload. */
-  function chattyBin(everyMs: number, ticks: number): void {
+  /** First stderr write is immediate after Node boot: that only removes the extra
+   *  setInterval delay. The spawn-time silence timer still includes Node boot;
+   *  the larger smoke window absorbs startup. Further ticks keep the process
+   *  alive past `timeoutMs`. Not a production timeout change. */
+  function chattyBin(everyMs: number, extraTicks: number): void {
     fakeBin(
       'chatty.js',
-      `let n = 0;
+      `let n = 1;
+       process.stderr.write('CODEBURN_PROGRESS {"kind":"tick","provider":"claude","done":0,"total":${extraTicks + 1}}\\n');
        const t = setInterval(() => {
-         process.stderr.write('CODEBURN_PROGRESS {"kind":"tick","provider":"claude","done":' + n + ',"total":${ticks}}\\n');
-         if (++n >= ${ticks}) { clearInterval(t); process.stdout.write(JSON.stringify({ ok: 1, ticks: n })); }
+         process.stderr.write('CODEBURN_PROGRESS {"kind":"tick","provider":"claude","done":' + n + ',"total":${extraTicks + 1}}\\n');
+         if (++n > ${extraTicks}) { clearInterval(t); process.stdout.write(JSON.stringify({ ok: 1, ticks: n })); }
        }, ${everyMs});`,
     )
   }
 
-  // The 0.9.20 failure class: a warm `optimize` measured 52.5s against a fixed
-  // 45s cap and was SIGKILLed even though the parse was making steady progress.
-  // Scaled down here — total runtime is 5x the window, so the OLD fixed-timeout
-  // code fails this test and only a resetting watchdog passes.
+  // Production already restarts the idle window on every stdout/stderr byte;
+  // this is not a product fix. The fixture used to wait one setInterval before
+  // the first byte, so a 600ms smoke window raced Node boot (independent 614ms
+  // fail). Immediate first stderr write removes only that delay — boot still
+  // counts. Extra ticks run ~4s under a 2s silence window, so a fixed
+  // total-runtime cap still fails this test. Not a production timeout change.
   it('never kills a child that keeps producing output past the window', async () => {
-    chattyBin(100, 15) // ~1.5s of work under a 600ms window
-    await expect(spawnCli(['optimize'], { timeoutMs: 600 })).resolves.toEqual({ ok: 1, ticks: 15 })
+    chattyBin(400, 10)
+    await expect(spawnCli(['optimize'], { timeoutMs: 2_000 })).resolves.toEqual({ ok: 1, ticks: 11 })
   })
 
   it('kills a child that goes silent, measured from its LAST byte', async () => {
@@ -914,6 +920,20 @@ describe('resident serve single-flight', { timeout: 30_000 }, () => {
     expect(readMaybe(files.heavyFile)).toBe('h')
     expect(readMaybe(files.oneShotsFile)).toBe('')
     expect(readMaybe(files.serveEnvFile)).toBe('1')
+  })
+
+  // The Projects pane's unfiltered list is the heaviest read in the app, and it
+  // was the one panel query that could not ride the resident child: `report` was
+  // in neither routing table, so every open paid a node boot plus a full
+  // session-cache parse and held one of the two run slots while it did.
+  it('routes the JSON report through the resident child instead of a cold spawn', async () => {
+    const files = fakeResidentBin()
+    startServe()
+
+    const result = await spawnCli(['report', '--format', 'json', '--period', 'lifetime'], { timeoutMs: 5_000 }) as { via: string }
+
+    expect(result).toMatchObject({ via: 'serve' })
+    expect(readMaybe(files.oneShotsFile)).toBe('')
   })
 
   it('forwards serve progress frames through the read onStderr callback', async () => {

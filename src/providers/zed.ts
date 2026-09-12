@@ -5,7 +5,7 @@ import zlib from 'zlib'
 
 import { calculateCost } from '../models.js'
 import { getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
 // Zed's built-in agent stores one row per thread in a single SQLite database;
 // the `data` blob is zstd-compressed JSON carrying `request_token_usage`
@@ -211,6 +211,10 @@ export function createZedProvider(dbPathOverride?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dbPathOverride ?? getZedThreadsDbPath(), label: 'threads.db' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

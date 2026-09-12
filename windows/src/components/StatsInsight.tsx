@@ -6,6 +6,7 @@ import { daysInMonth, monthDay } from '../lib/dates'
 import { computeHistoryStats } from '../lib/history'
 import type { Period } from './PeriodTabs'
 import { ArrowDownRight, ArrowUpRight, ChevronRight, FlameIcon } from './Icons'
+import { formatCompactSessionCount, formatSessionCount, SESSION_COUNT_HELP } from '../lib/session-count-label'
 
 type Props = {
   payload: MenubarPayload
@@ -44,7 +45,7 @@ export function StatsInsight({ payload, currency, period }: Props) {
           <StatRow label="Peak day spend" value={s.peak ? formatCompactCurrency(s.peak.cost, currency) : '-'} />
         </div>
         <div className="stats-col">
-          <StatRow label={`Sessions ${suffix}`} value={payload.current.sessions.toLocaleString()} />
+          <StatRow label={`Sessions ${suffix}`} value={formatSessionCount(payload.current.sessions, payload.current.sessionCountBasis)} />
           <StatRow label={`Calls ${suffix}`} value={payload.current.calls.toLocaleString()} />
           <StatRow label="Current streak" value={s.currentStreak > 0 ? plural(s.currentStreak, 'day') : '-'} />
           <StatRow label="Longest streak" value={s.longestStreak > 0 ? plural(s.longestStreak, 'day') : '-'} />
@@ -96,7 +97,7 @@ function TopProjects({ projects, currency }: { projects: ProjectEntry[]; currenc
               <ChevronRight size={7} className={`chevron ${isOpen ? 'chevron-open' : ''}`} />
               <span className="project-name">{projectDisplayName(project.name)}</span>
               <span className="stats-spacer" />
-              <span className="project-sessions">{project.sessions} sess</span>
+              <span className="project-sessions" title={project.sessionCountBasis === 'identity' ? undefined : SESSION_COUNT_HELP}>{formatCompactSessionCount(project.sessions, project.sessionCountBasis)}</span>
               <span className="project-cost">{formatCompactCurrency(project.cost, currency)}</span>
               <span className="project-bar" style={{ width: `${Math.max(2, 40 * (project.cost / maxCost))}px` }} />
             </button>

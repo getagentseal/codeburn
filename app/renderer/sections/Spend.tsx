@@ -15,9 +15,14 @@ import { formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { formatSessionCount, SESSION_COUNT_HELP } from '../lib/session-count-label'
 import type { CliError, DateRange, MenubarPayload, Period, SpendFlow } from '../lib/types'
 
 type Project = MenubarPayload['current']['topProjects'][number]
+
+function projectRowKey(project: Project, index: number): string {
+  return project.id || `legacy:${index}:${project.name}`
+}
 
 /** Date-only CLI strings ("2026-07-11") formatted at local noon so the calendar day never rolls across time zones. */
 function formatProjectDay(date: string): string {
@@ -209,16 +214,17 @@ function ProjectBreakdown({ projects }: { projects: Project[] }) {
     <Panel title="By project" right={projects.length ? `top ${projects.length}` : undefined} className="spend-scroll">
       {projects.length ? (
         projects.map((project, i) => {
-          const open = expanded === project.name
+          const rowKey = projectRowKey(project, i)
+          const open = expanded === rowKey
           return (
-            <Fragment key={project.name}>
+            <Fragment key={rowKey}>
               <ListRow
                 no={String(i + 1).padStart(2, '0')}
                 title={project.name}
-                sub={`${project.sessions.toLocaleString('en-US')} ${project.sessions === 1 ? 'session' : 'sessions'}`}
+                sub={<span title={project.sessionCountBasis === 'identity' ? undefined : SESSION_COUNT_HELP}>{formatSessionCount(project.sessions, project.sessionCountBasis)}</span>}
                 value={formatUsd(project.cost)}
                 expanded={open}
-                onClick={() => setExpanded(current => current === project.name ? null : project.name)}
+                onClick={() => setExpanded(current => current === rowKey ? null : rowKey)}
               />
               {open && (
                 <div className="spend-proj-detail" role="region" aria-label={`${project.name} sessions`}>

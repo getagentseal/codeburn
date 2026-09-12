@@ -40,6 +40,7 @@ export type Current = {
   cost: number
   calls: number
   sessions: number
+  sessionCountBasis?: 'identity' | 'partial'
   oneShotRate: number | null
   inputTokens: number
   outputTokens: number
@@ -50,7 +51,7 @@ export type Current = {
   topActivities: Array<{ name: string; cost: number; turns: number; oneShotRate: number | null }>
   topModels: Array<{ name: string; cost: number; calls: number; savingsUSD: number }>
   providers: Record<string, number>
-  topProjects: Array<{ name: string; cost: number; sessions: number; avgCostPerSession: number }>
+  topProjects: Array<{ name: string; cost: number; sessions: number; avgCostPerSession?: number; sessionCountBasis?: 'identity' | 'partial' }>
   tools: Array<{ name: string; calls: number }>
   subagents: Array<{ name: string; calls: number; cost: number }>
   skills: Array<{ name: string; turns: number; cost: number }>

@@ -4,7 +4,7 @@ import { homedir, platform } from 'os'
 
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 // zerostack (https://github.com/gi-dellav/zerostack) is a minimal Rust coding
 // agent. Each session is a single JSON file under <dataDir>/zerostack/sessions/.
@@ -131,6 +131,10 @@ export function createZerostackProvider(sessionsDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dir, label: 'sessions' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

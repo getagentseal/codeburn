@@ -132,7 +132,12 @@ async function seedWorkspaceSession(id: string, workspaceDirectory: string): Pro
 
 async function kiroCalls() {
   const projects = await parseAllSessions(undefined, 'kiro')
-  return projects.flatMap(p => p.sessions.map(s => ({ project: p.project, projectPath: p.projectPath, session: s })))
+  return projects.flatMap(p => p.sessions.map(s => ({
+    project: p.project,
+    projectPath: p.projectPath,
+    workingDirectory: s.workingDirectory,
+    session: s,
+  })))
 }
 
 describe('kiro projectPath emission', () => {
@@ -159,6 +164,60 @@ describe('kiro projectPath emission', () => {
     const row = rows.find(r => r.project === 'ws-project')
     expect(row).toBeDefined()
     expect(row!.projectPath).toBe(WS_DIR)
+  })
+})
+
+/**
+ * Sync attribution reads `session.workingDirectory`, NOT projectPath:
+ * computeAttributionRecords calls buildRepoGroups in "trusted-session-cwd"
+ * mode, resolves the repo from that field, and drops any session whose own
+ * directory does not resolve. project-path-v1 populated projectPath alone, so
+ * kiro sessions stayed attribution-blind while appearing to carry the path.
+ */
+describe('kiro workingDirectory emission (sync attribution)', () => {
+  it('CLI session: workingDirectory is the full meta.cwd', async () => {
+    await seedCliSession('cli-101', CLI_CWD)
+    const rows = await kiroCalls()
+    const row = rows.find(r => r.project === 'my-project')
+    expect(row).toBeDefined()
+    expect(row!.workingDirectory).toBe(CLI_CWD)
+  })
+
+  it('v2 IDE session: workingDirectory is workspacePaths[0]', async () => {
+    await seedV2Session('v2-101', V2_WORKSPACE)
+    const rows = await kiroCalls()
+    const row = rows.find(r => r.project === 'ide-project')
+    expect(row).toBeDefined()
+    expect(row!.workingDirectory).toBe(V2_WORKSPACE)
+  })
+
+  it('workspace session: workingDirectory is workspaceDirectory', async () => {
+    const WS_DIR = '/local/home/testuser/workplace/ws-wd-project'
+    await seedWorkspaceSession('ws-101', WS_DIR)
+    const rows = await kiroCalls()
+    const row = rows.find(r => r.project === 'ws-wd-project')
+    expect(row).toBeDefined()
+    expect(row!.workingDirectory).toBe(WS_DIR)
+  })
+
+  // Provenance is asserted implicitly by the three cases above rather than by a
+  // test of its own. parser.ts only promotes a call's workingDirectory onto the
+  // session when workingDirectoryProvenance === 'provider-field', failing closed
+  // otherwise (an unmarked value may have been synthesized from projectPath by
+  // an older build). So a populated session.workingDirectory is itself proof the
+  // marker was stamped; the marker lives on cached calls, which parseAllSessions
+  // does not surface.
+
+  // A home-root cwd is rejected by isTrustedAbsoluteWorkingDirectory, so the
+  // field must be absent rather than present-and-untrusted. Real Kiro IDE
+  // sessions opened on the home directory hit this: 5 of 8 observed
+  // session.json files carried workspacePaths: ['/home/<user>'].
+  it('a home-root cwd yields projectPath but no workingDirectory', async () => {
+    await seedCliSession('cli-103', HOME)
+    const rows = await kiroCalls()
+    const row = rows.find(r => r.projectPath === HOME)
+    expect(row).toBeDefined()
+    expect(row!.workingDirectory).toBeUndefined()
   })
 })
 
@@ -201,5 +260,51 @@ describe('kiro projectPath cache invalidation (project-path-v1 bump)', () => {
     const row = rows.find(r => r.project === 'my-project')
     expect(row).toBeDefined()
     expect(row!.projectPath).toBe(CLI_CWD)
+  })
+})
+
+/**
+ * The working-directory-v1 bump. A cache written by the project-path-v1 release
+ * holds projectPath but no workingDirectory, and without a fingerprint change
+ * those entries would be served forever — leaving attribution broken for exactly
+ * the users who already had a warm cache, which is everyone upgrading.
+ */
+describe('kiro workingDirectory cache invalidation (working-directory-v1 bump)', () => {
+  /** The fingerprint the project-path-v1 release wrote. */
+  function projectPathV1Fingerprint(): string {
+    const parts = [
+      `KIRO_HOME=${process.env['KIRO_HOME'] ?? ''}`,
+      'parser=ide-parsing-v1-est-cost-project-path-v1',
+    ]
+    return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16)
+  }
+
+  it('the bump changed the env fingerprint', () => {
+    expect(computeEnvFingerprint('kiro')).not.toBe(projectPathV1Fingerprint())
+  })
+
+  it('a project-path-v1 cache entry is re-parsed and gains workingDirectory', async () => {
+    const jsonlPath = await seedCliSession('cli-201', CLI_CWD)
+    const fp = await fingerprintFile(jsonlPath)
+    if (!fp) throw new Error('failed to fingerprint seeded session file')
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        kiro: {
+          envFingerprint: projectPathV1Fingerprint(),
+          files: {
+            [jsonlPath]: { fingerprint: fp, mcpInventory: [], turns: [] },
+          },
+        },
+      },
+    }
+    await mkdir(CACHE_DIR, { recursive: true })
+    await writeCacheOnDisk(cache)
+    clearSessionCache()
+
+    const rows = await kiroCalls()
+    const row = rows.find(r => r.project === 'my-project')
+    expect(row).toBeDefined()
+    expect(row!.workingDirectory).toBe(CLI_CWD)
   })
 })

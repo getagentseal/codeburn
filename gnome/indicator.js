@@ -13,6 +13,14 @@ const TOP_ACTIVITIES = 10;
 const CHART_HEIGHT = 52;
 const BAR_TRACK_WIDTH = 240;
 
+function formatSessionCount(sessions, basis) {
+  if (basis !== 'identity') {
+    if (!sessions) return 'Session count unavailable';
+    return sessions === 1 ? 'At least 1 session' : `At least ${sessions} sessions`;
+  }
+  return sessions === 1 ? '1 session' : `${sessions} sessions`;
+}
+
 const PERIODS = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: '7 Days' },
@@ -587,7 +595,7 @@ class CodeBurnIndicator extends PanelMenu.Button {
 
     const calls = Number(current.calls ?? 0);
     const sessions = Number(current.sessions ?? 0);
-    const metaParts = [`${calls.toLocaleString()} calls`, `${sessions} sessions`];
+    const metaParts = [`${calls.toLocaleString()} calls`, formatSessionCount(sessions, current.sessionCountBasis)];
     if (savings > 0) metaParts.push(`saved ${this._fmt(savings)}`);
     this._heroMeta.set_text(metaParts.join('   '));
 

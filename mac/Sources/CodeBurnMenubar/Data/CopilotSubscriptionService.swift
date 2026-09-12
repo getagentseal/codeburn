@@ -20,6 +20,30 @@ struct CopilotUsage: Sendable, Equatable {
     /// Business / Enterprise / Educators, unknown tiers title-cased).
     let plan: String?
     let fetchedAt: Date
+    /// Host that answered, so Settings can name it: `api.github.com`, or the
+    /// tenant's `api.<tenant>.ghe.com` on GitHub Enterprise Cloud (#1286).
+    var apiHost: String = CopilotHostEndpoint.defaultAPIHost
+}
+
+/// A discovered Copilot token together with the GitHub host it belongs to, so
+/// the quota request can be addressed to that host's API instead of assuming
+/// dotcom (#1286).
+struct CopilotCredential: Sendable, Equatable {
+    let token: String
+    /// Host the token was read from, or nil when the source carries none
+    /// (`apps.json` keyed by app name, the environment variables, `gh`, or a
+    /// token pasted into Settings), which is dotcom.
+    let host: String?
+
+    init(token: String, host: String? = nil) {
+        self.token = token
+        self.host = host
+    }
+
+    /// Normalized host, defaulting to dotcom for a source without one.
+    var resolvedHost: String {
+        CopilotHostEndpoint.normalize(host) ?? CopilotHostEndpoint.defaultHost
+    }
 }
 
 /// Live GitHub Copilot quota via the editor plugins' internal usage endpoint
@@ -27,18 +51,22 @@ struct CopilotUsage: Sendable, Equatable {
 ///
 /// - GET https://api.github.com/copilot_internal/user → plan + quota snapshots
 ///
+/// The host is not fixed: a credential read for a GitHub Enterprise Cloud
+/// tenant is queried on that tenant's own API host
+/// (`https://api.<tenant>.ghe.com/copilot_internal/user`) and is never sent to
+/// api.github.com. See `CopilotHostEndpoint`.
+///
 /// This is an INTERNAL, UNDOCUMENTED API that may drift without notice; every
 /// failure must degrade to the normal connection states and never crash the
 /// panel.
 ///
 /// Credential: any GitHub token already on the machine from a signed-in
 /// Copilot client. Modern clients no longer write the legacy plugin files, so
-/// discovery walks an ordered chain (see `readToken`). Read-only throughout;
+/// discovery walks an ordered chain (see `readCredential`). Read-only throughout;
 /// nothing is copied or written, and there is no refresh path: an expired or
 /// revoked token stays dead until the user signs in again with whichever
 /// client owns it.
 enum CopilotSubscriptionService {
-    private static let usageURL = URL(string: "https://api.github.com/copilot_internal/user")!
     private static let usageBlockedUntilKey = "codeburn.copilot.usage.blockedUntil"
     /// Capacity Dock provider id, used for the pasted-token rung.
     static let providerID = "copilot"
@@ -54,7 +82,11 @@ enum CopilotSubscriptionService {
         case rateLimited(retryAt: Date)
         case usageHTTPError(Int)
         case usageDecodeFailed
-        case network(Error)
+        case network(Error, host: String)
+        /// The credential belongs to a GitHub host whose Copilot quota
+        /// endpoint this build cannot derive (a self-hosted GitHub Enterprise
+        /// Server install, say). Never retried against api.github.com.
+        case unsupportedHost(String)
 
         var errorDescription: String? {
             switch self {
@@ -72,14 +104,17 @@ enum CopilotSubscriptionService {
                 return "Copilot quota fetch failed (HTTP \(code)). Sign in to Copilot again, then Reconnect."
             case .usageDecodeFailed:
                 return "Copilot quota response was malformed."
-            case let .network(err):
-                return "Network error: \(err.localizedDescription)"
+            case let .network(err, host):
+                return "Network error reaching \(host): \(err.localizedDescription)"
+            case let .unsupportedHost(host):
+                return "Copilot quota is not available for the GitHub host \(host). "
+                    + "CodeBurn can read github.com and GitHub Enterprise Cloud (*.ghe.com) hosts."
             }
         }
 
         var isTerminal: Bool {
             switch self {
-            case .noCredentials:
+            case .noCredentials, .unsupportedHost:
                 return true
             case let .usageHTTPError(code):
                 return (400..<500).contains(code)
@@ -153,7 +188,8 @@ enum CopilotSubscriptionService {
     /// Ordered, read-only credential chain; the first rung that yields a token
     /// wins and every rung tolerates absent or malformed data:
     ///
-    /// 1. legacy editor-plugin files: `hosts.json` then `apps.json`
+    /// 1. legacy editor-plugin files: `hosts.json` then `apps.json` (both
+    ///    carry the GitHub host the token belongs to)
     /// 2. `~/.copilot/config.json` then `~/.copilot/settings.json`
     /// 3. `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`
     /// 4. `gh auth token`
@@ -164,29 +200,51 @@ enum CopilotSubscriptionService {
     /// `/usr/bin/security` is not in its partition list and every read would
     /// raise the "allow access?" dialog. `gh auth token` reaches the same
     /// users, because the Copilot CLI itself falls back to gh.
-    private static func readToken(deps: Deps) -> String? {
-        for url in [deps.hostsURL, deps.appsURL] {
-            if let data = deps.readFile(url), let token = tokenFromMap(data) { return token }
-        }
+    private static func readCredential(deps: Deps) -> CopilotCredential? {
+        // hosts.json is keyed by GitHub host; apps.json by "<host>:<app id>"
+        // (older releases wrote a bare app name, which carries no host).
+        if let data = deps.readFile(deps.hostsURL),
+           let credential = credentialFromMap(data, host: { $0 }) { return credential }
+        if let data = deps.readFile(deps.appsURL),
+           let credential = credentialFromMap(data, host: { hostFromAppsKey($0) }) { return credential }
         for name in ["config.json", "settings.json"] {
             if let data = deps.readFile(deps.copilotDirURL.appendingPathComponent(name)),
-               let token = tokenFromCopilotCLIJSON(data) { return token }
+               let token = tokenFromCopilotCLIJSON(data) { return CopilotCredential(token: token) }
         }
         for name in environmentTokenNames {
-            if let token = nonEmpty(deps.environment(name)) { return token }
+            if let token = nonEmpty(deps.environment(name)) { return CopilotCredential(token: token) }
         }
-        if let token = cachedGhToken(deps: deps) { return token }
-        return nonEmpty(deps.savedToken())
+        if let token = cachedGhToken(deps: deps) { return CopilotCredential(token: token) }
+        guard let token = nonEmpty(deps.savedToken()) else { return nil }
+        return CopilotCredential(token: token)
     }
 
-    /// hosts.json keys by host — prefer github.com; apps.json has no
-    /// canonical key, so its first entry wins. Both store the token as
-    /// `oauth_token`.
-    private static func tokenFromMap(_ data: Data) -> String? {
+    /// Reads the `oauth_token` entries out of a credential map and picks one
+    /// with `CopilotHostEndpoint.preferredHost`, so the token we send and the
+    /// host we send it to always come from the same entry. Keys are visited in
+    /// sorted order, making the pick stable when several entries qualify.
+    private static func credentialFromMap(
+        _ data: Data,
+        host keyToHost: (String) -> String?
+    ) -> CopilotCredential? {
         guard let map = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        let preferred = map["github.com"] ?? map.values.first
-        guard let token = (preferred as? [String: Any])?["oauth_token"] as? String, !token.isEmpty else { return nil }
-        return token
+        let entries: [CopilotCredential] = map.keys.sorted().compactMap { key in
+            guard let token = (map[key] as? [String: Any])?["oauth_token"] as? String, !token.isEmpty else {
+                return nil
+            }
+            return CopilotCredential(token: token, host: keyToHost(key))
+        }
+        guard let preferred = CopilotHostEndpoint.preferredHost(among: entries.map(\.host)) else { return nil }
+        return entries.first { $0.resolvedHost == preferred }
+    }
+
+    /// apps.json keys look like `github.com:Iv1.<app id>` on the newer
+    /// plugins and like a bare app name ("Visual Studio Code") on the older
+    /// ones; only the former carries a host.
+    private static func hostFromAppsKey(_ key: String) -> String? {
+        guard let separator = key.firstIndex(of: ":") else { return nil }
+        let candidate = String(key[..<separator])
+        return candidate.contains(".") ? candidate : nil
     }
 
     /// GitHub access-token prefixes. `ghr_` (refresh) is deliberately absent:
@@ -342,19 +400,19 @@ enum CopilotSubscriptionService {
         if let until = usageBlockedUntil(), until > deps.now() {
             throw FetchError.rateLimited(retryAt: until)
         }
-        guard var token = readToken(deps: deps) else { throw FetchError.noCredentials }
+        guard var credential = readCredential(deps: deps) else { throw FetchError.noCredentials }
 
-        var (data, response) = try await send(request(token: token), deps: deps)
+        var (data, response) = try await send(request(credential), deps: deps)
         if response.statusCode == 401 {
             // An active client session rotates this token; re-read once before
             // giving up so we don't report a failure the source already fixed.
             // The subprocess rungs are cached, so drop those answers first.
             resetProbeCache()
-            guard let reread = readToken(deps: deps), reread != token else {
+            guard let reread = readCredential(deps: deps), reread != credential else {
                 throw FetchError.tokenRejected
             }
-            token = reread
-            (data, response) = try await send(request(token: token), deps: deps)
+            credential = reread
+            (data, response) = try await send(request(credential), deps: deps)
         }
         if response.statusCode == 429 {
             throw FetchError.rateLimited(retryAt: recordUsageRateLimit(
@@ -363,11 +421,26 @@ enum CopilotSubscriptionService {
         guard (200..<300).contains(response.statusCode) else {
             throw FetchError.usageHTTPError(response.statusCode)
         }
-        return try decodeUsage(data: data, now: deps.now())
+        return try decodeUsage(
+            data: data,
+            now: deps.now(),
+            apiHost: apiHost(for: credential))
     }
 
-    private static func request(token: String) -> URLRequest {
-        var request = URLRequest(url: usageURL)
+    /// The API host a credential is queried on. Throws rather than falling
+    /// back to dotcom, so an enterprise token is never sent to api.github.com.
+    private static func apiHost(for credential: CopilotCredential) throws -> String {
+        guard let host = CopilotHostEndpoint.apiHost(for: credential.host) else {
+            throw FetchError.unsupportedHost(credential.resolvedHost)
+        }
+        return host
+    }
+
+    private static func request(_ credential: CopilotCredential) throws -> URLRequest {
+        guard let url = CopilotHostEndpoint.usageURL(for: credential.host) else {
+            throw FetchError.unsupportedHost(credential.resolvedHost)
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 30
         // Headers mirror the VS Code Copilot Chat plugin.
@@ -376,7 +449,7 @@ enum CopilotSubscriptionService {
         request.setValue("copilot-chat/0.26.7", forHTTPHeaderField: "Editor-Plugin-Version")
         request.setValue("GitHubCopilotChat/0.26.7", forHTTPHeaderField: "User-Agent")
         request.setValue("2025-04-01", forHTTPHeaderField: "X-Github-Api-Version")
-        request.setValue("token \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("token \(credential.token)", forHTTPHeaderField: "Authorization")
         return request
     }
 
@@ -386,13 +459,19 @@ enum CopilotSubscriptionService {
         } catch let error as FetchError {
             throw error
         } catch {
-            throw FetchError.network(error)
+            // Name the host: on an unreachable enterprise tenant this is the
+            // only place the user learns which endpoint was tried.
+            throw FetchError.network(error, host: request.url?.host ?? CopilotHostEndpoint.defaultAPIHost)
         }
     }
 
     // MARK: - Decode (internal so tests can drive fixtures)
 
-    static func decodeUsage(data: Data, now: Date = Date()) throws -> CopilotUsage {
+    static func decodeUsage(
+        data: Data,
+        now: Date = Date(),
+        apiHost: String = CopilotHostEndpoint.defaultAPIHost
+    ) throws -> CopilotUsage {
         let parsed: Any
         do {
             parsed = try JSONSerialization.jsonObject(with: data)
@@ -410,7 +489,8 @@ enum CopilotSubscriptionService {
         return CopilotUsage(
             details: [premium, chat].compactMap { $0 },
             plan: planLabel(root["copilot_plan"] ?? root["copilotPlan"]),
-            fetchedAt: now
+            fetchedAt: now,
+            apiHost: apiHost
         )
     }
 

@@ -181,6 +181,106 @@ struct CapacityDockTodayTests {
         #expect(row?.outputTokens == nil)
     }
 
+    @Test("Cache read is the hovered provider's own figure, not the machine's")
+    func cacheReadIsProviderScoped() {
+        let store = store(todayPayload(
+            cost: 278.94,
+            calls: 1_542,
+            inputTokens: 9_000_000,
+            outputTokens: 400_000,
+            providerDetails: [
+                ProviderDetail(id: "claude", label: "Claude", cost: 190.10, calls: 900,
+                               hasUsage: true, inputTokens: 6_000_000, outputTokens: 250_000,
+                               sessions: 12, cacheReadTokens: 4_200_000),
+                ProviderDetail(id: "codex", label: "Codex", cost: 88.84, calls: 642,
+                               hasUsage: true, inputTokens: 3_000_000, outputTokens: 150_000,
+                               sessions: 4, cacheReadTokens: 120_000),
+            ]
+        ))
+        #expect(store.capacityDockToday(for: .claude)?.cacheReadTokens == 4_200_000)
+        #expect(store.capacityDockToday(for: .codex)?.cacheReadTokens == 120_000)
+    }
+
+    @Test("A tile spanning several rows sums cache read, absent until a row reports it")
+    func combinedTileSumsCacheRead() {
+        let cursor = CapacityDockProvider(rawValue: "cursor")!
+        let sums = store(todayPayload(
+            cost: 1,
+            calls: 4,
+            inputTokens: 0,
+            outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "cursor", label: "Cursor", cost: 0.5, calls: 2, hasUsage: true,
+                               cacheReadTokens: 3_000),
+                ProviderDetail(id: "cursor-agent", label: "Cursor Agent", cost: 0.5, calls: 2, hasUsage: true,
+                               cacheReadTokens: 40_000),
+            ]
+        ))
+        #expect(sums.capacityDockToday(for: cursor)?.cacheReadTokens == 43_000)
+
+        // Neither row reports cache read -> unknown, not a fabricated zero.
+        let absent = store(todayPayload(
+            cost: 1, calls: 4, inputTokens: 0, outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "cursor", label: "Cursor", cost: 0.5, calls: 2, hasUsage: true),
+                ProviderDetail(id: "cursor-agent", label: "Cursor Agent", cost: 0.5, calls: 2, hasUsage: true),
+            ]
+        ))
+        #expect(absent.capacityDockToday(for: cursor)?.cacheReadTokens == nil)
+    }
+
+    @Test("Known zero cache read stays zero; a legacy row stays unknown")
+    func cacheReadZeroVersusMissing() {
+        let store = store(todayPayload(
+            cost: 1, calls: 4, inputTokens: 0, outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "claude", label: "Claude", cost: 1, calls: 4, hasUsage: true,
+                               cacheReadTokens: 0),
+            ]
+        ))
+        #expect(store.capacityDockToday(for: .claude)?.cacheReadTokens == 0)
+    }
+
+    @Test("A partial cache-read sum is unknown, not a complete-looking total")
+    func partialCacheReadSumStaysUnknown() {
+        // One tile row reports cache read, the other is an active row from a
+        // CLI that predates the field: the tile must report none rather than
+        // present the one known row's figure as the whole account's total.
+        let cursor = CapacityDockProvider(rawValue: "cursor")!
+        let partial = store(todayPayload(
+            cost: 1, calls: 6, inputTokens: 0, outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "cursor", label: "Cursor", cost: 0.5, calls: 2, hasUsage: true,
+                               cacheReadTokens: 3_000),
+                ProviderDetail(id: "cursor-agent", label: "Cursor Agent", cost: 0.5, calls: 4, hasUsage: true),
+            ]
+        ))
+        #expect(partial.capacityDockToday(for: cursor)?.cacheReadTokens == nil)
+        // An idle row (no usage) does not force unknown: its cache read is a
+        // genuine zero.
+        let idle = store(todayPayload(
+            cost: 0.5, calls: 2, inputTokens: 0, outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "cursor", label: "Cursor", cost: 0.5, calls: 2, hasUsage: true,
+                               cacheReadTokens: 3_000),
+                ProviderDetail(id: "cursor-agent", label: "Cursor Agent", cost: 0, calls: 0, hasUsage: false),
+            ]
+        ))
+        #expect(idle.capacityDockToday(for: cursor)?.cacheReadTokens == 3_000)
+    }
+
+    @Test("Large cache counts survive without overflow")
+    func cacheReadLargeCounts() {
+        let store = store(todayPayload(
+            cost: 1, calls: 4, inputTokens: 0, outputTokens: 0,
+            providerDetails: [
+                ProviderDetail(id: "claude", label: "Claude", cost: 1, calls: 4, hasUsage: true,
+                               cacheReadTokens: 2_147_483_647),
+            ]
+        ))
+        #expect(store.capacityDockToday(for: .claude)?.cacheReadTokens == 2_147_483_647)
+    }
+
     @Test("Kimi Code reads its CLI row rather than the CLI's separate kimi provider")
     func dockIDMapsToTheCLIProviderID() {
         #expect(CapacityDockProvider.kimiCode.payloadProviderID == "kimicode")
@@ -295,6 +395,7 @@ struct CapacityDockTodayTests {
         #expect(old.inputTokens == nil)
         #expect(old.outputTokens == nil)
         #expect(old.sessions == nil)
+        #expect(old.cacheReadTokens == nil)
 
         let current = """
         {"id":"claude","label":"Claude","cost":190.1,"calls":900,"hasUsage":true,
@@ -304,5 +405,12 @@ struct CapacityDockTodayTests {
         #expect(new.inputTokens == 6_000_000)
         #expect(new.outputTokens == 250_000)
         #expect(new.sessions == 12)
+
+        let withCache = """
+        {"id":"claude","label":"Claude","cost":190.1,"calls":900,"hasUsage":true,
+         "inputTokens":6000000,"outputTokens":250000,"sessions":12,"cacheReadTokens":4200000}
+        """
+        let cached = try JSONDecoder().decode(ProviderDetail.self, from: Data(withCache.utf8))
+        #expect(cached.cacheReadTokens == 4_200_000)
     }
 }

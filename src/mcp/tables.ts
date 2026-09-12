@@ -1,6 +1,7 @@
 import { formatCost, formatTokens, markEstimated } from '../format.js'
 import type { MenubarPayload } from '../menubar-json.js'
 import { unpricedModelHint } from '../models.js'
+import { formatSessionCount } from '../session-count-label.js'
 
 const ESTIMATED_LEGEND = '_~ estimated cost (priced from estimated tokens)_'
 const isEstimated = (m: { estimatedCostUSD?: number }) => (m.estimatedCostUSD ?? 0) > 0
@@ -21,7 +22,7 @@ export function renderSummaryTable(p: MenubarPayload): string {
   const c = p.current
   const unpriced = c.unpricedModels ?? []
   return [
-    `**${c.label}** — ${formatCost(c.cost)} · ${c.calls} calls · ${c.sessions} sessions`,
+    `**${c.label}** — ${formatCost(c.cost)} · ${c.calls} calls · ${formatSessionCount(c.sessions, c.sessionCountBasis)}`,
     `cache hit ${pct(c.cacheHitPercent)} · one-shot ${oneShot(c.oneShotRate)} · in ${formatTokens(c.inputTokens)} / out ${formatTokens(c.outputTokens)}`,
     ...(unpriced.length > 0
       ? [`⚠ ${unpriced.length} model${unpriced.length === 1 ? '' : 's'} unpriced, counted at $0: ${unpriced.map(u => `${u.model} (${u.calls} calls)`).join(', ')}. ${unpricedModelHint()}`]
@@ -32,7 +33,7 @@ export function renderSummaryTable(p: MenubarPayload): string {
     ...(c.topModels.slice(0, 5).some(isEstimated) ? [ESTIMATED_LEGEND] : []),
     '',
     '_Top projects_',
-    mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, 5).map(x => [x.name, formatCost(x.cost), String(x.sessions)])),
+    mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, 5).map(x => [x.name, formatCost(x.cost), formatSessionCount(x.sessions, x.sessionCountBasis)])),
   ].join('\n')
 }
 
@@ -43,7 +44,7 @@ export function renderBreakdownTable(p: MenubarPayload, by: BreakdownBy, limit: 
     const table = mdTable(['Model', 'Cost', 'Calls'], rows.map(m => [m.name, markEstimated(formatCost(m.cost), isEstimated(m)), String(m.calls)]))
     return rows.some(isEstimated) ? `${table}\n\n${ESTIMATED_LEGEND}` : table
   }
-  if (by === 'project') return mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, limit).map(x => [x.name, formatCost(x.cost), String(x.sessions)]))
+  if (by === 'project') return mdTable(['Project', 'Cost', 'Sessions'], c.topProjects.slice(0, limit).map(x => [x.name, formatCost(x.cost), formatSessionCount(x.sessions, x.sessionCountBasis)]))
   if (by === 'task') return mdTable(['Task', 'Cost', 'Turns', 'One-shot'], c.topActivities.slice(0, limit).map(a => [a.name, formatCost(a.cost), String(a.turns), oneShot(a.oneShotRate)]))
   return mdTable(['Provider', 'Cost'], Object.entries(c.providers).sort(([, a], [, b]) => b - a).slice(0, limit).map(([name, cost]) => [name, formatCost(cost)]))
 }

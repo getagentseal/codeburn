@@ -186,6 +186,14 @@ describe('openclaw provider', () => {
     expect(sources.length).toBe(0)
   })
 
+  it('reports the agents root to doctor even when it holds no sessions', async () => {
+    const dir = join(baseDir, 'empty-root')
+    await mkdir(dir, { recursive: true })
+    const provider = createOpenClawProvider(dir)
+    expect(await provider.discoverSessions()).toEqual([])
+    expect(await provider.probeRoots!()).toEqual([{ path: dir, label: 'agents' }])
+  })
+
   afterAll(async () => {
     await rm(baseDir, { recursive: true, force: true })
   })

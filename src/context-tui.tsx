@@ -3,6 +3,7 @@ import { render, Box, Text, useApp, useInput } from 'ink'
 
 import { formatTokens } from './format.js'
 import { patchStdoutForWindows } from './ink-win.js'
+import { startUserTimingGuard } from './user-timing-guard.js'
 import {
   buildContextTree,
   listRecentTitledSessions,
@@ -204,6 +205,11 @@ function ContextTuiApp({ initialScope }: { initialScope: Scope }) {
 
 export async function runContextTui(opts: { initialScope?: Scope } = {}): Promise<void> {
   patchStdoutForWindows()
-  const instance = render(<ContextTuiApp initialScope={opts.initialScope ?? 'effective'} />)
-  await instance.waitUntilExit()
+  const stopUserTimingGuard = startUserTimingGuard()
+  try {
+    const instance = render(<ContextTuiApp initialScope={opts.initialScope ?? 'effective'} />)
+    await instance.waitUntilExit()
+  } finally {
+    stopUserTimingGuard()
+  }
 }

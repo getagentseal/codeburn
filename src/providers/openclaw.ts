@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { readSessionFile } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 const toolNameMap: Record<string, string> = {
   bash: 'Bash',
@@ -261,6 +261,12 @@ export function createOpenClawProvider(overrideDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      // #899: empty agents root that exists must be distinguishable from missing install.
+      const roots = overrideDir ? [overrideDir] : getOpenClawDirs()
+      return roots.map(path => ({ path, label: 'agents' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

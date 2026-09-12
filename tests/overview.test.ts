@@ -273,3 +273,62 @@ describe('renderOverview unpriced models', () => {
     expect(out).not.toContain('Unpriced')
   })
 })
+
+describe('renderOverview #1260 residuals', () => {
+  it('keeps same basename distinct abs paths as separate Top projects rows', () => {
+    const out = renderOverview([
+      makeProject({
+        project: 'vault',
+        projectPath: '/a/vault',
+        cost: 10,
+        calls: 1,
+        model: 'claude-sonnet-4-5',
+        provider: 'claude',
+        tokens: { input: 10, output: 5, cacheR: 0, cacheW: 0 },
+      }),
+      makeProject({
+        project: 'vault',
+        projectPath: '/b/vault',
+        cost: 1,
+        calls: 1,
+        model: 'gpt-5.4',
+        provider: 'pi',
+        tokens: { input: 10, output: 5, cacheR: 0, cacheW: 0 },
+      }),
+    ], { label: 'residuals', color: false })
+    expect(out).toContain('a/vault')
+    expect(out).toContain('b/vault')
+    expect(out).toContain('$10.00')
+    expect(out).toContain('$1.00')
+    // Must not collapse into a single basename-only vault row for both costs.
+    const top = out.split('Top projects')[1]?.split('Daily')[0] ?? ''
+    expect(top).not.toMatch(/│\s+vault\s+│\s+\$11\.00/)
+  })
+
+  it('keeps POSIX case-distinct paths as separate Top projects rows', () => {
+    const out = renderOverview([
+      makeProject({
+        project: 'Vault',
+        projectPath: '/a/Vault',
+        cost: 10,
+        calls: 1,
+        model: 'claude-sonnet-4-5',
+        provider: 'claude',
+        tokens: { input: 10, output: 5, cacheR: 0, cacheW: 0 },
+      }),
+      makeProject({
+        project: 'vault',
+        projectPath: '/a/vault',
+        cost: 1,
+        calls: 1,
+        model: 'gpt-5.4',
+        provider: 'pi',
+        tokens: { input: 10, output: 5, cacheR: 0, cacheW: 0 },
+      }),
+    ], { label: 'residuals', color: false })
+    const top = out.split('Top projects')[1]?.split('Daily')[0] ?? ''
+    expect(top).toContain('$10.00')
+    expect(top).toContain('$1.00')
+    expect(top).not.toContain('$11.00')
+  })
+})

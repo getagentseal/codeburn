@@ -145,14 +145,15 @@ describe('daily-cache adoption of a v30 file written under a different accountin
 
     const loaded = await loadDailyCache()
 
-    expect(DAILY_CACHE_VERSION).toBe(31)
-    expect(loaded.version).toBe(31)
-    // A v30 candidate must not satisfy the same-version adoption at
-    // adoptOlderDailyCaches, so its trust markers cannot survive.
+    expect(DAILY_CACHE_VERSION).toBe(32)
+    expect(loaded.version).toBe(32)
+    // A v30 candidate must not satisfy same-version adoption, so its trust
+    // markers cannot survive migration to the current cache version.
     expect(loaded.complete).toBe(false)
     expect(loaded.watermarkTrusted).toBe(false)
     const carried = loaded.days.find(entry => entry.date === date)
     expect(carried?.carried).toBe(true)
     expect(loaded.pendingRederive).toContain('hermes')
+    expect(loaded.pendingRederive).toContain('dsh')
   })
 })

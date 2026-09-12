@@ -1041,9 +1041,13 @@ private struct PulseInsight: View {
                 PulseTile(label: "1-shot", value: oneShotText, color: oneShotColor)
                 PulseTile(
                     label: "Cost / session",
-                    value: payload.current.sessions > 0
-                        ? (payload.current.cost / Double(payload.current.sessions)).asCompactCurrency()
-                        : "—",
+                    value: SessionCountLabel.averageText(
+                        SessionCountLabel.isExact(payload.current.sessionCountBasis) && payload.current.sessions > 0
+                            ? payload.current.cost / Double(payload.current.sessions)
+                            : nil,
+                        basis: payload.current.sessionCountBasis,
+                        format: { $0.asCompactCurrency() }
+                    ),
                     color: .secondary
                 )
             }
@@ -1212,8 +1216,8 @@ private struct StatsInsight: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    StatRow(label: "Sessions today", value: "\(payload.current.sessions)")
-                    StatRow(label: "Calls today", value: payload.current.calls.asThousandsSeparated())
+                    StatRow(label: "Sessions", value: SessionCountLabel.text(sessions: payload.current.sessions, basis: payload.current.sessionCountBasis))
+                    StatRow(label: "Calls", value: payload.current.calls.asThousandsSeparated())
                     StatRow(label: "Current streak", value: stats.currentStreak)
                     StatRow(label: "Longest streak", value: stats.longestStreak)
                 }
@@ -1376,39 +1380,17 @@ private struct TopProjectsList: View {
             ForEach(Array(top.enumerated()), id: \.offset) { idx, project in
                 let expandKey = "\(idx):\(project.name)"
                 let isOpen = expanded == expandKey
+                let canExpand = !project.sessionDetails.isEmpty
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(.quaternary)
-                            .rotationEffect(.degrees(isOpen ? 90 : 0))
-                        Text(projectDisplayName(project.name))
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer()
-                        Text("\(project.sessions) sess")
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(.quaternary)
-                        Text(project.cost.asCompactCurrency())
-                            .font(.codeMono(size: 10.5, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Theme.brandAccent.opacity(0.5))
-                            .frame(
-                                width: max(2, 40 * CGFloat(project.cost / max(maxCost, 0.01))),
-                                height: 6
-                            )
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            expanded = isOpen ? nil : expandKey
-                        }
-                    }
+                    projectRowHeader(
+                        project: project,
+                        isOpen: isOpen,
+                        canExpand: canExpand,
+                        maxCost: maxCost,
+                        expandKey: expandKey
+                    )
 
-                    if isOpen, !project.sessionDetails.isEmpty {
+                    if isOpen, canExpand {
                         SessionDetailsList(sessions: project.sessionDetails)
                             .padding(.top, 6)
                             .padding(.leading, 14)
@@ -1416,6 +1398,72 @@ private struct TopProjectsList: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func projectRowHeader(
+        project: ProjectEntry,
+        isOpen: Bool,
+        canExpand: Bool,
+        maxCost: Double,
+        expandKey: String
+    ) -> some View {
+        let header = HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.quaternary)
+                .rotationEffect(.degrees(isOpen ? 90 : 0))
+                .opacity(canExpand ? 1 : 0)
+            Text(projectDisplayName(project.name))
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer()
+            Text(SessionCountLabel.compact(sessions: project.sessions, basis: project.sessionCountBasis))
+                .font(.system(size: 9.5))
+                .foregroundStyle(.quaternary)
+            Text(project.cost.asCompactCurrency())
+                .font(.codeMono(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Theme.brandAccent.opacity(0.5))
+                .frame(
+                    width: max(2, 40 * CGFloat(project.cost / max(maxCost, 0.01))),
+                    height: 6
+                )
+        }
+        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        if canExpand {
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    expanded = isOpen ? nil : expandKey
+                }
+            } label: {
+                header
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(projectRowAccessibilityLabel(project, isOpen: isOpen, canExpand: true))
+            .accessibilityHint(isOpen ? "Hides session details" : "Shows session details")
+        } else {
+            header
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(projectRowAccessibilityLabel(project, isOpen: false, canExpand: false))
+        }
+    }
+
+    private func projectRowAccessibilityLabel(_ project: ProjectEntry, isOpen: Bool, canExpand: Bool) -> String {
+        var parts = [
+            project.name,
+            SessionCountLabel.text(sessions: project.sessions, basis: project.sessionCountBasis),
+            project.cost.asCompactCurrency()
+        ]
+        if canExpand {
+            parts.append(isOpen ? "Expanded" : "Collapsed")
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -1432,7 +1480,7 @@ private struct SessionDetailsList: View {
                             .foregroundStyle(.primary)
                             .monospacedDigit()
                             .frame(width: 52, alignment: .trailing)
-                        Text("  \(sess.calls) calls")
+                        Text("  \(sess.calls) \(sess.calls == 1 ? "call" : "calls")")
                             .font(.system(size: 9))
                             .foregroundStyle(.quaternary)
                         Spacer()
@@ -1691,8 +1739,8 @@ private struct AllStats {
         activeDaysFraction: activeDaysFraction,
         mostActiveDay: mostActiveDay,
         peakDaySpend: peakDaySpend,
-        currentStreak: currentStreak == 0 ? "—" : "\(currentStreak) days",
-        longestStreak: longestStreak == 0 ? "—" : "\(longestStreak) days",
+        currentStreak: currentStreak == 0 ? "—" : (currentStreak == 1 ? "1 day" : "\(currentStreak) days"),
+        longestStreak: longestStreak == 0 ? "—" : (longestStreak == 1 ? "1 day" : "\(longestStreak) days"),
         lifetimeTotal: lifetimeTotal,
         historyDayCount: history.count
     )
@@ -2417,12 +2465,21 @@ private struct CopilotPlanInsight: View {
 
     var body: some View {
         Group {
-            switch CopilotQuotaPresentation.planContent(loadState: store.copilotLoadState, hasUsage: store.copilotUsage != nil) {
+            switch CopilotQuotaPresentation.planContent(
+                loadState: store.copilotLoadState,
+                hasUsage: store.copilotUsage != nil,
+                explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: store.copilotQuotaRuntime.defaults)
+            ) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: "No Copilot credentials found",
-                    message: "Sign in via an editor's Copilot plugin first. Then click Try Again."
-                ) { Task { await store.bootstrapCopilot() } }
+                    title: CopilotQuotaPresentation.noCredentialsPlanTitle,
+                    message: CopilotQuotaPresentation.noCredentialsPlanMessage
+                ) { Task { await store.connectCopilot() } }
+            case .disconnected:
+                PlanConnectView(
+                    title: CopilotQuotaPresentation.disconnectedPlanTitle,
+                    message: CopilotQuotaPresentation.disconnectedPlanMessage
+                ) { Task { await store.connectCopilot() } }
             case .loading:
                 PlanLoadingView(message: "Reading Copilot credentials...")
             case .failed:
@@ -2438,7 +2495,7 @@ private struct CopilotPlanInsight: View {
                     title: "Refresh Copilot login",
                     reason: reason,
                     fallback: "Your Copilot sign-in has expired. Sign in via an editor's Copilot plugin again, then click Reconnect."
-                ) { Task { await store.bootstrapCopilot() } }
+                ) { Task { await store.connectCopilot() } }
             case let .usage(idle):
                 if let usage = store.copilotUsage {
                     loadedBody(usage: usage, idle: idle)

@@ -1,8 +1,10 @@
 import Foundation
+import CoreGraphics
 import SwiftUI
 import AppKit
 import Observation
 import ServiceManagement
+import UserNotifications
 
 private let refreshIntervalSeconds: UInt64 = 30
 private let forceRefreshWatchdogSeconds: TimeInterval = 90
@@ -63,10 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private var contextMenu: NSMenu?
     fileprivate let store = AppStore()
     let updateChecker = UpdateChecker()
-    /// True while the displays are asleep. Refresh ticks skip spawning
-    /// entirely then: nobody can see the menubar, and every fetch is a full
-    /// Node process (#647).
-    private var displayAsleep = false
     /// Bounds status staleness under App Nap: the 30s timer can be coalesced
     /// once the app naps (no permanent activity assertion anymore, #647), so
     /// this system-scheduled activity guarantees a tick attempt every few
@@ -165,7 +163,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         registerLoginItemIfNeeded()
         observeSubscriptionDisconnect()
         observeCapacityDockProviderSettingsRequests()
+        setupUpdateNotifications()
         Task { await updateChecker.checkIfNeeded() }
+    }
+
+    /// Delegate only: authorization is requested lazily by UpdateChecker the
+    /// first time a notification would actually be posted.
+    private func setupUpdateNotifications() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current().delegate = self
     }
 
     private func observeCapacityDockProviderSettingsRequests() {
@@ -208,7 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.displayAsleep = false
                 self?.recoverRefreshPipelineAfterInterruption(resetLoading: true, reason: "wake")
                 self?.startStatusItemPlacementRecovery()
             }
@@ -220,22 +225,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.displayAsleep = false
                 self?.recoverRefreshPipelineAfterInterruption(resetLoading: true, reason: "screen wake")
                 self?.startStatusItemPlacementRecovery()
             }
         }
 
-        // Display sleep without system sleep (clamshell displays off, screen
-        // saver energy settings) previously kept the full spawn cadence
-        // running for hours. Skip refreshes until the screens wake.
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.displayAsleep = true
                 self?.stopStatusItemPlacementRecovery()
             }
         }
@@ -588,12 +588,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             (now.timeIntervalSince(lastSubscriptionRefreshAt ?? .distantPast) >= threshold)
         )
         let shouldRefreshClaude = force || forceClaude || claudeDue
-        let shouldRefreshCodex = force || forceCodex || (
-            autoRefreshAllowed && now.timeIntervalSince(lastCodexRefreshAt ?? .distantPast) >= threshold
+        let shouldRefreshCodex = QuotaRefreshDecision.isDue(
+            force: force || forceCodex,
+            autoRefreshAllowed: autoRefreshAllowed,
+            lastAttemptAt: lastCodexRefreshAt,
+            now: now,
+            threshold: threshold
         )
-        let shouldRefreshCapacityDockProviders = force || forceCapacityDockProviders || (
-            autoRefreshAllowed
-                && now.timeIntervalSince(lastCapacityDockProviderRefreshAt ?? .distantPast) >= threshold
+        let shouldRefreshCapacityDockProviders = QuotaRefreshDecision.isDue(
+            force: force || forceCapacityDockProviders,
+            autoRefreshAllowed: autoRefreshAllowed,
+            lastAttemptAt: lastCapacityDockProviderRefreshAt,
+            now: now,
+            threshold: threshold
         )
         guard shouldRefreshClaude || shouldRefreshCodex || shouldRefreshCapacityDockProviders else {
             return false
@@ -604,35 +611,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             // the provider fails. Failures get their own shorter backoff below.
             lastSubscriptionRefreshAt = now
         }
+        if shouldRefreshCodex {
+            // Attempt anchor, like the generic adapters below: a disconnected
+            // or failing Codex must not force this branch on every tick.
+            lastCodexRefreshAt = now
+        }
+
+        if shouldRefreshCapacityDockProviders {
+            // Ahead of the Claude/Codex awaits: the dock must not wait on a
+            // slow provider to redraw its rings.
+            lastCapacityDockProviderRefreshAt = now
+            await store.refreshSelectedCapacityDockProviders()
+        }
 
         switch (shouldRefreshClaude, shouldRefreshCodex) {
         case (true, true):
             async let claude = refreshClaudeQuotaSingleFlight()
             async let codex = refreshCodexQuotaSingleFlight()
             let claudeSucceeded = await claude
-            let codexSucceeded = await codex
+            _ = await codex
             finishClaudeQuotaRefresh(
                 succeeded: claudeSucceeded,
                 attemptedAt: now,
                 cadence: threshold
             )
-            if codexSucceeded { lastCodexRefreshAt = Date() }
         case (true, false):
             let succeeded = await refreshClaudeQuotaSingleFlight()
             finishClaudeQuotaRefresh(succeeded: succeeded, attemptedAt: now, cadence: threshold)
         case (false, true):
-            if await refreshCodexQuotaSingleFlight() {
-                lastCodexRefreshAt = Date()
-            }
+            _ = await refreshCodexQuotaSingleFlight()
         case (false, false):
             break
-        }
-        if shouldRefreshCapacityDockProviders {
-            // Generic adapters have their own attempt anchor. They must not be
-            // polled on every payload tick merely because Codex is disconnected
-            // or a Codex refresh failed.
-            lastCapacityDockProviderRefreshAt = now
-            await store.refreshSelectedCapacityDockProviders()
         }
         return true
     }
@@ -757,9 +766,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         // key's stuck loading / in-flight / generation bookkeeping and force a
         // fresh fetch — even if the cache looks "not stale yet". This is the
         // guaranteed one-round-trip recovery path.
-        // An open popover also proves the screens are on: recover from a
-        // missed screensDidWake so a latched flag can't suppress refreshes.
-        displayAsleep = false
         if refreshTimer == nil {
             startRefreshLoop(forceQuotaOnStart: false)
         }
@@ -804,7 +810,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
     private func runRefreshLoopTick(reason: String, forcePayload: Bool = false, forceQuota: Bool = false) {
         refreshLoopHeartbeatAt = Date()
-        if displayAsleep && !forcePayload { return }
+        // Display sleep without system sleep (clamshell displays off, screen
+        // saver energy settings) otherwise keeps the full spawn cadence running
+        // for hours (#647). Asked live rather than latched from
+        // screensDidSleep, so a missed wake notification cannot strand it.
+        if !forcePayload && CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return }
         let hadForceRefreshInFlight = forceRefreshTask != nil
         let clearedStaleForceRefresh = clearStaleForceRefreshIfNeeded()
         let clearedStaleStatusRefresh = clearStaleStatusPayloadRefreshIfNeeded()
@@ -836,6 +846,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                     forceQuota: forceQuota,
                     qualityOfService: qualityOfService
                 )
+            }
+        }
+
+        if QuotaRefreshDecision.needsQuotaOnlyTick(
+            payloadRefreshDue: shouldForceRefresh,
+            payloadSkippedUnchanged: skippedUnchangedUsageRefresh
+        ) {
+            Task { [weak self] in
+                _ = await self?.refreshLiveQuotaProgressIfDue(force: forceQuota)
             }
         }
 
@@ -970,6 +989,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             // currency switch instead of waiting for the next 30s payload tick.
             _ = self.store.currency
             _ = self.store.displayMetric
+            // Second-row settings: the title has to re-render the moment the
+            // toggle or its metric changes, not on the next payload tick.
+            _ = self.store.menubarSecondRowEnabled
+            _ = self.store.menubarSecondRowMetric
             _ = self.store.dailyBudget
             _ = self.store.dailyTokenBudget
             // Read the derived flag so the flame re-tints when today's usage
@@ -1228,8 +1251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     /// menubar text point size. With no tint it stays a template image so the system
     /// auto-adapts to the menu bar; a tint returns a recolored non-template copy for
     /// the budget/quota warning states.
-    private static func menubarFlameImage(tint: NSColor?) -> NSImage? {
-        let config = NSImage.SymbolConfiguration(pointSize: menubarTitleFontSize, weight: .medium)
+    private static func menubarFlameImage(
+        tint: NSColor?,
+        pointSize: CGFloat = menubarTitleFontSize
+    ) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
         guard let symbol = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: "CodeBurn")?
             .withSymbolConfiguration(config) else { return nil }
         guard let tint else {
@@ -1246,6 +1272,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         return recolored
     }
 
+    /// Typography for one rendering of the status-item title. `singleRow` holds
+    /// the historical constants, so the off state of the second-row setting
+    /// produces exactly the string this app has always rendered.
+    private struct MenubarTitleStyle {
+        let fontSize: CGFloat
+        let attachmentPointSize: CGFloat
+        let baselineOffset: CGFloat
+        let attachmentVerticalOffset: CGFloat
+        /// Two rows only. The single row has the whole menu bar to itself, so its
+        /// flame keeps the image size the system hands back, exactly as before.
+        let clampsAttachmentToLineHeight: Bool
+
+        static let singleRow = MenubarTitleStyle(
+            fontSize: menubarTitleFontSize,
+            attachmentPointSize: menubarTitleFontSize,
+            baselineOffset: -1.0,
+            attachmentVerticalOffset: -3,
+            clampsAttachmentToLineHeight: false
+        )
+        static let twoRow = MenubarTitleStyle(
+            fontSize: MenubarRowTypography.twoRowFontSize,
+            attachmentPointSize: MenubarRowTypography.twoRowAttachmentPointSize,
+            baselineOffset: MenubarRowTypography.twoRowBaselineOffset,
+            attachmentVerticalOffset: MenubarRowTypography.twoRowAttachmentVerticalOffset,
+            clampsAttachmentToLineHeight: true
+        )
+
+        func attachmentBounds(imageSize: CGSize) -> CGRect {
+            guard clampsAttachmentToLineHeight else {
+                return CGRect(
+                    x: 0,
+                    y: attachmentVerticalOffset,
+                    width: imageSize.width,
+                    height: imageSize.height
+                )
+            }
+            return MenubarRowTypography.twoRowAttachmentBounds(imageSize: imageSize)
+        }
+    }
+
+    /// The button cell's single-line state as AppKit handed it to us, captured
+    /// before the two-row path ever touches it so turning the second row back
+    /// off restores the original rendering rather than a guessed default.
+    private var defaultTitleUsesSingleLineMode: Bool?
+    private var defaultTitleWraps: Bool?
+
     private func refreshStatusButton() {
         guard let button = statusItem.button else { return }
         // Skip while the popover is anchored to this button. Rewriting the
@@ -1260,7 +1332,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         button.image = nil
         button.imagePosition = .noImage
 
-        let font = NSFont.monospacedDigitSystemFont(ofSize: menubarTitleFontSize, weight: .regular)
+        // nil whenever the setting is off or the chosen metric has no data, in
+        // which case the title falls back to the single-row composition.
+        let secondRow = MenubarRowFormatter.secondRow(
+            settings: store.menubarRowSettings,
+            snapshot: store.menubarRowSnapshot
+        )
+        applyTitleLineMode(to: button, multiline: secondRow != nil)
+        button.attributedTitle = composeStatusTitle(
+            style: secondRow == nil ? .singleRow : .twoRow,
+            secondRow: secondRow
+        )
+
+        let menubarPeriod = store.menubarPeriod
+        if let shortfall = store.menubarBadgeDeviceShortfall {
+            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel) · \(shortfall.reachable) of \(shortfall.total) devices reporting"
+        } else {
+            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
+        }
+
+        persistBadgeStatusFile()
+    }
+
+    /// A multi-line attributed title only renders once the cell stops forcing a
+    /// single line. Both states are applied explicitly so toggling the setting
+    /// at runtime never leaves the cell in the other mode.
+    private func applyTitleLineMode(to button: NSStatusBarButton, multiline: Bool) {
+        guard let cell = button.cell else { return }
+        if defaultTitleUsesSingleLineMode == nil {
+            defaultTitleUsesSingleLineMode = cell.usesSingleLineMode
+            defaultTitleWraps = cell.wraps
+        }
+        if multiline {
+            cell.usesSingleLineMode = false
+            cell.wraps = true
+        } else {
+            cell.usesSingleLineMode = defaultTitleUsesSingleLineMode ?? false
+            cell.wraps = defaultTitleWraps ?? false
+        }
+    }
+
+    /// Composes the status-item title. With `secondRow` nil this is the original
+    /// single-row string, byte for byte; with a second row it renders the same
+    /// first line at the two-row point size and appends the extra line under a
+    /// paragraph style that clamps both lines into the menu bar's height.
+    private func composeStatusTitle(
+        style: MenubarTitleStyle,
+        secondRow: String?
+    ) -> NSAttributedString {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: style.fontSize, weight: .regular)
         // Tint the flame based on the worst-affected connected provider's quota.
         // Normal (<70%) keeps the template (auto white-on-dark / black-on-light);
         // warning/critical/danger override with a fixed palette color so the
@@ -1270,12 +1390,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         if tint == nil, store.isOverDailyBudget {
             tint = NSColor.systemYellow
         }
-        let flame = Self.menubarFlameImage(tint: tint)
+        let flame = Self.menubarFlameImage(tint: tint, pointSize: style.attachmentPointSize)
 
         let attachment = NSTextAttachment()
         attachment.image = flame
         if let size = flame?.size {
-            attachment.bounds = CGRect(x: 0, y: -3, width: size.width, height: size.height)
+            attachment.bounds = style.attachmentBounds(imageSize: size)
         }
 
         let menubarPeriod = store.menubarPeriod
@@ -1315,7 +1435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                     : " " + (cost?.asCompactCurrency() ?? fallback) + suffix
             }
 
-            var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: -1.0]
+            var textAttrs: [NSAttributedString.Key: Any] = [.font: font, .baselineOffset: style.baselineOffset]
             if !hasPayload {
                 textAttrs[.foregroundColor] = NSColor.secondaryLabelColor
             }
@@ -1328,21 +1448,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 let marker = " · \(shortfall.reachable)/\(shortfall.total)"
                 let markerAttrs: [NSAttributedString.Key: Any] = [
                     .font: font,
-                    .baselineOffset: -1.0,
+                    .baselineOffset: style.baselineOffset,
                     .foregroundColor: NSColor.secondaryLabelColor,
                 ]
                 composed.append(NSAttributedString(string: marker, attributes: markerAttrs))
             }
         }
 
-        button.attributedTitle = composed
-        if let shortfall = store.menubarBadgeDeviceShortfall {
-            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel) · \(shortfall.reachable) of \(shortfall.total) devices reporting"
-        } else {
-            button.toolTip = "CodeBurn \(menubarPeriod.menubarMetricLabel)"
-        }
+        guard let secondRow else { return composed }
 
-        persistBadgeStatusFile()
+        var secondRowAttrs: [NSAttributedString.Key: Any] = [.font: font]
+        if style.baselineOffset != 0 {
+            secondRowAttrs[.baselineOffset] = style.baselineOffset
+        }
+        composed.append(NSAttributedString(string: "\n" + secondRow, attributes: secondRowAttrs))
+
+        // Centre both lines against each other and clamp their height: the
+        // status item is only as tall as the menu bar, and an unclamped 9pt
+        // line box (with its natural leading) pushes the pair past 22pt, which
+        // AppKit resolves by clipping the second line away.
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+        paragraph.lineSpacing = 0
+        paragraph.paragraphSpacing = 0
+        paragraph.minimumLineHeight = MenubarRowTypography.twoRowLineHeight
+        paragraph.maximumLineHeight = MenubarRowTypography.twoRowLineHeight
+        composed.addAttribute(
+            .paragraphStyle,
+            value: paragraph,
+            range: NSRange(location: 0, length: composed.length)
+        )
+        return composed
     }
 
     private var lastWrittenBadgeGenerated: String?
@@ -1665,5 +1802,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         // Catch up on any menubar title updates that were skipped while the
         // popover was anchored.
         refreshStatusButton()
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        await MainActor.run { self.updateChecker.performFullUpdate() }
     }
 }

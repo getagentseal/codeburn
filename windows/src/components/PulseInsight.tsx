@@ -1,6 +1,7 @@
 import type { MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
 import { formatCompactCurrency } from '../lib/currency'
+import { formatSessionAveragePlaceholder, sessionCountIsExact } from '../lib/session-count-label'
 import { PencilLineIcon } from './Icons'
 
 type Props = {
@@ -9,10 +10,12 @@ type Props = {
 }
 
 export function PulseInsight({ payload, currency }: Props) {
-  const { cacheHitPercent, oneShotRate, cost, sessions } = payload.current
+  const { cacheHitPercent, oneShotRate, cost, sessions, sessionCountBasis } = payload.current
   const cacheText = cacheHitPercent <= 0 ? '-' : `${Math.round(cacheHitPercent)}%`
   const oneShotText = oneShotRate == null ? '-' : `${Math.round(oneShotRate * 100)}%`
-  const costPerSession = sessions > 0 ? formatCompactCurrency(cost / sessions, currency) : '-'
+  const costPerSession = sessionCountIsExact(sessionCountBasis) && sessions > 0
+    ? formatCompactCurrency(cost / sessions, currency)
+    : formatSessionAveragePlaceholder()
 
   return (
     <div className="pulse">

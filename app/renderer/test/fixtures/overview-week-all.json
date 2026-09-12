@@ -1,0 +1,622 @@
+{
+  "generated": "2026-09-07T14:22:51.049Z",
+  "current": {
+    "label": "Last 7 Days",
+    "cost": 0.540615,
+    "calls": 11,
+    "sessions": 7,
+    "sessionCountBasis": "partial",
+    "oneShotRate": null,
+    "inputTokens": 33800,
+    "outputTokens": 4710,
+    "cacheReadTokens": 900000,
+    "cacheWriteTokens": 0,
+    "cacheHitPercent": 96.38038123795245,
+    "codexCredits": 0,
+    "estimatedCostUSD": 0,
+    "topActivities": [
+      {
+        "name": "Conversation",
+        "cost": 0.540615,
+        "savingsUSD": 0,
+        "turns": 10,
+        "oneShotRate": null
+      }
+    ],
+    "topModels": [
+      {
+        "name": "Opus 4.6",
+        "cost": 0.44999999999999996,
+        "calls": 1,
+        "savingsUSD": 0,
+        "savingsBaselineModel": "",
+        "estimatedCostUSD": 0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 900000,
+        "cacheWriteTokens": 0
+      },
+      {
+        "name": "Sonnet 4.5",
+        "cost": 0.07425000000000001,
+        "calls": 5,
+        "savingsUSD": 0,
+        "savingsBaselineModel": "",
+        "estimatedCostUSD": 0,
+        "inputTokens": 16500,
+        "outputTokens": 1650,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      },
+      {
+        "name": "Haiku 4.5",
+        "cost": 0.015,
+        "calls": 1,
+        "savingsUSD": 0,
+        "savingsBaselineModel": "",
+        "estimatedCostUSD": 0,
+        "inputTokens": 10000,
+        "outputTokens": 1000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      },
+      {
+        "name": "GPT-5.3 Codex",
+        "cost": 0.001365,
+        "calls": 3,
+        "savingsUSD": 0,
+        "savingsBaselineModel": "",
+        "estimatedCostUSD": 0,
+        "inputTokens": 300,
+        "outputTokens": 60,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      },
+      {
+        "name": "totally-unknown-model-xyz",
+        "cost": 0,
+        "calls": 1,
+        "savingsUSD": 0,
+        "savingsBaselineModel": "",
+        "estimatedCostUSD": 0,
+        "inputTokens": 7000,
+        "outputTokens": 2000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0
+      }
+    ],
+    "unpricedModels": [
+      {
+        "model": "totally-unknown-model-xyz",
+        "calls": 1,
+        "tokens": 9000
+      }
+    ],
+    "localModelSavings": {
+      "totalUSD": 0,
+      "calls": 0,
+      "byModel": [],
+      "byProvider": []
+    },
+    "providers": {
+      "claude": 0.53925,
+      "codex": 0.001365
+    },
+    "providerDetails": [
+      {
+        "id": "claude",
+        "label": "Claude",
+        "cost": 0.53925,
+        "calls": 8,
+        "hasUsage": true,
+        "inputTokens": 33500,
+        "outputTokens": 4650,
+        "sessions": 5,
+        "sessionCountBasis": "partial",
+        "cacheReadTokens": 900000
+      },
+      {
+        "id": "codex",
+        "label": "Codex",
+        "cost": 0.001365,
+        "calls": 3,
+        "hasUsage": true,
+        "inputTokens": 300,
+        "outputTokens": 60,
+        "sessions": 2,
+        "sessionCountBasis": "partial",
+        "cacheReadTokens": 0
+      }
+    ],
+    "topProjects": [
+      {
+        "id": "/tmp/shared-vault",
+        "name": "tmp/shared-vault",
+        "cost": 0.47161499999999995,
+        "savingsUSD": 0,
+        "sessions": 3,
+        "sessionCountBasis": "partial",
+        "sessionDetails": [
+          {
+            "cost": 0.47024999999999995,
+            "savingsUSD": 0,
+            "calls": 4,
+            "inputTokens": 11500,
+            "outputTokens": 2450,
+            "date": "2026-09-02",
+            "models": [
+              {
+                "name": "Opus 4.6",
+                "cost": 0.44999999999999996,
+                "savingsUSD": 0
+              },
+              {
+                "name": "Sonnet 4.5",
+                "cost": 0.020250000000000004,
+                "savingsUSD": 0
+              },
+              {
+                "name": "totally-unknown-model-xyz",
+                "cost": 0,
+                "savingsUSD": 0
+              }
+            ]
+          },
+          {
+            "cost": 0.00091,
+            "savingsUSD": 0,
+            "calls": 2,
+            "inputTokens": 200,
+            "outputTokens": 40,
+            "date": "2026-09-07",
+            "models": [
+              {
+                "name": "GPT-5.3 Codex",
+                "cost": 0.00091,
+                "savingsUSD": 0
+              }
+            ]
+          },
+          {
+            "cost": 0.000455,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "date": "2026-09-02",
+            "models": [
+              {
+                "name": "GPT-5.3 Codex",
+                "cost": 0.000455,
+                "savingsUSD": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "/tmp/alt/shared-vault",
+        "name": "alt/shared-vault",
+        "cost": 0.018000000000000002,
+        "savingsUSD": 0,
+        "sessions": 1,
+        "sessionCountBasis": "partial",
+        "sessionDetails": [
+          {
+            "cost": 0.018000000000000002,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 4000,
+            "outputTokens": 400,
+            "date": "2026-09-07",
+            "models": [
+              {
+                "name": "Sonnet 4.5",
+                "cost": 0.018000000000000002,
+                "savingsUSD": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "/tmp/CaseVault",
+        "name": "CaseVault",
+        "cost": 0.018000000000000002,
+        "savingsUSD": 0,
+        "sessions": 1,
+        "sessionCountBasis": "partial",
+        "sessionDetails": [
+          {
+            "cost": 0.018000000000000002,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 4000,
+            "outputTokens": 400,
+            "date": "2026-09-07",
+            "models": [
+              {
+                "name": "Sonnet 4.5",
+                "cost": 0.018000000000000002,
+                "savingsUSD": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "/tmp/casevault",
+        "name": "casevault",
+        "cost": 0.018000000000000002,
+        "savingsUSD": 0,
+        "sessions": 1,
+        "sessionCountBasis": "partial",
+        "sessionDetails": [
+          {
+            "cost": 0.018000000000000002,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 4000,
+            "outputTokens": 400,
+            "date": "2026-09-07",
+            "models": [
+              {
+                "name": "Sonnet 4.5",
+                "cost": 0.018000000000000002,
+                "savingsUSD": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "/tmp/other-vault",
+        "name": "other-vault",
+        "cost": 0.015,
+        "savingsUSD": 0,
+        "sessions": 1,
+        "sessionCountBasis": "partial",
+        "sessionDetails": [
+          {
+            "cost": 0.015,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 10000,
+            "outputTokens": 1000,
+            "date": "2026-09-07",
+            "models": [
+              {
+                "name": "Haiku 4.5",
+                "cost": 0.015,
+                "savingsUSD": 0
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "modelEfficiency": [],
+    "topSessions": [
+      {
+        "project": "shared-vault",
+        "cost": 0.47024999999999995,
+        "savingsUSD": 0,
+        "calls": 4,
+        "date": "2026-09-02"
+      },
+      {
+        "project": "shared-vault",
+        "cost": 0.018000000000000002,
+        "savingsUSD": 0,
+        "calls": 1,
+        "date": "2026-09-07"
+      },
+      {
+        "project": "CaseVault",
+        "cost": 0.018000000000000002,
+        "savingsUSD": 0,
+        "calls": 1,
+        "date": "2026-09-07"
+      }
+    ],
+    "workflow": {
+      "corrections": 0,
+      "correctionRate": 0,
+      "medianTimeToFirstEditMs": null
+    },
+    "topReworkedFiles": [],
+    "pricingCoverage": 0.9090909090909091,
+    "retryTax": {
+      "totalUSD": 0,
+      "retries": 0,
+      "editTurns": 0,
+      "byModel": []
+    },
+    "routingWaste": {
+      "totalSavingsUSD": 0,
+      "baselineModel": "",
+      "baselineCostPerEdit": 0,
+      "byModel": []
+    },
+    "tools": [],
+    "skills": [],
+    "subagents": [],
+    "mcpServers": []
+  },
+  "optimize": {
+    "findingCount": 2,
+    "savingsUSD": 0.027760215517241376,
+    "topFindings": [
+      {
+        "title": "Shrink bash output limit",
+        "impact": "medium",
+        "savingsUSD": 0.0015197198275862067
+      },
+      {
+        "title": "1 context-heavy session",
+        "impact": "low",
+        "savingsUSD": 0.02624049568965517
+      }
+    ]
+  },
+  "history": {
+    "daily": [
+      {
+        "date": "2026-09-02",
+        "cost": 0.0027050000000000004,
+        "savingsUSD": 0,
+        "calls": 2,
+        "inputTokens": 600,
+        "outputTokens": 70,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "topModels": [
+          {
+            "name": "Sonnet 4.5",
+            "cost": 0.0022500000000000003,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 500,
+            "outputTokens": 50
+          },
+          {
+            "name": "GPT-5.3 Codex",
+            "cost": 0.000455,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 100,
+            "outputTokens": 20
+          }
+        ]
+      },
+      {
+        "date": "2026-09-07",
+        "cost": 0.53791,
+        "savingsUSD": 0,
+        "calls": 9,
+        "inputTokens": 33200,
+        "outputTokens": 4640,
+        "cacheReadTokens": 900000,
+        "cacheWriteTokens": 0,
+        "topModels": [
+          {
+            "name": "Opus 4.6",
+            "cost": 0.44999999999999996,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0
+          },
+          {
+            "name": "Sonnet 4.5",
+            "cost": 0.07200000000000001,
+            "savingsUSD": 0,
+            "calls": 4,
+            "inputTokens": 16000,
+            "outputTokens": 1600
+          },
+          {
+            "name": "Haiku 4.5",
+            "cost": 0.015,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 10000,
+            "outputTokens": 1000
+          },
+          {
+            "name": "GPT-5.3 Codex",
+            "cost": 0.00091,
+            "savingsUSD": 0,
+            "calls": 2,
+            "inputTokens": 200,
+            "outputTokens": 40
+          },
+          {
+            "name": "totally-unknown-model-xyz",
+            "cost": 0,
+            "savingsUSD": 0,
+            "calls": 1,
+            "inputTokens": 7000,
+            "outputTokens": 2000
+          }
+        ]
+      }
+    ]
+  },
+  "currency": {
+    "code": "USD",
+    "symbol": "$",
+    "rate": 1
+  },
+  "telemetrySnapshot": {
+    "schema": 2,
+    "period": "Last 7 Days",
+    "providerCount": 2,
+    "costBucket": "<1",
+    "models": [
+      {
+        "name": "Opus 4.6",
+        "costBucket": "<1",
+        "turnBucket": "1-10",
+        "oneShotRate": -1,
+        "tasks": [
+          {
+            "name": "Conversation",
+            "turnBucket": "1-10",
+            "share": 1
+          }
+        ]
+      },
+      {
+        "name": "Sonnet 4.5",
+        "costBucket": "<1",
+        "turnBucket": "1-10",
+        "oneShotRate": -1,
+        "tasks": [
+          {
+            "name": "Conversation",
+            "turnBucket": "1-10",
+            "share": 1
+          }
+        ]
+      },
+      {
+        "name": "Haiku 4.5",
+        "costBucket": "<1",
+        "turnBucket": "1-10",
+        "oneShotRate": -1,
+        "tasks": [
+          {
+            "name": "Conversation",
+            "turnBucket": "1-10",
+            "share": 1
+          }
+        ]
+      },
+      {
+        "name": "GPT-5.3 Codex",
+        "costBucket": "<1",
+        "turnBucket": "1-10",
+        "oneShotRate": -1,
+        "tasks": [
+          {
+            "name": "Conversation",
+            "turnBucket": "1-10",
+            "share": 1
+          }
+        ]
+      },
+      {
+        "name": "totally-unknown-model-xyz",
+        "costBucket": "<1",
+        "turnBucket": "1-10",
+        "oneShotRate": -1,
+        "tasks": [
+          {
+            "name": "Conversation",
+            "turnBucket": "1-10",
+            "share": 1
+          }
+        ]
+      }
+    ],
+    "categories": [
+      {
+        "name": "Conversation",
+        "turnBucket": "10-100",
+        "oneShotRate": -1,
+        "topModels": [
+          "Sonnet 4.5",
+          "GPT-5.3 Codex",
+          "Opus 4.6"
+        ]
+      }
+    ],
+    "providers": [
+      {
+        "name": "claude",
+        "costBucket": "<1"
+      },
+      {
+        "name": "codex",
+        "costBucket": "<1"
+      }
+    ],
+    "mcpServers": [],
+    "skills": [],
+    "tools": [],
+    "sessions": {
+      "countBucket": "1-10",
+      "medianMinutesBucket": "<5"
+    },
+    "efficiency": {
+      "cacheHitRate": 0.96,
+      "retryTaxShare": 0
+    }
+  },
+  "liveSessions": {
+    "windowSeconds": 600,
+    "sessions": [
+      {
+        "id": "shared-sonnet",
+        "provider": "claude",
+        "project": "shared-vault",
+        "branch": null,
+        "model": "Sonnet 4.5",
+        "contextTokens": 550,
+        "contextWindow": 200000,
+        "startedAt": "2026-09-07T14:22:45.597Z",
+        "lastActivityAt": "2026-09-07T14:22:45.597Z",
+        "idleSeconds": 5
+      },
+      {
+        "id": "other-haiku",
+        "provider": "claude",
+        "project": "other-vault",
+        "branch": null,
+        "model": "Haiku 4.5",
+        "contextTokens": 11000,
+        "contextWindow": 200000,
+        "startedAt": "2026-09-07T14:22:45.597Z",
+        "lastActivityAt": "2026-09-07T14:22:45.597Z",
+        "idleSeconds": 5
+      },
+      {
+        "id": "case-1",
+        "provider": "claude",
+        "project": "casevault",
+        "branch": null,
+        "model": "Sonnet 4.5",
+        "contextTokens": 4400,
+        "contextWindow": 200000,
+        "startedAt": "2026-09-07T14:22:45.597Z",
+        "lastActivityAt": "2026-09-07T14:22:45.597Z",
+        "idleSeconds": 5
+      },
+      {
+        "id": "case-0",
+        "provider": "claude",
+        "project": "CaseVault",
+        "branch": null,
+        "model": "Sonnet 4.5",
+        "contextTokens": 4400,
+        "contextWindow": 200000,
+        "startedAt": "2026-09-07T14:22:45.597Z",
+        "lastActivityAt": "2026-09-07T14:22:45.597Z",
+        "idleSeconds": 5
+      },
+      {
+        "id": "alt-sonnet",
+        "provider": "claude",
+        "project": "shared-vault",
+        "branch": null,
+        "model": "Sonnet 4.5",
+        "contextTokens": 4400,
+        "contextWindow": 200000,
+        "startedAt": "2026-09-07T14:22:45.597Z",
+        "lastActivityAt": "2026-09-07T14:22:45.597Z",
+        "idleSeconds": 5
+      }
+    ]
+  }
+}

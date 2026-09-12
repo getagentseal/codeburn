@@ -131,16 +131,20 @@ enum CodeburnCLI {
     ) -> Process {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        // Resolved once so the PATH we build and the argv we run can never disagree
+        // about which install of the CLI this launch is talking about.
+        let argv = baseArgv()
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = augmentedPath(
             environment["PATH"] ?? "",
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
-            environment: environment
+            environment: environment,
+            resolvedCLI: argv.first
         )
         process.environment = environment
         // `env --` treats everything following as argv, not VAR=val pairs -- guards against an
         // argument accidentally resembling an env assignment.
-        process.arguments = ["--"] + baseArgv() + subcommand
+        process.arguments = ["--"] + argv + subcommand
         // The menubar runs as an accessory app with no foreground window, and macOS
         // background-throttles accessory apps and their children. Without this lift the
         // codeburn subprocess parses 5-10x slower than the same command run from a
@@ -154,12 +158,27 @@ enum CodeburnCLI {
         return safeArgPattern.firstMatch(in: s, range: range) != nil
     }
 
+    /// `resolvedCLI` defaults to the CLI this app would actually launch; tests pass
+    /// a fixture path so PATH ordering can be asserted without a real install.
     static func augmentedPath(
         _ existing: String,
         homeDirectory: String,
-        environment: [String: String]
+        environment: [String: String],
+        resolvedCLI: String? = nil
     ) -> String {
         var parts = existing.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        // The CLI's shebang resolves `node` through PATH, so whichever node comes
+        // first wins — and a version manager's default can easily be older than
+        // the 22.13 the CLI requires, which surfaces as "Could not load Today"
+        // rather than anything pointing at Node. The interpreter that sits beside
+        // the CLI we are about to run is known to satisfy it, so it goes first.
+        if let cli = resolvedCLI ?? baseArgv().first, cli.hasPrefix("/") {
+            let binDir = (cli as NSString).deletingLastPathComponent
+            if FileManager.default.isExecutableFile(atPath: "\(binDir)/node") {
+                parts.removeAll { $0 == binDir }
+                parts.insert(binDir, at: 0)
+            }
+        }
         let userPaths = userNodePaths(homeDirectory: homeDirectory, environment: environment)
         for extra in additionalPathEntries + userPaths where !parts.contains(extra) {
             parts.append(extra)

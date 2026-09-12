@@ -152,6 +152,7 @@ export type MenubarPayload = {
     cost: number
     calls: number
     sessions: number
+    sessionCountBasis?: 'identity' | 'partial'
     oneShotRate: number | null
     inputTokens: number
     outputTokens: number
@@ -188,13 +189,15 @@ export type MenubarPayload = {
     // Optional: older CLIs omit it. `id` is the internal provider name (round-trips
     // as --provider), `label` the display name. `hasUsage` distinguishes active $0
     // providers from detected-but-idle providers when present.
-    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean }>
+    providerDetails?: Array<{ id: string; label: string; cost: number; calls?: number; hasUsage?: boolean; sessions?: number; sessionCountBasis?: 'identity' | 'partial' }>
     topProjects: Array<{
+      id?: string
       name: string
       cost: number
       savingsUSD: number
       sessions: number
-      avgCostPerSession: number
+      avgCostPerSession?: number
+      sessionCountBasis?: 'identity' | 'partial'
       sessionDetails: Array<{
         cost: number
         savingsUSD: number
@@ -739,6 +742,12 @@ export type TrayPrefs = {
   launchAtLoginManaged: boolean
 }
 
+export type ProjectFilter = { project: string[]; exclude: string[] }
+
+export type ProjectRow = { name: string; path: string; cost: number; sessions: number }
+
+export type ProjectsReport = { projects: ProjectRow[] }
+
 export interface CodeburnBridge {
   /** Subscribe to cold-start scan progress; returns an unsubscribe fn. */
   onProgress(cb: (event: ScanProgressEvent) => void): () => void
@@ -774,6 +783,10 @@ export interface CodeburnBridge {
   getProxyPaths(): Promise<string[]>
   getAudit(period: Period, provider: string, range?: DateRange): Promise<AuditRow[]>
   getPriceOverrides(): Promise<PriceOverrideList>
+  getProjectFilter(): Promise<ProjectFilter>
+  setProjectFilter(filter: ProjectFilter): Promise<ProjectFilter>
+  /** Every project that exists, filter NOT applied: the Projects pane's checklist. */
+  getUnfilteredProjects(): Promise<ProjectsReport>
   setPriceOverride(model: string, rates: PriceRates): Promise<ActionResult>
   removePriceOverride(model: string): Promise<ActionResult>
   setCurrency(code: string): Promise<ActionResult>

@@ -281,6 +281,7 @@ describe('interactive dashboard progressive startup', () => {
         savingsUSD: expected.data.savingsUSD,
         calls: expected.data.calls,
         sessions: expected.data.sessions,
+        sessionCountBasis: expected.data.sessionCountBasis,
         inputTokens: expected.data.inputTokens,
         outputTokens: expected.data.outputTokens,
         cacheReadTokens: expected.data.cacheReadTokens,

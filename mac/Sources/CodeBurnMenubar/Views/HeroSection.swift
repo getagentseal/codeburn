@@ -41,14 +41,17 @@ struct HeroSection: View {
                         .monospacedDigit()
                         .foregroundStyle(.tertiary)
                     } else {
-                        Text("\(totals.calls.asThousandsSeparated()) calls")
+                        Text("\(totals.calls.asThousandsSeparated()) \(totals.calls == 1 ? "call" : "calls")")
                             .font(.system(size: 11))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
-                        Text("\(totals.sessions) sessions")
+                        Text(combinedUsage != nil
+                             ? SessionCountLabel.combinedText
+                             : SessionCountLabel.text(sessions: totals.sessions, basis: totals.sessionCountBasis))
                             .font(.system(size: 10.5))
                             .monospacedDigit()
                             .foregroundStyle(.tertiary)
+                            .help(SessionCountLabel.helpText(combined: combinedUsage != nil, basis: totals.sessionCountBasis))
                     }
                 }
             }
@@ -154,14 +157,16 @@ struct HeroTotals: Equatable {
     let cost: Double
     let calls: Int
     let sessions: Int
+    let sessionCountBasis: String?
     let inputTokens: Int
     let outputTokens: Int
     let totalTokens: Int
 
-    init(cost: Double, calls: Int, sessions: Int, inputTokens: Int, outputTokens: Int, totalTokens: Int) {
+    init(cost: Double, calls: Int, sessions: Int, inputTokens: Int, outputTokens: Int, totalTokens: Int, sessionCountBasis: String? = nil) {
         self.cost = cost
         self.calls = calls
         self.sessions = sessions
+        self.sessionCountBasis = sessionCountBasis
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.totalTokens = totalTokens
@@ -169,6 +174,8 @@ struct HeroTotals: Equatable {
 
     init(payload: MenubarPayload, activeScope: MenubarScope) {
         if activeScope == .combined, let combined = payload.combined?.combined {
+            // Keep the numeric wire sum for compatibility. Combined-scope UI
+            // must not present it as a unique or lower-bound count.
             self.init(
                 cost: combined.cost,
                 calls: combined.calls,
@@ -187,7 +194,8 @@ struct HeroTotals: Equatable {
             sessions: current.sessions,
             inputTokens: current.inputTokens,
             outputTokens: current.outputTokens,
-            totalTokens: current.inputTokens + current.outputTokens
+            totalTokens: current.inputTokens + current.outputTokens,
+            sessionCountBasis: current.sessionCountBasis
         )
     }
 }

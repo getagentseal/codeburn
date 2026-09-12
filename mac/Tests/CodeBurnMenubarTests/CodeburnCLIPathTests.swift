@@ -139,4 +139,88 @@ struct CodeburnCLIPathTests {
         #expect(entries.contains("/etc/profiles/per-user/test/bin"))
         #expect(entries.contains("/run/current-system/sw/bin"))
     }
+
+    /// Regression: the app picked up whichever `node` came first on the inherited
+    /// PATH, so an nvm default of v20 shadowed the v24 that installed the CLI and
+    /// every refresh failed with "codeburn requires Node.js >= 22.13.0".
+    @Test("interpreter beside the CLI wins over an older node on PATH")
+    func siblingNodeIsPreferredOverInheritedPath() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodeburnCLIPathTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let newBin = root.appendingPathComponent("node/v24/bin", isDirectory: true)
+        let oldBin = root.appendingPathComponent("node/v20/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: newBin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: oldBin, withIntermediateDirectories: true)
+        for bin in [newBin, oldBin] {
+            let node = bin.appendingPathComponent("node")
+            try "#!/bin/sh\n".write(to: node, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        }
+
+        let path = CodeburnCLI.augmentedPath(
+            "\(oldBin.path):/usr/bin:/bin",
+            homeDirectory: root.appendingPathComponent("home").path,
+            environment: [:],
+            resolvedCLI: newBin.appendingPathComponent("codeburn").path
+        )
+        let entries = path.split(separator: ":").map(String.init)
+
+        #expect(entries.first == newBin.path)
+        #expect(entries.firstIndex(of: newBin.path)! < entries.firstIndex(of: oldBin.path)!)
+        // The stale entry still has to survive: it is where the rest of that
+        // toolchain lives, it just no longer decides which node runs.
+        #expect(entries.contains(oldBin.path))
+    }
+
+    @Test("a CLI directory already on PATH is promoted, not duplicated")
+    func siblingNodeDirectoryIsNotDuplicated() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodeburnCLIPathTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let node = bin.appendingPathComponent("node")
+        try "#!/bin/sh\n".write(to: node, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+
+        let path = CodeburnCLI.augmentedPath(
+            "/usr/bin:\(bin.path):/bin",
+            homeDirectory: root.appendingPathComponent("home").path,
+            environment: [:],
+            resolvedCLI: bin.appendingPathComponent("codeburn").path
+        )
+        let entries = path.split(separator: ":").map(String.init)
+
+        #expect(entries.first == bin.path)
+        #expect(entries.filter { $0 == bin.path }.count == 1)
+    }
+
+    /// A bare `codeburn` (PATH lookup) or a directory with no interpreter beside it
+    /// must leave the inherited order untouched -- reordering PATH on a guess would
+    /// change which tools every other lookup resolves to.
+    @Test("PATH order is untouched when there is no sibling interpreter")
+    func inheritedOrderSurvivesWithoutSiblingNode() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodeburnCLIPathTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+
+        for cli in [bin.appendingPathComponent("codeburn").path, "codeburn"] {
+            let path = CodeburnCLI.augmentedPath(
+                "/usr/bin:/bin",
+                homeDirectory: root.appendingPathComponent("home").path,
+                environment: [:],
+                resolvedCLI: cli
+            )
+            let entries = path.split(separator: ":").map(String.init)
+            #expect(entries.first == "/usr/bin")
+            #expect(entries.dropFirst().first == "/bin")
+            #expect(!entries.contains(bin.path))
+        }
+    }
 }

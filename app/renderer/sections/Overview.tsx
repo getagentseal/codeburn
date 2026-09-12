@@ -25,6 +25,7 @@ import type {
   YieldJsonReport,
 } from '../lib/types'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
+import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
 
 export { localDateKey } from '../lib/period'
 
@@ -778,6 +779,12 @@ export function OverviewContent({
   const heroCost = combined ? combined.combined.cost : data.current.cost
   const heroCalls = combined ? combined.combined.calls : data.current.calls
   const heroSessions = combined ? combined.combined.sessions : data.current.sessions
+  const heroSessionLabel = combined
+    ? formatCombinedSessionCount()
+    : formatSessionCount(heroSessions, data.current.sessionCountBasis)
+  const heroSessionHelp = combined
+    ? COMBINED_SESSION_COUNT_HELP
+    : (sessionCountIsExact(data.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
   const animateKey = heroSelectionKey
   const stats = deriveStats(data, now)
   const periodDaily = sliceDailyToPeriod(data.history.daily, period, now)
@@ -825,7 +832,7 @@ export function OverviewContent({
               Replaying the live hero from $0 on handoff makes that exact value
               appear to collapse and recover; snap to the revalidated total. */}
           <CountUp value={heroCost} animateKey={animateKey} animate={!suppressHeroReplay} />
-          <div className="ov-hero-sub">{heroCalls.toLocaleString('en-US')} calls · {heroSessions.toLocaleString('en-US')} sessions</div>
+          <div className="ov-hero-sub" title={heroSessionHelp}>{heroCalls.toLocaleString('en-US')} calls · {heroSessionLabel}</div>
           {combined
             ? <CombinedDevices usage={combined} />
             : (
@@ -888,7 +895,7 @@ export function OverviewContent({
             <div className="ov-panel-body">
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
                 const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
-                const sub = [formatChartDate(session.date), model, `${session.calls} calls`].filter(Boolean).join(' · ')
+                const sub = [formatChartDate(session.date), model, `${session.calls} ${session.calls === 1 ? 'call' : 'calls'}`].filter(Boolean).join(' · ')
                 return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => onNavigate?.('sessions')} />
               }) : <EmptyNote>No sessions in this range.</EmptyNote>}
             </div>

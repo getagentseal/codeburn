@@ -3,6 +3,7 @@ import { Box, Text, render, useApp, useInput, useWindowSize } from 'ink'
 
 import { formatTokens } from './format.js'
 import { patchStdoutForWindows } from './ink-win.js'
+import { startUserTimingGuard } from './user-timing-guard.js'
 import {
   cleanSessionProjectLabel,
   sessionDisplayName,
@@ -251,6 +252,11 @@ function SessionsTui({ rows, period, initialProvider }: { rows: SessionRow[]; pe
 
 export async function runSessionsTui(rows: SessionRow[], opts: { period: string; provider: string }): Promise<void> {
   patchStdoutForWindows()
-  const instance = render(<SessionsTui rows={rows} period={opts.period} initialProvider={opts.provider} />)
-  await instance.waitUntilExit()
+  const stopUserTimingGuard = startUserTimingGuard()
+  try {
+    const instance = render(<SessionsTui rows={rows} period={opts.period} initialProvider={opts.provider} />)
+    await instance.waitUntilExit()
+  } finally {
+    stopUserTimingGuard()
+  }
 }

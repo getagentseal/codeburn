@@ -203,6 +203,9 @@ final class CapacityDockController {
             onProviderClick: { [weak self] provider in
                 self?.providerClicked(provider)
             },
+            onSwitchGlanceWindow: { [weak self] provider in
+                _ = self?.switchGlanceWindow(for: provider)
+            },
             onHide: { [weak self] in
                 self?.hideDock()
             },
@@ -573,11 +576,35 @@ final class CapacityDockController {
             if !model.interaction.isPinned {
                 model.interaction.togglePinned()
             }
+        } else if switchGlanceWindow(for: provider) {
+            // The resting gauge is the period switch once a provider publishes
+            // two horizons, so clicking the provider that already rests there
+            // changes the window rather than unpinning. Escape and an outside
+            // click still dismiss, and the hover expansion is untouched: this
+            // branch only ever pins, never collapses.
+            if !model.interaction.isPinned {
+                model.interaction.togglePinned()
+            }
         } else {
             model.interaction.togglePinned()
         }
         layoutRail()
         showDetail(for: provider)
+    }
+
+    /// Moves one provider's gauge to its other quota horizon. Reports whether
+    /// anything changed so the click handler can tell a period switch from a
+    /// provider that has only one window to show.
+    @discardableResult
+    private func switchGlanceWindow(for provider: CapacityDockProvider) -> Bool {
+        let quota = store.capacityDockQuotaSummary(for: provider)
+        let current = model.preferences.glanceWindow(for: provider)
+        let next = CapacityDockGlanceWindow.next(after: current, quota: quota)
+        guard next != current else { return false }
+        // Persisting posts the preferences notification, which reloads the
+        // snapshot into the model and redraws the gauge at its new window.
+        CapacityDockPreferences.setGlanceWindow(next, for: provider, defaults: defaults)
+        return true
     }
 
     private func connect(_ provider: CapacityDockProvider) {

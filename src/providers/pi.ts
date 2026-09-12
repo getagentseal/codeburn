@@ -107,6 +107,12 @@ function getOmpSessionsDir(override?: string): string {
 // pathological run of blank/junk lines).
 const MAX_HEADER_LINES_SCANNED = 20
 
+function looksAbsolutePath(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  return trimmed.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(trimmed)
+}
+
 async function readSessionEntry(filePath: string): Promise<PiEntry | null> {
   let linesScanned = 0
   for await (const line of readSessionLines(filePath)) {
@@ -149,11 +155,17 @@ async function discoverSessionsInDir(sessionsDir: string, providerName: string):
     const addSession = async (filePath: string, agentName?: string): Promise<void> => {
       const entry = await readSessionEntry(filePath)
       if (!entry) return
-      const cwd = entry.cwd ?? dirName
+      // Prefer the session header cwd when present. Keep basename(project) for
+      // display, but retain the absolute cwd on sourcePath so parse/grouping
+      // never have to infer identity from the sole observed leaf name (#1260).
+      const rawCwd = typeof entry.cwd === 'string' ? entry.cwd.trim() : ''
+      const cwd = rawCwd || dirName
+      const absCwd = looksAbsolutePath(cwd) ? cwd : undefined
       sources.push({
         path: filePath,
-        project: basename(cwd),
+        project: basename(cwd) || cwd,
         provider: providerName,
+        ...(absCwd ? { sourcePath: absCwd } : {}),
         ...(agentName ? {
           agentName,
           ...(typeof entry.timestamp === 'string' ? { agentStartedAt: entry.timestamp } : {}),
@@ -204,6 +216,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
       let pendingUserMessage = ''
       let sessionTimestamp = ''
       let pendingUserTimestamp = ''
+      // Absolute session cwd from the header (or discovery sourcePath). Must
+      // survive into projectPath/workingDirectory so cross-provider merge can
+      // key by real path instead of basename-only (#1260).
+      let sessionCwd = typeof source.sourcePath === 'string' && looksAbsolutePath(source.sourcePath)
+        ? source.sourcePath.trim()
+        : ''
 
       for (const [lineIdx, line] of lines.entries()) {
         let entry: PiEntry
@@ -216,6 +234,10 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         if (entry.type === 'session') {
           sessionId = entry.id ?? sessionId
           if (typeof entry.timestamp === 'string' && entry.timestamp) sessionTimestamp = entry.timestamp
+          if (typeof entry.cwd === 'string' && entry.cwd.trim()) {
+            const headerCwd = entry.cwd.trim()
+            if (looksAbsolutePath(headerCwd)) sessionCwd = headerCwd
+          }
           continue
         }
         if (entry.type === 'model_change') {
@@ -318,6 +340,11 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           deduplicationKey: dedupKey,
           userMessage: pendingUserMessage,
           sessionId,
+          project: source.project,
+          ...(sessionCwd ? {
+            projectPath: sessionCwd,
+            workingDirectory: sessionCwd,
+          } : {}),
         }
 
         pendingUserMessage = ''

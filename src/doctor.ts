@@ -44,6 +44,9 @@ export type DoctorProviderReport = {
   parseVersion?: string
   /** Session sources discovered (candidate files/dbs). */
   candidatesFound: number
+  /** Sessions discovery dropped for a format reason: an unknown generation,
+   *  an unreadable header, or a header disagreeing with its filename. */
+  skippedVersionCount?: number
   /** How many discovered sources we attempted to parse (bounded sample). */
   sampled: number
   parsedOk: number
@@ -271,7 +274,9 @@ async function collectOneProvider(
   try {
     base.probePaths = await collectProbePaths(provider)
 
-    const sources = await provider.discoverSessions()
+    let skippedVersionCount = 0
+    const sources = await provider.discoverSessions(() => { skippedVersionCount++ })
+    if (skippedVersionCount > 0) base.skippedVersionCount = skippedVersionCount
     base.candidatesFound = sources.length
     if (base.probePaths.length === 0) {
       base.probePaths = derivePathsFromSources(sources.map(s => s.path))
@@ -313,7 +318,10 @@ async function collectOneProvider(
       }
     }
 
-    if (base.parseFailed > 0) {
+    if (skippedVersionCount > 0) {
+      base.status = 'errors'
+      base.verdict = `ERRORS (${pluralSessions(skippedVersionCount)} skipped: unreadable or unsupported format; ${pluralSessions(base.candidatesFound)} readable; ${base.parseFailed} sampled parse failures)`
+    } else if (base.parseFailed > 0) {
       base.status = 'errors'
       base.verdict = `ERRORS (${base.parseFailed}/${base.sampled} sampled file${base.sampled === 1 ? '' : 's'} failed to parse)`
     } else if (base.candidatesFound === 0) {

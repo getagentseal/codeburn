@@ -105,6 +105,12 @@ describe('#1115 billableOutputTokens on report/optimize totals', () => {
     expect(sessionBillableOutputTokens(makeSession('codex', 10, 3))).toBe(10)
   })
 
+  it('inclusive dsh: shared session and daily totals include reasoning exactly once', () => {
+    expect(billableOutputTokens('dsh', 10, 3)).toBe(10)
+    expect(sessionBillableOutputTokens(makeSession('dsh', 10, 3))).toBe(10)
+    expect(aggregateProjectsIntoDays([makeProject(makeSession('dsh', 10, 3))])[0]!.outputTokens).toBe(10)
+  })
+
   it('day-aggregator uses billable output per call', () => {
     const grokDays = aggregateProjectsIntoDays([makeProject(makeSession('grok', 10, 3))])
     expect(grokDays[0]!.outputTokens).toBe(13)

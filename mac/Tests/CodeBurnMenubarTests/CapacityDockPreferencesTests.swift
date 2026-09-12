@@ -25,6 +25,8 @@ struct CapacityDockPreferencesTests {
         #expect(snapshot.scale == 0.6)
         #expect(snapshot.theme == .graphite)
         #expect(snapshot.gaugeShape == .squircle)
+        #expect(snapshot.glanceWindows.isEmpty)
+        #expect(snapshot.glanceWindow(for: .claude) == .billing)
     }
 
     @Test("dock material theme persists independently from placement")

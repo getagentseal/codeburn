@@ -6,7 +6,9 @@ import Testing
 /// means the user must sign in via an editor's Copilot plugin again. These
 /// tests pin the display decision: a terminal login with a snapshot on hand
 /// must keep showing the bars (with a quiet idle caption), and only the
-/// no-data case falls through to the reconnect screen.
+/// no-data case falls through to the reconnect screen. Explicit Disconnect
+/// is a separate no-data path: credentials remain, so copy must not claim
+/// they are missing.
 @Suite("Copilot quota presentation")
 struct CopilotQuotaPresentationTests {
     typealias Presentation = CopilotQuotaPresentation
@@ -34,10 +36,77 @@ struct CopilotQuotaPresentationTests {
         #expect(Presentation.planContent(loadState: .transientFailure(retryAt: nil), hasUsage: false) == .transientFailed)
     }
 
-    @Test("credential-absent states route to the connect prompt")
+    @Test("absent-flag first use and real noCredentials keep the sign-in copy")
     func credentialStatesRouteToNoCredentials() {
         #expect(Presentation.planContent(loadState: .notBootstrapped, hasUsage: false) == .noCredentials)
+        #expect(Presentation.planContent(loadState: .notBootstrapped, hasUsage: false, explicitlyDisconnected: false) == .noCredentials)
         #expect(Presentation.planContent(loadState: .noCredentials, hasUsage: false) == .noCredentials)
+        #expect(Presentation.planContent(loadState: .noCredentials, hasUsage: false, explicitlyDisconnected: true) == .noCredentials)
+        #expect(Presentation.noCredentialsPlanTitle == "No Copilot credentials found")
+        #expect(Presentation.noCredentialsPlanMessage.contains("Sign in via an editor's Copilot plugin first"))
+        #expect(Presentation.settingsNotConnectedDetail(explicitlyDisconnected: false) == Presentation.noCredentialsSettingsDetail)
+        #expect(Presentation.noCredentialsSettingsDetail.contains("sign in"))
+    }
+
+    @Test("explicit disconnect copy differs from first-use; clearing the flag restores first-use")
+    func explicitDisconnectDiffersFromFirstUseAndClears() throws {
+        let suiteName = "codeburn.copilot.presentation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(!CopilotExplicitDisconnect.isSet(defaults: defaults))
+        let firstUse = Presentation.planContent(
+            loadState: .notBootstrapped,
+            hasUsage: false,
+            explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: defaults)
+        )
+        #expect(firstUse == .noCredentials)
+
+        CopilotExplicitDisconnect.mark(defaults: defaults)
+        #expect(CopilotExplicitDisconnect.isSet(defaults: defaults))
+        let disconnected = Presentation.planContent(
+            loadState: .notBootstrapped,
+            hasUsage: false,
+            explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: defaults)
+        )
+        #expect(disconnected == .disconnected)
+        #expect(disconnected != firstUse)
+        #expect(Presentation.disconnectedPlanTitle != Presentation.noCredentialsPlanTitle)
+        #expect(!Presentation.disconnectedPlanTitle.localizedCaseInsensitiveContains("no copilot credentials"))
+        #expect(!Presentation.disconnectedPlanMessage.localizedCaseInsensitiveContains("sign in"))
+        #expect(Presentation.disconnectedPlanMessage.localizedCaseInsensitiveContains("untouched"))
+        #expect(Presentation.disconnectedPlanMessage.localizedCaseInsensitiveContains("connect"))
+        let settings = Presentation.settingsNotConnectedDetail(explicitlyDisconnected: true)
+        #expect(settings == Presentation.disconnectedSettingsDetail)
+        #expect(settings != Presentation.noCredentialsSettingsDetail)
+        #expect(!settings.localizedCaseInsensitiveContains("sign in"))
+        #expect(settings.localizedCaseInsensitiveContains("untouched"))
+        #expect(settings.localizedCaseInsensitiveContains("connect"))
+
+        CopilotExplicitDisconnect.clear(defaults: defaults)
+        #expect(!CopilotExplicitDisconnect.isSet(defaults: defaults))
+        #expect(
+            Presentation.planContent(
+                loadState: .notBootstrapped,
+                hasUsage: false,
+                explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: defaults)
+            ) == .noCredentials
+        )
+        #expect(Presentation.settingsNotConnectedDetail(explicitlyDisconnected: false) == Presentation.noCredentialsSettingsDetail)
+    }
+
+    @Test("the connected detail names the host that answered")
+    func connectedDetailNamesTheHost() {
+        #expect(
+            Presentation.connectedSettingsDetail(plan: "Enterprise", apiHost: "api.acme.ghe.com")
+                == "Plan: Enterprise. Live quota tracked from api.acme.ghe.com.")
+        #expect(
+            Presentation.connectedSettingsDetail(plan: nil, apiHost: "api.github.com")
+                == "Live quota tracked from api.github.com.")
+        #expect(
+            Presentation.connectedSettingsDetail(plan: "Pro", apiHost: "")
+                == "Plan: Pro. Live quota tracked from api.github.com.")
     }
 
     @Test("a fresh snapshot is not stamped stale")

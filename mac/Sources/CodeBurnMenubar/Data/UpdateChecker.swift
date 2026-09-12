@@ -6,6 +6,7 @@ private let checkIntervalSeconds: TimeInterval = 2 * 24 * 60 * 60
 private let lastCheckKey = "UpdateChecker.lastCheckDate"
 private let cachedVersionKey = "UpdateChecker.latestVersion"
 private let cachedCliVersionKey = "UpdateChecker.latestCliVersion"
+private let lastNotifiedVersionsKey = "UpdateChecker.lastNotifiedVersions"
 private let updateTimeoutSeconds: UInt64 = 120
 private let maxUpdateStderrBytes = 64 * 1024
 // The installer that scans `mac-v*` releases for the menubar zip (instead of
@@ -62,6 +63,15 @@ private final class LockedDataBuffer: @unchecked Sendable {
 @MainActor
 @Observable
 final class UpdateChecker {
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let makeNotifier: () -> any UpdateNotifier
+    @ObservationIgnored private var notifier: (any UpdateNotifier)?
+
+    init(defaults: UserDefaults = .standard, makeNotifier: @escaping () -> any UpdateNotifier = { SystemUpdateNotifier() }) {
+        self.defaults = defaults
+        self.makeNotifier = makeNotifier
+    }
+
     var latestVersion: String?
     var latestCliVersion: String?
     var installedCliVersion: String?
@@ -118,14 +128,19 @@ final class UpdateChecker {
 
     func checkIfNeeded() async {
         installedCliVersion = Self.queryInstalledCliVersion()
-        let lastCheck = UserDefaults.standard.double(forKey: lastCheckKey)
+        let lastCheck = defaults.double(forKey: lastCheckKey)
         let now = Date().timeIntervalSince1970
         if now - lastCheck < checkIntervalSeconds {
-            latestVersion = UserDefaults.standard.string(forKey: cachedVersionKey)
-            latestCliVersion = UserDefaults.standard.string(forKey: cachedCliVersionKey)
+            latestVersion = defaults.string(forKey: cachedVersionKey)
+            latestCliVersion = defaults.string(forKey: cachedCliVersionKey)
             return
         }
         await check()
+        // Only the background poll notifies; a manual check already shows its result.
+        await notifyIfUpdateAvailable(
+            appVersion: updateAvailable ? latestVersion : nil,
+            cliVersion: cliUpdateAvailable ? latestCliVersion : nil
+        )
     }
 
     func check() async {
@@ -157,13 +172,40 @@ final class UpdateChecker {
 
             latestVersion = version
             latestCliVersion = cliVersion
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
-            UserDefaults.standard.set(version, forKey: cachedVersionKey)
-            if let cliVersion { UserDefaults.standard.set(cliVersion, forKey: cachedCliVersionKey) }
+            defaults.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
+            defaults.set(version, forKey: cachedVersionKey)
+            if let cliVersion { defaults.set(cliVersion, forKey: cachedCliVersionKey) }
         } catch {
             updateFailureStage = .check
             updateError = error.localizedDescription
             NSLog("CodeBurn: update check failed: \(error)")
+        }
+    }
+
+    /// Posts at most one notification per new version pair; the 2-day repoll
+    /// finds the same pair stamped and stays quiet.
+    func notifyIfUpdateAvailable(appVersion: String?, cliVersion: String?) async {
+        guard UpdateNotificationPreference.isEnabled(defaults: defaults) else { return }
+        guard let copy = Self.updateNotificationCopy(appVersion: appVersion, cliVersion: cliVersion) else { return }
+        let stamp = "\(appVersion ?? "-")|\(cliVersion ?? "-")"
+        guard defaults.string(forKey: lastNotifiedVersionsKey) != stamp else { return }
+        let notifier = notifier ?? makeNotifier()
+        self.notifier = notifier
+        guard await notifier.requestAuthorizationIfNeeded() else { return }
+        notifier.post(title: copy.title, body: copy.body, identifier: "UpdateChecker.\(stamp)")
+        defaults.set(stamp, forKey: lastNotifiedVersionsKey)
+    }
+
+    nonisolated static func updateNotificationCopy(appVersion: String?, cliVersion: String?) -> (title: String, body: String)? {
+        switch (appVersion, cliVersion) {
+        case let (app?, cli?):
+            return ("CodeBurn \(AppVersion.display(app)) available", "App and CLI \(AppVersion.display(cli)) updates are ready. Click to install.")
+        case let (app?, nil):
+            return ("CodeBurn \(AppVersion.display(app)) available", "Click to install the update.")
+        case let (nil, cli?):
+            return ("CodeBurn CLI \(AppVersion.display(cli)) available", "Click to install the update.")
+        case (nil, nil):
+            return nil
         }
     }
 

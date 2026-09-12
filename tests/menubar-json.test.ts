@@ -364,6 +364,44 @@ describe('buildMenubarPayload', () => {
     ])
   })
 
+  it('carries per-provider cache read into providerDetails', () => {
+    const providers: ProviderCost[] = [
+      { name: 'claude', displayName: 'Claude', cost: 190.1, calls: 900, hasUsage: true, inputTokens: 6_000_000, outputTokens: 250_000, sessions: 12, cacheReadTokens: 4_200_000 },
+      { name: 'codex', displayName: 'Codex', cost: 88.84, calls: 642, hasUsage: true, inputTokens: 3_000_000, outputTokens: 150_000, sessions: 4, cacheReadTokens: 0 },
+    ]
+    const payload = buildMenubarPayload(emptyPeriod('Today'), providers, null)
+    expect(payload.current.providerDetails).toEqual([
+      { id: 'claude', label: 'Claude', cost: 190.1, calls: 900, hasUsage: true, inputTokens: 6_000_000, outputTokens: 250_000, sessions: 12, cacheReadTokens: 4_200_000 },
+      { id: 'codex', label: 'Codex', cost: 88.84, calls: 642, hasUsage: true, inputTokens: 3_000_000, outputTokens: 150_000, sessions: 4, cacheReadTokens: 0 },
+    ])
+  })
+
+  it('omits the cache-read key entirely when no day reported it', () => {
+    // Add-only contract: absent means unknown, not zero, so a legacy row must
+    // stay absent rather than being emitted as 0.
+    const payload = buildMenubarPayload(
+      emptyPeriod('Today'),
+      [{ name: 'claude', displayName: 'Claude', cost: 190.1, calls: 900, hasUsage: true, inputTokens: 6_000_000, outputTokens: 250_000, sessions: 12 }],
+      null,
+    )
+    expect(payload.current.providerDetails).toEqual([
+      { id: 'claude', label: 'Claude', cost: 190.1, calls: 900, hasUsage: true, inputTokens: 6_000_000, outputTokens: 250_000, sessions: 12 },
+    ])
+    expect(Object.keys(payload.current.providerDetails[0]!)).not.toContain('cacheReadTokens')
+  })
+
+  it('drops a partial cache-read sum when an active day lacked counts', () => {
+    // A fold that summed some days but missed a legacy active day must not be
+    // labelled complete: the emitter omits the key rather than publish a
+    // partial number.
+    const payload = buildMenubarPayload(
+      emptyPeriod('Today'),
+      [{ name: 'claude', displayName: 'Claude', cost: 190.1, calls: 900, hasUsage: true, cacheReadTokens: 4_200_000, cacheReadIncomplete: true }],
+      null,
+    )
+    expect(Object.keys(payload.current.providerDetails[0]!)).not.toContain('cacheReadTokens')
+  })
+
   it('omits the token and session keys entirely when the period has no breakdown', () => {
     // Add-only contract: a consumer must be able to tell "no breakdown" from
     // zero, so absent stays absent rather than being emitted as 0.

@@ -388,6 +388,9 @@ private struct GeneralSettingsTab: View {
     @AppStorage(PreferredTerminal.defaultsKey)
     private var preferredTerminalRaw: String = PreferredTerminal.default.rawValue
 
+    @AppStorage(UpdateNotificationPreference.defaultsKey)
+    private var notifyAboutUpdates: Bool = true
+
     private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
     private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
 
@@ -454,6 +457,26 @@ private struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.menu)
+                // Optional second menu-bar line. Off by default, so the status
+                // item keeps its existing single-row figure untouched.
+                Toggle("Second row", isOn: Binding(
+                    get: { store.menubarSecondRowEnabled },
+                    set: { store.menubarSecondRowEnabled = $0 }
+                ))
+                if store.menubarSecondRowEnabled {
+                    Picker("Second row shows", selection: Binding(
+                        get: { store.menubarSecondRowMetric },
+                        set: { store.menubarSecondRowMetric = $0 }
+                    )) {
+                        ForEach(MenubarSecondRowMetric.allCases) { metric in
+                            Text(metric.settingsLabel).tag(metric)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Text("Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Accent", selection: Binding(
                     get: { store.accentPreset },
                     set: { store.accentPreset = $0 }
@@ -477,6 +500,13 @@ private struct GeneralSettingsTab: View {
                 }
                 .pickerStyle(.menu)
                 Text("How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Updates") {
+                Toggle("Notify me about updates", isOn: $notifyAboutUpdates)
+                Text("Posts a notification when a new CodeBurn release is available. Click it to install.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -1370,7 +1400,7 @@ private struct CopilotSettingsTab: View {
             }
             CopilotTokenSection()
             Section {
-                Text("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token.")
+                Text("Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
@@ -1428,7 +1458,7 @@ private struct CopilotTokenSection: View {
                 )
                 token = ""
                 CopilotSubscriptionService.resetProbeCache()
-                await store.bootstrapCopilot()
+                await store.connectCopilot()
             } catch {
                 errorText = error.localizedDescription
             }
@@ -1496,18 +1526,22 @@ private struct CopilotConnectionRow: View {
     private var stateDetail: String {
         switch store.copilotLoadState {
         case .loaded:
-            if let plan = store.copilotUsage?.plan {
-                return "Plan: \(plan)"
-            }
-            return "Live quota tracked from api.github.com."
+            return CopilotQuotaPresentation.connectedSettingsDetail(
+                plan: store.copilotUsage?.plan,
+                apiHost: store.copilotUsage?.apiHost ?? CopilotHostEndpoint.defaultAPIHost
+            )
         case .terminalFailure:
             return "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect."
         case .transientFailure: return store.copilotError ?? "GitHub rate-limited; auto-retrying."
         case .bootstrapping: return "Looking for a GitHub token on this Mac."
         case .loading: return "Background refresh in progress."
         case .dormant: return "Tap Load Quota to fetch live usage from api.github.com."
-        case .notBootstrapped, .noCredentials:
-            return "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect."
+        case .notBootstrapped:
+            return CopilotQuotaPresentation.settingsNotConnectedDetail(
+                explicitlyDisconnected: CopilotExplicitDisconnect.isSet(defaults: store.copilotQuotaRuntime.defaults)
+            )
+        case .noCredentials:
+            return CopilotQuotaPresentation.noCredentialsSettingsDetail
         case .failed: return store.copilotError ?? ""
         }
     }
@@ -1529,13 +1563,13 @@ private struct CopilotConnectionRow: View {
                     Text("CodeBurn will stop tracking Copilot quota. Every credential it read stays untouched, and your Copilot clients keep working.")
                 }
         case .terminalFailure, .noCredentials, .failed:
-            Button("Reconnect") { Task { await store.bootstrapCopilot() } }
+            Button("Reconnect") { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .dormant:
-            Button("Load Quota") { Task { await store.bootstrapCopilot() } }
+            Button("Load Quota") { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .notBootstrapped:
-            Button("Connect") { Task { await store.bootstrapCopilot() } }
+            Button("Connect") { Task { await store.connectCopilot() } }
                 .buttonStyle(.borderedProminent)
         case .bootstrapping:
             ProgressView().controlSize(.small)

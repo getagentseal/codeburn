@@ -5,7 +5,7 @@ import { join } from 'path'
 import { extractBashCommands } from '../bash-utils.js'
 import { calculateCost } from '../models.js'
 import { getSqliteLoadError, isSqliteAvailable, openDatabase, type SqliteDatabase } from '../sqlite.js'
-import type { ParsedProviderCall, Provider, SessionParser, SessionSource } from './types.js'
+import type { ParsedProviderCall, ProbeRoot, Provider, SessionParser, SessionSource } from './types.js'
 
 type ConversationRow = {
   conversation_id: string
@@ -268,6 +268,10 @@ export function createForgeProvider(dbPath = DEFAULT_DB_PATH): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dbPath, label: 'db' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

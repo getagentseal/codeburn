@@ -8,6 +8,7 @@ type LayoutNode = SpendFlowNode & {
   h: number
   fill: string
   displayLabel: string
+  axLabel: string
 }
 
 const VIEW_W = 760
@@ -103,9 +104,18 @@ export function Sankey({ flow }: { flow: SpendFlow }) {
         </text>
       ))}
       {projects.map(node => (
-        <text key={node.id} x="534" y={round(node.y + node.h / 2 + 3)} fontSize="10" fill="var(--mut)">
-          {node.displayLabel} · {formatUsd(node.cost)}
-        </text>
+        <g key={node.id}>
+          <title>{node.id}</title>
+          <text
+            x="534"
+            y={round(node.y + node.h / 2 + 3)}
+            fontSize="10"
+            fill="var(--mut)"
+            aria-label={`${node.axLabel} ${formatUsd(node.cost)}`}
+          >
+            {node.displayLabel} · {formatUsd(node.cost)}
+          </text>
+        </g>
       ))}
     </svg>
   )
@@ -125,8 +135,10 @@ function layoutNodes(nodes: SpendFlowNode[], x: number, modelSide: boolean): Lay
     const h = Math.max(2, inflated[i] * scale)
     const neutral = isOtherNode(node.id) || isOtherNode(node.label)
     const fill = modelSide && !neutral ? seriesColorForModel(node.label || node.id) : neutral ? 'var(--s-other)' : 'var(--mut2)'
-    const displayLabel = modelSide ? modelDisplayLabel(node.label || node.id) : projectDisplayLabel(node.label || node.id)
-    const laidOut = { ...node, x, y, h, fill, displayLabel }
+    const source = node.label || node.id
+    const axLabel = modelSide ? modelDisplayLabel(source) : projectCanonicalLabel(source)
+    const displayLabel = modelSide ? axLabel : ellipsize(axLabel, 24)
+    const laidOut = { ...node, x, y, h, fill, displayLabel, axLabel }
     y += h + GAP
     return laidOut
   })
@@ -149,10 +161,14 @@ function modelDisplayLabel(raw: string): string {
   return ellipsize(shortenId(value), 18)
 }
 
-function projectDisplayLabel(raw: string): string {
+function projectCanonicalLabel(raw: string): string {
   const value = raw.trim()
   if (isOtherNode(value)) return 'Other'
-  return ellipsize(shortenProjectPath(value), 24)
+  // Abs cwd still sent as the label (older payloads) may shorten. Canonical
+  // CLI labels already include the parent context that distinguishes collisions
+  // — do not drop it with a 3-segment tail.
+  if (value.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(value)) return shortenProjectPath(value)
+  return value
 }
 
 function shortenId(value: string): string {

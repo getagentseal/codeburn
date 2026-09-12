@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ActionResult, AliasRow, CombinedUsage, DeviceScanResult, Identity, MenubarPayload, PriceOverrideList, PriceRates, QuotaProvider, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
+import type { ActionResult, AliasRow, CombinedUsage, DeviceScanResult, Identity, MenubarPayload, PriceOverrideList, PriceRates, ProjectFilter, ProjectsReport, QuotaProvider, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
 import { Settings } from './Settings'
 
 const mocks = vi.hoisted(() => ({
@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getAliases: vi.fn<() => Promise<AliasRow[]>>(),
   getPriceOverrides: vi.fn<() => Promise<PriceOverrideList>>(),
+  getProjectFilter: vi.fn<() => Promise<ProjectFilter>>(),
+  setProjectFilter: vi.fn<(filter: ProjectFilter) => Promise<ProjectFilter>>(),
+  getUnfilteredProjects: vi.fn<() => Promise<ProjectsReport>>(),
   setPriceOverride: vi.fn<(model: string, rates: PriceRates) => Promise<ActionResult>>(),
   removePriceOverride: vi.fn<(model: string) => Promise<ActionResult>>(),
   setCurrency: vi.fn<(code: string) => Promise<ActionResult>>(),
@@ -64,6 +67,13 @@ const trayPrefs = {
 const telemetryOff: TelemetryStatus = {
   installId: '8f1c2b4d', country: 'DE', enabled: false, defaultEnabled: false, onboarded: true,
 }
+const noProjectFilter: ProjectFilter = { project: [], exclude: [] }
+const projectsReport: ProjectsReport = {
+  projects: [
+    { name: 'my-company', path: '/Users/x/Web/work/my-company', cost: 28.09, sessions: 16 },
+    { name: 'shop-ops', path: '/Users/x/ecommerce/shop-ops', cost: 4.2, sessions: 3 },
+  ],
+}
 const stored = new Map<string, string>()
 vi.stubGlobal('localStorage', {
   getItem: (key: string) => stored.get(key) ?? null,
@@ -87,6 +97,9 @@ describe('Settings', () => {
     mocks.getAliases.mockResolvedValue([{ from: 'proxy-opus', to: 'claude-opus-4-6' }])
     mocks.getPriceOverrides.mockResolvedValue({ overrides: [{ model: 'local/llama', inputPerM: 0.2, outputPerM: 0.6, cacheReadPerM: 0.05 }], configPath: '/home/user/.config/codeburn/config.json' })
     mocks.setPriceOverride.mockResolvedValue(actionOk)
+    mocks.getProjectFilter.mockResolvedValue(noProjectFilter)
+    mocks.setProjectFilter.mockImplementation(async filter => filter)
+    mocks.getUnfilteredProjects.mockResolvedValue(projectsReport)
     mocks.removePriceOverride.mockResolvedValue(actionOk)
     mocks.setCurrency.mockResolvedValue(actionOk)
     mocks.resetCurrency.mockResolvedValue(actionOk)
@@ -105,6 +118,112 @@ describe('Settings', () => {
     mocks.trayPrefs.mockResolvedValue(trayPrefs)
     localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
+  })
+
+  it('hides a project by saving it as an exclude pattern', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    const toggle = await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await user.click(toggle)
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/Users/x/Web/work/my-company'] })
+  })
+
+  it('shows a project as hidden when an include list leaves it out, and clears that list on Show all', async () => {
+    mocks.getProjectFilter.mockResolvedValue({ project: ['my-company'], exclude: [] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    expect(await screen.findByRole('switch', { name: 'Show /Users/x/ecommerce/shop-ops' })).toHaveAttribute('aria-checked', 'false')
+    await user.click(screen.getByRole('button', { name: 'Show all' }))
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: [] })
+  })
+
+  it('lists the projects unfiltered so a hidden one can be switched back on', async () => {
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    const toggle = await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await user.click(toggle)
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: [] })
+  })
+
+  it('hides a project whose name starts with a dash, by its path', async () => {
+    mocks.getUnfilteredProjects.mockResolvedValue({ projects: [{ name: '-Users-x-Web-Github-notes-app', path: '/Users/x/Web/Github/notes-app', cost: 219.35, sessions: 19 }] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    // The row reads as the directory, not as the encoded transcript folder name,
+    // and keeps its parent so two projects of the same name stay distinguishable.
+    expect(await screen.findByText('Github/notes-app')).toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: 'Show /Users/x/Web/Github/notes-app' }))
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: ['/Users/x/Web/Github/notes-app'] })
+  })
+
+  it('keeps an exclude pattern that matches nothing removable', async () => {
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['gone-repo'] })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    expect(await screen.findByText('matches nothing detected')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(mocks.setProjectFilter).toHaveBeenCalledWith({ project: [], exclude: [] })
+  })
+
+  // A filter has no period, so neither can the list it is checked against. The
+  // period on screen used to key this fetch, which made a pattern excluding a
+  // dormant project read as an orphan next to a Remove button.
+  it('asks for one project list for the whole history, not one per period on screen', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="today" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledWith()
+  })
+
+  it('keeps the project list across a period change instead of refetching it', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<Settings period="today" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledTimes(1)
+    rerender(<Settings period="month" />)
+    expect(await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })).toBeInTheDocument()
+    expect(mocks.getUnfilteredProjects).toHaveBeenCalledTimes(1)
+  })
+
+  // A lifetime list runs to thousands of rows on a real machine, so the pane
+  // leads with the costliest and narrows on a substring of the name or path.
+  it('sorts projects by lifetime cost and narrows them by a substring search', async () => {
+    mocks.getUnfilteredProjects.mockResolvedValue({
+      projects: [
+        { name: 'shop-ops', path: '/Users/x/ecommerce/shop-ops', cost: 4.2, sessions: 3 },
+        { name: 'my-company', path: '/Users/x/Web/work/my-company', cost: 28.09, sessions: 16 },
+        { name: 'notes-app', path: '/Users/x/Web/Github/notes-app', cost: 1.5, sessions: 1 },
+      ],
+    })
+    const user = userEvent.setup()
+    render(<Settings period="month" />)
+    await user.click(screen.getByRole('button', { name: 'Projects' }))
+    await screen.findByRole('switch', { name: 'Show /Users/x/Web/work/my-company' })
+    expect(screen.getAllByRole('switch').map(node => node.getAttribute('aria-label'))).toEqual([
+      'Show /Users/x/Web/work/my-company',
+      'Show /Users/x/ecommerce/shop-ops',
+      'Show /Users/x/Web/Github/notes-app',
+    ])
+
+    await user.type(screen.getByRole('textbox', { name: 'Search projects' }), 'ECOM')
+    expect(screen.getAllByRole('switch').map(node => node.getAttribute('aria-label'))).toEqual([
+      'Show /Users/x/ecommerce/shop-ops',
+    ])
+    expect(screen.getByText('1 of 3')).toBeInTheDocument()
+
+    await user.clear(screen.getByRole('textbox', { name: 'Search projects' }))
+    expect(screen.getAllByRole('switch')).toHaveLength(3)
+    expect(screen.queryByText('1 of 3')).not.toBeInTheDocument()
   })
 
   it('switches panes from the rail and renders the completed Plans pane', async () => {
@@ -263,6 +382,16 @@ describe('Settings', () => {
     await user.click(scope)
     await user.click(screen.getByRole('option', { name: 'Combined' }))
     expect(onScopeChange).toHaveBeenCalledWith('combined')
+  })
+
+  it('offers Local only while a project filter hides something, and says why', async () => {
+    const user = userEvent.setup()
+    render(<Settings period="month" scope="local" onScopeChange={vi.fn()} projectFiltered />)
+    const scope = screen.getByLabelText('Scope')
+    expect(screen.getByText(/Local only while the Projects pane hides something/)).toBeInTheDocument()
+    await user.click(scope)
+    expect(screen.queryByRole('option', { name: 'Combined' })).not.toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Local' })).toBeInTheDocument()
   })
 
   it('lists providers from the real overview payload', async () => {

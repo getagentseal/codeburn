@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   getIdentity: vi.fn(),
   cliStatus: vi.fn(),
   getPriceOverrides: vi.fn(),
+  getProjectFilter: vi.fn<() => Promise<{ project: string[]; exclude: string[] }>>(),
   getAliases: vi.fn(),
   setCurrency: vi.fn(),
   resetCurrency: vi.fn(),
@@ -152,6 +153,7 @@ function installDefaultMocks() {
     findings: [],
   })
   mocks.getModels.mockResolvedValue([])
+  mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: [] })
   mocks.getSessions.mockResolvedValue([])
   mocks.getCompareModels.mockResolvedValue([])
   mocks.getQuota.mockResolvedValue([
@@ -478,6 +480,59 @@ describe('App shortcuts', () => {
     localStorage.setItem('codeburn.scope', 'combined')
     render(<App />)
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+  })
+
+  it('never boots a filtered session into combined scope, and collapses the stored setting', async () => {
+    localStorage.setItem('codeburn.scope', 'combined')
+    localStorage.setItem('codeburn.projectFiltered', '1')
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
+    render(<App />)
+    // Local from the first poll: a combined total would carry the hidden project.
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all'))
+    expect(mocks.getOverview).not.toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined')
+    await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
+  })
+
+  // app-filter.json is read by the main process on every fetch, so a hand edit
+  // lands there at once. A renderer that only re-read on its own saves kept
+  // Combined on screen over argv that had already dropped `--scope combined`.
+  it('collapses combined scope when the filter appears outside the app', async () => {
+    localStorage.setItem('codeburn.scope', 'combined')
+    localStorage.setItem('codeburn.projectFiltered', '0')
+    mocks.getProjectFilter.mockResolvedValueOnce({ project: [], exclude: [] })
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
+    mocks.getOverview.mockResolvedValue(overviewPayload())
+    render(<App />)
+    await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'all', undefined, undefined, undefined, 'combined'))
+    await waitFor(() => expect(localStorage.getItem('codeburn.scope')).toBe('local'))
+    await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('1'))
+  })
+
+  // reportMemoKey carries no filter component, so an entry memoised under the
+  // other scope repaints until the next fetch lands. Clear on the change only:
+  // clearing on every poll would throw away the instant-switch memo wholesale.
+  it('clears the instant-switch memo once when the filter changes outside the app', async () => {
+    localStorage.setItem('codeburn.projectFiltered', '0')
+    mocks.getProjectFilter.mockResolvedValue({ project: [], exclude: ['my-company'] })
+    mocks.getOverview.mockResolvedValue(overviewPayload())
+    primePolledMemo('sentinel-filter-key', { stale: true })
+
+    render(<App />)
+
+    await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('1'))
+    await waitFor(() => expect(hasPolledMemo('sentinel-filter-key')).toBe(false))
+
+    // The filter now matches what is persisted: further polls must leave it alone.
+    primePolledMemo('sentinel-filter-key', { stale: true })
+    const calls = mocks.getOverview.mock.calls.length
+    fireEvent.keyDown(document, { key: 'r', metaKey: true })
+    await waitFor(() => expect(mocks.getOverview.mock.calls.length).toBeGreaterThan(calls))
+    expect(hasPolledMemo('sentinel-filter-key')).toBe(true)
+  })
+
+  it('records the filter for the next boot when the pane is empty', async () => {
+    render(<App />)
+    await waitFor(() => expect(localStorage.getItem('codeburn.projectFiltered')).toBe('0'))
   })
 
   it('builds the provider picker from providerDetails so display-name providers round-trip their internal id', async () => {

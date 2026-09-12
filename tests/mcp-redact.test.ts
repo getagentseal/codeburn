@@ -46,6 +46,13 @@ describe('redact', () => {
     expect(out.current.topSessions[0]!.project).toMatch(/^project-[0-9a-f]{6}$/)
     expect(out.current.topProjects[0]!.cost).toBe(5)
   })
+  it('hashes topProjects id when present so cwd is not leaked', () => {
+    const withId = payload()
+    withId.current.topProjects[0]!.id = '/tmp/secret-client-repo'
+    const out = redactProjectNames(withId, false)
+    expect(out.current.topProjects[0]!.id).toMatch(/^project-[0-9a-f]{6}$/)
+    expect(JSON.stringify(out)).not.toContain('/tmp/secret-client-repo')
+  })
   it('redacts session details when hashing', () => {
     const out = redactProjectNames(payload(), false)
     const details = out.current.topProjects[0]!.sessionDetails!

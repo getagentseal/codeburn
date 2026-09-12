@@ -8,6 +8,7 @@ export type MenubarPayload = {
     cost: number
     calls: number
     sessions: number
+    sessionCountBasis?: 'identity' | 'partial'
     oneShotRate: number | null
     inputTokens: number
     outputTokens: number
@@ -42,6 +43,8 @@ export type MenubarPayload = {
       cost: number
       calls?: number
       hasUsage?: boolean
+      sessions?: number
+      sessionCountBasis?: 'identity' | 'partial'
     }>
   }
   optimize: {
@@ -117,7 +120,8 @@ export type ProjectEntry = {
   name: string
   cost: number
   sessions: number
-  avgCostPerSession: number
+  avgCostPerSession?: number
+  sessionCountBasis?: 'identity' | 'partial'
   sessionDetails?: SessionDetailEntry[]
 }
 

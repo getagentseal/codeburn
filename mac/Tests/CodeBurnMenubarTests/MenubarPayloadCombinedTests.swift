@@ -29,6 +29,8 @@ struct MenubarPayloadCombinedTests {
         #expect(totals.inputTokens == 1000)
         #expect(totals.outputTokens == 500)
         #expect(totals.totalTokens == 1500)
+        #expect(totals.sessions == 3)
+        #expect(SessionCountLabel.combinedText == "Session count unavailable")
     }
 
     @Test("combined block is nil when absent")

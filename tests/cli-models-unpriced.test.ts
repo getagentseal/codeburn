@@ -6,17 +6,25 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 function runCli(args: string[], home: string, locale?: string) {
+  // Agent/CI runners often set FORCE_COLOR=1 even when NO_COLOR=1. Chalk then
+  // paints table chrome with ESC (U+001B). The hostile-ID assertion below is
+  // a source-safety check on model IDs, not on chalk headers, so pin color
+  // off in the child. Do not drop the C0/C1 regex.
+  const env = { ...process.env }
+  delete env.FORCE_COLOR
+  env.NO_COLOR = '1'
+  env.HOME = home
+  env.USERPROFILE = home
+  env.CLAUDE_CONFIG_DIR = join(home, '.claude')
+  env.CODEBURN_CACHE_DIR = join(home, '.cache', 'codeburn')
+  env.TZ = 'UTC'
+  if (locale) {
+    env.LANG = locale
+    env.LC_ALL = locale
+  }
   return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: process.cwd(),
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      CLAUDE_CONFIG_DIR: join(home, '.claude'),
-      CODEBURN_CACHE_DIR: join(home, '.cache', 'codeburn'),
-      TZ: 'UTC',
-      ...(locale ? { LANG: locale, LC_ALL: locale } : {}),
-    },
+    env,
     encoding: 'utf-8',
     timeout: 30_000,
   })

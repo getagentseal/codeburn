@@ -1,4 +1,6 @@
-import { parseAllSessions } from './parser.js'
+import { cachedProjectIdentitiesForRange } from './daily-cache.js'
+import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
+import { filterProjectsByName, foldIdentifiedWindowsPath, parseAllSessions } from './parser.js'
 import { toDateString } from './daily-cache.js'
 import type { DateRange } from './types.js'
 
@@ -22,6 +24,18 @@ function addToMap<K>(map: Map<K, number>, key: K, cost: number): void {
   map.set(key, (map.get(key) ?? 0) + cost)
 }
 
+/** #1260: identity for spend nodes — abs projectPath when present, else display label. */
+export function spendProjectIdentity(project: { project: string; projectPath?: string }): { id: string; label: string } {
+  const raw = (project.projectPath ?? '').trim().replace(/\\/g, '/')
+  const looksAbs = raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw) || (raw.includes('/') && !raw.startsWith('-'))
+  if (looksAbs && raw) {
+    const trimmed = raw.replace(/\/+$/, '')
+    const base = trimmed.split('/').filter(Boolean).pop() || project.project
+    return { id: foldIdentifiedWindowsPath(trimmed), label: base }
+  }
+  return { id: project.project, label: project.project }
+}
+
 function sortedEntries(totals: Map<string, number>): Array<[string, number]> {
   return [...totals.entries()].sort(([aName, aCost], [bName, bCost]) => {
     const byCost = bCost - aCost
@@ -40,24 +54,64 @@ function buildNodes(totals: Map<string, number>): { nodes: SpendFlowNode[]; keep
   return { nodes, keep }
 }
 
-export async function computeSpendFlow(range: DateRange, provider: string): Promise<SpendFlow> {
-  const projects = await parseAllSessions(range, provider)
+function looksAbsId(id: string): boolean {
+  return id.startsWith('/') || /^[a-zA-Z]:\//.test(id)
+}
+
+function pathParts(id: string): string[] {
+  return id.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean)
+}
+
+/// Visible chart labels keep the literal basename (hyphens stay hyphens).
+/// Same-basename abs cwds pick up enough parent segments to distinguish.
+/// Legacy slug ids and Other are left as-is.
+function assignDistinguishingProjectLabels(nodes: SpendFlowNode[], labels: Map<string, string>): void {
+  const visible = nodes.filter(node => node.id !== OTHER_ID)
+  for (const node of visible) {
+    if (!looksAbsId(node.id)) {
+      node.label = labels.get(node.id) ?? node.id
+      continue
+    }
+    const parts = pathParts(node.id)
+    const base = parts.at(-1) || labels.get(node.id) || node.id
+    const collisions = visible.filter(other => other.id !== node.id && looksAbsId(other.id) && pathParts(other.id).at(-1) === base)
+    if (collisions.length === 0) {
+      node.label = base
+      continue
+    }
+    let label = base
+    for (let n = 2; n <= parts.length; n++) {
+      label = parts.slice(-n).join('/')
+      const clash = collisions.some(other => pathParts(other.id).slice(-n).join('/') === label)
+      if (!clash) break
+    }
+    node.label = label
+  }
+}
+
+export async function computeSpendFlow(range: DateRange, provider: string, projectFilter?: string[], excludeFilter?: string[]): Promise<SpendFlow> {
+  const parsed = await parseAllSessions(range, provider)
+  await reportUnmatchedProjectPatterns(parsed, projectFilter, excludeFilter, () => cachedProjectIdentitiesForRange(range))
+  const projects = filterProjectsByName(parsed, projectFilter, excludeFilter)
   const matrix = new Map<string, Map<string, number>>()
   const projectTotals = new Map<string, number>()
   const modelTotals = new Map<string, number>()
 
+  const projectLabels = new Map<string, string>()
   for (const project of projects) {
+    const { id: projectId, label: projectLabel } = spendProjectIdentity(project)
+    if (!projectLabels.has(projectId)) projectLabels.set(projectId, projectLabel)
     for (const session of project.sessions) {
       for (const [model, breakdown] of Object.entries(session.modelBreakdown)) {
         const cost = breakdown.costUSD
         if (cost <= 0) continue
-        let modelCosts = matrix.get(project.project)
+        let modelCosts = matrix.get(projectId)
         if (!modelCosts) {
           modelCosts = new Map<string, number>()
-          matrix.set(project.project, modelCosts)
+          matrix.set(projectId, modelCosts)
         }
         addToMap(modelCosts, model, cost)
-        addToMap(projectTotals, project.project, cost)
+        addToMap(projectTotals, projectId, cost)
         addToMap(modelTotals, model, cost)
       }
     }
@@ -65,6 +119,7 @@ export async function computeSpendFlow(range: DateRange, provider: string): Prom
 
   const { nodes: models, keep: keptModels } = buildNodes(modelTotals)
   const { nodes: projectsNodes, keep: keptProjects } = buildNodes(projectTotals)
+  assignDistinguishingProjectLabels(projectsNodes, projectLabels)
   const rolledLinks = new Map<string, SpendFlowLink>()
 
   for (const [project, modelCosts] of matrix.entries()) {

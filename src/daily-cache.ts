@@ -4,6 +4,7 @@ import { mkdir, open, readdir, readFile, rename, stat, unlink } from 'fs/promise
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
+import type { ProjectFilterTarget } from './parser.js'
 import type { DateRange, ProjectSummary } from './types.js'
 
 // Bumped to 27: claude-haiku-4.5 copilot store rows now price correctly (alias added) — #1093.
@@ -178,7 +179,10 @@ import type { DateRange, ProjectSummary } from './types.js'
 // explicit estimates retain their status, and surviving Hermes sources replace
 // v29 slices produced by the old API-equivalent fallback.
 // 31: #1234 Hermes cost contract; 30 is claimed by #1132.
-export const DAILY_CACHE_VERSION = 31
+// v32: DSH session formats v1-v3 and inclusive reasoning accounting. Re-derive
+// finalized DSH days so migrated generations and retry attempts replace the
+// v0-only totals, and reasoning detail is not added on top of full output.
+export const DAILY_CACHE_VERSION = 32
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -206,6 +210,9 @@ const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   // Tracks DAILY_CACHE_VERSION: a v30 file may have been written by #1132's
   // accounting, which never carried the Hermes cost contract.
   hermes: 31,
+  // DSH v0-only parsing and exclusive-reasoning display were both stale in
+  // finalized days written before the multi-generation reader.
+  dsh: 32,
 }
 
 function providersPendingRederiveFrom(fromVersion: number): string[] {
@@ -1060,6 +1067,15 @@ function isPartialSurvival(date: string, baseline: ProviderDaySlice, fresh: Prov
   return date < settleCutoff && fresh.calls < baseline.calls
 }
 
+/// The read path's rule: keep whichever derivation explains MORE calls, on
+/// every date, with ties going to the baseline. Unlike the write path this is
+/// not deciding what to freeze, so it has no reason to prefer a thinner slice
+/// on a recent day — but it is also not the place a re-pricing lands, so an
+/// equal-call slice leaves the durable value alone.
+function baselineExplainsMore(baseline: ProviderDaySlice, fresh: ProviderDaySlice): boolean {
+  return fresh.calls <= baseline.calls
+}
+
 /// Index `freshUnderOldTz` (the same parse re-aggregated under the cache's OLD
 /// tzKey) by date then provider, so the merge can subtract exactly what the
 /// fresh parse still explains under the old bucketing.
@@ -1114,7 +1130,14 @@ export function mergeDayEntries(
   /// baseline wins on settled days (`isPartialSurvival`). The adoption union
   /// leaves it off - both sides are cache generations there and the newer
   /// schema deliberately wins per (date, provider).
-  guardPartialSurvival = false,
+  ///
+  /// `'prefer-richer'` is the read-path union's rule (`unionDaysForPeriod`):
+  /// on EVERY date, keep the slice explaining more calls, ties to the baseline.
+  /// That path is choosing what to REPORT, not what to freeze, so a thinner
+  /// derivation is never the better answer there — while the write path still
+  /// lets a recent day shrink, on the grounds that a still-settling day is
+  /// defined by its fresh parse.
+  guardPartialSurvival: boolean | 'prefer-richer' = false,
   /// Providers whose baseline slices were recorded under an accounting where a
   /// call meant something else, so a shrink is not evidence of source loss for
   /// this one re-derivation (see PENDING_REDERIVE_PROVIDER_VERSIONS). Only consulted
@@ -1167,14 +1190,22 @@ export function mergeDayEntries(
         }
       }
       if (existingSlice && hasSliceData(existingSlice) && !residual) {
-        if (!guardPartialSurvival || pendingRederive?.has(provider) || !isPartialSurvival(day.date, slice, existingSlice, settleCutoff)) continue
+        const keepBaseline = guardPartialSurvival === 'prefer-richer'
+          ? baselineExplainsMore(slice, existingSlice)
+          : isPartialSurvival(day.date, slice, existingSlice, settleCutoff)
+        if (!guardPartialSurvival || pendingRederive?.has(provider) || !keepBaseline) continue
         // The baseline holds more evidence than the sources can still produce:
         // swap the fresh slice back out for it (inverse of addSliceIntoDay, so
         // the day's totals and nested maps stay reconciled with its slices).
         subtractSliceFromDay(existing, provider, existingSlice)
       }
       addSliceIntoDay(existing, provider, toAdd, residual)
-      if (markSecondaryCarried) existing.carried = true
+      // The result day is seeded from `primary`, which has no provenance, so a
+      // secondary day already marked carried would silently lose the mark on
+      // every date both sides hold. Re-assert it only where this slice brought
+      // calls the primary could not produce — that is what "preserved from
+      // expired session logs" claims. An equal-call slice claims nothing.
+      if (markSecondaryCarried || (day.carried && slice.calls > (existingSlice?.calls ?? 0))) existing.carried = true
     }
   }
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
@@ -1459,4 +1490,26 @@ export async function ensureCacheHydrated(
     }
     return c
   })
+}
+
+/// The projects the day cache still knows about over a range, whose sources may
+/// be long expired. A --project/--exclude pattern is only reported as naming
+/// nothing once it has missed here too: the cache is what the totals are built
+/// from, so a path it carries is a path the report bills, whatever the live
+/// parse can still see. Read all-provider on purpose, like the day split itself,
+/// so a provider-scoped command does not call a path wrong because the spend
+/// sits under another tool.
+export function cachedProjectIdentities(cache: DailyCache, startStr: string, endStr: string): ProjectFilterTarget[] {
+  const identities: ProjectFilterTarget[] = []
+  for (const day of cache.days) {
+    if (day.date < startStr || day.date > endStr || !day.projects) continue
+    for (const [name, stats] of Object.entries(day.projects)) {
+      identities.push({ project: name, projectPath: stats.path ?? '' })
+    }
+  }
+  return identities
+}
+
+export async function cachedProjectIdentitiesForRange(range: DateRange): Promise<ProjectFilterTarget[]> {
+  return cachedProjectIdentities(await loadDailyCache(), toDateString(range.start), toDateString(range.end))
 }

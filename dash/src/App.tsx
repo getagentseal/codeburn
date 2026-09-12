@@ -12,7 +12,7 @@ import {
   type Payload,
   type Period,
 } from '@/lib/api'
-import { cn, fmtNum, fmtTokens, usd } from '@/lib/utils'
+import { cn, fmtNum, fmtTokens, formatSessionCount, usd } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MetricCard } from '@/components/MetricCard'
@@ -118,7 +118,7 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
         <div className="flex items-end justify-between px-5 pt-4">
           <div>
             <div className="text-xs text-tertiary-foreground">
-              {c ? `${fmtNum(c.calls)} calls · ${fmtNum(c.sessions)} sessions` : ' '}
+              {c ? `${fmtNum(c.calls)} calls · ${formatSessionCount(c.sessions, c.sessionCountBasis)}` : ' '}
             </div>
             <div className="mt-1 font-display text-4xl tracking-tight tabular-nums text-primary">
               {c ? (unit === 'tokens' ? fmtTokens(c.inputTokens + c.outputTokens) : usd(c.cost)) : <Skeleton className="h-10 w-36" />}
@@ -142,7 +142,7 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
               sub={`in ${fmtTokens(c.inputTokens)} / out ${fmtTokens(c.outputTokens)}`}
             />
             <MetricCard label="Calls" value={fmtNum(c.calls)} />
-            <MetricCard label="Sessions" value={fmtNum(c.sessions)} />
+            <MetricCard label="Sessions" value={formatSessionCount(c.sessions, c.sessionCountBasis)} />
             <MetricCard label="Cache hit" value={`${(c.cacheHitPercent || 0).toFixed(1)}%`} />
             <MetricCard label="Cache write" value={fmtTokens(cacheWrite)} />
             <MetricCard label="Cache read" value={fmtTokens(cacheRead)} />
@@ -221,8 +221,8 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
               rows={(c?.topProjects ?? []).slice(0, 10).map((p) => ({
                 name: p.name,
                 cost: usd(p.cost),
-                sessions: fmtNum(p.sessions),
-                avgCost: usd(p.avgCostPerSession),
+                sessions: formatSessionCount(p.sessions, p.sessionCountBasis),
+                avgCost: p.sessionCountBasis === 'identity' && p.avgCostPerSession != null ? usd(p.avgCostPerSession) : '—',
               }))}
             />
           )}
@@ -569,7 +569,7 @@ export function App() {
   return (
     <div className="min-h-screen bg-outer-background p-2.5 max-md:min-h-[100dvh]">
       <div className="flex h-[calc(100vh-20px)] flex-col gap-2.5 max-md:h-[calc(100dvh-20px)]">
-        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.5)] max-md:gap-3 max-md:px-3">
+        <header className="flex h-12 shrink-0 items-center gap-4 rounded-md border border-border bg-card px-5 shadow-[0_2px_8px_rgba(0,0,0,0.03)] dark:shadow-[0_2px_8px_rgba(0,0,0,0.5)] max-md:h-auto max-md:flex-wrap max-md:gap-3 max-md:px-3 max-md:py-2">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
@@ -582,7 +582,7 @@ export function App() {
               <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
             </svg>
           </button>
-          <div className="flex items-center gap-2 max-md:shrink-0">
+          <div className="flex shrink-0 items-center gap-2">
             <img src="/codeburn-logo.png" alt="CodeBurn" className="h-6 w-6" />
             <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">
               Code<span className="text-brand">Burn</span>
@@ -590,14 +590,14 @@ export function App() {
             <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground max-sm:hidden">usage</span>
           </div>
 
-          <div className="ml-6 flex rounded-md border border-border bg-interactive-secondary p-0.5 max-md:ml-2 max-md:shrink-0">
+          <div className="ml-6 flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5 max-md:ml-2">
             {(['usage', 'context'] as const).map((pg) => (
               <button
                 key={pg}
                 type="button"
                 onClick={() => setPage(pg)}
                 className={cn(
-                  'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors',
+                  'rounded-[5px] px-3 py-1 text-xs font-medium whitespace-nowrap transition-colors',
                   page === pg ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                 )}
               >
@@ -606,17 +606,18 @@ export function App() {
             ))}
           </div>
 
-          <div className="ml-auto flex items-center gap-2 max-md:min-w-0 max-md:overflow-x-auto max-md:[-ms-overflow-style:none] max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden">
+          {/* All widths: min-w-0 + overflow-x-auto contain mid-width overflow. Below md: full-width second row so ~390px isn't a ~22px clip. */}
+          <div className="ml-auto flex min-w-0 items-center gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-md:ml-0 max-md:w-full max-md:basis-full">
             {page === 'usage' && (
             <>
-            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5 max-md:shrink-0">
+            <div className="flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5">
               {PERIODS.map((p) => (
                 <button
                   key={p.key}
                   type="button"
                   onClick={() => { autoPeriod.current = false; setPeriod(p.key) }}
                   className={cn(
-                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
+                    'rounded-[5px] px-3 py-1 text-xs font-medium whitespace-nowrap transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
                     period === p.key ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                   )}
                 >
@@ -624,14 +625,14 @@ export function App() {
                 </button>
               ))}
             </div>
-            <div className="flex rounded-md border border-border bg-interactive-secondary p-0.5 max-md:shrink-0">
+            <div className="flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5">
               {(['cost', 'tokens'] as Unit[]).map((u) => (
                 <button
                   key={u}
                   type="button"
                   onClick={() => setUnit(u)}
                   className={cn(
-                    'rounded-[5px] px-3 py-1 text-xs font-medium transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
+                    'rounded-[5px] px-3 py-1 text-xs font-medium whitespace-nowrap transition-colors max-md:inline-flex max-md:min-h-9 max-md:items-center max-md:justify-center',
                     unit === u ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                   )}
                 >
@@ -642,7 +643,7 @@ export function App() {
             <select
               value={provider}
               onChange={(e) => setProvider(e.target.value)}
-              className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none max-md:min-h-9 max-md:shrink-0"
+              className="shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none max-md:min-h-9"
             >
               <option value="all">All tools</option>
               {providerOptions.map((p) => (

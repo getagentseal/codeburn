@@ -74,6 +74,12 @@ V1 does not include:
   preference exists, prefer Codex, then Claude, then the first supported
   provider.
 - A missing or disconnected quota is `--`, never `0%`.
+- The gauge reports one quota horizon: the weekly (else monthly) billing window
+  by default, or the provider's short rolling window (5-hour, hourly, daily,
+  session) when the user has switched it. The choice is stored per provider, so
+  Claude can rest on its 5-hour window while Codex stays weekly, and a stored
+  horizon the provider stops reporting falls back to the one it does report
+  rather than blanking the gauge. Switching never changes the rail's size.
 - Interactive provider cells remain at least 84 points along the provider axis,
   comfortably above the macOS 20-point minimum and 28-point default control
   targets. The detail hierarchy follows macOS text styles at 17, 12, 11, and
@@ -86,6 +92,11 @@ V1 does not include:
 - Expanded content lists only the providers selected in Settings.
 - Clicking a provider makes it the preferred/resting provider and keeps the
   rail expanded for that interaction.
+- Clicking the provider that already rests in the rail switches its gauge to its
+  other quota horizon when it reports two, and keeps the rail pinned; a provider
+  with one window keeps the plain pin toggle. VoiceOver and keyboard users get
+  the same switch as a named accessibility action on the provider cell. Escape
+  and an outside click still unpin.
 - Leaving both rail and detail bubble collapses after a forgiving 180 ms grace
   period unless pinned.
 - An outside click or Escape unpins and collapses.
@@ -101,6 +112,20 @@ V1 does not include:
   countdown. The most constrained available window supplies the ring value;
   this matches the reference's glance-first use and avoids understating a
   provider whose secondary window is closer to exhaustion.
+- Under that, one line says whether the window lasts: `Lasts until reset` or
+  `Runs out in 2d 8h`, and on windows of six hours or less, where a linear
+  run-out ETA is not defensible off a single burst, the pace stage instead
+  (`On pace`, `40% in deficit`, `30% in reserve`). It is the same whole-window
+  projection the Plan tab's caption uses, computed against the window length
+  the adapter reports — never a length inferred from the display label, which
+  mislabels any provider that picks its label from the distance to the reset.
+  It is silent early in a window, on an exhausted window, without a reset time,
+  without a validated duration, and on data that is stale, disconnected or
+  older than the ten-minute freshness horizon. The dock reserves its height
+  whether or not a column has a caption, because the panel's frame is computed
+  rather than fitted; the agent-tab quota hover card draws the same line under
+  its bar, indented past the label column, and simply omits it when silent
+  because that card is fitted.
 - Stale or retrying data remains visible and is labeled/dimmed. A terminal
   authentication/configuration failure provides a Connect/Reconnect action in
   the bubble itself. Network, rate-limit, parse, and provider outages remain

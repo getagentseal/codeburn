@@ -96,6 +96,9 @@ export function summarizeDeviceUsage(results: DeviceUsage[], window?: SummaryWin
       return {
         cost: a.cost + d.cost,
         calls: a.calls + d.calls,
+        // Numeric wire sum only. Combined-scope UI must not present this as a
+        // unique or lower-bound session count until a cross-device identity
+        // contract exists.
         sessions: a.sessions + d.sessions,
         inputTokens: a.inputTokens + d.inputTokens,
         outputTokens: a.outputTokens + d.outputTokens,

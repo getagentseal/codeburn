@@ -6,7 +6,7 @@ import { SERIES_LABELS, type SeriesKey, seriesClassForKey, seriesClassForModel, 
 import { formatChartDate } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
 
-const SERIES_ORDER: readonly SeriesKey[] = ['opus', 'fable', 'haiku', 'gpt', 'sonnet', 'other']
+const SERIES_ORDER: readonly SeriesKey[] = ['flagship', 'premium', 'balanced', 'fast', 'other']
 
 function modelSpend(day: DailyHistoryEntry): number {
   return day.topModels.reduce((sum, model) => sum + Math.max(0, model.cost), 0)

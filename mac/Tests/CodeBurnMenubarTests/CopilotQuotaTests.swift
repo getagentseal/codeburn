@@ -194,6 +194,7 @@ final class CopilotQuotaTests: XCTestCase {
         }
         let usage = try await CopilotSubscriptionService.refresh(deps: deps)
         XCTAssertEqual(usage.plan, "Individual")
+        XCTAssertEqual(usage.apiHost, "api.github.com")
         XCTAssertEqual(recorder.requests.count, 1)
         let request = recorder.requests[0]
         XCTAssertEqual(request.url?.absoluteString, "https://api.github.com/copilot_internal/user")
@@ -534,5 +535,163 @@ final class CopilotQuotaTests: XCTestCase {
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    // MARK: - Enterprise Cloud hosts (issue #1286)
+
+    /// A data-residency enterprise signs in on `<tenant>.ghe.com`, whose API
+    /// host is the only one that honours the token.
+    func testTenantHostIsQueriedOnItsOwnAPIHost() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: #"{"acme.ghe.com":{"user":"octocat","oauth_token":"gho_tenant"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        let usage = try await CopilotSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(usage.apiHost, "api.acme.ghe.com")
+        XCTAssertEqual(recorder.requests.count, 1)
+        XCTAssertEqual(
+            recorder.requests[0].url?.absoluteString,
+            "https://api.acme.ghe.com/copilot_internal/user")
+        XCTAssertEqual(
+            recorder.requests[0].value(forHTTPHeaderField: "Authorization"), "token gho_tenant")
+    }
+
+    /// With both hosts signed in, dotcom wins and the enterprise token is
+    /// never the one sent.
+    func testDotcomWinsOverATenantAndTheTenantTokenIsNotSent() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: #"{"acme.ghe.com":{"oauth_token":"gho_tenant"},"github.com":{"oauth_token":"gho_dotcom"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        let usage = try await CopilotSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(usage.apiHost, "api.github.com")
+        XCTAssertEqual(
+            recorder.requests[0].url?.absoluteString,
+            "https://api.github.com/copilot_internal/user")
+        XCTAssertEqual(authorization(recorder), "token gho_dotcom")
+    }
+
+    /// The token and the host must come from the same entry: a dotcom key with
+    /// no token must not lend its host to the tenant's credential.
+    func testTenantEntryWinsWhenTheDotcomEntryHasNoToken() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: #"{"github.com":{"user":"octocat"},"acme.ghe.com":{"oauth_token":"gho_tenant"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        _ = try await CopilotSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(
+            recorder.requests[0].url?.absoluteString,
+            "https://api.acme.ghe.com/copilot_internal/user")
+        XCTAssertEqual(authorization(recorder), "token gho_tenant")
+    }
+
+    /// apps.json keys are `<host>:<app id>` on the newer plugins, so the host
+    /// is carried there too.
+    func testAppsJsonHostPrefixedKeyIsQueriedOnTheTenantAPIHost() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: "{}",
+            apps: #"{"acme.ghe.com:Iv1.b507a08c87ecfe98":{"oauth_token":"gho_apps-tenant"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        _ = try await CopilotSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(
+            recorder.requests[0].url?.absoluteString,
+            "https://api.acme.ghe.com/copilot_internal/user")
+        XCTAssertEqual(authorization(recorder), "token gho_apps-tenant")
+    }
+
+    /// An app-name key carries no host, so dotcom stays the assumption.
+    func testAppsJsonAppNameKeyStillQueriesDotcom() async throws {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: "{}",
+            apps: #"{"Visual Studio Code":{"oauth_token":"ghu_apps-token"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        _ = try await CopilotSubscriptionService.refresh(deps: deps)
+        XCTAssertEqual(
+            recorder.requests[0].url?.absoluteString,
+            "https://api.github.com/copilot_internal/user")
+    }
+
+    /// A host this build cannot address (a self-hosted GHES install) fails
+    /// naming the host instead of sending the credential to dotcom.
+    func testUnsupportedHostFailsWithoutFetching() async {
+        let recorder = RequestRecorder()
+        let deps = Self.makeDeps(
+            hosts: #"{"github.acme-corp.net":{"oauth_token":"gho_ghes"}}"#,
+            recorder: recorder
+        ) { request in
+            Self.okJson(request, Self.usageBody)
+        }
+        do {
+            _ = try await CopilotSubscriptionService.refresh(deps: deps)
+            XCTFail("expected unsupportedHost")
+        } catch let error as CopilotSubscriptionService.FetchError {
+            guard case let .unsupportedHost(host) = error else {
+                return XCTFail("expected unsupportedHost, got \(error)")
+            }
+            XCTAssertEqual(host, "github.acme-corp.net")
+            XCTAssertTrue(error.isTerminal)
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Copilot quota is not available for the GitHub host github.acme-corp.net. "
+                    + "CodeBurn can read github.com and GitHub Enterprise Cloud (*.ghe.com) hosts.")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertTrue(recorder.requests.isEmpty)
+    }
+
+    /// An unreachable tenant is the case the issue reported as a bare
+    /// "Temporarily unavailable", so the message has to name the host tried.
+    func testUnreachableTenantHostNamesTheHostInTheError() async {
+        let recorder = RequestRecorder()
+        let deps = CopilotSubscriptionService.Deps(
+            fetch: { request in
+                recorder.record(request)
+                throw URLError(.cannotFindHost)
+            },
+            readFile: { url in
+                url.lastPathComponent == "hosts.json"
+                    ? #"{"acme.ghe.com":{"oauth_token":"gho_tenant"}}"#.data(using: .utf8)
+                    : nil
+            },
+            hostsURL: URL(fileURLWithPath: "/tmp/codeburn-tests/.config/github-copilot/hosts.json"),
+            appsURL: URL(fileURLWithPath: "/tmp/codeburn-tests/.config/github-copilot/apps.json"),
+            copilotDirURL: URL(fileURLWithPath: "/tmp/codeburn-tests/.copilot"),
+            environment: { _ in nil },
+            ghAuthToken: { nil },
+            savedToken: { nil },
+            now: { Self.now }
+        )
+        do {
+            _ = try await CopilotSubscriptionService.refresh(deps: deps)
+            XCTFail("expected network error")
+        } catch let error as CopilotSubscriptionService.FetchError {
+            guard case let .network(_, host) = error else {
+                return XCTFail("expected network, got \(error)")
+            }
+            XCTAssertEqual(host, "api.acme.ghe.com")
+            XCTAssertTrue(error.localizedDescription.contains("api.acme.ghe.com"))
+            XCTAssertFalse(error.isTerminal)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        XCTAssertEqual(recorder.requests.count, 1)
     }
 }

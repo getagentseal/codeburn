@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 import { safeNumber } from '../parser.js'
 
 const toolNameMap: Record<string, string> = {
@@ -267,6 +267,10 @@ export function createMuxProvider(muxRoot?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return toolNameMap[rawTool] ?? rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: root, label: 'root' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

@@ -7,6 +7,8 @@ import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, getShortModelName, unpricedModelHint } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated } from './format.js'
+import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
+import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
@@ -43,6 +45,23 @@ function projectName(p: ProjectSummary): string {
     if (base) return base
   }
   return p.project.split('-').filter(Boolean).pop() || p.project
+}
+
+/** #1260: aggregate by abs path identity so /a/vault != /b/vault. */
+function projectAggKey(p: ProjectSummary): string {
+  return normalizeAbsProjectPathKey(p.projectPath ?? '') ?? `label:${projectName(p).toLowerCase()}`
+}
+
+function disambiguatedProjectLabel(key: string, sample: ProjectSummary, basenameCounts: Map<string, number>): string {
+  const base = projectName(sample)
+  if ((basenameCounts.get(base) ?? 0) <= 1) return base
+  const path = (sample.projectPath ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  if (path && isAbsoluteProjectPath(path)) {
+    const parts = path.split('/').filter(Boolean)
+    if (parts.length >= 2) return parts.slice(-2).join('/')
+    return path
+  }
+  return sample.project || base || key
 }
 
 type Col = { header: string; right?: boolean }
@@ -92,6 +111,7 @@ export type OverviewDurable = {
   savingsUSD: number
   calls: number
   sessions: number
+  sessionCountBasis?: SessionCountBasis
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -127,18 +147,18 @@ export function renderOverview(
   const byCat = new Map<string, { cost: number; turns: number }>()
   const byTool = new Map<string, number>()
   const byDay = new Map<string, { cost: number; tokens: number; providers: Set<string> }>()
-  const byProject = new Map<string, { cost: number; sessions: number }>()
+  const byProject = new Map<string, { cost: number; sessions: number; sample: ProjectSummary }>()
 
   for (const p of projects) {
     cost += p.totalCostUSD
     savings += p.totalSavingsUSD
     calls += p.totalApiCalls
     sessions += p.sessions.length
-    const pname = projectName(p)
-    const pe = byProject.get(pname) ?? { cost: 0, sessions: 0 }
+    const pkey = projectAggKey(p)
+    const pe = byProject.get(pkey) ?? { cost: 0, sessions: 0, sample: p }
     pe.cost += p.totalCostUSD
     pe.sessions += p.sessions.length
-    byProject.set(pname, pe)
+    byProject.set(pkey, pe)
     for (const s of p.sessions) {
       inTok += s.totalInputTokens
       outTok += sessionBillableOutputTokens(s)
@@ -222,7 +242,10 @@ export function renderOverview(
   const kv = (k: string, v: string): string => '  ' + c.dim(k.padEnd(11)) + v
   out.push(kv('Cost', c.bold(formatCost(cost))))
   out.push(kv('Tokens', formatTokens(totalTokens) + c.dim('   (breakdown below)')))
-  out.push(kv('Calls', formatCount(calls) + c.dim('   sessions ') + formatCount(sessions)))
+  out.push(kv('Calls', formatCount(calls) + c.dim('   ') + formatSessionCount(sessions, durable ? durable.sessionCountBasis : 'identity')))
+  if (durable && durable.sessionCountBasis !== 'identity' && sessions > 0) {
+    out.push(kv('', c.dim(SESSION_COUNT_HELP)))
+  }
   out.push(kv('Cache hit', `${cacheHit.toFixed(1)}%`))
   if (savings > 0) out.push(kv('Savings', formatCost(savings) + c.dim(' (local models)')))
   const unpriced = findUnpricedModels(
@@ -307,13 +330,18 @@ export function renderOverview(
     out.push('')
   }
 
-  // Top projects
+  // Top projects (#1260: labels disambiguate when basename collides across abs paths)
   const projRows = [...byProject.entries()].sort((a, b) => b[1].cost - a[1].cost).slice(0, 10)
   if (projRows.length) {
+    const basenameCounts = new Map<string, number>()
+    for (const [, v] of projRows) {
+      const b = projectName(v.sample)
+      basenameCounts.set(b, (basenameCounts.get(b) ?? 0) + 1)
+    }
     out.push(heading('Top projects'))
     out.push(renderTable(c,
       [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
-      projRows.map(([name, v]) => [name, formatCost(v.cost), formatCount(v.sessions)]),
+      projRows.map(([key, v]) => [disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
     ))
     out.push('')
   }

@@ -4,7 +4,7 @@ import { homedir, platform } from 'os'
 
 import { readSessionLines } from '../fs-utils.js'
 import { calculateCost } from '../models.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 const PROVIDER_NAME = 'open-design'
 const ENV_DIR = 'CODEBURN_OPEN_DESIGN_DIR'
@@ -244,6 +244,10 @@ export function createOpenDesignProvider(overrideDir?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: overrideDir ?? getOpenDesignDir(), label: 'sessions' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

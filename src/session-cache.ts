@@ -154,19 +154,36 @@ export type ProviderSection = {
   files: Record<string, CachedFile>
   /** True when the provider's cache entries survive source-file eviction. */
   durable?: boolean
+  /** True once a scan walked THIS provider end to end. A `--provider X` run
+   *  only ever learns about X, so completeness is recorded per provider and the
+   *  whole-cache `complete` below is reserved for an unscoped scan. Absent →
+   *  fall back to the whole-cache flag (a cache written before this field, or
+   *  by an unscoped run that already vouched for every provider). */
+  complete?: boolean
+  /** Epoch ms floor of what `complete` covers: the scan skipped sources whose
+   *  mtime predates this (the `dateRange` filter in parseProviderSources), so
+   *  the section answers "complete" only for a query starting at or after it.
+   *  Absent means complete for any range. */
+  completeFrom?: number
 }
 
 export type SessionCache = {
   version: number
   providers: Record<string, ProviderSection>
-  /** True only once a full scan has run to completion. The throttled partial
-   *  saves during a cold hydration persist `false`; the single end-of-parse save
-   *  flips it `true`. A cache that is present-but-incomplete (an interrupted cold
-   *  start left a partial behind) must be treated as still cold — otherwise the
-   *  emptiness heuristic reads the partial as warm, the cross-process hydration
-   *  lock never engages, and totals heal only gradually while a concurrent parse
-   *  can freeze a partial daily history. Absent on caches written before this
-   *  field existed → read as incomplete (one self-healing re-hydration). */
+  /** True only once a full UNSCOPED scan has run to completion. The throttled
+   *  partial saves during a cold hydration persist `false`; the single
+   *  end-of-parse save flips it `true`. A cache that is present-but-incomplete
+   *  (an interrupted cold start left a partial behind) must be treated as still
+   *  cold — otherwise the emptiness heuristic reads the partial as warm, the
+   *  cross-process hydration lock never engages, and totals heal only gradually
+   *  while a concurrent parse can freeze a partial daily history. Absent on
+   *  caches written before this field existed → read as incomplete (one
+   *  self-healing re-hydration).
+   *
+   *  A provider-scoped run never sets it — it saw one provider — and instead
+   *  stamps that provider's own `ProviderSection.complete`. Kept as the
+   *  whole-cache answer so a reader that only knows the envelope (and every
+   *  cache written before per-provider stamps existed) keeps working. */
   complete?: boolean
 }
 
@@ -369,10 +386,9 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
   grok: 'authoritative-usage-v4',
-  // seed-aware-v1: the parser now skips the parent events a forked session
-  // replays (double-counted before), takes the model from the reporting
-  // assistant/message, and keeps agent-injected context out of the preview.
-  dsh: 'seed-aware-v1',
+  // v0-v3 generations, embedded attempt streams, retry accounting, and the
+  // version-specific inherited-prefix rules all change cached DSH calls.
+  dsh: 'session-formats-v0-v3-attempts-v5',
   // cost-provenance-v3: preserve Hermes included/estimated/actual status and
   // rebuild the provider section alongside the v3 lifetime ledger. The parse
   // bump is required with the ledger bump: seeding a new ledger from a section
@@ -385,11 +401,28 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // sessions' workspaceDirectory), which sync attribution needs to resolve
   // the git repo. Cached entries from before the bump lack projectPath and
   // would serve attribution-blind sessions forever without a re-parse.
-  kiro: 'ide-parsing-v1-est-cost-project-path-v1',
+  // working-directory-v1: project-path-v1 wired the session's directory to
+  // projectPath only, but sync attribution does not read that field. It calls
+  // buildRepoGroups in "trusted-session-cwd" mode, which resolves the repo from
+  // `session.workingDirectory` and drops any session whose own directory does
+  // not resolve — so every kiro session stayed attribution-blind despite
+  // carrying the path. All three parsers now emit workingDirectory from the
+  // same provider-recorded value; parser.ts stamps
+  // workingDirectoryProvenance: 'provider-field' on it, which is what the
+  // consumer requires (a marker-less value is treated as synthesized and fails
+  // closed). Entries cached under project-path-v1 hold projectPath but no
+  // workingDirectory, so a re-parse is required for the fix to take effect.
+  kiro: 'ide-parsing-v1-est-cost-project-path-v1-working-directory-v1',
   // nested-agent-v1: OMP writes crewmate transcripts one directory below each
   // parent session. reported-cost-v2 persists those measured costs through the
   // cache, including the explicit zero on xai-oauth turns.
-  omp: 'nested-agent-v1-reported-cost-v2',
+  // cwd-project-path-v1 (#1260): retain absolute session header cwd on
+  // projectPath/workingDirectory instead of basename-only identity.
+  // project-group-by-abs-v1 (#1260): parseProviderSources groups by abs
+  // projectPath/workingDirectory so same-basename distinct roots stay apart.
+  pi: 'cwd-project-path-v1-project-group-by-abs-v1',
+  // project-group-by-abs-v1: shared Pi/OMP serve grouping uses abs identity.
+  omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1',
   opencode: 'session-model-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
@@ -424,6 +457,8 @@ type ShardRef = { name: string; until: string }
 type EnvelopeProvider = {
   envFingerprint: string
   durable?: boolean
+  complete?: boolean
+  completeFrom?: number
   /** month (`YYYY-MM`, or `0000-00` for turn-less files) -> shard */
   shards: Record<string, ShardRef>
 }
@@ -563,9 +598,51 @@ export function emptyCache(): SessionCache {
 
 /** A cache is warm only when a full scan finished against it. Empty-but-marked
  *  (a machine with no sessions) is complete; present-but-unmarked (an interrupted
- *  cold start, or a pre-marker cache) is NOT — it is still cold. */
-export function isCacheComplete(cache: SessionCache): boolean {
-  return cache.complete === true
+ *  cold start, or a pre-marker cache) is NOT — it is still cold.
+ *
+ *  The answer is composed from the sections the REQUEST needs, on both axes a
+ *  scan can be scoped on:
+ *  - provider: a `--provider X` request asks only about X's section; an
+ *    unscoped one needs the whole-cache flag (only an unscoped scan can vouch
+ *    for the providers that have no section at all) plus every section it holds.
+ *  - date: a section stamped with a `completeFrom` floor skipped older sources,
+ *    so it answers a query starting at or after that floor and no other.
+ *
+ *  `sinceMs` is the requested range start; omitting it asks about ALL of
+ *  history, which only a section with no floor can satisfy. A section with no
+ *  `complete` of its own inherits the whole-cache flag, which is what keeps a
+ *  cache written before per-provider stamps (and one an unscoped scan wrote)
+ *  reading exactly as it did. */
+export function isCacheComplete(cache: SessionCache, providerFilter?: string, sinceMs?: number): boolean {
+  const sectionComplete = (provider: string): boolean => {
+    const section = cache.providers[provider]
+    if ((section?.complete ?? cache.complete) !== true) return false
+    const from = section?.completeFrom
+    return from === undefined || (sinceMs !== undefined && sinceMs >= from)
+  }
+  if (providerFilter && providerFilter !== 'all') return sectionComplete(providerFilter)
+  return cache.complete === true && Object.keys(cache.providers).every(sectionComplete)
+}
+
+/** Record that this scan walked `provider` to the end, optionally only back to
+ *  `completeFrom` (the range start that filtered older sources out). Coverage
+ *  only ever grows — a section already complete for all of history stays that
+ *  way — so the stored floor is the lowest of the two. Returns whether anything
+ *  changed, which is what makes the caller save a cache that is otherwise
+ *  clean. The section is created when absent: a scoped scan of a provider with
+ *  no sessions has nothing to cache but still has completeness to record, and
+ *  without it every such run would re-enter cold hydration forever. */
+export function markProviderComplete(cache: SessionCache, provider: string, completeFrom?: number): boolean {
+  const section = cache.providers[provider]
+    ?? (cache.providers[provider] = { envFingerprint: computeEnvFingerprint(provider), files: {} })
+  const prior = section.complete === true ? section.completeFrom ?? 0 : undefined
+  const widened = prior === undefined ? completeFrom : Math.min(prior, completeFrom ?? 0)
+  const floor = widened !== undefined && widened > 0 ? widened : undefined
+  const changed = section.complete !== true || section.completeFrom !== floor
+  section.complete = true
+  if (floor === undefined) delete section.completeFrom
+  else section.completeFrom = floor
+  return changed
 }
 
 /** Pre-parse probe of the same question `isCacheComplete` answers after a load:
@@ -574,7 +651,13 @@ export function isCacheComplete(cache: SessionCache): boolean {
  *  A cache still in a legacy layout has no envelope and reads as cold — the
  *  adoption in `loadCache` may still make it warm, which costs the caller
  *  nothing: a warm cache has an entry for every discovered file, so a
- *  cold-start optimisation keyed on missing entries simply finds no work. */
+ *  cold-start optimisation keyed on missing entries simply finds no work.
+ *  Deliberately the WHOLE-cache question, matching `isCacheComplete` with no
+ *  provider filter: its callers (the serve first-paint floor, the background
+ *  fill) answer for every provider at once, so a cache only one scoped run has
+ *  vouched for is still cold to them. A `completeFrom` floor does not make it
+ *  cold — the floored months are cached, and a wider request re-enters cold
+ *  hydration through `isCacheComplete` on its own. */
 export async function isColdCacheOnDisk(): Promise<boolean> {
   return (await readEnvelope(sessionCacheDir()))?.complete !== true
 }
@@ -946,6 +1029,8 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
       envFingerprint: meta.envFingerprint,
       files: {},
       ...(meta.durable ? { durable: true } : {}),
+      ...(meta.complete === true ? { complete: true } : {}),
+      ...(typeof meta.completeFrom === 'number' ? { completeFrom: meta.completeFrom } : {}),
     }
     // Recorded even when every shard is skipped or unreadable: the section is
     // what tells the next save which provider these carried-forward shard refs
@@ -1342,6 +1427,8 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       providers[provider] = {
         envFingerprint: plan.section.envFingerprint,
         ...(plan.section.durable ? { durable: true } : {}),
+        ...(plan.section.complete === true ? { complete: true } : {}),
+        ...(plan.section.completeFrom !== undefined ? { completeFrom: plan.section.completeFrom } : {}),
         shards,
       }
     }

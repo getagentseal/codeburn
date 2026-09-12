@@ -4,6 +4,17 @@ import Foundation
 /// Capacity Dock. Every CodeBurn-owned provider adapter normalizes into this
 /// presentation type.
 struct QuotaSummary: Equatable {
+    /// Quota providers use a ten-minute freshness horizon for last-known
+    /// snapshots. A projection from an older sample is misleading even when
+    /// the credentials are still connected, so pace presentation must omit it.
+    static let freshnessThreshold: TimeInterval = 10 * 60
+
+    static func isFresh(fetchedAt: Date?, now: Date = Date()) -> Bool {
+        guard let fetchedAt else { return false }
+        let age = now.timeIntervalSince(fetchedAt)
+        return age.isFinite && age >= 0 && age <= freshnessThreshold
+    }
+
     enum Connection: Equatable {
         case connected
         case disconnected      // no credentials present
@@ -30,6 +41,36 @@ struct QuotaSummary: Equatable {
         let label: String
         let percent: Double           // 0..1
         let resetsAt: Date?
+        /// Length of this window in seconds, carried only from metadata the
+        /// provider service itself validates (Codex's `limitWindowSeconds`,
+        /// Claude's fixed 5-hour/7-day windows). Nil means the duration is not
+        /// known — pace presentation must omit the estimate rather than infer
+        /// a length from the label or the reset date.
+        let windowSeconds: Int?
+        /// Timestamp of the provider sample that produced this window. Nil is
+        /// preserved for legacy/unsupported summaries and is not fresh enough
+        /// to support a pace projection.
+        let fetchedAt: Date?
+
+        init(
+            label: String,
+            percent: Double,
+            resetsAt: Date?,
+            windowSeconds: Int? = nil,
+            fetchedAt: Date? = nil
+        ) {
+            self.label = label
+            self.percent = percent
+            self.resetsAt = resetsAt
+            self.windowSeconds = windowSeconds
+            self.fetchedAt = fetchedAt
+        }
+
+        /// A pace estimate is valid only while the underlying sample remains
+        /// inside the established live-quota freshness horizon.
+        func isFresh(at now: Date = Date()) -> Bool {
+            QuotaSummary.isFresh(fetchedAt: fetchedAt, now: now)
+        }
     }
 
     /// Color band thresholds for the inline chip bar and aggregate menubar

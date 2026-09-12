@@ -543,6 +543,20 @@ describe('Overview', () => {
     expect(container.querySelectorAll('.ov-sessions-widget .mdot')).toHaveLength(0)
   })
 
+  it('uses singular call copy for a one-call expensive session', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    payload.current.topSessions = [
+      { project: 'tiny', cost: 0.02, savingsUSD: 0, calls: 1, date: '2026-07-08' },
+    ]
+    getOverview.mockResolvedValue(payload)
+
+    render(<Overview period="30days" provider="all" />)
+
+    expect(await screen.findByText('Jul 8 · 1 call')).toBeInTheDocument()
+    expect(screen.queryByText(/1 calls/)).not.toBeInTheDocument()
+  })
+
   it('disambiguates two same-project/same-day/same-calls sessions by cost', async () => {
     const now = new Date()
     const base = makePayload(now)
@@ -729,13 +743,77 @@ describe('Overview', () => {
     const kpis = container.querySelector('.ov-hero-main') as HTMLElement
     // Hero cost is the combined $500, not the local $312.40.
     expect(within(kpis).getByText('$500.00')).toBeInTheDocument()
-    expect(within(kpis).getByText(/6,300 calls · 128 sessions/)).toBeInTheDocument()
+    expect(within(kpis).getByText(/6,300 calls · Session count unavailable/)).toBeInTheDocument()
+    expect(within(kpis).queryByText(/128 sessions/)).not.toBeInTheDocument()
+    expect(within(kpis).queryByText(/At least/)).not.toBeInTheDocument()
     expect(within(kpis).getByText('Combined · Last 30 days')).toBeInTheDocument()
     expect(within(kpis).getByText('2 of 2 devices')).toBeInTheDocument()
     expect(within(kpis).getByText('workstation')).toBeInTheDocument()
     expect(within(kpis).getByText('laptop · this device')).toBeInTheDocument()
     // Combined mode hides the local savings lines (they are device-specific).
     expect(within(kpis).queryByText('Saved via local models')).not.toBeInTheDocument()
+    expect(within(kpis).getByTitle('Session identities are unavailable across devices.')).toBeInTheDocument()
+  })
+
+  it('combined zero, missing basis, and replicated device counts all stay unavailable', async () => {
+    const now = new Date()
+    const cases: Array<{ name: string, combined: NonNullable<MenubarPayload['combined']> }> = [
+      {
+        name: 'zero',
+        combined: {
+          perDevice: [{ id: 'local', name: 'laptop', local: true, cost: 0, calls: 0, sessions: 0, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0 }],
+          combined: { cost: 0, calls: 0, sessions: 0, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0, deviceCount: 1, reachableCount: 1 },
+        },
+      },
+      {
+        name: 'missing-basis',
+        combined: {
+          perDevice: [{ id: 'local', name: 'laptop', local: true, cost: 10, calls: 4, sessions: 2, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0 }],
+          combined: { cost: 10, calls: 4, sessions: 2, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0, deviceCount: 1, reachableCount: 1 },
+        },
+      },
+      {
+        name: 'replicated',
+        combined: {
+          perDevice: [
+            { id: 'a', name: 'one', local: true, cost: 1, calls: 1, sessions: 1, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0 },
+            { id: 'b', name: 'two', local: false, cost: 1, calls: 1, sessions: 1, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0 },
+          ],
+          combined: { cost: 2, calls: 2, sessions: 2, inputTokens: 0, outputTokens: 0, cacheCreateTokens: 0, cacheReadTokens: 0, totalTokens: 0, deviceCount: 2, reachableCount: 2 },
+        },
+      },
+    ]
+    for (const entry of cases) {
+      const payload = makePayload(now)
+      delete payload.current.sessionCountBasis
+      payload.combined = entry.combined
+      const { container, unmount } = render(<OverviewContent period="30days" provider="all" overview={polled(payload)} scope="combined" />)
+      const kpis = container.querySelector('.ov-hero-main') as HTMLElement
+      expect(within(kpis).getByText(/Session count unavailable/), entry.name).toBeInTheDocument()
+      expect(within(kpis).queryByText(/At least/), entry.name).not.toBeInTheDocument()
+      expect(within(kpis).getByTitle('Session identities are unavailable across devices.'), entry.name).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('local source-only exact zero and partial counts still work', async () => {
+    const now = new Date()
+    const zero = makePayload(now)
+    zero.current.cost = 0
+    zero.current.calls = 0
+    zero.current.sessions = 0
+    zero.current.sessionCountBasis = 'identity'
+    const { container, unmount } = render(<OverviewContent period="today" provider="all" overview={polled(zero)} scope="local" />)
+    expect(within(container.querySelector('.ov-hero-main') as HTMLElement).getByText(/0 sessions/)).toBeInTheDocument()
+    unmount()
+
+    const partial = makePayload(now)
+    partial.current.sessions = 3
+    partial.current.sessionCountBasis = 'partial'
+    render(<OverviewContent period="week" provider="all" overview={polled(partial)} scope="local" />)
+    const kpis = document.querySelector('.ov-hero-main') as HTMLElement
+    expect(within(kpis).getByText(/At least 3 sessions/)).toBeInTheDocument()
+    expect(within(kpis).getByTitle('Older session logs may be unavailable.')).toBeInTheDocument()
   })
 
   it('keeps local hero totals when scope is local even if a combined payload is present', async () => {

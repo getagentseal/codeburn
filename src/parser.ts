@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { existsSync } from 'fs'
 import { lstat, readFile, readdir, stat } from 'fs/promises'
 import { createHash } from 'crypto'
@@ -7,7 +8,7 @@ import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-
 import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
-import { discoverAllSessions, getProvider } from './providers/index.js'
+import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
 import { flushCodexCache, readCachedCodexResults, withCodexCacheDirectory, writeCachedCodexResults } from './codex-cache.js'
 import { antigravityCascadeIdFromPath, flushAntigravityCache, shouldReparseAntigravitySource } from './providers/antigravity.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
@@ -34,6 +35,7 @@ import {
   isCacheDirty,
   loadCache,
   markCacheDirty,
+  markProviderComplete,
   monthScopeForRange,
   reconcileFile,
   saveCache,
@@ -77,9 +79,22 @@ function claudeSlugFallbackPath(dirName: string): string {
   return dirName
 }
 
-function normalizeProjectPathKey(projectPath: string): string {
+/// Drive-letter and UNC (`//server/share` after slash-normalize) are Windows
+/// identity: directory case folds. A single leading slash is POSIX and does not.
+function isWindowsAbsPath(slashNormalized: string): boolean {
+  return /^[a-zA-Z]:(\/|$)/.test(slashNormalized) || slashNormalized.startsWith('//')
+}
+
+export function foldIdentifiedWindowsPath(slashNormalized: string): string {
+  return isWindowsAbsPath(slashNormalized) ? slashNormalized.toLowerCase() : slashNormalized
+}
+
+/// Cache/live grouping key for a stored cwd. Separators always normalize.
+/// Identified Windows paths casefold; POSIX case is identity.
+export function normalizeProjectPathKey(projectPath: string): string {
   const normalized = projectPath.trim().replace(/\\/g, '/')
-  return (normalized.replace(/\/+$/, '') || normalized).toLowerCase()
+  const trimmed = normalized.replace(/\/+$/, '') || normalized
+  return foldIdentifiedWindowsPath(trimmed)
 }
 
 function projectNameFromPath(projectPath: string, fallback: string): string {
@@ -3157,6 +3172,10 @@ export function setInteractiveScanUI(active = true): void {
   interactiveScanUI = active
 }
 
+export function isInteractiveScanUI(): boolean {
+  return interactiveScanUI
+}
+
 // Machine-readable scan progress for the desktop app's first-run splash. Plain
 // CLI/terminal usage is untouched: emission is gated on CODEBURN_PROGRESS=1,
 // which only the app's cold-start warmup spawn sets. Each event is one
@@ -3479,7 +3498,10 @@ export async function parseProviderSources(
   try {
     for (const { source, fp } of changedSources) {
       if (dateRange) {
-        if (fp.mtimeMs < dateRange.start.getTime()) continue
+        if (fp.mtimeMs < dateRange.start.getTime()) {
+          dateFloorSkippedProviders.add(providerName)
+          continue
+        }
       }
       filesParsedFromSource++
 
@@ -4221,7 +4243,12 @@ export async function parseProviderSources(
     }
   }
 
-  const projectMap = new Map<string, { projectPath?: string; sessions: SessionSummary[] }>()
+  // #1260: group by absolute projectPath / workingDirectory when
+  // available — never by display basename alone. Two Pi roots with cwd=/a/vault
+  // and /b/vault both display as "vault"; keying on the leaf collapsed them
+  // (first projectPath wins) before mergeProjectsByCrossProviderKey could see
+  // distinct abs identities.
+  const projectMap = new Map<string, { project: string; projectPath?: string; sessions: SessionSummary[] }>()
   for (const [key, { project, projectPath, workingDirectory, turns, prLinks, title, lineage, agentName, agentStartedAt }] of sessionMap) {
     const sessionId = key.split(':')[1] ?? key
     const assembledTurns = providerName === 'copilot'
@@ -4242,19 +4269,28 @@ export async function parseProviderSources(
     // Supplementary-only sessions (e.g. a rollup with no per-turn calls) have
     // apiCalls 0 by design but their tokens/cost are real and must serve.
     if (session.apiCalls > 0 || session.totalCostUSD > 0 || session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens + session.totalReasoningTokens > 0) {
-      const existing = projectMap.get(project)
+      const absFromPath = projectPath ? normalizeAbsProjectPathKey(projectPath) : null
+      const absFromWd = workingDirectory ? normalizeAbsProjectPathKey(workingDirectory) : null
+      const absKey = absFromPath ?? absFromWd
+      const groupKey = absKey ? `path:${absKey}` : `label:${project}`
+      const resolvedPath = absFromPath ? projectPath : (absFromWd ? workingDirectory : projectPath)
+      const existing = projectMap.get(groupKey)
       if (existing) {
         existing.sessions.push(session)
-        if (!existing.projectPath && projectPath) existing.projectPath = projectPath
+        if (absFromPath && !normalizeAbsProjectPathKey(existing.projectPath ?? '')) {
+          existing.projectPath = projectPath
+        } else if (!existing.projectPath && resolvedPath) {
+          existing.projectPath = resolvedPath
+        }
       } else {
-        projectMap.set(project, { projectPath, sessions: [session] })
+        projectMap.set(groupKey, { project, projectPath: resolvedPath, sessions: [session] })
       }
     }
   }
 
   const projects: ProjectSummary[] = []
-  for (const [dirName, { projectPath, sessions }] of projectMap) {
-    projects.push(summarizeProject(dirName, projectPath ?? unsanitizePath(dirName), sessions))
+  for (const { project, projectPath, sessions } of projectMap.values()) {
+    projects.push(summarizeProject(project, projectPath ?? unsanitizePath(project), sessions))
   }
 
   return projects
@@ -4386,29 +4422,89 @@ export function setCachePutMeta(meta: { startMs: number; endMs: number; sig: str
   putMeta = meta
 }
 
+export function isRootedProjectPattern(pattern: string): boolean {
+  const raw = pattern.trim().replace(/\\/g, '/')
+  return raw.startsWith('/') || raw === '~' || raw.startsWith('~/') || /^[a-zA-Z]:\//.test(raw)
+}
+
+/// A quoted "~/proj" reaches us unexpanded, and so does one typed into a field
+/// with no shell behind it. Left as a loose word it would match nothing and say
+/// nothing, since no stored path contains a tilde.
+function expandTilde(pattern: string): string {
+  const raw = pattern.trim().replace(/\\/g, '/')
+  if (raw !== '~' && !raw.startsWith('~/')) return raw
+  return homedir().replace(/\\/g, '/') + raw.slice(1)
+}
+
+/// A pattern is normalized once and matched many times: the day cache runs the
+/// filter for every project of every day, and again per provider slice.
+type CompiledPattern = { rooted: true; anchor: string | null } | { rooted: false; needle: string }
+
+export type ProjectFilterTarget = { project: string; projectPath?: string }
+
+function compile(patterns: readonly string[]): CompiledPattern[] {
+  return patterns.map(pattern => isRootedProjectPattern(pattern)
+    ? { rooted: true as const, anchor: normalizeAbsProjectPathKey(expandTilde(pattern)) }
+    : { rooted: false as const, needle: pattern.toLowerCase() })
+}
+
+/// An absolute path names ONE project, so it anchors on a segment boundary (the
+/// isProxiedPath rule): "/a/proj" takes "/a/proj/sub" but not "/a/proj-ui-kit".
+/// Both sides key through normalizeAbsProjectPathKey (Windows casefolds, POSIX
+/// does not, #1260), and rootedness alone picks the branch, so "/" names none.
+function hit(entry: ProjectFilterTarget, pattern: CompiledPattern, key: string | null): boolean {
+  if (pattern.rooted) {
+    const anchor = pattern.anchor
+    return anchor !== null && key !== null && (key === anchor || key.startsWith(anchor + '/'))
+  }
+  return entry.project.toLowerCase().includes(pattern.needle)
+    || (entry.projectPath ?? '').toLowerCase().includes(pattern.needle)
+}
+
+/// The filter as one closure: patterns are compiled here, so the caller can
+/// hold it across a loop, and include-then-exclude is composed in one place for
+/// the live parse and the day cache alike.
+export function makeProjectFilter(
+  include?: readonly string[],
+  exclude?: readonly string[],
+): (entry: ProjectFilterTarget) => boolean {
+  const inc = compile(include ?? [])
+  const exc = compile(exclude ?? [])
+  // The key costs a trim, a global replace and three regex passes. The day cache
+  // runs this per project, per day, per provider slice, so it is only paid when
+  // some pattern is rooted and can actually read it.
+  const needsKey = inc.some(p => p.rooted) || exc.some(p => p.rooted)
+  return entry => {
+    const key = needsKey ? normalizeAbsProjectPathKey(entry.projectPath ?? '') : null
+    if (inc.length > 0 && !inc.some(pattern => hit(entry, pattern, key))) return false
+    if (exc.length > 0 && exc.some(pattern => hit(entry, pattern, key))) return false
+    return true
+  }
+}
+
+export function matchesProjectPattern(project: ProjectFilterTarget, pattern: string): boolean {
+  return makeProjectFilter([pattern])(project)
+}
+
+/// Which rooted patterns name no project here? Each is tried on its own against
+/// the UNFILTERED list: judged inside filterProjectsByName instead, an earlier
+/// --project would mask a later one that selects the same project, and an
+/// --exclude would be tested against what --project had already removed.
+export function unmatchedRootedPatterns(projects: readonly ProjectFilterTarget[], patterns: readonly string[]): string[] {
+  return patterns.filter(pattern => {
+    if (!isRootedProjectPattern(pattern)) return false
+    return !projects.some(entry => matchesProjectPattern(entry, pattern))
+  })
+}
+
 export function filterProjectsByName(
   projects: ProjectSummary[],
   include?: string[],
   exclude?: string[],
 ): ProjectSummary[] {
-  let result = projects
-  if (include && include.length > 0) {
-    const patterns = include.map(s => s.toLowerCase())
-    result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return patterns.some(pat => name.includes(pat) || path.includes(pat))
-    })
-  }
-  if (exclude && exclude.length > 0) {
-    const patterns = exclude.map(s => s.toLowerCase())
-    result = result.filter(p => {
-      const name = p.project.toLowerCase()
-      const path = p.projectPath.toLowerCase()
-      return !patterns.some(pat => name.includes(pat) || path.includes(pat))
-    })
-  }
-  return result
+  if ((include?.length ?? 0) === 0 && (exclude?.length ?? 0) === 0) return projects
+  const matches = makeProjectFilter(include, exclude)
+  return projects.filter(matches)
 }
 
 function turnDayString(turn: ClassifiedTurn): string | null {
@@ -4573,28 +4669,148 @@ export function filterProjectsByDays(projects: ProjectSummary[], days: Set<strin
 // same repo used with Claude Code + Codex, say). An additive total summed at
 // the session level but forgotten here silently under-reports for exactly the
 // multi-provider users (this bit totalEstimatedCostUSD once, caught in #639
-// verification). Known gaps, deliberate: totalSavingsUSD is still not summed
-// (pre-existing, tracked separately) and totalProxiedCostUSD is re-derived
-// after the merge rather than summed here.
-export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
-  const crossProviderKey = (p: ProjectSummary): string => {
-    const path = p.projectPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
-    return path.includes('/') ? path : p.project.toLowerCase()
+// verification). totalSavingsUSD is summed with cost/calls. totalProxiedCostUSD
+// is re-derived after the merge rather than summed here.
+//
+// #1260: providers sanitize the same absolute cwd differently (-root-vault /
+// root-vault / vault). Prefer absolute projectPath (or session.workingDirectory)
+// as the merge key; attach slug/basename-only rows only when they uniquely match
+// one absolute path. Ambiguous basenames across distinct parents stay separate.
+// POSIX path case is identity: /a/Vault and /a/vault are two keys. Identified
+// Windows drive/UNC paths still casefold (C:\\Work\\Vault ≡ c:/work/vault).
+// Lowercased labels are matching hints only — two path keys sharing a hint
+// stay unattached.
+export function normalizeAbsProjectPathKey(projectPath: string): string | null {
+  const raw = projectPath.trim().replace(/\\/g, '/')
+  if (!raw) return null
+  // Absolute POSIX, Windows drive, or Codex-style stripped abs ("root/vault").
+  const looksAbs = raw.startsWith('/') || /^[a-zA-Z]:\//.test(raw) || (raw.includes('/') && !raw.startsWith('-'))
+  if (!looksAbs) return null
+  const folded = foldIdentifiedWindowsPath(raw)
+  const stripped = folded.replace(/^\/+/, '').replace(/\/+$/, '')
+  return stripped || null
+}
+
+function sanitizePathAsLabel(absKey: string): string {
+  return absKey.replace(/\//g, '-')
+}
+
+function labelAliases(project: string): string[] {
+  const raw = project.trim().replace(/\\/g, '/').toLowerCase()
+  if (!raw) return []
+  const noLeadDash = raw.replace(/^-+/, '')
+  return [...new Set([raw, noLeadDash].filter(Boolean))]
+}
+
+function foldInto(existing: ProjectSummary, p: ProjectSummary): void {
+  existing.sessions.push(...p.sessions)
+  if (p.subagentAnchors?.length) existing.subagentAnchors = [...(existing.subagentAnchors ?? []), ...p.subagentAnchors]
+  existing.totalCostUSD += p.totalCostUSD
+  existing.totalSavingsUSD = (existing.totalSavingsUSD ?? 0) + (p.totalSavingsUSD ?? 0)
+  existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
+  existing.totalApiCalls += p.totalApiCalls
+}
+
+export function crossProviderProjectKey(p: ProjectSummary): string {
+  const fromPath = normalizeAbsProjectPathKey(p.projectPath)
+  if (fromPath) return `path:${fromPath}`
+  const wd = p.sessions.map(s => s.workingDirectory).find(w => typeof w === 'string' && w.trim())
+  if (wd) {
+    const fromWd = normalizeAbsProjectPathKey(wd)
+    if (fromWd) return `path:${fromWd}`
   }
-  const mergedMap = new Map<string, ProjectSummary>()
+  const aliases = labelAliases(p.project)
+  return `label:${aliases[0] ?? p.project.toLowerCase()}`
+}
+
+const SANITIZED_COLLISION = '__collision__'
+
+function registerSanitizedLabel(
+  pathBySanitized: Map<string, string>,
+  sanitizedMembers: Map<string, Set<string>>,
+  label: string,
+  key: string,
+): void {
+  const members = sanitizedMembers.get(label) ?? new Set<string>()
+  members.add(key)
+  sanitizedMembers.set(label, members)
+  const prev = pathBySanitized.get(label)
+  if (prev === undefined) {
+    pathBySanitized.set(label, key)
+    return
+  }
+  if (prev !== key) pathBySanitized.set(label, SANITIZED_COLLISION)
+}
+
+export function mergeProjectsByCrossProviderKey(projects: ProjectSummary[]): Map<string, ProjectSummary> {
+  const pathProjects = new Map<string, ProjectSummary>()
+  const pathBySanitized = new Map<string, string>()
+  const sanitizedMembers = new Map<string, Set<string>>()
+  const pathByBasename = new Map<string, string[]>()
+  const deferred: ProjectSummary[] = []
+
   for (const p of projects) {
-    const key = crossProviderKey(p)
-    const existing = mergedMap.get(key)
+    const key = crossProviderProjectKey(p)
+    if (!key.startsWith('path:')) {
+      deferred.push(p)
+      continue
+    }
+    const abs = key.slice('path:'.length)
+    const existing = pathProjects.get(key)
     if (existing) {
-      existing.sessions.push(...p.sessions)
-      if (p.subagentAnchors?.length) existing.subagentAnchors = [...(existing.subagentAnchors ?? []), ...p.subagentAnchors]
-      existing.totalCostUSD += p.totalCostUSD
-      existing.totalEstimatedCostUSD = (existing.totalEstimatedCostUSD ?? 0) + (p.totalEstimatedCostUSD ?? 0)
-      existing.totalApiCalls += p.totalApiCalls
+      foldInto(existing, p)
+      if (normalizeAbsProjectPathKey(p.projectPath) && !normalizeAbsProjectPathKey(existing.projectPath)) {
+        existing.projectPath = p.projectPath
+        existing.project = p.project
+      }
     } else {
-      mergedMap.set(key, { ...p })
+      pathProjects.set(key, { ...p })
+      const sanitized = sanitizePathAsLabel(abs).toLowerCase()
+      registerSanitizedLabel(pathBySanitized, sanitizedMembers, sanitized, key)
+      registerSanitizedLabel(pathBySanitized, sanitizedMembers, `-${sanitized}`, key)
+      const base = abs.split('/').filter(Boolean).pop()
+      if (base) {
+        const hint = base.toLowerCase()
+        const bucket = pathByBasename.get(hint) ?? []
+        bucket.push(key)
+        pathByBasename.set(hint, bucket)
+      }
     }
   }
+
+  const labelOnly = new Map<string, ProjectSummary>()
+  for (const p of deferred) {
+    // Collect ALL candidates from sanitized + basename maps across aliases.
+    // On sanitized COLLISION, retain the full member set (do not ignore collision
+    // so a weaker basename unique-hit can still attach). Attach only when exactly
+    // one path key remains; otherwise stay label-only.
+    const candidates = new Set<string>()
+    for (const alias of labelAliases(p.project)) {
+      const viaSanitized = pathBySanitized.get(alias)
+      if (viaSanitized === SANITIZED_COLLISION) {
+        const members = sanitizedMembers.get(alias)
+        if (members) for (const m of members) candidates.add(m)
+      } else if (viaSanitized) {
+        candidates.add(viaSanitized)
+      }
+      const bases = pathByBasename.get(alias)
+      if (bases) for (const b of bases) candidates.add(b)
+    }
+    if (candidates.size === 1) {
+      const attach = [...candidates][0]!
+      foldInto(pathProjects.get(attach)!, p)
+      continue
+    }
+    // size === 0: no match; size > 1: ambiguous (sanitized collision, multi-parent, …)
+    const labelKey = `label:${labelAliases(p.project)[0] ?? p.project.toLowerCase()}`
+    const existing = labelOnly.get(labelKey)
+    if (existing) foldInto(existing, p)
+    else labelOnly.set(labelKey, { ...p })
+  }
+
+  const mergedMap = new Map<string, ProjectSummary>()
+  for (const [k, v] of pathProjects) mergedMap.set(k, v)
+  for (const [k, v] of labelOnly) mergedMap.set(k, v)
   return mergedMap
 }
 
@@ -5015,6 +5231,13 @@ export async function computeCorpusFingerprint(providerFilter?: string): Promise
 // new data, so the run must not report hydration complete even in write mode.
 let deferredRetryableSource = false
 
+// Providers for which this run left an uncached source unparsed because its
+// mtime predates the requested range. The scan still reached the end, but only
+// for sources modified since `dateRange.start` — which is exactly what the
+// per-provider completeness floor records, so a later WIDER query re-enters
+// cold hydration instead of trusting a cache that never saw those files.
+const dateFloorSkippedProviders = new Set<string>()
+
 // One command invocation that renders a dashboard asks for several ranges that
 // differ only in where they END — the scan range runs to end-of-day, the
 // durable headline re-anchors on its own `new Date()`. The exact-key memo needs
@@ -5190,8 +5413,8 @@ export function parseAllSessions(dateRange?: DateRange, providerFilter?: string)
   return withCodexCacheDirectory(codexCacheDir, () => parseAllSessionsInCacheScope(dateRange, providerFilter))
 }
 
-function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string): boolean {
-  if (!isCacheComplete(cache)) return false
+function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string, sinceMs?: number): boolean {
+  if (!isCacheComplete(cache, providerFilter, sinceMs)) return false
   const sections = providerFilter && providerFilter !== 'all'
     ? ([[providerFilter, cache.providers[providerFilter]]] as const).filter((entry): entry is readonly [string, ProviderSection] => entry[1] != null)
     : Object.entries(cache.providers)
@@ -5201,7 +5424,7 @@ function canServeCompleteSnapshot(cache: SessionCache, providerFilter?: string):
 
 export async function isCompleteSessionSnapshotAvailable(dateRange: DateRange, providerFilter?: string): Promise<boolean> {
   const diskCache = await loadCache(monthScopeForRange(dateRange.start, dateRange.end))
-  return canServeCompleteSnapshot(diskCache, providerFilter)
+  return canServeCompleteSnapshot(diskCache, providerFilter, dateRange.start.getTime())
 }
 
 async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
@@ -5249,11 +5472,12 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // a proxied key emitted under two providers the attribution can land on a
   // different provider than a full load would pick.
   const loadScope = dateRange ? monthScopeForRange(dateRange.start, dateRange.end) : undefined
+  const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
   let diskCache = await loadCache(loadScope)
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
-    process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache)}\n`)
+    process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
   }
 
   // Cold-hydration coordination (advisory, cross-process). Engages whenever the
@@ -5264,10 +5488,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   // If another live process is already hydrating, wait for it, then reload the
   // now-warm cache instead of double-parsing. Never a correctness gate: on any
   // doubt it proceeds unlocked.
-  if (!isCacheComplete(diskCache)) {
+  if (!isCacheComplete(diskCache, providerFilter, rangeStartMs)) {
     const hydration = await beginColdHydration(true)
     if (hydration.waited) diskCache = await loadCache(loadScope)
-    const isCold = !isCacheComplete(diskCache)
+    const isCold = !isCacheComplete(diskCache, providerFilter, rangeStartMs)
     try {
       return await runParse(key, diskCache, dateRange, providerFilter, { isCold, burstSig, parseStartedAt })
     } finally {
@@ -5275,7 +5499,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
     }
   }
 
-  if (firstPaintPrefersCompleteSnapshot && canServeCompleteSnapshot(diskCache, providerFilter)) {
+  if (firstPaintPrefersCompleteSnapshot && canServeCompleteSnapshot(diskCache, providerFilter, rangeStartMs)) {
     return runParse(key, diskCache, dateRange, providerFilter, {
       readOnly: true,
       snapshotOnly: true,
@@ -5372,9 +5596,13 @@ async function runParseInner(
   readOnlyServedStale = false
   deferredRetryableSource = false
   firstPaintDeferredThisRun = 0
+  dateFloorSkippedProviders.clear()
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
-  const allSources = snapshotOnly ? [] : await discoverAllSessions(providerFilter)
+  const discovery = snapshotOnly
+    ? { sources: [], failedProviders: [] }
+    : await discoverAllSessionsWithFailures(providerFilter)
+  const allSources = discovery.sources
   traceTiming('discovery', ` sources=${allSources.length}`)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
@@ -5492,10 +5720,34 @@ async function runParseInner(
   // background fill) has to come back cold and finish the job. A floored run
   // that deferred NOTHING parsed exactly what an unfloored run would have, so
   // it keeps the normal stamp.
+  //
+  // What the stamp records is what this run actually WALKED, on both axes a
+  // scan can be scoped on (#912). A `--provider X` run saw X and nothing else,
+  // so it marks X's section and leaves the whole-cache flag — the one that
+  // vouches for providers with no section at all — to an unscoped run. A ranged
+  // run left every uncached source older than the range unparsed, so the
+  // providers that skipped one record the range start as their completeness
+  // floor rather than claiming all of history. And a provider whose discovery
+  // threw contributed an empty source list that means "unknown", not "empty",
+  // so it is not marked at all.
   const deferredForFirstPaint = firstPaintDeferredThisRun > 0
-  const wasComplete = isCacheComplete(diskCache)
-  if (!readOnly && !wasComplete && !deferredForFirstPaint) diskCache.complete = true
-  if (!readOnly && (isCacheDirty(diskCache) || (!wasComplete && !deferredForFirstPaint))) {
+  const rangeStartMs = dateRange?.start.getTime()
+  const scopedRun = !!providerFilter && providerFilter !== 'all'
+  const discoveryFailed = new Set(discovery.failedProviders)
+  let completenessChanged = false
+  if (!readOnly && !deferredForFirstPaint) {
+    const walked = scopedRun ? [providerFilter!] : Object.keys(diskCache.providers)
+    for (const provider of walked) {
+      if (discoveryFailed.has(provider)) continue
+      const floor = dateFloorSkippedProviders.has(provider) ? rangeStartMs : undefined
+      if (markProviderComplete(diskCache, provider, floor)) completenessChanged = true
+    }
+    if (!scopedRun && discoveryFailed.size === 0 && diskCache.complete !== true) {
+      diskCache.complete = true
+      completenessChanged = true
+    }
+  }
+  if (!readOnly && (isCacheDirty(diskCache) || completenessChanged)) {
     try {
       const published = await saveCache(diskCache, refreshLock?.verifyStillOwner)
       if (!published) throw new RefreshFenceLostError()

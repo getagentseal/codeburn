@@ -42,6 +42,7 @@ export function redactProjectNames(payload: MenubarPayload, includeNames: boolea
       topProjects: payload.current.topProjects.map(p => ({
         ...p,
         name: pseudonym(p.name),
+        ...(p.id ? { id: pseudonym(p.id) } : {}),
         sessionDetails: p.sessionDetails ? redactSessionDetails(p.sessionDetails) : [],
       })),
       topSessions: payload.current.topSessions.map(s => ({ ...s, project: pseudonym(s.project) })),

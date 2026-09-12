@@ -3,7 +3,7 @@ import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
-import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
+import type { Provider, SessionSource, SessionParser, ParsedProviderCall, ProbeRoot } from './types.js'
 
 /// ZCode (CLI v0.14.x) records usage in a single SQLite database at
 /// ~/.zcode/cli/db/db.sqlite. We read it because the other on-disk sources are
@@ -211,6 +211,10 @@ export function createZcodeProvider(dbPathOverride?: string): Provider {
 
     toolDisplayName(rawTool: string): string {
       return rawTool
+    },
+
+    async probeRoots(): Promise<ProbeRoot[]> {
+      return [{ path: dbPath, label: 'db' }]
     },
 
     async discoverSessions(): Promise<SessionSource[]> {

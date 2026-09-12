@@ -510,7 +510,8 @@ function parseCliSession(meta: KiroCliSessionMeta, entries: KiroCliEntry[], seen
       userMessage: pendingUserMessage,
       sessionId,
       project,
-      ...(meta.cwd ? { projectPath: meta.cwd } : {}),
+      // workingDirectory is what sync attribution reads; see PROVIDER_PARSE_VERSIONS.kiro.
+      ...(meta.cwd ? { projectPath: meta.cwd, workingDirectory: meta.cwd } : {}),
     })
     turnIndex++
   }
@@ -668,7 +669,10 @@ async function parseWorkspaceSession(record: Record<string, unknown>, source: Se
     userMessage: pendingUserMessage,
     sessionId,
     ...(typeof record['workspaceDirectory'] === 'string' && record['workspaceDirectory']
-      ? { projectPath: record['workspaceDirectory'] as string }
+      ? {
+          projectPath: record['workspaceDirectory'] as string,
+          workingDirectory: record['workspaceDirectory'] as string,
+        }
       : {}),
   })
 
@@ -782,7 +786,9 @@ async function parseV2Session(source: SessionSource, seenKeys: Set<string>): Pro
           userMessage: turnUserMessage,
           sessionId,
           project: source.project,
-          ...(meta.workspacePaths?.[0] ? { projectPath: meta.workspacePaths[0] } : {}),
+          ...(meta.workspacePaths?.[0]
+            ? { projectPath: meta.workspacePaths[0], workingDirectory: meta.workspacePaths[0] }
+            : {}),
         })
       }
     }

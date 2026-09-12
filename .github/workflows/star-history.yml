@@ -14,16 +14,66 @@ concurrency:
 
 jobs:
   update:
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
       # Pin the action to an immutable revision because this workflow grants
-      # write access to the repository.
-      - uses: narayann7/star-history-action@a68d8f9d67ca20d55b682a264e69152dcf326e9c
+      # write access to the repository. commit: false keeps generation here;
+      # publishing is a rolling review branch so main's pull-request rule
+      # (GH013) is preserved. This workflow does not open pull requests.
+      - id: charts
+        uses: narayann7/star-history-action@a68d8f9d67ca20d55b682a264e69152dcf326e9c
         with:
           repos: getagentseal/codeburn
           output-dir: assets/star-history
           type: Date
           themes: light,dark
           width: "960"
+          commit: "false"
+
+      - name: Prepare star-history review branch
+        if: steps.charts.outputs.changed == 'true'
+        env:
+          BRANCH: chore/star-history
+          BASE: ${{ github.event.repository.default_branch }}
+          SERVER: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assets/star-history README.md
+          if git diff --cached --quiet; then
+            echo "Generator reported a change, but the worktree matches HEAD; nothing to publish."
+            exit 0
+          fi
+
+          git switch -C "$BRANCH"
+          git commit -m "chore: update star history"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            git fetch origin "$BRANCH"
+            git push --force-with-lease origin "HEAD:refs/heads/${BRANCH}"
+          else
+            git push -u origin "HEAD:refs/heads/${BRANCH}"
+          fi
+
+          compare_url="${SERVER}/${REPOSITORY}/compare/${BASE}...${BRANCH}?expand=1"
+          {
+            echo "## Star history review branch"
+            echo
+            echo "Charts changed. The rolling review branch was published; open or refresh the pull request from this comparison URL. Actions does not create or approve pull requests."
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Server | ${SERVER} |"
+            echo "| Repository | ${REPOSITORY} |"
+            echo "| Base | ${BASE} |"
+            echo "| Branch | ${BRANCH} |"
+            echo
+            echo "[Open pull request]($compare_url)"
+          } >> "$GITHUB_STEP_SUMMARY"

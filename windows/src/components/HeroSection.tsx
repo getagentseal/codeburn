@@ -1,10 +1,11 @@
 import type { CombinedUsage, MenubarPayload } from '../lib/payload'
 import type { CurrencyState } from '../lib/currency'
-import { formatCurrency, formatTokens, plural } from '../lib/currency'
+import { formatCurrency, formatTokens } from '../lib/currency'
 import { prettyDate, todayKey } from '../lib/dates'
 import { SectionCaption } from './CollapsibleSection'
 import { ArrowDownRight, ArrowUpRight, LeafIcon, MonitorIcon, WarningIcon } from './Icons'
 import type { DisplayMetric } from '../lib/appSettings'
+import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
 
 type Props = {
   payload: MenubarPayload | null
@@ -29,6 +30,12 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
   const cost = totals?.cost ?? payload?.current.cost ?? 0
   const calls = totals?.calls ?? payload?.current.calls ?? 0
   const sessions = totals?.sessions ?? payload?.current.sessions ?? 0
+  const sessionLabel = combined
+    ? formatCombinedSessionCount()
+    : formatSessionCount(sessions, payload?.current.sessionCountBasis)
+  const sessionHelp = combined
+    ? COMBINED_SESSION_COUNT_HELP
+    : (sessionCountIsExact(payload?.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
   const inputTokens = totals?.inputTokens ?? payload?.current.inputTokens ?? 0
   const outputTokens = totals?.outputTokens ?? payload?.current.outputTokens ?? 0
 
@@ -72,7 +79,7 @@ export function HeroSection({ payload, currency, periodLabel, isToday, dailyBudg
           ) : (
             <>
               <span className="hero-calls">{calls.toLocaleString()} {calls === 1 ? 'call' : 'calls'}</span>
-              <span className="hero-sessions">{plural(sessions, 'session')}</span>
+              <span className="hero-sessions" title={sessionHelp}>{sessionLabel}</span>
             </>
           )}
         </div>

@@ -27,6 +27,15 @@ export function fmtNum(n: number | undefined | null): string {
   return v.toLocaleString()
 }
 
+export function formatSessionCount(sessions: number, basis?: 'identity' | 'partial'): string {
+  if (basis !== 'identity') {
+    if (sessions <= 0) return 'Session count unavailable'
+    return sessions === 1 ? 'At least 1 session' : `At least ${sessions.toLocaleString()} sessions`
+  }
+  if (sessions === 1) return '1 session'
+  return `${sessions.toLocaleString()} sessions`
+}
+
 export function compactUsd(n: number): string {
   if (!isFinite(n)) return '$0'
   const sign = n < 0 ? '-' : ''

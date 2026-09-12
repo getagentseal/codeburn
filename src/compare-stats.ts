@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'fs/promises'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 import type { ClassifiedTurn, ProjectSummary } from './types.js'
 import { isBehavioralCall } from './behavioral-weight.js'
@@ -379,7 +379,16 @@ async function collectJsonlFiles(sessionDir: string): Promise<string[]> {
   return files
 }
 
-export async function scanSelfCorrections(projectDirs: string[]): Promise<Map<string, number>> {
+/// Session ids of every session in `projects`. For Claude transcripts the id IS
+/// the `.jsonl` stem, which is what lets a project-filtered compare scope the
+/// self-correction scan to the sessions it actually reported on.
+export function projectSessionIds(projects: readonly ProjectSummary[]): Set<string> {
+  return new Set(projects.flatMap(p => p.sessions.map(s => s.sessionId)))
+}
+
+/// `sessionIds`, when given, restricts the scan to transcripts whose file stem
+/// is one of them; omitted, every file under `projectDirs` is read as before.
+export async function scanSelfCorrections(projectDirs: string[], sessionIds?: ReadonlySet<string>): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
   const seen = new Set<string>()
 
@@ -407,6 +416,7 @@ export async function scanSelfCorrections(projectDirs: string[]): Promise<Map<st
     }
 
     for (const file of allFiles) {
+      if (sessionIds && !sessionIds.has(basename(file, '.jsonl'))) continue
       let raw: string
       try {
         raw = await readFile(file, 'utf8')
