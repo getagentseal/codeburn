@@ -1,6 +1,8 @@
 /** The project filter rule, restated for the renderer: src/parser.ts reaches
- *  for node:fs, so the pane cannot import it. projectMatch.test.ts pins the two
- *  against each other, because a switch that disagrees with the CLI lies. */
+ *  for node:fs, so the pane cannot import it. tests/project-match-parity.test.ts
+ *  pins the two against each other, because a switch that disagrees with the
+ *  CLI lies. It sits in the CLI suite because it needs both halves, and the
+ *  desktop CI job installs only app/ dependencies. */
 
 type MatchTarget = { name: string; path?: string }
 

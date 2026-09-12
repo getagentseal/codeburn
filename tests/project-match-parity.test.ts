@@ -2,9 +2,9 @@ import { homedir } from 'node:os'
 
 import { describe, expect, it } from 'vitest'
 
-import { matchesProjectPattern } from '../../../src/parser.js'
+import { matchesProjectPattern } from '../src/parser.js'
 
-import { projectMatches, projectPattern } from './projectMatch'
+import { projectMatches, projectPattern } from '../app/renderer/lib/projectMatch.js'
 
 const PROJECTS = [
   { name: 'my-company', path: '/Users/me/work/my-company' },
@@ -27,6 +27,9 @@ const PATTERNS = [
   'root/vault', 'me/work', '/', '//', '', '-Users-me-Web', 'thing', '/nope',
 ]
 
+// This parity test lives in the CLI suite, not beside the module it covers:
+// it needs both halves, and the desktop CI job installs only app/ dependencies,
+// so an app-side test importing src/parser.ts fails to resolve chalk there.
 // A tilde is absent on purpose: the main process expands it on the way in and
 // out of the filter file (see normalizePatterns), so a pattern reaching the
 // renderer is already a path it can resolve.
