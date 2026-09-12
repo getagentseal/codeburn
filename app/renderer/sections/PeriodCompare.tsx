@@ -89,25 +89,20 @@ const STATUS_LABEL: Record<PeriodContribution['status'], string> = {
 }
 
 /// One lens row under a normalization view. Raw rows come straight from the
-/// report; the per-day view is a shared per-range scalar (percentages and
-/// statuses are unchanged); the per-100-calls view recomputes honestly — a
+/// report; normalized views recompute differences, percentages and direction
+/// from each side's own denominator — a
 /// zero-call side has NO cost-per-call, never zero.
 function normalizeRow(row: PeriodContribution, view: View, daysA: number, daysB: number): { a: number | null; b: number | null; diff: number | null; pct: number | null; status: PeriodContribution['status'] } {
   if (view === 'raw') return { a: row.costA, b: row.costB, diff: row.diff, pct: row.pct, status: row.status }
-  if (view === 'perDay') {
-    return {
-      a: daysA > 0 ? row.costA / daysA : null,
-      b: daysB > 0 ? row.costB / daysB : null,
-      diff: daysA > 0 && daysB > 0 ? row.costB / daysB - row.costA / daysA : null,
-      pct: row.pct,
-      status: row.status,
-    }
-  }
-  const a = row.callsA > 0 ? row.costA * 100 / row.callsA : null
-  const b = row.callsB > 0 ? row.costB * 100 / row.callsB : null
+  const a = view === 'perDay'
+    ? (daysA > 0 ? row.costA / daysA : null)
+    : (row.callsA > 0 ? row.costA * 100 / row.callsA : null)
+  const b = view === 'perDay'
+    ? (daysB > 0 ? row.costB / daysB : null)
+    : (row.callsB > 0 ? row.costB * 100 / row.callsB : null)
   let status: PeriodContribution['status']
-  if (a === null && b !== null) status = 'new'
-  else if (b === null && a !== null) status = 'gone'
+  if ((a === null || a === 0) && b !== null && b !== 0) status = 'new'
+  else if ((b === null || b === 0) && a !== null && a !== 0) status = 'gone'
   else if (a === null && b === null) status = 'flat'
   else if (b! > a!) status = 'up'
   else if (b! < a!) status = 'down'
@@ -146,7 +141,7 @@ export function PeriodCompare({
   const report = usePolled<PeriodDiffReport>(
     () => codeburn.getPeriodCompare(rangeA, rangeB, provider),
     [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('periodcompare', 'week', provider, rangeA, `${rangeB.from}..${rangeB.to}`) },
+    { enabled: ready, memoKey: reportMemoKey('periodcompare-v2', 'week', provider, rangeA, `${rangeB.from}..${rangeB.to}`) },
   )
 
   // One event per distinct (lens, view) actually put on screen, not per
@@ -452,7 +447,7 @@ function LensCard({
         </div>
       </div>
       {view === 'perDay' && (
-        <p className="pcmp-caption">Each side's cost divided by its own calendar days (A: {report.rangeA.days}, B: {report.rangeB.days}) — percentages are unchanged by the scale.</p>
+        <p className="pcmp-caption">Each side's cost divided by its own calendar days (A: {report.rangeA.days}, B: {report.rangeB.days}) — differences and percentages compare these daily averages.</p>
       )}
       {view === 'per100Calls' && (
         <p className="pcmp-caption">Each side's cost per 100 of its OWN API calls — efficiency, not scale. A side with zero calls has no cost per call: shown as —.</p>
@@ -480,7 +475,7 @@ function LensCard({
               <span role="cell" className="pcmp-label pcmp-key" title={row.key}>{row.key}</span>
               <span role="cell">{norm.a === null ? '—' : formatUsd(norm.a)}</span>
               <span role="cell">{norm.b === null ? '—' : formatUsd(norm.b)}</span>
-              <span role="cell" className={diffClass(row.diff, 'cost')}>{norm.diff === null ? '—' : signedUsd(norm.diff)}</span>
+              <span role="cell" className={diffClass(norm.diff ?? 0, 'cost')}>{norm.diff === null ? '—' : signedUsd(norm.diff)}</span>
               <span role="cell">
                 {norm.status === 'new' && <span className="pcmp-badge new">New</span>}
                 {norm.status === 'gone' && <><span className="pcmp-badge gone">Gone</span> {signedPct(norm.pct)}</>}
@@ -538,7 +533,7 @@ function DrillPanel({
       drillKey,
     ),
     [rangeA.from, rangeA.to, rangeB.from, rangeB.to, provider, dimension, drillKey, refreshToken],
-    { memoKey: reportMemoKey('periodcomparesessions', 'week', provider, { from: rangeA.from, to: rangeA.to }, `${dimension}:${drillKey}`) },
+    { memoKey: reportMemoKey('periodcomparesessions-v2', 'week', provider, { from: rangeA.from, to: rangeA.to }, JSON.stringify([rangeB.from, rangeB.to, dimension, drillKey])) },
   )
   if (!report.data) {
     if (report.error) return <CliErrorPanel error={report.error} subject="contribution sessions" />

@@ -86,6 +86,38 @@ beforeEach(() => {
 })
 
 describe('PeriodCompare', () => {
+  it('recomputes percentages and direction for daily averages with unequal lengths', async () => {
+    const unequal: PeriodDiffReport = { ...report, rangeA: { ...report.rangeA, days: 1 }, rangeB: { ...report.rangeB, days: 10 },
+      projects: [{ key: '/work/eff', costA: 100, costB: 160, diff: 60, pct: 60, status: 'up', callsA: 10, callsB: 10 }] }
+    mocks.getPeriodCompare.mockResolvedValue(unequal)
+    render(<PeriodCompare provider="all" />)
+    await screen.findByText('Contributions by project')
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Per day' }))
+    const row = screen.getByRole('button', { name: /\/work\/eff:.*Down/ })
+    expect(row).toHaveTextContent('$100.00')
+    expect(row).toHaveTextContent('$16.00')
+    expect(row).toHaveTextContent('−$84.00')
+    expect(row).toHaveTextContent('−84.0%')
+    expect(row).not.toHaveTextContent('+60.0%')
+  })
+
+  it('does not reuse session details from a different B range after remount', async () => {
+    const user = userEvent.setup()
+    const first = render(<PeriodCompare provider="all" />)
+    await user.click(await screen.findByRole('button', { name: /\/work\/eff/ }))
+    expect(await screen.findByLabelText('Sessions behind /work/eff')).toHaveTextContent('$20.00')
+    expect(mocks.getPeriodCompareSessions).toHaveBeenCalledTimes(1)
+    first.unmount()
+    const rangeB = { from: RANGE_B.from, to: '2026-03-18' }
+    localStorage.setItem('codeburn.periodCompare.v1', JSON.stringify({ preset: 'custom', rangeA: RANGE_A, rangeB, lens: 'projects', view: 'raw' }))
+    mocks.getPeriodCompare.mockResolvedValue({ ...report, rangeB: { ...rangeB, days: 10 } })
+    mocks.getPeriodCompareSessions.mockResolvedValue({ ...sessionsReport, rangeB: { ...rangeB, days: 10 }, sessions: [{ ...sessionsReport.sessions[0], costB: 250, diff: 240 }] })
+    render(<PeriodCompare provider="all" />)
+    await user.click(await screen.findByRole('button', { name: /\/work\/eff/ }))
+    await waitFor(() => expect(mocks.getPeriodCompareSessions).toHaveBeenCalledTimes(2))
+    expect(screen.getByLabelText('Sessions behind /work/eff')).toHaveTextContent('$250.00')
+  })
+
   it('renders both ranges, the totals difference, and the coverage notes', async () => {
     render(<PeriodCompare provider="all" />)
     expect(await screen.findByText('Totals')).toBeInTheDocument()

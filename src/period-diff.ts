@@ -2,6 +2,7 @@ import { getDaysInRange, type DailyCache, type DailyEntry } from './daily-cache.
 import type { DateRange, ProjectSummary } from './types.js'
 import { buildPeriodData, canonicalSessionCountKey } from './usage-aggregator.js'
 import { inferSessionProvider } from './session-output.js'
+import { spendProjectIdentity } from './spend-flow.js'
 
 /// Period-vs-period difference engine (Compare periods). Pure functions only:
 /// no clock reads, no filesystem, no parsing. The caller parses each range with
@@ -319,10 +320,19 @@ function normalizedView(totalsA: PeriodTotals, totalsB: PeriodTotals, rangeA: Pe
 }
 
 function projectContributions(projectsA: ProjectSummary[], projectsB: ProjectSummary[]): Contribution[] {
-  const costsA = new Map<string, { cost: number; calls: number }>()
-  const costsB = new Map<string, { cost: number; calls: number }>()
-  for (const p of projectsA) costsA.set(p.project, { cost: p.totalCostUSD, calls: p.totalApiCalls })
-  for (const p of projectsB) costsB.set(p.project, { cost: p.totalCostUSD, calls: p.totalApiCalls })
+  const fold = (projects: ProjectSummary[]) => {
+    const totals = new Map<string, { cost: number; calls: number }>()
+    for (const project of projects) {
+      const { id } = spendProjectIdentity(project)
+      const value = totals.get(id) ?? { cost: 0, calls: 0 }
+      value.cost += project.totalCostUSD
+      value.calls += project.totalApiCalls
+      totals.set(id, value)
+    }
+    return totals
+  }
+  const costsA = fold(projectsA)
+  const costsB = fold(projectsB)
   const keys = new Set([...costsA.keys(), ...costsB.keys()])
   const rows: Contribution[] = []
   for (const key of keys) {
@@ -490,7 +500,7 @@ export function diffSessions(
         // use several models and its total belongs to no single one of them.
         const modelEntry = dimension === 'model' ? session.modelBreakdown[key] : undefined
         if (dimension === 'model' && !modelEntry) continue
-        if (dimension === 'project' && project.project !== key) continue
+        if (dimension === 'project' && spendProjectIdentity(project).id !== key) continue
         const cost = dimension === 'model' ? modelEntry!.costUSD : session.totalCostUSD
         const calls = dimension === 'model' ? modelEntry!.calls : session.apiCalls
         const identity = canonicalSessionCountKey(session, project.projectPath)

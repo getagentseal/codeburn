@@ -109,6 +109,24 @@ function lensSum(rows: Array<{ diff: number }>): number {
 }
 
 describe('buildPeriodDiffReport — acceptance fixture', () => {
+  it('keeps same-label projects separate by canonical path through drill-down', () => {
+    const one = { ...makeProject('app', [makeSession({ sessionId: 'shared', costUSD: 3, calls: 1 })]), projectPath: '/work/a/app' }
+    const two = { ...makeProject('app', [makeSession({ sessionId: 'shared', costUSD: 5, calls: 1 })]), projectPath: '/work/b/app' }
+    const report = buildPeriodDiffReport({ provider: 'all', rangeA: RANGE_A, rangeB: RANGE_B, projectsA: [], projectsB: [one, two] })
+    expect(report.projects.map(p => [p.key, p.costB])).toEqual([['/work/b/app', 5], ['/work/a/app', 3]])
+    expect(lensSum(report.projects)).toBe(report.totals.diff.cost)
+    expect(diffSessions([], [one, two], 'project', '/work/a/app')).toMatchObject([{ costB: 3 }])
+    expect(diffSessions([], [one, two], 'project', '/work/b/app')).toMatchObject([{ costB: 5 }])
+    expect(diffSessions([], [one, two], 'project', 'app')).toEqual([])
+  })
+
+  it('adds multiple summaries of the same canonical project instead of overwriting', () => {
+    const one = makeProject('/work/app', [makeSession({ sessionId: 'one', costUSD: 3, calls: 1 })])
+    const two = makeProject('/work/app', [makeSession({ sessionId: 'two', costUSD: 5, calls: 1 })])
+    const report = buildPeriodDiffReport({ provider: 'all', rangeA: RANGE_A, rangeB: RANGE_B, projectsA: [], projectsB: [one, two] })
+    expect(report.projects).toMatchObject([{ key: '/work/app', costB: 8, callsB: 2 }])
+  })
+
   const { projectsA, projectsB } = acceptanceFixture()
   const report = buildPeriodDiffReport({ provider: 'all', rangeA: RANGE_A, rangeB: RANGE_B, projectsA, projectsB })
 
