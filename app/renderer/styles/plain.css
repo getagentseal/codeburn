@@ -453,6 +453,17 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .spend-proj-session .sps-cost { color: var(--ink); font-family: var(--mono); }
 .spend-proj-empty { padding: 4px 0 8px 27px; font-size: 11px; color: var(--mut2); }
 
+/* Spend: By branch lens (project picker, branch detail lines, coverage note). */
+.branch-picker { padding: 0 0 8px; }
+.branch-detail-line { display: grid; grid-template-columns: 110px minmax(0, 1fr); column-gap: 10px; padding: 3px 0; font-size: 11px; color: var(--mut); font-variant-numeric: tabular-nums; }
+.branch-detail-line > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.branch-detail-line code { font-family: var(--mono); font-size: 10px; }
+.spend-proj-session.li-clickable { cursor: pointer; border-radius: 6px; }
+.spend-proj-session.li-clickable:hover .sps-model { text-decoration: underline; }
+.spend-proj-session.is-open-row .sps-model { text-decoration: underline; }
+.branch-coverage { display: flex; flex-wrap: wrap; column-gap: 16px; row-gap: 2px; padding: 8px 0 2px; border-top: 1px solid var(--line2); font-size: 10px; color: var(--mut2); font-variant-numeric: tabular-nums; }
+.branch-coverage-note { flex-basis: 100%; }
+
 /* Models: token audit lens (fixed columns, scrolls inside its panel). */
 .audit-table { min-width: 720px; }
 .audit-table .mdot { width: 10px; height: 10px; border-radius: 3px; }

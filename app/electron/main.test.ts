@@ -45,6 +45,7 @@ const CHANNELS = [
   'codeburn:getCompare',
   'codeburn:getYield',
   'codeburn:getSpendFlow',
+  'codeburn:getBranchSpend',
   'codeburn:getOptimizeReport',
   'codeburn:getDevices',
   'codeburn:getDevicesScan',
@@ -114,6 +115,8 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getModels', args: ['week', 'claude', true, { from: '2026-07-01', to: '2026-07-11' }], argv: ['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getYield', args: ['today', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['yield', '--format', 'json', '--period', 'today', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSpendFlow', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getBranchSpend', args: ['month', 'openai'], argv: ['spend', '--format', 'branch-json', '--period', 'month', '--provider', 'openai'] },
+  { channel: 'codeburn:getBranchSpend', args: ['30days', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'branch-json', '--period', '30days', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getOptimizeReport', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['optimize', '--format', 'json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getDevices', args: ['week'], argv: ['devices', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getDevicesScan', args: [], argv: ['devices', 'scan', '--format', 'json'] },
@@ -512,6 +515,7 @@ describe('createBridgeHandlers (cold-start warmup)', () => {
       ['codeburn:getCompareModels', ['today', 'all', true]],
       ['codeburn:getYield', ['today', 'all', undefined, true]],
       ['codeburn:getSpendFlow', ['today', 'all', undefined, true]],
+      ['codeburn:getBranchSpend', ['today', 'all', undefined, true]],
       ['codeburn:getOptimizeReport', ['today', 'all', undefined, true]],
     ]
 

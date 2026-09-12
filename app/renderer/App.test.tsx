@@ -7,7 +7,7 @@ import { sanitizeProps } from '../electron/telemetry'
 import { __resetPolledMemo, hasPolledMemo, primePolledMemo } from './hooks/usePolled'
 import { setActiveCurrency } from './lib/format'
 import { readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
-import type { DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SpendFlow } from './lib/types'
+import type { BranchSpendReport, DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SpendFlow } from './lib/types'
 
 const stored = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -22,6 +22,7 @@ vi.stubGlobal('localStorage', {
 const mocks = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string, range?: DateRange, configSource?: string | null, background?: boolean, scope?: string) => Promise<MenubarPayload>>(),
   getSpendFlow: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<SpendFlow>>(),
+  getBranchSpend: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<BranchSpendReport>>(),
   getTimeline: vi.fn<(period: string, provider: string, range?: DateRange) => Promise<MenubarPayload>>(),
   getOptimizeReport: vi.fn<(period: string, provider: string, range?: DateRange, background?: boolean) => Promise<OptimizeJsonReport>>(),
   getModels: vi.fn(),
@@ -137,6 +138,11 @@ function installDefaultMocks() {
   mocks.getOverview.mockResolvedValue(overviewPayload())
   mocks.getTimeline.mockResolvedValue(overviewPayload())
   mocks.getSpendFlow.mockResolvedValue({ period: { label: 'Last 30 days', start: '', end: '' }, models: [], projects: [], links: [] })
+  mocks.getBranchSpend.mockResolvedValue({
+    period: { label: '', start: '', end: '' },
+    projects: [],
+    totals: { branchKnownCost: 0, branchUnknownCost: 0, noBranchDataCost: 0, noBranchDataSessions: 0, noBranchDataProviders: [], distinctSessions: 0 },
+  })
   mocks.getOptimizeReport.mockResolvedValue({
     period: { label: 'Last 30 days', start: null, end: null },
     summary: {

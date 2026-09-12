@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react'
 
+import { BranchBreakdown } from '../components/BranchBreakdown'
 import { CliErrorPanel, CliErrorText } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
 import { ListRow } from '../components/ListRow'
@@ -183,6 +184,8 @@ function SpendPage({
         </Panel>
         <ProjectBreakdown projects={projects} />
       </div>
+
+      <BranchBreakdown period={period} provider={provider} range={range} />
 
       <Panel title="Cost flow · model → project" right="model → project flow for this range" className="scroll-x">
         {flow.data && flow.data.links.length ? (

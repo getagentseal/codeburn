@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Polled } from '../hooks/usePolled'
-import type { MenubarPayload, SpendFlow } from '../lib/types'
+import type { BranchSpendReport, MenubarPayload, SpendFlow } from '../lib/types'
 import { Spend, SpendContent } from './Spend'
 
 const ROOT_WEEK_OVERVIEW = JSON.parse(
@@ -19,15 +19,24 @@ function polled(data: MenubarPayload): Polled<MenubarPayload> {
   return { data, error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
 }
 
-const { getOverview, getSpendFlow, getTimeline } = vi.hoisted(() => ({
+const { getOverview, getSpendFlow, getTimeline, getBranchSpend } = vi.hoisted(() => ({
   getOverview: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
   getSpendFlow: vi.fn<(period: string, provider: string) => Promise<SpendFlow>>(),
   getTimeline: vi.fn<(period: string, provider: string) => Promise<MenubarPayload>>(),
+  getBranchSpend: vi.fn<(period: string, provider: string) => Promise<BranchSpendReport>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getOverview, getSpendFlow, getTimeline } }
+  return { ...actual, codeburn: { getOverview, getSpendFlow, getTimeline, getBranchSpend } }
 })
+
+function emptyBranchReport(): BranchSpendReport {
+  return {
+    period: { label: '', start: '', end: '' },
+    projects: [],
+    totals: { branchKnownCost: 0, branchUnknownCost: 0, noBranchDataCost: 0, noBranchDataSessions: 0, noBranchDataProviders: [], distinctSessions: 0 },
+  }
+}
 
 function daily(date: string, cost: number, models: Array<{ name: string; cost: number }>) {
   return {
@@ -144,6 +153,8 @@ describe('Spend', () => {
     vi.setSystemTime(new Date(2026, 6, 10, 12, 0, 0))
     getOverview.mockReset()
     getSpendFlow.mockReset()
+    getBranchSpend.mockReset()
+    getBranchSpend.mockResolvedValue(emptyBranchReport())
   })
 
   afterEach(() => {

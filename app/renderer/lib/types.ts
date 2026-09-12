@@ -438,6 +438,74 @@ export type SpendFlow = {
   links: SpendFlowLink[]
 }
 
+// ————— src/branch-spend.ts — Spend "By branch" lens (shared contract) —————
+
+export type BranchTokenSplit = {
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+/** One session's contribution inside a single (project, branch) row; cost is
+ *  the branch-sliced portion. `workingDirectory` is the provider-recorded
+ *  historical cwd (the worktree path itself when the session ran in one). */
+export type BranchSpendSessionRow = {
+  sessionId: string
+  title?: string
+  provider: string
+  workingDirectory?: string
+  isSidechain?: boolean
+  cost: number
+  calls: number
+  tokens: BranchTokenSplit
+  models: string[]
+  firstActive: string | null
+  lastActive: string | null
+}
+
+export type BranchWorktreeRow = { path: string; sessions: number; cost: number }
+
+export type BranchSpendRow = {
+  projectId: string
+  projectLabel: string
+  /** `null` = Unknown: spend before the session's first observed branch. */
+  branch: string | null
+  cost: number
+  calls: number
+  sessions: number
+  tokens: BranchTokenSplit
+  firstActive: string | null
+  lastActive: string | null
+  worktrees: BranchWorktreeRow[]
+  sessionRows: BranchSpendSessionRow[]
+}
+
+export type BranchSpendCoverage = {
+  branchKnownCost: number
+  branchUnknownCost: number
+  noBranchDataCost: number
+  noBranchDataSessions: number
+  noBranchDataProviders: string[]
+  /** Identity-based; never the sum of row session counts (rows overlap). */
+  distinctSessions: number
+}
+
+export type BranchSpendProjectReport = {
+  id: string
+  label: string
+  totalCost: number
+  branches: BranchSpendRow[]
+  coverage: BranchSpendCoverage
+}
+
+export type BranchSpendReport = {
+  period: { label: string; start: string; end: string }
+  projects: BranchSpendProjectReport[]
+  totals: BranchSpendCoverage
+}
+
 // ————— src/optimize.ts —————
 
 export type WasteAction =
@@ -759,6 +827,8 @@ export interface CodeburnBridge {
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>
   getSpendFlow(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SpendFlow>
+  /** Spend per canonical project × branch (`spend --format branch-json`). */
+  getBranchSpend(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<BranchSpendReport>
   getOptimizeReport(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<OptimizeJsonReport>
   getDevices(period: Period): Promise<CombinedUsage>
   getDevicesScan(): Promise<DeviceScanResult>
