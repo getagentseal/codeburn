@@ -61,6 +61,27 @@ None at the provider level. The daily aggregation cache (`src/daily-cache.ts`) r
 - Streaming responses produce duplicate message IDs across resumed sessions; `parser.ts` strips them via the global `seenMsgIds` Set.
 - Model display names are mapped in `claude.ts:7-20`; add new versions there when Anthropic releases them.
 
+## Early quota resets
+
+Anthropic sometimes resets a usage window before its scheduled time. The menubar
+notices on the existing refresh lifecycle — no extra request — by comparing each
+fetch's windows against the previous fetch's readings, which are kept per window
+in `UserDefaults` alongside the record of what has already been announced.
+`SubscriptionSnapshotStore`'s 30 days of snapshots then give the local history
+caption ("Last 3 weekly resets came ~18h early"), derived from the stored reset
+times alone: a fixed window that starts at `t` ends at `t + length`, so a cycle
+that ends sooner than a full window after the previous cycle's scheduled end
+began early by the difference. Everything is local; nothing is fetched to
+produce it.
+
+The detection is deliberately quiet. It needs a validated window length (the
+fixed 5-hour and 7-day limits), a stored reset that has not yet passed, and
+either a reset time anchored to a genuinely new cycle or a fall of at least 40
+points that lands at or under 10%. A scheduled reset, a plan change, clock or
+timestamp skew, a window appearing or disappearing, a first observation and a
+reconnect after a terminal failure all produce nothing. Short windows get no
+history summary, the same discipline `QuotaPace` applies to its ETA.
+
 ## When fixing a bug here
 
 1. Confirm whether the bug is in **discovery** (sessions not picked up) or **parsing** (sessions found but data wrong).
