@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
 
 // Stub electron so importing main.ts does not require an Electron runtime.
@@ -929,6 +929,110 @@ describe('project filter', () => {
       // No utimes bump: same millisecond, so only size and inode catch it.
       writeFileSync(filterPath, JSON.stringify({ project: ['side-project'], exclude: [] }))
       expect(readProjectFilter()).toEqual({ project: ['side-project'], exclude: [] })
+    })
+  })
+
+  // The cache is per-process and empty on the FIRST read of a launch, which is
+  // exactly when an unreadable file must not be flattened into "no filter".
+  // A directory where the file belongs makes statSync succeed and readFileSync
+  // fail, the same shape as a half-written file with nothing cached yet.
+  it('refuses to report an empty filter when the file cannot be read', async () => {
+    await withFilterFile(filterPath => {
+      mkdirSync(filterPath)
+      expect(() => readProjectFilter()).toThrow(/Could not read the project filter/)
+    })
+  })
+
+  // statSync rejects EACCES and EIO exactly the way it rejects ENOENT, so only
+  // the errno separates "there is no filter" from "the filter did not load".
+  it('refuses to report an empty filter when the path cannot be stat-ed', async () => {
+    await withFilterFile(filterPath => {
+      writeFileSync(filterPath, JSON.stringify({ exclude: ['my-company'] }))
+      const previous = process.env.CODEBURN_APP_FILTER
+      // The parent is a file, so this stats ENOTDIR rather than ENOENT.
+      process.env.CODEBURN_APP_FILTER = join(filterPath, 'app-filter.json')
+      try {
+        expect(() => readProjectFilter()).toThrow(/Could not read the project filter/)
+      } finally {
+        process.env.CODEBURN_APP_FILTER = previous
+      }
+    })
+  })
+
+  it('fails a fetch closed rather than spawning it unfiltered', async () => {
+    await withFilterFile(async filterPath => {
+      mkdirSync(filterPath)
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      const res = await handlers['codeburn:getSessions']!('week', 'all')
+      expect(calls).toEqual([])
+      expect(res).toMatchObject({ ok: false, error: { kind: 'nonzero' } })
+    })
+  })
+
+  // The renderer drops to local scope from what this channel reports. An empty
+  // filter here would re-offer Combined, whose total is unfilterable by design.
+  it('reports the read failure to the pane instead of an empty filter', async () => {
+    await withFilterFile(async filterPath => {
+      mkdirSync(filterPath)
+      const handlers = createBridgeHandlers(deps({ spawnCli: vi.fn(), spawnCliAction: vi.fn(), resolveCodeburnPath: () => '/bin/codeburn' }))
+      expect(await handlers['codeburn:getProjectFilter']!()).toMatchObject({ ok: false, error: { kind: 'nonzero' } })
+    })
+  })
+
+  it('never falls back to a combined overview when the filter cannot be read', async () => {
+    await withFilterFile(async filterPath => {
+      mkdirSync(filterPath)
+      const { spawnCli, spawnCliAction, calls } = fakeSpawn()
+      const handlers = createBridgeHandlers(deps({ spawnCli, spawnCliAction, resolveCodeburnPath: () => '/bin/codeburn' }))
+      const res = await handlers['codeburn:getOverview']!('30days', 'all', undefined, undefined, undefined, 'combined')
+      expect(calls).toEqual([])
+      expect(res).toMatchObject({ ok: false })
+    })
+  })
+
+  /** Records every path writeFileSync is aimed at, and still performs the write. */
+  function recordWrites(): { targets: string[]; restore: () => void } {
+    const targets: string[] = []
+    const real = fs.writeFileSync
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation(((target, data, options) => {
+      targets.push(String(target))
+      return real(target, data, options)
+    }) as typeof fs.writeFileSync)
+    return { targets, restore: () => spy.mockRestore() }
+  }
+
+  // A write straight over the live path can be interrupted, and a truncated
+  // filter is an unreadable one. Same staging rule as saveConfig in src/config.ts.
+  it('stages the write and renames it into place, never writing the live path', async () => {
+    await withFilterFile(filterPath => {
+      const { targets, restore } = recordWrites()
+      try {
+        writeProjectFilter({ project: [], exclude: ['my-company'] })
+      } finally {
+        restore()
+      }
+      expect(targets).toHaveLength(1)
+      expect(targets[0]).not.toBe(filterPath)
+      expect(readdirSync(dirname(filterPath))).toEqual(['app-filter.json'])
+      expect(readProjectFilter()).toEqual({ project: [], exclude: ['my-company'] })
+    })
+  })
+
+  // A staged file that outlived a failed rename is the half-written JSON the
+  // staging exists to prevent, sitting one directory entry away from the real one.
+  it('cleans up the staged file when the rename cannot land', async () => {
+    await withFilterFile(filterPath => {
+      mkdirSync(filterPath)
+      writeFileSync(join(filterPath, 'occupied'), '')
+      const { targets, restore } = recordWrites()
+      try {
+        expect(() => writeProjectFilter({ project: [], exclude: ['my-company'] })).toThrow()
+      } finally {
+        restore()
+      }
+      expect(targets).toHaveLength(1)
+      expect(existsSync(targets[0]!)).toBe(false)
     })
   })
 

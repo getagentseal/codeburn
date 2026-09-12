@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, type MenuItemConstructorOptions } from 'electron'
+import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -182,6 +183,15 @@ function normalizeProjectFilter(value: unknown): ProjectFilter {
   return { project: normalizePatterns(raw.project), exclude: normalizePatterns(raw.exclude) }
 }
 
+/// A read that failed is NOT an empty filter. Answering with one would run the
+/// next fetch unfiltered and paint the projects the file exists to hide, which
+/// is the single outcome this pane must never produce. Callers surface this as
+/// a panel error instead, so the screen stays empty until the file is readable.
+function unreadableFilter(error: unknown): CliError {
+  const code = (error as NodeJS.ErrnoException).code
+  return new CliError('nonzero', `Could not read the project filter${code ? ` (${code})` : ''}. Showing nothing rather than the projects it hides.`)
+}
+
 export function readProjectFilter(): ProjectFilter {
   const filterPath = appFilterPath()
   if (filterPath === null) return EMPTY_PROJECT_FILTER
@@ -190,7 +200,11 @@ export function readProjectFilter(): ProjectFilter {
   try {
     const stat = fs.statSync(filterPath)
     stamp = `${stat.mtimeMs}:${stat.size}:${stat.ino}`
-  } catch {
+  } catch (error) {
+    // A missing file is the one honest way to have no filter. Every other errno
+    // (EACCES on the directory, EIO) is a read that failed, and statSync rejects
+    // them all the same way.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw unreadableFilter(error)
     appFilterCache = null
     return EMPTY_PROJECT_FILTER
   }
@@ -199,9 +213,12 @@ export function readProjectFilter(): ProjectFilter {
     const filter = normalizeProjectFilter(JSON.parse(fs.readFileSync(filterPath, 'utf8')))
     appFilterCache = { path: filterPath, stamp, filter }
     return filter
-  } catch {
-    // Unreadable or half-written: keep the last filter, never unhide.
-    return appFilterCache?.path === filterPath ? appFilterCache.filter : EMPTY_PROJECT_FILTER
+  } catch (error) {
+    // Unreadable or half-written: keep the last filter, never unhide. The cache
+    // is per-process, so the first read of a launch has no last filter to keep
+    // and the failure has to travel instead of being flattened to "show all".
+    if (appFilterCache?.path === filterPath) return appFilterCache.filter
+    throw unreadableFilter(error)
   }
 }
 
@@ -213,7 +230,20 @@ export function writeProjectFilter(value: unknown): ProjectFilter {
   // write, and the empty filter is what every later read will report.
   if (filterPath === null) return EMPTY_PROJECT_FILTER
   fs.mkdirSync(path.dirname(filterPath), { recursive: true })
-  fs.writeFileSync(filterPath, JSON.stringify(filter, null, 2) + '\n')
+  // Staged and renamed, like saveConfig in src/config.ts and for the same
+  // reason: a writeFileSync straight over the live path can be interrupted, and
+  // this is the one file that decides what stays hidden. A truncated filter is
+  // an unreadable filter, which now costs a visible error on the next read
+  // instead of a silent unhide, but neither is a state a click should produce.
+  // The temp name is randomized so two windows saving at once cannot collide.
+  const tmpPath = `${filterPath}.${randomBytes(8).toString('hex')}.tmp`
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(filter, null, 2) + '\n')
+    fs.renameSync(tmpPath, filterPath)
+  } catch (error) {
+    fs.rmSync(tmpPath, { force: true })
+    throw error
+  }
   appFilterCache = null
   return filter
 }
@@ -544,7 +574,10 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
       ...rangeArgs(vRange(range)),
     ]),
     'codeburn:getPriceOverrides': run(() => ['price-override', '--list', '--format', 'json']),
-    'codeburn:getProjectFilter': async () => ({ ok: true, value: readProjectFilter() }),
+    'codeburn:getProjectFilter': async () => {
+      try { return { ok: true, value: readProjectFilter() } }
+      catch (error) { return { ok: false, error: toEnvelopeError(error) } }
+    },
     'codeburn:setProjectFilter': async (filter?: unknown) => {
       try { return { ok: true, value: writeProjectFilter(filter) } }
       catch (error) { return { ok: false, error: { kind: 'nonzero', message: sanitizeError(error) } } }
