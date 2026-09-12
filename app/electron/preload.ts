@@ -28,6 +28,9 @@ const bridge = {
   getSessions: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSessions', period, provider, range, background),
   getCompareModels: (period: string, provider: string, background?: boolean) => invoke('codeburn:getCompareModels', period, provider, background),
   getCompare: (period: string, provider: string, modelA: string, modelB: string) => invoke('codeburn:getCompare', period, provider, modelA, modelB),
+  getCompareCohortModels: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getCompareCohortModels', period, provider, range, background),
+  getCompareCohort: (period: string, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string, background?: boolean) =>
+    invoke('codeburn:getCompareCohort', period, provider, modelA, modelB, range, projects, category, background),
   getYield: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getYield', period, provider, range, background),
   getSpendFlow: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getSpendFlow', period, provider, range, background),
   getOptimizeReport: (period: string, provider: string, range?: DateRange, background?: boolean) => invoke('codeburn:getOptimizeReport', period, provider, range, background),

@@ -165,6 +165,29 @@ function vToken(value: string): string {
   if (value.startsWith('-')) throw new CliError('bad-args', 'argument must not start with "-"')
   return value
 }
+// Project filter patterns reach the CLI as repeatable --project values. An
+// absolute path starts with "/", a loose word must not start with "-" (that
+// would read as a flag); anything else is refused before it becomes argv.
+function vProjectPatterns(projects: string[] | undefined): string[] {
+  if (!projects || projects.length === 0) return []
+  for (const pattern of projects) {
+    if (typeof pattern !== 'string' || pattern.length === 0 || pattern.startsWith('-')) {
+      throw new CliError('bad-args', 'invalid project pattern')
+    }
+  }
+  return projects.flatMap(pattern => ['--project', pattern])
+}
+// Activity categories for the cohort selection: the ids behind the CLI's
+// --category (src/types.ts CATEGORY_LABELS keys). Duplicated here because the
+// main process deliberately does not import core src/ modules.
+const COHORT_CATEGORIES = new Set([
+  'coding', 'debugging', 'feature', 'refactoring', 'testing', 'exploration',
+  'planning', 'delegation', 'git', 'build/deploy', 'conversation', 'brainstorming', 'general',
+])
+function vCategory(category: string): string {
+  if (!COHORT_CATEGORIES.has(category)) throw new CliError('bad-args', 'invalid category')
+  return category
+}
 // Claude config source ids are `<kind>:<hex>` (src/providers/claude.ts) — the
 // colon is part of the real value, so the token class allows it while anchoring
 // the first char to alphanumeric so a leading "-" can never smuggle a flag.
@@ -391,6 +414,17 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getCompare': run((period: string, provider: string, modelA: string, modelB: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), '--model-a', vToken(modelA), '--model-b', vToken(modelB),
     ]),
+    // Cohort mode: the facet query (models/projects/categories) and the report
+    // for two models over an explicit selection. Same `compare` command, new
+    // cohort-json format; --project stays repeatable, category is one id.
+    'codeburn:getCompareCohortModels': run((period: string, provider: string, range?: DateRange) => [
+      'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+    ], 3),
+    'codeburn:getCompareCohort': run((period: string, provider: string, modelA: string, modelB: string, range?: DateRange, projects?: string[], category?: string) => [
+      'compare', '--format', 'cohort-json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
+      '--model-a', vToken(modelA), '--model-b', vToken(modelB), ...rangeArgs(vRange(range)),
+      ...(vProjectPatterns(projects)), ...(category ? ['--category', vCategory(category)] : []),
+    ], 7),
     'codeburn:getYield': run((period: string, provider: string, range?: DateRange) => [
       'yield', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),
@@ -639,6 +673,14 @@ function bootstrap(): void {
   process.on('unhandledRejection', reason => {
     console.error('Unhandled promise rejection in main process:', reason)
   })
+
+  // Opt-in profile isolation for parallel dev/verification runs: a distinct
+  // userData dir also isolates serve.pid, the single-instance lock and telemetry
+  // state, so two checkouts can run Electron side by side. Unset by default —
+  // normal launches keep the OS default profile.
+  if (process.env.CODEBURN_USER_DATA_DIR) {
+    app.setPath('userData', process.env.CODEBURN_USER_DATA_DIR)
+  }
 
   // Packaged builds ship their own version-matched CLI under resources/cli (the
   // afterPack hook copies it in). Point the resolver at the launch shim before
