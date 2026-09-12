@@ -204,7 +204,119 @@ function spendControlWindow(data: Record<string, any>): QuotaWindow | null {
   return { label: reached ? `${label} · limit reached` : label, percent, resetsAt }
 }
 
-export function decodeCodexUsage(body: unknown): QuotaProvider {
+// Banked limit-reset credits. The Swift menubar owns the same three functions
+// (mac/Sources/CodeBurnMenubar/Data/CodexBankedResets.swift); they are mirrored
+// line for line so both surfaces print the same sentence. The CLI reads them off
+// the `rate_limit_reset_credits` block of the usage response it already fetches
+// and never calls the companion endpoint, so no new request and no new cadence.
+
+type ResetGrant = { id: string; resetType: string | null; grantedAt: number | null }
+
+type ResetCredits = {
+  availableCount: number
+  /** How many can be applied right now. Null is unknown, not zero. */
+  applicableAvailableCount: number | null
+  grants: ResetGrant[]
+  nextExpiresAt: number | null
+}
+
+function isoMillis(value: unknown): number | null {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const at = Date.parse(value)
+  return Number.isFinite(at) ? at : null
+}
+
+/** Null on any unexpected shape: the row hides, the quota read still succeeds. */
+export function decodeResetCredits(value: unknown, now: number): ResetCredits | null {
+  if (!value || typeof value !== 'object') return null
+  const block = value as Record<string, unknown>
+  const count = num(block.available_count)
+  if (count === null || count < 0 || !Number.isInteger(count)) return null
+  const rows = Array.isArray(block.credits) ? block.credits : []
+  const available = rows.filter((row): row is Record<string, unknown> =>
+    Boolean(row) && typeof row === 'object'
+    && String((row as Record<string, unknown>).status ?? '').toLowerCase() === 'available')
+  const expiries = available
+    .map(row => isoMillis(row.expires_at))
+    .filter((at): at is number => at !== null && at > now)
+  // Identity first, and only then a grant: a credit we cannot name is a credit
+  // we could re-announce on every refresh.
+  const grants: ResetGrant[] = []
+  for (const row of available) {
+    const identity = [row.id, row.granted_at]
+      .map(candidate => typeof candidate === 'string' ? candidate.trim() : '')
+      .find(candidate => candidate !== '')
+    if (!identity) continue
+    grants.push({
+      id: identity,
+      resetType: typeof row.reset_type === 'string' && row.reset_type ? row.reset_type : null,
+      grantedAt: isoMillis(row.granted_at),
+    })
+  }
+  const applicable = num(block.applicable_available_count)
+  return {
+    availableCount: count,
+    applicableAvailableCount: applicable !== null && applicable >= 0 && Number.isInteger(applicable) ? applicable : null,
+    grants,
+    nextExpiresAt: expiries.length > 0 ? Math.min(...expiries) : null,
+  }
+}
+
+/** Deliberately not `Intl.RelativeTimeFormat`: this string has to come out
+ *  character-identical in TypeScript and in Swift, so the rules are spelled out
+ *  instead of delegated to a locale-aware formatter. */
+export function compactAge(at: number, now: number): string {
+  const elapsed = (now - at) / 1000
+  if (elapsed >= 0) {
+    if (elapsed < 60) return 'just now'
+    if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ago`
+    if (elapsed < 86_400) return `${Math.floor(elapsed / 3600)}h ago`
+    return `${Math.floor(elapsed / 86_400)}d ago`
+  }
+  const ahead = -elapsed
+  if (ahead < 60) return 'in under a minute'
+  if (ahead < 3600) return `in ${Math.floor(ahead / 60)}m`
+  if (ahead < 86_400) return `in ${Math.floor(ahead / 3600)}h`
+  return `in ${Math.floor(ahead / 86_400)}d`
+}
+
+/** "weekly" -> "weekly reset". An absent `reset_type` degrades to the bare noun
+ *  rather than inventing a scope the payload did not state. */
+function resetTypeLabel(resetType: string | null): string {
+  const raw = (resetType ?? '').trim().replace(/[_-]/g, ' ').toLowerCase()
+  return raw ? `${raw} reset` : 'limit reset'
+}
+
+function latestGrant(credits: ResetCredits): ResetGrant | null {
+  let latest: ResetGrant | null = null
+  for (const grant of credits.grants) {
+    if (grant.grantedAt === null) continue
+    if (latest === null || grant.grantedAt > (latest.grantedAt ?? -Infinity)) latest = grant
+  }
+  return latest
+}
+
+/** `Limit resets · 2 available · 1 usable now · latest weekly reset granted 2h ago`.
+ *  Null when the account holds nothing — the line hides rather than printing a zero. */
+export function resetCreditsLine(credits: ResetCredits | null, now: number): string | null {
+  if (!credits || credits.availableCount <= 0) return null
+  const parts = [`${credits.availableCount} available`]
+  // Only worth saying when it disagrees with the headline count.
+  if (credits.applicableAvailableCount !== null && credits.applicableAvailableCount !== credits.availableCount) {
+    parts.push(`${credits.applicableAvailableCount} usable now`)
+  }
+  const grant = latestGrant(credits)
+  if (grant?.grantedAt != null) {
+    const type = resetTypeLabel(grant.resetType)
+    parts.push(grant.grantedAt > now
+      ? `next ${type} lands ${compactAge(grant.grantedAt, now)}`
+      : `latest ${type} granted ${compactAge(grant.grantedAt, now)}`)
+  }
+  if (credits.nextExpiresAt !== null) parts.push(`next expires ${compactAge(credits.nextExpiresAt, now)}`)
+  return `Limit resets · ${parts.join(' · ')}`
+}
+
+export function decodeCodexUsage(body: unknown, now: number = Date.now()): QuotaProvider {
   const data = body && typeof body === 'object' ? body as Record<string, any> : {}
   const primaryRaw = windowOf(data.rate_limit?.primary_window)
   const secondaryRaw = windowOf(data.rate_limit?.secondary_window)
@@ -234,10 +346,15 @@ export function decodeCodexUsage(body: unknown): QuotaProvider {
   }
   // Uncapped on purpose, so a bar-less card does not read as a failed fetch.
   if (!credits && data.credits?.unlimited === true) footerLines.push('Credits · Unlimited')
+  // Limit-reset credits, banked ones included. `notes` is what `codeburn quota`
+  // prints; the footer keeps the desktop surfaces in step.
+  const resets = resetCreditsLine(decodeResetCredits(data.rate_limit_reset_credits, now), now)
+  if (resets) footerLines.push(resets)
   return {
     provider: 'codex', connection: 'connected', primary: primary ?? credits, details,
     planLabel: planLabel(data.plan_type),
     footerLines,
+    ...(resets ? { notes: [resets] } : {}),
   }
 }
 
