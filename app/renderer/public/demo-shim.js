@@ -39,7 +39,7 @@
   }
 
   const READ_CHANNELS = [
-    'getOverview', 'getTimeline', 'getPlans', 'getModels', 'getSessions',
+    'getOverview', 'getTimeline', 'getPlans', 'getModels', 'getSessions', 'getSessionsContributions',
     'getCompareModels', 'getCompare', 'getYield', 'getSpendFlow',
     'getOptimizeReport', 'getAudit', 'getActReport', 'getShareStatus',
     'getIdentity', 'getAliases', 'getProxyPaths', 'getPriceOverrides', 'getDevices',

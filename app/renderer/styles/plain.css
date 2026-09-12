@@ -1141,3 +1141,86 @@ html.page-hidden *::after {
   .onboard-in { animation: none; }
   .switch, .switch .switch-knob, .onboard-dot { transition: none; }
 }
+
+/* ————— Drill-through: history navigation, selection chips, session drawer ————— */
+
+/* Back/Forward in the top bar. */
+.bar-nav { display: flex; gap: 2px; margin-right: 8px; }
+.bar-nav-btn {
+  width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--fg); font-size: 15px; line-height: 1;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.bar-nav-btn:hover:not(:disabled) { background: var(--hover); }
+.bar-nav-btn:disabled { opacity: .35; cursor: default; }
+
+/* Active-selection chips at a drill-through destination. */
+.drill-chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel, var(--bg));
+}
+.drill-chips-label { font-size: var(--fs-label); color: var(--mut); margin-right: 2px; }
+.drill-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 4px 3px 8px; border: 1px solid var(--line2); border-radius: 999px;
+  font-size: var(--fs-label); background: var(--hover);
+  max-width: 340px;
+}
+.drill-chip-dim { color: var(--mut); }
+.drill-chip-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drill-chip-x {
+  width: 16px; height: 16px; border: none; border-radius: 50%;
+  background: transparent; color: var(--mut); font-size: 13px; line-height: 1;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.drill-chip-x:hover { background: var(--line2); color: var(--fg); }
+.drill-chips-clear {
+  border: none; background: transparent; color: var(--accent);
+  font-size: var(--fs-label); cursor: pointer; margin-left: 4px;
+}
+
+/* Clickable aggregates (activity rows). */
+.ov-drill { cursor: pointer; border-radius: 6px; }
+.ov-drill:hover { background: var(--hover); }
+.ov-drill:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* Row cost split under a selection: contribution first, full cost secondary. */
+.session-cost-split { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+.session-cost-split small { color: var(--mut); }
+.sessions-unattributed { color: var(--mut); }
+
+/* The side drawer: slides over the content column from the right. */
+.drawer-scrim { position: fixed; inset: 0; background: rgb(0 0 0 / 35%); z-index: 60; }
+.session-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 61;
+  width: min(420px, 92vw); overflow-y: auto;
+  background: var(--panel, var(--bg)); color: var(--fg);
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 18%);
+  padding: 18px 18px 28px;
+  display: flex; flex-direction: column; gap: 14px;
+  outline: none;
+}
+.drawer-head { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+.drawer-title { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.drawer-sub { color: var(--mut); font-size: var(--fs-label); margin-top: 3px; }
+.drawer-close {
+  width: 26px; height: 26px; flex: none; border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--fg); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.drawer-close:hover { background: var(--hover); }
+.drawer-note { margin: 0; font-size: var(--fs-label); color: var(--mut); }
+.drawer-caption { margin: 6px 0 0; font-size: var(--fs-label); color: var(--mut); }
+.drawer-breakdown { display: flex; flex-direction: column; gap: 5px; }
+.drawer-breakdown-head { font-size: var(--fs-label); color: var(--mut); text-transform: uppercase; letter-spacing: .04em; }
+.drawer-breakdown-row { display: grid; grid-template-columns: minmax(90px, 40%) 1fr auto; align-items: center; gap: 8px; }
+.drawer-breakdown-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-breakdown-bar { height: 5px; border-radius: 3px; background: var(--hover); overflow: hidden; }
+.drawer-breakdown-bar span { display: block; height: 100%; background: var(--accent); }
+.drawer-breakdown-cost { font-variant-numeric: tabular-nums; }
+.drawer-link { color: var(--accent); text-decoration: none; }
+.drawer-link:hover { text-decoration: underline; }
+
+/* Drill affordances inside expanded report rows. */
+.spend-proj-drill, .pr-drill { margin-bottom: 8px; }

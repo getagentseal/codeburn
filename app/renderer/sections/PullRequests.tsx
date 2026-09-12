@@ -11,7 +11,9 @@ import { formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { PERIOD_LABELS } from '../lib/period'
 import type { CliError, DateRange, MenubarPayload, Period } from '../lib/types'
+import { prFilters } from '../lib/investigation'
 import { rangeLabel } from '../components/TopBar'
+import type { InvestigateRequest } from './Overview'
 
 type PullRequests = NonNullable<MenubarPayload['current']['pullRequests']>
 type PrRow = PullRequests['rows'][number]
@@ -65,11 +67,12 @@ export function PullRequests({ period, provider, range = null }: { period: Perio
   return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} />
 }
 
-export function PullRequestsContent({ overview, period, provider, range = null }: {
+export function PullRequestsContent({ overview, period, provider, range = null, onInvestigate }: {
   overview: Polled<MenubarPayload>
   period: Period
   provider: string
   range?: DateRange | null
+  onInvestigate?: (request: InvestigateRequest) => void
 }) {
   if (!overview.data) {
     if (overview.error) return <CliErrorPanel error={overview.error} subject="pull requests" />
@@ -81,15 +84,17 @@ export function PullRequestsContent({ overview, period, provider, range = null }
     period={period}
     provider={provider}
     range={range}
+    onInvestigate={onInvestigate}
   />
 }
 
-function PullRequestsPage({ pullRequests, staleError, period, provider, range }: {
+function PullRequestsPage({ pullRequests, staleError, period, provider, range, onInvestigate }: {
   pullRequests?: PullRequests
   staleError: CliError | null
   period: Period
   provider: string
   range: DateRange | null
+  onInvestigate?: (request: InvestigateRequest) => void
 }) {
   const empty = !pullRequests || pullRequests.rows.length === 0
   return (
@@ -98,7 +103,7 @@ function PullRequestsPage({ pullRequests, staleError, period, provider, range }:
       <Panel title="Pull request spend">
         {empty
           ? <PrEmptyNote period={period} provider={provider} range={range} />
-          : <PrTable pullRequests={pullRequests} />}
+          : <PrTable pullRequests={pullRequests} onInvestigate={onInvestigate} />}
       </Panel>
     </>
   )
@@ -131,7 +136,7 @@ function PrEmptyNote({ period, provider, range }: { period: Period; provider: st
   )
 }
 
-function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
+function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; onInvestigate?: (request: InvestigateRequest) => void }) {
   const { rows, distinctCost, distinctSessions, subagentSessions, attributedCost, unattributedCost } = pullRequests
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
   // Reset any open expansion when the PR set changes (a period/provider switch or
@@ -182,6 +187,7 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
             pr={pr}
             expanded={expandedUrl === pr.url}
             onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
+            onInvestigate={onInvestigate}
           />
         ))}
       </div>
@@ -205,7 +211,7 @@ function PrTable({ pullRequests }: { pullRequests: PullRequests }) {
 
 const APPROX_TITLE = 'Approximate: the transcript expired before per-turn capture, so this PR’s share is an even split of the whole session.'
 
-function PrRowView({ pr, expanded, onToggle }: { pr: PrRow; expanded: boolean; onToggle: () => void }) {
+function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expanded: boolean; onToggle: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const models = pr.models ?? []
   const categories = pr.categories ?? []
   const catMax = categories.length ? Math.max(...categories.map(cat => cat.cost)) : 0

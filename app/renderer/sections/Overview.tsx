@@ -12,6 +12,13 @@ import { motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd, formatUsdWithCurrency } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import {
+  categoryFilters,
+  dayFilters,
+  modelFilters,
+  sessionFilters,
+  type InvestigationFilters,
+} from '../lib/investigation'
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type {
@@ -499,7 +506,7 @@ function aggregateModels(daily: DailyHistoryEntry[]): AggregatedModel[] {
   return [...byName.values()].sort((a, b) => b.cost - a.cost)
 }
 
-function ModelsTable({ models }: { models: AggregatedModel[] }) {
+function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onSelectModel?: (name: string) => void }) {
   if (!models.length) return <EmptyNote>No model usage in this range yet.</EmptyNote>
 
   return (
@@ -517,7 +524,11 @@ function ModelsTable({ models }: { models: AggregatedModel[] }) {
         <tbody>
           {models.map(model => (
             <tr key={model.name}>
-              <td className="ov-model-name">{model.name}</td>
+              <td className="ov-model-name">
+                {onSelectModel ? (
+                  <button type="button" className="ov-link" title={`View sessions for ${model.name}`} onClick={() => onSelectModel(model.name)}>{model.name}</button>
+                ) : model.name}
+              </td>
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
               <td className="num mono">{formatUsd(model.cost)}</td>
@@ -530,7 +541,14 @@ function ModelsTable({ models }: { models: AggregatedModel[] }) {
   )
 }
 
-function DailyChart({ daily, dataStart = null, animateKey = '' }: { daily: DailyHistoryEntry[]; dataStart?: string | null; animateKey?: string }) {
+/** The drill-through payload App passes down: a filter selection plus the
+ *  (optional) session to open the drawer on at the destination. */
+export type InvestigateRequest = {
+  filters: InvestigationFilters
+  sessionId?: string | null
+}
+
+function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: { daily: DailyHistoryEntry[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void }) {
   const isNoData = (day: DailyHistoryEntry) => dataStart !== null && day.date < dataStart
   const max = Math.max(...daily.map(day => day.cost), 0)
   const peakIndex = daily.reduce((peak, day, index) => day.cost > (daily[peak]?.cost ?? -1) ? index : peak, 0)
@@ -572,10 +590,14 @@ function DailyChart({ daily, dataStart = null, animateKey = '' }: { daily: Daily
       <div className="chart" ref={chartRef}>
         {daily.map((day, index) => {
           const noData = isNoData(day)
+          // A day with recorded activity is a drill-through entry: clicking it
+          // opens the sessions that were active that day (sessions started
+          // earlier included, within the source's day granularity).
+          const drillable = !noData && (day.cost > 0 || day.calls > 0) && onSelectDay !== undefined
           return (
             <button
               type="button"
-              aria-label={`${day.date}: ${noData ? 'no data recorded' : formatUsd(day.cost)}`}
+              aria-label={`${day.date}: ${noData ? 'no data recorded' : formatUsd(day.cost)}${drillable ? ' — view sessions' : ''}`}
               className={`col${index === peakIndex && !noData ? ' hi' : ''}${noData ? ' nodata' : ''}`}
               key={day.date}
               style={{ height: `${max > 0 ? Math.max(2, day.cost / max * 100) : 2}%` }}
@@ -587,6 +609,7 @@ function DailyChart({ daily, dataStart = null, animateKey = '' }: { daily: Daily
               onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
               onMouseLeave={() => setTip(null)}
+              onClick={drillable ? () => onSelectDay!(day.date) : undefined}
             />
           )
         })}
@@ -629,28 +652,49 @@ function formatRate(rate: number | null): string {
   return rate === null ? '—' : `${Math.round(rate * 100)}%`
 }
 
-function TopActivities({ activities }: { activities: MenubarPayload['current']['topActivities'] }) {
+function TopActivities({ activities, onSelectCategory }: { activities: MenubarPayload['current']['topActivities']; onSelectCategory?: (rawCategory: string) => void }) {
   const rows = [...activities].sort((a, b) => b.cost - a.cost).slice(0, 6)
   if (!rows.length) return <EmptyNote>No activity in this range yet.</EmptyNote>
   const maxCost = rows[0].cost
 
   return (
     <div className="ov-activities">
-      {rows.map(activity => (
-        <div className="ov-activity" key={activity.name}>
-          <div className="ov-activity-bar" aria-hidden="true">
-            <span style={{ width: `${maxCost > 0 ? activity.cost / maxCost * 100 : 0}%` }} />
+      {rows.map(activity => {
+        // Only categories the CLI named with their raw key are drill entries:
+        // an older payload's label cannot round-trip as a filter value.
+        const drillable = onSelectCategory !== undefined && !!activity.rawCategory
+        const select = () => onSelectCategory?.(activity.rawCategory!)
+        return (
+          <div
+            className={drillable ? 'ov-activity ov-drill' : 'ov-activity'}
+            key={activity.name}
+            {...(drillable ? {
+              role: 'button',
+              tabIndex: 0,
+              title: `View ${activity.name} sessions`,
+              onClick: select,
+              onKeyDown: (event: React.KeyboardEvent) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  select()
+                }
+              },
+            } : {})}
+          >
+            <div className="ov-activity-bar" aria-hidden="true">
+              <span style={{ width: `${maxCost > 0 ? activity.cost / maxCost * 100 : 0}%` }} />
+            </div>
+            <div className="ov-activity-main">
+              <span className="ov-activity-name">{activity.name}</span>
+              <strong>{formatUsd(activity.cost)}</strong>
+            </div>
+            <div className="ov-activity-meta">
+              <span>{activity.turns.toLocaleString('en-US')} turns</span>
+              <span>{formatRate(activity.oneShotRate)} one-shot</span>
+            </div>
           </div>
-          <div className="ov-activity-main">
-            <span className="ov-activity-name">{activity.name}</span>
-            <strong>{formatUsd(activity.cost)}</strong>
-          </div>
-          <div className="ov-activity-meta">
-            <span>{activity.turns.toLocaleString('en-US')} turns</span>
-            <span>{formatRate(activity.oneShotRate)} one-shot</span>
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -683,6 +727,7 @@ export function OverviewContent({
   range = null,
   overview,
   onNavigate,
+  onInvestigate,
   ready = true,
   scope = 'local',
   headlineSnapshot = null,
@@ -692,6 +737,8 @@ export function OverviewContent({
   range?: DateRange | null
   overview: Polled<MenubarPayload>
   onNavigate?: (section: 'optimize' | 'sessions') => void
+  /** Drill-through entries: day bars, expensive sessions, models, categories. */
+  onInvestigate?: (request: InvestigateRequest) => void
   ready?: boolean
   scope?: Scope
   headlineSnapshot?: OverviewHeadlineSnapshot | null
@@ -803,6 +850,22 @@ export function OverviewContent({
   const localSaved = data.current.localModelSavings.totalUSD
   // A custom range has no meaningful "vs last week" or month-to-date baseline.
   const signals = deriveSignals(data, now, rangeActive)
+  // Drill-through entry points. An expensive-session row can only open the
+  // exact session when the payload carries its identity (provider + id);
+  // otherwise the row keeps the plain "See all" navigation, never a guess.
+  const openSessionRow = (session: MenubarPayload['current']['topSessions'][number]) => {
+    if (!session.sessionId || !session.provider || !onInvestigate) {
+      onNavigate?.('sessions')
+      return
+    }
+    // The drawer key uses the RAW row project (projectKey), not the friendly
+    // display name, so it matches the sessions-list rows exactly.
+    const projectKey = session.projectKey ?? session.project
+    onInvestigate({
+      filters: sessionFilters({ provider: session.provider, sessionId: session.sessionId }),
+      sessionId: `${session.provider}\u0000${projectKey}\u0000${session.sessionId}`,
+    })
+  }
   return (
     <div className="ov-dashboard">
       {error && <StaleBanner error={error} />}
@@ -840,7 +903,7 @@ export function OverviewContent({
 
       <div className="ov-card ov-panel ov-chart-widget">
         <div className="ov-panel-head"><h3>Daily spend</h3><span className="r">{topModel ? `Biggest driver: ${topModel.name}` : 'No model driver yet'}</span></div>
-        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
+        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} onSelectDay={date => onInvestigate?.({ filters: dayFilters(date) })} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
       </div>
 
       <WorkflowCard current={data.current} />
@@ -868,7 +931,7 @@ export function OverviewContent({
         <div className="ov-main-column">
           <div className="ov-card ov-panel ov-models-widget">
             <div className="ov-panel-head"><h3>Models this period</h3><span className="r">Sorted by cost</span></div>
-            <div className="ov-panel-body ov-model-panel"><ModelsTable models={models} /></div>
+            <div className="ov-panel-body ov-model-panel"><ModelsTable models={models} onSelectModel={onInvestigate ? name => onInvestigate({ filters: modelFilters([name]) }) : undefined} /></div>
           </div>
 
           <div className="ov-card ov-panel ov-sessions-widget">
@@ -877,7 +940,7 @@ export function OverviewContent({
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
                 const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
                 const sub = [formatChartDate(session.date), model, `${session.calls} ${session.calls === 1 ? 'call' : 'calls'}`].filter(Boolean).join(' · ')
-                return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => onNavigate?.('sessions')} />
+                return <ListRow key={`${session.project}-${session.date}-${index}`} no={String(index + 1).padStart(2, '0')} title={session.project} sub={sub} value={formatUsd(session.cost)} onClick={() => openSessionRow(session)} />
               }) : <EmptyNote>No sessions in this range.</EmptyNote>}
             </div>
           </div>
@@ -886,7 +949,7 @@ export function OverviewContent({
         <div className="ov-side-column">
           <div className="ov-card ov-panel ov-activities-widget">
             <div className="ov-panel-head"><h3>Top activities</h3><span className="r">Sorted by cost</span></div>
-            <div className="ov-panel-body"><TopActivities activities={data.current.topActivities} /></div>
+            <div className="ov-panel-body"><TopActivities activities={data.current.topActivities} onSelectCategory={onInvestigate ? raw => onInvestigate({ filters: categoryFilters(raw) }) : undefined} /></div>
           </div>
         </div>
       </div>

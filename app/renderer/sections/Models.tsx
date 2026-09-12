@@ -12,9 +12,11 @@ import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { categoryFilters, modelFilters } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type { AuditRow, DateRange, ModelReportRow, Period } from '../lib/types'
 import type { SettingsPane } from './Settings'
+import type { InvestigateRequest } from './Overview'
 
 type ModelsLens = 'model' | 'task' | 'audit'
 
@@ -38,6 +40,7 @@ export function Models({
   range = null,
   refreshToken = 0,
   onNavigate,
+  onInvestigate,
   ready = true,
 }: {
   period: Period
@@ -45,6 +48,7 @@ export function Models({
   range?: DateRange | null
   refreshToken?: number
   onNavigate?: (section: Section, pane?: SettingsPane) => void
+  onInvestigate?: (request: InvestigateRequest) => void
   ready?: boolean
 }) {
   const [lens, setLens] = useState<ModelsLens>('model')
@@ -70,6 +74,7 @@ export function Models({
           byTask={lens === 'task'}
           refreshToken={refreshToken}
           onAddAlias={onAddAlias}
+          onInvestigate={onInvestigate}
           ready={ready}
         />
       )}
@@ -84,6 +89,7 @@ function ModelsUsage({
   byTask,
   refreshToken,
   onAddAlias,
+  onInvestigate,
   ready,
 }: {
   period: Period
@@ -92,6 +98,7 @@ function ModelsUsage({
   byTask: boolean
   refreshToken: number
   onAddAlias: () => void
+  onInvestigate?: (request: InvestigateRequest) => void
   ready: boolean
 }) {
   const report = usePolled<ModelReportRow[]>(
@@ -111,7 +118,7 @@ function ModelsUsage({
       {report.error && <StaleBanner error={report.error} />}
       <Panel className="scroll-x">
         {report.data.length ? (
-          <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} />
+          <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
         ) : (
           <EmptyNote>No model usage in this range yet.</EmptyNote>
         )}
@@ -215,8 +222,13 @@ function AuditTableRow({ row }: { row: AuditRow }) {
   )
 }
 
-function ModelsTable({ rows, byTask, onAddAlias }: { rows: ModelReportRow[]; byTask: boolean; onAddAlias: () => void }) {
-  if (byTask) return <ModelsByTaskTable rows={rows} onAddAlias={onAddAlias} />
+function ModelsTable({ rows, byTask, onAddAlias, onInvestigate }: {
+  rows: ModelReportRow[]
+  byTask: boolean
+  onAddAlias: () => void
+  onInvestigate?: (request: InvestigateRequest) => void
+}) {
+  if (byTask) return <ModelsByTaskTable rows={rows} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
 
   return (
     <table>
@@ -233,14 +245,18 @@ function ModelsTable({ rows, byTask, onAddAlias }: { rows: ModelReportRow[]; byT
       </thead>
       <tbody>
         {rows.map((row, i) => (
-          <ModelTableRow key={`${row.provider}-${row.model}-${i}`} row={row} onAddAlias={onAddAlias} />
+          <ModelTableRow key={`${row.provider}-${row.model}-${i}`} row={row} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
         ))}
       </tbody>
     </table>
   )
 }
 
-function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
+function ModelsByTaskTable({ rows, onAddAlias, onInvestigate }: {
+  rows: ModelReportRow[]
+  onAddAlias: () => void
+  onInvestigate?: (request: InvestigateRequest) => void
+}) {
   const groups = groupTaskRows(rows)
 
   return (
@@ -258,9 +274,9 @@ function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAdd
       </thead>
       {groups.map(group => (
         <tbody className="model-task-group" key={`${group.provider}-${group.model}`}>
-          <ModelGroupRow rows={group.rows} onAddAlias={onAddAlias} />
+          <ModelGroupRow rows={group.rows} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
           {group.rows.map((row, i) => (
-            <ModelTaskRow key={`${row.category ?? 'all'}-${i}`} row={row} />
+            <ModelTaskRow key={`${row.category ?? 'all'}-${i}`} row={row} onInvestigate={onInvestigate} />
           ))}
         </tbody>
       ))}
@@ -268,7 +284,7 @@ function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAdd
   )
 }
 
-function ModelTableRow({ row, onAddAlias }: { row: ModelReportRow; onAddAlias: () => void }) {
+function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow; onAddAlias: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
   const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
@@ -277,12 +293,17 @@ function ModelTableRow({ row, onAddAlias }: { row: ModelReportRow; onAddAlias: (
     background: seriesColorForModel(row.modelDisplayName || row.model),
     marginRight: 8,
   }
+  // The fold group's canonical short names: the row's own key plus every raw
+  // id folded into it, so the chip matches every session under this row.
+  const drillModelKeys = [row.model, ...row.rawModels].filter(Boolean)
 
   return (
     <tr>
       <td className={cellClass} title={row.model}>
         <span className="mdot" style={dotStyle} />
-        {row.modelDisplayName}
+        {onInvestigate ? (
+          <button type="button" className="ov-link" title={`View sessions for ${row.modelDisplayName}`} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{row.modelDisplayName}</button>
+        ) : row.modelDisplayName}
         {unpriced ? (
           <>
             {' '}
@@ -301,12 +322,13 @@ function ModelTableRow({ row, onAddAlias }: { row: ModelReportRow; onAddAlias: (
   )
 }
 
-function ModelGroupRow({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
+function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportRow[]; onAddAlias: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const model = rows[0]
   const calls = rows.reduce((sum, row) => sum + row.calls, 0)
   const costUSD = rows.reduce((sum, row) => sum + row.costUSD, 0)
   const savingsUSD = rows.reduce((sum, row) => sum + row.savingsUSD, 0)
   const unpriced = costUSD === 0 && savingsUSD === 0
+  const drillModelKeys = [...new Set(rows.flatMap(row => [row.model, ...row.rawModels]))].filter(Boolean)
 
   return (
     <tr className="model-group-row">
@@ -317,7 +339,11 @@ function ModelGroupRow({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlia
             style={{ background: seriesColorForModel(model.modelDisplayName || model.model) }}
           />
           <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <span className="model-group-name">{model.modelDisplayName}</span>
+            {onInvestigate ? (
+              <button type="button" className="model-group-name ov-link" title={`View sessions for ${model.modelDisplayName}`} onClick={() => onInvestigate({ filters: modelFilters(drillModelKeys) })}>{model.modelDisplayName}</button>
+            ) : (
+              <span className="model-group-name">{model.modelDisplayName}</span>
+            )}
             <span style={providerTagStyle}>{model.providerDisplayName}</span>
           </span>
           {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
@@ -333,14 +359,18 @@ function ModelGroupRow({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlia
   )
 }
 
-function ModelTaskRow({ row }: { row: ModelReportRow }) {
+function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
   const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
 
   return (
     <tr className="model-task-row">
-      <td className={cellClass}>{row.category ?? 'general'}</td>
+      <td className={cellClass}>
+        {onInvestigate && row.category ? (
+          <button type="button" className="ov-link" title={`View ${row.category} sessions`} onClick={() => onInvestigate({ filters: categoryFilters(row.category!) })}>{row.category ?? 'general'}</button>
+        ) : row.category ?? 'general'}
+      </td>
       <td className={cellClass}>{fmtInt(row.calls)}</td>
       <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
       <td className={cellClass}>{tokenValue(row.outputTokens)}</td>

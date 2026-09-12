@@ -166,6 +166,9 @@ export type MenubarPayload = {
       savingsUSD: number
       turns: number
       oneShotRate: number | null
+      // Raw TaskCategory key (additive, optional): `name` is the display label,
+      // this round-trips as the drill-through filter value.
+      rawCategory?: string
     }>
     topModels: Array<{
       name: string
@@ -197,6 +200,9 @@ export type MenubarPayload = {
         outputTokens: number
         date: string
         models: Array<{ name: string; cost: number; savingsUSD: number }>
+        // Drill-through identity (additive, optional): see topSessions.
+        sessionId?: string
+        provider?: string
       }>
     }>
     modelEfficiency: Array<{
@@ -210,6 +216,13 @@ export type MenubarPayload = {
       savingsUSD: number
       calls: number
       date: string
+      // Drill-through identity (additive, optional): provider + session id
+      // open the exact session even when another provider reuses id or title.
+      sessionId?: string
+      provider?: string
+      // Raw session project (the sessions-list row key); `project` stays the
+      // friendly display name.
+      projectKey?: string
     }>
     // Workflow-intelligence rollups (src/menubar-json.ts buildWorkflow /
     // buildTopReworkedFiles). Optional: older CLIs omit them, so the Overview
@@ -548,6 +561,47 @@ export type SessionRow = {
   durationMs: number
 }
 
+// ————— src/session-contributions.ts (drill-through, `sessions --contributions`) —————
+
+/** One attributed slice of a session's in-range spend. Segments PARTITION the
+ *  session (every turn lands in exactly one), so summing a single dimension
+ *  over all segments reconciles that dimension's aggregate exactly. `prs` is
+ *  the turn's ACTIVE PR set carried forward like the by-PR attribution: []
+ *  means unattributed, and a multi-PR set is listed whole (attributing to one
+ *  PR of the set is a 1/len share of the segment, never the full amount). */
+export type ContributionSegment = {
+  day: string
+  category: string | null
+  branch: string | null
+  /** Short model name -> attributed cost (same key family as modelBreakdown).
+   *  Sums to `cost`; the unattributable remainder rides under ''. */
+  models: Record<string, number>
+  prs: string[]
+  /** True when the PR set is the legacy whole-session even split (transcript
+   *  expired before per-turn capture); absent otherwise. */
+  approx?: true
+  cost: number
+  calls: number
+  savingsUSD: number
+  inputTokens: number
+  outputTokens: number
+}
+
+/** Additive fields on SessionRow, present only in the contributions report. */
+export type SessionDrillFields = {
+  contributions?: { segments: ContributionSegment[] }
+  /** Canonical project identity (the same id topProjects[].id carries), so a
+   *  project chip matches rows exactly even when raw paths are prefix-similar. */
+  projectId?: string
+  /** Provider-recorded parent of a subagent transcript (integration point for
+   *  work-unit grouping). Absent for ordinary sessions. */
+  parentSessionId?: string
+  agentId?: string
+  isSidechain?: boolean
+}
+
+export type SessionDrillRow = SessionRow & SessionDrillFields
+
 // ————— src/compare-stats.ts —————
 export type ModelStats = {
   model: string
@@ -755,6 +809,9 @@ export interface CodeburnBridge {
   readonly arch?: string
   getModels(period: Period, provider: string, byTask: boolean, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
   getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
+  /** Session rows with per-turn contribution segments (`sessions --contributions`).
+   *  Same population and filtering semantics as getSessions; additive fields only. */
+  getSessionsContributions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionDrillRow[]>
   getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>

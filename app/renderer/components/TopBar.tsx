@@ -19,9 +19,14 @@ export const PERIOD_OPTIONS: SegOption[] = [
   { value: 'lifetime', label: 'Life' },
 ]
 
-/** The `.bar` top bar: title, scope caption, period SegTabs, provider ProviderPop. */
+/** The `.bar` top bar: back/forward history controls, title, scope caption,
+ *  period SegTabs, provider ProviderPop. */
 export function TopBar({
   title,
+  canBack = false,
+  canForward = false,
+  onBack,
+  onForward,
   scope,
   period,
   onPeriodChange,
@@ -36,6 +41,12 @@ export function TopBar({
   onConfigSelect,
 }: {
   title: ReactNode
+  /** In-app Back/Forward history (drill-through restores filters, sort,
+   *  page depth, and the open drawer). Hidden when no handler is provided. */
+  canBack?: boolean
+  canForward?: boolean
+  onBack?: () => void
+  onForward?: () => void
   scope?: ReactNode
   period: string
   onPeriodChange: (value: string) => void
@@ -51,6 +62,30 @@ export function TopBar({
 }) {
   return (
     <div className="bar">
+      {onBack && onForward && (
+        <div className="bar-nav" role="group" aria-label="Navigation history">
+          <button
+            type="button"
+            className="bar-nav-btn"
+            aria-label="Back"
+            title="Back"
+            disabled={!canBack}
+            onClick={() => { if (canBack) onBack() }}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="bar-nav-btn"
+            aria-label="Forward"
+            title="Forward"
+            disabled={!canForward}
+            onClick={() => { if (canForward) onForward() }}
+          >
+            ›
+          </button>
+        </div>
+      )}
       <div className="t">{title}</div>
       {scope !== undefined && <span className="scope">{scope}</span>}
       <div className="sp" />

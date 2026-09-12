@@ -385,6 +385,12 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getSessions': run((period: string, provider: string, range?: DateRange) => [
       'sessions', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),
+    // Drill-through report: plain session rows plus per-turn contribution
+    // segments (day/category/branch/model/PR). Same filtering semantics as
+    // getSessions — one filtering mechanism, additive payload fields only.
+    'codeburn:getSessionsContributions': run((period: string, provider: string, range?: DateRange) => [
+      'sessions', '--format', 'json', '--contributions', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+    ], 3),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
     ], 2),
