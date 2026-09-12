@@ -427,6 +427,10 @@
 "Capacity Dock" = "Capacity Dock";
 "Unknown" = "Unknown";
 "Click to keep Capacity Dock expanded" = "Click to keep Capacity Dock expanded";
+"Click to switch between this provider's usage windows" = "Click to switch between this provider's usage windows";
+/* VoiceOver action on the provider cell. The window name is either the
+   provider's own label or the generic horizon, both left verbatim. */
+"Show %@ usage" = "Show %@ usage";
 "none running" = "none running";
 "1 running" = "1 running";
 "%lld running" = "%lld running";
@@ -544,14 +548,15 @@
 "Sign in with the Gemini CLI first, then click Connect." = "Sign in with the Gemini CLI first, then click Connect.";
 "Disconnect Gemini?" = "Disconnect Gemini?";
 "CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working." = "CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working.";
-"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token." = "Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token.";
+"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com." = "Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com.";
 "GitHub token" = "GitHub token";
 "Save & Connect" = "Save & Connect";
 "Clear Token" = "Clear Token";
 "Paste a token" = "Paste a token";
 "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota." = "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota.";
 "Couldn't load Copilot quota" = "Couldn't load Copilot quota";
-"Live quota tracked from api.github.com." = "Live quota tracked from api.github.com.";
+"Live quota tracked from %@." = "Live quota tracked from %@.";
+"Plan: %@. Live quota tracked from %@." = "Plan: %@. Live quota tracked from %@.";
 "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect.";
 "GitHub rate-limited; auto-retrying." = "GitHub rate-limited; auto-retrying.";
 "Looking for a GitHub token on this Mac." = "Looking for a GitHub token on this Mac.";
@@ -601,3 +606,26 @@
 "Issues" = "Issues";
 "Links" = "Links";
 "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License." = "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License.";
+
+/* MARK: Menubar second row (#1252) */
+"Second row" = "Second row";
+"Second row shows" = "Second row shows";
+"Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data." = "Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data.";
+"Quota remaining" = "Quota remaining";
+"Today's cost" = "Today's cost";
+"Today's tokens" = "Today's tokens";
+"Active sessions" = "Active sessions";
+/* Row text. The amount, the token figure and the provider name are substituted
+   already formatted, so only the word around them is translated; `tok` is a
+   unit and stays verbatim. The reset countdown reuses the popover's own
+   `%lldd %lldh` / `%lldh %lldm` / `%lldm` keys above. */
+"%@ today" = "%@ today";
+"%@ tok today" = "%@ tok today";
+"%lld%% left" = "%lld%% left";
+"%@ %lld%% left" = "%@ %lld%% left";
+
+/* MARK: Codex credit limit */
+"Monthly usage limit" = "Monthly usage limit";
+"Monthly usage limit · limit reached" = "Monthly usage limit · limit reached";
+"Monthly usage limit · %@ / %@ credits" = "Monthly usage limit · %@ / %@ credits";
+"%@ · limit reached" = "%@ · limit reached";

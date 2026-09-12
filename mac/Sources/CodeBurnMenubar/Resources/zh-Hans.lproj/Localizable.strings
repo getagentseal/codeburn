@@ -421,6 +421,9 @@
 "Capacity Dock" = "容量 Dock";
 "Unknown" = "未知";
 "Click to keep Capacity Dock expanded" = "点按以保持容量 Dock 展开";
+"Click to switch between this provider's usage windows" = "点按以在该服务商的用量周期之间切换";
+/* 服务商单元格的 VoiceOver 操作。周期名称来自服务商，保持原样。 */
+"Show %@ usage" = "显示 %@ 用量";
 "none running" = "无运行中";
 "1 running" = "1 个运行中";
 "%lld running" = "%lld 个运行中";
@@ -538,14 +541,15 @@
 "Sign in with the Gemini CLI first, then click Connect." = "请先通过 Gemini 命令行工具登录，然后点按“连接”。";
 "Disconnect Gemini?" = "要断开 Gemini 连接吗？";
 "CodeBurn will stop tracking Gemini quota. Your ~/.gemini credentials are untouched. The Gemini CLI keeps working." = "CodeBurn 将停止跟踪 Gemini 配额。你的 ~/.gemini 凭证不会受到影响，Gemini 命令行工具仍可正常使用。";
-"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token." = "Copilot 实时配额跟踪以只读方式读取这台 Mac 上已有的 GitHub 令牌，不会复制或存储任何内容。CodeBurn 会依次查看 `~/.config/github-copilot` 中的编辑器插件文件、Copilot 命令行工具的 `~/.copilot` 文件、COPILOT_GITHUB_TOKEN、GH_TOKEN 和 GITHUB_TOKEN 环境变量、`gh auth token`，最后是你在下方粘贴的令牌。用量跟踪无需这些内容，只有实时配额条才需要令牌。";
+"Copilot live-quota tracking reads a GitHub token that is already on this Mac, read-only. Nothing is copied or stored. CodeBurn looks at the editor plugin files in `~/.config/github-copilot`, the Copilot CLI's `~/.copilot` files, the COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN variables, `gh auth token`, and finally a token you paste below. Usage tracking works without any of this; only the live quota bars need a token. A credential found for a GitHub Enterprise Cloud host is queried on that tenant's own API (api.<tenant>.ghe.com) and never sent to api.github.com." = "Copilot 实时配额跟踪以只读方式读取这台 Mac 上已有的 GitHub 令牌，不会复制或存储任何内容。CodeBurn 会依次查看 `~/.config/github-copilot` 中的编辑器插件文件、Copilot 命令行工具的 `~/.copilot` 文件、COPILOT_GITHUB_TOKEN、GH_TOKEN 和 GITHUB_TOKEN 环境变量、`gh auth token`，最后是你在下方粘贴的令牌。用量跟踪无需这些内容，只有实时配额条才需要令牌。为 GitHub Enterprise Cloud 主机找到的凭证，只会向该租户自己的 API（api.<tenant>.ghe.com）查询，绝不会发送到 api.github.com。";
 "GitHub token" = "GitHub 令牌";
 "Save & Connect" = "存储并连接";
 "Clear Token" = "清除令牌";
 "Paste a token" = "粘贴令牌";
 "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. The token is saved in CodeBurn's own Keychain item and is used only to read your Copilot quota." = "可选，仅当这台 Mac 上没有其他已登录来源时才需要。一个具有 \"Plan: Read-only\" 权限的细粒度个人访问令牌即可。该令牌保存在 CodeBurn 自己的钥匙串项目中，且仅用于读取你的 Copilot 配额。";
 "Couldn't load Copilot quota" = "无法载入 Copilot 配额";
-"Live quota tracked from api.github.com." = "实时配额来自 api.github.com。";
+"Live quota tracked from %@." = "实时配额来自 %@。";
+"Plan: %@. Live quota tracked from %@." = "套餐：%@。实时配额来自 %@。";
 "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "请通过 Copilot 命令行工具、编辑器的 Copilot 插件或 gh auth login 重新登录，然后点按“重新连接”。";
 "GitHub rate-limited; auto-retrying." = "GitHub 已限流，正在自动重试。";
 "Looking for a GitHub token on this Mac." = "正在这台 Mac 上查找 GitHub 令牌。";
@@ -595,3 +599,25 @@
 "Issues" = "问题反馈";
 "Links" = "链接";
 "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT License." = "© 2026 Resham Joshi (iamtoruk) · AgentSeal. MIT 许可证。";
+
+/* MARK: Menubar second row (#1252) */
+"Second row" = "第二行";
+"Second row shows" = "第二行显示";
+"Adds a smaller second line under the menubar figure. Quota remaining tracks whichever connected provider is nearest its limit. The line hides itself while the chosen metric has no data." = "在菜单栏数字下方添加一行较小的文字。“剩余配额”会跟踪最接近限额的已连接服务商。当所选指标暂无数据时，该行会自动隐藏。";
+"Quota remaining" = "剩余配额";
+"Today's cost" = "今日花费";
+"Today's tokens" = "今日 Token";
+"Active sessions" = "活跃会话";
+/* 菜单栏空间有限，这几条要尽量短。金额、Token 数和服务商名称都已在代码中格式化，
+   此处只翻译它们周围的文字；tok 是单位，保持原样。重置倒计时复用上方弹窗的
+   `%lldd %lldh` / `%lldh %lldm` / `%lldm` 三个键。 */
+"%@ today" = "今日 %@";
+"%@ tok today" = "今日 %@ tok";
+"%lld%% left" = "剩余 %lld%%";
+"%@ %lld%% left" = "%@ 剩余 %lld%%";
+
+/* MARK: Codex credit limit */
+"Monthly usage limit" = "每月用量上限";
+"Monthly usage limit · limit reached" = "每月用量上限 · 已达上限";
+"Monthly usage limit · %@ / %@ credits" = "每月用量上限 · %@ / %@ 点数";
+"%@ · limit reached" = "%@ · 已达上限";
