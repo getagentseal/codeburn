@@ -125,7 +125,11 @@ extension ModelEntry {
     /// comma grouping so the text is deterministic.
     var tokenAccessibilityText: String {
         func exact(_ value: Int) -> String {
-            var digits = String(value)
+            // Group the MAGNITUDE, then re-apply the sign. Grouping the signed
+            // string treats "-" as a leading digit, so the sign is emitted
+            // twice ("--1,234,567"). `magnitude` is unsigned, so Int.min is
+            // handled too rather than trapping on negation.
+            var digits = String(value.magnitude)
             var grouped = ""
             while digits.count > 3 {
                 let cut = digits.index(digits.endIndex, offsetBy: -3)

@@ -135,4 +135,23 @@ struct ModelEntryTokenCountsTests {
         #expect(label.contains("900,000 cache read (reused input)"))
         #expect(!label.contains("cache write"))
     }
+
+    @Test("accessibility text groups a negative count with a single minus sign")
+    func accessibilityTextGroupsNegativeCountsOnce() throws {
+        // A negative count is not expected from the CLI, but the payload field
+        // is a plain Int and a corrupt or hand-edited snapshot can carry one.
+        // Grouping the signed string would emit the sign twice ("--1,234,567"),
+        // which a screen reader reads as a different number.
+        let payload = try decode("""
+        [
+          { "name": "Broken", "cost": 0, "savingsUSD": 0, "savingsBaselineModel": "", "calls": 1,
+            "inputTokens": -1234567, "outputTokens": -12, "cacheReadTokens": 0, "cacheWriteTokens": 0 }
+        ]
+        """)
+        let label = payload.current.topModels[0].tokenAccessibilityText
+        #expect(label.contains("-1,234,567 input"))
+        #expect(!label.contains("--"))
+        // Under the grouping threshold the sign still appears exactly once.
+        #expect(label.contains("-12 output"))
+    }
 }

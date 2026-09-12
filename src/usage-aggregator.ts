@@ -19,7 +19,7 @@ import { aggregateModelTaskTurns, sessionDurationMinutes } from './telemetry-sna
 import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, computePricingCoverage } from './workflow-insights.js'
 import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
-import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { callBillableOutputTokens, sessionBillableOutput, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
@@ -133,16 +133,19 @@ export function buildPeriodData(label: string, projects: ProjectSummary[]): Peri
 
   for (const sess of sessions) {
     inputTokens += sess.totalInputTokens
-    outputTokens += sessionBillableOutputTokens(sess)
-    cacheReadTokens += sess.totalCacheReadTokens
-    cacheWriteTokens += sess.totalCacheWriteTokens
     // Per-model output uses the same billable-output rule as the headline:
     // reasoning tokens are added only where the provider reports them
     // separately from output (never twice where output already includes
     // them, #1075). modelBreakdown's raw token counters cannot be summed
     // for display without it. A bucket no surviving call maps to falls
     // back to its own counters under the session's provider.
-    const sessionModelOut = sessionModelBillableOutputTokens(sess)
+    //
+    // One walk yields both: the headline total and the per-model split come
+    // out of the same pass over this session's assistant calls.
+    const { total: sessionOut, byModel: sessionModelOut } = sessionBillableOutput(sess)
+    outputTokens += sessionOut
+    cacheReadTokens += sess.totalCacheReadTokens
+    cacheWriteTokens += sess.totalCacheWriteTokens
     for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
       if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, savingsUSD: 0, editTurns: 0, oneShotTurns: 0 }
       catTotals[cat].turns += d.turns
