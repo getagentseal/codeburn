@@ -339,6 +339,9 @@ export type ModelReportRow = {
   // model). Length 1 when nothing merged.
   rawModels: string[]
   category: TaskCategory | null
+  // By-agent lens only: the recorded subagent type, or '(main)' for ordinary
+  // sessions and providers that record no agent type. Null otherwise.
+  agentType?: string | null
   inputTokens: number
   outputTokens: number
   cacheWriteTokens: number
@@ -546,6 +549,36 @@ export type SessionRow = {
   startedAt: string
   endedAt: string
   durationMs: number
+  // Subagent type the provider recorded (`general-purpose`, `Explore`, …).
+  // Optional so older CLIs that predate the field degrade to "unknown" instead
+  // of a fabricated agent label.
+  agentType?: string | null
+}
+
+// ————— src/work-units.ts (sessions --by-work-unit --format json) —————
+export type WorkUnitRole = 'root' | 'child' | 'unknown'
+
+export type WorkUnitMember = {
+  sessionId: string
+  // Every member of a unit shares the root's provider: lineage edges are only
+  // resolved same-provider, so this field is the identity that keeps two
+  // sessions sharing an id across providers separable.
+  provider: string
+  role: WorkUnitRole
+}
+
+export type WorkUnitJson = {
+  workUnitId: string
+  rootSessionId: string
+  rootProvider: string
+  childSessionIds: string[]
+  roles: Record<string, WorkUnitRole>
+  members: WorkUnitMember[]
+}
+
+export type WorkUnitReport = {
+  sessions: SessionRow[]
+  workUnits: WorkUnitJson[]
 }
 
 // ————— src/compare-stats.ts —————
@@ -754,7 +787,10 @@ export interface CodeburnBridge {
    *  that predate the direct-download update link. */
   readonly arch?: string
   getModels(period: Period, provider: string, byTask: boolean, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
+  getModelsByAgent(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<ModelReportRow[]>
   getSessions(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<SessionRow[]>
+  /** `sessions --by-work-unit --format json`: rows plus the resolver's unit partition. */
+  getWorkUnits(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<WorkUnitReport>
   getCompareModels(period: Period, provider: string, background?: boolean): Promise<ModelStats[]>
   getCompare(period: Period, provider: string, modelA: string, modelB: string): Promise<CompareJsonReport>
   getYield(period: Period, provider: string, range?: DateRange, background?: boolean): Promise<YieldJsonReport>

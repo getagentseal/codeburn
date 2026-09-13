@@ -382,8 +382,18 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
       'models', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...(byTask ? ['--by-task'] : []), ...rangeArgs(vRange(range)),
     ], 4),
+    // By-agent lens: the CLI's existing --by-agent breakdown (Claude subagent
+    // transcripts; everything else buckets under "(main)").
+    'codeburn:getModelsByAgent': run((period: string, provider: string, range?: DateRange) => [
+      'models', '--by-agent', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+    ], 3),
     'codeburn:getSessions': run((period: string, provider: string, range?: DateRange) => [
       'sessions', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
+    ], 3),
+    // Work-unit lens: same population and filters as getSessions, grouped by
+    // provider-recorded orchestration lineage. JSON envelope { sessions, workUnits }.
+    'codeburn:getWorkUnits': run((period: string, provider: string, range?: DateRange) => [
+      'sessions', '--by-work-unit', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)), ...rangeArgs(vRange(range)),
     ], 3),
     'codeburn:getCompareModels': run((period: string, provider: string) => [
       'compare', '--format', 'json', '--period', vPeriod(period), ...providerArgs(vProvider(provider)),
@@ -639,6 +649,15 @@ function bootstrap(): void {
   process.on('unhandledRejection', reason => {
     console.error('Unhandled promise rejection in main process:', reason)
   })
+
+  // Optional dev isolation (parallel checkouts running `npm run dev` side by
+  // side): a CODEBURN_USER_DATA_DIR redirect moves EVERYTHING keyed on
+  // userData — serve.pid, telemetry state, tray settings — so two dev apps
+  // never fight over one resident serve child. Must run before the first
+  // app.getPath('userData') read (bootstrap's serve/telemetry/companion).
+  if (process.env.CODEBURN_USER_DATA_DIR) {
+    try { app.setPath('userData', process.env.CODEBURN_USER_DATA_DIR) } catch { /* non-fatal: fall back to the default profile */ }
+  }
 
   // Packaged builds ship their own version-matched CLI under resources/cli (the
   // afterPack hook copies it in). Point the resolver at the launch shim before
