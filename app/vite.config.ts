@@ -24,12 +24,30 @@ const stamp = buildStamp()
 // The production index.html ships a strict `script-src 'self'`. In dev, Vite's
 // React Fast Refresh preamble is injected as an inline <script>, which that CSP
 // blocks; relax script-src to allow inline scripts for the dev server only.
+//
+// CODEBURN_DEMO_BRIDGE=1 additionally opts this dev server into the repo's
+// browser-demo harness (app/demo-bridge.mjs): it loads renderer/public's
+// demo-shim.js BEFORE the app bundle (plain scripts run at parse time; module
+// scripts are deferred) and widens connect-src to the bridge's 127.0.0.1:4900.
+// The shipped index.html and production CSP are untouched.
 function devCsp(): Plugin {
+  const demo = process.env.CODEBURN_DEMO_BRIDGE === '1'
   return {
     name: 'codeburn-dev-csp',
     apply: 'serve',
     transformIndexHtml(html) {
-      return html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+      let out = html.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+      if (demo) {
+        out = out.replace(
+          "connect-src 'self' ws://localhost:5173 http://localhost:5173",
+          "connect-src 'self' ws://localhost:5173 http://localhost:5173 http://127.0.0.1:4900",
+        )
+        out = out.replace(
+          '<div id="root"></div>',
+          '<div id="root"></div>\n    <script src="/demo-shim.js"></script>',
+        )
+      }
+      return out
     },
   }
 }
@@ -45,6 +63,13 @@ export default defineConfig({
     __BUILD_SHA__: JSON.stringify(stamp.sha),
     __BUILD_DATE__: JSON.stringify(stamp.date),
   },
-  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  // CODEBURN_DEV_PORT lets parallel checkouts dev on distinct ports (default
+  // 5173 unchanged). strictPort keeps a misconfigured overlap loud instead of
+  // silently hopping to a port the Electron dev script would never watch.
+  server: {
+    host: '127.0.0.1',
+    port: Number.parseInt(process.env.CODEBURN_DEV_PORT ?? '5173', 10) || 5173,
+    strictPort: true,
+  },
   build: { outDir: '../dist/renderer', emptyOutDir: true },
 })

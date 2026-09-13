@@ -46,7 +46,9 @@ const ROUTES = {
   getTimeline: (period, provider, r) => ['status', '--format', 'menubar-json', '--period', period, ...prov(provider), ...range(r)],
   getPlans: (period) => ['status', '--format', 'json', '--period', period],
   getModels: (period, provider, byTask, r) => ['models', '--format', 'json', '--period', period, ...prov(provider), ...(byTask ? ['--by-task'] : []), ...range(r)],
+  getModelsByAgent: (period, provider, r) => ['models', '--by-agent', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
   getSessions: (period, provider, r) => ['sessions', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
+  getWorkUnits: (period, provider, r) => ['sessions', '--by-work-unit', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
   getCompareModels: (period, provider) => ['compare', '--format', 'json', '--period', period, ...prov(provider)],
   getCompare: (period, provider, a, b) => ['compare', '--format', 'json', '--period', period, ...prov(provider), '--model-a', a, '--model-b', b],
   getYield: (period, provider, r) => ['yield', '--format', 'json', '--period', period, ...prov(provider), ...range(r)],
@@ -61,7 +63,7 @@ const ROUTES = {
   getPriceOverrides: () => ['price-override', '--list', '--format', 'json'],
   getDevices: (period) => ['devices', '--format', 'json', '--period', period],
 }
-const SERVED = new Set(['getOverview', 'getTimeline', 'getPlans', 'getModels', 'getSessions', 'getCompareModels', 'getCompare', 'getYield', 'getSpendFlow', 'getOptimizeReport', 'getAudit'])
+const SERVED = new Set(['getOverview', 'getTimeline', 'getPlans', 'getModels', 'getModelsByAgent', 'getSessions', 'getWorkUnits', 'getCompareModels', 'getCompare', 'getYield', 'getSpendFlow', 'getOptimizeReport', 'getAudit'])
 
 createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
