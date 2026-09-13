@@ -16,11 +16,12 @@ import { reportMemoKey } from '../lib/reportMemoKey'
 import type { AuditRow, DateRange, ModelReportRow, Period } from '../lib/types'
 import type { SettingsPane } from './Settings'
 
-type ModelsLens = 'model' | 'task' | 'audit'
+type ModelsLens = 'model' | 'task' | 'agent' | 'audit'
 
 const LENSES = [
   { value: 'model', label: 'By model' },
   { value: 'task', label: 'By task' },
+  { value: 'agent', label: 'By agent' },
   { value: 'audit', label: 'Audit' },
 ]
 
@@ -68,6 +69,7 @@ export function Models({
           provider={provider}
           range={range}
           byTask={lens === 'task'}
+          byAgent={lens === 'agent'}
           refreshToken={refreshToken}
           onAddAlias={onAddAlias}
           ready={ready}
@@ -82,6 +84,7 @@ function ModelsUsage({
   provider,
   range,
   byTask,
+  byAgent = false,
   refreshToken,
   onAddAlias,
   ready,
@@ -90,14 +93,18 @@ function ModelsUsage({
   provider: string
   range: DateRange | null
   byTask: boolean
+  /** The CLI's existing --by-agent breakdown, fetched through its own channel. */
+  byAgent?: boolean
   refreshToken: number
   onAddAlias: () => void
   ready: boolean
 }) {
   const report = usePolled<ModelReportRow[]>(
-    () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
-    [period, provider, byTask, range?.from, range?.to, refreshToken],
-    { enabled: ready, memoKey: reportMemoKey('models', period, provider, range, String(byTask)) },
+    () => byAgent
+      ? (range ? codeburn.getModelsByAgent(period, provider, range) : codeburn.getModelsByAgent(period, provider))
+      : (range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask)),
+    [period, provider, byTask, byAgent, range?.from, range?.to, refreshToken],
+    { enabled: ready, memoKey: reportMemoKey('models', period, provider, range, byAgent ? 'agent' : String(byTask)) },
   )
 
   if (!report.data) {
@@ -111,7 +118,9 @@ function ModelsUsage({
       {report.error && <StaleBanner error={report.error} />}
       <Panel className="scroll-x">
         {report.data.length ? (
-          <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} />
+          byAgent
+            ? <ModelsByAgentTable rows={report.data} onAddAlias={onAddAlias} />
+            : <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} />
         ) : (
           <EmptyNote>No model usage in this range yet.</EmptyNote>
         )}
@@ -241,7 +250,7 @@ function ModelsTable({ rows, byTask, onAddAlias }: { rows: ModelReportRow[]; byT
 }
 
 function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
-  const groups = groupTaskRows(rows)
+  const groups = groupDimensionRows(rows)
 
   return (
     <table className="models-by-task">
@@ -265,6 +274,57 @@ function ModelsByTaskTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAdd
         </tbody>
       ))}
     </table>
+  )
+}
+
+// The By-agent lens reuses the by-task grouped shape (rows grouped under their
+// (provider, model), the third dimension in the first column) but is fed by the
+// CLI's own --by-agent command. The agent label is whatever the CLI recorded —
+// the real subagent type, or its "(main)" bucket. Nothing is invented here for
+// providers that carry no agent-type notion.
+function ModelsByAgentTable({ rows, onAddAlias }: { rows: ModelReportRow[]; onAddAlias: () => void }) {
+  const groups = groupDimensionRows(rows)
+
+  return (
+    <table className="models-by-task models-by-agent">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Calls</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Cache read</th>
+          <th>Cost</th>
+          <th>Saved</th>
+        </tr>
+      </thead>
+      {groups.map(group => (
+        <tbody className="model-task-group" key={`${group.provider}-${group.model}`}>
+          <ModelGroupRow rows={group.rows} onAddAlias={onAddAlias} />
+          {group.rows.map((row, i) => (
+            <ModelAgentRow key={`${row.agentType ?? 'main'}-${i}`} row={row} />
+          ))}
+        </tbody>
+      ))}
+    </table>
+  )
+}
+
+function ModelAgentRow({ row }: { row: ModelReportRow }) {
+  const unpriced = row.costUSD === 0 && row.savingsUSD === 0
+  const cellClass = unpriced ? 'dim' : undefined
+  const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
+
+  return (
+    <tr className="model-task-row">
+      <td className={cellClass}>{row.agentType ?? '(main)'}</td>
+      <td className={cellClass}>{fmtInt(row.calls)}</td>
+      <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
+      <td className={cellClass}>{tokenValue(row.outputTokens)}</td>
+      <td className={cellClass}>{tokenValue(row.cacheReadTokens)}</td>
+      <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
+      <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
+    </tr>
   )
 }
 
@@ -351,7 +411,7 @@ function ModelTaskRow({ row }: { row: ModelReportRow }) {
   )
 }
 
-function groupTaskRows(rows: ModelReportRow[]) {
+function groupDimensionRows(rows: ModelReportRow[]) {
   const groups = new Map<string, { provider: string; model: string; rows: ModelReportRow[] }>()
   for (const row of rows) {
     const key = `${row.provider}\u0000${row.model}`

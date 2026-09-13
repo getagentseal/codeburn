@@ -5,13 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuditRow, ModelReportRow } from '../lib/types'
 import { Models } from './Models'
 
-const { getModels, getAudit } = vi.hoisted(() => ({
+const { getModels, getModelsByAgent, getAudit } = vi.hoisted(() => ({
   getModels: vi.fn<(period: string, provider: string, byTask: boolean) => Promise<ModelReportRow[]>>(),
+  getModelsByAgent: vi.fn<(period: string, provider: string) => Promise<ModelReportRow[]>>(),
   getAudit: vi.fn<(period: string, provider: string) => Promise<AuditRow[]>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getModels, getAudit } }
+  return { ...actual, codeburn: { getModels, getModelsByAgent, getAudit } }
 })
 
 const rows: ModelReportRow[] = [
@@ -148,6 +149,7 @@ const auditRows: AuditRow[] = [
 describe('Models', () => {
   beforeEach(() => {
     getModels.mockReset()
+    getModelsByAgent.mockReset()
     getAudit.mockReset()
   })
 
@@ -286,5 +288,90 @@ describe('Models', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Audit' }))
 
     expect(await screen.findByText('No model usage to audit in this range yet.')).toBeInTheDocument()
+  })
+})
+
+// ————— By-agent lens —————
+// The wire rows come from the CLI's own `models --by-agent --format json`:
+// one row per (provider, model, agent), the agent being the recorded subagent
+// type or the CLI's "(main)" bucket. The lens only groups and renders them.
+
+const byAgentRows: ModelReportRow[] = [
+  {
+    ...rows[0],
+    agentType: 'Explore',
+    calls: 900,
+    inputTokens: 40_000_000,
+    outputTokens: 2_100_000,
+    cacheReadTokens: 21_000_000,
+    totalTokens: 64_100_000,
+    costUSD: 65.5,
+    savingsUSD: 16.3,
+  },
+  {
+    ...rows[0],
+    agentType: 'general-purpose',
+    calls: 1300,
+    inputTokens: 60_000_000,
+    outputTokens: 3_300_000,
+    cacheReadTokens: 33_000_000,
+    totalTokens: 98_300_000,
+    costUSD: 98.7,
+    savingsUSD: 24.6,
+  },
+  {
+    ...rows[0],
+    agentType: '(main)',
+    calls: 2612,
+    inputTokens: 52_600_000,
+    outputTokens: 4_240_000,
+    cacheReadTokens: 65_400_000,
+    totalTokens: 135_240_000,
+    costUSD: 167.0,
+    savingsUSD: 45.5,
+  },
+]
+
+describe('Models By agent lens', () => {
+  beforeEach(() => {
+    getModels.mockReset()
+    getModelsByAgent.mockReset()
+    getAudit.mockReset()
+  })
+
+  it('fetches through the by-agent channel and renders one row per agent under the model group', async () => {
+    getModels.mockResolvedValue(rows)
+    getModelsByAgent.mockResolvedValue(byAgentRows)
+
+    render(<Models period="30days" provider="all" />)
+
+    expect(await screen.findByText('Claude Opus 4.8')).toBeInTheDocument()
+    expect(getModels).toHaveBeenCalledWith('30days', 'all', false)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'By agent' }))
+
+    await waitFor(() => expect(getModelsByAgent).toHaveBeenCalledWith('30days', 'all'))
+    expect(await screen.findByText('Explore')).toBeInTheDocument()
+    expect(screen.getByText('general-purpose')).toBeInTheDocument()
+    expect(screen.getByText('(main)')).toBeInTheDocument()
+    // Provider/model dimensions stay visible on the group row.
+    expect(screen.getByText('Anthropic')).toBeInTheDocument()
+    expect(screen.getAllByText('Claude Opus 4.8')).toHaveLength(1)
+    expect(document.querySelectorAll('.model-task-group')).toHaveLength(1)
+    expect(document.querySelectorAll('.model-task-row')).toHaveLength(3)
+    expect(document.querySelector('.models-by-agent')!.querySelector('th')!.textContent).toBe('Agent')
+  })
+
+  it('buckets a main-sessions-only population under (main) without inventing agents', async () => {
+    getModels.mockResolvedValue(rows.slice(0, 1))
+    getModelsByAgent.mockResolvedValue([{ ...byAgentRows[2], agentType: '(main)' }])
+
+    render(<Models period="week" provider="anthropic" />)
+
+    expect(await screen.findByText('Claude Opus 4.8')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'By agent' }))
+
+    expect(await screen.findByText('(main)')).toBeInTheDocument()
+    expect(document.querySelectorAll('.model-task-row')).toHaveLength(1)
   })
 })

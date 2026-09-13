@@ -3,15 +3,16 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { SessionRow } from '../lib/types'
+import type { SessionRow, WorkUnitJson, WorkUnitReport } from '../lib/types'
 import { INITIAL_VISIBLE, Sessions } from './Sessions'
 
-const { getSessions } = vi.hoisted(() => ({
+const { getSessions, getWorkUnits } = vi.hoisted(() => ({
   getSessions: vi.fn<(period: string, provider: string) => Promise<SessionRow[]>>(),
+  getWorkUnits: vi.fn<(period: string, provider: string) => Promise<WorkUnitReport>>(),
 }))
 vi.mock('../lib/ipc', async orig => {
   const actual = await orig<typeof import('../lib/ipc')>()
-  return { ...actual, codeburn: { getSessions } }
+  return { ...actual, codeburn: { getSessions, getWorkUnits } }
 })
 
 function session(overrides: Partial<SessionRow> & Pick<SessionRow, 'sessionId' | 'project' | 'provider'>): SessionRow {
@@ -112,7 +113,10 @@ const rows: SessionRow[] = [
 ]
 
 describe('Sessions', () => {
-  beforeEach(() => getSessions.mockReset())
+  beforeEach(() => {
+    getSessions.mockReset()
+    getWorkUnits.mockReset()
+  })
 
   it('shows the first-load skeleton, then yields to the session list', async () => {
     let resolve!: (value: SessionRow[]) => void
@@ -330,5 +334,181 @@ describe('Sessions', () => {
     await user.type(search, 'webhook')
     expect(container.querySelectorAll('.session-row')).toHaveLength(1)
     expect(container.querySelector('.session-row .session-title')).toHaveTextContent('Add billing webhook')
+  })
+})
+
+// ————— Work-unit (orchestration) view —————
+
+function unit(rootSessionId: string, children: string[]): WorkUnitJson {
+  const role: WorkUnitJson['members'][number]['role'] = children.length > 0 ? 'root' : 'unknown'
+  return {
+    workUnitId: `trace-${rootSessionId}`,
+    rootSessionId,
+    rootProvider: 'claude',
+    childSessionIds: [...children].sort(),
+    roles: {
+      [rootSessionId]: role,
+      ...Object.fromEntries(children.map(childId => [childId, 'child'])),
+    } as WorkUnitJson['roles'],
+    members: [
+      { sessionId: rootSessionId, provider: 'claude', role },
+      ...[...children].sort().map(childId => ({ sessionId: childId, provider: 'claude', role: 'child' as const })),
+    ],
+  }
+}
+
+// Acceptance fixture: root 2 + children 3 and 5 + independent 7 → 17 / 10 / 8.
+const groupFixture = (): WorkUnitReport => ({
+  sessions: [
+    session({ sessionId: 'root', project: 'orchestration', provider: 'claude', title: 'Ship the release', cost: 2, models: ['Opus 4.8'] }),
+    session({ sessionId: 'child-a', project: 'orchestration', provider: 'claude', title: 'Explore indexing', cost: 3, agentType: 'Explore', startedAt: '2026-07-01T10:05:00.000Z' }),
+    session({ sessionId: 'child-b', project: 'orchestration', provider: 'claude', title: 'Write the tests', cost: 5, agentType: 'general-purpose', startedAt: '2026-07-01T10:20:00.000Z' }),
+    session({ sessionId: 'independent', project: 'solo-project', provider: 'claude', title: 'Solo work', cost: 7 }),
+  ],
+  workUnits: [unit('root', ['child-a', 'child-b']), unit('independent', [])],
+})
+
+describe('Sessions work-unit view', () => {
+  beforeEach(() => {
+    getSessions.mockReset()
+    getWorkUnits.mockReset()
+    // The plain list keeps its own fetch enabled; give it the same population
+    // the work-unit payload will carry, like the app has when a user switches
+    // views on real data.
+    getSessions.mockResolvedValue(groupFixture().sessions)
+  })
+
+  it('groups sessions, separates root from agents, and distinguishes sessions from groups', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue(groupFixture())
+    const { container } = render(<Sessions period="30days" provider="all" />)
+
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+    expect(await screen.findByText('4 sessions · 1 group · $17.00 · 4K tokens')).toBeInTheDocument()
+    expect(getWorkUnits).toHaveBeenCalledTimes(1)
+
+    const groupRow = screen.getByRole('button', { name: /Ship the release/ })
+    expect(groupRow).toHaveTextContent('orchestration · 2 agents · root $2.00 + agents $8.00')
+    expect(groupRow).toHaveTextContent('$10.00')
+    expect(screen.getByRole('button', { name: /Solo work/ })).toHaveTextContent('$7.00')
+    // The aggregate row does not re-sum the member detail: one group row only.
+    expect(container.querySelectorAll('.work-unit-row')).toHaveLength(1)
+  })
+
+  it('expands members with their recorded agent type, collapses, and totals never move', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue(groupFixture())
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+    const summary = await screen.findByText('4 sessions · 1 group · $17.00 · 4K tokens')
+
+    const groupRow = screen.getByRole('button', { name: /Ship the release/ })
+    await user.click(groupRow)
+    expect(groupRow).toHaveAttribute('aria-expanded', 'true')
+    const members = screen.getByRole('region', { name: 'Ship the release group members' })
+    expect(within(members).getByText('Explore')).toBeInTheDocument()
+    expect(within(members).getByText('general-purpose')).toBeInTheDocument()
+    // Root carries no agent type: the resolver role labels it, nothing invented.
+    expect(within(members).getByText('root session')).toBeInTheDocument()
+    expect(within(members).getByRole('button', { name: /Write the tests/ })).toHaveTextContent('$5.00')
+
+    await user.click(within(members).getByRole('button', { name: /Explore indexing/ }))
+    expect(within(members).getByRole('region', { name: 'orchestration session details' })).toBeInTheDocument()
+    expect(summary).toBeInTheDocument()
+    expect(container.querySelectorAll('.work-unit-row')).toHaveLength(1)
+
+    await user.click(groupRow)
+    expect(groupRow).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('region', { name: 'Ship the release group members' })).not.toBeInTheDocument()
+    // Expand/collapse never moves the top-level totals.
+    expect(screen.getByText('4 sessions · 1 group · $17.00 · 4K tokens')).toBeInTheDocument()
+  })
+
+  it('searching for a member surfaces the whole group and flags only the match', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue(groupFixture())
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+    await screen.findByText('4 sessions · 1 group · $17.00 · 4K tokens')
+
+    const search = screen.getByRole('textbox', { name: 'Search sessions' })
+    await user.type(search, 'indexing')
+
+    const groupRow = screen.getByRole('button', { name: /Ship the release/ })
+    expect(groupRow).toBeInTheDocument()
+    await user.click(groupRow)
+    const members = screen.getByRole('region', { name: 'Ship the release group members' })
+    // The whole group is visible and only the matching member is flagged.
+    const matchedRow = within(members).getByRole('button', { name: /Explore indexing/ })
+    expect(matchedRow).toHaveTextContent('search match')
+    const rootMemberRow = within(members).getByRole('button', { name: /Ship the release/ })
+    expect(rootMemberRow).toHaveTextContent('root session')
+    expect(rootMemberRow).not.toHaveTextContent('search match')
+    expect(container.querySelectorAll('.member-row')).toHaveLength(3)
+  })
+
+  it('searching by a member\'s agent type finds the group (the label the row shows)', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue(groupFixture())
+    render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+    await screen.findByText('4 sessions · 1 group · $17.00 · 4K tokens')
+
+    const search = screen.getByRole('textbox', { name: 'Search sessions' })
+    await user.type(search, 'explore')
+
+    // The group containing the Explore agent stays visible; the solo does not.
+    expect(screen.getByRole('button', { name: /Ship the release/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Solo work/ })).not.toBeInTheDocument()
+    // The WHOLE group counts (3 member sessions), not just the matched member.
+    expect(screen.getByText('3 sessions · 1 group · $10.00 · 3K tokens')).toBeInTheDocument()
+  })
+
+  it('sorts by whole-unit cost, so a $10 group outranks a $9 standalone', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue({
+      sessions: [
+        session({ sessionId: 'big-root', project: 'orchestration', provider: 'claude', title: 'Orchestrator', cost: 2 }),
+        session({ sessionId: 'big-child', project: 'orchestration', provider: 'claude', title: 'Worker', cost: 8, startedAt: '2026-07-01T10:05:00.000Z' }),
+        session({ sessionId: 'mid-solo', project: 'solo-project', provider: 'claude', title: 'Mid solo', cost: 9 }),
+      ],
+      workUnits: [unit('big-root', ['big-child']), unit('mid-solo', [])],
+    })
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+    await screen.findByText('3 sessions · 1 group · $19.00 · 3K tokens')
+
+    const titles = [...container.querySelectorAll('.session-row .session-title')].map(node => node.textContent)
+    expect(titles).toEqual(['Orchestrator', 'Mid solo'])
+  })
+
+  it('a population switch closes an open group so no detail outlives its population', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue(groupFixture())
+    const { rerender } = render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+
+    const groupRow = await screen.findByRole('button', { name: /Ship the release/ })
+    await user.click(groupRow)
+    expect(screen.getByRole('region', { name: 'Ship the release group members' })).toBeInTheDocument()
+
+    getWorkUnits.mockResolvedValue({ sessions: [], workUnits: [] })
+    rerender(<Sessions period="week" provider="all" />)
+    await screen.findByText('0 sessions')
+    expect(screen.queryByRole('region', { name: 'Ship the release group members' })).not.toBeInTheDocument()
+  })
+
+  it('says so when the range has sessions but no recorded lineage', async () => {
+    const user = userEvent.setup()
+    getWorkUnits.mockResolvedValue({
+      sessions: [session({ sessionId: 'plain', project: 'solo-project', provider: 'codex', title: 'Plain work', cost: 4 })],
+      workUnits: [unit('plain', [])],
+    })
+    const { container } = render(<Sessions period="30days" provider="all" />)
+    await user.click(await screen.findByRole('button', { name: 'Group by work units' }))
+
+    expect(await screen.findByText('1 session · 0 groups · $4.00 · 1K tokens')).toBeInTheDocument()
+    expect(screen.getByText(/No agent groups in this range/)).toBeInTheDocument()
+    expect(container.querySelectorAll('.session-row')).toHaveLength(1)
   })
 })

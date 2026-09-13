@@ -854,6 +854,13 @@ td:first-child { font-size: var(--fs-body); font-weight: var(--fw-body); }
 .stat .v { font-size: var(--fs-stat); font-weight: var(--fw-kpi); font-variant-numeric: tabular-nums; letter-spacing: -.03em; line-height: 1.1; }
 .stat .d { margin-top: 4px; color: var(--mut2); font-size: var(--fs-label); font-variant-numeric: tabular-nums; }
 .session-detail-notes { display: flex; flex-wrap: wrap; gap: 8px 24px; color: var(--mut); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* Work-unit grouping: the expanded member list under an orchestration root. */
+.work-unit-members { display: flex; flex-direction: column; }
+.work-unit-members .session-row { background: color-mix(in srgb, var(--panel) 88%, var(--hover)); }
+.work-unit-members .session-primary { padding-left: 14px; }
+.member-chevron { font-size: 13px; }
+.member-row:hover .member-chevron, .member-row:focus-visible .member-chevron { color: var(--mut); }
+.member-match { color: var(--accent); }
 
 /* Compare */
 .cmp-range-note { color: var(--mut); margin: 0 0 6px; font-size: 11.5px; }
