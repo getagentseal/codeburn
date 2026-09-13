@@ -93,6 +93,7 @@ describe('sessions JSON emitter', () => {
       startedAt: '2026-07-10T10:00:00.000Z',
       endedAt: '2026-07-10T10:05:00.000Z',
       durationMs: 300_000,
+      agentType: null,
     }])
   })
 

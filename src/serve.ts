@@ -96,7 +96,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
   },
   sessions: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
-    '--provider': 'value', '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
+    '--provider': 'value', '--format': 'value', '--by-pr': 'flag', '--by-work-unit': 'flag', '--no-pager': 'flag',
     '--project': 'value', '--exclude': 'value',
   },
   compare: {

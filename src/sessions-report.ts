@@ -24,6 +24,10 @@ export type SessionRow = {
   startedAt: string
   endedAt: string
   durationMs: number
+  /// Subagent type the provider recorded for this session (`general-purpose`,
+  /// `Explore`, …), null when the session is not a subagent or the provider
+  /// records no agent type. Unknown stays null — never synthesized.
+  agentType: string | null
 }
 
 function durationMs(startedAt: string, endedAt: string): number {
@@ -49,6 +53,7 @@ export function aggregateSessions(projects: ProjectSummary[]): SessionRow[] {
     startedAt: session.firstTimestamp,
     endedAt: session.lastTimestamp,
     durationMs: durationMs(session.firstTimestamp, session.lastTimestamp),
+    agentType: session.agentType ?? null,
   })))
 }
 
@@ -333,7 +338,11 @@ export function renderWorkUnitTable(rows: SessionRow[], resolution: WorkUnitReso
 /// `sessions --by-work-unit --format json`: an add-only envelope. `sessions`
 /// is the exact row array the default json output emits today; `workUnits` is
 /// the resolver's full partition (standalone sessions included, so consumers
-/// can reconcile counts and totals).
+/// can reconcile counts and totals). Each unit carries provider-scoped
+/// identity (`rootProvider` + `members[{sessionId, provider, role}]`), so two
+/// sessions sharing an id across providers stay separable; ambiguous duplicate
+/// records have no bySession mapping and their members never include them —
+/// consumers treat those rows as standalone, exactly like the CLI table does.
 export function renderWorkUnitJson(rows: SessionRow[], resolution: WorkUnitResolution): string {
   return JSON.stringify({ sessions: rows, workUnits: resolution.units }, null, 2)
 }

@@ -172,6 +172,8 @@ describe('codeburn serve --stdio', () => {
       [316, ['spend', '--format', 'flow-json', '--period', 'today']],
       [317, ['optimize', '--format', 'json', '--period', 'today']],
       [318, ['audit', '--format', 'json', '--period', 'today']],
+      [319, ['sessions', '--by-work-unit', '--format', 'json', '--period', 'today']],
+      [320, ['models', '--by-agent', '--format', 'json', '--period', 'today']],
     ]
     for (const [id, args] of commands) {
       expect(await request(id, args)).toMatchObject({ ok: true })

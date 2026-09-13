@@ -33,16 +33,34 @@ export type WorkUnitSession = {
   lineage?: SessionLineage
 }
 
+export type WorkUnitMember = {
+  sessionId: string
+  /// The member's provider. Within one unit every member shares the root's
+  /// provider: a lineage edge is only ever resolved against a parent with the
+  /// same provider key, so cross-provider id collisions can never join.
+  provider: string
+  role: WorkUnitRole
+}
+
 export type WorkUnit = {
   /// deriveTraceId(rootSessionId): the exact trace-id derivation sync uses, so
   /// a work unit's identity matches the root trace identity already on the wire.
   workUnitId: string
   rootSessionId: string
+  /// The root record's provider. Present even on ambiguous-duplicate units
+  /// (which carry no bySession mapping): the record itself knew its provider.
+  rootProvider: string
   /// Sorted member children (transitive descendants fold under the top root).
   childSessionIds: string[]
   /// Role per member session id, root included. Standalone units carry their
   /// single member as `unknown` unless the provider recorded it as a root.
+  /// Keys are session ids only — safe because all members share one provider.
   roles: Record<string, WorkUnitRole>
+  /// Provider-scoped membership in presentation order: root first, then the
+  /// children of `childSessionIds`. Additive twin of childSessionIds+roles that
+  /// lets JSON consumers join members back to session rows without guessing a
+  /// provider for a bare id.
+  members: WorkUnitMember[]
 }
 
 export type WorkUnitResolution = {
@@ -138,8 +156,13 @@ export function resolveWorkUnits(sessions: WorkUnitSession[]): WorkUnitResolutio
     const unit: WorkUnit = {
       workUnitId: deriveTraceId(session.sessionId),
       rootSessionId: session.sessionId,
+      rootProvider: session.provider,
       childSessionIds: children,
       roles,
+      members: [
+        { sessionId: session.sessionId, provider: session.provider, role },
+        ...children.map(childId => ({ sessionId: childId, provider: session.provider, role: 'child' as const })),
+      ],
     }
     units.push(unit)
     // Ambiguous duplicate records share one key; registering it would point

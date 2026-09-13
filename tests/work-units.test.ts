@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { aggregateSessions, renderJson, renderTable, renderWorkUnitJson, renderWorkUnitTable } from '../src/sessions-report.js'
+import type { SessionRow } from '../src/sessions-report.js'
 import { inferSessionProvider } from '../src/session-output.js'
 import { deriveTraceId } from '../src/sync/otlp.js'
 import { resolveWorkUnits, workUnitSessionKey } from '../src/work-units.js'
@@ -60,8 +61,10 @@ describe('resolveWorkUnits', () => {
     expect(units).toEqual([{
       workUnitId: deriveTraceId('child'),
       rootSessionId: 'child',
+      rootProvider: 'claude',
       childSessionIds: [],
       roles: { child: 'unknown' },
+      members: [{ sessionId: 'child', provider: 'claude', role: 'unknown' }],
     }])
   })
 
@@ -302,5 +305,193 @@ describe('sessions --by-work-unit presentation', () => {
     expect(family.roles).toEqual({ root: 'root', 'child-1': 'child', 'child-2': 'child' })
     const solo = parsed.workUnits.find((unit: { rootSessionId: string }) => unit.rootSessionId === 'solo')
     expect(solo.roles).toEqual({ solo: 'unknown' })
+  })
+})
+
+/// ————— Desktop wire contract —————
+/// `sessions --by-work-unit --format json` is what CodeBurn Desktop consumes.
+/// The envelope must let a JSON-only consumer join every session row to its
+/// unit by (provider, sessionId) — the `members` twin — and every row not
+/// claimed by a multi-member unit renders standalone, exactly like the CLI
+/// table's rule. These tests exercise that join, not the resolver internals.
+
+type WireUnit = {
+  workUnitId: string
+  rootSessionId: string
+  rootProvider: string
+  childSessionIds: string[]
+  roles: Record<string, string>
+  members: Array<{ sessionId: string; provider: string; role: string }>
+}
+
+function wire(projects: ProjectSummary[]) {
+  const rows = aggregateSessions(projects)
+  const parsed = JSON.parse(renderWorkUnitJson(rows, resolveProjects(projects))) as {
+    sessions: SessionRow[]
+    workUnits: WireUnit[]
+  }
+  const groups: Array<{ unit: WireUnit; members: SessionRow[] }> = []
+  const claimed = new Set<string>()
+  for (const unit of parsed.workUnits) {
+    const memberRows = unit.members
+      .map(member => parsed.sessions.find(row => row.provider === member.provider && row.sessionId === member.sessionId))
+      .filter((row): row is SessionRow => row !== undefined)
+    if (memberRows.length >= 2) {
+      groups.push({ unit, members: memberRows })
+      for (const row of memberRows) claimed.add(`${row.provider}\u0000${row.sessionId}`)
+    }
+  }
+  const singles = parsed.sessions.filter(row => !claimed.has(`${row.provider}\u0000${row.sessionId}`))
+  return { parsed, groups, singles }
+}
+
+const costOf = (rows: SessionRow[]): number => rows.reduce((sum, row) => sum + row.cost, 0)
+
+describe('work-unit json membership (desktop wire contract)', () => {
+  it('acceptance fixture: root 2 + children 3 and 5 + independent 7 → 17 global, group 10, children 8', () => {
+    const { groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'root', title: 'Orchestration root', cost: 2, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:40:00.000Z',
+        lineage: recorded('root'),
+      }),
+      makeSession({
+        sessionId: 'child-a', cost: 3, calls: 1,
+        startedAt: '2026-08-20T10:05:00.000Z', endedAt: '2026-08-20T10:15:00.000Z',
+        lineage: recorded('child', 'root'),
+      }),
+      makeSession({
+        sessionId: 'child-b', cost: 5, calls: 1,
+        startedAt: '2026-08-20T10:20:00.000Z', endedAt: '2026-08-20T10:30:00.000Z',
+        lineage: recorded('child', 'root'),
+      }),
+      makeSession({
+        sessionId: 'independent', title: 'Solo work', cost: 7, calls: 1,
+        startedAt: '2026-08-21T09:00:00.000Z', endedAt: '2026-08-21T09:30:00.000Z',
+      }),
+    ]))
+
+    expect(groups).toHaveLength(1)
+    const group = groups[0]!
+    expect(group.members).toHaveLength(3)
+    // Root first, its own cost separated from the descendants'.
+    expect(group.members[0]!.sessionId).toBe('root')
+    expect(group.members[0]!.cost).toBe(2)
+    expect(costOf(group.members)).toBe(10)
+    expect(costOf(group.members) - group.members[0]!.cost).toBe(8)
+    expect(singles.map(row => row.cost)).toEqual([7])
+    expect(costOf(group.members) + costOf(singles)).toBe(17)
+  })
+
+  it('a grandchild folds under the top root and is counted exactly once', () => {
+    const { parsed, groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'root', cost: 1, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:40:00.000Z',
+        lineage: recorded('root'),
+      }),
+      makeSession({
+        sessionId: 'child', cost: 2, calls: 1,
+        startedAt: '2026-08-20T10:05:00.000Z', endedAt: '2026-08-20T10:15:00.000Z',
+        lineage: recorded('child', 'root'),
+      }),
+      makeSession({
+        sessionId: 'grandchild', cost: 4, calls: 1,
+        startedAt: '2026-08-20T10:10:00.000Z', endedAt: '2026-08-20T10:12:00.000Z',
+        lineage: recorded('child', 'child'),
+      }),
+    ]))
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.members.map(member => member.sessionId)).toEqual(['root', 'child', 'grandchild'])
+    expect(costOf(groups[0]!.members)).toBe(7)
+    expect(singles).toHaveLength(0)
+    // Flat fold under the top root: no intermediate parent is invented, but the
+    // grandchild appears exactly once across childSessionIds.
+    const family = parsed.workUnits.find(unit => unit.rootSessionId === 'root')!
+    expect(family.childSessionIds).toEqual(['child', 'grandchild'])
+  })
+
+  it('an out-of-window parent leaves the child ungrouped but its cost still counted', () => {
+    const { groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'orphan', cost: 6, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:10:00.000Z',
+        lineage: recorded('child', 'missing'),
+      }),
+    ]))
+    expect(groups).toHaveLength(0)
+    expect(singles.map(row => row.sessionId)).toEqual(['orphan'])
+    expect(costOf(singles)).toBe(6)
+  })
+
+  it('a parent cycle marks both participants unknown and never groups them', () => {
+    const { parsed, groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'a', cost: 3, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:10:00.000Z',
+        lineage: recorded('child', 'b'),
+      }),
+      makeSession({
+        sessionId: 'b', cost: 4, calls: 1,
+        startedAt: '2026-08-20T10:05:00.000Z', endedAt: '2026-08-20T10:15:00.000Z',
+        lineage: recorded('child', 'a'),
+      }),
+    ]))
+    expect(groups).toHaveLength(0)
+    expect(singles.map(row => row.sessionId).sort()).toEqual(['a', 'b'])
+    expect(costOf(singles)).toBe(7)
+    for (const unit of parsed.workUnits) expect(unit.roles).toEqual({ [unit.rootSessionId]: 'unknown' })
+  })
+
+  it('two ambiguous records with the same (provider, id) never fold and never lose spend', () => {
+    const { parsed, groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'dup', title: 'First record', cost: 3, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:10:00.000Z',
+      }),
+      makeSession({
+        sessionId: 'dup', title: 'Second record', cost: 4, calls: 1,
+        startedAt: '2026-08-20T11:00:00.000Z', endedAt: '2026-08-20T11:10:00.000Z',
+      }),
+    ]))
+    expect(parsed.sessions).toHaveLength(2)
+    expect(groups).toHaveLength(0)
+    expect(singles).toHaveLength(2)
+    expect(costOf(singles)).toBe(7)
+  })
+
+  it('the same session id under two providers stays two standalone rows; members carry the provider', () => {
+    const { parsed, groups, singles } = wire(makeProjects([
+      makeSession({
+        sessionId: 'shared-id', cost: 3, calls: 1,
+        startedAt: '2026-08-20T10:00:00.000Z', endedAt: '2026-08-20T10:10:00.000Z',
+      }),
+    ]))
+    // The fixture parser is Claude-only, so the second provider is asserted at
+    // the resolver level below; here the claude row stays standalone.
+    expect(groups).toHaveLength(0)
+    expect(singles.map(row => row.sessionId)).toEqual(['shared-id'])
+    const unit = parsed.workUnits[0]!
+    expect(unit.rootProvider).toBe('claude')
+    expect(unit.members).toEqual([{ sessionId: 'shared-id', provider: 'claude', role: 'unknown' }])
+
+    // Cross-provider id collision: resolver keeps the two keys apart and the
+    // members lists let a JSON consumer tell the two units apart. The codex
+    // child folds under the codex record only; the claude id stays standalone.
+    const cross = resolveWorkUnits([
+      { sessionId: 'shared-id', provider: 'claude' },
+      { sessionId: 'shared-id', provider: 'codex' },
+      { sessionId: 'kid', provider: 'codex', lineage: recorded('child', 'shared-id') },
+    ])
+    expect(cross.units).toHaveLength(2)
+    const codexUnit = cross.units.find(unit => unit.rootProvider === 'codex')!
+    expect(codexUnit.childSessionIds).toEqual(['kid'])
+    expect(codexUnit.members).toEqual([
+      { sessionId: 'shared-id', provider: 'codex', role: 'root' },
+      { sessionId: 'kid', provider: 'codex', role: 'child' },
+    ])
+    const claudeUnit = cross.units.find(unit => unit.rootProvider === 'claude')!
+    expect(claudeUnit.members).toEqual([{ sessionId: 'shared-id', provider: 'claude', role: 'unknown' }])
   })
 })
