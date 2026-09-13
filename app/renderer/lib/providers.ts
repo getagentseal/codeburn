@@ -7,6 +7,7 @@ export const PROVIDER_NAMES: Record<ProviderName, string> = {
   copilot: 'Copilot',
   antigravity: 'Antigravity',
   kimi: 'Kimi Code',
+  zcode: 'ZCode',
 }
 
 /** Company named in honest copy like "Anthropic rate limited the quota endpoint". */
@@ -17,6 +18,7 @@ export const PROVIDER_OWNERS: Record<ProviderName, string> = {
   copilot: 'GitHub',
   antigravity: 'Google',
   kimi: 'Moonshot AI',
+  zcode: 'Z.ai',
 }
 
 const ALL_PROVIDERS = Object.keys(PROVIDER_NAMES) as ProviderName[]

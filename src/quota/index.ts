@@ -17,6 +17,7 @@ import { fetchGrokQuota } from './grok.js'
 import { fetchKimiQuota } from './kimi.js'
 import type { ProviderName, QuotaProvider } from './types.js'
 import { fetchZaiQuota } from './zai.js'
+import { fetchZcodeQuota } from './zcode.js'
 
 export type QuotaCommandWindow = { label: string; usedPct: number; resetsAt?: string }
 
@@ -47,6 +48,7 @@ const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'kimi', name: 'Kimi', read: async signal => (await fetchKimiQuota({ signal })).quota },
   { id: 'cursor', name: 'Cursor', read: async signal => (await fetchCursorQuota({ signal })).quota },
   { id: 'zai', name: 'Z.ai', read: async signal => (await fetchZaiQuota({ signal })).quota },
+  { id: 'zcode', name: 'ZCode', read: async signal => (await fetchZcodeQuota({ signal })).quota },
   { id: 'grok', name: 'Grok', read: async signal => (await fetchGrokQuota({ signal })).quota },
   { id: 'clinepass', name: 'ClinePass', read: async signal => (await fetchClinePassQuota({ signal })).quota },
 ]

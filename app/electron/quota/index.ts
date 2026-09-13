@@ -9,6 +9,7 @@ import { fetchGeminiQuota } from './gemini'
 import { fetchKimiQuota } from './kimi'
 import { atomicWriteSecureFile, readSecureFile, sanitizeError } from './security'
 import type { ProviderName, QuotaProvider } from './types'
+import { fetchZcodeQuota } from './zcode'
 
 export type { QuotaProvider, QuotaWindow } from './types'
 export { sanitizeError } from './security'
@@ -23,6 +24,7 @@ type QuotaDeps = {
   copilot: (options: FetcherOptions) => Promise<FetchResult>
   antigravity: (options: FetcherOptions) => Promise<FetchResult>
   kimi: (options: FetcherOptions) => Promise<FetchResult>
+  zcode: (options: FetcherOptions) => Promise<FetchResult>
   statePath: string
   readFile: typeof readSecureFile
   writeFile: typeof atomicWriteSecureFile
@@ -30,7 +32,7 @@ type QuotaDeps = {
   refreshMs: number
 }
 
-const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi']
+const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode']
 
 const defaultDeps: QuotaDeps = {
   claude: fetchClaudeQuota,
@@ -41,6 +43,7 @@ const defaultDeps: QuotaDeps = {
   // no remote endpoints), so it ignores the abort/keychain options entirely.
   antigravity: async () => ({ quota: await fetchAntigravityQuota() }),
   kimi: fetchKimiQuota,
+  zcode: fetchZcodeQuota,
   statePath: path.join(os.homedir(), '.codeburn', 'quota-backoff.json'),
   readFile: readSecureFile,
   writeFile: atomicWriteSecureFile,
