@@ -62,7 +62,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "bonjour-service": "^1.4.1",
     "chalk": "^5.4.1",
-    "commander": "^13.1.0",
+    "commander": "^15.0.0",
     "ink": "^7.0.0",
     "react": "^19.2.5",
     "selfsigned": "^5.5.0",
