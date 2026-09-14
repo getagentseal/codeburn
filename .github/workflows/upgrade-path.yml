@@ -46,7 +46,7 @@ jobs:
 
       - name: Upload payloads on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: upgrade-path-${{ matrix.os }}-node${{ matrix.node-version }}
           path: ${{ runner.temp }}/codeburn upgrade path/payloads

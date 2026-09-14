@@ -70,7 +70,7 @@ jobs:
 
       - name: Upload artifact (for manual runs)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: CodeBurnMenubar-Windows-${{ steps.version.outputs.value }}
           path: release-artifacts/*

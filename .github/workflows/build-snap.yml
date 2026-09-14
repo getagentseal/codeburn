@@ -42,7 +42,7 @@ jobs:
         run: npm --prefix app run package:snap
 
       - name: Upload snap artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: CodeBurn-Snap
           path: app/release/codeburn_*.snap
