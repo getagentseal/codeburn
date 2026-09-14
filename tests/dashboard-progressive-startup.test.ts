@@ -118,7 +118,8 @@ async function renderAutoPeriodDashboard(initialProjects: ProjectSummary[], init
 }
 
 async function waitForFrame(app: ReturnType<typeof render>, frames: string[], predicate: (frame: string) => boolean): Promise<string> {
-  for (let attempt = 0; attempt < 200; attempt++) {
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
     await app.waitUntilRenderFlush()
     const frame = frames.filter(value => value.trim()).at(-1) ?? ''
     if (predicate(frame)) return frame

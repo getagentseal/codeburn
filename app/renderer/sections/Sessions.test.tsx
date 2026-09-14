@@ -255,7 +255,7 @@ describe('Sessions', () => {
     getSessions.mockResolvedValue(rows.slice(1))
     view.rerender(<Sessions period="30days" provider="all" refreshToken={1} openSessionId={openKey} onSessionClose={onSessionClose} />)
     await screen.findByText(/5 sessions · \$13\.52/)
-    expect(onSessionClose).toHaveBeenCalled()
+    await waitFor(() => expect(onSessionClose).toHaveBeenCalled())
   })
 
   it('shows the selection chips, per-row contributions, and the separately-labeled full cost', async () => {
