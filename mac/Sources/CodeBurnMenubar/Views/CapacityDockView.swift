@@ -1264,7 +1264,7 @@ struct CapacityDockDetailView: View {
     private func budgetLine() -> some View {
         let spend = store.capacityDockToday?.cost ?? 0
         let budget = store.activeDailyBudget
-        Text(budget > 0 ? L("today %@ of %@", spend.asUSD(), budget.asUSD()) : L("no budget set"))
+        Text(budget > 0 ? L("today %1$@ of %2$@", spend.asUSD(), budget.asUSD()) : L("no budget set"))
             .font(.system(size: 11))
             .monospacedDigit()
             .foregroundStyle(Color.capacityDockText.opacity(0.6))

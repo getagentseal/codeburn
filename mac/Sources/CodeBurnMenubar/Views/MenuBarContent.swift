@@ -250,7 +250,7 @@ private struct EmptyProviderState: View {
             Image(systemName: "tray")
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
-            Text(L("No %@ data for %@", provider.displayLabel, periodLabel))
+            Text(L("No %1$@ data for %2$@", provider.displayLabel, periodLabel))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

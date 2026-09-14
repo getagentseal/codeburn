@@ -249,6 +249,76 @@ struct LocalizationCoverageTests {
         )
     }
 
+    // MARK: - Expression arguments (#1331)
+    //
+    // A literal that is not the argument's first token used to be invisible:
+    // the first-character check read `Text(flag ? "A" : "B")` as machinery and
+    // moved on. The three shapes below all shipped copy that way.
+
+    @Test("ternary branches are copy, not control flow")
+    func flagsTernaryBranches() {
+        let source = """
+        Text(isEarly ? "Came early" : "On time")
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: source, fileName: "V.swift")
+                .map(\.literal) == ["Came early", "On time"]
+        )
+    }
+
+    @Test("a literal concatenated onto a variable is copy")
+    func flagsConcatenatedLiterals() {
+        let source = """
+        view.help(prefix + " and counting")
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: source, fileName: "V.swift")
+                .map(\.literal) == [" and counting"]
+        )
+    }
+
+    @Test("a let-bound literal passed to a call site is reported; a bound L(…) is not")
+    func tracesLetBoundLiterals() {
+        let bare = """
+        let tip = "Quota resets at midnight"
+        view.help(tip)
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: bare, fileName: "V.swift")
+                .map(\.literal) == ["Quota resets at midnight"]
+        )
+
+        let routed = """
+        let tip = L("Quota resets at midnight")
+        view.help(tip)
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: routed, fileName: "V.swift").isEmpty
+        )
+    }
+
+    @Test("Text(verbatim:) is the explicit do-not-localize opt-out")
+    func acceptsVerbatim() {
+        let source = """
+        Text(verbatim: "· \\(name)")
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: source, fileName: "V.swift").isEmpty
+        )
+    }
+
+    @Test("literals inside a call's closures are reported once, by their own call site")
+    func doesNotDoubleReportExpressions() {
+        let source = """
+        Button(action: save) { Text("Save now") }
+        Section(header: Text("Sessions")) { }
+        """
+        #expect(
+            LocalizationSourceScanner.unroutedLiterals(inSource: source, fileName: "V.swift")
+                .map(\.literal) == ["Save now", "Sessions"]
+        )
+    }
+
     @Test("a URL inside a literal does not read as a comment")
     func survivesURLsInLiterals() {
         let source = """

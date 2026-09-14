@@ -291,7 +291,7 @@ final class UpdateChecker {
                 isUpdating = false
                 updateFailureStage = .cliUpdate
                 updateError = L(
-                "Could not find the package manager for %@. Run “%@” manually, then try again.",
+                "Could not find the package manager for %1$@. Run “%2$@” manually, then try again.",
                 cliPath.isEmpty ? L("the CLI") : cliPath,
                 cliUpdateCommand
             )
@@ -362,7 +362,7 @@ final class UpdateChecker {
         if cliTooOldForUpdate {
             updateFailureStage = .menubarUpdate
             updateError = L(
-                "Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again.",
+                "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again.",
                 AppVersion.display(installedCliVersion ?? ""),
                 cliUpdateCommand
             )

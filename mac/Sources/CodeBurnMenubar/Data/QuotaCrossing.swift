@@ -43,8 +43,8 @@ struct QuotaCrossingEvent: Equatable, Sendable {
 
     var notificationTitle: String {
         switch level {
-        case .warning: L("%@ · %@ at 80%%", providerName, windowLabel)
-        case .limit: L("%@ · %@ limit reached", providerName, windowLabel)
+        case .warning: L("%1$@ · %2$@ at 80%%", providerName, windowLabel)
+        case .limit: L("%1$@ · %2$@ limit reached", providerName, windowLabel)
         }
     }
 }

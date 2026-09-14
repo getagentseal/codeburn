@@ -88,8 +88,8 @@
 "Reconnect" = "Reconnect";
 "Add API Key" = "Add API Key";
 "now" = "now";
-"%lldd %lldh" = "%lldd %lldh";
-"%lldh %lldm" = "%lldh %lldm";
+"%1$lldd %2$lldh" = "%1$lldd %2$lldh";
+"%1$lldh %2$lldm" = "%1$lldh %2$lldm";
 "%lldm" = "%lldm";
 
 /* MARK: Usage refresh cadence */
@@ -165,10 +165,10 @@
 "App and CLI %@ updates are ready. Click to install." = "App and CLI %@ updates are ready. Click to install.";
 "Click to install the update." = "Click to install the update.";
 "CodeBurn CLI %@ available" = "CodeBurn CLI %@ available";
-"Could not find the package manager for %@. Run “%@” manually, then try again." = "Could not find the package manager for %@. Run “%@” manually, then try again.";
+"Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "Could not find the package manager for %1$@. Run “%2$@” manually, then try again.";
 "the CLI" = "the CLI";
 "CLI update failed (exit %lld)" = "CLI update failed (exit %lld)";
-"Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again." = "Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again.";
+"Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again.";
 "Update failed (exit %lld)" = "Update failed (exit %lld)";
 "GitHub returned HTTP %lld." = "GitHub returned HTTP %lld.";
 "No mac-v release with a menubar zip and checksum was found." = "No mac-v release with a menubar zip and checksum was found.";
@@ -178,7 +178,7 @@
 
 /* MARK: Status-item menu, tooltip and update alerts */
 "%@ credits" = "%@ credits";
-"CodeBurn %@ · %lld of %lld devices reporting" = "CodeBurn %@ · %lld of %lld devices reporting";
+"CodeBurn %1$@ · %2$lld of %3$lld devices reporting" = "CodeBurn %1$@ · %2$lld of %3$lld devices reporting";
 "Settings…" = "Settings…";
 "Capacity Dock Settings…" = "Capacity Dock Settings…";
 "Refresh Now" = "Refresh Now";
@@ -188,11 +188,11 @@
 "Today · no usage yet" = "Today · no usage yet";
 "1 call" = "1 call";
 "%lld calls" = "%lld calls";
-"Today · %@ · %@" = "Today · %@ · %@";
+"Today · %1$@ · %2$@" = "Today · %1$@ · %2$@";
 "CodeBurn Settings" = "CodeBurn Settings";
 "Update Available" = "Update Available";
-"%@ is available (you have %@)." = "%@ is available (you have %@).";
-"%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force" = "%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force";
+"%1$@ is available (you have %2$@)." = "%1$@ is available (you have %2$@).";
+"%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force" = "%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force";
 "%@ Run:\n\ncodeburn menubar --force" = "%@ Run:\n\ncodeburn menubar --force";
 "Up to Date" = "Up to Date";
 "You're on the latest version (%@)." = "You're on the latest version (%@).";
@@ -201,12 +201,12 @@
 /* MARK: Popover chrome, header, footer and banners */
 "This total may be incomplete." = "This total may be incomplete.";
 "Claude config" = "Claude config";
-"No %@ data for %@" = "No %@ data for %@";
+"No %1$@ data for %2$@" = "No %1$@ data for %2$@";
 "Couldn't load %@" = "Couldn't load %@";
 "Retry" = "Retry";
 "Loading %@…" = "Loading %@…";
 "Your AI Bill, Itemized" = "Your AI Bill, Itemized";
-"%@ over limit (%lld%%)" = "%@ over limit (%lld%%)";
+"%1$@ over limit (%2$lld%%)" = "%1$@ over limit (%2$lld%%)";
 "resets in %@" = "resets in %@";
 "Change accent color" = "Change accent color";
 "CLI %@ available" = "CLI %@ available";
@@ -228,7 +228,7 @@
 "Combined unavailable · showing local" = "Combined unavailable · showing local";
 "Combined · %@" = "Combined · %@";
 "Saved %@ with local models" = "Saved %@ with local models";
-"%lld of %lld devices" = "%lld of %lld devices";
+"%1$lld of %2$lld devices" = "%1$lld of %2$lld devices";
 "%@ · local" = "%@ · local";
 
 /* MARK: Period strip and date picker */
@@ -284,19 +284,19 @@
 "Spend up %lld%% vs prior 7 days" = "Spend up %lld%% vs prior 7 days";
 "Cache hit only %lld%% — paying for cold prompts" = "Cache hit only %lld%% — paying for cold prompts";
 "%lld%% one-shot — lots of iteration" = "%lld%% one-shot — lots of iteration";
-"On pace for %@ this month (+%lld%% vs last)" = "On pace for %@ this month (+%lld%% vs last)";
+"On pace for %1$@ this month (+%2$lld%% vs last)" = "On pace for %1$@ this month (+%2$lld%% vs last)";
 "What's working" = "What's working";
 "What to improve" = "What to improve";
 "Risks" = "Risks";
 
 /* MARK: Insight tabs (trend, calendar, forecast, pulse, stats, optimize, plan) */
 "Last %lld days" = "Last %lld days";
-"%@%% vs prior %lldd" = "%@%% vs prior %lldd";
+"%1$@%% vs prior %2$lldd" = "%1$@%% vs prior %2$lldd";
 "Avg/day" = "Avg/day";
 "Peak" = "Peak";
 "Yesterday" = "Yesterday";
 "%@ tokens" = "%@ tokens";
-"%@ on %@" = "%@ on %@";
+"%1$@ on %2$@" = "%1$@ on %2$@";
 "Daily activity" = "Daily activity";
 "%lld active days" = "%lld active days";
 "Peak day" = "Peak day";
@@ -313,18 +313,18 @@
 "No tracked usage" = "No tracked usage";
 "%@: future day" = "%@: future day";
 "%@: no tracked usage" = "%@: no tracked usage";
-"%@: %@, %lld calls, %@ tokens" = "%@: %@, %lld calls, %@ tokens";
+"%1$@: %2$@, %3$lld calls, %4$@ tokens" = "%1$@: %2$@, %3$lld calls, %4$@ tokens";
 "Month-to-date" = "Month-to-date";
 "On pace for" = "On pace for";
 "Avg/day (this wk)" = "Avg/day (this wk)";
 "Last 7d" = "Last 7d";
 "no prior month" = "no prior month";
-"%@%% vs last month (%@)" = "%@%% vs last month (%@)";
+"%1$@%% vs last month (%2$@)" = "%1$@%% vs last month (%2$@)";
 "Cache hit" = "Cache hit";
 "Cost / session" = "Cost / session";
 "Cost/edit" = "Cost/edit";
-"Save ~%@ / ~%@ tokens · 1 finding" = "Save ~%@ / ~%@ tokens · 1 finding";
-"Save ~%@ / ~%@ tokens · %lld findings" = "Save ~%@ / ~%@ tokens · %lld findings";
+"Save ~%1$@ / ~%2$@ tokens · 1 finding" = "Save ~%1$@ / ~%2$@ tokens · 1 finding";
+"Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "Save ~%1$@ / ~%2$@ tokens · %3$lld findings";
 "Favorite model" = "Favorite model";
 "Active days (month)" = "Active days (month)";
 "Most active day" = "Most active day";
@@ -335,7 +335,7 @@
 "Tracked spend (last %lld days)" = "Tracked spend (last %lld days)";
 "Costliest session" = "Costliest session";
 "Retry tax" = "Retry tax";
-"%lld retries across %lld edits" = "%lld retries across %lld edits";
+"%1$lld retries across %2$lld edits" = "%1$lld retries across %2$lld edits";
 "%@ ret/edit" = "%@ ret/edit";
 "Hides session details" = "Hides session details";
 "Shows session details" = "Shows session details";
@@ -347,7 +347,7 @@
 "%lld%% of spend" = "%lld%% of spend";
 "could be optimized" = "could be optimized";
 "Routing waste" = "Routing waste";
-"vs %@ @ %@/edit" = "vs %@ @ %@/edit";
+"vs %1$@ @ %2$@/edit" = "vs %1$@ @ %2$@/edit";
 "Connect Claude subscription" = "Connect Claude subscription";
 "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically." = "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically.";
 "Reading Claude credentials..." = "Reading Claude credentials...";
@@ -407,9 +407,9 @@
 "On pace: %@ at reset" = "On pace: %@ at reset";
 "%@%% in deficit" = "%@%% in deficit";
 "%@%% in reserve" = "%@%% in reserve";
-"%@ · hits 100%% %@" = "%@ · hits 100%% %@";
-"%@ · %@ at reset" = "%@ · %@ at reset";
-"On pace: %@ at reset · hits 100%% %@" = "On pace: %@ at reset · hits 100%% %@";
+"%1$@ · hits 100%% %2$@" = "%1$@ · hits 100%% %2$@";
+"%1$@ · %2$@ at reset" = "%1$@ · %2$@ at reset";
+"On pace: %1$@ at reset · hits 100%% %2$@" = "On pace: %1$@ at reset · hits 100%% %2$@";
 "Based on last cycle: %@" = "Based on last cycle: %@";
 "in %lldm" = "in %lldm";
 "in %lldh" = "in %lldh";
@@ -430,6 +430,10 @@
    provider's own label or the generic horizon, both left verbatim. */
 "Show %@ usage" = "Show %@ usage";
 "none running" = "none running";
+"Kimi Code" = "Kimi Code";
+"Gemini" = "Gemini";
+"Copilot" = "Copilot";
+"Antigravity" = "Antigravity";
 "1 running" = "1 running";
 "%lld running" = "%lld running";
 "%@ left" = "%@ left";
@@ -439,7 +443,7 @@
 "Open in %@" = "Open in %@";
 "Bring %@ to front" = "Bring %@ to front";
 "burned" = "burned";
-"today %@ of %@" = "today %@ of %@";
+"today %1$@ of %2$@" = "today %1$@ of %2$@";
 "no budget set" = "no budget set";
 "Refreshing…" = "Refreshing…";
 "Last known usage · refreshing" = "Last known usage · refreshing";
@@ -560,7 +564,7 @@
 "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. Leave the host at github.com unless the token was minted on a GitHub Enterprise Cloud tenant, in which case enter that tenant's host (<tenant>.ghe.com) so the token is never sent to api.github.com. Both are saved in CodeBurn's own Keychain item and are used only to read your Copilot quota." = "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. Leave the host at github.com unless the token was minted on a GitHub Enterprise Cloud tenant, in which case enter that tenant's host (<tenant>.ghe.com) so the token is never sent to api.github.com. Both are saved in CodeBurn's own Keychain item and are used only to read your Copilot quota.";
 "Couldn't load Copilot quota" = "Couldn't load Copilot quota";
 "Live quota tracked from %@." = "Live quota tracked from %@.";
-"Plan: %@. Live quota tracked from %@." = "Plan: %@. Live quota tracked from %@.";
+"Plan: %1$@. Live quota tracked from %2$@." = "Plan: %1$@. Live quota tracked from %2$@.";
 "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect.";
 "GitHub rate-limited; auto-retrying." = "GitHub rate-limited; auto-retrying.";
 "Looking for a GitHub token on this Mac." = "Looking for a GitHub token on this Mac.";
@@ -632,7 +636,7 @@
 /* MARK: Codex credit limit */
 "Monthly usage limit" = "Monthly usage limit";
 "Monthly usage limit · limit reached" = "Monthly usage limit · limit reached";
-"Monthly usage limit · %@ / %@ credits" = "Monthly usage limit · %@ / %@ credits";
+"Monthly usage limit · %1$@ / %2$@ credits" = "Monthly usage limit · %1$@ / %2$@ credits";
 "%@ · limit reached" = "%@ · limit reached";
 
 /* MARK: Added on rebase onto main (#1306, #1313, #1314, #1328, #1329) */
@@ -663,16 +667,16 @@
 "%@ quota reset early" = "%@ quota reset early";
 "%@ quota cleared early" = "%@ quota cleared early";
 "You're back to %lld%%." = "You're back to %lld%%.";
-"%@'s %@ reset %@ early. %@" = "%@'s %@ reset %@ early. %@";
-"%@ cleared your %@ %@ before its reset. %@" = "%@ cleared your %@ %@ before its reset. %@";
-"%@ reset %@ early" = "%@ reset %@ early";
-"%@ cleared, %@ before reset" = "%@ cleared, %@ before reset";
+"%1$@'s %2$@ reset %3$@ early. %4$@" = "%1$@'s %2$@ reset %3$@ early. %4$@";
+"%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@ cleared your %2$@ %3$@ before its reset. %4$@";
+"%1$@ reset %2$@ early" = "%1$@ reset %2$@ early";
+"%1$@ cleared, %2$@ before reset" = "%1$@ cleared, %2$@ before reset";
 "%lld%% of it was available when CodeBurn noticed." = "%lld%% of it was available when CodeBurn noticed.";
-"%@ reset this %@ %@ before its scheduled time. %@" = "%@ reset this %@ %@ before its scheduled time. %@";
-"%@ cleared this %@ %@ before the window's scheduled reset, which has not moved. %@" = "%@ cleared this %@ %@ before the window's scheduled reset, which has not moved. %@";
-"Last %@ reset came ~%@ early" = "Last %@ reset came ~%@ early";
-"Last %lld %@ resets came ~%@ early" = "Last %lld %@ resets came ~%@ early";
-"%lld of the last %lld %@ resets came ~%@ early" = "%lld of the last %lld %@ resets came ~%@ early";
+"%1$@ reset this %2$@ %3$@ before its scheduled time. %4$@" = "%1$@ reset this %2$@ %3$@ before its scheduled time. %4$@";
+"%1$@ cleared this %2$@ %3$@ before the window's scheduled reset, which has not moved. %4$@" = "%1$@ cleared this %2$@ %3$@ before the window's scheduled reset, which has not moved. %4$@";
+"Last %1$@ reset came ~%2$@ early" = "Last %1$@ reset came ~%2$@ early";
+"Last %1$lld %2$@ resets came ~%3$@ early" = "Last %1$lld %2$@ resets came ~%3$@ early";
+"%1$lld of the last %2$lld %3$@ resets came ~%4$@ early" = "%1$lld of the last %2$lld %3$@ resets came ~%4$@ early";
 "%lldh" = "%lldh";
 "5-hour limit" = "5-hour limit";
 "weekly limit" = "weekly limit";
@@ -689,11 +693,11 @@
 /* MARK: Codex banked limit resets (#725) */
 "%lld available" = "%lld available";
 "%lld usable now" = "%lld usable now";
-"next %@ lands %@" = "next %@ lands %@";
-"latest %@ granted %@" = "latest %@ granted %@";
+"next %1$@ lands %2$@" = "next %1$@ lands %2$@";
+"latest %1$@ granted %2$@" = "latest %1$@ granted %2$@";
 "next expires %@" = "next expires %@";
-"A %@ lands %@." = "A %@ lands %@.";
-"A %@ was added to your account %@." = "A %@ was added to your account %@.";
+"A %1$@ lands %2$@." = "A %1$@ lands %2$@.";
+"A %1$@ was added to your account %2$@." = "A %1$@ was added to your account %2$@.";
 "A %@ was added to your account." = "A %@ was added to your account.";
 "You have %lld available to use." = "You have %lld available to use.";
 "Codex banked a limit reset" = "Codex banked a limit reset";
@@ -710,6 +714,6 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure.";
 
 /* MARK: Quota crossing notifications */
-"%@ · %@ at 80%%" = "%@ · %@ at 80%%";
-"%@ · %@ limit reached" = "%@ · %@ limit reached";
-"Quota crossings (%lld%% and %lld%%)" = "Quota crossings (%lld%% and %lld%%)";
+"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ at 80%%";
+"%1$@ · %2$@ limit reached" = "%1$@ · %2$@ limit reached";
+"Quota crossings (%1$lld%% and %2$lld%%)" = "Quota crossings (%1$lld%% and %2$lld%%)";

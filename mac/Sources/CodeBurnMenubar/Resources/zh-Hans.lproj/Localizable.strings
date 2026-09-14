@@ -82,8 +82,8 @@
 "Reconnect" = "重新连接";
 "Add API Key" = "添加 API 密钥";
 "now" = "现在";
-"%lldd %lldh" = "%lld 天 %lld 小时";
-"%lldh %lldm" = "%lld 小时 %lld 分";
+"%1$lldd %2$lldh" = "%1$lld 天 %2$lld 小时";
+"%1$lldh %2$lldm" = "%1$lld 小时 %2$lld 分";
 "%lldm" = "%lld 分";
 
 /* MARK: Usage refresh cadence */
@@ -159,10 +159,10 @@
 "App and CLI %@ updates are ready. Click to install." = "应用与命令行工具 %@ 更新已就绪。点按以安装。";
 "Click to install the update." = "点按以安装更新。";
 "CodeBurn CLI %@ available" = "CodeBurn 命令行工具 %@ 可用";
-"Could not find the package manager for %@. Run “%@” manually, then try again." = "找不到 %@ 对应的包管理器。请手动运行“%@”，然后重试。";
+"Could not find the package manager for %1$@. Run “%2$@” manually, then try again." = "找不到 %1$@ 对应的包管理器。请手动运行“%2$@”，然后重试。";
 "the CLI" = "命令行工具";
 "CLI update failed (exit %lld)" = "命令行工具更新失败（退出码 %lld）";
-"Your codeburn CLI (%@) is too old to update the menubar. Run “%@” first, then try again." = "你的 codeburn 命令行工具（%@）版本过旧，无法更新菜单栏应用。请先运行“%@”，然后重试。";
+"Your codeburn CLI (%1$@) is too old to update the menubar. Run “%2$@” first, then try again." = "你的 codeburn 命令行工具（%1$@）版本过旧，无法更新菜单栏应用。请先运行“%2$@”，然后重试。";
 "Update failed (exit %lld)" = "更新失败（退出码 %lld）";
 "GitHub returned HTTP %lld." = "GitHub 返回 HTTP %lld。";
 "No mac-v release with a menubar zip and checksum was found." = "未找到包含菜单栏 zip 与校验和的 mac-v 版本。";
@@ -172,7 +172,7 @@
 
 /* MARK: Status-item menu, tooltip and update alerts */
 "%@ credits" = "%@ 点数";
-"CodeBurn %@ · %lld of %lld devices reporting" = "CodeBurn %@ · %lld/%lld 台设备已上报";
+"CodeBurn %1$@ · %2$lld of %3$lld devices reporting" = "CodeBurn %1$@ · %2$lld/%3$lld 台设备已上报";
 "Settings…" = "设置…";
 "Capacity Dock Settings…" = "容量 Dock 设置…";
 "Refresh Now" = "立即刷新";
@@ -182,11 +182,11 @@
 "Today · no usage yet" = "今天 · 暂无用量";
 "1 call" = "1 次调用";
 "%lld calls" = "%lld 次调用";
-"Today · %@ · %@" = "今天 · %@ · %@";
+"Today · %1$@ · %2$@" = "今天 · %1$@ · %2$@";
 "CodeBurn Settings" = "CodeBurn 设置";
 "Update Available" = "有可用更新";
-"%@ is available (you have %@)." = "%@ 已发布（你当前为 %@）。";
-"%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force" = "%@ 你的 codeburn 命令行工具版本过旧，无法安装。请先运行：\n\n%@\n\n然后：\n\ncodeburn menubar --force";
+"%1$@ is available (you have %2$@)." = "%1$@ 已发布（你当前为 %2$@）。";
+"%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force" = "%1$@ 你的 codeburn 命令行工具版本过旧，无法安装。请先运行：\n\n%2$@\n\n然后：\n\ncodeburn menubar --force";
 "%@ Run:\n\ncodeburn menubar --force" = "%@ 运行：\n\ncodeburn menubar --force";
 "Up to Date" = "已是最新版本";
 "You're on the latest version (%@)." = "你已使用最新版本（%@）。";
@@ -195,12 +195,12 @@
 /* MARK: Popover chrome, header, footer and banners */
 "This total may be incomplete." = "此总计可能不完整。";
 "Claude config" = "Claude 配置";
-"No %@ data for %@" = "%@ 在%@没有数据";
+"No %1$@ data for %2$@" = "%1$@ 在%2$@没有数据";
 "Couldn't load %@" = "无法载入%@";
 "Retry" = "重试";
 "Loading %@…" = "正在载入%@…";
 "Your AI Bill, Itemized" = "你的 AI 账单，逐项明细";
-"%@ over limit (%lld%%)" = "%@ 已超限（%lld%%）";
+"%1$@ over limit (%2$lld%%)" = "%1$@ 已超限（%2$lld%%）";
 "resets in %@" = "%@后重置";
 "Change accent color" = "更改主题色";
 "CLI %@ available" = "命令行工具 %@ 可用";
@@ -222,7 +222,7 @@
 "Combined unavailable · showing local" = "合并数据不可用 · 显示本机数据";
 "Combined · %@" = "合并 · %@";
 "Saved %@ with local models" = "使用本地模型节省了 %@";
-"%lld of %lld devices" = "%lld/%lld 台设备";
+"%1$lld of %2$lld devices" = "%1$lld/%2$lld 台设备";
 "%@ · local" = "%@ · 本机";
 
 /* MARK: Period strip and date picker */
@@ -278,19 +278,19 @@
 "Spend up %lld%% vs prior 7 days" = "支出较前 7 天上升 %lld%%";
 "Cache hit only %lld%% — paying for cold prompts" = "缓存命中率仅 %lld%% — 正在为冷提示付费";
 "%lld%% one-shot — lots of iteration" = "一次通过率 %lld%% — 反复修改较多";
-"On pace for %@ this month (+%lld%% vs last)" = "按当前速度本月将达 %@（较上月 +%lld%%）";
+"On pace for %1$@ this month (+%2$lld%% vs last)" = "按当前速度本月将达 %1$@（较上月 +%2$lld%%）";
 "What's working" = "做得好的";
 "What to improve" = "可以改进的";
 "Risks" = "风险";
 
 /* MARK: Insight tabs (trend, calendar, forecast, pulse, stats, optimize, plan) */
 "Last %lld days" = "最近 %lld 天";
-"%@%% vs prior %lldd" = "%@%% 较前 %lld 天";
+"%1$@%% vs prior %2$lldd" = "%1$@%% 较前 %2$lld 天";
 "Avg/day" = "日均";
 "Peak" = "峰值";
 "Yesterday" = "昨天";
 "%@ tokens" = "%@ Token";
-"%@ on %@" = "%@（%@）";
+"%1$@ on %2$@" = "%1$@（%2$@）";
 "Daily activity" = "每日活动";
 "%lld active days" = "%lld 个活跃日";
 "Peak day" = "峰值日";
@@ -307,18 +307,18 @@
 "No tracked usage" = "无跟踪到的用量";
 "%@: future day" = "%@：未来日期";
 "%@: no tracked usage" = "%@：无跟踪到的用量";
-"%@: %@, %lld calls, %@ tokens" = "%@：%@，%lld 次调用，%@ Token";
+"%1$@: %2$@, %3$lld calls, %4$@ tokens" = "%1$@：%2$@，%3$lld 次调用，%4$@ Token";
 "Month-to-date" = "本月至今";
 "On pace for" = "预计本月";
 "Avg/day (this wk)" = "日均（本周）";
 "Last 7d" = "最近 7 天";
 "no prior month" = "无上月数据";
-"%@%% vs last month (%@)" = "%@%% 较上月（%@）";
+"%1$@%% vs last month (%2$@)" = "%1$@%% 较上月（%2$@）";
 "Cache hit" = "缓存命中";
 "Cost / session" = "每会话花费";
 "Cost/edit" = "每次编辑花费";
-"Save ~%@ / ~%@ tokens · 1 finding" = "可省约 %@ / 约 %@ Token · 1 项建议";
-"Save ~%@ / ~%@ tokens · %lld findings" = "可省约 %@ / 约 %@ Token · %lld 项建议";
+"Save ~%1$@ / ~%2$@ tokens · 1 finding" = "可省约 %1$@ / 约 %2$@ Token · 1 项建议";
+"Save ~%1$@ / ~%2$@ tokens · %3$lld findings" = "可省约 %1$@ / 约 %2$@ Token · %3$lld 项建议";
 "Favorite model" = "最常用模型";
 "Active days (month)" = "活跃天数（本月）";
 "Most active day" = "最活跃的一天";
@@ -329,7 +329,7 @@
 "Tracked spend (last %lld days)" = "已跟踪支出（最近 %lld 天）";
 "Costliest session" = "花费最高的会话";
 "Retry tax" = "重试成本";
-"%lld retries across %lld edits" = "%lld 次重试，涉及 %lld 次编辑";
+"%1$lld retries across %2$lld edits" = "%1$lld 次重试，涉及 %2$lld 次编辑";
 "%@ ret/edit" = "%@ 次重试/编辑";
 "Hides session details" = "隐藏会话详情";
 "Shows session details" = "显示会话详情";
@@ -341,7 +341,7 @@
 "%lld%% of spend" = "占支出 %lld%%";
 "could be optimized" = "可以优化";
 "Routing waste" = "路由浪费";
-"vs %@ @ %@/edit" = "对比 %@（%@/次编辑）";
+"vs %1$@ @ %2$@/edit" = "对比 %1$@（%2$@/次编辑）";
 "Connect Claude subscription" = "连接 Claude 订阅";
 "CodeBurn will read your Claude Code credentials once. macOS will ask permission. After that, the live quota bar shows next to the Claude tab and updates automatically." = "CodeBurn 只会读取一次你的 Claude Code 凭证，macOS 会请求授权。之后实时配额条会显示在 Claude 标签旁并自动更新。";
 "Reading Claude credentials..." = "正在读取 Claude 凭证…";
@@ -401,9 +401,9 @@
 "On pace: %@ at reset" = "符合节奏：重置时 %@";
 "%@%% in deficit" = "超出 %@%%";
 "%@%% in reserve" = "结余 %@%%";
-"%@ · hits 100%% %@" = "%@ · %@达到 100%%";
-"%@ · %@ at reset" = "%@ · 重置时 %@";
-"On pace: %@ at reset · hits 100%% %@" = "符合节奏：重置时 %@ · %@达到 100%%";
+"%1$@ · hits 100%% %2$@" = "%1$@ · %2$@达到 100%%";
+"%1$@ · %2$@ at reset" = "%1$@ · 重置时 %2$@";
+"On pace: %1$@ at reset · hits 100%% %2$@" = "符合节奏：重置时 %1$@ · %2$@达到 100%%";
 "Based on last cycle: %@" = "按上一周期估算：%@";
 "in %lldm" = "%lld 分钟后";
 "in %lldh" = "%lld 小时后";
@@ -424,13 +424,18 @@
 "Show %@ usage" = "显示 %@ 用量";
 "none running" = "无运行中";
 "1 running" = "1 个运行中";
+/* 服务商/计划名按目录规则在两种语言中原样保留。 */
+"Kimi Code" = "Kimi Code";
+"Gemini" = "Gemini";
+"Copilot" = "Copilot";
+"Antigravity" = "Antigravity";
 "%lld running" = "%lld 个运行中";
 "%@ left" = "剩余 %@";
 /* 运行中会话行的提示。%@ 为终端应用自身的名称，保持原样。 */
 "Open in %@" = "在 %@ 中打开";
 "Bring %@ to front" = "将 %@ 切换到前台";
 "burned" = "已消耗";
-"today %@ of %@" = "今天 %@ / %@";
+"today %1$@ of %2$@" = "今天 %1$@ / %2$@";
 "no budget set" = "未设置预算";
 "Refreshing…" = "正在刷新…";
 "Last known usage · refreshing" = "最近已知用量 · 正在刷新";
@@ -551,7 +556,7 @@
 "Optional, and only needed when nothing else on this Mac is signed in. A fine-grained personal access token with the \"Plan: Read-only\" permission is enough. Leave the host at github.com unless the token was minted on a GitHub Enterprise Cloud tenant, in which case enter that tenant's host (<tenant>.ghe.com) so the token is never sent to api.github.com. Both are saved in CodeBurn's own Keychain item and are used only to read your Copilot quota." = "可选，仅当这台 Mac 上没有其他已登录来源时才需要。一个具有 \"Plan: Read-only\" 权限的细粒度个人访问令牌即可。主机请保持为 github.com，除非该令牌是在 GitHub Enterprise Cloud 租户上签发的；若是，请填入该租户的主机（<tenant>.ghe.com），这样令牌就绝不会发送到 api.github.com。两者都保存在 CodeBurn 自己的钥匙串项目中，且仅用于读取你的 Copilot 配额。";
 "Couldn't load Copilot quota" = "无法载入 Copilot 配额";
 "Live quota tracked from %@." = "实时配额来自 %@。";
-"Plan: %@. Live quota tracked from %@." = "套餐：%@。实时配额来自 %@。";
+"Plan: %1$@. Live quota tracked from %2$@." = "套餐：%1$@。实时配额来自 %2$@。";
 "Sign in again with the Copilot CLI, an editor's Copilot plugin, or gh auth login, then click Reconnect." = "请通过 Copilot 命令行工具、编辑器的 Copilot 插件或 gh auth login 重新登录，然后点按“重新连接”。";
 "GitHub rate-limited; auto-retrying." = "GitHub 已限流，正在自动重试。";
 "Looking for a GitHub token on this Mac." = "正在这台 Mac 上查找 GitHub 令牌。";
@@ -622,7 +627,7 @@
 /* MARK: Codex credit limit */
 "Monthly usage limit" = "每月用量上限";
 "Monthly usage limit · limit reached" = "每月用量上限 · 已达上限";
-"Monthly usage limit · %@ / %@ credits" = "每月用量上限 · %@ / %@ 点数";
+"Monthly usage limit · %1$@ / %2$@ credits" = "每月用量上限 · %1$@ / %2$@ 点数";
 "%@ · limit reached" = "%@ · 已达上限";
 
 /* MARK: Added on rebase onto main (#1306, #1313, #1314, #1328, #1329) */
@@ -653,16 +658,16 @@
 "%@ quota reset early" = "%@ 配额已提前重置";
 "%@ quota cleared early" = "%@ 配额已提前清零";
 "You're back to %lld%%." = "你已恢复到 %lld%%。";
-"%@'s %@ reset %@ early. %@" = "%@ 的%@提前 %@重置。%@";
-"%@ cleared your %@ %@ before its reset. %@" = "%@ 清空了你的%@，比其重置提前 %@。%@";
-"%@ reset %@ early" = "%@提前 %@重置";
-"%@ cleared, %@ before reset" = "%@已清空，比重置提前 %@";
+"%1$@'s %2$@ reset %3$@ early. %4$@" = "%1$@ 的%2$@提前 %3$@重置。%4$@";
+"%1$@ cleared your %2$@ %3$@ before its reset. %4$@" = "%1$@ 清空了你的%2$@，比其重置提前 %3$@。%4$@";
+"%1$@ reset %2$@ early" = "%1$@提前 %2$@重置";
+"%1$@ cleared, %2$@ before reset" = "%1$@已清空，比重置提前 %2$@";
 "%lld%% of it was available when CodeBurn noticed." = "CodeBurn 发现时其中有 %lld%% 可用。";
-"%@ reset this %@ %@ before its scheduled time. %@" = "%@ 将这个%@提前 %@ 重置，早于其预定时间。%@";
-"%@ cleared this %@ %@ before the window's scheduled reset, which has not moved. %@" = "%@ 清空了这个%@，比该窗口的预定重置时间早 %@，而重置时间并未改变。%@";
-"Last %@ reset came ~%@ early" = "上次%@重置提前了约 %@";
-"Last %lld %@ resets came ~%@ early" = "最近 %lld 次%@重置提前了约 %@";
-"%lld of the last %lld %@ resets came ~%@ early" = "最近 %lld/%lld 次%@重置提前了约 %@";
+"%1$@ reset this %2$@ %3$@ before its scheduled time. %4$@" = "%1$@ 将这个%2$@提前 %3$@ 重置，早于其预定时间。%4$@";
+"%1$@ cleared this %2$@ %3$@ before the window's scheduled reset, which has not moved. %4$@" = "%1$@ 清空了这个%2$@，比该窗口的预定重置时间早 %3$@，而重置时间并未改变。%4$@";
+"Last %1$@ reset came ~%2$@ early" = "上次%1$@重置提前了约 %2$@";
+"Last %1$lld %2$@ resets came ~%3$@ early" = "最近 %1$lld 次%2$@重置提前了约 %3$@";
+"%1$lld of the last %2$lld %3$@ resets came ~%4$@ early" = "最近 %1$lld/%2$lld 次%3$@重置提前了约 %4$@";
 "%lldh" = "%lld 小时";
 "5-hour limit" = "5 小时限额";
 "weekly limit" = "每周限额";
@@ -679,11 +684,11 @@
 /* MARK: Codex banked limit resets (#725) */
 "%lld available" = "%lld 个可用";
 "%lld usable now" = "%lld 个现在可用";
-"next %@ lands %@" = "下一次%@将于 %@到账";
-"latest %@ granted %@" = "最近一次%@于 %@发放";
+"next %1$@ lands %2$@" = "下一次%1$@将于 %2$@到账";
+"latest %1$@ granted %2$@" = "最近一次%1$@于 %2$@发放";
 "next expires %@" = "下一个将于 %@过期";
-"A %@ lands %@." = "一次%@将于 %@到账。";
-"A %@ was added to your account %@." = "%@已于 %@添加到你的账户。";
+"A %1$@ lands %2$@." = "一次%1$@将于 %2$@到账。";
+"A %1$@ was added to your account %2$@." = "%1$@已于 %2$@添加到你的账户。";
 "A %@ was added to your account." = "%@已添加到你的账户。";
 "You have %lld available to use." = "你有 %lld 个可以使用。";
 "Codex banked a limit reset" = "Codex 存入了一次限额重置";
@@ -700,6 +705,6 @@
 "Input tokens reused from this provider's prompt cache today — not fresh input (arrow.down), not cache writes, and already priced at the cache-read rate inside the burned figure." = "今天从该服务商提示缓存中复用的输入 Token。不是新的输入（arrow.down），也不是缓存写入，并且已按缓存读取费率计入已消耗金额。";
 
 /* MARK: Quota crossing notifications */
-"%@ · %@ at 80%%" = "%@ · %@ 已达 80%%";
-"%@ · %@ limit reached" = "%@ · %@ 已达上限";
-"Quota crossings (%lld%% and %lld%%)" = "配额跨越（%lld%% 与 %lld%%）";
+"%1$@ · %2$@ at 80%%" = "%1$@ · %2$@ 已达 80%%";
+"%1$@ · %2$@ limit reached" = "%1$@ · %2$@ 已达上限";
+"Quota crossings (%1$lld%% and %2$lld%%)" = "配额跨越（%1$lld%% 与 %2$lld%%）";

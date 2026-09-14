@@ -1393,7 +1393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         let menubarPeriod = store.menubarPeriod
         if let shortfall = store.menubarBadgeDeviceShortfall {
             button.toolTip = L(
-                "CodeBurn %@ · %lld of %lld devices reporting",
+                "CodeBurn %1$@ · %2$lld of %3$lld devices reporting",
                 menubarPeriod.menubarMetricLabel,
                 shortfall.reachable,
                 shortfall.total
@@ -1740,7 +1740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private func contextMenuUsageSummary() -> String {
         guard let current = store.todayPayload?.current else { return L("Today · no usage yet") }
         let calls = current.calls == 1 ? L("1 call") : L("%lld calls", current.calls)
-        return L("Today · %@ · %@", current.cost.asCurrency(), calls)
+        return L("Today · %1$@ · %2$@", current.cost.asCurrency(), calls)
     }
 
     private var settingsWindowController: NSWindowController?
@@ -1821,13 +1821,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             } else if updateChecker.updateAvailable, let latest = updateChecker.latestVersion {
                 alert.messageText = L("Update Available")
                 let header = L(
-                    "%@ is available (you have %@).",
+                    "%1$@ is available (you have %2$@).",
                     AppVersion.display(latest),
                     AppVersion.display(updateChecker.currentVersion)
                 )
                 if updateChecker.cliTooOldForUpdate {
                     alert.informativeText = L(
-                        "%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force",
+                        "%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force",
                         header,
                         updateChecker.cliUpdateCommand
                     )

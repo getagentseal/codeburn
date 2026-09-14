@@ -132,6 +132,7 @@ enum LocalizationSourceScanner {
     static func unroutedLiterals(inSource source: String, fileName: String) -> [Finding] {
         let code = Array(strippingComments(source))
         var findings: [Finding] = []
+        let bindings = literalBindings(in: code)
 
         for callSite in userFacingCallSites {
             let needle = Array(callSite)
@@ -157,6 +158,21 @@ enum LocalizationSourceScanner {
                             literal: literal.value
                         )
                     )
+                } else if cursor < code.count, code[cursor] != "\"" {
+                    // The argument is an expression, not a bare literal: a
+                    // ternary (`Text(flag ? "A" : "B")`), a concatenation
+                    // (`.help(prefix + " suffix")`), or a variable holding a
+                    // literal bound earlier in the file (#1331). Those all put
+                    // copy on screen while looking like machinery to the
+                    // first-character check above.
+                    findings += unroutedExpressionLiterals(
+                        after: cursor,
+                        at: index,
+                        callSite: callSite,
+                        in: code,
+                        bindings: bindings,
+                        fileName: fileName
+                    )
                 }
                 index += needle.count
             }
@@ -164,6 +180,206 @@ enum LocalizationSourceScanner {
         // Call sites are scanned one kind at a time, so sort back into reading
         // order — a failure message that jumps around the file is hard to act on.
         return findings.sorted { ($0.line, $0.literal) < ($1.line, $1.literal) }
+    }
+
+    // MARK: - Expression arguments (#1331)
+
+    /// A `let`/`var` whose right-hand side is a single string literal (or a
+    /// single `L("…")`), collected per file so a call site handed a bare
+    /// identifier can be traced back to the copy it carries.
+    struct LiteralBinding {
+        let name: String
+        let literal: String
+        /// True when the bound literal already sits inside `L(…)`.
+        let routed: Bool
+    }
+
+    /// The first `let`/`var name =` binding per identifier in the file. Swift
+    /// allows shadowing, so this is an approximation — but the shape the issue
+    /// names (one literal, one use in a `.help`) is exactly the file-local one,
+    /// and a cross-file constant is out of reach for a source scan anyway.
+    static func literalBindings(in code: [Character]) -> [String: LiteralBinding] {
+        var bindings: [String: LiteralBinding] = [:]
+        for keyword in ["let ", "var "] {
+            let needle = Array(keyword)
+            var index = 0
+            while index + needle.count <= code.count {
+                guard Array(code[index..<(index + needle.count)]) == needle,
+                      startsAWord(needle, at: index, in: code) else {
+                    index += 1
+                    continue
+                }
+                var cursor = index + needle.count
+                while cursor < code.count, code[cursor].isWhitespace { cursor += 1 }
+                var name = ""
+                while cursor < code.count, code[cursor].isLetter || code[cursor].isNumber || code[cursor] == "_" {
+                    name.append(code[cursor])
+                    cursor += 1
+                }
+                while cursor < code.count, code[cursor].isWhitespace { cursor += 1 }
+                guard !name.isEmpty, cursor < code.count, code[cursor] == "=" else {
+                    index += needle.count
+                    continue
+                }
+                cursor += 1
+                while cursor < code.count, code[cursor].isWhitespace { cursor += 1 }
+                if cursor + 1 < code.count, code[cursor] == "L", code[cursor + 1] == "(" {
+                    cursor += 2
+                    while cursor < code.count, code[cursor].isWhitespace { cursor += 1 }
+                    if cursor < code.count, code[cursor] == "\"",
+                       let literal = stringLiteral(in: code, startingAt: cursor) {
+                        if bindings[name] == nil {
+                            bindings[name] = LiteralBinding(name: name, literal: unescaped(literal.value), routed: true)
+                        }
+                    }
+                } else if cursor < code.count, code[cursor] == "\"",
+                          let literal = stringLiteral(in: code, startingAt: cursor) {
+                    if bindings[name] == nil {
+                        bindings[name] = LiteralBinding(name: name, literal: unescaped(literal.value), routed: false)
+                    }
+                }
+                index += needle.count
+            }
+        }
+        return bindings
+    }
+
+    /// The extent of one call argument: from just after the open parenthesis to
+    /// the enclosing close (or a top-level comma, since only the first
+    /// argument of each call site is copy). Bracket-balanced so closures and
+    /// nested calls inside the argument do not end it early.
+    static func argumentSpan(in code: [Character], from start: Int) -> Range<Int> {
+        var depth = 0
+        var index = start
+        while index < code.count {
+            switch code[index] {
+            case "(", "[", "{":
+                depth += 1
+            case ")", "]", "}":
+                depth -= 1
+                if depth < 0 { return start..<index }
+            case "," where depth == 0:
+                return start..<index
+            default:
+                break
+            }
+            index += 1
+        }
+        return start..<code.count
+    }
+
+    /// Copy hidden inside a non-literal argument: ternary branches,
+    /// concatenation operands, and identifiers bound to a literal earlier in
+    /// the file. `Text(verbatim:)` is exempt — it is SwiftUI's explicit
+    /// do-not-localize API, and flagging it would leave no way to opt out.
+    static func unroutedExpressionLiterals(
+        after start: Int,
+        at callSiteIndex: Int,
+        callSite: String,
+        in code: [Character],
+        bindings: [String: LiteralBinding],
+        fileName: String
+    ) -> [Finding] {
+        var cursor = start
+        let span = argumentSpan(in: code, from: start)
+
+        // An argument label (`verbatim:`, `title:`) precedes the value; step
+        // past it. `verbatim` opts out of localization entirely.
+        if code[cursor].isLetter {
+            var label = ""
+            while cursor < code.count, code[cursor].isLetter || code[cursor].isNumber || code[cursor] == "_" {
+                label.append(code[cursor])
+                cursor += 1
+            }
+            var afterLabel = cursor
+            while afterLabel < code.count, code[afterLabel].isWhitespace { afterLabel += 1 }
+            if afterLabel < code.count, code[afterLabel] == ":" {
+                if label == "verbatim" { return [] }
+                cursor = afterLabel + 1
+                while cursor < code.count, code[cursor].isWhitespace { cursor += 1 }
+            } else {
+                cursor = start
+            }
+        }
+
+        // A bare identifier as the whole argument: the `.help(title)` shape.
+        if cursor < code.count, code[cursor].isLetter || code[cursor] == "_" {
+            var name = ""
+            var end = cursor
+            while end < code.count, code[end].isLetter || code[end].isNumber || code[end] == "_" {
+                name.append(code[end])
+                end += 1
+            }
+            var after = end
+            while after < code.count, code[after].isWhitespace { after += 1 }
+            let terminator = after < code.count ? code[after] : "\0"
+            if name.count > 1, terminator == "," || terminator == ")" || terminator == "}" || terminator == "\0",
+               let binding = bindings[name], !binding.routed, needsTranslation(binding.literal) {
+                return [
+                    Finding(
+                        file: fileName,
+                        line: lineNumber(of: callSiteIndex, in: code),
+                        callSite: callSite,
+                        literal: binding.literal
+                    )
+                ]
+            }
+        }
+
+        // Any literal at the argument's own depth that is not already routed
+        // (`L(…)`) or another user-facing call's own argument (that call's scan
+        // reports it; reporting it here too would double-count).
+        var findings: [Finding] = []
+        var depth = 0
+        var index = span.lowerBound
+        while index < span.upperBound {
+            switch code[index] {
+            case "(", "[", "{":
+                depth += 1
+            case ")", "]", "}":
+                depth -= 1
+            case "\"":
+                if let literal = stringLiteral(in: code, startingAt: index) {
+                    if depth == 0, needsTranslation(literal.value),
+                       !precededByRoutingOrCallSite(literalStart: index, in: code) {
+                        findings.append(
+                            Finding(
+                                file: fileName,
+                                line: lineNumber(of: index, in: code),
+                                callSite: callSite,
+                                literal: literal.value
+                            )
+                        )
+                    }
+                    index = literal.end
+                    continue
+                }
+            default:
+                break
+            }
+            index += 1
+        }
+        return findings
+    }
+
+    /// Whether the significant text immediately before `literalStart` is `L(`
+    /// (routed) or one of the user-facing call sites (that occurrence is its
+    /// argument and is reported — or exempted — by that site's own scan).
+    static func precededByRoutingOrCallSite(literalStart: Int, in code: [Character]) -> Bool {
+        var back = literalStart
+        while back > 0, code[back - 1].isWhitespace { back -= 1 }
+        for needle in userFacingCallSites + ["L("] {
+            let n = Array(needle)
+            let start = back - n.count
+            guard start >= 0, Array(code[start..<back]) == n else { continue }
+            // `L(` must be the localization function, not `someL(`/`a.L(`.
+            if needle == "L(", start > 0 {
+                let before = code[start - 1]
+                if before.isLetter || before.isNumber || before == "_" || before == "." { continue }
+            }
+            return true
+        }
+        return false
     }
 
     // MARK: - Display-label properties

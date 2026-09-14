@@ -558,7 +558,7 @@ private struct GeneralSettingsTab: View {
                 Text(L("Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back. The Capacity Dock shows the same notice for 12 hours either way."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                Toggle(L("Quota crossings (%lld%% and %lld%%)", 80, 100), isOn: $notifyAboutQuotaCrossings)
+                Toggle(L("Quota crossings (%1$lld%% and %2$lld%%)", 80, 100), isOn: $notifyAboutQuotaCrossings)
             }
 
             Section(L("Terminal")) {

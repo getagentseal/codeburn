@@ -95,7 +95,7 @@ enum QuotaWarningPresentation {
         // "Over limit" only once the window really is. Severity turns `.danger`
         // at 90%, and "over limit (93%)" is not true.
         var text = warning.percent >= 100
-            ? L("%@ over limit (%lld%%)", subject, percent)
+            ? L("%1$@ over limit (%2$lld%%)", subject, percent)
             : "\(subject) \(percent)%"
         if let countdown = resetCountdown(warning.resetsAt, now: now) {
             text += " · " + L("resets in %@", countdown)

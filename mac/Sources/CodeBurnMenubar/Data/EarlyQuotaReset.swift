@@ -72,7 +72,7 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
         switch signal {
         case .resetMovedForward:
             return L(
-                "%@'s %@ reset %@ early. %@",
+                "%1$@'s %2$@ reset %3$@ early. %4$@",
                 providerName, EarlyQuotaResetFormat.limitName(windowName), lead, back
             )
         // The reset time did not move: the vendor emptied the counter inside the
@@ -80,7 +80,7 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
         // here would promise a whole new window that is not coming.
         case .usageDropped:
             return L(
-                "%@ cleared your %@ %@ before its reset. %@",
+                "%1$@ cleared your %2$@ %3$@ before its reset. %4$@",
                 providerName, EarlyQuotaResetFormat.usageName(windowName), lead, back
             )
         }
@@ -92,13 +92,13 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
         switch signal {
         case .resetMovedForward:
             return L(
-                "%@ reset %@ early",
+                "%1$@ reset %2$@ early",
                 EarlyQuotaResetFormat.capitalizedFirst(EarlyQuotaResetFormat.limitName(windowName)),
                 lead
             )
         case .usageDropped:
             let usage = EarlyQuotaResetFormat.usageName(windowName)
-            return L("%@ cleared, %@ before reset", EarlyQuotaResetFormat.capitalizedFirst(usage), lead)
+            return L("%1$@ cleared, %2$@ before reset", EarlyQuotaResetFormat.capitalizedFirst(usage), lead)
         }
     }
 
@@ -111,12 +111,12 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
         switch signal {
         case .resetMovedForward:
             return L(
-                "%@ reset this %@ %@ before its scheduled time. %@",
+                "%1$@ reset this %2$@ %3$@ before its scheduled time. %4$@",
                 providerName, EarlyQuotaResetFormat.limitName(windowName), lead, available
             )
         case .usageDropped:
             return L(
-                "%@ cleared this %@ %@ before the window's scheduled reset, which has not moved. %@",
+                "%1$@ cleared this %2$@ %3$@ before the window's scheduled reset, which has not moved. %4$@",
                 providerName, EarlyQuotaResetFormat.usageName(windowName), lead, available
             )
         }
@@ -271,13 +271,13 @@ enum EarlyQuotaResetHistory {
             let noun = EarlyQuotaResetFormat.windowNoun(windowName)
             let lead = EarlyQuotaResetFormat.approximateLead(seconds: typicalEarlyBySeconds)
             if earlyResets == 1 && observedResets == 1 {
-                return L("Last %@ reset came ~%@ early", noun, lead)
+                return L("Last %1$@ reset came ~%2$@ early", noun, lead)
             }
             if earlyResets == observedResets {
-                return L("Last %lld %@ resets came ~%@ early", earlyResets, noun, lead)
+                return L("Last %1$lld %2$@ resets came ~%3$@ early", earlyResets, noun, lead)
             }
             return L(
-                "%lld of the last %lld %@ resets came ~%@ early",
+                "%1$lld of the last %2$lld %3$@ resets came ~%4$@ early",
                 earlyResets, observedResets, noun, lead
             )
         }
@@ -370,7 +370,7 @@ enum EarlyQuotaResetFormat {
         let hours = Int((seconds / 3600).rounded())
         guard hours >= 24 else { return L("%lldh", hours) }
         let rest = hours % 24
-        return rest == 0 ? L("%lldd", hours / 24) : L("%lldd %lldh", hours / 24, rest)
+        return rest == 0 ? L("%lldd", hours / 24) : L("%1$lldd %2$lldh", hours / 24, rest)
     }
 
     /// "18h", "2d" — rounded, for a pattern that is only ever approximate.

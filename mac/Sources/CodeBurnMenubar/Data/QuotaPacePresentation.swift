@@ -23,8 +23,8 @@ enum QuotaPacePresentation {
         let hours = minutes / 60
         let days = hours / 24
         // Same three keys the popover's reset countdown uses.
-        if days > 0 { return L("%lldd %lldh", days, hours % 24) }
-        if hours > 0 { return L("%lldh %lldm", hours, minutes % 60) }
+        if days > 0 { return L("%1$lldd %2$lldh", days, hours % 24) }
+        if hours > 0 { return L("%1$lldh %2$lldm", hours, minutes % 60) }
         return L("%lldm", minutes)
     }
 }

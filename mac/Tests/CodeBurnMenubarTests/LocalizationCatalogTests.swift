@@ -35,7 +35,8 @@ struct LocalizationCatalogTests {
         )
     }
 
-    /// Specifier occurrences in order, `%%` included.
+    /// Specifier occurrences in order, `%%` included. Positional specifiers
+    /// (`%1$@`) keep their index inside the token; bare ones (`%@`) stay bare.
     static func specifiers(in value: String) -> [String] {
         var found: [String] = []
         var rest = Substring(value)
@@ -53,6 +54,12 @@ struct LocalizationCatalogTests {
                 token.append(rest[cursor])
                 cursor = rest.index(after: cursor)
             }
+            // A `$` right after the digits makes this a positional specifier:
+            // the index is part of the contract, so it stays in the token.
+            if cursor < rest.endIndex, rest[cursor] == "$" {
+                token.append("$")
+                cursor = rest.index(after: cursor)
+            }
             while cursor < rest.endIndex, "lhqLzjt".contains(rest[cursor]) {
                 token.append(rest[cursor])
                 cursor = rest.index(after: cursor)
@@ -68,9 +75,30 @@ struct LocalizationCatalogTests {
     }
 
     /// The specifiers that consume an argument. `String(format:)` binds these
-    /// positionally, so their order is part of the contract between locales.
+    /// by slot, so slot agreement is part of the contract between locales.
     static func arguments(in value: String) -> [String] {
         specifiers(in: value).filter { $0 != "%%" }
+    }
+
+    /// Slot number → verb for every argument specifier. A positional specifier
+    /// (`%2$lld`) names its own slot; a bare one (`%@`) takes the next slot in
+    /// order of appearance, which is how `String(format:)` binds it.
+    static func argumentSlots(in value: String) -> [Int: String] {
+        var slots: [Int: String] = [:]
+        var next = 1
+        for token in arguments(in: value) {
+            if let dollar = token.firstIndex(of: "$") {
+                let digits = token[token.index(after: token.startIndex)..<dollar]
+                if let slot = Int(digits) {
+                    slots[slot] = String(token[token.index(after: dollar)...])
+                    next = max(next, slot + 1)
+                    continue
+                }
+            }
+            slots[next] = String(token.dropFirst())
+            next += 1
+        }
+        return slots
     }
 
     static func literalPercentCount(in value: String) -> Int {
@@ -142,19 +170,40 @@ struct LocalizationCatalogTests {
 
     // MARK: - Format specifiers
 
-    @Test("argument specifiers match in count and order across locales")
+    @Test("every argument slot agrees on its verb across locales")
     func argumentSpecifierParity() throws {
         let en = try Self.table("en")
         let zh = try Self.table("zh-Hans")
 
         for key in en.keys.sorted() {
             guard let english = en[key], let chinese = zh[key] else { continue }
-            let expected = Self.arguments(in: english)
-            let actual = Self.arguments(in: chinese)
+            let expected = Self.argumentSlots(in: english)
+            let actual = Self.argumentSlots(in: chinese)
             #expect(
                 expected == actual,
-                "specifier mismatch for \(key.debugDescription): en \(expected) vs zh-Hans \(actual). String(format:) binds positionally, so a reorder or a dropped specifier is a wrong value or a crash."
+                "specifier mismatch for \(key.debugDescription): en \(expected) vs zh-Hans \(actual). String(format:) binds by slot, so a slot with a different verb is a wrong value or a crash."
             )
+        }
+    }
+
+    /// A key whose arguments are all the same type (`%@ … %@`) cannot be checked
+    /// for order by comparing specifier lists: the slots bind positionally, so
+    /// Chinese word order may legally reorder them, and only positional
+    /// specifiers say which argument landed where. Swapped slots in exactly
+    /// this shape shipped once (#1331); this pins the positional form so the
+    /// slot comparison above has something explicit to compare.
+    @Test("keys with two or more arguments use positional specifiers in every locale")
+    func multiArgumentKeysArePositional() throws {
+        for localization in ["en", "zh-Hans"] {
+            for (key, value) in try Self.table(localization) {
+                let args = Self.arguments(in: value)
+                guard args.count >= 2 else { continue }
+                let bare = args.filter { !$0.contains("$") }
+                #expect(
+                    bare.isEmpty,
+                    "\(key.debugDescription) in \(localization) has \(args.count) arguments but \(bare.debugDescription) are bare: use %1$…, %2$… so each slot is explicit and checkable"
+                )
+            }
         }
     }
 
@@ -230,13 +279,13 @@ struct LocalizationCatalogTests {
 
     @Test("percent-bearing quota copy formats correctly in both locales")
     func quotaCopyResolves() throws {
-        let englishOverLimit = try Self.localized("%@ over limit (%lld%%)", "en", "Claude", 105)
+        let englishOverLimit = try Self.localized("%1$@ over limit (%2$lld%%)", "en", "Claude", 105)
         #expect(englishOverLimit == "Claude over limit (105%)")
 
-        let chineseOverLimit = try Self.localized("%@ over limit (%lld%%)", "zh-Hans", "Claude", 105)
+        let chineseOverLimit = try Self.localized("%1$@ over limit (%2$lld%%)", "zh-Hans", "Claude", 105)
         #expect(chineseOverLimit == "Claude 已超限（105%）")
 
-        let countdown = try Self.localized("%lldh %lldm", "zh-Hans", 2, 11)
+        let countdown = try Self.localized("%1$lldh %2$lldm", "zh-Hans", 2, 11)
         #expect(countdown == "2 小时 11 分")
 
         // The quota warning banner's reset clause wraps that same countdown.
