@@ -344,11 +344,9 @@ private struct BarColumn: View {
 
 private struct BarTooltipCard: View {
     let bar: TrendBar
-    /// Value to display in the tooltip header. Matches the metric the trend chart
-    /// is currently using (tokens when the .all-providers view has token data,
-    /// cost when provider-filtered views force a $ fallback). Passing this in keeps
-    /// the tooltip in sync with the chart instead of always reading bar.tokens,
-    /// which is zero for provider-filtered days.
+    /// Value shown in the tooltip header on days without a model breakdown, in
+    /// the metric the trend chart is using (tokens when the bars carry any, else
+    /// cost). Days with a breakdown show a Total row instead.
     let value: Double
     let formatValue: (Double) -> String
     @Environment(\.colorScheme) private var colorScheme
@@ -380,9 +378,11 @@ private struct BarTooltipCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(primaryText)
                 Spacer()
-                Text("\(formatValue(value))")
-                    .font(.codeMono(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.brandAccent)
+                if bar.topModels.isEmpty {
+                    Text("\(formatValue(value))")
+                        .font(.codeMono(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.brandAccent)
+                }
             }
 
             if !bar.topModels.isEmpty {
@@ -406,6 +406,30 @@ private struct BarTooltipCard: View {
                                 .font(.codeMono(size: 9.5, weight: .medium))
                                 .foregroundStyle(tertiaryText)
                         }
+                    }
+
+                    Rectangle()
+                        .fill(borderStroke)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 0.5)
+
+                    // Day totals from the payload, not a sum of the rows above:
+                    // only four models render and a day can carry more.
+                    HStack(spacing: 6) {
+                        Color.clear
+                            .frame(width: 3, height: 12)
+                        Text(L("Total"))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(primaryText)
+                        Spacer()
+                        if bar.cost > 0 {
+                            Text(bar.cost.asCompactCurrency())
+                                .font(.codeMono(size: 9.5, weight: .semibold))
+                                .foregroundStyle(Theme.brandAccent)
+                        }
+                        Text("\(formatTokensCompact(bar.tokens)) tok")
+                            .font(.codeMono(size: 9.5, weight: .medium))
+                            .foregroundStyle(tertiaryText)
                     }
                 }
             }

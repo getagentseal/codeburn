@@ -295,6 +295,7 @@
 "Avg/day" = "Avg/day";
 "Peak" = "Peak";
 "Yesterday" = "Yesterday";
+"Total" = "Total";
 "%@ tokens" = "%@ tokens";
 "%@ on %@" = "%@ on %@";
 "Daily activity" = "Daily activity";
