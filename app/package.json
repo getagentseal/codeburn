@@ -41,7 +41,7 @@
     "@vitest/ui": "^3.2.7",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
-    "electron": "^43.1.0",
+    "electron": "^43.7.0",
     "electron-builder": "^26.15.3",
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
