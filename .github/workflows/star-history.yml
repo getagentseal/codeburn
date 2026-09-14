@@ -24,7 +24,7 @@ jobs:
       # publishing is a rolling review branch so main's pull-request rule
       # (GH013) is preserved. This workflow does not open pull requests.
       - id: charts
-        uses: narayann7/star-history-action@a68d8f9d67ca20d55b682a264e69152dcf326e9c
+        uses: narayann7/star-history-action@12543ab7352b91fb7c5eb0c4fbb39772baa0c168
         with:
           repos: getagentseal/codeburn
           output-dir: assets/star-history
