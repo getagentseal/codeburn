@@ -68,7 +68,7 @@
     "selfsigned": "^5.5.0",
     "strip-ansi": "^7.2.0",
     "undici": "^7.27.2",
-    "zod": "^3.25.76"
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",
