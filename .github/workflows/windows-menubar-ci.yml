@@ -28,7 +28,7 @@ jobs:
         os: [windows-latest, ubuntu-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # webkit2gtk + libayatana are what the Tauri and ksni crates link against; without
       # them the Linux leg cannot even typecheck the Rust side.
