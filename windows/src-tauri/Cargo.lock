@@ -491,7 +491,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "windows-sys 0.59.0",
 ]
