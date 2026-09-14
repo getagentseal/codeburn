@@ -56,3 +56,4 @@ src/summit.ts
 # Local working notes and tool state, never part of the product.
 TEAMS-HANDOFF.md
 .gstack/
+.mimosa/

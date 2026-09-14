@@ -78,7 +78,39 @@ CodeBurn does. It reads the session files your tools already write to disk and b
 
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily. The optional desktop app can send an anonymous, bucketed usage report if you say yes to it; see [Telemetry](#telemetry).
 
+## 中文说明
+
+CodeBurn 是一个免费、开源、以本地优先为原则的 AI 编程用量与成本分析工具。它直接读取 Claude Code、Cursor、Codex、Gemini、Grok 等工具已经写入本机的会话文件，按工具、模型、项目和任务统计 Token、调用次数与费用，不需要代理、API Key 或上传原始会话数据。
+
+本分支额外提供了简体中文 Web 面板：将面板中的用户界面文字、统计卡片、图表、表格、工作流和上下文浏览器翻译为中文，并将后端生成的周期标题、活动分类和上下文条目映射为中文显示。品牌名、模型名、金额格式和 Token 数字格式保持原样，便于与原始数据对应。
+
+### 快速开始
+
+```bash
+# 无需安装，直接启动交互式终端面板
+npx codeburn
+
+# 启动 Web 面板
+npx codeburn web
+
+# 全局安装后使用 codeburn 命令
+npm install -g codeburn
+```
+
+需要 Node.js `22.13+`，并且本机至少有一个受支持工具产生的会话数据。完整命令、支持的工具、隐私说明和各平台安装方式请继续阅读下方英文文档。
+
+### 本地开发
+
+```bash
+npm install
+npm test
+npm run build
+```
+
+主要目录：`src/` 为 CLI 与数据解析逻辑，`dash/` 为 Web 面板，`tests/` 为测试，`docs/` 为提供商和功能说明，`assets/` 为界面资源。
+
 <p align="center">
+  <a href="#中文说明">中文说明</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#find-and-fix-waste">Find waste</a> ·
   <a href="#apply-fixes-undo-anytime">Apply fixes</a> ·
