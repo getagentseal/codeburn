@@ -32,7 +32,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globali
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = "0.3"
-png = "0.17"
+png = "0.18"
 
 [features]
 default = ["custom-protocol"]

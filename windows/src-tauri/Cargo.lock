@@ -482,7 +482,7 @@ dependencies = [
  "dirs 5.0.1",
  "fontdue",
  "ksni",
- "png 0.17.16",
+ "png 0.18.1",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
