@@ -82,7 +82,7 @@ export type Payload = {
 
 export async function fetchUsage(period: Period, provider: string): Promise<Payload> {
   const res = await fetch(`/api/usage?period=${encodeURIComponent(period)}&provider=${encodeURIComponent(provider)}`)
-  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  if (!res.ok) throw new Error(`请求失败 (${res.status})`)
   return res.json() as Promise<Payload>
 }
 
@@ -193,7 +193,7 @@ function normalizePayload(p?: Payload): Payload | undefined {
 
 export async function fetchDevices(period: Period, provider: string): Promise<{ devices: DeviceUsage[] }> {
   const res = await fetch(`/api/devices?period=${encodeURIComponent(period)}&provider=${encodeURIComponent(provider)}`)
-  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  if (!res.ok) throw new Error(`请求失败 (${res.status})`)
   const data = (await res.json()) as { devices: DeviceUsage[] }
   return { devices: (data.devices ?? []).map((d) => ({ ...d, payload: normalizePayload(d.payload) })) }
 }
@@ -202,12 +202,12 @@ export async function fetchDevices(period: Period, provider: string): Promise<{ 
 // are computed server-side by the CLI; the dashboard only forwards the key, so
 // these can never drift from the CLI's totals.
 export const PERIODS: Array<{ key: Period; label: string }> = [
-  { key: 'today', label: 'Today' },
-  { key: 'week', label: '7 days' },
-  { key: '30days', label: '30 days' },
-  { key: 'month', label: 'Month' },
-  { key: 'all', label: '6 months' },
-  { key: 'lifetime', label: 'Lifetime' },
+  { key: 'today', label: '今天' },
+  { key: 'week', label: '近7天' },
+  { key: '30days', label: '近30天' },
+  { key: 'month', label: '本月' },
+  { key: 'all', label: '近6个月' },
+  { key: 'lifetime', label: '全部' },
 ]
 
 export type DiscoveredDevice = {
@@ -221,7 +221,7 @@ export type DiscoveredDevice = {
 
 export async function scanDevices(): Promise<DiscoveredDevice[]> {
   const res = await fetch('/api/devices/scan')
-  if (!res.ok) throw new Error(`Scan failed (${res.status})`)
+  if (!res.ok) throw new Error(`扫描失败 (${res.status})`)
   const json = (await res.json()) as { found: DiscoveredDevice[] }
   return json.found
 }
@@ -286,14 +286,14 @@ export type ContextTree = {
 
 export async function fetchContextSessions(provider: ContextProvider): Promise<ContextSessionInfo[]> {
   const res = await fetch(`/api/context/sessions?provider=${encodeURIComponent(provider)}`)
-  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  if (!res.ok) throw new Error(`请求失败 (${res.status})`)
   const json = (await res.json()) as { sessions: ContextSessionInfo[] }
   return json.sessions ?? []
 }
 
 export async function fetchContextTree(provider: ContextProvider, id: string): Promise<ContextTree> {
   const res = await fetch(`/api/context/tree?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(id)}`)
-  if (!res.ok) throw new Error(`Request failed (${res.status})`)
+  if (!res.ok) throw new Error(`请求失败 (${res.status})`)
   return res.json() as Promise<ContextTree>
 }
 
@@ -312,7 +312,7 @@ const postJson = (path: string, body: unknown) =>
 
 export async function shareStatus(): Promise<ShareStatus> {
   const res = await fetch('/api/share/status')
-  if (!res.ok) throw new Error(`share status failed (${res.status})`)
+  if (!res.ok) throw new Error(`共享状态查询失败 (${res.status})`)
   return res.json() as Promise<ShareStatus>
 }
 export async function startShare(always: boolean): Promise<ShareStatus> {

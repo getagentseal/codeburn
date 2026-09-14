@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 export type Column = { key: string; label: string; num?: boolean }
 
 export function DataTable({ columns, rows }: { columns: Column[]; rows: Array<Record<string, ReactNode>> }) {
-  if (!rows.length) return <div className="py-8 text-center text-sm text-tertiary-foreground">No data.</div>
+  if (!rows.length) return <div className="py-8 text-center text-sm text-tertiary-foreground">暂无数据</div>
   return (
     <table className="w-full text-sm">
       <thead>

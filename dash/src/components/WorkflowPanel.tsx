@@ -6,16 +6,16 @@ import { fmtNum } from '@/lib/utils'
 // to hours) so a fast 0.8s and a slow 12m both read at a glance.
 function fmtDuration(ms: number): string {
   if (!isFinite(ms) || ms < 0) return '—'
-  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 1000) return `${Math.round(ms)} 毫秒`
   const s = ms / 1000
-  if (s < 10) return `${s.toFixed(1)}s`
-  if (s < 60) return `${Math.round(s)}s`
+  if (s < 10) return `${s.toFixed(1)} 秒`
+  if (s < 60) return `${Math.round(s)} 秒`
   const m = Math.floor(s / 60)
   const rs = Math.round(s % 60)
-  if (m < 60) return rs ? `${m}m ${rs}s` : `${m}m`
+  if (m < 60) return rs ? `${m} 分 ${rs} 秒` : `${m} 分`
   const h = Math.floor(m / 60)
   const rm = m % 60
-  return rm ? `${h}h ${rm}m` : `${h}h`
+  return rm ? `${h} 时 ${rm} 分` : `${h} 时`
 }
 
 // The panel earns its place only when at least one signal carries real data.
@@ -63,13 +63,13 @@ export function WorkflowPanel({ current }: { current: Current }) {
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-2.5">
         <Row
-          label="Correction rate"
-          hint="Share of prompts where you corrected the assistant, and the correction count"
+          label="纠正率"
+          hint="你纠正 AI 回答的提示占比，以及纠正次数"
           value={correction}
         />
         <Row
-          label="First-edit time"
-          hint="Median time from a prompt to the first file edit"
+          label="首次编辑用时"
+          hint="从发出提示到首次文件编辑的中位用时"
           value={
             w?.medianTimeToFirstEditMs == null ? (
               <span className="text-tertiary-foreground">—</span>
@@ -80,8 +80,8 @@ export function WorkflowPanel({ current }: { current: Current }) {
         />
         {coverage != null && (
           <Row
-            label="Pricing coverage"
-            hint="Share of cost-bearing calls with a resolved price"
+            label="定价覆盖率"
+            hint="已解析出单价的计费调用占比"
             // Floor, never round: near-complete coverage with unpriced calls
             // outstanding must not render as the 100% reserved for genuinely
             // complete pricing.
@@ -92,7 +92,7 @@ export function WorkflowPanel({ current }: { current: Current }) {
 
       {reworked.length > 0 && (
         <div className="border-t border-border pt-3">
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-tertiary-foreground">Most reworked</div>
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-tertiary-foreground">改动最频繁</div>
           <div className="flex flex-col gap-1.5">
             {reworked.slice(0, 8).map((f, i) => (
               // Ranked summary rows are stateless and paths can repeat. Include
@@ -103,7 +103,7 @@ export function WorkflowPanel({ current }: { current: Current }) {
                   {f.path}
                 </span>
                 <span className="shrink-0 text-xs tabular-nums text-tertiary-foreground">
-                  <span className="font-medium text-foreground">{fmtNum(f.edits)}</span> edits · {fmtNum(f.sessions)} sess
+                  <span className="font-medium text-foreground">{fmtNum(f.edits)}</span> 次编辑 · {fmtNum(f.sessions)} 会话
                 </span>
               </div>
             ))}

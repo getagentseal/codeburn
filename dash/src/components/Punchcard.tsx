@@ -3,8 +3,8 @@ import { useMemo, useRef, useState } from 'react'
 import type { GranularHistory } from '@/lib/api'
 import { usd } from '@/lib/utils'
 
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-const WEEKDAYS_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+const WEEKDAYS_FULL = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 
 type Cell = { cost: number; covered: boolean }
@@ -50,16 +50,16 @@ export function Punchcard({ timeline }: { timeline: GranularHistory }) {
   // happened at hour 0. Show the honest limitation instead of a fake column.
   const hourResolved = timeline.bucketMinutes < 1440
 
-  const bucketNote = timeline.bucketMinutes >= 60 ? 'Hourly buckets' : `${timeline.bucketMinutes}-minute buckets`
+  const bucketNote = timeline.bucketMinutes >= 60 ? '按小时分桶' : `按 ${timeline.bucketMinutes} 分钟分桶`
 
   if (!hasBucket) {
-    return <div className="py-10 text-center text-sm text-tertiary-foreground">No timestamped usage in this period.</div>
+    return <div className="py-10 text-center text-sm text-tertiary-foreground">该时段没有带时间戳的用量。</div>
   }
 
   if (!hourResolved) {
     return (
       <div className="py-8 text-center text-sm text-tertiary-foreground">
-        Hour-of-day detail needs sub-daily buckets. Switch to Today or 7 days to see the punchcard.
+        按小时分布需要更细的时间桶。切换到「今天」或「近7天」即可查看热力图。
       </div>
     )
   }
@@ -69,9 +69,9 @@ export function Punchcard({ timeline }: { timeline: GranularHistory }) {
   return (
     <div>
       <div className="mb-3 flex items-center justify-between gap-3">
-        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-tertiary-foreground">{bucketNote} · local time</span>
+        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-tertiary-foreground">{bucketNote} · 本地时间</span>
         <div className="flex items-center gap-1.5 text-[10px] text-tertiary-foreground">
-          <span>Less</span>
+          <span>少</span>
           {[0.12, 0.4, 0.7, 1].map((t) => (
             <span
               key={t}
@@ -84,7 +84,7 @@ export function Punchcard({ timeline }: { timeline: GranularHistory }) {
               }}
             />
           ))}
-          <span>More</span>
+          <span>多</span>
         </div>
       </div>
 

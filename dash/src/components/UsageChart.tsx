@@ -6,10 +6,10 @@ import { CHART_COLORS, cn, compactUsd, fmtTokens, label, usd } from '@/lib/utils
 
 export type Unit = 'cost' | 'tokens'
 
-const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTHS = ['', '1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 function fmtDay(d: string): string {
   const [, m, day] = String(d).split('-')
-  return m && day ? `${Number(day)} ${MONTHS[Number(m)]}` : d
+  return m && day ? `${MONTHS[Number(m)]}${Number(day)}日` : d
 }
 
 const TOP_N = 6
@@ -43,7 +43,7 @@ function makeTooltip(labels: Record<string, string>, fmt: (n: number) => string,
             </div>
           ))}
           <div className="mt-1 flex items-center justify-between border-t border-border pt-1 text-foreground">
-            <span>Total</span>
+            <span>合计</span>
             <span className="font-semibold tabular-nums">{fmt(total)}</span>
           </div>
         </div>
@@ -61,23 +61,23 @@ function pad2(value: number): string {
 function fmtTimelineTick(value: string, bucketMinutes: number): string {
   const d = new Date(value)
   if (!Number.isFinite(d.getTime())) return value
-  if (bucketMinutes >= 1440) return `${d.getDate()} ${MONTHS[d.getMonth() + 1]}`
-  if (bucketMinutes >= 60) return `${d.getDate()} ${MONTHS[d.getMonth() + 1]} ${pad2(d.getHours())}:00`
+  if (bucketMinutes >= 1440) return `${MONTHS[d.getMonth() + 1]}${d.getDate()}日`
+  if (bucketMinutes >= 60) return `${MONTHS[d.getMonth() + 1]}${d.getDate()}日 ${pad2(d.getHours())}:00`
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
 function fmtTimelineTooltip(value: string, bucketMinutes: number): string {
   const d = new Date(value)
   if (!Number.isFinite(d.getTime())) return value
-  const day = `${d.getDate()} ${MONTHS[d.getMonth() + 1]} ${d.getFullYear()}`
+  const day = `${d.getFullYear()}年${MONTHS[d.getMonth() + 1]}${d.getDate()}日`
   if (bucketMinutes >= 1440) return day
-  return `${day}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  return `${day} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
 function bucketLabel(bucketMinutes: number): string {
-  if (bucketMinutes >= 1440) return 'Daily buckets'
-  if (bucketMinutes >= 60) return 'Hourly buckets'
-  return `${bucketMinutes}-minute buckets`
+  if (bucketMinutes >= 1440) return '按天分桶'
+  if (bucketMinutes >= 60) return '按小时分桶'
+  return `按 ${bucketMinutes} 分钟分桶`
 }
 
 function fmtTimelineUsd(value: number | string): string {
@@ -140,7 +140,7 @@ function GranularLines({
     const chartSeries: Series[] = keys.map((key, index) => ({
       key,
       label: key === 'display_other'
-        ? 'Other'
+        ? '其他'
         : breakdown === 'models'
           ? label(metadataById.get(key) ?? key)
           : metadataById.get(key) ?? key,
@@ -164,7 +164,7 @@ function GranularLines({
   }, [timeline, breakdown, unit])
 
   if (series.length === 0) {
-    return <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-tertiary-foreground">No timestamped usage in this period.</div>
+    return <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-tertiary-foreground">该时段没有带时间戳的用量。</div>
   }
 
   const fmt = unit === 'tokens' ? fmtTokens : usd
@@ -343,7 +343,7 @@ export function GranularUsageChart({
                   !available && 'cursor-not-allowed opacity-40',
                 )}
               >
-                {option}
+                {option === 'sessions' ? '会话' : '模型'}
               </button>
             )
           })}
@@ -371,7 +371,7 @@ export function DeviceUsageChart({ devices, unit = 'cost' }: { devices: DeviceUs
     const dates = [...new Set(named.flatMap((d) => dailyOf(d).map((e) => e.date)))].sort((a, b) => a.localeCompare(b))
     const series: Series[] = named.map((d) => ({
       key: keyOf(d),
-      label: d.name + (d.local ? ' (this Mac)' : ''),
+      label: d.name + (d.local ? '（本机）' : ''),
       color: colorOf(d.id),
     }))
     const rowData = dates.map((date) => {

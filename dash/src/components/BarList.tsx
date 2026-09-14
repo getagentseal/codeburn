@@ -1,7 +1,7 @@
 export type BarItem = { name: string; value: number; display: string }
 
 export function BarList({ items, total }: { items: BarItem[]; total?: number }) {
-  if (!items.length) return <div className="py-8 text-center text-sm text-tertiary-foreground">No data.</div>
+  if (!items.length) return <div className="py-8 text-center text-sm text-tertiary-foreground">暂无数据</div>
   const max = Math.max(...items.map((i) => i.value), 1)
   return (
     <div className="flex flex-col gap-2.5">

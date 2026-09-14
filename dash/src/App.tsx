@@ -12,7 +12,7 @@ import {
   type Payload,
   type Period,
 } from '@/lib/api'
-import { cn, fmtNum, fmtTokens, formatSessionCount, usd } from '@/lib/utils'
+import { cn, fmtNum, fmtTokens, formatSessionCount, usd, zhActivityLabel, zhPeriodLabel } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MetricCard } from '@/components/MetricCard'
@@ -84,7 +84,7 @@ function IndexingNotice({ payload }: { payload?: Payload }) {
   if (!hydration || hydration.complete) return null
   return (
     <div role="status" className="mb-3 border-l-2 border-primary px-2.5 py-1 text-[12px] text-muted-foreground">
-      Indexing history · {Math.min(hydration.indexedFiles, hydration.totalFiles)}/{hydration.totalFiles} files · totals below cover what is indexed so far
+      正在索引历史 · {Math.min(hydration.indexedFiles, hydration.totalFiles)}/{hydration.totalFiles} 个文件 · 下方合计仅覆盖已索引部分
     </div>
   )
 }
@@ -100,13 +100,13 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
     ? Object.entries(c.providers).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
     : []
   const activityBars: BarItem[] = c
-    ? c.topActivities.filter((a) => a.cost > 0).map((a) => ({ name: a.name, value: a.cost, display: usd(a.cost) }))
+    ? c.topActivities.filter((a) => a.cost > 0).map((a) => ({ name: zhActivityLabel(a.name), value: a.cost, display: usd(a.cost) }))
     : []
   // Workflow rides beside Model efficiency only when it carries data. Without
   // it the row is a single full-width Model efficiency panel, so an older peer
   // (no workflow block) renders exactly as the dashboard did before.
   const workflowPanel = c && hasWorkflowContent(c) ? (
-    <Panel title="Workflow">
+    <Panel title="工作流">
       <WorkflowPanel current={c} />
     </Panel>
   ) : null
@@ -118,7 +118,7 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
         <div className="flex items-end justify-between px-5 pt-4">
           <div>
             <div className="text-xs text-tertiary-foreground">
-              {c ? `${fmtNum(c.calls)} calls · ${formatSessionCount(c.sessions, c.sessionCountBasis)}` : ' '}
+              {c ? `${fmtNum(c.calls)} 次调用 · ${formatSessionCount(c.sessions, c.sessionCountBasis)}` : ' '}
             </div>
             <div className="mt-1 font-display text-4xl tracking-tight tabular-nums text-primary">
               {c ? (unit === 'tokens' ? fmtTokens(c.inputTokens + c.outputTokens) : usd(c.cost)) : <Skeleton className="h-10 w-36" />}
@@ -135,18 +135,18 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {c ? (
           <>
-            <MetricCard label="Cost" value={usd(c.cost)} accent />
+            <MetricCard label="费用" value={usd(c.cost)} accent />
             <MetricCard
-              label="Tokens"
+              label="Token 数"
               value={fmtTokens(c.inputTokens + c.outputTokens)}
-              sub={`in ${fmtTokens(c.inputTokens)} / out ${fmtTokens(c.outputTokens)}`}
+              sub={`输入 ${fmtTokens(c.inputTokens)} / 输出 ${fmtTokens(c.outputTokens)}`}
             />
-            <MetricCard label="Calls" value={fmtNum(c.calls)} />
-            <MetricCard label="Sessions" value={formatSessionCount(c.sessions, c.sessionCountBasis)} />
-            <MetricCard label="Cache hit" value={`${(c.cacheHitPercent || 0).toFixed(1)}%`} />
-            <MetricCard label="Cache write" value={fmtTokens(cacheWrite)} />
-            <MetricCard label="Cache read" value={fmtTokens(cacheRead)} />
-            <MetricCard label="One-shot" value={c.oneShotRate == null ? '—' : `${Math.round(c.oneShotRate * 100)}%`} />
+            <MetricCard label="调用" value={fmtNum(c.calls)} />
+            <MetricCard label="会话" value={formatSessionCount(c.sessions, c.sessionCountBasis)} />
+            <MetricCard label="缓存命中" value={`${(c.cacheHitPercent || 0).toFixed(1)}%`} />
+            <MetricCard label="缓存写入" value={fmtTokens(cacheWrite)} />
+            <MetricCard label="缓存读取" value={fmtTokens(cacheRead)} />
+            <MetricCard label="一次通过" value={c.oneShotRate == null ? '—' : `${Math.round(c.oneShotRate * 100)}%`} />
           </>
         ) : (
           Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-20" />)
@@ -154,16 +154,16 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
       </div>
 
       <div className="mb-3 grid gap-3 lg:grid-cols-2">
-        <Panel title="By tool">
+        <Panel title="按工具">
           <BarList items={toolBars} total={c?.cost} />
         </Panel>
-        <Panel title="Top models">
+        <Panel title="模型排行">
           <DataTable
             columns={[
-              { key: 'name', label: 'Model' },
-              { key: 'cost', label: 'Cost', num: true },
-              { key: 'calls', label: 'Calls', num: true },
-              { key: 'savings', label: 'Savings', num: true },
+              { key: 'name', label: '模型' },
+              { key: 'cost', label: '费用', num: true },
+              { key: 'calls', label: '调用', num: true },
+              { key: 'savings', label: '节省', num: true },
             ]}
             rows={(c?.topModels ?? []).filter((m) => m.cost > 0).slice(0, 8).map((m) => ({
               name: m.name,
@@ -176,12 +176,12 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
       </div>
 
       <div className={cn('mb-3 grid gap-3', workflowPanel && 'lg:grid-cols-2')}>
-        <Panel title="Model efficiency">
+        <Panel title="模型效率">
           <DataTable
             columns={[
-              { key: 'name', label: 'Model' },
-              { key: 'costPerEdit', label: 'Cost/edit', num: true },
-              { key: 'oneShot', label: 'One-shot', num: true },
+              { key: 'name', label: '模型' },
+              { key: 'costPerEdit', label: '费用/次', num: true },
+              { key: 'oneShot', label: '一次通过', num: true },
             ]}
             rows={(c?.modelEfficiency ?? []).slice(0, 10).map((m) => ({
               name: m.name,
@@ -198,25 +198,25 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
 
       {timeline && (
         <div className="mb-3">
-          <Panel title="Spend punchcard">
+          <Panel title="消费热力图">
             <Punchcard timeline={timeline} />
           </Panel>
         </div>
       )}
 
       <div className="mb-3 grid gap-3 lg:grid-cols-2">
-        <Panel title="Top projects">
+        <Panel title="项目排行">
           {isRemote ? (
             <p className="py-6 text-center text-sm text-tertiary-foreground">
-              Project and session detail stays on that device. Only totals are shared.
+              项目与会话明细保留在原设备上，仅共享合计数据。
             </p>
           ) : (
             <DataTable
               columns={[
-                { key: 'name', label: 'Project' },
-                { key: 'cost', label: 'Cost', num: true },
-                { key: 'sessions', label: 'Sessions', num: true },
-                { key: 'avgCost', label: 'Avg/session', num: true },
+                { key: 'name', label: '项目' },
+                { key: 'cost', label: '费用', num: true },
+                { key: 'sessions', label: '会话', num: true },
+                { key: 'avgCost', label: '均价/次', num: true },
               ]}
               rows={(c?.topProjects ?? []).slice(0, 10).map((p) => ({
                 name: p.name,
@@ -227,28 +227,28 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
             />
           )}
         </Panel>
-        <Panel title="By activity">
+        <Panel title="按活动">
           <BarList items={activityBars} total={c?.cost} />
         </Panel>
       </div>
 
       <div className="mb-3 grid gap-3 lg:grid-cols-2">
-        <Panel title="Subagents">
+        <Panel title="子代理">
           <DataTable
             columns={[
-              { key: 'name', label: 'Subagent' },
-              { key: 'calls', label: 'Calls', num: true },
-              { key: 'cost', label: 'Cost', num: true },
+              { key: 'name', label: '子代理' },
+              { key: 'calls', label: '调用', num: true },
+              { key: 'cost', label: '费用', num: true },
             ]}
             rows={(c?.subagents ?? []).slice(0, 10).map((s) => ({ name: s.name, calls: fmtNum(s.calls), cost: usd(s.cost) }))}
           />
         </Panel>
-        <Panel title="Skills">
+        <Panel title="技能">
           <DataTable
             columns={[
-              { key: 'name', label: 'Skill' },
-              { key: 'turns', label: 'Turns', num: true },
-              { key: 'cost', label: 'Cost', num: true },
+              { key: 'name', label: '技能' },
+              { key: 'turns', label: '轮次', num: true },
+              { key: 'cost', label: '费用', num: true },
             ]}
             rows={(c?.skills ?? []).slice(0, 10).map((s) => ({ name: s.name, turns: fmtNum(s.turns), cost: usd(s.cost) }))}
           />
@@ -256,24 +256,24 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
       </div>
 
       <div className="mb-3 grid gap-3 lg:grid-cols-2">
-        <Panel title="MCP servers">
+        <Panel title="MCP 服务">
           <DataTable
             columns={[
-              { key: 'name', label: 'Server' },
-              { key: 'calls', label: 'Calls', num: true },
+              { key: 'name', label: '服务器' },
+              { key: 'calls', label: '调用', num: true },
             ]}
             rows={(c?.mcpServers ?? []).slice(0, 10).map((m) => ({ name: m.name, calls: fmtNum(m.calls) }))}
           />
         </Panel>
-        <Panel title="Savings & waste">
+        <Panel title="节省与浪费">
           {c ? (
             <div className="flex flex-col gap-3 py-1">
-              <Stat label="Local-model savings" value={usd(c.localModelSavings?.totalUSD)} />
+              <Stat label="本地模型节省" value={usd(c.localModelSavings?.totalUSD)} />
               <Stat
-                label={`Retry tax${c.retryTax?.retries ? ` (${fmtNum(c.retryTax.retries)} retries)` : ''}`}
+                label={`重试损失${c.retryTax?.retries ? `（${fmtNum(c.retryTax.retries)} 次重试）` : ''}`}
                 value={usd(c.retryTax?.totalUSD)}
               />
-              <Stat label="Routing waste (potential)" value={usd(c.routingWaste?.totalSavingsUSD)} />
+              <Stat label="路由浪费（潜在）" value={usd(c.routingWaste?.totalSavingsUSD)} />
             </div>
           ) : (
             <Skeleton className="h-20" />
@@ -281,11 +281,11 @@ function DeviceView({ payload, isRemote, unit }: { payload?: Payload; isRemote: 
         </Panel>
       </div>
 
-      <Panel title="Tools">
+      <Panel title="工具">
         <DataTable
           columns={[
-            { key: 'name', label: 'Tool' },
-            { key: 'calls', label: 'Calls', num: true },
+            { key: 'name', label: '工具' },
+            { key: 'calls', label: '调用', num: true },
           ]}
           rows={(c?.tools ?? []).slice(0, 14).map((t) => ({ name: t.name, calls: fmtNum(t.calls) }))}
         />
@@ -348,14 +348,14 @@ function CombinedView({ devices, unit }: { devices: DeviceUsage[]; unit: Unit })
   const taskBars: BarItem[] = [...activities.entries()]
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => ({ name: k, value: v, display: usd(v) }))
+    .map(([k, v]) => ({ name: zhActivityLabel(k), value: v, display: usd(v) }))
 
   return (
     <>
       <Card className="mb-3 overflow-hidden">
         <div className="flex items-end justify-between px-5 pt-4">
           <div>
-            <div className="text-xs text-tertiary-foreground">{`${reachable} device${reachable === 1 ? '' : 's'} · ${fmtNum(total.calls)} calls`}</div>
+            <div className="text-xs text-tertiary-foreground">{`${reachable} 台设备 · ${fmtNum(total.calls)} 次调用`}</div>
             <div className="mt-1 font-display text-4xl tracking-tight tabular-nums text-primary">
               {unit === 'tokens' ? fmtTokens(total.tokens) : usd(total.cost)}
             </div>
@@ -367,27 +367,27 @@ function CombinedView({ devices, unit }: { devices: DeviceUsage[]; unit: Unit })
       </Card>
 
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <MetricCard label="Total cost" value={usd(total.cost)} accent />
-        <MetricCard label="Tokens" value={fmtTokens(total.tokens)} sub={`in ${fmtTokens(inTok)} / out ${fmtTokens(outTok)}`} />
-        <MetricCard label="Calls" value={fmtNum(total.calls)} />
-        <MetricCard label="Sessions" value={fmtNum(total.sessions)} />
-        <MetricCard label="Cache write" value={fmtTokens(cacheWrite)} />
-        <MetricCard label="Cache read" value={fmtTokens(cacheRead)} />
-        <MetricCard label="Devices" value={String(reachable)} />
+        <MetricCard label="总费用" value={usd(total.cost)} accent />
+        <MetricCard label="Token 数" value={fmtTokens(total.tokens)} sub={`输入 ${fmtTokens(inTok)} / 输出 ${fmtTokens(outTok)}`} />
+        <MetricCard label="调用" value={fmtNum(total.calls)} />
+        <MetricCard label="会话" value={fmtNum(total.sessions)} />
+        <MetricCard label="缓存写入" value={fmtTokens(cacheWrite)} />
+        <MetricCard label="缓存读取" value={fmtTokens(cacheRead)} />
+        <MetricCard label="设备数" value={String(reachable)} />
       </div>
 
-      <Panel title="By device">
+      <Panel title="按设备">
         <DataTable
           columns={[
-            { key: 'device', label: 'Device' },
-            { key: 'cost', label: 'Cost', num: true },
-            { key: 'tokens', label: 'Tokens', num: true },
-            { key: 'calls', label: 'Calls', num: true },
-            { key: 'sessions', label: 'Sessions', num: true },
+            { key: 'device', label: '设备' },
+            { key: 'cost', label: '费用', num: true },
+            { key: 'tokens', label: 'Token 数', num: true },
+            { key: 'calls', label: '调用', num: true },
+            { key: 'sessions', label: '会话', num: true },
           ]}
           rows={rows.map((r) => ({
-            device: r.name + (r.local ? ' · this Mac' : ''),
-            cost: r.error ? <span className="text-tertiary-foreground">unreachable</span> : usd(r.cost),
+            device: r.name + (r.local ? ' · 本机' : ''),
+            cost: r.error ? <span className="text-tertiary-foreground">无法连接</span> : usd(r.cost),
             tokens: r.error ? '—' : fmtTokens(r.tokens),
             calls: r.error ? '—' : fmtNum(r.calls),
             sessions: r.error ? '—' : fmtNum(r.sessions),
@@ -396,16 +396,16 @@ function CombinedView({ devices, unit }: { devices: DeviceUsage[]; unit: Unit })
       </Panel>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <Panel title="By task (all devices)">
+        <Panel title="按任务（所有设备）">
           <BarList items={taskBars} total={total.cost} />
         </Panel>
-        <Panel title="By tool (all devices)">
+        <Panel title="按工具（所有设备）">
           <BarList items={toolBars} total={total.cost} />
         </Panel>
       </div>
 
       <div className="mt-3">
-        <Panel title="Top models (all devices)">
+        <Panel title="模型排行（所有设备）">
           <BarList items={modelBars} total={total.cost} />
         </Panel>
       </div>
@@ -431,8 +431,8 @@ function ThemeToggle() {
     <button
       type="button"
       onClick={toggle}
-      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label={dark ? '切换到浅色模式' : '切换到深色模式'}
+      title={dark ? '切换到浅色模式' : '切换到深色模式'}
       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-tertiary-foreground transition-colors hover:bg-interactive-secondary hover:text-foreground max-md:h-9 max-md:w-9 max-md:shrink-0"
     >
       {dark ? (
@@ -563,8 +563,8 @@ export function App() {
   }, [])
 
   const showCombined = multi && view === 'all'
-  const viewTitle = showCombined ? 'All devices' : (primary ? primary.name + (primary.local ? ' · this Mac' : '') : 'Loading…')
-  const label = local?.payload?.current?.label ?? ''
+  const viewTitle = showCombined ? '所有设备' : (primary ? primary.name + (primary.local ? ' · 本机' : '') : '加载中…')
+  const label = zhPeriodLabel(local?.payload?.current?.label ?? '')
 
   return (
     <div className="min-h-screen bg-outer-background p-2.5 max-md:min-h-[100dvh]">
@@ -573,7 +573,7 @@ export function App() {
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            aria-label="Open menu"
+            aria-label="打开菜单"
             aria-expanded={sidebarOpen}
             aria-controls="dashboard-sidebar"
             className="-ml-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-foreground transition-colors hover:bg-interactive-secondary md:hidden"
@@ -587,7 +587,7 @@ export function App() {
             <span className="text-lg font-semibold tracking-[-0.02em] text-foreground">
               Code<span className="text-brand">Burn</span>
             </span>
-            <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground max-sm:hidden">usage</span>
+            <span className="ml-1 text-[11px] font-light uppercase tracking-[0.14em] text-tertiary-foreground max-sm:hidden">用量</span>
           </div>
 
           <div className="ml-6 flex shrink-0 rounded-md border border-border bg-interactive-secondary p-0.5 max-md:ml-2">
@@ -601,7 +601,7 @@ export function App() {
                   page === pg ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                 )}
               >
-                {pg === 'usage' ? 'Usage' : 'Context'}
+                {pg === 'usage' ? '用量' : '上下文'}
               </button>
             ))}
           </div>
@@ -636,7 +636,7 @@ export function App() {
                     unit === u ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
                   )}
                 >
-                  {u === 'cost' ? 'Cost' : 'Tokens'}
+                  {u === 'cost' ? '费用' : 'Token 数'}
                 </button>
               ))}
             </div>
@@ -645,7 +645,7 @@ export function App() {
               onChange={(e) => setProvider(e.target.value)}
               className="shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground outline-none max-md:min-h-9"
             >
-              <option value="all">All tools</option>
+              <option value="all">全部工具</option>
               {providerOptions.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -662,7 +662,7 @@ export function App() {
           {sidebarOpen && (
             <button
               type="button"
-              aria-label="Close menu"
+              aria-label="关闭菜单"
               onClick={() => setSidebarOpen(false)}
               className="fixed inset-0 z-30 bg-black/40 md:hidden"
             />
@@ -679,7 +679,7 @@ export function App() {
           >
             <button
               type="button"
-              aria-label="Close menu"
+              aria-label="关闭菜单"
               onClick={() => setSidebarOpen(false)}
               className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-tertiary-foreground transition-colors hover:bg-interactive-secondary hover:text-foreground md:hidden"
             >
@@ -690,10 +690,10 @@ export function App() {
             {page === 'usage' && (
             <>
             <div className="flex flex-col gap-1">
-              <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Devices</p>
+              <p className="mb-1 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">设备</p>
               {multi && (
                 <SideLink active={view === 'all'} onClick={() => { setView('all'); setSidebarOpen(false) }}>
-                  All devices
+                  所有设备
                 </SideLink>
               )}
               {devices.map((d) => (
@@ -703,10 +703,10 @@ export function App() {
                   onClick={() => { setView(d.id); setSidebarOpen(false) }}
                 >
                   {d.name}
-                  {d.local ? ' · this Mac' : ''}
+                  {d.local ? ' · 本机' : ''}
                 </SideLink>
               ))}
-              {devices.length === 0 && <p className="px-2.5 py-1 text-xs text-tertiary-foreground">Loading…</p>}
+              {devices.length === 0 && <p className="px-2.5 py-1 text-xs text-tertiary-foreground">加载中…</p>}
             </div>
 
             <button
@@ -718,25 +718,25 @@ export function App() {
                 <circle cx="7" cy="7" r="4.5" />
                 <path d="M10.5 10.5L14 14" />
               </svg>
-              Search local devices
+              搜索局域网设备
             </button>
             </>
             )}
 
             <div className="border-t border-border pt-4">
-              <p className="mb-2 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">Share</p>
+              <p className="mb-2 px-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-heading">共享</p>
               <button
                 type="button"
                 onClick={() => void toggleShare()}
                 className="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-[13.5px] text-foreground transition-colors hover:bg-interactive-secondary max-md:min-h-9"
               >
-                <span>Share this device</span>
+                <span>共享本设备</span>
                 <Switch on={!!shareInfo?.sharing} />
               </button>
               {shareInfo?.sharing && (
                 <div className="mt-1.5 px-2.5">
                   <p className="text-[11px] leading-relaxed text-tertiary-foreground">
-                    Discoverable as &ldquo;{shareInfo.name}&rdquo; · {shareInfo.peers} paired
+                    可被发现为 &ldquo;{shareInfo.name}&rdquo; · 已配对 {shareInfo.peers} 台
                   </p>
                   <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                     <input
@@ -745,7 +745,7 @@ export function App() {
                       onChange={() => void toggleAlways()}
                       className="h-3.5 w-3.5 accent-primary"
                     />
-                    Keep sharing always
+                    始终保持共享
                   </label>
                 </div>
               )}
@@ -753,7 +753,7 @@ export function App() {
 
             <div className="mt-auto border-t border-border pt-4">
               <p className="text-[11px] leading-relaxed text-tertiary-foreground">
-                Local only. Nothing leaves your machine; only totals are shared between your devices.
+                仅本地运行。数据不会离开你的电脑；设备之间只共享合计数据。
               </p>
               <div className="mt-3 flex items-center gap-1">
                 <a
@@ -797,7 +797,7 @@ export function App() {
 
           <main className="min-w-0 flex-1 overflow-y-auto pr-0.5">
             <div className="mb-3 flex items-baseline justify-between">
-              <h1 className="font-display text-xl tracking-tight text-foreground">{page === 'context' ? 'Context' : viewTitle}</h1>
+              <h1 className="font-display text-xl tracking-tight text-foreground">{page === 'context' ? '上下文' : viewTitle}</h1>
               <span className="text-xs text-tertiary-foreground">{page === 'usage' ? label : ''}</span>
             </div>
 
@@ -812,7 +812,7 @@ export function App() {
             )}
 
             {page === 'usage' && isError && (
-              <div className="mt-4 text-sm text-tertiary-foreground">Failed to load: {String((error as Error)?.message)}</div>
+              <div className="mt-4 text-sm text-tertiary-foreground">加载失败：{String((error as Error)?.message)}</div>
             )}
           </main>
         </div>
@@ -824,16 +824,16 @@ export function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
           <div className="w-full max-w-sm overflow-hidden rounded-lg border border-border bg-card shadow-[0_24px_60px_-20px_rgba(0,0,0,0.35)]">
             <div className="border-b border-border px-5 py-3.5">
-              <h2 className="text-sm font-semibold text-foreground">Incoming pairing request</h2>
+              <h2 className="text-sm font-semibold text-foreground">收到配对请求</h2>
             </div>
             <div className="flex flex-col gap-3 px-5 py-4">
               {pending.map((p) => (
                 <div key={p.id} className="rounded-md border border-border px-3.5 py-3">
                   <p className="text-sm text-foreground">
-                    &ldquo;{p.name}&rdquo; wants to pair with this device.
+                    「{p.name}」想要与本设备配对。
                   </p>
                   <p className="mt-1 text-xs text-tertiary-foreground">
-                    Confirm this code matches on that device: <span className="font-mono text-foreground">{p.code}</span>
+                    请在对方设备上核对配对码一致：<span className="font-mono text-foreground">{p.code}</span>
                   </p>
                   <div className="mt-3 flex gap-2">
                     <button
@@ -841,14 +841,14 @@ export function App() {
                       onClick={() => void respondPairing(p.id, true)}
                       className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
                     >
-                      Approve
+                      批准
                     </button>
                     <button
                       type="button"
                       onClick={() => void respondPairing(p.id, false)}
                       className="rounded-md border border-border px-3 py-1.5 text-xs text-tertiary-foreground transition-colors hover:text-foreground"
                     >
-                      Deny
+                      拒绝
                     </button>
                   </div>
                 </div>

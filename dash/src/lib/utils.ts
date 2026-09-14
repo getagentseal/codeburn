@@ -29,11 +29,10 @@ export function fmtNum(n: number | undefined | null): string {
 
 export function formatSessionCount(sessions: number, basis?: 'identity' | 'partial'): string {
   if (basis !== 'identity') {
-    if (sessions <= 0) return 'Session count unavailable'
-    return sessions === 1 ? 'At least 1 session' : `At least ${sessions.toLocaleString()} sessions`
+    if (sessions <= 0) return '会话数不可用'
+    return `至少 ${sessions.toLocaleString()} 次会话`
   }
-  if (sessions === 1) return '1 session'
-  return `${sessions.toLocaleString()} sessions`
+  return `${sessions.toLocaleString()} 次会话`
 }
 
 export function compactUsd(n: number): string {
@@ -43,6 +42,49 @@ export function compactUsd(n: number): string {
   if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(1) + 'M'
   if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k'
   return sign + '$' + Math.round(a)
+}
+
+// zh-CN display mapping for backend-generated strings (period labels from
+// src/cli-date.ts, activity names from src/types.ts CATEGORY_LABELS).
+// Unknown values pass through unchanged so newer backends never render blank.
+
+const MONTH_NUMBERS: Record<string, number> = {
+  January: 1, February: 2, March: 3, April: 4, May: 5, June: 6,
+  July: 7, August: 8, September: 9, October: 10, November: 11, December: 12,
+}
+
+export function zhPeriodLabel(raw: string): string {
+  const m = raw.match(/^(Today|Yesterday) \((.+)\)$/)
+  if (m) return (m[1] === 'Today' ? '今天' : '昨天') + ' (' + m[2] + ')'
+  if (raw === 'Last 7 Days') return '近7天'
+  if (raw === 'Last 30 Days') return '近30天'
+  if (raw === 'Last 6 months') return '近6个月'
+  if (raw === 'Lifetime') return '全部'
+  const mo = raw.match(/^([A-Z][a-z]+) (\d{4})$/)
+  if (mo && MONTH_NUMBERS[mo[1]!]) return mo[2] + '年' + MONTH_NUMBERS[mo[1]!] + '月'
+  const d = raw.match(/^(\d+) days \((.+)\)$/)
+  if (d) return d[1] + ' 天 (' + d[2] + ')'
+  return raw
+}
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  Coding: '编码',
+  Debugging: '调试',
+  'Feature Dev': '功能开发',
+  Refactoring: '重构',
+  Testing: '测试',
+  Exploration: '探索',
+  Planning: '规划',
+  Delegation: '委派',
+  'Git Ops': 'Git 操作',
+  'Build/Deploy': '构建/部署',
+  Conversation: '对话',
+  Brainstorming: '头脑风暴',
+  General: '通用',
+}
+
+export function zhActivityLabel(name: string): string {
+  return ACTIVITY_LABELS[name] ?? name
 }
 
 // Forest green -> gold -> terracotta ramp for stacked series. Referenced as CSS
@@ -69,7 +111,8 @@ const MODEL_LABELS: Record<string, string> = {
 // and lightly clean the rest.
 export function label(key: string): string {
   if (MODEL_LABELS[key]) return MODEL_LABELS[key]
-  if (key === 'Other' || key === 'unknown') return key
+  if (key === 'Other') return '其他'
+  if (key === 'unknown') return '未知'
   return key
     .replace(/^gpt-/i, 'GPT-')
     .replace(/-(\d{8,})$/, '')

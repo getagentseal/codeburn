@@ -17,11 +17,31 @@ const PROVIDERS: Array<{ key: ContextProvider; label: string }> = [
   { key: 'codex', label: 'Codex' },
 ]
 
+// zh-CN display for backend-generated context-tree row labels
+// (src/context-tree.ts). Tool names and unknown labels pass through.
+const TREE_LABELS: Record<string, string> = {
+  assistant: '助手',
+  user: '用户',
+  system: '系统',
+  text: '文本',
+  reasoning: '推理',
+  'tool-call': '工具调用',
+  'tool-result': '工具结果',
+  tool: '工具结果',
+  image: '图像',
+  'compact-summary': '压缩摘要',
+  meta: '元数据',
+}
+
+function zhTreeLabel(label: string): string {
+  return TREE_LABELS[label] ?? label
+}
+
 function ago(mtimeMs: number): string {
   const mins = Math.max(0, Math.round((Date.now() - mtimeMs) / 60_000))
-  if (mins < 60) return `${mins}m ago`
-  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`
-  return `${Math.round(mins / (60 * 24))}d ago`
+  if (mins < 60) return `${mins}分前`
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}时前`
+  return `${Math.round(mins / (60 * 24))}天前`
 }
 
 function TreeTable({ rows }: { rows: ContextRow[] }) {
@@ -40,7 +60,7 @@ function TreeTable({ rows }: { rows: ContextRow[] }) {
             className={cn('relative min-w-0 flex-1 truncate text-[13px]', r.bold ? 'font-semibold text-foreground' : 'text-muted-foreground')}
             style={{ paddingLeft: r.depth * 16 }}
           >
-            {r.label}
+            {zhTreeLabel(r.label)}
           </span>
           <span className="relative w-16 shrink-0 text-right text-xs tabular-nums text-tertiary-foreground">{fmtNum(r.count)}x</span>
           <span className={cn('relative w-20 shrink-0 text-right text-[13px] tabular-nums', r.bold ? 'font-semibold text-foreground' : 'text-foreground')}>
@@ -74,12 +94,12 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
       <div className="flex flex-col gap-2 px-4 py-4">
         <Skeleton className="h-14" />
         <Skeleton className="h-40" />
-        <p className="text-xs text-tertiary-foreground">Reading the whole transcript, large sessions take a few seconds…</p>
+        <p className="text-xs text-tertiary-foreground">正在读取完整会话记录，较大的会话需要几秒钟…</p>
       </div>
     )
   }
   if (isError || !data) {
-    return <p className="px-4 py-4 text-sm text-tertiary-foreground">Failed to load: {String((error as Error)?.message ?? 'unknown')}</p>
+    return <p className="px-4 py-4 text-sm text-tertiary-foreground">加载失败：{String((error as Error)?.message ?? '未知')}</p>
   }
 
   const view = scope === 'full' ? data.full : data.effective
@@ -90,19 +110,19 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
   return (
     <div className="flex flex-col gap-3 px-4 py-4">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Chip label="Messages" value={fmtNum(view.messages)} />
-        <Chip label="Est. tokens" value={fmtTokens(view.tokens)} />
+        <Chip label="消息数" value={fmtNum(view.messages)} />
+        <Chip label="预估 Token" value={fmtTokens(view.tokens)} />
         <Chip
-          label="Context (exact)"
+          label="精确上下文"
           value={data.reported ? (window ? `${fmtTokens(data.reported.context)} / ${fmtTokens(window)}` : fmtTokens(data.reported.context)) : '—'}
         />
-        <Chip label="Compactions" value={fmtNum(data.compactions)} />
+        <Chip label="压缩次数" value={fmtNum(data.compactions)} />
       </div>
 
       {pct !== null && (
         <div>
           <div className="mb-1 flex justify-between text-[11px] text-tertiary-foreground">
-            <span>{label(data.model)} · live context window</span>
+            <span>{label(data.model)} · 实时上下文窗口</span>
             <span className="tabular-nums">{pct}%</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-interactive-secondary">
@@ -123,11 +143,11 @@ function SessionDetails({ provider, id }: { provider: ContextProvider; id: strin
                 scope === s ? 'bg-active-primary text-foreground shadow-sm' : 'text-tertiary-foreground hover:text-foreground',
               )}
             >
-              {s === 'effective' ? 'Live window' : 'Full history'}
+              {s === 'effective' ? '实时窗口' : '完整历史'}
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-tertiary-foreground">token counts are estimates; “Context (exact)” comes from API usage</span>
+        <span className="text-[11px] text-tertiary-foreground">token 数为估算值；「精确上下文」来自 API 实际用量</span>
       </div>
 
       <TreeTable rows={rows} />
@@ -154,7 +174,7 @@ function SessionRow({ s, open, onToggle }: { s: ContextSessionInfo; open: boolea
         </svg>
         <span className="shrink-0 font-mono text-xs text-primary">{s.sessionId.slice(0, 8)}</span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
-          {s.title || <span className="text-tertiary-foreground">untitled session</span>}
+          {s.title || <span className="text-tertiary-foreground">未命名会话</span>}
         </span>
         <span className="hidden shrink-0 text-xs text-tertiary-foreground sm:block">{s.project}</span>
         <span className="w-16 shrink-0 text-right text-xs tabular-nums text-tertiary-foreground">{ago(s.mtimeMs)}</span>
@@ -200,7 +220,7 @@ export function ContextExplorer() {
             {p.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-tertiary-foreground">what fills each session’s context window, block by block</span>
+        <span className="ml-auto text-xs text-tertiary-foreground">逐块查看每个会话的上下文窗口构成</span>
       </div>
 
       <Card className="overflow-hidden">
@@ -211,8 +231,8 @@ export function ContextExplorer() {
             ))}
           </div>
         )}
-        {isError && <p className="px-4 py-6 text-sm text-tertiary-foreground">Failed to load sessions: {String((error as Error)?.message)}</p>}
-        {data && data.length === 0 && <p className="px-4 py-6 text-sm text-tertiary-foreground">No sessions found for this provider.</p>}
+        {isError && <p className="px-4 py-6 text-sm text-tertiary-foreground">加载会话失败：{String((error as Error)?.message)}</p>}
+        {data && data.length === 0 && <p className="px-4 py-6 text-sm text-tertiary-foreground">该工具下没有找到会话。</p>}
         {data?.map((s) => (
           <SessionRow key={s.sessionId} s={s} open={openId === s.sessionId} onToggle={() => setOpenId(openId === s.sessionId ? null : s.sessionId)} />
         ))}
