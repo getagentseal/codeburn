@@ -75,6 +75,8 @@ enum ProviderConnectionCatalog {
         entry("devin", "Devin", [.automatic, .web], [.cookieOrWebSession]),
         entry("zai", "Z.ai", [.automatic, .api],
               [.localAppOrCLI, .apiTokenOrCloudCredentials], live: true),
+        entry("zcode", "ZCode", [.automatic, .cli],
+              [.localAppOrCLI], live: true),
         entry("minimax", "MiniMax", [.automatic, .web, .api],
               [.cookieOrWebSession, .apiTokenOrCloudCredentials]),
         entry("manus", "Manus", [.automatic, .web], [.cookieOrWebSession]),

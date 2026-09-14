@@ -105,6 +105,10 @@ serves the Pi CLI login; this one serves the ZCode desktop app's own login.
   into `.ldb` the records are snappy-compressed and invisible to the raw scan;
   the gauge falls back to `disconnected` until the webview writes a fresh
   journal entry.
+- **All surfaces.** The CLI reads it in `src/quota/zcode.ts`, the Electron app
+  in `app/electron/quota/zcode.ts`, and the native macOS menubar mirrors both in
+  `mac/Sources/CodeBurnMenubar/Data/ZcodeSubscriptionService.swift` (same journal
+  scan, same endpoint; catalog id `zcode`, live Capacity Dock adapter).
 - **Windows map** as in `zai.ts`: `unit 3 × number 5` → 5-hour,
   `unit 6 × number 1` → Weekly; `percentage` is used percent (fallback
   `currentValue / usage`); `data.level` is the plan label (`"pro"` → "Pro").
