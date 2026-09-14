@@ -1560,7 +1560,7 @@ function ScrollableViewport({ children, width, lineScroll = true }: { children: 
   )
 }
 
-export function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, initialDurable, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay, windowColumns, initialIndexPendingFiles, initialHistoryIndexing = false, initialCacheWasCold = false, initialHistoryIndex, autoFallbackFromEmptyToday = false, terminateProcess }: {
+export function InteractiveDashboard({ initialProjects, initialDailyHistoryProjects, initialPeriod, initialProvider, initialPlanUsages, initialDurable, refreshSeconds, projectFilter, excludeFilter, customRange, customRangeLabel, initialDay, windowColumns, initialIndexPendingFiles, initialHistoryIndexing = false, initialCacheWasCold = false, initialHistoryIndex, autoFallbackFromEmptyToday = false, terminateProcess, onHistoryIndexed }: {
   initialProjects: ProjectSummary[]
   initialDailyHistoryProjects?: ProjectSummary[]
   initialPeriod: Period
@@ -1581,6 +1581,7 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
   initialCacheWasCold?: boolean
   initialHistoryIndex?: DashboardHistoryIndex
   autoFallbackFromEmptyToday?: boolean
+  onHistoryIndexed?: () => void
   /// CLI-only hard stop after Ink has been asked to restore the terminal.
   /// Component tests and embedders omit it and receive ordinary Ink exit.
   terminateProcess?: (exitCode: number) => void
@@ -1618,6 +1619,8 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
   const [indexPhase, setIndexPhase] = useState<DashboardIndexPhase>(initialCacheWasCold ? 'week' : 'cached')
   const historyIndexRef = useRef<DashboardHistoryIndex | null>(initialHistoryIndex ?? null)
   const autoFallbackAppliedRef = useRef(false)
+  const onHistoryIndexedRef = useRef(onHistoryIndexed)
+  onHistoryIndexedRef.current = onHistoryIndexed
   const quitArmedRef = useRef(false)
   // #1143: first q during the cold-start fill arms a confirmation so the user
   // sees feedback instead of a silent ~16.5s drain. The second q (or any
@@ -1867,7 +1870,9 @@ export function InteractiveDashboard({ initialProjects, initialDailyHistoryProje
       if (!cancelled) console.error(error)
     }).finally(() => {
       clearInterval(progressId)
-      if (!cancelled) setIndexing(false)
+      if (cancelled) return
+      setIndexing(false)
+      onHistoryIndexedRef.current?.()
     })
     return () => {
       cancelled = true
