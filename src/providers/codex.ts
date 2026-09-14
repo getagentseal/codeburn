@@ -139,6 +139,11 @@ type CodexEntry = {
     originator?: string
     session_id?: string
     forked_from_id?: string
+    /// Parent of a spawned sub-agent thread; its rollout replays the parent's
+    /// history like a fork does, but names the parent under `source`, not
+    /// `forked_from_id`.
+    parent_thread_id?: string
+    source?: { subagent?: { thread_spawn?: { parent_thread_id?: string } } }
     model?: string
     name?: string
     invocation?: { server?: string; tool?: string }
@@ -494,6 +499,9 @@ function parseCodexLine(line: string | Buffer): CodexEntry | null {
       originator: payloadString('originator'),
       session_id: payloadString('session_id'),
       forked_from_id: payloadString('forked_from_id'),
+      parent_thread_id: type === 'session_meta'
+        ? getRawJsonStringField(getRawPayloadFieldWindow(line, 'source') ?? '', 'parent_thread_id')
+        : undefined,
       model: compactModel,
       name: payloadString('name'),
       invocation,
@@ -829,7 +837,12 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // string methods on it.
           const rawSessionCwd: unknown = entry.payload?.cwd
           if (typeof rawSessionCwd === 'string' && rawSessionCwd) sessionCwd = rawSessionCwd
-          forkedFromId = entry.payload?.forked_from_id ?? ''
+          // Small lines arrive fully parsed (nested `source`), oversized ones
+          // through the compact head decoder (flattened `parent_thread_id`).
+          forkedFromId = entry.payload?.forked_from_id
+            || entry.payload?.parent_thread_id
+            || entry.payload?.source?.subagent?.thread_spawn?.parent_thread_id
+            || ''
           if (forkedFromId && entry.timestamp) {
             // An unparseable timestamp (a garbage string, or a non-string from
             // the unchecked JSON.parse cast) makes `new Date(NaN).toISOString()`
