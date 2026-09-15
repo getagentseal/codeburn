@@ -210,6 +210,30 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.topModels.find(m => m.name === 'k3-agent')).toBeUndefined()
   })
 
+  it('keeps a Bedrock-routed model in its own topModels row instead of merging it into the direct row', () => {
+    // Claude Code (CLAUDE_CODE_USE_BEDROCK=1) and Hermes (bedrock provider)
+    // record Bedrock's id for the same model a direct session records as the
+    // vendor id. Same tokens, different invoice: the two must not collapse.
+    const period: PeriodData = {
+      ...emptyPeriod('Today'),
+      models: [
+        { name: 'claude-haiku-4-5-20251001', cost: 0.187, savingsUSD: 0, calls: 4 },
+        { name: 'anthropic.claude-haiku-4-5-20251001-v1:0', cost: 0.029, savingsUSD: 0, calls: 1 },
+        // A cross-region inference profile of the same model folds into the
+        // Bedrock row, not a third one.
+        { name: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', cost: 0.011, savingsUSD: 0, calls: 1 },
+      ],
+    }
+    const payload = buildMenubarPayload(period, [], null)
+    const direct = payload.current.topModels.find(m => m.name === 'Haiku 4.5')!
+    const bedrock = payload.current.topModels.find(m => m.name === 'Haiku 4.5 (Bedrock)')!
+    expect(direct.cost).toBeCloseTo(0.187)
+    expect(direct.calls).toBe(4)
+    expect(bedrock.cost).toBeCloseTo(0.029 + 0.011)
+    expect(bedrock.calls).toBe(2)
+    expect(payload.current.topModels.filter(m => m.name.startsWith('Haiku 4.5'))).toHaveLength(2)
+  })
+
   it('caps topActivities at 20 so all task categories can surface', () => {
     const period: PeriodData = {
       label: 'Today',
