@@ -35,34 +35,54 @@ export function resolveModelBreakdownKey(
 }
 
 /**
+ * One walk over the session's calls producing BOTH the session-level billable
+ * output and the per-model split. The two were previously derived by separate
+ * passes; every caller that wants both (the menubar period aggregation) would
+ * otherwise traverse every assistant call twice for no extra information.
+ *
+ * The fallback is shared deliberately: whether calls carried usage decides the
+ * total and the per-model map together, so they can never disagree about which
+ * source they came from.
+ */
+export function sessionBillableOutput(session: SessionSummary): { total: number, byModel: Record<string, number> } {
+  const breakdown = session.modelBreakdown ?? {}
+  const byModel: Record<string, number> = {}
+  let total = 0
+  let sawUsage = false
+  for (const turn of session.turns ?? []) {
+    for (const call of turn.assistantCalls ?? []) {
+      if (!call.usage) continue
+      sawUsage = true
+      const billable = callBillableOutputTokens(call)
+      total += billable
+      // A call whose model maps to no bucket still counts toward the session
+      // total — dropping it there would under-report the headline — but it has
+      // no row to land in, exactly as before.
+      const key = resolveModelBreakdownKey(call, breakdown)
+      if (!key) continue
+      byModel[key] = (byModel[key] ?? 0) + billable
+    }
+  }
+  if (sawUsage) return { total, byModel }
+
+  const provider = inferSessionProvider(session)
+  for (const [model, d] of Object.entries(breakdown)) {
+    byModel[model] = billableOutputTokens(provider, d.tokens?.outputTokens ?? 0, d.tokens?.reasoningTokens ?? 0)
+  }
+  return {
+    total: billableOutputTokens(provider, session.totalOutputTokens ?? 0, session.totalReasoningTokens ?? 0),
+    byModel,
+  }
+}
+
+/**
  * Per-model displayed output, keyed like this session's `modelBreakdown`.
  * Call usage wins while provider identity is known. Aggregate-only /
  * stub sessions fall back to each existing bucket so a finite
  * sessionBillableOutputTokens cannot leave model Output Tokens at 0.
  */
 export function sessionModelBillableOutputTokens(session: SessionSummary): Record<string, number> {
-  const breakdown = session.modelBreakdown ?? {}
-  const out: Record<string, number> = {}
-  let sawUsage = false
-  for (const turn of session.turns ?? []) {
-    for (const call of turn.assistantCalls ?? []) {
-      if (!call.usage) continue
-      sawUsage = true
-      const key = resolveModelBreakdownKey(call, breakdown)
-      if (!key) continue
-      out[key] = (out[key] ?? 0) + callBillableOutputTokens(call)
-    }
-  }
-  if (sawUsage) return out
-  const provider = inferSessionProvider(session)
-  for (const [model, d] of Object.entries(session.modelBreakdown ?? {})) {
-    out[model] = billableOutputTokens(
-      provider,
-      d.tokens?.outputTokens ?? 0,
-      d.tokens?.reasoningTokens ?? 0,
-    )
-  }
-  return out
+  return sessionBillableOutput(session).byModel
 }
 
 /** First on-call provider, then a model-name fallback. Sessions are usually one provider. */
@@ -94,19 +114,5 @@ export function callBillableOutputTokens(call: CallLike): number {
 
 /** Display/report output: exclusive providers add reasoning; inclusive ones do not. */
 export function sessionBillableOutputTokens(session: SessionSummary): number {
-  let fromCalls = 0
-  let sawUsage = false
-  for (const turn of session.turns ?? []) {
-    for (const call of turn.assistantCalls ?? []) {
-      if (!call.usage) continue
-      sawUsage = true
-      fromCalls += callBillableOutputTokens(call)
-    }
-  }
-  if (sawUsage) return fromCalls
-  return billableOutputTokens(
-    inferSessionProvider(session),
-    session.totalOutputTokens ?? 0,
-    session.totalReasoningTokens ?? 0,
-  )
+  return sessionBillableOutput(session).total
 }

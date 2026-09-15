@@ -18,7 +18,18 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 /// v7: providerDetails also carries per-provider cacheReadTokens, which a v6
 ///     record predates — the dock's cache-read row would stay hidden behind a
 ///     warm snapshot even once the live payload had the data.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 7
+/// v8: current.topModels rows carry per-model input/output/cache-read/write
+///     counts, which a v7 record predates — the Models sections would show no
+///     per-model token breakdown purely because the snapshot was written
+///     before this build. A v7 record is treated as a miss (one real recompute
+///     per query), then the fresh record is served; daily/session caches are
+///     separate version domains and are not touched.
+/// v9: current.topModels is no longer capped at 20 rows (#1318). A v8 record
+///     holds only the 20 costliest rows, so the Overview model table would
+///     keep silently dropping the tail — the local and free models the uncap
+///     exists to surface — until the next recompute. Same treatment: one real
+///     recompute, then the fresh record is served.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 9
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

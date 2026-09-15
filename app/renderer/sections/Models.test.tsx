@@ -223,14 +223,21 @@ describe('Models', () => {
     expect(screen.queryByText('add alias ›')).not.toBeInTheDocument()
   })
 
-  it('renders unpriced proxy rows as dim with alias affordance and dashes', async () => {
+  it('renders unpriced proxy rows as dim with alias affordance, keeping observed tokens visible', async () => {
     getModels.mockResolvedValue([rows[3]])
 
     render(<Models period="30days" provider="all" />)
 
     expect(await screen.findByText('my-proxy-model')).toHaveClass('dim')
     expect(screen.getByText('add alias ›')).toHaveClass('alias')
-    expect(screen.getAllByText('—')).toHaveLength(5)
+    // Tokens are observed usage, not a pricing artifact: they render even
+    // though the model has no pricing entry. Cache read shows its known zero.
+    expect(screen.getByText('4.8M')).toBeInTheDocument()
+    expect(screen.getByText('400K')).toBeInTheDocument()
+    expect(screen.getByText('0')).toBeInTheDocument()
+    expect(screen.getByText('4.8M')).not.toHaveClass('dim')
+    // Only cost and saved collapse to dashes.
+    expect(screen.getAllByText('—')).toHaveLength(2)
     expect(screen.queryByText('$0.00')).not.toBeInTheDocument()
   })
 
