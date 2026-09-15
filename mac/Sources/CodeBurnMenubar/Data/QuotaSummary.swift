@@ -51,19 +51,36 @@ struct QuotaSummary: Equatable {
         /// preserved for legacy/unsupported summaries and is not fresh enough
         /// to support a pace projection.
         let fetchedAt: Date?
+        /// Pre-localization, state-independent name for this window, when the
+        /// adapter has one that differs from `label`. The early-reset monitor
+        /// keys and names windows from this when present: a display label that
+        /// translates (or carries state such as "· limit reached") must not
+        /// become storage identity, or a language switch drops the baseline
+        /// and two translated siblings collide on one key.
+        let storageLabel: String?
+        /// Absolute usage the provider reported for this window, in the
+        /// provider's own units (credits, requests…), when it reports one.
+        /// The percent alone cannot tell a vendor clearing the counter from a
+        /// limit that grew: both drop the ratio. Nil when the adapter has no
+        /// absolute figure.
+        let usedUnits: Double?
 
         init(
             label: String,
             percent: Double,
             resetsAt: Date?,
             windowSeconds: Int? = nil,
-            fetchedAt: Date? = nil
+            fetchedAt: Date? = nil,
+            storageLabel: String? = nil,
+            usedUnits: Double? = nil
         ) {
             self.label = label
             self.percent = percent
             self.resetsAt = resetsAt
             self.windowSeconds = windowSeconds
             self.fetchedAt = fetchedAt
+            self.storageLabel = storageLabel
+            self.usedUnits = usedUnits
         }
 
         /// A pace estimate is valid only while the underlying sample remains

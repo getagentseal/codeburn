@@ -2761,7 +2761,9 @@ final class AppStore {
                     percent: credits.usedPercent / 100,
                     resetsAt: credits.resetsAt,
                     windowSeconds: credits.windowSeconds,
-                    fetchedAt: usage.fetchedAt
+                    fetchedAt: usage.fetchedAt,
+                    storageLabel: credits.storageLabel,
+                    usedUnits: credits.used
                 )
                 if primary == nil { primary = row }
                 details.append(row)
@@ -3027,19 +3029,30 @@ final class AppStore {
         var observations: [EarlyQuotaResetMonitor.Observation] = []
         var seen: Set<String> = []
         for row in rows {
-            // A blank label is no identity to store under and no name to say out
+            // Storage identity is the pre-localization `storageLabel` when the
+            // adapter provides one, else the display label — which must then be
+            // a stable English string (a period or model name), because a
+            // translated label would drop the baseline on a language switch and
+            // lets two translated siblings collide on one key.
+            let identity = row.storageLabel ?? row.label
+            // A blank identity is nothing to store under and no name to say out
             // loud; two of them would also share one key.
-            guard !row.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            let key = EarlyQuotaResetFormat.windowKey(forLabel: row.label)
+            guard !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let key = EarlyQuotaResetFormat.windowKey(forLabel: identity)
             guard seen.insert(key).inserted else { continue }
             observations.append(EarlyQuotaResetMonitor.Observation(
                 windowKey: key,
-                windowName: EarlyQuotaResetFormat.windowName(forLabel: row.label),
+                windowName: EarlyQuotaResetFormat.windowName(forLabel: identity),
                 windowSeconds: row.windowSeconds,
                 // `QuotaSummary.Window` carries a 0...1 fraction; the detector
                 // reasons in the snapshot store's 0...100 points.
                 reading: row.resetsAt.map {
-                    EarlyQuotaResetReading(percent: row.percent * 100, resetsAt: $0, observedAt: now)
+                    EarlyQuotaResetReading(
+                        percent: row.percent * 100,
+                        resetsAt: $0,
+                        observedAt: now,
+                        usedUnits: row.usedUnits
+                    )
                 }
             ))
         }

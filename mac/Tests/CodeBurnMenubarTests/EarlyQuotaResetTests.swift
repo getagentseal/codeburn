@@ -43,6 +43,126 @@ private let beforeEarlyReset = reading(percent: 80, resetsIn: 18 * 3600, observe
 /// A new cycle, anchored a full window after the previous look at the old one.
 private let afterEarlyReset = reading(percent: 0, resetsIn: week)
 
+// MARK: - Review fixes (#1339): anchoring, spend caps, stable identity
+
+@Test("A successor schedule meaningfully EARLIER than the old one is a flip-flop, not a reset")
+func backwardsSuccessorStaysSilent() throws {
+    // A replica briefly serving a cycle whose reset sits before the one we
+    // already stored is the flip-flop the announcement dedupe also guards; the
+    // detector itself stays silent on it rather than feeding it forward.
+    let previous = EarlyQuotaResetReading(
+        percent: 80,
+        resetsAt: now.addingTimeInterval(eighteenHours),
+        observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 0,
+        resetsAt: now.addingTimeInterval(eighteenHours).addingTimeInterval(-3 * 3600),
+        observedAt: now
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()) == nil)
+}
+
+@Test("A rolling window re-anchoring across a fetch gap is excluded by the duration contract, not detected")
+func rollingTrackerNeedsTheContract() throws {
+    // The pair is genuinely indistinguishable from a cut-short cycle (see the
+    // detector's type doc): reset moved forward by the observation gap, percent
+    // fell across the boundary. The guard is that the ADAPTER passes
+    // windowSeconds only for cycles it can vouch are fixed — so with no
+    // vouched duration, the detector has no opinion at all.
+    let gap: TimeInterval = 30 * 60
+    let previous = EarlyQuotaResetReading(
+        percent: 70,
+        resetsAt: now.addingTimeInterval(-gap).addingTimeInterval(week),
+        observedAt: now.addingTimeInterval(-gap)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 5,
+        resetsAt: now.addingTimeInterval(week),
+        observedAt: now
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context(windowSeconds: nil)) == nil)
+}
+
+@Test("Sub-tolerance creep of the reset time is not a new cycle")
+func creepingResetStaysSilent() throws {
+    // A fixed window's vendor jitters `resets_at` by seconds between fetches;
+    // only a move past the skew tolerance can begin signal 1.
+    let previous = EarlyQuotaResetReading(
+        percent: 60,
+        resetsAt: now.addingTimeInterval(week),
+        observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2,
+        resetsAt: now.addingTimeInterval(week + 45),
+        observedAt: now
+    )
+    // Jump is under the tolerance, so the reading falls through to signal 2's
+    // ratio test — which this percent collapse satisfies, so it reports the
+    // usage-dropped form, never reset-moved-forward.
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("A Codex spend-cap increase is not a goodwill reset even when the ratio collapses")
+func spendCapIncreaseStaysSilent() throws {
+    // Limit raised 100 -> 1000 credits; usage ROSE 90 -> 95; the ratio fell
+    // 90% -> 9.5%, satisfying both the 40-point drop and the ≤10% landing of
+    // signal 2. The absolute figures say the vendor gave capacity by raising
+    // the cap, not by clearing the counter, so it stays silent.
+    let previous = EarlyQuotaResetReading(
+        percent: 90, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300), usedUnits: 90
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 9.5, resetsAt: now.addingTimeInterval(week), observedAt: now, usedUnits: 95
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()) == nil)
+}
+
+@Test("A real cleared counter falls in absolute units too and still fires")
+func clearedCounterStillFiresWithUnits() throws {
+    let previous = EarlyQuotaResetReading(
+        percent: 80, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300), usedUnits: 800
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2, resetsAt: now.addingTimeInterval(week), observedAt: now, usedUnits: 20
+    )
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("Percent-only providers keep the ratio test (Claude has no absolute units)")
+func percentOnlyDropStillFires() throws {
+    let previous = EarlyQuotaResetReading(
+        percent: 80, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2, resetsAt: now.addingTimeInterval(week), observedAt: now
+    )
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("A window keyed from a localized or state-suffixed display label is keyed by its storage label instead")
+func storageLabelStabilizesTheKey() {
+    // The Codex credit row's display label localizes and appends "· limit
+    // reached"; both the reached and unreached, English and translated forms
+    // must resolve to ONE storage identity via storageLabel.
+    let displayVariants = [
+        "Monthly usage limit",
+        "Monthly usage limit · limit reached",
+        "每月使用限额",
+        "每月使用限额 · 已达上限",
+    ]
+    let keys = Set(displayVariants.map { EarlyQuotaResetFormat.windowKey(forLabel: $0) })
+    // Slugs of the display forms disagree (the old behavior: four baselines,
+    // two of them shared between languages); the adapter passes storageLabel
+    // so the caller never slugifies any of these.
+    #expect(keys.count > 1)
+    #expect(EarlyQuotaResetFormat.windowKey(forLabel: "Monthly usage limit") == "monthly_usage_limit")
+}
+
 @Suite("Early quota reset detection")
 struct EarlyQuotaResetDetectorTests {
     @Test("A reset time that jumps to a new cycle before the old one ended is an early reset")

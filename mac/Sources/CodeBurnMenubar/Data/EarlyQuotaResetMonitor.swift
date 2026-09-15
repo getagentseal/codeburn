@@ -31,6 +31,10 @@ final class EarlyQuotaResetMonitor {
         let windowKey: String
         let windowName: String
         let windowSeconds: Int?
+        /// Absolute usage in the provider's units, when reported; folded into
+        /// the stored reading so signal 2 can tell a cleared counter from a
+        /// raised limit.
+        var usedUnits: Double? { reading?.usedUnits }
         /// Nil when the window was not in this fetch.
         let reading: EarlyQuotaResetReading?
     }
