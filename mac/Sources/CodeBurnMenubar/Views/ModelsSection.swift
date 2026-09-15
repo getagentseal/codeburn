@@ -102,7 +102,7 @@ private struct ModelRow: View {
             // line appears only when the payload carries counts for the row — an
             // older CLI renders exactly as before.
             if model.hasTokenCounts {
-                Text("\(count(model.inputTokens)) in · \(count(model.outputTokens)) out · \(count(model.cacheReadTokens)) cache read")
+                Text(L("%1$@ in · %2$@ out · %3$@ cache read", count(model.inputTokens), count(model.outputTokens), count(model.cacheReadTokens)))
                     .font(.system(size: 10.5))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
