@@ -102,7 +102,11 @@ function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; pa
       if (text) partsByMsg.set(row.id, [{ type: 'text', text }])
       continue
     }
-    if (row.type !== 'assistant') continue
+    // Compaction rows carry their own CompactionUsage (cost + tokens for the
+    // compaction request itself) and counted as assistant messages on 1.x, so
+    // they must keep landing here or every compacted 2.x session undercounts.
+    // A `running` compaction has neither and is dropped by buildAssistantCall.
+    if (row.type !== 'assistant' && row.type !== 'compaction') continue
 
     const model = payload['model']
     const data: MessageData = { role: 'assistant' }

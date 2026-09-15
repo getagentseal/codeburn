@@ -1151,14 +1151,25 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(call.costUSD).toBeGreaterThan(0)
   })
 
-  it('skips v2 rows that are not user/assistant (compaction, idle, model-switched)', async () => {
+  it('counts compaction usage and skips rows with nothing to report', async () => {
     const dbPath = createV2TestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertV2Session(db, 'ses_v2_1')
       insertV2Message(db, 'msg_1', 'ses_v2_1', 'model-switched', 1, 1700000000000, { model: { id: 'x', providerID: 'opencode' } })
-      insertV2Message(db, 'msg_2', 'ses_v2_1', 'compaction', 2, 1700000000100, {})
-      insertV2Message(db, 'msg_3', 'ses_v2_1', 'idle', 3, 1700000000200, { outcome: 'succeeded' })
-      insertV2Message(db, 'msg_4', 'ses_v2_1', 'assistant', 4, 1700000000300, {
+      // CompactionUsage travels on the compaction row itself; 1.x counted
+      // these as assistant messages, so dropping them undercounts compactions.
+      insertV2Message(db, 'msg_2', 'ses_v2_1', 'compaction', 2, 1700000000100, {
+        status: 'completed', reason: 'auto', summary: 's', recent: 'r',
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        cost: 0.0042,
+        tokens: { input: 18100, output: 900, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      // A still-running compaction carries no usage and must yield nothing.
+      insertV2Message(db, 'msg_3', 'ses_v2_1', 'compaction', 3, 1700000000150, {
+        status: 'running', reason: 'auto', summary: 's', recent: 'r',
+      })
+      insertV2Message(db, 'msg_4', 'ses_v2_1', 'idle', 4, 1700000000200, { outcome: 'succeeded' })
+      insertV2Message(db, 'msg_5', 'ses_v2_1', 'assistant', 5, 1700000000300, {
         model: { id: 'gpt-4o', providerID: 'openai' },
         content: [{ type: 'text', text: 'hi' }],
         tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1167,8 +1178,11 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
 
     const provider = createOpenCodeProvider(tmpDir)
     const calls = await collectCalls(provider, dbPath, 'ses_v2_1')
-    expect(calls).toHaveLength(1)
-    expect(calls[0]!.model).toBe('openai/gpt-4o')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.model).toBe('opencode/glm-5.3-flash')
+    expect(calls[0]!.inputTokens).toBe(18100)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[1]!.model).toBe('openai/gpt-4o')
   })
 
   it('walks v2 child sessions through parent_id', async () => {
