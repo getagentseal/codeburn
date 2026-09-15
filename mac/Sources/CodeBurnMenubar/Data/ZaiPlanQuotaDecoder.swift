@@ -37,10 +37,18 @@ enum ZaiPlanQuotaDecoder {
                   let count = jsonNumber(limit["number"]) else { continue }
 
             let label: String
+            /// Fixed cycle length derived from the unit/count enum the payload
+            /// carries — provider metadata, not the label. 5-hour and weekly
+            /// windows reset on fixed instants (the unit enum says so), which
+            /// is what the early-reset monitor's windowSeconds contract needs:
+            /// an adapter that cannot vouch for fixed cycling passes no length.
+            let cycleSeconds: Int
             if unit == 3, count == 5 {
                 label = "5-hour"
+                cycleSeconds = 5 * 3600
             } else if unit == 6, count == 1 {
                 label = "Weekly"
+                cycleSeconds = 7 * 24 * 3600
             } else {
                 continue
             }
@@ -56,7 +64,8 @@ enum ZaiPlanQuotaDecoder {
             let window = QuotaSummary.Window(
                 label: label,
                 percent: min(1, max(0, usedPercent / 100)),
-                resetsAt: parseReset(limit["nextResetTime"])
+                resetsAt: parseReset(limit["nextResetTime"]),
+                windowSeconds: cycleSeconds
             )
             if label == "Weekly" { weekly = window } else { fiveHour = window }
         }

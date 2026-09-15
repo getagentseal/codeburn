@@ -56,6 +56,9 @@ struct ZcodeQuotaTests {
         #expect(summary.planLabel == "Pro")
         #expect(summary.details.map(\.label) == ["5-hour", "Weekly"])
         #expect(summary.details.map(\.percent) == [0.03, 0.18])
+        // Fixed cycle lengths from the payload's unit/count enum — the metadata
+        // the early-reset monitor's windowSeconds contract needs (#1339).
+        #expect(summary.details.map(\.windowSeconds) == [5 * 3600, 7 * 24 * 3600])
         #expect(summary.primary?.label == "Weekly")
         #expect(summary.details[0].resetsAt == Date(timeIntervalSince1970: 1_800_000_000))
         #expect(summary.details[1].resetsAt == Date(timeIntervalSince1970: 1_800_500_000))
@@ -157,7 +160,8 @@ struct ZcodeQuotaTests {
             QuotaSummary.Window(
                 label: "5-hour",
                 percent: 0.25,
-                resetsAt: Date(timeIntervalSince1970: 1_800_000_000)
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_000),
+                windowSeconds: 5 * 3600
             ),
         ])
     }
