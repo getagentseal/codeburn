@@ -323,8 +323,17 @@ enum CapacityDockPreferences {
         defaults: UserDefaults = .standard
     ) {
         guard !defaults.bool(forKey: manualSelectionKey) else { return }
+        // ZCode yields to Z.ai at seed time: both adapters read the same z.ai
+        // plan endpoint, so a machine signed in through the Pi CLI and the
+        // ZCode app would otherwise seed two rings reporting the same numbers.
+        // The deliberately configured Z.ai credential wins; pinning ZCode in
+        // Settings always shows it regardless.
+        var seeded = connected
+        if seeded.contains(where: { $0.id == "zai" }) {
+            seeded.removeAll { $0.id == "zcode" }
+        }
         let desired = supportedProviders
-            .filter(connected.contains)
+            .filter(seeded.contains)
             .prefix(maxAutoProviders)
         let desiredIDs = desired.map(\.rawValue)
         guard !desiredIDs.isEmpty else { return }  // nothing active yet — wait

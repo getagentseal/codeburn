@@ -5,7 +5,7 @@ import Testing
 struct ProviderConnectionCatalogTests {
     @Test("pins the complete provider inventory")
     func pinnedReferenceInventory() {
-        #expect(ProviderConnectionCatalog.inventoryRevision == "714bff00815f0d98ae206e781d563595129ba185")
+        #expect(ProviderConnectionCatalog.inventoryRevision == "5b09e44d0f9e60107d3fbed232e5f6e17d486df3")
         #expect(ProviderConnectionCatalog.providers.count == 70)
         #expect(ProviderConnectionCatalog.providers.map(\.id) == [
             "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode",

@@ -2273,6 +2273,13 @@ final class AppStore {
         }
         for (id, summary) in capacityDockProviderSummaries {
             guard let provider = CapacityDockProvider(rawValue: id) else { continue }
+            // Same z.ai plan endpoint as Z.ai: while the deliberately
+            // configured Z.ai connection is live, the ambient ZCode summary
+            // duplicates its row.
+            if id == "zcode",
+               capacityDockProviderSummaries["zai"]?.connection == .connected {
+                continue
+            }
             append(label: provider.displayName, summary: summary)
         }
         return candidates

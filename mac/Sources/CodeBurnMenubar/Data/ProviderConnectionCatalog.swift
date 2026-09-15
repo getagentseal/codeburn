@@ -45,7 +45,7 @@ struct ProviderConnectionCatalogEntry: Equatable, Sendable {
 /// Declarative connection inventory owned by CodeBurn. The live flag identifies
 /// every provider with a native CodeBurn quota adapter.
 enum ProviderConnectionCatalog {
-    static let inventoryRevision = "714bff00815f0d98ae206e781d563595129ba185"
+    static let inventoryRevision = "5b09e44d0f9e60107d3fbed232e5f6e17d486df3"
 
     static let providers: [ProviderConnectionCatalogEntry] = [
         entry("codex", "Codex", [.automatic, .web, .cli, .oauth, .api],

@@ -90,10 +90,17 @@ struct ZcodeQuotaTests {
             .appendingPathComponent("leveldb", isDirectory: true)
         try FileManager.default.createDirectory(at: leveldb, withIntermediateDirectories: true)
 
-        // Chromium's journal framing: key bytes, a varint length plus string
-        // marker gap (here a NUL and a 0x01), then the value bytes.
-        let journal = "oauth:zai:access_token\u{00}\u{01}eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8ifQ synthetic-trailer"
-        try Data(journal.utf8).write(to: leveldb.appendingPathComponent("000003.log"))
+        // Byte-faithful to a recorded ZCode journal (redacted hexdump in the
+        // #1347 review thread): origin, NUL, the 0x01 one-byte-string flag,
+        // the key name, then the value frame — varint length (the recorded
+        // 1,403-byte login encodes as fb 0a, neither a token character), the
+        // same 0x01 flag, and the value's Latin-1 bytes.
+        var journal = Data("https://zcode.z.ai".utf8)
+        journal.append(contentsOf: [0x00, 0x01])
+        journal.append(Data("oauth:zai:access_token".utf8))
+        journal.append(contentsOf: [0xfb, 0x0a, 0x01])
+        journal.append(Data("eyJhbGciOiJodHRwOi8vd3d3LnczLm9yZy8ifQ synthetic-trailer".utf8))
+        try journal.write(to: leveldb.appendingPathComponent("000003.log"))
 
         #expect(
             ZcodeSubscriptionService.accessToken(fromZCodeDataRoot: root)
@@ -112,10 +119,15 @@ struct ZcodeQuotaTests {
             .appendingPathComponent("leveldb", isDirectory: true)
         try FileManager.default.createDirectory(at: leveldb, withIntermediateDirectories: true)
 
-        let older = "oauth:zai:access_token\u{00}\u{01}older-token-padding-aaaaaaaa"
-        let newer = "oauth:zai:access_token\u{00}\u{01}newer-token-padding-bbbbbbbb"
-        try Data(older.utf8).write(to: leveldb.appendingPathComponent("000001.log"))
-        try Data(newer.utf8).write(to: leveldb.appendingPathComponent("000004.log"))
+        func frame(_ value: String) -> Data {
+            // The recorded framing; see readsZCodeAppLogin above.
+            var data = Data("https://zcode.z.ai\u{00}\u{01}oauth:zai:access_token".utf8)
+            data.append(contentsOf: [0xfb, 0x0a, 0x01])
+            data.append(Data(value.utf8))
+            return data
+        }
+        try frame("older-token-padding-aaaaaaaa").write(to: leveldb.appendingPathComponent("000001.log"))
+        try frame("newer-token-padding-bbbbbbbb").write(to: leveldb.appendingPathComponent("000004.log"))
         try Data("COMPRESSED".utf8).write(to: leveldb.appendingPathComponent("000005.ldb"))
 
         #expect(

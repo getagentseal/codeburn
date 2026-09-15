@@ -110,6 +110,20 @@ export async function collectQuota(options: {
       clearTimeout(timer)
     }
   }))
+  // ZCode and Z.ai read the same endpoint and report the same plan numbers
+  // whenever both credentials belong to one z.ai account: showing both is a
+  // duplicate row. The deliberately configured Z.ai credential (Keychain,
+  // ZAI_API_KEY, Pi) wins and the ambient ZCode app login yields — but only
+  // while Z.ai is actually connected, so a rejected or stale Z.ai state never
+  // hides a working ZCode row.
+  const zaiRow = providers.find(row => row.id === 'zai')
+  if (zaiRow?.available) {
+    const zcodeIndex = providers.findIndex(row => row.id === 'zcode')
+    if (zcodeIndex !== -1 && providers[zcodeIndex].available) {
+      providers.splice(zcodeIndex, 1)
+      zaiRow.notes = [...(zaiRow.notes ?? []), 'A ZCode app login is also connected; it reads the same z.ai plan endpoint and is hidden as a duplicate.']
+    }
+  }
   return { providers }
 }
 

@@ -10,6 +10,9 @@ const neverFetch = (() => { throw new Error('the test must not reach the network
 const TOKEN = 'eyJhbGciOiJIUzU1MiJ9.synthetic-zcode-login-with-no-meaning.sig'
 const STORAGE_KEY = 'oauth:zai:access_token'
 
+/** Shape and values mirror the recorded 200 response posted (redacted — it
+ *  carries no account identity to begin with, only limits and the plan level)
+ *  in the #1347 review thread. */
 const successBody = {
   code: 200,
   data: {
@@ -21,11 +24,22 @@ const successBody = {
   },
 }
 
+/** Byte-faithful to a recorded ZCode journal (redacted hexdump in the #1347
+ *  review thread): the map key is the origin, a NUL, the 0x01 one-byte-string
+ *  flag and the key name; the value frame is a varint length, the same 0x01
+ *  flag, then the value's Latin-1 bytes. The gap bytes are copied from the
+ *  recording — the real login is 1,403 bytes, whose length encodes as
+ *  `fb 0a`, neither of which is a token character. That matters: the scanner
+ *  reads the frame as key + non-token gap + token, so a length varint that
+ *  collided with the token alphabet (only possible for a login under ~130
+ *  bytes; the recorded HS512 JWT is ~1,400) could not be matched. */
 function journalEntry(key: string, value: string): Buffer {
   return Buffer.concat([
-    Buffer.from('META:https://z.ai', 'latin1'),
+    Buffer.from('https://zcode.z.ai', 'latin1'),
+    Buffer.from([0x00, 0x01]),
     Buffer.from(key, 'latin1'),
-    Buffer.from([0xfb, 0x0a, 0x01]), // varint length + Chromium string marker
+    Buffer.from([0xfb, 0x0a]),
+    Buffer.from([0x01]),
     Buffer.from(value, 'latin1'),
   ])
 }
