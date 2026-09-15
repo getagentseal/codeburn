@@ -853,13 +853,11 @@ export function OverviewContent({
   // the fallback for payloads from older CLIs: its rows know input/output but
   // not cache read, so the cache column shows "—" there.
   //
-  // TRADE-OFF, all-provider view: the previous `aggregateModels` source was
-  // uncapped (a union over each day's top-5), whereas `current.topModels` is
-  // capped at the CLI's TOP_MODELS_LIMIT of 20 rows. All-provider therefore
-  // gains that cap here. Accepted: the union it replaces was itself truncated
-  // per day, so its rows past the top few were already partial sums, and 20
-  // period-accurate rows beat an unbounded list of per-day leftovers. Raising
-  // the cap is a payload-size decision for the CLI, not this table.
+  // `current.topModels` is uncapped (#1318), so this table lists every model
+  // with usage in the period — the union-over-top-5 fallback it replaced was
+  // itself truncated per day, and a row cap would drop exactly the local and
+  // free models (qwen, llama, …) whose cost is $0 and therefore rank last.
+  // Consumers wanting fewer rows slice their own; this table scrolls instead.
   const topModelsCarryCounts = data.current.topModels.some(model =>
     model.inputTokens !== undefined || model.outputTokens !== undefined,
   )

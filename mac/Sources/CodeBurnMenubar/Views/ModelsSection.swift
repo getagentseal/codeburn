@@ -41,11 +41,15 @@ struct ModelsSection: View {
     }
 }
 
-/// Compact token count for the narrow popover: `1.2K` / `3.4M`, plain digits
-/// below a thousand. The exact values ride along in the row's accessibility
-/// label, so compact rounding never hides the real number.
-private func compactTokenCount(_ n: Int) -> String {
-    if n >= 1_000_000 {
+/// Compact token count for the narrow popover: `1.2K` / `3.4M` / `5.6B`,
+/// plain digits below a thousand. The exact values ride along in the row's
+/// accessibility label, so compact rounding never hides the real number.
+/// Internal so tests can pin the billions rung (#1318): period cache-read
+/// totals on heavy machines cross a billion and rendered as `12345.7M`.
+func compactTokenCount(_ n: Int) -> String {
+    if n >= 1_000_000_000 {
+        return String(format: "%.1fB", Double(n) / 1_000_000_000)
+    } else if n >= 1_000_000 {
         return String(format: "%.1fM", Double(n) / 1_000_000)
     } else if n >= 1_000 {
         return String(format: "%.1fK", Double(n) / 1_000)

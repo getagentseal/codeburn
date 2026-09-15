@@ -137,7 +137,6 @@ import { buildTelemetrySnapshot, type TelemetrySnapshot, type TelemetrySnapshotI
 import { sessionCountIsExact, type SessionCountBasis } from './session-count-label.js'
 
 const TOP_ACTIVITIES_LIMIT = 20
-const TOP_MODELS_LIMIT = 20
 const TOP_FINDINGS_LIMIT = 10
 const HISTORY_DAYS_LIMIT = 365
 const SYNTHETIC_MODEL_NAME = '<synthetic>'
@@ -561,6 +560,13 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   // display names here — the menubar shows "Kimi K3" rather than "k3". Ids that
   // collapse to one display name (e.g. k3 and kimi-k3) merge into a single row,
   // and their token counts merge under the same grouping as cost.
+  //
+  // The list is uncapped (#1318): the desktop Overview renders it as the
+  // period's model table, where cutting at N would drop exactly the local and
+  // free models the table exists to expose. Every consumer that wants fewer
+  // rows already slices its own (the desktop hero takes 8, MCP tables take 5
+  // or the caller's limit) — rows are still cost-ranked, so "top" ordering
+  // survives without a count limit.
   const merged = new Map<string, {
     cost: number
     calls: number
@@ -582,7 +588,6 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   }
   return [...merged.entries()]
     .sort(([, a], [, b]) => b.cost - a.cost)
-    .slice(0, TOP_MODELS_LIMIT)
     .map(([name, d]) => ({
       name,
       cost: d.cost,

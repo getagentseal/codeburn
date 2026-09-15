@@ -154,4 +154,16 @@ struct ModelEntryTokenCountsTests {
         // Under the grouping threshold the sign still appears exactly once.
         #expect(label.contains("-12 output"))
     }
+
+    @Test("compact token count crosses into a billions rung (#1318)")
+    func compactTokenCountHasBillionsRung() {
+        // Period cache-read totals on heavy machines cross a billion; before the
+        // rung existed they rendered as `12345.7M` in the row's secondary line.
+        #expect(compactTokenCount(12_345_700_000) == "12.3B")
+        #expect(compactTokenCount(1_000_000_000) == "1.0B")
+        // The existing rungs are unchanged on both sides of the boundary.
+        #expect(compactTokenCount(999_999_999) == "1000.0M")
+        #expect(compactTokenCount(1_234) == "1.2K")
+        #expect(compactTokenCount(999) == "999")
+    }
 }

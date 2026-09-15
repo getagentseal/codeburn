@@ -169,7 +169,7 @@ describe('buildMenubarPayload', () => {
     expect(payload.current.oneShotRate).toBeNull()
   })
 
-  it('filters out the synthetic model and caps topModels at 20 so multi-model users see all their models', () => {
+  it('filters out the synthetic model and keeps every model row uncapped (#1318)', () => {
     const models = Array.from({ length: 30 }, (_, i) => ({
       name: `Model${i}`, cost: 30 - i, calls: 100,
     }))
@@ -182,8 +182,11 @@ describe('buildMenubarPayload', () => {
     }
     const payload = buildMenubarPayload(period, [], null)
     expect(payload.current.topModels.find(m => m.name === '<synthetic>')).toBeUndefined()
-    expect(payload.current.topModels).toHaveLength(20)
+    // The Overview model table renders this list whole, so a cap would drop
+    // exactly the local/free models at its tail.
+    expect(payload.current.topModels).toHaveLength(30)
     expect(payload.current.topModels[0].name).toBe('Model0')
+    expect(payload.current.topModels[29].name).toBe('Model29')
   })
 
   it('resolves raw model ids to display names in topModels and merges rows that collapse', () => {

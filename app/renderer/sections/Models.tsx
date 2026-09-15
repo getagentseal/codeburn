@@ -287,10 +287,11 @@ function ModelsByTaskTable({ rows, onAddAlias, onInvestigate }: {
 function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow; onAddAlias: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
-  // Token columns are observed usage, not a pricing artifact: a model with no
-  // pricing entry still burned real input/output/cache-read tokens, so they
-  // render regardless. Only cost/saved collapse to dashes behind the alias
-  // affordance — there is no attributed cost to show for them.
+  // Calls and token columns are observed usage, not a pricing artifact: a
+  // model with no pricing entry still made real calls and burned real
+  // input/output/cache-read tokens, so they render at full weight. Only
+  // cost/saved collapse to dashes behind the alias affordance — there is no
+  // attributed cost to show for them.
   const dotStyle = {
     display: 'inline-block',
     background: seriesColorForModel(row.modelDisplayName || row.model),
@@ -315,7 +316,7 @@ function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow
         ) : null}
         <span style={{ ...providerTagStyle, display: 'block', marginTop: 2, paddingLeft: 16 }}>{row.providerDisplayName}</span>
       </td>
-      <td className={cellClass}>{fmtInt(row.calls)}</td>
+      <td>{fmtInt(row.calls)}</td>
       <td>{formatCompact(row.inputTokens)}</td>
       <td>{formatCompact(row.outputTokens)}</td>
       <td>{formatCompact(row.cacheReadTokens)}</td>
@@ -352,7 +353,7 @@ function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportR
           {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
         </span>
       </td>
-      <td className={unpriced ? 'dim' : undefined}>{fmtInt(calls)}</td>
+      <td>{fmtInt(calls)}</td>
       <td aria-label="No aggregate input" />
       <td aria-label="No aggregate output" />
       <td aria-label="No aggregate cache read" />
@@ -373,7 +374,7 @@ function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestiga
           <button type="button" className="ov-link" title={`View ${row.category} sessions`} onClick={() => onInvestigate({ filters: categoryFilters(row.category!) })}>{row.category ?? 'general'}</button>
         ) : row.category ?? 'general'}
       </td>
-      <td className={cellClass}>{fmtInt(row.calls)}</td>
+      <td>{fmtInt(row.calls)}</td>
       {/* Observed usage renders even for unpriced models — see ModelTableRow. */}
       <td>{formatCompact(row.inputTokens)}</td>
       <td>{formatCompact(row.outputTokens)}</td>
