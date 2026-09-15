@@ -309,47 +309,6 @@ function searchDirs(): string[] {
 }
 
 /**
- * Every input that can change a resolution answer. Resolution stat-scans PATH
- * entries and readdir-scans the nvm versions directory, and it runs on EVERY
- * CLI request (each section poll, each prefetch warm), so it is memoized
- * against exactly these values: an unchanged environment never touches the
- * filesystem again for the same bin, while any changed variable — including a
- * test that re-points CODEBURN_BIN — recomputes from scratch.
- */
-function resolutionEnvKey(bin?: string): string {
-  return [
-    bin ?? '',
-    process.env.CODEBURN_BIN,
-    process.env.CODEBURN_BUNDLED_CLI,
-    process.env.CODEBURN_DEV_REPO_ROOT,
-    process.env.CODEBURN_CLI_PATH_FILE,
-    process.env.CODEBURN_PATH_DIRS,
-    process.env.VITE_DEV_SERVER_URL,
-    process.env.NVM_DIR,
-    process.env.PATH,
-  ].join('\u0000')
-}
-
-let resolvedTargetCache: { key: string; value: CliTarget } | null = null
-const spawnEnvCache = new Map<string, { key: string; value: NodeJS.ProcessEnv }>()
-
-/** Test hygiene: drop memoized resolution state so one test's filesystem or env
- *  layout can never bleed into the next via an unchanged key. */
-export function __resetCliResolutionForTests(): void {
-  resolvedTargetCache = null
-  spawnEnvCache.clear()
-}
-
-/** A child that could not even be started means the memoized target may point
- *  at a binary that has since been deleted or replaced on disk. Drop the memo
- *  so the next request re-resolves (and can discover a successor install)
- *  instead of retrying the same dead path forever. */
-function invalidateCliResolution(): void {
-  resolvedTargetCache = null
-  spawnEnvCache.clear()
-}
-
-/**
  * Spawn env for the resolved CLI. A GUI-launched app inherits a minimal PATH
  * (/usr/bin:/bin:...) that lacks the user's node install, and the `codeburn`
  * npm shim starts with `#!/usr/bin/env node` — so spawning it fails with
@@ -358,18 +317,10 @@ function invalidateCliResolution(): void {
  * Homebrew, and npm-prefix layouts) plus the same dirs the resolver searches.
  */
 export function spawnEnvFor(bin: string): NodeJS.ProcessEnv {
-  // Memoized per bin: composing the PATH string rescans searchDirs() (a readdir
-  // of the nvm tree) on every call otherwise, and callers treat the result as
-  // read-only — every mutation site re-spreads into a fresh object first.
-  const key = resolutionEnvKey(bin)
-  const cached = spawnEnvCache.get(bin)
-  if (cached && cached.key === key) return cached.value
   const parts = [dirname(bin), ...searchDirs(), ...(process.env.PATH || '').split(delimiter)]
   const seen = new Set<string>()
   const path = parts.filter(p => p && !seen.has(p) && (seen.add(p), true)).join(delimiter)
-  const env: NodeJS.ProcessEnv = { ...process.env, PATH: path }
-  spawnEnvCache.set(bin, { key, value: env })
-  return env
+  return { ...process.env, PATH: path }
 }
 
 /**
@@ -516,17 +467,6 @@ function readPersistedPath(): string | null {
  * before.
  */
 export function resolveTarget(): CliTarget | null {
-  // Memoized ONLY on success. A null (CLI not found yet) recomputes every call,
-  // so a CLI installed — or a locate-CLI flow persisted — while the app is open
-  // is still discovered on the next read instead of being pinned to "missing".
-  const key = resolutionEnvKey()
-  if (resolvedTargetCache?.key === key) return resolvedTargetCache.value
-  const target = resolveTargetUncached()
-  if (target) resolvedTargetCache = { key, value: target }
-  return target
-}
-
-function resolveTargetUncached(): CliTarget | null {
   const override = process.env.CODEBURN_BIN
   if (override && isAbsolute(override) && isExecutableFile(override)) return { kind: 'external', bin: override }
 
@@ -681,7 +621,6 @@ function runCli(spec: SpawnSpec, cmdLabel: string, timeoutMs: number, onStderr?:
     })
 
     child.on('error', err => {
-      invalidateCliResolution()
       finish(() => reject(new CliError('not-found', err.message, 'spawn-error')))
     })
 
@@ -1213,7 +1152,7 @@ function runAction(spec: SpawnSpec, args: string[], timeoutMs: number): Promise<
 
     child.stdout.on('data', chunk => { stdout += chunk })
     child.stderr.on('data', chunk => { stderr += chunk })
-    child.on('error', err => { invalidateCliResolution(); finish({ ok: false, stdout, stderr: err.message, code: null }) })
+    child.on('error', err => finish({ ok: false, stdout, stderr: err.message, code: null }))
     child.on('close', code => finish({ ok: code === 0, stdout, stderr, code }))
   })
 }

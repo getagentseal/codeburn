@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync 
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join, isAbsolute, relative, win32, posix } from 'node:path'
 
-import { __resetCliResolutionForTests, spawnCli, spawnCliAction, spawnEnvFor, spawnSpecFor, startServe, killAll, shutdownAll, CliError, cmdShimArgs, escapeForCmd, nodeManagerDirs, notFoundStage, reapOrphanServe, resolveCodeburnPath, resolveTarget } from './cli'
+import { spawnCli, spawnCliAction, spawnEnvFor, spawnSpecFor, startServe, killAll, shutdownAll, CliError, cmdShimArgs, escapeForCmd, nodeManagerDirs, notFoundStage, reapOrphanServe, resolveCodeburnPath, resolveTarget } from './cli'
 
 let dir: string
 const originalBin = process.env.CODEBURN_BIN
@@ -118,7 +118,6 @@ afterEach(() => {
   if (originalDevRepoRoot === undefined) delete process.env.CODEBURN_DEV_REPO_ROOT
   else process.env.CODEBURN_DEV_REPO_ROOT = originalDevRepoRoot
   rmSync(dir, { recursive: true, force: true })
-  __resetCliResolutionForTests()
 })
 
 describe('resolveCodeburnPath (Vite development)', () => {
@@ -1576,76 +1575,5 @@ describe('nodeManagerDirs (nvm resolution)', () => {
     } finally {
       rmSync(nvm, { recursive: true, force: true })
     }
-  })
-})
-
-describe('CLI resolution memoization', () => {
-  it('reuses a successful resolution for an unchanged environment and recomputes when it changes', () => {
-    delete process.env.CODEBURN_BIN
-    process.env.CODEBURN_PATH_DIRS = ''
-    process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
-    delete process.env.VITE_DEV_SERVER_URL
-    const bin = fakeBin('memoized.js', 'process.stdout.write("{}")')
-    expect(resolveTarget()).toEqual({ kind: 'external', bin })
-    // Same env, file gone from disk: the successful resolution is memoized, so
-    // the steady-state read path never re-scans the filesystem per request.
-    rmSync(bin)
-    expect(resolveTarget()).toEqual({ kind: 'external', bin })
-    // Any changed resolution input recomputes from scratch.
-    process.env.CODEBURN_BIN = join(dir, 'missing.js')
-    expect(resolveTarget()).toBeNull()
-  })
-
-  it('does not memoize a miss, so a CLI that appears later is still discovered', () => {
-    delete process.env.CODEBURN_BIN
-    process.env.CODEBURN_PATH_DIRS = ''
-    const persisted = join(dir, 'persisted-cli-path')
-    process.env.CODEBURN_CLI_PATH_FILE = persisted
-    delete process.env.VITE_DEV_SERVER_URL
-    expect(resolveTarget()).toBeNull()
-    // Same environment, the locate-CLI flow writes a path file: the next read
-    // must find it. A cached null would pin the app to "CLI not found".
-    writeFileSync(persisted, `${persisted}\n`, { mode: 0o644 })
-    chmodSync(persisted, 0o755)
-    expect(resolveTarget()).toEqual({ kind: 'external', bin: persisted })
-  })
-
-  it('memoizes spawnEnvFor per bin until a resolution input changes', () => {
-    delete process.env.CODEBURN_BIN
-    process.env.CODEBURN_PATH_DIRS = join(dir, 'a')
-    const bin = join(dir, 'a', 'codeburn')
-    const first = spawnEnvFor(bin)
-    expect(spawnEnvFor(bin)).toBe(first)
-    expect(first.PATH!.startsWith(join(dir, 'a'))).toBe(true)
-    process.env.CODEBURN_PATH_DIRS = join(dir, 'b')
-    const second = spawnEnvFor(bin)
-    expect(second).not.toBe(first)
-    // The changed search space joins the recomputed PATH; dirname(bin) still leads.
-    expect(second.PATH!.includes(join(dir, 'b'))).toBe(true)
-    expect(first.PATH!.includes(join(dir, 'b'))).toBe(false)
-  })
-})
-
-describe('CLI resolution invalidation on spawn failure', () => {
-  it('re-resolves to a successor install after the memoized binary disappears', async () => {
-    delete process.env.CODEBURN_BIN
-    const searchDir = join(dir, 'shims')
-    mkdirSync(searchDir, { recursive: true })
-    process.env.CODEBURN_PATH_DIRS = searchDir
-    process.env.CODEBURN_CLI_PATH_FILE = join(dir, 'no-persisted-path')
-    delete process.env.VITE_DEV_SERVER_URL
-    const first = join(searchDir, 'codeburn')
-    writeFileSync(first, '#!/bin/sh\necho {}\n', { mode: 0o755 })
-    await expect(spawnCli(['anything'])).resolves.toEqual({})
-    expect(resolveTarget()).toEqual({ kind: 'external', bin: first })
-    // The resolved binary is deleted and a successor appears in the same dir.
-    // Same environment, so only the spawn-error invalidation lets the next
-    // request leave the dead path.
-    rmSync(first)
-    await expect(spawnCli(['anything'])).rejects.toBeInstanceOf(CliError)
-    const second = join(searchDir, 'codeburn')
-    writeFileSync(second, '#!/bin/sh\necho {}\n', { mode: 0o755 })
-    await expect(spawnCli(['anything'])).resolves.toEqual({})
-    expect(resolveTarget()).toEqual({ kind: 'external', bin: second })
   })
 })

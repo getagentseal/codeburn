@@ -103,6 +103,23 @@ describe('App render churn', () => {
     expect(growth).toBeLessThanOrEqual(2)
   })
 
+  it('still ticks the "refreshed Ns ago" label once a second while the shell stays flat', async () => {
+    await bootApp()
+    // The footer label is RefreshedAt's whole output: starts at "just now",
+    // then counts seconds. Find the node whose text carries the label.
+    const labelNode = () => Array.from(document.querySelectorAll('body *'))
+      .find(node => (node.textContent ?? '').trim().startsWith('refreshed'))
+    const first = labelNode()?.textContent?.trim()
+    expect(first).toBe('refreshed just now')
+    const shellRendersBeforeTick = churn.state.overviewRenders
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(labelNode()?.textContent?.trim()).toBe('refreshed 1s ago')
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(labelNode()?.textContent?.trim()).toBe('refreshed 2s ago')
+    // …while the shell did not re-render at all across those ticks.
+    expect(churn.state.overviewRenders).toBe(shellRendersBeforeTick)
+  })
+
   it('rolls the shell exactly on the local midnight boundary, not on every check', async () => {
     vi.setSystemTime(new Date(2026, 8, 12, 23, 59, 40))
     await bootApp()

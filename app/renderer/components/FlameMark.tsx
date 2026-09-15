@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
 import { motionEnabled } from '../lib/motion'
-// Pre-scaled 192px cut of assets/flame.png (53kB vs 712kB, and a 147kB RGBA
+// Pre-scaled 192px cut of the original 880px flame art (53kB vs 712kB, and a 147kB RGBA
 // decode instead of 3.1MB). The mark never renders above 76 CSS px, so the
 // browser was downscaling the 880px original on every mount; this cut is the
 // same art resampled once with lanczos and verified side-by-side at 20/52/76px.
