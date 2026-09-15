@@ -29,6 +29,18 @@ Precedence when no `dataDir` argument is passed (the production path):
 
 SQLite (older builds) or file-based JSON (OpenCode 1.1+, under `storage/`).
 
+OpenCode 2.x (mainline since 2.0.3, issue #1293) writes a second SQLite
+generation: `session_v2` + `session_message` (whose FK points at
+`session_v2(id)`; messages are tagged by a `type` column, ordered by `seq`,
+payload JSON in `data`). The legacy `session`/`message`/`part` tables freeze at
+upgrade — a post-upgrade session has rows in `session_message` and zero new
+rows in `message`. The parser branches per database on `sqlite_master`: when
+the v2 tables exist they win and the legacy tables are ignored entirely (the
+generations are never joined); otherwise the legacy path runs unchanged.
+Session-level cost/token rollups and the `parent_id` child-session walk exist
+in both generations, so discovery, parsing and dedup behave the same either
+way.
+
 ## Caching
 
 None.

@@ -1043,3 +1043,222 @@ skipUnlessSqlite('opencode provider - env override discovery', () => {
   })
 
 })
+
+// ---------------------------------------------------------------------------
+// OpenCode 2.x (session_v2 + session_message) — issue #1293.
+// ejwill's 2.0.3 schema: session_v2 carries the session row (with the same
+// cost/tokens columns legacy had), session_message is tagged by `type` with
+// the payload JSON in `data`, ordered by `seq`. Legacy tables freeze at
+// upgrade; the generations are never joined.
+// ---------------------------------------------------------------------------
+
+type V2MessageFixture = {
+  text?: string
+  agent?: string
+  model?: { id: string; providerID: string; variant?: string }
+  content?: Array<{ type: string; text?: string; name?: string; state?: { status: string; input?: Record<string, unknown> } }>
+  cost?: number
+  tokens?: { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+  time?: { created: number }
+}
+
+function createV2TestDb(dir: string, opts: { withLegacy?: boolean } = {}): string {
+  const ocDir = join(dir, 'opencode')
+  mkdirSync(ocDir, { recursive: true })
+  const dbPath = join(ocDir, 'opencode.db')
+
+  const { DatabaseSync: Database } = require('node:sqlite')
+  const db = new Database(dbPath)
+  db.exec(`
+    CREATE TABLE session_v2 (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+      slug TEXT NOT NULL, directory TEXT NOT NULL, title TEXT, version TEXT NOT NULL,
+      cost REAL NOT NULL DEFAULT 0, tokens_input INTEGER NOT NULL DEFAULT 0,
+      tokens_output INTEGER NOT NULL DEFAULT 0, tokens_reasoning INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_read INTEGER NOT NULL DEFAULT 0, tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+      model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+      time_archived INTEGER
+    )
+  `)
+  db.exec(`
+    CREATE TABLE session_message (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+      seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    )
+  `)
+  if (opts.withLegacy) {
+    // An in-place upgrade keeps the frozen legacy tables around, empty.
+    db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, slug TEXT NOT NULL, directory TEXT NOT NULL, title TEXT, version TEXT NOT NULL, time_created INTEGER, time_updated INTEGER, time_archived INTEGER)`)
+    db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER, data TEXT NOT NULL)`)
+    db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, data TEXT NOT NULL)`)
+  }
+  db.close()
+  return dbPath
+}
+
+function insertV2Session(
+  db: TestDb,
+  id: string,
+  opts: { directory?: string; title?: string; parentId?: string | null; archived?: number | null; model?: string } = {},
+): void {
+  db.prepare(`
+    INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version, time_created, time_updated, time_archived, model)
+    VALUES (?, 'proj-1', ?, 'slug-1', ?, ?, '2.0.3', 1700000000000, 1700000000000, ?, ?)
+  `).run(id, opts.parentId ?? null, opts.directory ?? '/home/user/myproject', opts.title ?? 'My Project', opts.archived ?? null, opts.model ?? null)
+}
+
+function insertV2Message(db: TestDb, id: string, sessionId: string, type: string, seq: number, timeCreated: number, payload: V2MessageFixture): void {
+  db.prepare(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, sessionId, type, seq, timeCreated, timeCreated, JSON.stringify(payload))
+}
+
+skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_message)', () => {
+  it('discovers and parses v2 sessions with tokens, cost, model, tools and user attribution', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_v2_1')
+      insertV2Message(db, 'msg_1', 'ses_v2_1', 'user', 1, 1700000000000, { text: 'fix the login bug' })
+      insertV2Message(db, 'msg_2', 'ses_v2_1', 'assistant', 2, 1700000000123, {
+        agent: 'build',
+        model: { id: 'glm-5.3-flash', providerID: 'opencode', variant: 'max' },
+        content: [
+          { type: 'text', text: 'looking into it' },
+          { type: 'tool', name: 'bash', state: { status: 'completed', input: { command: 'grep -rn login src/' } } },
+        ],
+        cost: 0.0077,
+        tokens: { input: 21410, output: 2175, reasoning: 0, cache: { read: 112128, write: 0 } },
+        time: { created: 1700000000123 },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(`${dbPath}:ses_v2_1`)
+    expect(sessions[0]!.project).toBe('home-user-myproject')
+
+    const calls = await collectCalls(provider, dbPath, 'ses_v2_1')
+    expect(calls).toHaveLength(1)
+    const call = calls[0]!
+    expect(call.model).toBe('opencode/glm-5.3-flash')
+    expect(call.inputTokens).toBe(21410)
+    expect(call.outputTokens).toBe(2175)
+    expect(call.cacheReadInputTokens).toBe(112128)
+    expect(call.tools).toContain('Bash')
+    expect(call.bashCommands).toEqual(['grep'])
+    expect(call.userMessage).toBe('fix the login bug')
+    expect(call.costUSD).toBeGreaterThan(0)
+  })
+
+  it('counts compaction usage and skips rows with nothing to report', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_v2_1')
+      insertV2Message(db, 'msg_1', 'ses_v2_1', 'model-switched', 1, 1700000000000, { model: { id: 'x', providerID: 'opencode' } })
+      // CompactionUsage travels on the compaction row itself; 1.x counted
+      // these as assistant messages, so dropping them undercounts compactions.
+      insertV2Message(db, 'msg_2', 'ses_v2_1', 'compaction', 2, 1700000000100, {
+        status: 'completed', reason: 'auto', summary: 's', recent: 'r',
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        cost: 0.0042,
+        tokens: { input: 18100, output: 900, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      // A still-running compaction carries no usage and must yield nothing.
+      insertV2Message(db, 'msg_3', 'ses_v2_1', 'compaction', 3, 1700000000150, {
+        status: 'running', reason: 'auto', summary: 's', recent: 'r',
+      })
+      insertV2Message(db, 'msg_4', 'ses_v2_1', 'idle', 4, 1700000000200, { outcome: 'succeeded' })
+      insertV2Message(db, 'msg_5', 'ses_v2_1', 'assistant', 5, 1700000000300, {
+        model: { id: 'gpt-4o', providerID: 'openai' },
+        content: [{ type: 'text', text: 'hi' }],
+        tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const calls = await collectCalls(provider, dbPath, 'ses_v2_1')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]!.model).toBe('opencode/glm-5.3-flash')
+    expect(calls[0]!.inputTokens).toBe(18100)
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+    expect(calls[1]!.model).toBe('openai/gpt-4o')
+  })
+
+  it('walks v2 child sessions through parent_id', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_parent')
+      insertV2Session(db, 'ses_child', { parentId: 'ses_parent' })
+      insertV2Message(db, 'msg_c1', 'ses_child', 'assistant', 1, 1700000000500, {
+        model: { id: 'm', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'child work' }],
+        tokens: { input: 7, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    // Only the root is discovered; the child is reached through the tree walk.
+    expect(sessions.map((s) => s.path)).toEqual([`${dbPath}:ses_parent`])
+
+    const calls = await collectCalls(provider, dbPath, 'ses_parent')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.sessionId).toBe('ses_parent')
+    expect(calls[0]!.inputTokens).toBe(7)
+  })
+
+  it('prefers the v2 generation on an upgraded database with both table sets', async () => {
+    const dbPath = createV2TestDb(tmpDir, { withLegacy: true })
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_v2_live')
+      insertV2Message(db, 'msg_1', 'ses_v2_live', 'assistant', 1, 1700000000000, {
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'live v2 turn' }],
+        tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      // Frozen pre-upgrade session still in the legacy table.
+      insertSession(db, 'ses_legacy_frozen', { title: 'frozen' })
+      insertMessage(db, 'lmsg_1', 'ses_legacy_frozen', 1690000000000, {
+        role: 'assistant', modelID: 'opencode/old', tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const sessions = await provider.discoverSessions()
+    // v2 wins: the frozen legacy session is not surfaced.
+    expect(sessions.map((s) => s.path)).toEqual([`${dbPath}:ses_v2_live`])
+
+    const v2Calls = await collectCalls(provider, dbPath, 'ses_v2_live')
+    expect(v2Calls).toHaveLength(1)
+    expect(v2Calls[0]!.inputTokens).toBe(100)
+
+    const legacyCalls = await collectCalls(provider, dbPath, 'ses_legacy_frozen')
+    expect(legacyCalls).toHaveLength(0)
+  })
+
+  it('falls back to session_v2 rollups when v2 messages carry no tokens', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.prepare(`
+        INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version,
+          cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+          model, time_created, time_updated, time_archived)
+        VALUES ('ses_roll', 'proj-1', NULL, 'slug-1', '/home/user/myproject', 't', '2.0.3',
+          0.0077, 21410, 2175, 0, 112128, 0, ?, 1700000000000, 1700000000000, NULL)
+      `).run(JSON.stringify({ id: 'glm-5.3-flash', providerID: 'opencode' }))
+      insertV2Message(db, 'msg_1', 'ses_roll', 'user', 1, 1700000000000, { text: 'hello' })
+      insertV2Message(db, 'msg_2', 'ses_roll', 'assistant', 2, 1700000000100, {
+        model: { id: 'glm-5.3-flash', providerID: 'opencode' },
+      })
+    })
+
+    const provider = createOpenCodeProvider(tmpDir)
+    const calls = await collectCalls(provider, dbPath, 'ses_roll')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('opencode/glm-5.3-flash')
+    expect(calls[0]!.inputTokens).toBe(21410)
+    expect(calls[0]!.cacheReadInputTokens).toBe(112128)
+    expect(calls[0]!.costUSD).toBeCloseTo(0.0077, 4)
+  })
+})

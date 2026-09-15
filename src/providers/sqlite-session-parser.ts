@@ -48,6 +48,105 @@ type SessionTokenRow = {
   model?: Uint8Array | string
 }
 
+type V2MessageRow = {
+  session_id: string
+  id: string
+  type: string
+  seq: number
+  time_created: number
+  data: Uint8Array | string
+}
+
+
+/**
+ * OpenCode 2.x generations (issue #1293): v2 writes `session_v2` + `session_message`
+ * (its FK points at `session_v2(id)`), while the legacy `session`/`message`/`part`
+ * tables freeze at upgrade and stay frozen — a session created on 2.x has rows in
+ * `session_message` and zero new rows in `message`. The generations are never
+ * joined: whichever exists decides what is read, and v2 wins when present.
+ */
+function detectGeneration(db: SqliteDatabase): 'v2' | 'legacy' | null {
+  try {
+    const v2 = db.query<{ cnt: number }>(
+      "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type = 'table' AND name IN ('session_v2', 'session_message')",
+    )
+    if ((v2[0]?.cnt ?? 0) === 2) return 'v2'
+  } catch (err) {
+    if (isSqliteBusyError(err)) throw err
+  }
+  return validateSchemaDetailed(db).ok ? 'legacy' : null
+}
+
+/**
+ * Normalizes v2 `session_message` rows into the legacy message/part shape the
+ * shared parse loop already consumes. v2 payloads are tagged by the `type`
+ * column (no `role` field); assistant messages carry `content` inline (no part
+ * table), `model` as a `{id, providerID}` ref, and `tokens` in the same
+ * normalized shape legacy stored.
+ */
+function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; partsByMsg: Map<string, PartData[]> } {
+  const messages: MessageRow[] = []
+  const partsByMsg = new Map<string, PartData[]>()
+
+  for (const row of rows) {
+    let payload: Record<string, unknown>
+    try {
+      payload = JSON.parse(blobToText(row.data)) as Record<string, unknown>
+    } catch {
+      continue
+    }
+
+    if (row.type === 'user') {
+      messages.push({ session_id: row.session_id, id: row.id, time_created: row.time_created, data: JSON.stringify({ role: 'user' }) })
+      const text = typeof payload['text'] === 'string' ? payload['text'] : ''
+      if (text) partsByMsg.set(row.id, [{ type: 'text', text }])
+      continue
+    }
+    // Compaction rows carry their own CompactionUsage (cost + tokens for the
+    // compaction request itself) and counted as assistant messages on 1.x, so
+    // they must keep landing here or every compacted 2.x session undercounts.
+    // A `running` compaction has neither and is dropped by buildAssistantCall.
+    if (row.type !== 'assistant' && row.type !== 'compaction') continue
+
+    const model = payload['model']
+    const data: MessageData = { role: 'assistant' }
+    if (model !== null && typeof model === 'object' && !Array.isArray(model)) {
+      const ref = model as Record<string, unknown>
+      const id = typeof ref['id'] === 'string' ? ref['id'] : ''
+      const providerID = typeof ref['providerID'] === 'string' ? ref['providerID'] : ''
+      if (id && providerID) data.modelID = `${providerID}/${id}`
+    }
+    if (typeof payload['cost'] === 'number') data.cost = payload['cost']
+    const tokens = payload['tokens']
+    if (tokens !== null && typeof tokens === 'object' && !Array.isArray(tokens)) data.tokens = tokens as MessageData['tokens']
+
+    const parts: PartData[] = []
+    const content = payload['content']
+    if (Array.isArray(content)) {
+      for (const item of content) {
+        if (item === null || typeof item !== 'object') continue
+        const c = item as Record<string, unknown>
+        if ((c['type'] === 'text' || c['type'] === 'reasoning') && typeof c['text'] === 'string' && c['text']) {
+          parts.push({ type: c['type'] as string, text: c['text'] })
+        } else if (c['type'] === 'tool') {
+          const state = c['state']
+          const input = state !== null && typeof state === 'object' && (state as Record<string, unknown>)['input'] !== null
+            && typeof (state as Record<string, unknown>)['input'] === 'object'
+            ? (state as Record<string, unknown>)['input'] as Record<string, unknown>
+            : {}
+          parts.push({ type: 'tool', tool: typeof c['name'] === 'string' ? c['name'] : '', state: { input } })
+        }
+      }
+    }
+
+    messages.push({ session_id: row.session_id, id: row.id, time_created: row.time_created, data: JSON.stringify(data) })
+    partsByMsg.set(row.id, parts)
+  }
+
+  return { messages, partsByMsg }
+}
+
+
 function parseSessionModel(value: Uint8Array | string | undefined): string | undefined {
   try {
     const parsed: unknown = JSON.parse(blobToText(value))
@@ -62,15 +161,17 @@ function parseSessionModel(value: Uint8Array | string | undefined): string | und
   }
 }
 
-function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string): {
+function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string, generation: 'v2' | 'legacy'): {
   cost: number; input: number; output: number; reasoning: number
   cacheRead: number; cacheWrite: number; model: string | undefined
 } | null {
   try {
+    // Both generations expose the same token columns; only the table name moves.
+    const table = generation === 'v2' ? 'session_v2' : 'session'
     const rows = db.query<SessionTokenRow>(
       `SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
               CAST(model AS BLOB) AS model
-       FROM session WHERE id = ?`,
+       FROM ${table} WHERE id = ?`,
       [sessionId],
     )
     if (rows.length === 0) return null
@@ -151,53 +252,77 @@ export function createSqliteSessionParser(
       }
 
       try {
-        const schema = validateSchemaDetailed(db)
-        if (!schema.ok) {
-          warnUnrecognizedSchemaOnce(config.displayName, schema.missing)
+        const generation = detectGeneration(db)
+        if (generation === null) {
+          warnUnrecognizedSchemaOnce(config.displayName, ['session', 'message', 'part'])
           return
         }
 
-        const messages = db.query<MessageRow>(
-          `WITH RECURSIVE session_tree(id) AS (
-            SELECT id FROM session WHERE id = ?
-            UNION
-            SELECT child.id
-            FROM session child
-            JOIN session_tree parent ON child.parent_id = parent.id
-            WHERE child.time_archived IS NULL
-          )
-          SELECT session_id, id, time_created, CAST(data AS BLOB) AS data
-          FROM message
-          WHERE session_id IN (SELECT id FROM session_tree)
-          ORDER BY time_created ASC, id ASC`,
-          [sessionId],
-        )
+        let messages: MessageRow[]
+        let partsByMsg: Map<string, PartData[]>
 
-        const parts = db.query<PartRow>(
-          `WITH RECURSIVE session_tree(id) AS (
-            SELECT id FROM session WHERE id = ?
-            UNION
-            SELECT child.id
-            FROM session child
-            JOIN session_tree parent ON child.parent_id = parent.id
-            WHERE child.time_archived IS NULL
+        if (generation === 'v2') {
+          const rows = db.query<V2MessageRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session_v2 WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session_v2 child
+              JOIN session_tree parent ON child.parent_id = parent.id
+              WHERE child.time_archived IS NULL
+            )
+            SELECT session_id, id, type, seq, time_created, CAST(data AS BLOB) AS data
+            FROM session_message
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY time_created ASC, session_id ASC, seq ASC`,
+            [sessionId],
           )
-          SELECT message_id, CAST(data AS BLOB) AS data
-          FROM part
-          WHERE session_id IN (SELECT id FROM session_tree)
-          ORDER BY message_id, id`,
-          [sessionId],
-        )
+          const normalized = v2RowsToLegacyShape(rows)
+          messages = normalized.messages
+          partsByMsg = normalized.partsByMsg
+        } else {
+          messages = db.query<MessageRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session child
+              JOIN session_tree parent ON child.parent_id = parent.id
+              WHERE child.time_archived IS NULL
+            )
+            SELECT session_id, id, time_created, CAST(data AS BLOB) AS data
+            FROM message
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY time_created ASC, id ASC`,
+            [sessionId],
+          )
 
-        const partsByMsg = new Map<string, PartData[]>()
-        for (const part of parts) {
-          try {
-            const parsed = JSON.parse(blobToText(part.data)) as PartData
-            const list = partsByMsg.get(part.message_id) ?? []
-            list.push(parsed)
-            partsByMsg.set(part.message_id, list)
-          } catch {
-            // skip corrupt part data
+          const parts = db.query<PartRow>(
+            `WITH RECURSIVE session_tree(id) AS (
+              SELECT id FROM session WHERE id = ?
+              UNION
+              SELECT child.id
+              FROM session child
+              JOIN session_tree parent ON child.parent_id = parent.id
+              WHERE child.time_archived IS NULL
+            )
+            SELECT message_id, CAST(data AS BLOB) AS data
+            FROM part
+            WHERE session_id IN (SELECT id FROM session_tree)
+            ORDER BY message_id, id`,
+            [sessionId],
+          )
+
+          partsByMsg = new Map<string, PartData[]>()
+          for (const part of parts) {
+            try {
+              const parsed = JSON.parse(blobToText(part.data)) as PartData
+              const list = partsByMsg.get(part.message_id) ?? []
+              list.push(parsed)
+              partsByMsg.set(part.message_id, list)
+            } catch {
+              // skip corrupt part data
+            }
           }
         }
 
@@ -251,7 +376,7 @@ export function createSqliteSessionParser(
         }
 
         if (yieldCount === 0 && messages.length > 0) {
-          const sessionTokens = tryQuerySessionTokens(db, sessionId)
+          const sessionTokens = tryQuerySessionTokens(db, sessionId, generation)
           if (sessionTokens && (sessionTokens.cost > 0 || sessionTokens.input > 0 || sessionTokens.output > 0)) {
             const dedupKey = `${config.providerName}:${sessionId}:session-level`
             if (!seenKeys.has(dedupKey)) {
@@ -292,7 +417,7 @@ export function createSqliteSessionParser(
             process.stderr.write(
               `codeburn: ${config.displayName} session ${sessionId} has ${messages.length} messages ` +
               `(${parseFailCount} unparseable, ${roleSkipCount} non-user/assistant roles) ` +
-              `but yielded 0 calls. Parts: ${parts.length}.\n`
+              `but yielded 0 calls.\n`
             )
           }
         }
@@ -331,11 +456,14 @@ export async function discoverSqliteSessions(
     }
 
     try {
-      const schema = validateSchemaDetailed(db)
-      if (!schema.ok) continue
+      const generation = detectGeneration(db)
+      if (generation === null) continue
 
+      // Same projection on both generations; only the table name moves.
+      const table = generation === 'v2' ? 'session_v2' : 'session'
       const rows = db.query<SessionRow>(
-        'SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created FROM session WHERE time_archived IS NULL AND parent_id IS NULL ORDER BY time_created DESC',
+        `SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created
+         FROM ${table} WHERE time_archived IS NULL AND parent_id IS NULL ORDER BY time_created DESC`,
       )
 
       for (const row of rows) {
