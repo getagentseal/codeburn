@@ -40,7 +40,13 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
 
 ## Deduplication
 
-`codex:<sessionId>:<timestamp>:<cumulativeTotal>` for accounted events, plus `codex:<sessionId>:<timestamp>:est<n>` for estimated events that fall back to char-counting.
+Three layers, in order:
+
+1. **Byte-identity collapse (#257)**: a `token_count` event whose `info` payload is byte-identical to the previous event's is a re-emission of the same event, not a new request, and is skipped regardless of cumulative presence. Measured on public rollouts (53 sessions / 1313 events): 603 are such repeats.
+2. **Equal-cumulative guard**: with `total_token_usage.total_tokens` present, an event whose cumulative total equals the predecessor's is skipped.
+3. **`seenKeys` cross-session key**: with cumulative identity — `codex:<forkedFromId|sessionId>:<total>:<input>:<cached>:<output>:<reasoning>` (fork replays collide with the parent). Without cumulative — `codex:record:<path>:<line offset>`, i.e. physical record position: stable on cache resume/re-read, but cross-file replay identity past the 5s fork cutoff is deliberately not guessed (accepted trade-off; see Quirks).
+
+Estimated events that fall back to char-counting use `codex:<sessionId>:<timestamp>:est<n>`.
 
 ## Quirks
 
@@ -48,7 +54,8 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
   1. `last_token_usage` present: use it directly.
   2. Only cumulative: compute deltas against the prior turn.
   3. Neither: estimate from message text length (`CHARS_PER_TOKEN = 4`).
-- `prevCumulativeTotal` is initialized to `null`, not `0`. A session whose first event reports `total = 0` would otherwise be dropped as a "duplicate" of the initial state.
+- A minority of real sessions emit `token_count` events with no `total_token_usage` at all (54 of 1313 in the public-rollout sample). Those events skip the equal-cumulative guard and key on record position instead; distinct payloads stay distinct, byte-identical repeats still collapse.
+- `prevCumulativeTotal` is initialized to `null`, not `0`. A session whose first event reports `total = 0` would otherwise be dropped as a "duplicate" of the initial state. `prevInfoIdentity` (the byte-identity string) is persisted in the resume state alongside it.
 - `prev*` token counters are advanced on **every** event, including ones that used `last_token_usage`. Earlier code only updated them on the fallback branch, which double-counted any session that mixed modes.
 - OpenAI counts cached tokens **inside** `input_tokens`. The parser subtracts them so the rest of the codebase can assume Anthropic semantics (cached are separate).
 
