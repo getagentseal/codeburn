@@ -67,12 +67,14 @@ Anthropic sometimes resets a usage window before its scheduled time. The menubar
 notices on the existing refresh lifecycle — no extra request — by comparing each
 fetch's windows against the previous fetch's readings, which are kept per window
 in `UserDefaults` alongside the record of what has already been announced.
-`SubscriptionSnapshotStore`'s 30 days of snapshots then give the local history
-caption ("Last 3 weekly resets came ~18h early"), derived from the stored reset
-times alone: a fixed window that starts at `t` ends at `t + length`, so a cycle
-that ends sooner than a full window after the previous cycle's scheduled end
-began early by the difference. Everything is local; nothing is fetched to
-produce it.
+The same detector runs for every other Capacity Dock provider off its own
+fetch, under its own record; Claude's is described here because it is the one
+with a snapshot file behind it. `SubscriptionSnapshotStore`'s 30 days of
+snapshots give Claude the local history caption ("Last 3 weekly resets came
+~18h early"), derived from the stored reset times alone: a fixed window that
+starts at `t` ends at `t + length`, so a cycle that ends sooner than a full
+window after the previous cycle's scheduled end began early by the difference.
+Everything is local; nothing is fetched to produce it.
 
 The detection is deliberately quiet. It needs a validated window length (the
 fixed 5-hour and 7-day limits), a stored reset that has not yet passed, and

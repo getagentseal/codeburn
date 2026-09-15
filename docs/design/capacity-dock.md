@@ -137,6 +137,18 @@ V1 does not include:
   normal scheduled reset, a plan change, clock or timestamp skew, a window that
   appears or disappears between fetches, a window's first observation, and a
   provider reconnecting after a terminal failure or a fresh bootstrap.
+- Every dock provider runs through the same detector as its own fetch succeeds,
+  and everything it keeps — the previous fetch's readings, the record of what
+  has been announced, the band, and the history caption — is scoped to that
+  provider and that window, so one provider's early reset can never move
+  another's state. A window needs both a reset time and a validated length to
+  produce anything, so today only Claude and Codex announce: the other live
+  adapters (Antigravity, ClinePass, Copilot, Cursor, Gemini, Grok, Kimi Code,
+  Z.ai) report a reset time but no window length, and are silent under the same
+  rule that keeps any unvalidated window quiet. They need no further wiring when
+  their adapters start carrying one. A window that has no key of its own is
+  identified by the label the adapter already shows; a label that changes with
+  the window's state costs a baseline, which is silence, never a false alarm.
 - Stale or retrying data remains visible and is labeled/dimmed. A terminal
   authentication/configuration failure provides a Connect/Reconnect action in
   the bubble itself. Network, rate-limit, parse, and provider outages remain
@@ -251,8 +263,9 @@ any source-owned consent prompt is reserved for an explicit Connect action.
 - `CapacityDockMotion`: pure timing/easing plus edge-aware interpolation policy.
 - `EarlyQuotaReset`: pure early-reset detection, the bounded notice window, and
   the local history summariser behind the hover card's caption.
-- `EarlyQuotaResetMonitor`: per-provider baseline, announcement record and
-  delivery through the existing `UpdateNotifier`.
+- `EarlyQuotaResetMonitor`: per-provider baseline, announcement record, cycle
+  ledger and delivery through the existing `UpdateNotifier`. One `UserDefaults`
+  record per provider id, under the key the feature first shipped with.
 - `AppDelegate`: create/start/stop the controller and include quota/preferences
   in the existing observation re-arm. It must not own dock rendering details.
 

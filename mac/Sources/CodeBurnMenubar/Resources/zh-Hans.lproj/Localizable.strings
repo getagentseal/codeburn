@@ -670,6 +670,7 @@
 "Last %1$lld %2$@ resets came ~%3$@ early" = "最近 %1$lld 次%2$@重置提前了约 %3$@";
 "%1$lld of the last %2$lld %3$@ resets came ~%4$@ early" = "最近 %1$lld/%2$lld 次%3$@重置提前了约 %4$@";
 "%lldh" = "%lld 小时";
+"%@ limit" = "%@ 限额";
 "5-hour limit" = "5 小时限额";
 "weekly limit" = "每周限额";
 "Opus weekly limit" = "Opus 每周限额";

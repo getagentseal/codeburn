@@ -43,6 +43,126 @@ private let beforeEarlyReset = reading(percent: 80, resetsIn: 18 * 3600, observe
 /// A new cycle, anchored a full window after the previous look at the old one.
 private let afterEarlyReset = reading(percent: 0, resetsIn: week)
 
+// MARK: - Review fixes (#1339): anchoring, spend caps, stable identity
+
+@Test("A successor schedule meaningfully EARLIER than the old one is a flip-flop, not a reset")
+func backwardsSuccessorStaysSilent() throws {
+    // A replica briefly serving a cycle whose reset sits before the one we
+    // already stored is the flip-flop the announcement dedupe also guards; the
+    // detector itself stays silent on it rather than feeding it forward.
+    let previous = EarlyQuotaResetReading(
+        percent: 80,
+        resetsAt: now.addingTimeInterval(eighteenHours),
+        observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 0,
+        resetsAt: now.addingTimeInterval(eighteenHours).addingTimeInterval(-3 * 3600),
+        observedAt: now
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()) == nil)
+}
+
+@Test("A rolling window re-anchoring across a fetch gap is excluded by the duration contract, not detected")
+func rollingTrackerNeedsTheContract() throws {
+    // The pair is genuinely indistinguishable from a cut-short cycle (see the
+    // detector's type doc): reset moved forward by the observation gap, percent
+    // fell across the boundary. The guard is that the ADAPTER passes
+    // windowSeconds only for cycles it can vouch are fixed — so with no
+    // vouched duration, the detector has no opinion at all.
+    let gap: TimeInterval = 30 * 60
+    let previous = EarlyQuotaResetReading(
+        percent: 70,
+        resetsAt: now.addingTimeInterval(-gap).addingTimeInterval(week),
+        observedAt: now.addingTimeInterval(-gap)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 5,
+        resetsAt: now.addingTimeInterval(week),
+        observedAt: now
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context(windowSeconds: nil)) == nil)
+}
+
+@Test("Sub-tolerance creep of the reset time is not a new cycle")
+func creepingResetStaysSilent() throws {
+    // A fixed window's vendor jitters `resets_at` by seconds between fetches;
+    // only a move past the skew tolerance can begin signal 1.
+    let previous = EarlyQuotaResetReading(
+        percent: 60,
+        resetsAt: now.addingTimeInterval(week),
+        observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2,
+        resetsAt: now.addingTimeInterval(week + 45),
+        observedAt: now
+    )
+    // Jump is under the tolerance, so the reading falls through to signal 2's
+    // ratio test — which this percent collapse satisfies, so it reports the
+    // usage-dropped form, never reset-moved-forward.
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("A Codex spend-cap increase is not a goodwill reset even when the ratio collapses")
+func spendCapIncreaseStaysSilent() throws {
+    // Limit raised 100 -> 1000 credits; usage ROSE 90 -> 95; the ratio fell
+    // 90% -> 9.5%, satisfying both the 40-point drop and the ≤10% landing of
+    // signal 2. The absolute figures say the vendor gave capacity by raising
+    // the cap, not by clearing the counter, so it stays silent.
+    let previous = EarlyQuotaResetReading(
+        percent: 90, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300), usedUnits: 90
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 9.5, resetsAt: now.addingTimeInterval(week), observedAt: now, usedUnits: 95
+    )
+    #expect(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()) == nil)
+}
+
+@Test("A real cleared counter falls in absolute units too and still fires")
+func clearedCounterStillFiresWithUnits() throws {
+    let previous = EarlyQuotaResetReading(
+        percent: 80, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300), usedUnits: 800
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2, resetsAt: now.addingTimeInterval(week), observedAt: now, usedUnits: 20
+    )
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("Percent-only providers keep the ratio test (Claude has no absolute units)")
+func percentOnlyDropStillFires() throws {
+    let previous = EarlyQuotaResetReading(
+        percent: 80, resetsAt: now.addingTimeInterval(week), observedAt: now.addingTimeInterval(-300)
+    )
+    let current = EarlyQuotaResetReading(
+        percent: 2, resetsAt: now.addingTimeInterval(week), observedAt: now
+    )
+    let event = try #require(EarlyQuotaResetDetector.detect(previous: previous, current: current, context: context()))
+    #expect(event.signal == .usageDropped)
+}
+
+@Test("A window keyed from a localized or state-suffixed display label is keyed by its storage label instead")
+func storageLabelStabilizesTheKey() {
+    // The Codex credit row's display label localizes and appends "· limit
+    // reached"; both the reached and unreached, English and translated forms
+    // must resolve to ONE storage identity via storageLabel.
+    let displayVariants = [
+        "Monthly usage limit",
+        "Monthly usage limit · limit reached",
+        "每月使用限额",
+        "每月使用限额 · 已达上限",
+    ]
+    let keys = Set(displayVariants.map { EarlyQuotaResetFormat.windowKey(forLabel: $0) })
+    // Slugs of the display forms disagree (the old behavior: four baselines,
+    // two of them shared between languages); the adapter passes storageLabel
+    // so the caller never slugifies any of these.
+    #expect(keys.count > 1)
+    #expect(EarlyQuotaResetFormat.windowKey(forLabel: "Monthly usage limit") == "monthly_usage_limit")
+}
+
 @Suite("Early quota reset detection")
 struct EarlyQuotaResetDetectorTests {
     @Test("A reset time that jumps to a new cycle before the old one ended is an early reset")
@@ -693,5 +813,512 @@ private final class RecordingEarlyResetNotifier: UpdateNotifier {
 
     func post(title: String, body: String, identifier: String) {
         posts.append((title, body, identifier))
+    }
+}
+
+// MARK: - Every provider, not just Claude
+
+/// One provider's identity for the same weekly window, so the guards below run
+/// unchanged against Claude and Codex. Codex's window has no key of its own:
+/// like every provider but Claude it is identified by its display label.
+struct EarlyResetProviderCase: Sendable, CustomStringConvertible {
+    let providerID: String
+    let providerName: String
+    let windowKey: String
+    let windowName: String
+    let planLabel: String
+
+    var description: String { providerName }
+}
+
+private let claudeCase = EarlyResetProviderCase(
+    providerID: "claude",
+    providerName: "Claude",
+    windowKey: "seven_day",
+    windowName: "weekly limit",
+    planLabel: "Max 20x"
+)
+
+private let codexCase = EarlyResetProviderCase(
+    providerID: "codex",
+    providerName: "Codex",
+    windowKey: EarlyQuotaResetFormat.windowKey(forLabel: "Weekly"),
+    windowName: EarlyQuotaResetFormat.windowName(forLabel: "Weekly"),
+    planLabel: "Plus"
+)
+
+private let everyProviderCase = [claudeCase, codexCase]
+
+private func context(
+    _ provider: EarlyResetProviderCase,
+    windowSeconds: Int? = weekSeconds,
+    previousPlanLabel: String? = nil,
+    currentPlanLabel: String? = nil,
+    baselineIsTrusted: Bool = true
+) -> EarlyQuotaResetDetector.Context {
+    EarlyQuotaResetDetector.Context(
+        providerID: provider.providerID,
+        providerName: provider.providerName,
+        windowKey: provider.windowKey,
+        windowName: provider.windowName,
+        windowSeconds: windowSeconds,
+        previousPlanLabel: previousPlanLabel ?? provider.planLabel,
+        currentPlanLabel: currentPlanLabel ?? provider.planLabel,
+        baselineIsTrusted: baselineIsTrusted
+    )
+}
+
+@Suite("Early quota reset detection, every provider")
+struct EarlyQuotaResetProviderScopeTests {
+    @Test("Both signals fire for any provider and name it", arguments: everyProviderCase)
+    func bothSignalsFire(_ provider: EarlyResetProviderCase) throws {
+        let jumped = try #require(EarlyQuotaResetDetector.detect(
+            previous: beforeEarlyReset, current: afterEarlyReset, context: context(provider)
+        ))
+        #expect(jumped.providerID == provider.providerID)
+        #expect(jumped.signal == .resetMovedForward)
+        #expect(jumped.earlyBySeconds == eighteenHours)
+        #expect(jumped.notificationTitle == "\(provider.providerName) quota reset early")
+        #expect(jumped.notificationBody
+            == "\(provider.providerName)'s weekly limit reset 18h early. You're back to 100%.")
+
+        let dropped = try #require(EarlyQuotaResetDetector.detect(
+            previous: reading(percent: 92, resetsIn: eighteenHours, observedAgo: 300),
+            current: reading(percent: 1, resetsIn: eighteenHours),
+            context: context(provider)
+        ))
+        #expect(dropped.providerID == provider.providerID)
+        #expect(dropped.signal == .usageDropped)
+        #expect(dropped.notificationTitle == "\(provider.providerName) quota cleared early")
+        #expect(dropped.notificationBody
+            == "\(provider.providerName) cleared your weekly usage 18h before its reset. "
+            + "You're back to 99%.")
+        for text in [dropped.notificationTitle, dropped.notificationBody,
+                     dropped.noticeText, dropped.noticeHelpText] {
+            #expect(!text.contains("reset early"))
+        }
+    }
+
+    @Test("Every false-positive guard holds for every provider", arguments: everyProviderCase)
+    func guardsHold(_ provider: EarlyResetProviderCase) {
+        func silent(
+            _ previous: EarlyQuotaResetReading?,
+            _ current: EarlyQuotaResetReading?,
+            _ ctx: EarlyQuotaResetDetector.Context,
+            _ what: Comment
+        ) {
+            #expect(
+                EarlyQuotaResetDetector.detect(previous: previous, current: current, context: ctx) == nil,
+                what
+            )
+        }
+        let base = context(provider)
+
+        // A scheduled reset, which is the common case and the one that must
+        // never speak.
+        silent(reading(percent: 96, resetsIn: -60, observedAgo: 300),
+               reading(percent: 0, resetsIn: week), base, "scheduled reset")
+        // A plan change gives capacity back legitimately.
+        silent(beforeEarlyReset, afterEarlyReset,
+               context(provider, previousPlanLabel: "Pro"), "plan change")
+        // Clock and data skew, in all four shapes.
+        silent(beforeEarlyReset, reading(percent: 0, resetsIn: -3600), base, "reset in the past")
+        silent(beforeEarlyReset, reading(percent: 0, resetsIn: week + 2 * 3600), base, "reset beyond a window")
+        silent(reading(percent: 80, resetsIn: eighteenHours, observedAgo: -600),
+               afterEarlyReset, base, "clock went backwards")
+        silent(reading(percent: 80, resetsIn: week + 2 * 3600, observedAgo: 300),
+               afterEarlyReset, base, "stored reset beyond a window")
+        // A window that came, went, or has never been seen before.
+        silent(nil, afterEarlyReset, base, "no baseline")
+        silent(beforeEarlyReset, nil, base, "window absent this fetch")
+        // The far side of a gap.
+        silent(beforeEarlyReset, afterEarlyReset,
+               context(provider, baselineIsTrusted: false), "untrusted baseline")
+        // A baseline this build cannot reason about.
+        for percent in [150.0, -1.0, Double.nan] {
+            silent(EarlyQuotaResetReading(
+                percent: percent,
+                resetsAt: now.addingTimeInterval(eighteenHours),
+                observedAt: now.addingTimeInterval(-300)
+            ), afterEarlyReset, base, "malformed baseline")
+        }
+        // No validated duration: no opinion. This is what keeps the providers
+        // whose adapters carry no window length silent.
+        silent(beforeEarlyReset, afterEarlyReset,
+               context(provider, windowSeconds: nil), "unknown duration")
+        // Rounding noise, and a fall that does not land near empty.
+        silent(reading(percent: 80, resetsIn: eighteenHours, observedAgo: 300),
+               reading(percent: 79, resetsIn: eighteenHours), base, "rounding noise")
+        silent(reading(percent: 95, resetsIn: eighteenHours, observedAgo: 300),
+               reading(percent: 40, resetsIn: eighteenHours), base, "partial drop")
+        silent(reading(percent: 20, resetsIn: eighteenHours, observedAgo: 300),
+               reading(percent: 8, resetsIn: eighteenHours), base, "small drop to near-empty")
+        // A stored reset further out than one window, on signal 2's shape.
+        silent(reading(percent: 92, resetsIn: week + 1000, observedAgo: 300),
+               reading(percent: 1, resetsIn: week + 500), base, "stale baseline")
+        // A rolling window's reset time creeping forward, and a jump that lands
+        // short of a cycle boundary.
+        silent(reading(percent: 80, resetsIn: eighteenHours, observedAgo: 300),
+               reading(percent: 0, resetsIn: eighteenHours + 1800), base, "rolling creep")
+        silent(reading(percent: 80, resetsIn: eighteenHours, observedAgo: 300),
+               reading(percent: 0, resetsIn: 4 * 24 * 3600), base, "partial window jump")
+        // A reset time moving backwards, and a new cycle that gives nothing back.
+        silent(reading(percent: 80, resetsIn: 30 * 3600, observedAgo: 300),
+               reading(percent: 0, resetsIn: eighteenHours), base, "backwards reset")
+        silent(reading(percent: 0, resetsIn: eighteenHours, observedAgo: 300),
+               afterEarlyReset, base, "nothing given back")
+    }
+
+    @Test("A window named only by its display label gets a stable key and readable copy")
+    func labelDerivedNaming() throws {
+        #expect(EarlyQuotaResetFormat.windowKey(forLabel: "Weekly") == "weekly")
+        #expect(EarlyQuotaResetFormat.windowKey(forLabel: "5-hour") == "5_hour")
+        #expect(EarlyQuotaResetFormat.windowKey(forLabel: "GPT-5.3-Codex-Spark · Weekly")
+            == "gpt_5_3_codex_spark_weekly")
+        // Sibling rows must not collide, or one would overwrite the other's
+        // baseline inside the same provider record.
+        let keys = ["Weekly", "5-hour", "Monthly usage limit", "Auto", "API"]
+            .map(EarlyQuotaResetFormat.windowKey(forLabel:))
+        #expect(Set(keys).count == keys.count)
+
+        #expect(EarlyQuotaResetFormat.windowName(forLabel: "Weekly") == "weekly limit")
+        #expect(EarlyQuotaResetFormat.windowName(forLabel: "5-hour") == "5-hour limit")
+        // A label that already names what it caps keeps its own noun, and the
+        // usage phrasing must not double it into "monthly usage usage".
+        #expect(EarlyQuotaResetFormat.windowName(forLabel: "Monthly usage limit")
+            == "monthly usage limit")
+        let event = try #require(EarlyQuotaResetDetector.detect(
+            previous: reading(percent: 92, resetsIn: eighteenHours, observedAgo: 300),
+            current: reading(percent: 1, resetsIn: eighteenHours),
+            context: EarlyQuotaResetDetector.Context(
+                providerID: "codex",
+                providerName: "Codex",
+                windowKey: EarlyQuotaResetFormat.windowKey(forLabel: "Monthly usage limit"),
+                windowName: EarlyQuotaResetFormat.windowName(forLabel: "Monthly usage limit"),
+                windowSeconds: 30 * 24 * 3600,
+                previousPlanLabel: "Plus",
+                currentPlanLabel: "Plus",
+                baselineIsTrusted: true
+            )
+        ))
+        #expect(event.notificationBody
+            == "Codex cleared your monthly usage 18h before its reset. You're back to 99%.")
+        #expect(event.noticeText == "Monthly usage cleared, 18h before reset")
+    }
+
+    @Test("Every dock provider's display name reads as a sentence")
+    func displayNamesReadWell() {
+        for provider in CapacityDockPreferences.supportedProviders
+        where provider.catalogEntry.hasLiveCodeBurnQuotaAdapter {
+            let event = EarlyQuotaResetEvent(
+                providerID: provider.rawValue,
+                providerName: provider.displayName,
+                windowKey: "weekly",
+                windowName: "weekly limit",
+                signal: .resetMovedForward,
+                scheduledResetAt: now.addingTimeInterval(eighteenHours),
+                detectedAt: now,
+                percentBefore: 80,
+                percentAfter: 0
+            )
+            #expect(event.notificationBody
+                == "\(provider.displayName)'s weekly limit reset 18h early. You're back to 100%.")
+            // No empty or trailing-space name can reach the copy.
+            #expect(!provider.displayName.isEmpty)
+            #expect(provider.displayName.trimmingCharacters(in: .whitespaces) == provider.displayName)
+        }
+    }
+}
+
+@Suite("Early quota reset, provider isolation and stored state")
+@MainActor
+struct EarlyQuotaResetProviderStateTests {
+    @Test("An early reset on one provider never moves another's state")
+    func providersAreIsolated() async throws {
+        try await withIsolatedMonitor { monitor, notifier, _ in
+            // Both providers see the same pre-reset window.
+            for id in ["claude", "codex"] {
+                await monitor.record(
+                    providerID: id, providerName: id == "claude" ? "Claude" : "Codex",
+                    planLabel: "Max 20x", baselineIsTrusted: true,
+                    observations: [providerObservation(id, beforeEarlyReset)],
+                    now: now.addingTimeInterval(-300)
+                )
+            }
+            // Only Claude resets early.
+            let claudeEvent = await monitor.record(
+                providerID: "claude", providerName: "Claude", planLabel: "Max 20x",
+                baselineIsTrusted: true,
+                observations: [providerObservation("claude", afterEarlyReset)],
+                now: now
+            )
+            #expect(claudeEvent?.providerID == "claude")
+            #expect(notifier.posts.count == 1)
+            #expect(notifier.posts.first?.title == "Claude quota reset early")
+            // Codex's band stays empty, and its baseline is untouched.
+            #expect(monitor.visibleEvent(providerID: "codex", now: now) == nil)
+
+            // Codex resets an hour later, off its own baseline, and is announced
+            // in its own name. Claude's band is not replaced.
+            let codexEvent = await monitor.record(
+                providerID: "codex", providerName: "Codex", planLabel: "Max 20x",
+                baselineIsTrusted: true,
+                observations: [providerObservation("codex", afterEarlyReset)],
+                now: now
+            )
+            #expect(codexEvent?.providerID == "codex")
+            #expect(notifier.posts.count == 2)
+            #expect(notifier.posts.last?.title == "Codex quota reset early")
+            #expect(monitor.visibleEvent(providerID: "claude", now: now)?.providerID == "claude")
+            #expect(monitor.visibleEvent(providerID: "codex", now: now)?.providerID == "codex")
+
+            // And forgetting one leaves the other standing.
+            monitor.forget(providerID: "claude")
+            #expect(monitor.visibleEvent(providerID: "claude", now: now) == nil)
+            #expect(monitor.visibleEvent(providerID: "codex", now: now) != nil)
+        }
+    }
+
+    @Test("A Codex reset announced once is not announced again")
+    func codexDedupeHolds() async throws {
+        try await withIsolatedMonitor { monitor, notifier, defaults in
+            await monitor.record(
+                providerID: "codex", providerName: "Codex", planLabel: "Plus",
+                baselineIsTrusted: true,
+                observations: [providerObservation("codex", beforeEarlyReset)],
+                now: now.addingTimeInterval(-300)
+            )
+            await monitor.record(
+                providerID: "codex", providerName: "Codex", planLabel: "Plus",
+                baselineIsTrusted: true,
+                observations: [providerObservation("codex", afterEarlyReset)],
+                now: now
+            )
+            #expect(notifier.posts.count == 1)
+
+            let relaunched = EarlyQuotaResetMonitor(defaults: defaults, makeNotifier: { notifier })
+            await relaunched.record(
+                providerID: "codex", providerName: "Codex", planLabel: "Plus",
+                baselineIsTrusted: true,
+                observations: [providerObservation("codex", reading(percent: 80, resetsIn: eighteenHours - 600))],
+                now: now.addingTimeInterval(600)
+            )
+            await relaunched.record(
+                providerID: "codex", providerName: "Codex", planLabel: "Plus",
+                baselineIsTrusted: true,
+                observations: [providerObservation("codex", reading(percent: 0, resetsIn: week))],
+                now: now.addingTimeInterval(1200)
+            )
+            #expect(notifier.posts.count == 1)
+        }
+    }
+
+    @Test("A Claude record written by the build that shipped this feature still counts")
+    func storedClaudeRecordIsCompatible() async throws {
+        // Announced already: the update must not re-notify.
+        #expect(try await legacyRecordPostCount(announced: true) == 0)
+        // The same record with nothing announced does post. Without this the
+        // silence above would also be produced by a record the monitor can no
+        // longer find or decode, which is exactly the regression to catch.
+        #expect(try await legacyRecordPostCount(announced: false) == 1)
+    }
+
+    /// Runs one fetch against a state record written in the shape, and under the
+    /// exact defaults key, that #1329 shipped: no cycle ledger, no latest event.
+    private func legacyRecordPostCount(announced: Bool) async throws -> Int {
+        var count = 0
+        try await withIsolatedMonitor { monitor, notifier, defaults in
+            let scheduled = Int(now.addingTimeInterval(eighteenHours).timeIntervalSince1970)
+            let observed = Int(now.addingTimeInterval(-300).timeIntervalSince1970)
+            let announcedList = announced ? "[\(scheduled)]" : "[]"
+            let legacy = """
+            {"planLabel":"Max 20x",\
+            "windows":{"seven_day":{"percent":80,\
+            "resetsAt":\(scheduled),"observedAt":\(observed)}},\
+            "announced":{"seven_day":\(announcedList)}}
+            """
+            // Spelled out, not built from the constant: a changed key must fail
+            // this rather than silently take the record with it.
+            defaults.set(Data(legacy.utf8), forKey: "codeburn.quota.earlyReset.state.claude")
+
+            await monitor.record(
+                providerID: "claude", providerName: "Claude", planLabel: "Max 20x",
+                baselineIsTrusted: true,
+                observations: [weeklyObservation(afterEarlyReset)],
+                now: now
+            )
+            count = notifier.posts.count
+        }
+        return count
+    }
+
+    @Test("The cycle ledger keeps one entry per cycle, so any provider can have a pattern")
+    func ledgerFeedsTheHistorySummary() async throws {
+        try await withIsolatedMonitor { monitor, _, _ in
+            // Four weekly cycles, each landing 18h early, each seen by several
+            // fetches with a jittered reset timestamp.
+            var resetsAt = now
+            for _ in 0..<4 {
+                for fetch in 0..<3 {
+                    let jitter = TimeInterval(fetch) * 30
+                    await monitor.record(
+                        providerID: "codex", providerName: "Codex", planLabel: "Plus",
+                        baselineIsTrusted: true,
+                        observations: [providerObservation("codex", EarlyQuotaResetReading(
+                            percent: 10,
+                            resetsAt: resetsAt.addingTimeInterval(jitter),
+                            observedAt: resetsAt.addingTimeInterval(-week + TimeInterval(fetch))
+                        ))],
+                        now: resetsAt.addingTimeInterval(-week + TimeInterval(fetch))
+                    )
+                }
+                resetsAt = resetsAt.addingTimeInterval(week - eighteenHours)
+            }
+            let cycles = monitor.observedResets(providerID: "codex", windowKey: "weekly")
+            #expect(cycles.count == 4)
+
+            let summary = try #require(EarlyQuotaResetHistory.summarize(
+                cycleResets: cycles,
+                windowKey: "weekly",
+                windowName: "weekly limit",
+                windowSeconds: weekSeconds
+            ))
+            #expect(summary.earlyResets == 3)
+            #expect(summary.observedResets == 3)
+            #expect(summary.caption == "Last 3 weekly resets came ~18h early")
+            // Claude's ledger is its own, and empty here.
+            #expect(monitor.observedResets(providerID: "claude", windowKey: "seven_day").isEmpty)
+        }
+    }
+}
+
+private func providerObservation(
+    _ providerID: String,
+    _ reading: EarlyQuotaResetReading?
+) -> EarlyQuotaResetMonitor.Observation {
+    EarlyQuotaResetMonitor.Observation(
+        windowKey: providerID == "claude" ? "seven_day" : "weekly",
+        windowName: "weekly limit",
+        windowSeconds: weekSeconds,
+        reading: reading
+    )
+}
+
+@Suite("Early quota reset wiring, non-Claude providers")
+@MainActor
+struct EarlyQuotaResetWiringTests {
+    /// Grok stands in for every provider fetched through the CodeBurn-owned
+    /// adapter: the detector only ever saw Claude's refresh, so a reset on one
+    /// of these was silent however plainly the adapter reported it.
+    @Test("A dock provider's early reset is detected, banded and named after it")
+    func dockProviderGetsItsOwnEvent() async throws {
+        let suiteName = "codeburn.quota.earlyReset.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let notifier = RecordingEarlyResetNotifier()
+        let store = AppStore()
+        store.earlyQuotaResetMonitor = EarlyQuotaResetMonitor(
+            defaults: defaults,
+            makeNotifier: { notifier }
+        )
+        store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
+
+        let provider = try #require(CapacityDockProvider(rawValue: "grok"))
+        // Fetch one: the window still has 18 hours to run. Fetch two: a new
+        // weekly cycle, anchored a full window after the first look.
+        let responses = [
+            Self.summary(percent: 0.8, resetsIn: 18 * 3600),
+            Self.summary(percent: 0, resetsIn: week),
+        ]
+        let index = Counter()
+        store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in Self.summary(percent: 0, resetsIn: week) },
+            refreshCursor: { Self.summary(percent: 0, resetsIn: week) },
+            refreshGrok: { responses[await index.next()] },
+            refreshZai: { _ in Self.summary(percent: 0, resetsIn: week) }
+        ))
+
+        await store.refreshCapacityDockProvider(provider)
+        #expect(notifier.posts.isEmpty)
+        await store.refreshCapacityDockProvider(provider)
+
+        #expect(notifier.posts.count == 1)
+        #expect(notifier.posts.first?.title == "Grok quota reset early")
+        let band = try #require(store.capacityDockEarlyResetNotice(for: provider))
+        #expect(band.providerID == "grok")
+        #expect(band.noticeText == "Weekly limit reset 18h early")
+        // Claude's band and captions are untouched by another provider's reset.
+        #expect(store.capacityDockEarlyResetNotice(for: CapacityDockProvider.claude) == nil)
+        #expect(store.earlyResetHistoryCaptions(for: CapacityDockProvider.claude).isEmpty)
+    }
+
+    /// `QuotaSummary.Window` carries no duration for these adapters today, and a
+    /// window with no validated duration is exactly what the detector refuses to
+    /// have an opinion about.
+    @Test("A provider whose windows carry no duration stays silent")
+    func windowWithoutDurationIsSilent() async throws {
+        let suiteName = "codeburn.quota.earlyReset.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let notifier = RecordingEarlyResetNotifier()
+        let store = AppStore()
+        store.earlyQuotaResetMonitor = EarlyQuotaResetMonitor(
+            defaults: defaults,
+            makeNotifier: { notifier }
+        )
+        store.capacityDockCredentialLoader = { _ in CapacityDockProviderCredential() }
+
+        let provider = try #require(CapacityDockProvider(rawValue: "grok"))
+        let responses = [
+            Self.summary(percent: 0.8, resetsIn: 18 * 3600, windowSeconds: nil),
+            Self.summary(percent: 0, resetsIn: week, windowSeconds: nil),
+        ]
+        let index = Counter()
+        store.capacityDockProviderQuotaService = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in Self.summary(percent: 0, resetsIn: week) },
+            refreshCursor: { Self.summary(percent: 0, resetsIn: week) },
+            refreshGrok: { responses[await index.next()] },
+            refreshZai: { _ in Self.summary(percent: 0, resetsIn: week) }
+        ))
+
+        await store.refreshCapacityDockProvider(provider)
+        await store.refreshCapacityDockProvider(provider)
+
+        #expect(notifier.posts.isEmpty)
+        #expect(store.capacityDockEarlyResetNotice(for: provider) == nil)
+    }
+
+    nonisolated private static func summary(
+        percent: Double,
+        resetsIn: TimeInterval,
+        windowSeconds: Int? = 7 * 24 * 3600
+    ) -> QuotaSummary {
+        let window = QuotaSummary.Window(
+            label: "Weekly",
+            percent: percent,
+            resetsAt: Date().addingTimeInterval(resetsIn),
+            windowSeconds: windowSeconds,
+            fetchedAt: Date()
+        )
+        return QuotaSummary(
+            providerFilter: .grok,
+            connection: .connected,
+            primary: window,
+            details: [window],
+            planLabel: "Grok Build",
+            footerLines: []
+        )
+    }
+}
+
+private actor Counter {
+    private var value = 0
+    func next() -> Int {
+        defer { value += 1 }
+        return value
     }
 }
