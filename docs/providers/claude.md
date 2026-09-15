@@ -51,6 +51,19 @@ aggregate cache-write token total for reports, but prices the 1-hour portion at
 If the split fields are missing, the parser falls back to the legacy behavior
 and prices every cache write at the 5-minute rate.
 
+## Bedrock and Vertex routes
+
+The JSONL has no provider field; the only trace of how a call was billed is
+the model id. With `CLAUDE_CODE_USE_BEDROCK=1` the assistant messages record
+Bedrock's id — `anthropic.claude-haiku-4-5-20251001-v1:0` (the `us.`/`global.`
+inference-profile prefix the user configured is dropped in the transcript) —
+where a direct-API session records `claude-haiku-4-5-20251001`. Both price at
+their own catalog rows. `getShortModelName` renders the Bedrock id as
+`Haiku 4.5 (Bedrock)`, so reports keep the two invoices as separate rows
+instead of merging them under one name (see "Model names and routes" in
+`../architecture.md`). Vertex ids (`claude-…@20251001`) are not yet treated as
+a route; the `@` suffix is stripped and they merge with the direct row.
+
 ## Caching
 
 None at the provider level. The daily aggregation cache (`src/daily-cache.ts`) reuses prior computed days.

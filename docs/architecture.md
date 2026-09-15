@@ -202,6 +202,12 @@ Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is 
 
 For the per-provider data location, storage format, parser quirks, and test coverage, see `docs/providers/`.
 
+### Model names and routes (`src/models.ts`)
+
+Reports key model rows by the display name from `getShortModelName`, not the raw id, so the several spellings a tool can record for one model (`claude-sonnet-4-5-20250929`, `anthropic/claude-sonnet-4-5`, `accounts/fireworks/models/…`) fold into one row. Pricing (`getModelCosts`) always runs on the raw id.
+
+A **route** is the exception to that folding. The same model billed through a different door — Claude direct from Anthropic versus Claude through AWS Bedrock — is a different invoice, and tools record a different id per door (Bedrock: `anthropic.claude-…-v1:0`, with optional `us.`/`eu.`/`global.` inference-profile prefix, or the ARN / `bedrock/` wrappers). `getModelRoute(id)` recognises those shapes and returns `{ id, label, baseModel }`; `getShortModelName` then renders `"<base short name> (<label>)"`, so `Haiku 4.5` and `Haiku 4.5 (Bedrock)` stay separate rows while every Bedrock spelling of one model shares a row. Ids with no route are untouched. Bedrock is the first route; the same hook is where OpenRouter, Vertex or Azure spellings belong once a provider is shown to record them.
+
 ## macOS Menubar (`mac/`)
 
 Swift package (`mac/Package.swift`), targets macOS 14, strict concurrency on. Layout under `mac/Sources/CodeBurnMenubar/`:

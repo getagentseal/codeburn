@@ -1079,6 +1079,10 @@ const warnedUnknownModels = new Set<string>()
 /// Users still get $0 in cost reports for them (correct — local inference is
 /// effectively free); the warning was just noise.
 function looksLikeLocalModel(name: string): boolean {
+  // Bedrock ids end in `-v1:0`, which is a version, not an Ollama tag. Without
+  // this an unpriced Bedrock model is silently treated as free local inference
+  // and never flagged.
+  if (getModelRoute(name)) return false
   // Ollama and LM Studio tags include `:tag` (e.g. qwen3.6:35b-a3b-bf16).
   if (name.includes(':') && !name.startsWith('http')) return true
   // GGUF / quantized fingerprints commonly seen in local inference.
@@ -1394,8 +1398,125 @@ function lookupShortName(id: string): string | undefined {
   return undefined
 }
 
+// --- Model routes -----------------------------------------------------------
+//
+// The same model can be billed through more than one door: Claude direct from
+// Anthropic, or through AWS Bedrock; GPT direct from OpenAI, or through
+// Bedrock's OpenAI-compatible endpoint. The token counts are identical, the
+// invoice is not, and the tool that ran the model records a different id per
+// door — Bedrock's `anthropic.claude-…-v1:0` versus Anthropic's
+// `claude-…`. Reports key rows by display name, so collapsing both ids onto one
+// "Fable 5.1" would merge two invoices into one row and lose the very thing a
+// user asks when their spend moves to a cloud account: "which of this went
+// through Bedrock?".
+//
+// A route is derived from the id alone, so it works for every provider that
+// preserves the vendor's id (Claude Code with CLAUDE_CODE_USE_BEDROCK, Hermes,
+// OpenCode, …). Bedrock is the first; OpenRouter / Vertex / Azure spellings
+// belong here too once a provider is shown to record them.
+
+export type ModelRoute = {
+  /// Stable key, safe for filters and JSON (`bedrock`).
+  id: string
+  /// Suffix appended to the display name: "Fable 5.1 (Bedrock)".
+  label: string
+  /// The vendor id with the route's wrapping removed — what the same model
+  /// would be called when reached directly (`claude-fable-5-1`).
+  baseModel: string
+}
+
+// Bedrock foundation-model ids and cross-region inference-profile ids:
+//   [<geo>.]<vendor>.<model>[-v<major>:<minor>]
+// where <geo> is an inference-profile prefix (`us`, `eu`, `apac`, `global`,
+// `jp`, `au`, `us-gov`, …) and <vendor> is Bedrock's provider segment
+// (`anthropic`, `openai`, `meta`, `amazon`, …). The full-ARN spelling
+// (`arn:aws:bedrock:<region>:<account>:inference-profile/<id>`) and the
+// LiteLLM route spelling (`bedrock/[<region>/]<id>`) wrap the same id.
+//
+// The vendor segment is matched from a fixed list so a dotted id that is NOT
+// a Bedrock id (`gpt-4.1-mini`, `glm-4.7`, `MiniMax-M2.7`) is never mistaken
+// for one: those have a version digit, not a vendor, before the first dot.
+// Each vendor lists the brand prefixes its model segment can start with. A
+// segment that already names its brand (`claude-…`, `nova-pro`, `llama3-…`) is
+// the base model as-is; one that does not (`deepseek.r1`, `deepseek.v3.2`) is
+// re-joined with the vendor (`deepseek-r1`) so the short name and the
+// pricing alias still recognise it and the row does not read "r1 (Bedrock)".
+const BEDROCK_VENDORS: Record<string, string[]> = {
+  ai21: ['jamba', 'j2'],
+  amazon: ['nova', 'titan'],
+  anthropic: ['claude'],
+  cohere: ['command', 'rerank', 'embed'],
+  deepseek: [],
+  google: ['gemma', 'gemini'],
+  meta: ['llama'],
+  minimax: [],
+  mistral: ['mistral', 'mixtral', 'ministral', 'magistral', 'devstral', 'pixtral', 'voxtral', 'codestral'],
+  moonshot: ['kimi'],
+  moonshotai: ['kimi'],
+  nvidia: ['nemotron'],
+  openai: ['gpt', 'o1', 'o3', 'o4'],
+  qwen: [],
+  stability: ['stable', 'sd3'],
+  twelvelabs: ['pegasus', 'marengo'],
+  writer: ['palmyra'],
+  xai: ['grok'],
+  zai: ['glm'],
+}
+// `-v1:0` is the foundation-model version; Bedrock's OpenAI ids spell it
+// `-1:0`. A trailing `:300k`-style context tag is a variant of the same model.
+const BEDROCK_ID = /^(?:(?<geo>[a-z]{2,6}(?:-[a-z]{2,4})?)\.)?(?<vendor>[a-z0-9]+)\.(?<model>[a-z0-9][a-z0-9.-]*?)(?<version>-v\d+(?::\d+)?|-\d+:\d+)?(?<ctx>:\d+k)?$/i
+const BEDROCK_ARN = /^arn:aws:bedrock:[a-z0-9-]*:\d*:(?:inference-profile|foundation-model|application-inference-profile)\/(?<id>.+)$/i
+const BEDROCK_LITELLM_PREFIX = /^bedrock\/(?:(?:invoke|converse|[a-z]{2}-[a-z]+-\d)\/)?/i
+
+function parseBedrockId(model: string): { vendor: string; base: string } | null {
+  let id = model.trim()
+  const arn = BEDROCK_ARN.exec(id)
+  if (arn?.groups) id = arn.groups['id']!
+  id = id.replace(BEDROCK_LITELLM_PREFIX, '')
+  const m = BEDROCK_ID.exec(id)
+  if (!m?.groups) return null
+  const vendor = m.groups['vendor']!.toLowerCase()
+  if (!Object.hasOwn(BEDROCK_VENDORS, vendor)) return null
+  const segment = m.groups['model']!
+  const lower = segment.toLowerCase()
+  const brands = BEDROCK_VENDORS[vendor]!
+  const selfDescribing = lower.startsWith(vendor) || brands.some(brand => lower.startsWith(brand))
+  return { vendor, base: selfDescribing ? segment : `${vendor}-${segment}` }
+}
+
+/// Which billing door a model id went through, or undefined for a plain vendor
+/// id (direct API, or a route this table does not know). Pure and cheap: no
+/// catalog lookup, so it is safe on the parse path. Exported so structured
+/// consumers (menubar payload, filters) can key on `route.id` rather than
+/// parse the display suffix back out.
+export function getModelRoute(model: string): ModelRoute | undefined {
+  const bedrock = parseBedrockId(model)
+  if (bedrock) {
+    // Bedrock keeps the vendor's own model naming after its `<vendor>.`
+    // segment, so the base id is the model segment as-is:
+    // `anthropic.claude-fable-5-1` → `claude-fable-5-1`,
+    // `openai.gpt-5.6-luna` → `gpt-5.6-luna`,
+    // `anthropic.claude-haiku-4-5-20251001-v1:0` → `claude-haiku-4-5-20251001`.
+    // Vendors whose Bedrock id is not their own spelling (Amazon Nova, Meta's
+    // `llama3-1-70b-instruct`) show the model segment too; the label still
+    // says Bedrock, and pricing keeps the full id.
+    return { id: 'bedrock', label: 'Bedrock', baseModel: bedrock.base }
+  }
+  return undefined
+}
+
 // Public API stays unary so Array.map/forEach cannot feed index as cycle state.
+//
+// Route-aware: a Bedrock id renders as "<base short name> (Bedrock)". Reports
+// key model rows on this name, so a Bedrock session and a direct-API session of
+// the same model land in separate rows instead of one merged invoice. Ids with
+// no known route resolve exactly as before, so every existing key is stable.
 export function getShortModelName(model: string): string {
+  const route = getModelRoute(model)
+  // A user alias on the full id is a deliberate remap and wins over the route.
+  if (route && !Object.hasOwn(userAliases, model)) {
+    return `${shortModelName(route.baseModel, new Set())} (${route.label})`
+  }
   return shortModelName(model, new Set())
 }
 
