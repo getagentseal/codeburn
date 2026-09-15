@@ -223,6 +223,46 @@ describe('quota command envelope', () => {
     expect(renderQuotaTable(report, { color: false })).toContain('Claude (Max 20x)')
   })
 
+  it('hides a connected ZCode row while the Z.ai credential is live, and notes the duplicate', async () => {
+    const zai: QuotaProvider = {
+      provider: 'zai', connection: 'connected', planLabel: 'Pro', footerLines: [],
+      primary: { label: 'Weekly', percent: 0.45, resetsAt: '2026-09-21T12:00:00.000Z' }, details: [],
+    }
+    const zcode: QuotaProvider = {
+      provider: 'zcode', connection: 'connected', planLabel: 'Pro', footerLines: [],
+      primary: { label: 'Weekly', percent: 0.45, resetsAt: '2026-09-21T12:00:00.000Z' }, details: [],
+    }
+    const report = await collectQuota({
+      readers: [
+        { id: 'zai', name: 'Z.ai', read: async () => zai },
+        { id: 'zcode', name: 'ZCode', read: async () => zcode },
+      ],
+    })
+    expect(report.providers.map(row => row.id)).toEqual(['zai'])
+    expect(report.providers[0].notes).toEqual([
+      'A ZCode app login is also connected; it reads the same z.ai plan endpoint and is hidden as a duplicate.',
+    ])
+  })
+
+  it('keeps the ZCode row when Z.ai is configured but not usable', async () => {
+    // A rejected or stale Z.ai state must never hide a working ZCode login.
+    const zai: QuotaProvider = {
+      provider: 'zai', connection: 'terminalFailure', primary: null, details: [], planLabel: null,
+      footerLines: ['Z.ai rejected this API key.'],
+    }
+    const zcode: QuotaProvider = {
+      provider: 'zcode', connection: 'connected', planLabel: 'Pro', footerLines: [],
+      primary: { label: 'Weekly', percent: 0.45, resetsAt: '2026-09-21T12:00:00.000Z' }, details: [],
+    }
+    const report = await collectQuota({
+      readers: [
+        { id: 'zai', name: 'Z.ai', read: async () => zai },
+        { id: 'zcode', name: 'ZCode', read: async () => zcode },
+      ],
+    })
+    expect(report.providers.map(row => row.id)).toEqual(['zai', 'zcode'])
+  })
+
   it('gives up on a provider that outlives its timeout', async () => {
     const report = await collectQuota({
       timeoutMs: 5,

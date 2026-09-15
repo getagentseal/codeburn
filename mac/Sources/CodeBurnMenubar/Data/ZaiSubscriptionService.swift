@@ -106,62 +106,17 @@ enum ZaiSubscriptionService {
         return try decode(data)
     }
 
+    /// Shared body with ZaiSubscriptionService via ZaiPlanQuotaDecoder; only
+    /// the error vocabulary differs between the two adapters.
     static func decode(_ data: Data) throws -> QuotaSummary {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw FetchError.parseFailure
-        }
-        let bodyCode = jsonNumber(root["code"]).map(Int.init)
-        if bodyCode == 401 || bodyCode == 403 { throw FetchError.authenticationRejected }
-        if root["success"] as? Bool == false { throw FetchError.parseFailure }
-
-        let payload = (root["data"] as? [String: Any]) ?? root
-        guard let limits = payload["limits"] as? [Any] else { throw FetchError.parseFailure }
-
-        var fiveHour: QuotaSummary.Window?
-        var weekly: QuotaSummary.Window?
-
-        for raw in limits {
-            guard let limit = raw as? [String: Any],
-                  let type = limit["type"] as? String,
-                  type == "CREDIT_LIMIT" || type == "TOKENS_LIMIT",
-                  let unit = jsonNumber(limit["unit"]),
-                  let count = jsonNumber(limit["number"]) else { continue }
-
-            let label: String
-            if unit == 3, count == 5 {
-                label = "5-hour"
-            } else if unit == 6, count == 1 {
-                label = "Weekly"
-            } else {
-                continue
+        do {
+            return try ZaiPlanQuotaDecoder.decode(data)
+        } catch let error as ZaiPlanQuotaDecoder.DecodeError {
+            switch error {
+            case .authenticationRejected: throw FetchError.authenticationRejected
+            case .parseFailure: throw FetchError.parseFailure
             }
-
-            var usedPercent = jsonNumber(limit["percentage"])
-            if usedPercent == nil,
-               let current = jsonNumber(limit["currentValue"]),
-               let total = jsonNumber(limit["usage"]), total > 0 {
-                usedPercent = current / total * 100
-            }
-            guard let usedPercent else { continue }
-
-            let window = QuotaSummary.Window(
-                label: label,
-                percent: min(1, max(0, usedPercent / 100)),
-                resetsAt: parseReset(limit["nextResetTime"])
-            )
-            if label == "Weekly" { weekly = window } else { fiveHour = window }
         }
-
-        let details = [fiveHour, weekly].compactMap { $0 }
-        guard !details.isEmpty else { throw FetchError.parseFailure }
-        return QuotaSummary(
-            providerFilter: .all,
-            connection: .connected,
-            primary: weekly ?? fiveHour,
-            details: details,
-            planLabel: planLabel(payload["level"]),
-            footerLines: ["Source: Z.ai Coding Plan"]
-        )
     }
 
     static func loadPiAPIKey(
@@ -178,30 +133,4 @@ enum ZaiSubscriptionService {
         return key?.isEmpty == false ? key : nil
     }
 
-    private static func jsonNumber(_ value: Any?) -> Double? {
-        if let value = value as? Double, value.isFinite { return value }
-        if let value = value as? NSNumber { return value.doubleValue }
-        if let value = value as? String, let number = Double(value), number.isFinite { return number }
-        return nil
-    }
-
-    private static func parseReset(_ value: Any?) -> Date? {
-        if let number = jsonNumber(value) {
-            let seconds = number < 1_000_000_000_000 ? number : number / 1000
-            return seconds.isFinite ? Date(timeIntervalSince1970: seconds) : nil
-        }
-        guard let value = value as? String else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
-    }
-
-    private static func planLabel(_ value: Any?) -> String? {
-        guard let value = value as? String else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.replacingOccurrences(of: "_", with: " ").lowercased().capitalized
-    }
 }
