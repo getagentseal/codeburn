@@ -7,13 +7,14 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatDayShort, formatUsd } from '../lib/format'
+import { formatCount, formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { PERIOD_LABELS } from '../lib/period'
 import type { CliError, DateRange, MenubarPayload, Period } from '../lib/types'
 import { prFilters } from '../lib/investigation'
 import { rangeLabel } from '../components/TopBar'
 import type { InvestigateRequest } from './Overview'
+import { Icon } from '../components/icons'
 
 type PullRequests = NonNullable<MenubarPayload['current']['pullRequests']>
 type PrRow = PullRequests['rows'][number]
@@ -57,14 +58,19 @@ function rowKeyDown(event: KeyboardEvent<HTMLDivElement>, toggle: () => void): v
 
 /** Standalone entry: self-fetches the overview payload (used in tests). The App
  *  passes its shared overview poll straight into PullRequestsContent instead. */
-export function PullRequests({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
+export function PullRequests({ period, provider, range = null, onInvestigate }: {
+  period: Period
+  provider: string
+  range?: DateRange | null
+  onInvestigate?: (request: InvestigateRequest) => void
+}) {
   const overview = usePolled<MenubarPayload>(
     () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
     [period, provider, range?.from, range?.to],
   )
   // The key remounts the content on a period/provider/range switch so row state
   // (an open expansion) never survives onto the same PR rendered from new data.
-  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} />
+  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} onInvestigate={onInvestigate} />
 }
 
 export function PullRequestsContent({ overview, period, provider, range = null, onInvestigate }: {
@@ -100,11 +106,13 @@ function PullRequestsPage({ pullRequests, staleError, period, provider, range, o
   return (
     <>
       {staleError && <StaleBanner error={staleError} />}
-      <Panel title="Pull request spend">
-        {empty
-          ? <PrEmptyNote period={period} provider={provider} range={range} />
-          : <PrTable pullRequests={pullRequests} onInvestigate={onInvestigate} />}
-      </Panel>
+      {empty ? (
+        <Panel title="Pull request spend">
+          <PrEmptyNote period={period} provider={provider} range={range} />
+        </Panel>
+      ) : (
+        <PrTable pullRequests={pullRequests} onInvestigate={onInvestigate} />
+      )}
     </>
   )
 }
@@ -154,58 +162,58 @@ function PrTable({ pullRequests, onInvestigate }: { pullRequests: PullRequests; 
   const displayedAttributed = rows.reduce((sum, row) => sum + Number(row.cost.toFixed(2)), 0)
 
   return (
-    <>
-      <div className="pr-summary" aria-label="Pull request attribution summary">
-        <div className="pr-summary-item">
-          <span>Attributed spend</span>
-          <strong>{formatUsd(summable ? displayedAttributed : distinctCost)}</strong>
+    <div className="pr-page">
+      <Panel title="Pull request spend">
+        <div className="pr-summary" aria-label="Pull request attribution summary">
+          <div className="pr-summary-item">
+            <span>Attributed spend</span>
+            <strong>{formatUsd(summable ? displayedAttributed : distinctCost)}</strong>
+          </div>
+          <div className="pr-summary-item">
+            <span>Pull requests</span>
+            <strong>{rows.length.toLocaleString('en-US')}</strong>
+          </div>
+          <div className="pr-summary-item">
+            <span>Linked sessions</span>
+            <strong>{distinctSessions.toLocaleString('en-US')}</strong>
+          </div>
+          <div className="pr-summary-item">
+            <span>Folded agent runs</span>
+            <strong>{(subagentSessions ?? 0).toLocaleString('en-US')}</strong>
+          </div>
         </div>
-        <div className="pr-summary-item">
-          <span>Pull requests</span>
-          <strong>{rows.length.toLocaleString('en-US')}</strong>
+      </Panel>
+      <Panel
+        title="Attributed pull requests"
+        right={<>Sorted by spend, highest first <span className="pr-list-count">{rows.length.toLocaleString('en-US')} total</span></>}
+      >
+          <div className="pr-list" aria-label="Spend by pull request">
+          {rows.map(pr => (
+            <PrRowView
+              key={pr.url}
+              pr={pr}
+              expanded={expandedUrl === pr.url}
+              onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
+              onInvestigate={onInvestigate}
+            />
+          ))}
         </div>
-        <div className="pr-summary-item">
-          <span>Linked sessions</span>
-          <strong>{distinctSessions.toLocaleString('en-US')}</strong>
-        </div>
-        <div className="pr-summary-item">
-          <span>Folded agent runs</span>
-          <strong>{(subagentSessions ?? 0).toLocaleString('en-US')}</strong>
-        </div>
-      </div>
-      <div className="pr-list-head">
-        <div>
-          <strong>Attributed pull requests</strong>
-          <span>Sorted by spend, highest first</span>
-        </div>
-        <span className="pr-list-count">{rows.length.toLocaleString('en-US')} total</span>
-      </div>
-      <div className="pr-list" aria-label="Spend by pull request">
-        {rows.map(pr => (
-          <PrRowView
-            key={pr.url}
-            pr={pr}
-            expanded={expandedUrl === pr.url}
-            onToggle={() => setExpandedUrl(current => current === pr.url ? null : pr.url)}
-            onInvestigate={onInvestigate}
-          />
-        ))}
-      </div>
-      {summable ? (
-        <p className="pr-footnote">
-          Costs are attributed turn by turn, so every row adds up without double counting.
-          {subagentSessions ? ` ${subagentSessions.toLocaleString('en-US')} subagent ${subagentSessions === 1 ? 'run is' : 'runs are'} included in the PR where the work happened.` : ''}
-        </p>
-      ) : (
-        <p className="pr-footnote">
-          {formatUsd(distinctCost)} across {distinctSessions.toLocaleString('en-US')} distinct {sessionWord(distinctSessions)} produced pull requests.
-          {' '}Attribution is by reference: a session referencing several PRs counts toward each, so the rows above are not summed.
-        </p>
-      )}
-      {unattributed > 0 && (
-        <p className="pr-unattributed">Not tied to a specific PR: {formatUsd(unattributed)}</p>
-      )}
-    </>
+        {summable ? (
+          <p className="pr-footnote">
+            Costs are attributed turn by turn, so every row adds up without double counting.
+            {subagentSessions ? ` ${subagentSessions.toLocaleString('en-US')} subagent ${subagentSessions === 1 ? 'run is' : 'runs are'} included in the PR where the work happened.` : ''}
+          </p>
+        ) : (
+          <p className="pr-footnote">
+            {formatUsd(distinctCost)} across {distinctSessions.toLocaleString('en-US')} distinct {sessionWord(distinctSessions)} produced pull requests.
+            {' '}Attribution is by reference: a session referencing several PRs counts toward each, so the rows above are not summed.
+          </p>
+        )}
+        {unattributed > 0 && (
+          <p className="pr-unattributed">Not tied to a specific PR: {formatUsd(unattributed)}</p>
+        )}
+      </Panel>
+    </div>
   )
 }
 
@@ -228,14 +236,14 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
       >
         <div className="pr-card-identity">
           <span className="pr-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><circle cx="6" cy="5" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M6 7.5V19M11 5h4a3 3 0 0 1 3 3v8.5"/></svg>
+            <Icon name="git-pull-request" />
           </span>
           <div>
             <a className="pr-link" href={pr.url} title={pr.url} onClick={event => openPr(event, pr.url)}>{pr.label}</a>
             <div className="pr-card-meta">
               <span>{spanLabel(pr.firstStarted, pr.lastEnded)}</span>
               <span>{pr.sessions.toLocaleString('en-US')} {sessionWord(pr.sessions)}</span>
-              <span>{pr.calls.toLocaleString('en-US')} calls</span>
+              <span>{formatCount(pr.calls, 'call')}</span>
             </div>
           </div>
         </div>
@@ -247,10 +255,26 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
           <span className="pr-card-label">Spend</span>
           <strong {...(pr.approx ? { title: APPROX_TITLE } : {})}>{pr.approx ? '~' : ''}{formatUsd(pr.cost)}</strong>
         </div>
-        <span className="pr-chevron" aria-hidden="true">›</span>
+        <span className="pr-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
       </div>
       {expanded && (
         <div className="pr-detail-cell">
+            {/* Drill-through entry: a control of its own, never the row. The row
+                is a toggle, so hanging the investigation off it would cost the
+                expansion; this opens the sessions that composed the PR while the
+                row stays exactly as the reader left it. The PR URL is the
+                aggregation key of the by-PR report, so it selects at the
+                destination without a lookup. */}
+            {onInvestigate && (
+              <button
+                className="ov-link pr-drill"
+                type="button"
+                title={`View sessions for ${pr.label}`}
+                onClick={() => onInvestigate({ filters: prFilters(pr.url) })}
+              >
+                View sessions for this pull request →
+              </button>
+            )}
             {categories.length > 0 ? (
               <div className="pr-detail" role="region" aria-label={`${pr.label} cost breakdown`}>
                 <div className="pr-detail-head">

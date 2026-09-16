@@ -333,8 +333,8 @@ enum MenubarRowFormatter {
         let hours = minutes / 60
         let days = hours / 24
         // d/h/m are unit abbreviations; zh-Hans uses 天/小时/分.
-        if days > 0 { return L("%lldd %lldh", days, hours % 24) }
-        if hours > 0 { return L("%lldh %lldm", hours, minutes % 60) }
+        if days > 0 { return L("%1$lldd %2$lldh", days, hours % 24) }
+        if hours > 0 { return L("%1$lldh %2$lldm", hours, minutes % 60) }
         return L("%lldm", minutes)
     }
 

@@ -401,6 +401,11 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // `codex-code-review` from the activity name "code review".
   'codex-auto-review':             'gpt-5.5',
   'grok-build':                    'grok-build-0.1',
+  // Grok Bot's desktop app serves opaque `sand-*` aliases and records no model
+  // id at all, so there is nothing truthful to price it by. It is xAI's own
+  // product, so it prices at xAI's published grok-4.6 rate ($2.00/M in,
+  // $6.00/M out, $0.50/M cached). Every grokbot call is costIsEstimated.
+  'grokbot-auto':                  'grok-4.6',
   'GPT-5.3 Codex (low reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (medium reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (high reasoning)': 'gpt-5.3-codex',
@@ -889,14 +894,17 @@ export function resolveCanonicalModelId(model: string): string {
 // rather than hand-listed so a vendor LiteLLM already knows (`x-ai/`, `qwen/`,
 // `nousresearch/`, …) is never dropped by a stale list.
 const EXTRA_NAMESPACES = [
-  // Routing wrappers (see ROUTER_PREFIXES); no catalog lists them.
-  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity', 'orcarouter',
+  // Routing wrappers (see ROUTER_PREFIXES); no catalog lists them. `cliproxy/`
+  // is codex-cliproxy-gateway's default route prefix over CLIProxyAPI.
+  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity', 'orcarouter', 'cliproxy',
   // LiteLLM route prefixes that never appear as a key prefix.
   'litellm_proxy', 'openai_like',
   // Vendor spellings the catalog indexes under another name: `zhipu` is `z-ai`,
   // `mimo` is `xiaomi` (BUILTIN_ALIASES maps the bare MiMo ids to `xiaomi/`),
   // and `kimi/` is a client-side prefix (Codex records `kimi/k3[1m]`).
-  'zhipu', 'mimo', 'kimi',
+  // `zcode/` is CLIProxyAPI's provider spelling for the Z.ai coding plans; the
+  // bare `glm-*` leaf already prices via its own catalog row, which carries an explicit zero cache-write cost.
+  'zhipu', 'mimo', 'kimi', 'zcode',
 ]
 
 // Local runners. Their catalog rows are $0 stubs, so an unlisted local tag must
@@ -943,6 +951,12 @@ const ROUTER_PREFIXES = [
   /^cmd\//i,
   /^antigravity\//i,
   /^orcarouter\//i,
+  // codex-cliproxy-gateway keeps Codex's own OAuth routing native and forwards
+  // only `cliproxy/*` ids to CLIProxyAPI, so a routed session records
+  // `cliproxy/<id>` — and `<id>` can itself be a provider path
+  // (`cliproxy/zcode/glm-5.3-flash`). Peeling the wrapper lets the one
+  // known-namespace strip in getCanonicalName reach the priced leaf.
+  /^cliproxy\//i,
   // `xiaomi/` is NOT peeled: it is the vendor namespace LiteLLM prices under,
   // and BUILTIN_ALIASES maps the bare MiMo ids INTO it. Peeling would pull the
   // opposite way. It stays a known namespace via the catalog-derived set.
@@ -1242,6 +1256,7 @@ const autoModelNames: Record<string, string> = {
   'ibm-bob-auto': 'IBM Bob (auto)',
   'kiro-auto': 'Kiro (auto)',
   'quickdesk-auto': 'Quick Desktop (auto)',
+  'grokbot-auto': 'Grok Bot (auto)',
   'cline-auto': 'Cline (auto)',
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',

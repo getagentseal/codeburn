@@ -46,6 +46,14 @@ function sessionPseudonym(id: string): string {
   return `session-${hashed(`session:${id}`)}`
 }
 
+/// PR rows name the repository in both the full URL (the aggregation key) and
+/// the `owner/repo#123` label, so a caller that asked not to see project names
+/// must not see them either. Pseudonymized from the URL so rows referring to
+/// the same PR still line up; the numbers stay untouched.
+function prPseudonym(url: string): string {
+  return `pr-${hashed(`pr:${url}`)}`
+}
+
 type SessionDetails = MenubarPayload['current']['topProjects'][number]['sessionDetails']
 
 function redactSessionDetails(details: SessionDetails): SessionDetails {
@@ -89,6 +97,18 @@ export function redactProjectNames(payload: MenubarPayload, includeNames: boolea
               // session, not a name: it stays null.
               branch: b.branch === null ? null : branchPseudonym(b.branch),
             })),
+          }
+        : {}),
+      ...(payload.current.pullRequests
+        ? {
+            pullRequests: {
+              ...payload.current.pullRequests,
+              rows: payload.current.pullRequests.rows.map(row => ({
+                ...row,
+                url: prPseudonym(row.url),
+                label: prPseudonym(row.url),
+              })),
+            },
           }
         : {}),
     },

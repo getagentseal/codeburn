@@ -130,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        SingleInstanceGuard.retireOlderInstances()
         ProcessInfo.processInfo.automaticTerminationSupportEnabled = false
         ProcessInfo.processInfo.disableSuddenTermination()
         // Deliberately NO app-lifetime beginActivity here. A permanent
@@ -568,6 +569,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     fileprivate var lastCapacityDockProviderRefreshAt: Date?
     private var claudeQuotaFailureCount = 0
     private var nextClaudeQuotaRefreshAt: Date?
+    private var lastQuotaRolloverCheckAt = Date()
+
+    /// Reset instants crossed since the previous tick, grouped by the force
+    /// flags `refreshLiveQuotaProgressIfDue` takes. Without this a window that
+    /// resets at 14:00 keeps showing its pre-reset percentage until the next
+    /// cadence tick.
+    private func quotaGroupsRolledOver(
+        now: Date = Date()
+    ) -> (claude: Bool, codex: Bool, dock: Bool, any: Bool) {
+        let since = lastQuotaRolloverCheckAt
+        lastQuotaRolloverCheckAt = now
+        func rolledOver(_ dates: [Date?]) -> Bool {
+            QuotaRefreshDecision.windowRolledOver(
+                resetDates: dates.compactMap { $0 },
+                lastCheckedAt: since,
+                now: now
+            )
+        }
+        let claude = rolledOver(store.subscription.map {
+            [$0.fiveHourResetsAt, $0.sevenDayResetsAt, $0.sevenDayOpusResetsAt, $0.sevenDaySonnetResetsAt]
+        } ?? [])
+        let codex = rolledOver(store.codexUsage.map { [$0.primary?.resetsAt, $0.secondary?.resetsAt] } ?? [])
+        let dock = rolledOver(store.capacityDockProviderSummaries.values.flatMap {
+            [$0.primary?.resetsAt] + $0.details.map(\.resetsAt)
+        })
+        return (claude, codex, dock, claude || codex || dock)
+    }
 
     @discardableResult
     private func refreshLiveQuotaProgressIfDue(
@@ -643,6 +671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         case (false, false):
             break
         }
+        await store.quotaCrossingMonitor.record(windows: store.quotaWindows)
         return true
     }
 
@@ -849,12 +878,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             }
         }
 
-        if QuotaRefreshDecision.needsQuotaOnlyTick(
+        let rolledOver = quotaGroupsRolledOver()
+        if rolledOver.any || QuotaRefreshDecision.needsQuotaOnlyTick(
             payloadRefreshDue: shouldForceRefresh,
             payloadSkippedUnchanged: skippedUnchangedUsageRefresh
         ) {
             Task { [weak self] in
-                _ = await self?.refreshLiveQuotaProgressIfDue(force: forceQuota)
+                _ = await self?.refreshLiveQuotaProgressIfDue(
+                    force: forceQuota,
+                    forceClaude: rolledOver.claude,
+                    forceCodex: rolledOver.codex,
+                    forceCapacityDockProviders: rolledOver.dock
+                )
             }
         }
 
@@ -1123,17 +1158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
             while !Task.isCancelled && clock.now < deadline {
                 let placement = self.statusItemPlacementState
-                let revealed = placement.screen.map { screen in
-                    StatusItemPlacementPolicy.isMenuBarRevealed(
-                        pointer: NSEvent.mouseLocation,
-                        screenFrame: screen.frame,
-                        screenVisibleFrame: screen.visibleFrame
-                    )
-                } ?? false
+                let menuBar = Self.menuBarState(for: placement.screen)
                 switch recovery.action(
                     for: placement.geometry,
-                    isMenuBarRevealed: revealed,
-                    revealHasSettled: false
+                    isMenuBarRevealed: menuBar.revealed,
+                    revealHasSettled: false,
+                    menuBarAutoHides: menuBar.autoHides
                 ) {
                 case .stopHealthy:
                     return
@@ -1149,17 +1179,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled else { return }
                     let settledPlacement = self.statusItemPlacementState
-                    let settledReveal = settledPlacement.screen.map { screen in
-                        StatusItemPlacementPolicy.isMenuBarRevealed(
-                            pointer: NSEvent.mouseLocation,
-                            screenFrame: screen.frame,
-                            screenVisibleFrame: screen.visibleFrame
-                        )
-                    } ?? false
+                    let settledMenuBar = Self.menuBarState(for: settledPlacement.screen)
                     switch recovery.action(
                         for: settledPlacement.geometry,
-                        isMenuBarRevealed: settledReveal,
-                        revealHasSettled: true
+                        isMenuBarRevealed: settledMenuBar.revealed,
+                        revealHasSettled: true,
+                        menuBarAutoHides: settledMenuBar.autoHides
                     ) {
                     case .stopHealthy:
                         return
@@ -1192,6 +1217,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 NSLog("CodeBurn: status item stayed parked without a menu-bar reveal")
             }
         }
+    }
+
+    private static func menuBarState(for screen: NSScreen?) -> (revealed: Bool, autoHides: Bool) {
+        guard let screen else { return (false, true) }
+        return (
+            StatusItemPlacementPolicy.isMenuBarRevealed(
+                pointer: NSEvent.mouseLocation,
+                screenFrame: screen.frame,
+                screenVisibleFrame: screen.visibleFrame
+            ),
+            StatusItemPlacementPolicy.menuBarAutoHides(
+                screenFrame: screen.frame,
+                screenVisibleFrame: screen.visibleFrame
+            )
+        )
     }
 
     private func stopStatusItemPlacementRecovery() {
@@ -1358,7 +1398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         let menubarPeriod = store.menubarPeriod
         if let shortfall = store.menubarBadgeDeviceShortfall {
             button.toolTip = L(
-                "CodeBurn %@ · %lld of %lld devices reporting",
+                "CodeBurn %1$@ · %2$lld of %3$lld devices reporting",
                 menubarPeriod.menubarMetricLabel,
                 shortfall.reachable,
                 shortfall.total
@@ -1705,7 +1745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private func contextMenuUsageSummary() -> String {
         guard let current = store.todayPayload?.current else { return L("Today · no usage yet") }
         let calls = current.calls == 1 ? L("1 call") : L("%lld calls", current.calls)
-        return L("Today · %@ · %@", current.cost.asCurrency(), calls)
+        return L("Today · %1$@ · %2$@", current.cost.asCurrency(), calls)
     }
 
     private var settingsWindowController: NSWindowController?
@@ -1786,13 +1826,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             } else if updateChecker.updateAvailable, let latest = updateChecker.latestVersion {
                 alert.messageText = L("Update Available")
                 let header = L(
-                    "%@ is available (you have %@).",
+                    "%1$@ is available (you have %2$@).",
                     AppVersion.display(latest),
                     AppVersion.display(updateChecker.currentVersion)
                 )
                 if updateChecker.cliTooOldForUpdate {
                     alert.informativeText = L(
-                        "%@ Your codeburn CLI is too old to install it. First run:\n\n%@\n\nthen:\n\ncodeburn menubar --force",
+                        "%1$@ Your codeburn CLI is too old to install it. First run:\n\n%2$@\n\nthen:\n\ncodeburn menubar --force",
                         header,
                         updateChecker.cliUpdateCommand
                     )

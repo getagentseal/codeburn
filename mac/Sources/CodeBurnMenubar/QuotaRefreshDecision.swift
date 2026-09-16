@@ -22,4 +22,12 @@ enum QuotaRefreshDecision {
         guard autoRefreshAllowed else { return false }
         return now.timeIntervalSince(lastAttemptAt ?? .distantPast) >= threshold
     }
+
+    /// True when a window's `resetsAt` fell between the previous tick and now.
+    /// That boundary is the one moment the provider's numbers are certain to
+    /// have moved, and it fires once per reset instant: the tick that sees it
+    /// moves `lastCheckedAt` past the boundary.
+    static func windowRolledOver(resetDates: [Date], lastCheckedAt: Date, now: Date) -> Bool {
+        resetDates.contains { $0 > lastCheckedAt && $0 <= now }
+    }
 }

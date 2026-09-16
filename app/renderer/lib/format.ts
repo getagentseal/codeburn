@@ -50,6 +50,12 @@ export function shortenProjectPath(value: string, maxSegments = 3): string {
   return displayParts.join('/') || trimmed
 }
 
+/** "1 session" / "2,048 sessions" — one count label for every count site, so the
+ *  separator and the noun form never drift between screens. */
+export function formatCount(n: number, singular: string, plural = `${singular}s`): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? singular : plural}`
+}
+
 /** Compact token/count formatting: 1_842 → "1.8K", 184_000 → "184K", 1_200_000 → "1.2M". */
 export function formatCompact(n: number): string {
   if (!Number.isFinite(n)) return '—'
@@ -79,11 +85,12 @@ export function formatDayLong(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-/** "2h 14m" / "47m" / "38s" from a duration in ms. */
+/** "12 days" / "2h 14m" / "47m" / "38s" from a duration in ms. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '—'
-  const totalMin = Math.round(ms / 60_000)
-  if (totalMin < 1) return `${Math.round(ms / 1000)}s`
+  const totalMin = Math.floor(ms / 60_000)
+  if (totalMin < 1) return `${Math.floor(ms / 1000)}s`
   if (totalMin < 60) return `${totalMin}m`
+  if (totalMin >= 2_880) return `${Math.round(totalMin / 1_440)} days`
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
 }

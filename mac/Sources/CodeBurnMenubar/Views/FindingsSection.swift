@@ -192,7 +192,7 @@ private struct TipItem: Identifiable {
     }
     if let projected = stats.projectedMonth, let prevMonth = stats.previousMonthTotal, projected > prevMonth * 1.3 {
         risks.append(TipItem(
-            text: L("On pace for %@ this month (+%lld%% vs last)", projected.asCompactCurrency(), Int(((projected - prevMonth) / prevMonth) * 100)),
+            text: L("On pace for %1$@ this month (+%2$lld%% vs last)", projected.asCompactCurrency(), Int(((projected - prevMonth) / prevMonth) * 100)),
             trailing: nil
         ))
     }

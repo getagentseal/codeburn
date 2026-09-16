@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useState } from 'react'
 import type { MenubarPayload } from '../lib/types'
+import { Icon } from './icons'
 
 export type TeamTab = 'teams.week' | 'teams.status' | string
 
@@ -38,19 +39,19 @@ export function useTeamTabs(payload: MenubarPayload | null): TeamTabConfig[] {
           newTabs.push({
             id: 'teams.week',
             label: 'Team Week',
-            icon: <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4" /><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+            icon: <Icon name="circle-check" />,
           })
         } else if (key === 'teams.status') {
           newTabs.push({
             id: 'teams.status',
             label: 'Team Status',
-            icon: <svg viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>,
+            icon: <Icon name="zap" />,
           })
         } else {
           newTabs.push({
             id: key,
             label: `Unknown (${key})`,
-            icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /></svg>,
+            icon: <Icon name="circle" />,
           })
         }
       }

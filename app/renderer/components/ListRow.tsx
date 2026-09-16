@@ -1,5 +1,7 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 
+import { Icon } from './icons'
+
 export { seriesColorForModel } from '../lib/modelSeries'
 
 /**
@@ -52,7 +54,7 @@ export function ListRow({
         {sub !== undefined && <span>{sub}</span>}
       </div>
       {value !== undefined && <span className={valueClass ? `val ${valueClass}` : 'val'}>{value}</span>}
-      {interactive && <span className="chev">›</span>}
+      {interactive && <span className="chev" aria-hidden="true"><Icon name="chevron-right" /></span>}
     </div>
   )
 }

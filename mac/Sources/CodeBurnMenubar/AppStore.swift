@@ -175,13 +175,8 @@ final class AppStore {
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
-    /// Early quota resets seen for each provider, keyed by dock provider id, and
-    /// this Mac's own record of how early past resets landed. Both are derived
-    /// from data already on disk on the existing refresh lifecycle — no polling
-    /// of its own, no network (#725).
-    var earlyResetEvents: [String: EarlyQuotaResetEvent] = [:]
-    var earlyResetHistory: [EarlyQuotaResetHistory.Summary] = []
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
+    @ObservationIgnored var quotaCrossingMonitor = QuotaCrossingMonitor()
 
     var codexUsage: CodexUsage?
     var codexError: String?
@@ -1623,8 +1618,6 @@ final class AppStore {
         subscriptionError = nil
         subscriptionLoadState = .notBootstrapped
         capacityEstimates = [:]
-        earlyResetEvents[CapacityDockProvider.claude.rawValue] = nil
-        earlyResetHistory = []
         earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.claude.rawValue)
         Task.detached { await SubscriptionSnapshotStore.clearAll() }
         // Notify the AppDelegate to clear its cadence-loop anchor so the next
@@ -2141,22 +2134,6 @@ final class AppStore {
         return cleaned
     }
 
-    /// The early-reset band for one dock provider, while it is still recent.
-    func capacityDockEarlyResetNotice(
-        for provider: CapacityDockProvider,
-        now: Date = Date()
-    ) -> EarlyQuotaResetEvent? {
-        guard let event = earlyResetEvents[provider.rawValue] else { return nil }
-        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
-    }
-
-    /// This Mac's own early-reset pattern for the provider's windows, for the
-    /// quota hover card. Only Claude persists the snapshots this is derived from.
-    func earlyResetHistoryCaptions(for filter: ProviderFilter) -> [String] {
-        guard filter == .claude else { return [] }
-        return earlyResetHistory.map(\.caption)
-    }
-
     /// Snapshot of live quota state for a given provider. Returns nil when the user
     /// has not connected yet — the bar slot stays empty so we never trigger a
     /// source-owned Keychain prompt at startup. Once bootstrapped, the bar persists across all
@@ -2165,48 +2142,78 @@ final class AppStore {
     /// Aggregate quota status across all connected providers, used by the menu
     /// bar flame icon (color) and the popover warning row. Severity = worst
     /// observed across any provider's worst window. Warning providers are
-    /// every connected provider at >= 70% utilization.
+    /// every connected provider at >= 70% utilization, each carrying the window
+    /// that put it there so the row can name it (`QuotaWarningPresentation`).
     struct AggregateQuotaStatus {
         let severity: QuotaSummary.Severity
-        let warnings: [(name: String, percent: Double)]   // sorted desc by percent
+        let warnings: [QuotaWarning]   // sorted desc by percent
+    }
+
+    /// Every connected provider's quota windows, flattened. The warning banner
+    /// and the crossing notifier read the same list, so the two can never
+    /// disagree about what a provider is reporting.
+    var quotaWindows: [QuotaCrossingWindow] {
+        var windows: [QuotaCrossingWindow] = []
+        func include(_ name: String, _ candidates: [QuotaWarning.Candidate]) {
+            windows += candidates.map {
+                QuotaCrossingWindow(providerName: name, label: $0.label, percent: $0.percent, resetsAt: $0.resetsAt)
+            }
+        }
+        if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
+            // Labelled as `claudeQuotaSummary` labels them, so the warning row
+            // names a window the way the Plan tab and the Capacity Dock do.
+            include("Claude", [
+                .init(label: "5-hour", percent: usage.fiveHourPercent, resetsAt: usage.fiveHourResetsAt),
+                .init(label: "Weekly", percent: usage.sevenDayPercent, resetsAt: usage.sevenDayResetsAt),
+                .init(label: "Weekly · Opus", percent: usage.sevenDayOpusPercent, resetsAt: usage.sevenDayOpusResetsAt),
+                .init(label: "Weekly · Sonnet", percent: usage.sevenDaySonnetPercent, resetsAt: usage.sevenDaySonnetResetsAt),
+            ])
+        }
+        if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
+            include("Codex", [usage.primary, usage.secondary].compactMap { $0 }.map {
+                QuotaWarning.Candidate(label: $0.windowLabel, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = kimiUsage, shouldIncludeCachedQuota(loadState: kimiLoadState) {
+            var windows: [QuotaWarning.Candidate] = []
+            if let w = usage.primary {
+                windows.append(.init(label: w.label, percent: w.usedPercent, resetsAt: w.resetsAt))
+            }
+            windows += usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            }
+            include("Kimi Code", windows)
+        }
+        if let usage = geminiUsage, shouldIncludeCachedQuota(loadState: geminiLoadState) {
+            include("Gemini", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = copilotUsage, shouldIncludeCachedQuota(loadState: copilotLoadState) {
+            include("Copilot", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = antigravityUsage, shouldIncludeCachedQuota(loadState: antigravityLoadState) {
+            include("Antigravity", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        return windows
     }
 
     var aggregateQuotaStatus: AggregateQuotaStatus {
-        var providers: [(name: String, percent: Double)] = []
-        if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
-            let worst = [
-                usage.fiveHourPercent,
-                usage.sevenDayPercent,
-                usage.sevenDayOpusPercent,
-                usage.sevenDaySonnetPercent,
-            ].compactMap { $0 }.max() ?? 0
-            if worst > 0 { providers.append(("Claude", worst)) }
+        var order: [String] = []
+        var byProvider: [String: [QuotaWarning.Candidate]] = [:]
+        for window in quotaWindows {
+            if byProvider[window.providerName] == nil { order.append(window.providerName) }
+            byProvider[window.providerName, default: []].append(
+                .init(label: window.label, percent: window.percent, resetsAt: window.resetsAt)
+            )
         }
-        if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
-            let worst = max(usage.primary?.usedPercent ?? 0, usage.secondary?.usedPercent ?? 0)
-            if worst > 0 { providers.append(("Codex", worst)) }
-        }
-        if let usage = kimiUsage, shouldIncludeCachedQuota(loadState: kimiLoadState) {
-            let worst = max(usage.primary?.usedPercent ?? 0, usage.details.map(\.usedPercent).max() ?? 0)
-            if worst > 0 { providers.append(("Kimi Code", worst)) }
-        }
-        if let usage = geminiUsage, shouldIncludeCachedQuota(loadState: geminiLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Gemini", worst)) }
-        }
-        if let usage = copilotUsage, shouldIncludeCachedQuota(loadState: copilotLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Copilot", worst)) }
-        }
-        if let usage = antigravityUsage, shouldIncludeCachedQuota(loadState: antigravityLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Antigravity", worst)) }
-        }
-        let worst = providers.map(\.percent).max() ?? 0
-        let severity = QuotaSummary.severity(for: worst / 100)
-        let sorted = providers.sorted { $0.percent > $1.percent }
-        let warnings = sorted.filter { $0.percent >= 70 }
-        return AggregateQuotaStatus(severity: severity, warnings: warnings)
+        let providers = order.compactMap { QuotaWarning.worst(name: $0, windows: byProvider[$0] ?? []) }
+        let result = QuotaWarningPresentation.aggregate(providers)
+        return AggregateQuotaStatus(severity: result.severity, warnings: result.warnings)
     }
 
     private func shouldIncludeCachedQuota(loadState: SubscriptionLoadState) -> Bool {
@@ -2236,7 +2243,10 @@ final class AppStore {
     /// "none running".
     func capacityDockLiveSessions(for provider: CapacityDockProvider) -> [LiveSession]? {
         guard let block = menubarPayload?.liveSessions else { return nil }
-        return block.sessions.filter { $0.provider == provider.id }
+        // The CLI names providers by their own ids ("kimicode", "cursor-agent"),
+        // not by the dock's raw identifiers ("kimi"); match the payload ids.
+        let ids = provider.payloadProviderIDs
+        return block.sessions.filter { ids.contains($0.provider) }
     }
 
     /// Today's totals for the dock popover. The background loop keeps the
@@ -2884,7 +2894,6 @@ final class AppStore {
         }
 
         await refreshCapacityEstimates()
-        await refreshEarlyResetHistory()
     }
 
     /// Hand this fetch's windows to the early-reset monitor, which compares them
@@ -2917,10 +2926,6 @@ final class AppStore {
             observations: observations,
             now: now
         )
-        earlyResetEvents[provider.rawValue] = earlyQuotaResetMonitor.visibleEvent(
-            providerID: provider.rawValue,
-            now: now
-        )
     }
 
     /// Claude's rate-limit windows are fixed lengths, the same durations the
@@ -2931,24 +2936,6 @@ final class AppStore {
         case "seven_day", "seven_day_opus", "seven_day_sonnet": QuotaPacePresentation.claudeSevenDaySeconds
         default: nil
         }
-    }
-
-    /// Re-derive the "past resets came this early" captions from the snapshots
-    /// already on disk. Local only: no network, no external feed.
-    private func refreshEarlyResetHistory() async {
-        var summaries: [EarlyQuotaResetHistory.Summary] = []
-        for key in ["seven_day", "seven_day_opus", "seven_day_sonnet"] {
-            let snapshots = await SubscriptionSnapshotStore.snapshots(for: key)
-            if let summary = EarlyQuotaResetHistory.summarize(
-                snapshots: snapshots,
-                windowKey: key,
-                windowName: EarlyQuotaResetFormat.claudeWindowName(forKey: key),
-                windowSeconds: Self.claudeWindowSeconds(forKey: key)
-            ) {
-                summaries.append(summary)
-            }
-        }
-        earlyResetHistory = summaries
     }
 
     /// Sum effective tokens (input + 5*output + cache_creation + 0.1*cache_read) across the

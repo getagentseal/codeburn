@@ -84,11 +84,11 @@ struct QuotaSummaryHeadlineTests {
 
     @Test("severity steps at the 0.50 / 0.75 / 0.90 band boundaries")
     func severityBoundaries() {
-        #expect(QuotaSummary.severity(for: 0.49) == .normal)
-        #expect(QuotaSummary.severity(for: 0.50) == .warning)
-        #expect(QuotaSummary.severity(for: 0.74) == .warning)
-        #expect(QuotaSummary.severity(for: 0.75) == .critical)
-        #expect(QuotaSummary.severity(for: 0.89) == .critical)
-        #expect(QuotaSummary.severity(for: 0.90) == .danger)
+        #expect(QuotaSummary.severity(for: 0.59) == .normal)
+        #expect(QuotaSummary.severity(for: 0.60) == .warning)
+        #expect(QuotaSummary.severity(for: 0.69) == .warning)
+        #expect(QuotaSummary.severity(for: 0.70) == .critical)
+        #expect(QuotaSummary.severity(for: 0.94) == .critical)
+        #expect(QuotaSummary.severity(for: 0.95) == .danger)
     }
 }

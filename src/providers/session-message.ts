@@ -1,4 +1,4 @@
-import { calculateCost } from '../models.js'
+import { billableOutputTokens, calculateCost } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ParsedProviderCall } from './types.js'
 
@@ -133,7 +133,10 @@ export function buildAssistantCall(opts: {
   let costUSD = calculateCost(
     model,
     tokens.input,
-    tokens.output + tokens.reasoning,
+    // Same single source of truth the cache-rehydration path uses, so a fresh
+    // parse and a cached read can never disagree about whether this provider's
+    // reasoning tokens already sit inside its output count. (#1075, #1334)
+    billableOutputTokens(opts.providerName, tokens.output, tokens.reasoning),
     tokens.cacheWrite,
     tokens.cacheRead,
     0,

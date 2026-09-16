@@ -1,7 +1,7 @@
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 
-import { calculateCost } from '../models.js'
+import { billableOutputTokens, calculateCost } from '../models.js'
 import {
   isSqliteAvailable,
   getSqliteLoadError,
@@ -257,7 +257,13 @@ export function createSqliteSessionParser(
             if (!seenKeys.has(dedupKey)) {
               seenKeys.add(dedupKey)
               const model = sessionTokens.model ?? 'unknown'
-              let costUSD = calculateCost(model, sessionTokens.input, sessionTokens.output, sessionTokens.cacheWrite, sessionTokens.cacheRead, 0)
+              // OpenCode stores reasoning in its own session column and bills it
+              // at the output rate, so it has to join the output bucket here the
+              // same way the per-message path does. Routed through
+              // billableOutputTokens so this fallback can never drift from the
+              // per-message pricing in buildAssistantCall. (#1334)
+              const outputForCost = billableOutputTokens(config.providerName, sessionTokens.output, sessionTokens.reasoning)
+              let costUSD = calculateCost(model, sessionTokens.input, outputForCost, sessionTokens.cacheWrite, sessionTokens.cacheRead, 0)
               if (costUSD === 0 && sessionTokens.cost > 0) costUSD = sessionTokens.cost
               yield {
                 provider: config.providerName,

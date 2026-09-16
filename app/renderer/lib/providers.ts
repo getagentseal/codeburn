@@ -8,6 +8,7 @@ export const PROVIDER_NAMES: Record<ProviderName, string> = {
   antigravity: 'Antigravity',
   kimi: 'Kimi Code',
   zcode: 'ZCode',
+  grokbot: 'Grok Bot',
 }
 
 /** Company named in honest copy like "Anthropic rate limited the quota endpoint". */
@@ -19,6 +20,9 @@ export const PROVIDER_OWNERS: Record<ProviderName, string> = {
   antigravity: 'Google',
   kimi: 'Moonshot AI',
   zcode: 'Z.ai',
+  // The weekly allowance is served by Cursor's dashboard, so Cursor is who
+  // rate limits it.
+  grokbot: 'Cursor',
 }
 
 const ALL_PROVIDERS = Object.keys(PROVIDER_NAMES) as ProviderName[]

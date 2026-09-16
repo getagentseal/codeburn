@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 import gsap from 'gsap'
 import { useGSAP } from '@gsap/react'
@@ -33,6 +33,32 @@ export function motionEnabled(): boolean {
  * (CSS keyframe) animation never renders under reduced motion or in tests. */
 export function motionClass(base: string, animated: string): string {
   return motionEnabled() ? `${base} ${animated}` : base
+}
+
+/** Milliseconds behind --dur-fast, --dur-base and --dur-slow in plain.css. */
+export const DUR = { fast: 120, base: 180, slow: 240 } as const
+
+export function useExitAnimation(onDone: () => void, durationMs: number, openKey: string): { closing: boolean; beginExit: () => void } {
+  const [closing, setClosing] = useState(false)
+  const done = useRef(onDone)
+  done.current = onDone
+
+  // Re-opening on a new subject mid-exit must disarm the pending timer, or it
+  // fires and closes the subject the user just asked for.
+  useEffect(() => { setClosing(false) }, [openKey])
+
+  useEffect(() => {
+    if (!closing) return
+    const timer = window.setTimeout(() => done.current(), durationMs)
+    return () => window.clearTimeout(timer)
+  }, [closing, durationMs])
+
+  const beginExit = useCallback(() => {
+    if (motionEnabled()) setClosing(true)
+    else done.current()
+  }, [])
+
+  return { closing, beginExit }
 }
 
 /**

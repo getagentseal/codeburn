@@ -1,0 +1,47 @@
+name: New provider
+description: Track a new AI coding tool for codeburn to support.
+labels:
+  - provider
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read "Adding a New Provider" in CONTRIBUTING.md first. New providers have the highest bar because broken parsing silently produces wrong data for users. Do not rely on AI-generated guesses about storage paths or schemas — install the tool and inspect the actual files on disk.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool name and link
+    validations:
+      required: true
+  - type: input
+    id: storage-path
+    attributes:
+      label: Where it stores sessions on disk
+      description: The path, e.g. `~/.tool/sessions/`.
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Redacted sample of one session file
+    validations:
+      required: true
+  - type: dropdown
+    id: pricing-public
+    attributes:
+      label: Is pricing public
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: can-help-test
+    attributes:
+      label: Can you help test
+      options:
+        - "Yes"
+        - "No"
+    validations:
+      required: true

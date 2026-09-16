@@ -3,8 +3,9 @@
 /// the optional `liveSessions` block of the menubar payload; the app renders
 /// only what it finds here.
 import { open, readdir, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
+import { kimicodeHomes, projectFromWorkDir, readState as readKimicodeState } from './providers/kimicode.js'
 import { reportedContextWindow } from './context-tree.js'
 import { getShortModelName } from './models.js'
 import type { ApiUsage, AssistantMessageContent, JournalEntry } from './types.js'
@@ -292,7 +293,108 @@ export async function collectLiveSessionInputs(
     parent.subagentActivityMs.push(sidechain.mtimeMs)
   }
 
-  return [...inputs.values()]
+  return [...inputs.values(), ...await collectKimicodeInputs(nowMs, windowMs)]
+}
+
+/// What the tail of the main wire file says about the session: the model it
+/// last asked for, the context Kimi itself measured after the last turn, and
+/// the window it asked for. Tail-only, like the Claude scanner: a running wire
+/// file reaches tens of MB and only the end matters.
+async function kimicodeTail(wirePath: string): Promise<{ model: string | null; contextTokens: number | null; contextWindow: number | null }> {
+  const out = { model: null as string | null, contextTokens: null as number | null, contextWindow: null as number | null }
+  let text = ''
+  try {
+    text = await readTail(wirePath, TAIL_BYTES)
+  } catch {
+    return out
+  }
+  const lines = text.split('\n')
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]
+    if (!line || !line.trim()) continue
+    let record: { type?: unknown; model?: unknown; maxTokens?: unknown; tokens?: unknown }
+    try {
+      record = JSON.parse(line) as typeof record
+    } catch {
+      continue
+    }
+    if (record.type === 'llm.request' && out.model === null) {
+      if (typeof record.model === 'string' && record.model) out.model = record.model
+      if (typeof record.maxTokens === 'number' && record.maxTokens > 0) out.contextWindow = record.maxTokens
+    } else if (record.type === 'token_counting.measured' && out.contextTokens === null) {
+      if (typeof record.tokens === 'number' && record.tokens >= 0) out.contextTokens = record.tokens
+    }
+    if (out.model !== null && out.contextTokens !== null) break
+  }
+  // A measurement without a window (or the reverse) draws nothing; the app
+  // needs both to size the ring.
+  if (out.contextTokens === null || out.contextWindow === null) { out.contextTokens = null; out.contextWindow = null }
+  return out
+}
+
+/// Kimi Code keeps a directory per session, the session's own turns in
+/// `agents/main/wire.jsonl` and every sub-agent in a sibling agent directory.
+/// A missing or unreadable store is silent: no Kimi install means no rows.
+export async function collectKimicodeInputs(
+  nowMs: number,
+  windowMs: number,
+  roots: string[] = kimicodeHomes(),
+): Promise<LiveSessionInput[]> {
+  // Walked level by level rather than recursively: an agent directory also
+  // holds `blobs` and `file-history` trees, and descending into those turns a
+  // two-thousand-file scan into an eighteen-thousand-entry one.
+  const subdirectories = async (path: string): Promise<string[]> =>
+    (await readdir(path, { withFileTypes: true }).catch(() => []))
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(path, entry.name))
+
+  const paths: string[] = []
+  await Promise.all(roots.map(async root => {
+    await Promise.all((await subdirectories(join(root, 'sessions'))).map(async workDir => {
+      await Promise.all((await subdirectories(workDir)).map(async sessionDir => {
+        for (const agent of await subdirectories(join(sessionDir, 'agents'))) {
+          paths.push(join(agent, 'wire.jsonl'))
+        }
+      }))
+    }))
+  }))
+
+  const bySession = new Map<string, { mainMs: number; subagentMs: number[] }>()
+  await Promise.all(paths.map(async path => {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) return
+    const sessionDir = dirname(dirname(dirname(path)))
+    const agents = bySession.get(sessionDir) ?? { mainMs: 0, subagentMs: [] }
+    if (basename(dirname(path)) === 'main') agents.mainMs = info.mtimeMs
+    else if (nowMs - info.mtimeMs <= windowMs) agents.subagentMs.push(info.mtimeMs)
+    bySession.set(sessionDir, agents)
+  }))
+
+  const inputs: LiveSessionInput[] = []
+  for (const [sessionDir, agents] of bySession) {
+    const mainIsLive = agents.mainMs > 0 && nowMs - agents.mainMs <= windowMs
+    if (!mainIsLive && agents.subagentMs.length === 0) continue
+    const state = await readKimicodeState(sessionDir)
+    // `createdAt` is absent on stores that never wrote it; the state file itself
+    // is created with the session, so its birthtime is the same moment.
+    const birthtimeMs = state.createdAtMs
+      ? 0
+      : (await stat(join(sessionDir, 'state.json')).catch(() => null))?.birthtimeMs ?? 0
+    const tail = await kimicodeTail(join(sessionDir, 'agents', 'main', 'wire.jsonl'))
+    inputs.push({
+      id: basename(sessionDir).replace(/^session_/, ''),
+      provider: 'kimicode',
+      project: projectFromWorkDir(state.cwd || state.workDir || '', basename(dirname(sessionDir))),
+      branch: null,
+      model: tail.model,
+      contextTokens: tail.contextTokens,
+      contextWindow: tail.contextWindow,
+      startedMs: state.createdAtMs || birthtimeMs,
+      lastActivityMs: agents.mainMs,
+      subagentActivityMs: agents.subagentMs,
+    })
+  }
+  return inputs
 }
 
 export async function collectLiveSessions(

@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
 import { motionEnabled } from '../lib/motion'
-import flame from '../assets/flame.png'
+import flame from '../assets/onboarding-flame.png'
 
 /**
  * Brand flame mark: the exact approved icon art (app/build/icon.png minus the
@@ -21,7 +21,6 @@ export function FlameMark({ size = 20, live = false }: { size?: number; live?: b
       className={flicker ? 'flamemark fm-flicker' : 'flamemark'}
       style={flicker ? flickerStyle : undefined}
       src={flame}
-      width={size}
       height={size}
       alt=""
       aria-hidden="true"

@@ -1,0 +1,92 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /dash
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /windows
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /windows/src-tauri
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      day: monday
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

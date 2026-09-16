@@ -2,11 +2,13 @@
 
 <!-- What does this PR do? 1-3 bullet points. -->
 
-## Testing
+## Testing / Verification
 
 - [ ] I have tested this locally against real data (not just unit tests)
 - [ ] `npm test` passes
 - [ ] `npm run build` succeeds
+- [ ] Not a UI change
+- [ ] UI change: before and after screenshots attached below
 
 ### For new providers only:
 

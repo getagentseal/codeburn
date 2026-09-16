@@ -79,6 +79,7 @@ CodeBurn does. It reads the session files your tools already write to disk and b
 Everything runs locally. No wrapper, no proxy, no API keys, nothing leaves your machine. Pricing comes from [LiteLLM](https://github.com/BerriAI/litellm), refreshed daily. The optional desktop app can send an anonymous, bucketed usage report if you say yes to it; see [Telemetry](#telemetry).
 
 <p align="center">
+  <a href="https://codeburn.app">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#find-and-fix-waste">Find waste</a> ·
   <a href="#apply-fixes-undo-anytime">Apply fixes</a> ·
@@ -389,16 +390,6 @@ gnome-extensions enable codeburn@codeburn.dev
 
 See [gnome/README.md](gnome/README.md) for settings and development notes. The Tauri tray app in `windows/` also builds and runs on Linux, but it is experimental and unreleased there — the GNOME extension is the supported Linux surface.
 
-### Omarchy
-
-Install the [CodeBurn Omarchy plugin](https://omarchyplugins.com/plugin.html?id=codeburn) to add CodeBurn to Omarchy:
-
-Community-maintained by [@erzz](https://github.com/erzz) — issues and feature requests go to [erzz/omarchy-codeburn](https://github.com/erzz/omarchy-codeburn).
-
-```bash
-omarchy plugin add https://github.com/erzz/omarchy-codeburn.git --enable
-```
-
 ## CodeBurn in your agent (MCP)
 
 ```bash
@@ -450,6 +441,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
   <a href="docs/providers/vercel-gateway.md" title="Vercel AI Gateway"><img src="assets/providers/vercel-gateway.png" alt="Vercel AI Gateway" height="34" /></a>
   <a href="docs/providers/zerostack.md" title="Zerostack"><img src="assets/providers/zerostack.png" alt="Zerostack" height="34" /></a>
   <a href="docs/providers/grok.md" title="Grok Build"><img src="assets/providers/grok.png" alt="Grok Build" height="34" /></a>
+  <a href="docs/providers/grokbot.md" title="Grok Bot"><img src="assets/providers/grok.png" alt="Grok Bot" height="34" /></a>
   <a href="docs/providers/zcode.md" title="ZCode"><img src="assets/providers/zcode.jpg" alt="ZCode" height="34" /></a>
   <a href="docs/providers/zed.md" title="Zed"><img src="assets/providers/zed.jpg" alt="Zed" height="34" /></a>
   <a href="docs/providers/hermes.md" title="Hermes Agent"><img src="assets/providers/hermes.png" alt="Hermes Agent" height="34" /></a>
@@ -568,7 +560,7 @@ Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, an
 
 ### Pricing
 
-Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing. Routing-gateway model ids are priced as the model they wrap: [OrcaRouter](https://www.orcarouter.ai) fusion route ids peel to their current upstream (`openai/gpt-oss-120b`), `orcarouter/auto` stays unpriced until a live probe pins the rotating target, and a nested upstream spelling (`orcarouter/deepseek/deepseek-v4-pro`) prices at that exact row, so a gateway-routed session reports real spend instead of $0.
+Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing. Routing-gateway model ids are priced as the model they wrap: [OrcaRouter](https://www.orcarouter.ai) fusion route ids peel to their current upstream (`openai/gpt-oss-120b`), `orcarouter/auto` stays unpriced until a live probe pins the rotating target, and a nested upstream spelling (`orcarouter/deepseek/deepseek-v4-pro`) prices at that exact row, so a gateway-routed session reports real spend instead of $0. Codex sessions routed through [codex-cliproxy-gateway](https://github.com/aceHubert/codex-cliproxy-gateway) record `cliproxy/<model>` ids — including CLIProxyAPI provider paths like `cliproxy/zcode/glm-5.3-flash` — and the wrapper and the known provider segment peel the same way.
 
 ### Task Categories
 
@@ -895,14 +887,13 @@ Sponsoring as a team or company? Your logo lands right here, in front of every d
 
 ## Star History
 
-<p align="center">
-<!-- star-history:start -->
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg">
-  <img alt="Star history" src="assets/star-history/star-history-light.svg">
-</picture>
-<!-- star-history:end -->
-</p>
+<a href="https://www.star-history.com/?repos=getagentseal%2Fcodeburn&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 

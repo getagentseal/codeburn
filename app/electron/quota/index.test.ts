@@ -7,8 +7,9 @@ const quota = (provider: ProviderName): QuotaProvider => ({
   provider, connection: 'connected', primary: null, details: [], planLabel: null, footerLines: [],
 })
 
-// Every construction stubs all seven fetchers: a missing dep falls back to the
-// real fetcher, which would touch disk or the network inside a test.
+// Every construction stubs all eight fetchers: a missing dep falls back to the
+// real fetcher, which would touch disk or the network inside a test. Grok Bot's
+// install check is stubbed too, so the row does not depend on the host machine.
 const noopFetchers = () => ({
   claude: vi.fn(async () => ({ quota: quota('claude') })),
   codex: vi.fn(async () => ({ quota: quota('codex') })),
@@ -17,17 +18,18 @@ const noopFetchers = () => ({
   antigravity: vi.fn(async () => ({ quota: quota('antigravity') })),
   kimi: vi.fn(async () => ({ quota: quota('kimi') })),
   zcode: vi.fn(async () => ({ quota: quota('zcode') })),
+  grokbot: vi.fn(async () => ({ quota: quota('grokbot') })),
 })
 
 describe('QuotaService', () => {
   it('fetches and returns every registered provider', async () => {
     const fetchers = noopFetchers()
     const service = new QuotaService({
-      ...fetchers, now: () => 1000,
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000,
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     const results = await service.getQuota({ force: true })
-    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode'])
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode', 'grokbot'])
     for (const fetcher of Object.values(fetchers)) expect(fetcher).toHaveBeenCalledTimes(1)
     // Antigravity is local-only; it must not receive keychain permission.
     expect(fetchers.antigravity).toHaveBeenCalledWith({ signal: expect.any(AbortSignal), allowKeychain: false })
@@ -42,7 +44,7 @@ describe('QuotaService', () => {
     try {
       const fetchers = noopFetchers()
       const service = new QuotaService({
-        ...fetchers, now: () => Date.parse('2026-08-14T00:00:00Z'),
+        ...fetchers, grokbotInstalled: () => true, now: () => Date.parse('2026-08-14T00:00:00Z'),
         readFile: vi.fn(async () => null),
         writeFile: vi.fn(async () => {}),
         statePath: '/mock/backoff.json',
@@ -58,15 +60,28 @@ describe('QuotaService', () => {
     }
   })
 
+  // Grok Bot is an optional desktop app: with it absent there is no row to
+  // show, only someone else's Cursor allowance under a Grok Bot label.
+  it('omits Grok Bot entirely when the app is not installed', async () => {
+    const fetchers = noopFetchers()
+    const service = new QuotaService({
+      ...fetchers, grokbotInstalled: () => false, now: () => 1000,
+      readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
+    })
+    const results = await service.getQuota({ force: true })
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'zcode'])
+    expect(fetchers.grokbot).not.toHaveBeenCalled()
+  })
+
   it('omits disabled providers from polling and results', async () => {
     const fetchers = noopFetchers()
     const service = new QuotaService({
-      ...fetchers, now: () => 1000,
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000,
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     // Unknown names are ignored rather than throwing.
     const results = await service.getQuota({ force: true, disabled: ['gemini', 'copilot', 'bogus' as ProviderName] })
-    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'antigravity', 'kimi', 'zcode'])
+    expect(results.map(row => row.provider)).toEqual(['claude', 'codex', 'antigravity', 'kimi', 'zcode', 'grokbot'])
     expect(fetchers.gemini).not.toHaveBeenCalled()
     expect(fetchers.copilot).not.toHaveBeenCalled()
   })
@@ -77,7 +92,7 @@ describe('QuotaService', () => {
     fetchers.claude.mockImplementation(async () => ({ quota: quota('claude'), retryAfterSeconds: 60 }))
     fetchers.gemini.mockImplementation(async () => ({ quota: quota('gemini'), retryAfterSeconds: 120 }))
     const service = new QuotaService({
-      ...fetchers, now: () => Date.parse('2026-07-12T00:00:00Z'),
+      ...fetchers, grokbotInstalled: () => true, now: () => Date.parse('2026-07-12T00:00:00Z'),
       readFile: vi.fn(async () => writes.at(-1) ?? null),
       writeFile: vi.fn(async (_path, value) => { writes.push(value) }),
       statePath: '/mock/backoff.json',
@@ -95,7 +110,7 @@ describe('QuotaService', () => {
   it('force re-fetches within the cache window by invalidating first', async () => {
     const fetchers = noopFetchers()
     const service = new QuotaService({
-      ...fetchers, now: () => 1000, refreshMs: 120_000,
+      ...fetchers, grokbotInstalled: () => true, now: () => 1000, refreshMs: 120_000,
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     await service.getQuota()
@@ -111,7 +126,7 @@ describe('QuotaService', () => {
     const fetchers = noopFetchers()
     fetchers.claude.mockImplementation(async () => { await pending; return { quota: quota('claude') } })
     const service = new QuotaService({
-      ...fetchers,
+      ...fetchers, grokbotInstalled: () => true,
       readFile: vi.fn(async () => null), writeFile: vi.fn(async () => undefined),
     })
     const first = service.getQuota({ force: true })

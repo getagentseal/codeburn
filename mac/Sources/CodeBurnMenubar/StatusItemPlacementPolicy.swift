@@ -39,15 +39,22 @@ enum StatusItemPlacementPolicy {
             && location.y <= screenFrame.maxY + edgeOvershoot
     }
 
+    /// An auto-hidden bar overlays the screen, so it never shrinks the visible
+    /// frame; a persistent bar always does.
+    static func menuBarAutoHides(screenFrame: CGRect, screenVisibleFrame: CGRect) -> Bool {
+        let geometryTolerance: CGFloat = 1
+        return screenVisibleFrame.maxY >= screenFrame.maxY - geometryTolerance
+    }
+
     static func isMenuBarRevealed(
         pointer: CGPoint,
         screenFrame: CGRect,
         screenVisibleFrame: CGRect
     ) -> Bool {
-        let geometryTolerance: CGFloat = 1
-        let menuBarOccupiesVisibleFrame = screenVisibleFrame.maxY < screenFrame.maxY - geometryTolerance
-        return menuBarOccupiesVisibleFrame
-            || isMenuBarRevealLocation(pointer, screenFrame: screenFrame)
+        if !menuBarAutoHides(screenFrame: screenFrame, screenVisibleFrame: screenVisibleFrame) {
+            return true
+        }
+        return isMenuBarRevealLocation(pointer, screenFrame: screenFrame)
     }
 }
 
@@ -68,8 +75,9 @@ enum StatusItemPlacementRecoveryAction: Equatable {
 
 /// Pure state machine for the AppKit recovery loop. A reveal is consumed only
 /// when a pulse is actually issued; realization lag must not waste the user's
-/// one reveal gesture. After a failed pulse, a hide followed by a distinct
-/// reveal is required before another attempt.
+/// one reveal gesture. After a failed pulse on an auto-hidden bar, a hide
+/// followed by a distinct reveal is required before another attempt. A
+/// persistent menu bar never hides, so that gate would strand the retries.
 struct StatusItemPlacementRecoveryCoordinator {
     private(set) var pulseCount = 0
     private var requiresHideBeforeNextPulse = false
@@ -82,7 +90,8 @@ struct StatusItemPlacementRecoveryCoordinator {
     mutating func action(
         for geometry: StatusItemPlacementRecoveryGeometry,
         isMenuBarRevealed: Bool,
-        revealHasSettled: Bool
+        revealHasSettled: Bool,
+        menuBarAutoHides: Bool = true
     ) -> StatusItemPlacementRecoveryAction {
         if geometry == .healthy {
             return .stopHealthy
@@ -108,7 +117,7 @@ struct StatusItemPlacementRecoveryCoordinator {
         }
 
         pulseCount += 1
-        requiresHideBeforeNextPulse = true
+        requiresHideBeforeNextPulse = menuBarAutoHides
         return .pulse(pulseCount)
     }
 }

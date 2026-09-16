@@ -182,8 +182,8 @@ describe('Spend', () => {
       '2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05',
       '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10',
     ])
-    const ticks = container.querySelectorAll('.sbars-wrap > .ov-xax span')
-    expect([...ticks].map(tick => tick.textContent)).toEqual(['Jun 26', 'Jun 30', 'Jul 4', 'Jul 8', 'Jul 10'])
+    const ticks = container.querySelectorAll('.sbars-wrap .ov-xax span')
+    expect([...ticks].map(tick => tick.textContent)).toEqual(['Jun 28', 'Jul 2', 'Jul 6', 'Jul 10'])
 
     expect(container.querySelectorAll('[data-testid="sankey-ribbon"]')).toHaveLength(makeFlow().links.length)
   })

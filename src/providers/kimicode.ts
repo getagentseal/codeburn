@@ -11,6 +11,10 @@ type JsonObject = Record<string, unknown>
 
 type SessionState = {
   createdAt?: string
+  /// Epoch-ms `createdAt`, which is how the CLI store writes it (the string
+  /// form above belongs to other hosts).
+  createdAtMs?: number
+  cwd?: string
   updatedAt?: string
   workDir?: string
   /// Map of agent name -> descriptor. Carries the `parentAgentId` field
@@ -78,7 +82,7 @@ function timestampIso(value: unknown): string {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
 
-function kimicodeHomes(override?: string): string[] {
+export function kimicodeHomes(override?: string): string[] {
   const explicit = override || process.env['KIMI_CODE_HOME']
   if (explicit) return [resolve(explicit)]
   // Default stores. Beyond the CLI's own ~/.kimi-code, embedded runtimes keep
@@ -108,7 +112,7 @@ async function isFile(path: string): Promise<boolean> {
   }
 }
 
-async function readState(sessionDir: string): Promise<SessionState> {
+export async function readState(sessionDir: string): Promise<SessionState> {
   try {
     const state = asObject(JSON.parse(await readFile(join(sessionDir, 'state.json'), 'utf8')))
     if (!state) return {}
@@ -125,6 +129,8 @@ async function readState(sessionDir: string): Promise<SessionState> {
     }
     return {
       createdAt: stringValue(state['createdAt']) || undefined,
+      createdAtMs: nonNegativeNumber(state['createdAt']) || undefined,
+      cwd: stringValue(state['cwd']) || undefined,
       updatedAt: stringValue(state['updatedAt']) || undefined,
       workDir: stringValue(state['workDir']) || undefined,
       ...(agentsMap ? { agents: agentsMap } : {}),
@@ -134,7 +140,7 @@ async function readState(sessionDir: string): Promise<SessionState> {
   }
 }
 
-function projectFromWorkDir(workDir: string, workDirKey: string): string {
+export function projectFromWorkDir(workDir: string, workDirKey: string): string {
   if (workDir) return basename(workDir.replace(/[\\/]+$/, '')) || workDir
   const match = /^wd_(.+)_[a-f0-9]{12}$/i.exec(workDirKey)
   return match?.[1] || workDirKey.replace(/^wd_/, '') || 'kimicode'

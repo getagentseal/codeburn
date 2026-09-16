@@ -1,0 +1,69 @@
+name: Pull request gate
+
+# Three checks when a pull request is opened or reopened, all skipped for
+# repository admins and bots. Each closes the PR with a note; reopening after
+# the fix is the intended path. Runs on pull_request_target so it can act on
+# PRs from forks; it never checks out or runs the PR's code.
+#
+# 1. The description must say what the change is: an untouched template closes.
+# 2. A first-time contributor's PR over 300 changed lines must reference an
+#    issue, so large work is discussed before it is written.
+# 3. A contributor may have at most five pull requests open at once.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const maxOpen = 5
+            const bigChange = 300
+            const { owner, repo } = context.repo
+            const pr = context.payload.pull_request
+            const author = pr.user.login
+            if (pr.user.type === 'Bot') return
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username: author })
+            if (perm.permission === 'admin') return
+
+            const close = async (body) => {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body })
+              await github.rest.pulls.update({ owner, repo, pull_number: pr.number, state: 'closed' })
+            }
+
+            // 1. Description filled in. The template's Summary section, minus its
+            // HTML comments, must contain something.
+            const body = pr.body ?? ''
+            const summary = (body.split(/^## Testing/m)[0] ?? '').replace(/^## Summary/m, '').replace(/<!--[\s\S]*?-->/g, '').trim()
+            if (summary.length < 12) {
+              await close('Closing for now: the description is still the template. Fill in what this change does and why under "Summary", then reopen. A couple of sentences is enough.')
+              return
+            }
+
+            // 2. Large first-time PRs need an issue behind them.
+            const firstTimer = ['FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'NONE'].includes(pr.author_association)
+            const size = (pr.additions ?? 0) + (pr.deletions ?? 0)
+            // An issue reference: `#123` standing alone (not a hex colour or a heading), or an issue URL.
+            const linksIssue = /(^|[\s(])#\d{2,}\b|github\.com\/[^\s]+\/issues\/\d+/.test(body)
+            if (firstTimer && size > bigChange && !linksIssue) {
+              await close(`Closing for now: this is your first pull request here and it changes ${size} lines with no issue behind it. Open an issue describing the change first so we can agree on the shape before the work is written, then reopen this with the issue number in the description. Small fixes do not need this.`)
+              return
+            }
+
+            // 3. Open-PR cap.
+            const { data: open } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:pr is:open author:${author}`,
+              per_page: 100,
+            })
+            const others = open.items.filter(i => i.number !== pr.number).sort((a, b) => a.number - b.number)
+            if (others.length >= maxOpen) {
+              const list = others.map(i => `#${i.number}`).join(', ')
+              await close(`Closing for now: you already have ${others.length} pull requests open (${list}), and we review at most ${maxOpen} per contributor at a time. Reopen this one when one of them is merged or closed. Issues are always welcome.`)
+            }

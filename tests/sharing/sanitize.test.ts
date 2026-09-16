@@ -28,6 +28,15 @@ function fixture(): MenubarPayload {
         { branch: 'exp/extraction-arms', cost: 60, calls: 3, sessions: 1 },
         { branch: null, cost: 40, calls: 2, sessions: 1 },
       ],
+      pullRequests: {
+        rows: [{
+          url: 'https://github.com/secret-client/repo/pull/42', label: 'secret-client/repo#42',
+          cost: 60, savingsUSD: 0, sessions: 1, calls: 5,
+          firstStarted: '2026-06-01T10:00:00.000Z', lastEnded: '2026-06-01T12:00:00.000Z',
+          approx: false, models: ['Opus'],
+        }],
+        distinctCost: 60, distinctSessions: 1, attributedCost: 60, unattributedCost: 0,
+      },
     },
     history: {
       daily: [],
@@ -75,6 +84,13 @@ describe('sanitizeForSharing', () => {
   it('leaks no working-directory key from the session rows', () => {
     const clean = sanitizeForSharing(fixture())
     expect(JSON.stringify(clean)).not.toContain('-Users-me-Projects-secret-project')
+  })
+
+  it('drops the pull-request rows: their urls and labels name the repository', () => {
+    const clean = sanitizeForSharing(fixture())
+    expect(clean.current.pullRequests).toBeUndefined()
+    expect(JSON.stringify(clean)).not.toContain('github.com/secret-client/repo')
+    expect(JSON.stringify(clean)).not.toContain('secret-client/repo#42')
   })
 
   it('drops the live-session block, which names the project and branch in flight', () => {

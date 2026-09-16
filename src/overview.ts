@@ -7,6 +7,7 @@ import { formatCost as baseCost, getCurrency } from './currency.js'
 import { findUnpricedModels, getShortModelName, unpricedModelHint } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated } from './format.js'
+import { maxOf } from './math-utils.js'
 import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
 import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
@@ -79,7 +80,7 @@ function vlen(s: string): number {
 
 function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
   const widths = cols.map((col, i) =>
-    Math.max(vlen(col.header), ...rows.map((r) => vlen(r[i] ?? ''))),
+    maxOf(rows.map((r) => vlen(r[i] ?? '')), vlen(col.header)),
   )
   const pad = (s: string, w: number, right?: boolean): string => {
     const fill = ' '.repeat(Math.max(0, w - vlen(s)))

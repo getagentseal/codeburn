@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { formatDayShort } from '../lib/format'
+import { prFilters } from '../lib/investigation'
 import type { MenubarPayload } from '../lib/types'
 import { PullRequests } from './PullRequests'
 
@@ -171,6 +172,60 @@ describe('PullRequests', () => {
 
     await userEvent.keyboard('{Enter}')
     expect(row).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('drills a PR through to the sessions that composed it, leaving the row expanded', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    const onInvestigate = vi.fn()
+    render(<PullRequests period="lifetime" provider="all" onInvestigate={onInvestigate} />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    const row = rowForLink(link)
+    await userEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(screen.getByRole('button', { name: /View sessions for this pull request/ }))
+    expect(onInvestigate).toHaveBeenCalledTimes(1)
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: prFilters('https://github.com/getagentseal/codeburn/pull/780') })
+    // The affordance drills; the row it sits in keeps the state it was in.
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+  })
+
+  it('drills from the keyboard and still leaves a legacy row expanded', async () => {
+    const approxPayload: PrPayload = {
+      rows: [
+        { url: 'https://github.com/getagentseal/codeburn/pull/900', label: 'getagentseal/codeburn#900', cost: 12.5, savingsUSD: 0, sessions: 1, calls: 30, firstStarted: '2026-07-10T10:00:00Z', lastEnded: '2026-07-10T11:00:00Z', approx: true },
+      ],
+      distinctCost: 12.5,
+      distinctSessions: 1,
+      attributedCost: 12.5,
+      unattributedCost: 0,
+    }
+    getOverview.mockResolvedValue(makePayload(approxPayload))
+    const onInvestigate = vi.fn()
+    render(<PullRequests period="lifetime" provider="all" onInvestigate={onInvestigate} />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#900' })
+    const row = rowForLink(link)
+    await userEvent.click(row)
+
+    // A row with no per-turn detail still offers the drill-through.
+    const drill = screen.getByRole('button', { name: /View sessions for this pull request/ })
+    drill.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(onInvestigate).toHaveBeenCalledWith({ filters: prFilters('https://github.com/getagentseal/codeburn/pull/900') })
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('offers no drill-through affordance when the section has no destination to drill to', async () => {
+    getOverview.mockResolvedValue(makePayload(SAMPLE))
+    render(<PullRequests period="lifetime" provider="all" />)
+
+    const link = await screen.findByRole('link', { name: 'getagentseal/codeburn#780' })
+    await userEvent.click(rowForLink(link))
+    expect(screen.getByText('Feature work')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /View sessions/ })).toBeNull()
   })
 
   it('states the attributed-total footer and the summable framing', async () => {

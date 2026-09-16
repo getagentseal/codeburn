@@ -99,6 +99,26 @@ describe('period diff over a real parse', () => {
     expect(rows[0]!.costA).toBeCloseTo(costA, 10)
     expect(rows[0]!.costB).toBeCloseTo(costB, 10)
   })
+
+  it('reports cost per local day for both sides, zero-filled across the range', async () => {
+    await writeStraddlingSession()
+    const projectsA = await parseAllSessions({ start: new Date(2026, 3, 15), end: new Date(2026, 3, 17, 23, 59, 59, 999) }, 'all')
+    const projectsB = await parseAllSessions({ start: new Date(2026, 3, 18), end: new Date(2026, 3, 20, 23, 59, 59, 999) }, 'all')
+    const report = buildPeriodDiffReport({
+      provider: 'all',
+      rangeA: { from: '2026-04-15', to: '2026-04-17' },
+      rangeB: { from: '2026-04-18', to: '2026-04-20' },
+      projectsA,
+      projectsB,
+    })
+    expect(report.daily.A.map(day => day.date)).toEqual(['2026-04-15', '2026-04-16', '2026-04-17'])
+    expect(report.daily.B.map(day => day.date)).toEqual(['2026-04-18', '2026-04-19', '2026-04-20'])
+    expect(report.daily.A[0]!.cost).toBe(0)
+    expect(report.daily.A[1]!.cost).toBeGreaterThan(0)
+    expect(report.daily.A[2]!.cost).toBeGreaterThan(report.daily.A[1]!.cost)
+    expect(report.daily.A.reduce((sum, day) => sum + day.cost, 0)).toBeCloseTo(report.totals.A.cost, 10)
+    expect(report.daily.B.map(day => day.cost)).toEqual([0, 0, 0])
+  })
 })
 
 function lensSum(rows: Array<{ diff: number }>): number {

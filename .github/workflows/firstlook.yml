@@ -16,7 +16,7 @@ jobs:
       pull-requests: write
       contents: read
     steps:
-      - uses: getagentseal/firstlook@main
+      - uses: getagentseal/firstlook@e88f257908a23e857ad717b6bb35a6829cd2b120 # main 2026-09-14
         with:
           pr-number: ${{ inputs.pr-number }}
           skip-users: 'dependabot[bot],renovate[bot]'

@@ -77,7 +77,7 @@ enum CopilotQuotaPresentation {
         // The host is an API hostname and the plan comes from GitHub; both are
         // substituted verbatim, only the sentence around them is translated.
         guard let plan, !plan.isEmpty else { return L("Live quota tracked from %@.", host) }
-        return L("Plan: %@. Live quota tracked from %@.", plan, host)
+        return L("Plan: %1$@. Live quota tracked from %2$@.", plan, host)
     }
 
     static func settingsNotConnectedDetail(explicitlyDisconnected: Bool) -> String {

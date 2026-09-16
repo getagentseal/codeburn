@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { calculateCost } from '../../src/models.js'
 import { createOpenCodeProvider } from '../../src/providers/opencode.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
@@ -847,6 +848,57 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(calls[0]!.costUSD).toBeGreaterThan(0)
     expect(calls[0]!.model).toBe('anthropic/claude-sonnet-4-20250514')
     expect(calls[0]!.deduplicationKey).toBe('opencode:sess-1:session-level')
+  })
+
+  it('bills session-level reasoning tokens at the output rate', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.exec(`ALTER TABLE session ADD COLUMN cost REAL`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_input INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_output INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_reasoning INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_read INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN tokens_cache_write INTEGER`)
+      db.exec(`ALTER TABLE session ADD COLUMN model TEXT`)
+
+      insertSession(db, 'sess-1')
+      db.prepare(`UPDATE session SET cost = ?, tokens_input = ?, tokens_output = ?, tokens_reasoning = ?, tokens_cache_read = ?, tokens_cache_write = ?, model = ? WHERE id = ?`)
+        .run(0, 5000, 2000, 4000, 3000, 1000, JSON.stringify({
+          providerID: 'anthropic',
+          id: 'claude-sonnet-4-20250514',
+        }), 'sess-1')
+
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant', modelID: 'claude-sonnet-4-20250514',
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.reasoningTokens).toBe(4000)
+    // OpenCode charges reasoning tokens at the output rate, and
+    // billableOutputTokens says the same for this provider, so the session-level
+    // fallback has to price output + reasoning, not output alone. (#1334)
+    const model = 'anthropic/claude-sonnet-4-20250514'
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost(model, 5000, 2000 + 4000, 1000, 3000, 0), 10)
+    expect(calls[0]!.costUSD).toBeGreaterThan(calculateCost(model, 5000, 2000, 1000, 3000, 0))
+  })
+
+  it('bills per-message reasoning tokens at the output rate', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-1')
+      insertMessage(db, 'msg-1', 'sess-1', 1700000001000, {
+        role: 'assistant', modelID: 'claude-sonnet-4-20250514', cost: 0,
+        tokens: { input: 1000, output: 200, reasoning: 500, cache: { read: 0, write: 0 } },
+      })
+      insertPart(db, 'part-1', 'msg-1', 'sess-1', { type: 'text', text: 'done' })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-1')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.reasoningTokens).toBe(500)
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-20250514', 1000, 200 + 500, 0, 0, 0), 10)
   })
 
   it('accepts role "model" as equivalent to "assistant"', async () => {

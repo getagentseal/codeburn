@@ -35,7 +35,7 @@ export type QuotaWindow = {
 }
 
 export type QuotaProvider = {
-  provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode'
+  provider: 'claude' | 'codex' | 'gemini' | 'copilot' | 'antigravity' | 'kimi' | 'zcode' | 'grokbot'
   connection: 'connected' | 'disconnected' | 'accessDenied' | 'loading' | 'stale' | 'transientFailure' | 'terminalFailure'
   primary: QuotaWindow | null
   details: QuotaWindow[]
@@ -600,7 +600,7 @@ export type DeviceScanResult = { found: ScannedDevice[] }
 // ————— src/act/report.ts buildActReportJson —————
 
 export type ActReportJson = {
-  totals: {
+  totals?: {
     realizedCostUSD: number
     measuredActions: number
   }
@@ -859,6 +859,8 @@ export type NormalizedMetric = { a: number | null; b: number | null; diff: numbe
 
 export type AggregateDayRow = { date: string; historyCost: number; detailCost: number; aggregateOnly: number }
 
+export type PeriodDayCost = { date: string; cost: number }
+
 export type PeriodHistoryBasis = {
   historyCost: { A: number; B: number }
   detailCost: { A: number; B: number }
@@ -882,6 +884,8 @@ export type PeriodDiffReport = {
     per100Calls: NormalizedMetric
     denominators: { perDay: string; per100Calls: string }
   }
+  /** Cost per local day for each side, zero-filled over every day in the range. */
+  daily: { A: PeriodDayCost[]; B: PeriodDayCost[] }
   coverage: {
     unpricedModelsA: Array<{ model: string; calls: number }>
     unpricedModelsB: Array<{ model: string; calls: number }>

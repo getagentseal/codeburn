@@ -43,6 +43,10 @@ import type { ParsedProviderCall } from './providers/types.js'
 // v15: builtin alias prices `codex-auto-review` (#1047). Exact-hit cache
 // entries still hold the pre-alias $0; bump so unchanged rollouts reprice.
 // Must be max(main v14 #1092, this)+1 — #1092 spent v14 on MCP/skills.
+// No bump for #1264: the missing-cumulative branch is a no-op on real data
+// (0 occurrences of info-without-total across 137k+ events; null-info pings
+// already take the estimate path), so cached numbers are identical and a
+// bump would only force a cold reparse. v16 was never shipped in a release.
 export const CODEX_CACHE_VERSION = 15
 export const CODEX_LEGACY_CACHE_FILE = 'codex-results.json'
 export function codexCacheFileName(version = CODEX_CACHE_VERSION): string {
