@@ -441,6 +441,7 @@ CodeBurn auto-detects which AI tools you use. Each logo links to its provider do
   <a href="docs/providers/vercel-gateway.md" title="Vercel AI Gateway"><img src="assets/providers/vercel-gateway.png" alt="Vercel AI Gateway" height="34" /></a>
   <a href="docs/providers/zerostack.md" title="Zerostack"><img src="assets/providers/zerostack.png" alt="Zerostack" height="34" /></a>
   <a href="docs/providers/grok.md" title="Grok Build"><img src="assets/providers/grok.png" alt="Grok Build" height="34" /></a>
+  <a href="docs/providers/grokbot.md" title="Grok Bot"><img src="assets/providers/grok.png" alt="Grok Bot" height="34" /></a>
   <a href="docs/providers/zcode.md" title="ZCode"><img src="assets/providers/zcode.jpg" alt="ZCode" height="34" /></a>
   <a href="docs/providers/zed.md" title="Zed"><img src="assets/providers/zed.jpg" alt="Zed" height="34" /></a>
   <a href="docs/providers/hermes.md" title="Hermes Agent"><img src="assets/providers/hermes.png" alt="Hermes Agent" height="34" /></a>
@@ -559,7 +560,7 @@ Left/right arrow keys switch between Today, 7 Days, 30 Days, Month, 6 Months, an
 
 ### Pricing
 
-Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing. Routing-gateway model ids are priced as the model they wrap: [OrcaRouter](https://www.orcarouter.ai) fusion route ids peel to their current upstream (`openai/gpt-oss-120b`), `orcarouter/auto` stays unpriced until a live probe pins the rotating target, and a nested upstream spelling (`orcarouter/deepseek/deepseek-v4-pro`) prices at that exact row, so a gateway-routed session reports real spend instead of $0.
+Prices every API call using input, output, cache read, cache write, and web search token counts, with a fast mode multiplier for Claude. Prices are fetched from [LiteLLM](https://github.com/BerriAI/litellm) and cached locally for 24 hours at `~/.cache/codeburn/`. Hardcoded fallbacks for all Claude and GPT-5 models prevent fuzzy-matching mispricing. Routing-gateway model ids are priced as the model they wrap: [OrcaRouter](https://www.orcarouter.ai) fusion route ids peel to their current upstream (`openai/gpt-oss-120b`), `orcarouter/auto` stays unpriced until a live probe pins the rotating target, and a nested upstream spelling (`orcarouter/deepseek/deepseek-v4-pro`) prices at that exact row, so a gateway-routed session reports real spend instead of $0. Codex sessions routed through [codex-cliproxy-gateway](https://github.com/aceHubert/codex-cliproxy-gateway) record `cliproxy/<model>` ids — including CLIProxyAPI provider paths like `cliproxy/zcode/glm-5.3-flash` — and the wrapper and the known provider segment peel the same way.
 
 ### Task Categories
 

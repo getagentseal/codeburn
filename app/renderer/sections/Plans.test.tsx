@@ -270,7 +270,7 @@ describe('Plans', () => {
     expect(await screen.findByText('Anthropic rate limited the quota endpoint, retrying in a few minutes')).toBeInTheDocument()
     expect(screen.getByText('OpenAI rate limited the quota endpoint, retrying in a few minutes')).toBeInTheDocument()
     // The rate-limited note replaces the generic waiting copy.
-    expect(screen.queryByText('waiting on the CLI…')).not.toBeInTheDocument()
+    expect(screen.queryByText('Waiting on the CLI…')).not.toBeInTheDocument()
   })
 
   it('falls back to the generic waiting note when a transient failure is not rate limited', async () => {
@@ -281,7 +281,7 @@ describe('Plans', () => {
 
     render(<Plans period="30days" />)
 
-    expect(await screen.findByText('waiting on the CLI…')).toBeInTheDocument()
+    expect(await screen.findByText('Waiting on the CLI…')).toBeInTheDocument()
     expect(screen.queryByText(/rate limited the quota endpoint/)).not.toBeInTheDocument()
   })
 

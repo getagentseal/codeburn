@@ -23,6 +23,7 @@ final class CapacityDockProviderQuotaService {
         var refreshClinePass: @Sendable (String) async throws -> QuotaSummary
         var refreshCursor: @Sendable () async throws -> QuotaSummary
         var refreshGrok: @Sendable () async throws -> QuotaSummary
+        var refreshGrokBot: @Sendable () async throws -> QuotaSummary
         var refreshZai: @Sendable (String?) async throws -> QuotaSummary
 
         static let live = Dependencies(
@@ -34,6 +35,9 @@ final class CapacityDockProviderQuotaService {
             },
             refreshGrok: {
                 try await GrokBuildSubscriptionService.refresh()
+            },
+            refreshGrokBot: {
+                try await GrokBotSubscriptionService.refresh()
             },
             refreshZai: { apiKey in
                 try await ZaiSubscriptionService.refresh(apiKey: apiKey)
@@ -65,6 +69,14 @@ final class CapacityDockProviderQuotaService {
         case "grok":
             do {
                 return try await dependencies.refreshGrok()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CapacityDockProviderFetchFailure(error: error)
+            }
+        case "grokbot":
+            do {
+                return try await dependencies.refreshGrokBot()
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -146,6 +158,14 @@ struct CapacityDockProviderFetchFailure: LocalizedError, Equatable, Sendable {
             }
         }
         if let error = error as? GrokBuildSubscriptionService.FetchError {
+            switch error.classification {
+            case .terminalAuth:
+                return .terminal
+            case .transient, .parseFailure:
+                return .transient
+            }
+        }
+        if let error = error as? GrokBotSubscriptionService.FetchError {
             switch error.classification {
             case .terminalAuth:
                 return .terminal

@@ -119,6 +119,7 @@ enum ProviderConnectionCatalog {
         entry("bedrock", "AWS Bedrock", [.automatic, .api], [.apiTokenOrCloudCredentials]),
         entry("grok", "Grok", [.automatic, .cli, .oauth],
               [.localAppOrCLI, .oauth], live: true),
+        entry("grokbot", "Grok Bot", [.automatic, .cli], [.localAppOrCLI], live: true),
         entry("groq", "Groq", [.automatic, .web, .api],
               [.cookieOrWebSession, .apiTokenOrCloudCredentials]),
         entry("llmproxy", "LLM Proxy", [.automatic, .api], [.apiTokenOrCloudCredentials]),

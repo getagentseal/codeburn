@@ -175,12 +175,6 @@ final class AppStore {
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
-    /// Early quota resets seen for each provider, keyed by dock provider id, and
-    /// this Mac's own record of how early past resets landed. Both are derived
-    /// from data already on disk on the existing refresh lifecycle — no polling
-    /// of its own, no network (#725).
-    var earlyResetEvents: [String: EarlyQuotaResetEvent] = [:]
-    var earlyResetHistory: [EarlyQuotaResetHistory.Summary] = []
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
     @ObservationIgnored var quotaCrossingMonitor = QuotaCrossingMonitor()
 
@@ -1624,8 +1618,6 @@ final class AppStore {
         subscriptionError = nil
         subscriptionLoadState = .notBootstrapped
         capacityEstimates = [:]
-        earlyResetEvents[CapacityDockProvider.claude.rawValue] = nil
-        earlyResetHistory = []
         earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.claude.rawValue)
         Task.detached { await SubscriptionSnapshotStore.clearAll() }
         // Notify the AppDelegate to clear its cadence-loop anchor so the next
@@ -2140,22 +2132,6 @@ final class AppStore {
         // Cap length so a runaway server body cannot fill stderr.
         if cleaned.count > 240 { cleaned = String(cleaned.prefix(240)) + "…" }
         return cleaned
-    }
-
-    /// The early-reset band for one dock provider, while it is still recent.
-    func capacityDockEarlyResetNotice(
-        for provider: CapacityDockProvider,
-        now: Date = Date()
-    ) -> EarlyQuotaResetEvent? {
-        guard let event = earlyResetEvents[provider.rawValue] else { return nil }
-        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
-    }
-
-    /// This Mac's own early-reset pattern for the provider's windows, for the
-    /// quota hover card. Only Claude persists the snapshots this is derived from.
-    func earlyResetHistoryCaptions(for filter: ProviderFilter) -> [String] {
-        guard filter == .claude else { return [] }
-        return earlyResetHistory.map(\.caption)
     }
 
     /// Snapshot of live quota state for a given provider. Returns nil when the user
@@ -2911,7 +2887,6 @@ final class AppStore {
         }
 
         await refreshCapacityEstimates()
-        await refreshEarlyResetHistory()
     }
 
     /// Hand this fetch's windows to the early-reset monitor, which compares them
@@ -2944,10 +2919,6 @@ final class AppStore {
             observations: observations,
             now: now
         )
-        earlyResetEvents[provider.rawValue] = earlyQuotaResetMonitor.visibleEvent(
-            providerID: provider.rawValue,
-            now: now
-        )
     }
 
     /// Claude's rate-limit windows are fixed lengths, the same durations the
@@ -2958,24 +2929,6 @@ final class AppStore {
         case "seven_day", "seven_day_opus", "seven_day_sonnet": QuotaPacePresentation.claudeSevenDaySeconds
         default: nil
         }
-    }
-
-    /// Re-derive the "past resets came this early" captions from the snapshots
-    /// already on disk. Local only: no network, no external feed.
-    private func refreshEarlyResetHistory() async {
-        var summaries: [EarlyQuotaResetHistory.Summary] = []
-        for key in ["seven_day", "seven_day_opus", "seven_day_sonnet"] {
-            let snapshots = await SubscriptionSnapshotStore.snapshots(for: key)
-            if let summary = EarlyQuotaResetHistory.summarize(
-                snapshots: snapshots,
-                windowKey: key,
-                windowName: EarlyQuotaResetFormat.claudeWindowName(forKey: key),
-                windowSeconds: Self.claudeWindowSeconds(forKey: key)
-            ) {
-                summaries.append(summary)
-            }
-        }
-        earlyResetHistory = summaries
     }
 
     /// Sum effective tokens (input + 5*output + cache_creation + 0.1*cache_read) across the

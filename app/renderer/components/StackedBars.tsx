@@ -1,5 +1,7 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 
+import { ChartTip } from './ChartTip'
+import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { formatUsd } from '../lib/format'
 import { useBarGrowIn } from '../lib/motion'
 import { SERIES_LABELS, type SeriesKey, seriesClassForKey, seriesClassForModel, seriesKeyForModel } from '../lib/modelSeries'
@@ -14,6 +16,7 @@ function modelSpend(day: DailyHistoryEntry): number {
 
 export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = '', dataStart = null }: { daily: DailyHistoryEntry[]; fallbackLabel?: string; animateKey?: string; dataStart?: string | null }) {
   const barsRef = useRef<HTMLDivElement>(null)
+  const [tip, setTip] = useState<{ day: DailyHistoryEntry; x: number; y: number } | null>(null)
   useBarGrowIn(barsRef, '.c', [animateKey])
   const presentSeries = new Set<SeriesKey>()
   let usesFallback = false
@@ -29,14 +32,27 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
     }
   }
   // Fallback days contribute day.cost to the scale so their single segment is proportional.
-  const maxTotal = Math.max(1, ...daily.map(day => (modelSpend(day) > 0 ? modelSpend(day) : Math.max(0, day.cost))))
+  const dayTotal = (day: DailyHistoryEntry) => (modelSpend(day) > 0 ? modelSpend(day) : Math.max(0, day.cost))
+  const maxTotal = Math.max(1, ...daily.map(dayTotal))
+  // Bars are drawn against the top tick, so a bar top and a gridline agree.
+  const valueTicks = niceTicks(maxTotal)
+  const axisMax = valueTicks.at(-1) || 1
+  const peakIndex = daily.reduce((peak, day, index) => (dayTotal(day) > dayTotal(daily[peak]) ? index : peak), 0)
+  const peak = daily[peakIndex]
   const legendSeries = SERIES_ORDER.filter(series => presentSeries.has(series))
-  const ticks = daily.filter((_, index) => index % 4 === 0)
-  const lastDay = daily.at(-1)
-  if (lastDay && ticks.at(-1) !== lastDay) ticks.push(lastDay)
+  const ticks = daily.filter((_, index) => (daily.length - 1 - index) % 4 === 0)
+  const columnCentre = (index: number) => ((index + 0.5) / Math.max(1, daily.length)) * 100
 
   return (
     <div className="sbars-wrap">
+      <div className="chart-frame">
+      <div className="chart-plot">
+      <div className="chart-grid" aria-hidden="true">
+        {valueTicks.map(tick => <span className="chart-gridline" key={tick} style={{ bottom: `${(tick / axisMax) * 100}%` }} />)}
+        {daily.map((day, index) => (dayOfWeek(day.date) === 0 && index > 0
+          ? <span className="chart-weekline" key={day.date} style={{ left: `${columnCentre(index) - (50 / Math.max(1, daily.length))}%` }} />
+          : null))}
+      </div>
       <div className="sbars" aria-label="Daily spend by model" ref={barsRef}>
         {daily.map(day => {
           // Days before the first recorded day are unknown, not zero: no bar, and
@@ -51,6 +67,9 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
               role="img"
               aria-label={noData ? `${day.date}, no data recorded` : `${day.date}, ${formatUsd(day.cost)}`}
               title={noData ? `${day.date} · No data recorded` : `${day.date} · ${formatUsd(day.cost)}`}
+              onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
+              onMouseLeave={() => setTip(null)}
             >
               {noData ? (
                 <span className="nodata-mark" aria-hidden="true" />
@@ -58,7 +77,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
                 [...day.topModels].sort(
                   (a, b) => SERIES_ORDER.indexOf(seriesKeyForModel(a.name)) - SERIES_ORDER.indexOf(seriesKeyForModel(b.name)),
                 ).map(model => {
-                  const pct = Math.max(1, (Math.max(0, model.cost) / maxTotal) * 100)
+                  const pct = Math.max(1, (Math.max(0, model.cost) / axisMax) * 100)
                   const routes = model.rawModels && model.rawModels.length > 1 ? ` (${model.rawModels.join(', ')})` : ''
                   return (
                     <span
@@ -72,13 +91,23 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
               ) : day.cost > 0 ? (
                 <span
                   className={`s ${seriesClassForKey('other')}`}
-                  style={{ height: `${Math.max(1, (day.cost / maxTotal) * 100)}%` }}
+                  style={{ height: `${Math.max(1, (day.cost / axisMax) * 100)}%` }}
                   title={`${fallbackLabel} · ${formatUsd(day.cost)}`}
                 />
               ) : null}
             </div>
           )
         })}
+      </div>
+      {peak && dayTotal(peak) > 0 && (
+        <span className="chart-peak-guide" aria-hidden="true" style={{ bottom: `${(dayTotal(peak) / axisMax) * 100}%`, left: `${columnCentre(peakIndex)}%` }} />
+      )}
+      </div>
+      <div className="chart-axis" aria-hidden="true">
+        {ticksClearOfPeak(valueTicks, peak && dayTotal(peak) > 0 ? dayTotal(peak) : 0, axisMax).map(tick => <span className="chart-axis-tick" key={tick} style={{ bottom: `${(tick / axisMax) * 100}%` }}>{formatAxisMoney(tick)}</span>)}
+        {peak && dayTotal(peak) > 0 && (
+          <span className="chart-axis-peak" style={{ bottom: `${(dayTotal(peak) / axisMax) * 100}%` }}>{formatUsd(dayTotal(peak))}</span>
+        )}
       </div>
       <div className="ov-xax">
         {ticks.map(day => {
@@ -89,6 +118,7 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
             </span>
           )
         })}
+      </div>
       </div>
       <div className="legend">
         {legendSeries.map(series => (
@@ -104,6 +134,34 @@ export function StackedBars({ daily, fallbackLabel = 'All models', animateKey = 
           </span>
         )}
       </div>
+      {tip && (
+        <ChartTip x={tip.x} y={tip.y}>
+          <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
+          {dataStart !== null && tip.day.date < dataStart ? (
+            <div className="chart-tip-s">No data recorded</div>
+          ) : modelSpend(tip.day) > 0 ? (
+            [...tip.day.topModels].sort((a, b) => b.cost - a.cost).map(model => (
+              <div className="chart-tip-row" key={model.name}>
+                <i className={`chart-tip-sw ${seriesClassForModel(model.name)}`} />
+                <span>{model.name}</span>
+                <b>{formatUsd(model.cost)}</b>
+              </div>
+            ))
+          ) : (
+            <div className="chart-tip-row">
+              <i className={`chart-tip-sw ${seriesClassForKey('other')}`} />
+              <span>{fallbackLabel}</span>
+              <b>{formatUsd(tip.day.cost)}</b>
+            </div>
+          )}
+        </ChartTip>
+      )}
     </div>
   )
+}
+
+/** 0 = Sunday, from a local `YYYY-MM-DD` key. */
+function dayOfWeek(date: string): number {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day).getDay()
 }

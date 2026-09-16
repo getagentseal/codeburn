@@ -9,11 +9,10 @@ import { Panel } from './components/Panel'
 import { Sidebar, type Section } from './components/Sidebar'
 import { Splash } from './components/Splash'
 import { ToastHost } from './components/ToastHost'
-import { SwitchingBanner } from './components/SwitchingBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { rangeLabel, TopBar } from './components/TopBar'
 import { Window } from './components/Window'
-import { clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled } from './hooks/usePolled'
+import { clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled, usePolledInFlight } from './hooks/usePolled'
 import { readDailyBudget } from './lib/budget'
 import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import {
@@ -55,6 +54,7 @@ import { Settings, type SettingsPane } from './sections/Settings'
 import { SpendContent } from './sections/Spend'
 import { PluginsSection } from './sections/Plugins'
 import type { DateRange, MenubarPayload, ModelReportRow, Period, Scope, TelemetryStatus } from './lib/types'
+import { Icon } from './components/icons'
 
 // Bucket raw dollar amounts before they leave the machine: telemetry carries
 // coarse ranges, never exact spend.
@@ -893,6 +893,7 @@ function AppMain() {
   const scopeCaption = scope === 'combined'
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · Combined`
     : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${providerLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
+  const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)
   const selectedLastSuccessAt = selectedReportKeys.length > 0 && selectedReportTimestamps.every((value): value is number => value != null)
@@ -905,9 +906,8 @@ function AppMain() {
       <ToastHost />
       <Splash hasData={overview.data != null || headlineSnapshot != null} hasError={overview.error != null && !overviewCold} />
       {onboardingStatus && <Onboarding defaultEnabled={onboardingStatus.defaultEnabled} onDone={finishOnboarding} />}
-      <div className="ct" aria-busy={overview.switching || (!!headlineSnapshot && overview.loading)}>
-        <div className={overview.switching || (!!headlineSnapshot && overview.loading) ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
-        {(overview.switching || (!!headlineSnapshot && overview.loading)) && <SwitchingBanner />}
+      <div className="ct" aria-busy={refreshing}>
+        <div className={refreshing ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
         <UpdateBanner />
         <IndexingBanner payload={overview.data ?? null} />
         <DailyBudgetBanner payload={overview.data ?? null} provider={provider} />
@@ -970,11 +970,11 @@ function AppMain() {
         {section !== 'settings' && (
           <Hint
             items={[
-              { k: shortcutLabel('1-8,9'), label: 'Navigate' },
+              { k: shortcutLabel('1-9'), label: 'Navigate' },
               { k: shortcutLabel(','), label: 'Settings' },
               { k: shortcutLabel('R'), label: 'Refresh' },
             ]}
-            right={<RefreshedAt lastSuccessAt={selectedLastSuccessAt} />}
+            right={<RefreshedAt lastSuccessAt={selectedLastSuccessAt} refreshing={refreshing} />}
           />
         )}
       </div>
@@ -986,14 +986,28 @@ function AppMain() {
  *  a 1-second tick, so the tick lives here: a clock in AppMain would reconcile
  *  the whole tree — sidebar, hero, chart, heatmap, tables — 60 times a minute
  *  for a label one row wide. Props re-renders (a new lastSuccessAt) still land
- *  immediately; the interval only repaints elapsed time. */
-function RefreshedAt({ lastSuccessAt }: { lastSuccessAt: number | null }) {
+ *  immediately; the interval only repaints elapsed time. The RefreshMark it
+ *  renders keeps the fixed icon and screen-reader state main's footer added. */
+function RefreshedAt({ lastSuccessAt, refreshing }: { lastSuccessAt: number | null; refreshing: boolean }) {
   const [, setTick] = useState(0)
   useEffect(() => {
     const id = window.setInterval(() => setTick(tick => tick + 1), 1000)
     return () => window.clearInterval(id)
   }, [])
-  return <>{refreshedLabel(lastSuccessAt, false, Date.now())}</>
+  return <RefreshMark refreshing={refreshing} label={refreshedLabel(lastSuccessAt, false, Date.now())} />
+}
+
+/** Footer refresh state. The icon is always in the DOM at a fixed 12px so the
+ *  "refreshed Ns ago" text never moves between idle and in-flight, and it sits
+ *  LAST in a right-anchored row so the label re-flowing never shifts it. */
+function RefreshMark({ refreshing, label }: { refreshing: boolean; label: string }) {
+  return (
+    <>
+      <span className="sr-only" role="status" aria-live="polite">{refreshing ? 'Refreshing' : ''}</span>
+      <span>{label}</span>
+      <Icon name="refresh-cw" className={refreshing ? 'refresh-mark spinning' : 'refresh-mark'} />
+    </>
+  )
 }
 
 function StatusLine({ polled, snapshot }: { polled: ReturnType<typeof usePolled<MenubarPayload>>; snapshot?: ReturnType<typeof readOverviewHeadline> }) {

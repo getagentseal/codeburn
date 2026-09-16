@@ -6,12 +6,13 @@ import { ConnectAffordance } from '../components/ConnectAffordance'
 import { Dropdown } from '../components/Dropdown'
 import { Panel } from '../components/Panel'
 import { ProviderLogo } from '../components/ProviderLogo'
+import { BarNav } from '../components/TopBar'
 import type { Section } from '../components/Sidebar'
 import { clearPolledMemo, usePolled } from '../hooks/usePolled'
 import { updateDownloadUrl, useUpdateStatus } from '../hooks/useUpdateStatus'
 import { version as appVersion } from '../../package.json'
 import { readDailyBudget } from '../lib/budget'
-import { formatConverted, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatConverted, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { projectMatches, projectPattern } from '../lib/projectMatch'
 import { shortcutLabel } from '../lib/platform'
@@ -27,6 +28,7 @@ import { rateLimitedNote } from './Plans'
 import { SharingPane } from './SettingsSharing'
 import { CapacityDockPane, MenuBarPane } from './SettingsTray'
 import type { ActionResult, AliasRow, ClaudeConfigSelector, CompanionStatus, CliError, CombinedUsage, DeviceScanResult, Identity, JsonPlanSummary, MenubarPayload, Period, PlanId, PlanProvider, PriceOverrideList, PriceOverrideRow, PriceRates, ProjectFilter, ProjectRow, ProjectsReport, ProviderName, QuotaProvider, Scope, ShareStatus, StatusJson, TelemetryStatus } from '../lib/types'
+import { Icon } from '../components/icons'
 
 export type SettingsPane = 'general' | 'providers' | 'projects' | 'aliases' | 'pricing' | 'plans' | 'devices' | 'export' | 'privacy' | 'sharing' | 'menubar' | 'dock'
 type Pane = SettingsPane
@@ -61,22 +63,22 @@ function writeSetting(key: string, value: string): void {
 }
 
 const RAIL_ITEMS: Array<{ id: Pane; label: string; icon: React.ReactNode }> = [
-  { id: 'general', label: 'General', icon: <><line x1="4" y1="8" x2="20" y2="8" /><circle cx="9" cy="8" r="2.2" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="15" cy="16" r="2.2" /></> },
-  { id: 'providers', label: 'Providers', icon: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></> },
-  { id: 'projects', label: 'Projects', icon: <><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4L11 8.5h8.5A1.5 1.5 0 0 1 21 10v7.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" /><path d="M9 14l2 2 4-4" /></> },
-  { id: 'aliases', label: 'Model aliases', icon: <><path d="M20 12l-8 8-9-9V3h8z" /><circle cx="7.5" cy="7.5" r="1.4" /></> },
-  { id: 'pricing', label: 'Pricing', icon: <><circle cx="12" cy="12" r="9" /><path d="M14.5 9a2.5 2.5 0 0 0-2.5-1.6c-1.5 0-2.5.8-2.5 2s1 1.6 2.5 2 2.5.9 2.5 2-1 2-2.5 2A2.5 2.5 0 0 1 9.5 15" /><line x1="12" y1="6" x2="12" y2="18" /></> },
-  { id: 'plans', label: 'Plans', icon: <><rect x="2" y="5" width="20" height="14" rx="2" /><line x1="2" y1="10" x2="22" y2="10" /></> },
-  { id: 'devices', label: 'Devices', icon: <><rect x="3" y="4" width="18" height="12" rx="1.5" /><line x1="8" y1="20" x2="16" y2="20" /><line x1="12" y1="16" x2="12" y2="20" /></> },
-  { id: 'export', label: 'Export', icon: <><path d="M12 3v12" /><path d="M7 11l5 5 5-5" /><path d="M4 21h16" /></> },
-  { id: 'sharing', label: 'Automatic Sync', icon: <><path d="M12 3v12" /><path d="M7 11l5 5 5-5" /><path d="M4 21h16" /></> },
-  { id: 'privacy', label: 'Privacy & data', icon: <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /> },
+  { id: 'general', label: 'General', icon: <Icon name="sliders-horizontal" /> },
+  { id: 'providers', label: 'Providers', icon: <Icon name="layout-grid" /> },
+  { id: 'projects', label: 'Projects', icon: <Icon name="folder" /> },
+  { id: 'aliases', label: 'Model aliases', icon: <Icon name="tag" /> },
+  { id: 'pricing', label: 'Pricing', icon: <Icon name="circle-dollar-sign" /> },
+  { id: 'plans', label: 'Plans', icon: <Icon name="credit-card" /> },
+  { id: 'devices', label: 'Devices', icon: <Icon name="monitor-smartphone" /> },
+  { id: 'export', label: 'Export', icon: <Icon name="download" /> },
+  { id: 'sharing', label: 'Automatic sync', icon: <Icon name="refresh-cw" /> },
+  { id: 'privacy', label: 'Privacy & data', icon: <Icon name="shield" /> },
 ]
 
 /// Appended to the rail only while the matching switch in the sidebar corner is on.
 const TRAY_RAIL_ITEMS: Record<'menubar' | 'dock', { id: Pane; label: string; icon: React.ReactNode }> = {
-  menubar: { id: 'menubar', label: 'Menu bar', icon: <><rect x="2" y="4" width="20" height="5" rx="1.5" /><circle cx="18" cy="6.5" r="1" /><path d="M5 14h6M5 18h10" /></> },
-  dock: { id: 'dock', label: 'Capacity Dock', icon: <><rect x="16" y="4" width="5" height="16" rx="2.5" /><circle cx="18.5" cy="9" r="1.4" /><circle cx="18.5" cy="15" r="1.4" /><path d="M3 12h8" /></> },
+  menubar: { id: 'menubar', label: 'Menu bar', icon: <Icon name="panel-top" /> },
+  dock: { id: 'dock', label: 'Capacity Dock', icon: <Icon name="panel-right" /> },
 }
 
 /// The sidebar's two switches decide which tray panes exist, so this reads the same status
@@ -147,13 +149,13 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
 
   return (
     <>
-      <div className="bar"><div className="t">Settings</div></div>
+      <div className="bar"><BarNav /><h1 className="t">Settings</h1></div>
       <ToastHost />
       <div className={motionClass('body set-body', 'section-fade')}>
         <nav className="set-rail" aria-label="Settings sections">
           {railItems.map(item => (
             <button key={item.id} className={pane === item.id ? 'set-rail-item on' : 'set-rail-item'} aria-current={pane === item.id ? 'page' : undefined} onClick={() => setPane(item.id)}>
-              <svg viewBox="0 0 24 24" aria-hidden="true">{item.icon}</svg>{item.label}
+              {item.icon}{item.label}
             </button>
           ))}
         </nav>
@@ -172,7 +174,7 @@ export function Settings({ period, refreshToken = 0, onNavigate, initialPane, cl
           {pane === 'dock' && <CapacityDockPane refreshToken={refreshToken} />}
         </main>
       </div>
-      <Hint items={[{ k: shortcutLabel('1-8'), label: 'Navigate' }, { k: shortcutLabel('R'), label: 'Refresh' }]} right="pairing uses mutual TLS · approve-style, no PIN" />
+      <Hint items={[{ k: shortcutLabel('1-9'), label: 'Navigate' }, { k: shortcutLabel(','), label: 'Settings' }, { k: shortcutLabel('R'), label: 'Refresh' }]} right="pairing uses mutual TLS · approve-style, no PIN" />
     </>
   )
 }
@@ -250,8 +252,8 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
         <div className="about-sec">
           <div className="about-sec-h">Display</div>
           <div className="about-row"><label className="tx" htmlFor="settings-currency">Currency</label><span className="r">
-            {plans.data ? <Dropdown id="settings-currency" ariaLabel="Currency" value={plans.data.currency} options={currencies.map(code => ({ value: code, label: code }))} onChange={value => { trackEvent('settings_change', { setting: 'currency', value }); void codeburn.setCurrency(value).then(finishCurrency) }} width={92} /> : plans.error ? <SettingsErrorText error={plans.error} /> : <span className="set-cap">Loading…</span>}
             <button className="set-text-button" onClick={() => { trackEvent('settings_change', { setting: 'currency', value: 'USD' }); void codeburn.resetCurrency().then(finishCurrency) }}>Reset to USD</button>
+            {plans.data ? <Dropdown id="settings-currency" ariaLabel="Currency" value={plans.data.currency} options={currencies.map(code => ({ value: code, label: code }))} onChange={value => { trackEvent('settings_change', { setting: 'currency', value }); void codeburn.setCurrency(value).then(finishCurrency) }} width={92} /> : plans.error ? <SettingsErrorText error={plans.error} /> : <span className="set-cap">Loading…</span>}
           </span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-period">Default period<small>Applied on next launch.</small></label><span className="r"><Dropdown id="settings-period" ariaLabel="Default period" value={defaultPeriod} options={[{ value: 'today', label: 'Today' }, { value: 'week', label: '7d' }, { value: '30days', label: '30d' }, { value: 'month', label: 'Month' }, { value: 'all', label: 'All' }]} onChange={value => { setDefaultPeriod(value); writeSetting('codeburn.defaultPeriod', value); trackEvent('settings_change', { setting: 'defaultPeriod', value }) }} width={92} /></span></div>
           <div className="about-row"><label className="tx" htmlFor="settings-scope">Scope<small>{projectFiltered ? 'Local only while the Projects pane hides something: paired devices report their usage unfiltered, so a combined total would carry the hidden projects.' : 'Combined aggregates usage across every paired device, like the menubar. Local shows this device only.'}</small></label><span className="r"><Dropdown id="settings-scope" ariaLabel="Scope" value={scope} options={projectFiltered ? [{ value: 'local', label: 'Local' }] : [{ value: 'local', label: 'Local' }, { value: 'combined', label: 'Combined' }]} onChange={value => onScopeChange?.(value)} width={110} /></span></div>
@@ -360,7 +362,7 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
     </div></div>}
     <div className="card"><div className="about-sec set-last-sec">
       {projects.length > 0 && <div className="set-filter-form set-search-form">
-        <input aria-label="Search projects" className="set-input set-mono" placeholder="search projects…" value={search} onChange={event => setSearch(event.target.value)} />
+        <input aria-label="Search projects" className="set-input set-mono" placeholder="Search projects…" value={search} onChange={event => setSearch(event.target.value)} />
         {needle && <span className="set-cap">{shown.length.toLocaleString()} of {projects.length.toLocaleString()}</span>}
       </div>}
       {report.error ? <SettingsErrorText error={report.error} />
@@ -373,7 +375,7 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
           const pattern_ = projectPattern(project)
           return <div className="about-row" key={pattern_}>
             <span className="tx set-mono">{shortenProjectPath(project.path || project.name, 2)}<small>{pattern_}</small></span>
-            <span className="r set-status"><span className="set-cap">{formatConverted(project.cost)} · {project.sessions} sessions</span></span>
+            <span className="r set-status"><span className="set-cap">{formatConverted(project.cost)} · {formatCount(project.sessions, 'session')}</span></span>
             <button type="button" role="switch" aria-checked={visible} aria-label={`Show ${pattern_}`} className={visible ? 'switch on' : 'switch'} disabled={busy} onClick={() => toggle(project, !visible)}><span className="switch-knob" /></button>
           </div>
         })}
@@ -383,7 +385,7 @@ function ProjectsPane({ refreshToken, onConfigMutated }: { refreshToken: number;
         <button className="btnp" disabled={busy} onClick={() => apply({ ...filter, exclude: filter.exclude.filter(value => value !== entry) })}>Remove</button>
       </div>)}
       <div className="set-filter-form">
-        <input aria-label="Hide projects matching" className="set-input set-mono" placeholder="hide projects matching…" value={pattern} onChange={event => setPattern(event.target.value)} />
+        <input aria-label="Hide projects matching" className="set-input set-mono" placeholder="Hide projects matching…" value={pattern} onChange={event => setPattern(event.target.value)} />
         <button className="btnp btnp-primary" disabled={busy || !pattern.trim() || filter.exclude.includes(pattern.trim())} onClick={() => apply({ ...filter, exclude: [...filter.exclude, pattern.trim()] }, true)}>Hide</button>
       </div>
       {error && <p className="set-action-msg error">{error}</p>}
@@ -637,7 +639,7 @@ function PrivacyPane() {
   return <section className="set-p on"><div><h3 className="set-h">Privacy &amp; data</h3><p className="set-sub">What codeburn does, and does not do, with your data.</p></div><div className="card">
     <PrivacyClaim title="Local-only" detail="Everything runs on your machine. Data is read from local session files." icon={<><rect x="4.5" y="10" width="15" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>} />
     <PrivacyClaim title="No API keys" detail="Usage is detected from local files; no provider API keys are required." icon={<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />} />
-    <div className="set-claim"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M6 7l1 14h10l1-14M9 7V4h6v3" /></svg><div style={{ flex: 1 }}><div className="set-claim-t">Local report snapshots</div><div className="set-claim-d">Calculated usage and cost reports are compressed and kept on this Mac so screens open immediately after restart. Credentials are never included.</div></div><button type="button" className="btnp" onClick={clearSnapshots}>Clear snapshots</button></div>
+    <div className="set-claim"><Icon name="trash-2" /><div style={{ flex: 1 }}><div className="set-claim-t">Local report snapshots</div><div className="set-claim-d">Calculated usage and cost reports are compressed and kept on this Mac so screens open immediately after restart. Credentials are never included.</div></div><button type="button" className="btnp" onClick={clearSnapshots}>Clear snapshots</button></div>
     <TelemetryClaim />
   </div></section>
 }
@@ -663,13 +665,13 @@ function TelemetryClaim() {
       if (optingIn && value?.enabled) trackEvent('settings_change', { setting: 'telemetry', value: true })
     }).catch(() => {})
   }
-  return <div className="set-claim"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19v-5M9 19V9M14 19v-8M19 19V5" /></svg><div style={{ flex: 1 }}><div className="set-claim-t">Anonymous telemetry</div><div className="set-claim-d">Optional usage statistics: model mix, task success, performance and errors. The daily report includes the names of the models, tools, skills and MCP servers you use, alongside bucketed counts of how often each one came up. Never your prompts, your code, or your project and file names.</div></div>
+  return <div className="set-claim"><Icon name="chart-column" /><div style={{ flex: 1 }}><div className="set-claim-t">Anonymous telemetry</div><div className="set-claim-d">Optional usage statistics: model mix, task success, performance and errors. The daily report includes the names of the models, tools, skills and MCP servers you use, alongside bucketed counts of how often each one came up. Never your prompts, your code, or your project and file names.</div></div>
     <button type="button" role="switch" aria-checked={status.enabled} aria-label="Anonymous telemetry" className={status.enabled ? 'switch on' : 'switch'} onClick={toggle}><span className="switch-knob" /></button>
   </div>
 }
 
 function PrivacyClaim({ title, detail, icon }: { title: string; detail: string; icon: React.ReactNode }) {
-  return <div className="set-claim"><svg viewBox="0 0 24 24" aria-hidden="true">{icon}</svg><div><div className="set-claim-t">{title}</div><div className="set-claim-d">{detail}</div></div></div>
+  return <div className="set-claim">{icon}<div><div className="set-claim-t">{title}</div><div className="set-claim-d">{detail}</div></div></div>
 }
 
 function ThisDevicePanel({ identity, shareStatus }: { identity: ReturnType<typeof usePolled<Identity>>; shareStatus: ReturnType<typeof usePolled<ShareStatus>> }) {
@@ -679,7 +681,7 @@ function ThisDevicePanel({ identity, shareStatus }: { identity: ReturnType<typeo
 
 function DiscoveredPanel({ scan }: { scan: ReturnType<typeof usePolled<DeviceScanResult>> }) {
   const found = scan.data?.found.filter(device => !device.paired) ?? []
-  return <Panel title="Discovered nearby" right={scan.loading ? 'listening…' : undefined}>{!scan.data && scan.error ? <SettingsErrorText error={scan.error} /> : !scan.data ? <p className="set-cap">listening…</p> : found.length === 0 ? <p className="set-cap">No nearby devices found.</p> : found.map(device => <div className="li" key={`${device.host}:${device.port}:${device.fingerprint}`}><div className="lx"><b>{device.name}</b><span>fingerprint {shortFingerprint(device.fingerprint)}</span></div></div>)}<p className="set-cap set-device-caption">To pair a device, run <code>codeburn devices add</code> in a terminal. Pairing is interactive (approve on the other device).</p></Panel>
+  return <Panel title="Discovered nearby" right={scan.loading ? 'Listening…' : undefined}>{!scan.data && scan.error ? <SettingsErrorText error={scan.error} /> : !scan.data ? <p className="set-cap">Listening…</p> : found.length === 0 ? <p className="set-cap">No nearby devices found.</p> : found.map(device => <div className="li" key={`${device.host}:${device.port}:${device.fingerprint}`}><div className="lx"><b>{device.name}</b><span>fingerprint {shortFingerprint(device.fingerprint)}</span></div></div>)}<p className="set-cap set-device-caption">To pair a device, run <code>codeburn devices add</code> in a terminal. Pairing is interactive (approve on the other device).</p></Panel>
 }
 
 function PairedPanel({ devices, period, onRefresh }: { devices: ReturnType<typeof usePolled<CombinedUsage>>; period: Period; onRefresh: () => void }) {
@@ -692,7 +694,7 @@ function PairedPanel({ devices, period, onRefresh }: { devices: ReturnType<typeo
       onRefresh()
     })
   }
-  return <Panel title="Paired devices" right={<button className="set-text-button" onClick={onRefresh}>Refresh</button>}>{!devices.data && devices.error ? <SettingsErrorText error={devices.error} /> : !devices.data ? <p className="set-cap">Loading paired devices…</p> : paired.length === 0 ? <p className="set-cap">No paired devices yet.</p> : paired.map(device => <div className="li" key={device.id}><div className="lx"><b>{device.name}</b><span>{device.sessions.toLocaleString('en-US')} sessions · {formatUsd(device.cost)} {periodLabel(period)}</span></div><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(device.name)} /></div>)}{devices.data && devices.data.combined.deviceCount > 1 && <div className="li"><div className="lx"><b>Combined view active · {devices.data.combined.deviceCount} devices</b></div></div>}{error && <p className="set-action-msg error">{error}</p>}</Panel>
+  return <Panel title="Paired devices" right={<button className="set-text-button" onClick={onRefresh}>Refresh</button>}>{!devices.data && devices.error ? <SettingsErrorText error={devices.error} /> : !devices.data ? <p className="set-cap">Loading paired devices…</p> : paired.length === 0 ? <p className="set-cap">No paired devices yet.</p> : paired.map(device => <div className="li" key={device.id}><div className="lx"><b>{device.name}</b><span>{formatCount(device.sessions, 'session')} · {formatUsd(device.cost)} {periodLabel(period)}</span></div><ConfirmButton label="Remove" prompt="Remove?" onConfirm={() => remove(device.name)} /></div>)}{devices.data && devices.data.combined.deviceCount > 1 && <div className="li"><div className="lx"><b>Combined view active · {formatCount(devices.data.combined.deviceCount, 'device')}</b></div></div>}{error && <p className="set-action-msg error">{error}</p>}</Panel>
 }
 
 function SettingsErrorText({ error }: { error: CliError }) {

@@ -220,8 +220,8 @@ Add a `Capacity Dock` section to General Settings:
 - `Appearance` menu with `Graphite` and `Liquid Glass`.
 - Early-reset notifications are a switch in the General Settings
   `Notifications` section, default on, stored under
-  `codeburn.quota.earlyResetNotificationsEnabled`. With it off the dock band
-  still appears; only the system notification is withheld.
+  `codeburn.quota.earlyResetNotificationsEnabled`. With it off the system
+  notification is withheld.
 - A compact switch list containing only connected or usable stale providers.
   Provider connection and credential entry remains in the Providers section;
   General Settings never presents the entire 69-provider catalog as dock

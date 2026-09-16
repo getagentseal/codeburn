@@ -5,6 +5,7 @@ import React, { Fragment, useState, useCallback, useEffect, useLayoutEffect, use
 import { render, Box, Text, measureElement, useInput, useApp, useWindowSize, type DOMElement, type Instance, type RenderOptions } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost, formatTokens, markEstimated, carriedCostNote } from './format.js'
+import { maxOf } from './math-utils.js'
 import { formatSessionCount } from './session-count-label.js'
 import { aggregateModelEfficiency } from './model-efficiency.js'
 import { parseAllSessions, filterProjectsByDateRange, filterProjectsByName, setInteractiveScanUI, withSinglePassParse, withColdFirstPaintFloor, filesParsedFromSourceCount, isCompleteSessionSnapshotAvailable } from './parser.js'
@@ -480,7 +481,7 @@ function fit(s: string, n: number): string {
 type MetricCell = { text: string; color?: string; dimColor?: boolean }
 
 function getMetricWidths(headers: string[], rows: string[][]): number[] {
-  return headers.map((header, index) => Math.max(header.length, ...rows.map(row => row[index]?.length ?? 0)))
+  return headers.map((header, index) => maxOf(rows.map(row => row[index]?.length ?? 0), header.length))
 }
 
 function getMetricGroupWidth(metricWidths: number[]): number {
@@ -684,7 +685,7 @@ function DailyActivity({ projects, days = 14, pw, bw, scrollable = false, cursor
   const allRows = getDailyActivityRows(projects)
   const orderedRows = scrollable ? [...allRows].reverse() : allRows
   const rows = scrollable ? orderedRows.slice(cursor, cursor + days) : orderedRows.slice(-days)
-  const maxCost = Math.max(0, ...(scrollable ? orderedRows : rows).map(row => row.cost))
+  const maxCost = maxOf((scrollable ? orderedRows : rows).map(row => row.cost), 0)
   const headers = ['cost', 'calls']
   const values = rows.map(row => [formatCost(row.cost), String(row.calls)])
   const metricWidths = getMetricWidths(headers, values)
@@ -764,13 +765,13 @@ export function shortProject(absPath: string, width = Infinity): string {
 
 export function getDashboardMaxWidth(projects: ProjectSummary[], budgets?: Map<string, ContextBudget>, activeProvider?: string): number {
   const sessions = projects.flatMap(project => project.sessions)
-  const longest = (values: string[]) => Math.max(1, ...values.map(value => value.length))
+  const longest = (values: string[]) => maxOf(values.map(value => value.length), 1)
   const rowWidth = (labels: string[], metricCount: number, metricWidth = 7) =>
     PANEL_CHROME + 10 + 1 + longest(labels) + metricCount * metricWidth
   const modelTotals = aggregateModelTotals(projects)
-  const modelMetricWidth = Math.max(7, ...Object.values(modelTotals).map(model =>
+  const modelMetricWidth = maxOf(Object.values(modelTotals).map(model =>
     markEstimated(formatCost(model.costUSD), model.estimatedCostUSD > 0).length
-  ))
+  ), 7)
   const categoryLabels = sessions.flatMap(session => Object.keys(session.categoryBreakdown).map(category => CATEGORY_LABELS[category as TaskCategory] ?? category))
   const skillLabels = sessions.flatMap(session => Object.keys(session.skillBreakdown))
   const agentLabels = sessions.flatMap(session => Object.keys(session.subagentBreakdown))
@@ -792,7 +793,7 @@ function getProjectBreakdownRowLimit(period: Period, dayMode = false): number {
 }
 
 function ProjectBreakdown({ projects, pw, bw, budgets, rows = 14 }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget>; rows?: number }) {
-  const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
+  const maxCost = maxOf(projects.map(p => p.totalCostUSD), -Infinity)
   const hasBudgets = budgets && budgets.size > 0
   const headers = ['cost', 'avg/s', 'session', ...(hasBudgets ? ['overhead'] : [])]
   const visibleProjects = projects.slice(0, rows)

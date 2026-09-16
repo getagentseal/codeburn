@@ -1,5 +1,6 @@
 import { behavioralCallCount, behavioralTurnCount } from './behavioral-weight.js'
 import { getShortModelName } from './models.js'
+import { maxOf } from './math-utils.js'
 import { inferSessionProvider, sessionBillableOutputTokens } from './session-output.js'
 import { CATEGORY_LABELS } from './types.js'
 import type { ProjectSummary, SessionSummary, TaskCategory } from './types.js'
@@ -191,7 +192,7 @@ function renderSessionGrid<T>(columns: SessionColumn[], items: T[], cell: (item:
   // Content can use spare room, but never grow beyond the terminal frame.
   for (let i = 0; i < fitted.length; i++) {
     const col = fitted[i]!
-    const longest = Math.max(col.header.length, ...values.map(row => row[i]?.length ?? 0))
+    const longest = maxOf(values.map(row => row[i]?.length ?? 0), col.header.length)
     const spare = available - frameWidth(fitted)
     const wanted = Math.max(0, Math.min(longest - col.width, spare))
     col.width += wanted
