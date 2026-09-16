@@ -280,6 +280,7 @@ export const PROVIDER_ENV_VARS: Record<string, string[]> = {
   opencode: ['XDG_DATA_HOME', 'OPENCODE_DATA_DIR', 'OPENCODE_DB_PREFIX'],
   goose: ['XDG_DATA_HOME', 'GOOSE_PATH_ROOT'],
   grok: ['GROK_HOME'],
+  grokbot: ['CODEBURN_GROKBOT_DIR', 'APPDATA'],
   crush: ['XDG_DATA_HOME', 'CRUSH_GLOBAL_DATA', 'LOCALAPPDATA'],
   warp: ['WARP_DB_PATH'],
   antigravity: ['CODEBURN_CACHE_DIR'],
@@ -386,6 +387,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.
   grok: 'authoritative-usage-v4',
+  // Estimated from message text: Grok Bot's local mirror records no tokens.
+  grokbot: 'estimated-usage-v1',
   // v0-v3 generations, embedded attempt streams, retry accounting, and the
   // version-specific inherited-prefix rules all change cached DSH calls.
   dsh: 'session-formats-v0-v3-attempts-v5',

@@ -16,8 +16,7 @@ import Foundation
 /// - the scheduled reset time of every announcement already made, matched with
 ///   the detector's own skew tolerance, so a vendor that briefly serves the old
 ///   cycle again — possibly from a replica whose timestamp differs by a minute
-///   or two — cannot announce the same reset twice, across relaunches included;
-/// - the latest event, for the Capacity Dock band.
+///   or two — cannot announce the same reset twice, across relaunches included.
 @MainActor
 final class EarlyQuotaResetMonitor {
     struct Observation: Equatable {
@@ -33,7 +32,6 @@ final class EarlyQuotaResetMonitor {
         var windows: [String: EarlyQuotaResetReading]
         /// Scheduled reset times already announced, per window key.
         var announced: [String: [Date]]
-        var latestEvent: EarlyQuotaResetEvent?
     }
 
     /// Announcements older than the snapshot store's horizon are dropped.
@@ -110,23 +108,16 @@ final class EarlyQuotaResetMonitor {
                 windows: windows,
                 announced: announced
                     .mapValues { $0.filter { $0 >= cutoff } }
-                    .filter { !$0.value.isEmpty },
-                latestEvent: headline ?? stored?.latestEvent
+                    .filter { !$0.value.isEmpty }
             ),
             providerID: providerID
         )
 
         guard let headline else { return nil }
         // Persisted before delivery: an event is one-shot even when the user has
-        // notifications off or denied, and the dock band still shows it.
+        // notifications off or denied.
         await post(headline)
         return headline
-    }
-
-    /// The latest announced event for the dock band, while it is still recent.
-    func visibleEvent(providerID: String, now: Date = Date()) -> EarlyQuotaResetEvent? {
-        guard let event = loadState(providerID: providerID)?.latestEvent else { return nil }
-        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
     }
 
     /// Called on user disconnect so a reconnect, possibly to another account,

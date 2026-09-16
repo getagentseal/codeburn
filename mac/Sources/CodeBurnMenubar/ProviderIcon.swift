@@ -27,6 +27,7 @@ enum ProviderIconCache {
         "codex": "codex",
         "openai": "codex",
         "githubcopilot": "copilot",
+        "grokbot": "grok",
         "googlegemini": "gemini",
         "moonshot": "kimi",
     ]

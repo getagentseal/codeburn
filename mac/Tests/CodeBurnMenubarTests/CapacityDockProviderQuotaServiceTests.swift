@@ -15,6 +15,10 @@ struct CapacityDockProviderQuotaServiceTests {
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
     }
+    nonisolated private static let unusedGrokBot: @Sendable () async throws -> QuotaSummary = {
+        Issue.record("Wrong adapter dispatched")
+        return Self.summary()
+    }
     nonisolated private static let unusedZai: @Sendable (String?) async throws -> QuotaSummary = { _ in
         Issue.record("Wrong adapter dispatched")
         return Self.summary()
@@ -31,6 +35,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
@@ -57,6 +62,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: { apiKey in
                 if let apiKey { await capture.record(apiKey) }
                 return expected
@@ -84,6 +90,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: { expected },
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "cursor"))
@@ -106,9 +113,33 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: { expected },
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "grok"))
+
+        let result = try await service.fetch(
+            provider: provider,
+            credential: CapacityDockProviderCredential()
+        )
+
+        #expect(result == expected)
+    }
+
+    @Test("Grok Bot dispatches through the Cursor app's own local session")
+    func dispatchesGrokBot() async throws {
+        let expected = Self.summary(percent: 0.99)
+        let service = CapacityDockProviderQuotaService(dependencies: .init(
+            refreshClinePass: { _ in
+                Issue.record("Wrong adapter dispatched")
+                return Self.summary()
+            },
+            refreshCursor: Self.unusedCursor,
+            refreshGrok: Self.unusedGrok,
+            refreshGrokBot: { expected },
+            refreshZai: Self.unusedZai
+        ))
+        let provider = try #require(CapacityDockProvider(rawValue: "grokbot"))
 
         let result = try await service.fetch(
             provider: provider,
@@ -127,6 +158,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
@@ -159,6 +191,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "openrouter"))
@@ -182,6 +215,7 @@ struct CapacityDockProviderQuotaServiceTests {
             refreshClinePass: { _ in throw ClinePassSubscriptionService.FetchError.authenticationRejected },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
         let provider = try #require(CapacityDockProvider(rawValue: "clinepass"))
@@ -208,6 +242,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 refreshClinePass: { _ in throw error },
                 refreshCursor: Self.unusedCursor,
                 refreshGrok: Self.unusedGrok,
+                refreshGrokBot: Self.unusedGrokBot,
                 refreshZai: Self.unusedZai
             ))
             do {
@@ -245,6 +280,7 @@ struct CapacityDockProviderQuotaServiceTests {
                 },
                 refreshCursor: Self.unusedCursor,
                 refreshGrok: { throw error },
+                refreshGrokBot: Self.unusedGrokBot,
                 refreshZai: Self.unusedZai
             ))
             do {
@@ -277,6 +313,7 @@ struct CapacityDockProviderQuotaServiceTests {
             },
             refreshCursor: Self.unusedCursor,
             refreshGrok: Self.unusedGrok,
+            refreshGrokBot: Self.unusedGrokBot,
             refreshZai: Self.unusedZai
         ))
 

@@ -632,6 +632,9 @@ type CodexResumeState = {
   forkedFromId: string
   forkCutoff: string
   prevCumulativeTotal: number | null
+  /// Byte-identity of the last token_count info payload (#257 re-emission
+  /// collapse). Optional so resume states written before it still decode.
+  prevInfoIdentity?: string | null
   prevInput: number
   prevCached: number
   prevCacheWrite: number
@@ -668,6 +671,7 @@ function isResumeState(value: unknown): value is CodexResumeState {
     && typeof v['forkedFromId'] === 'string'
     && typeof v['forkCutoff'] === 'string'
     && (v['prevCumulativeTotal'] === null || typeof v['prevCumulativeTotal'] === 'number')
+    && (v['prevInfoIdentity'] === undefined || v['prevInfoIdentity'] === null || typeof v['prevInfoIdentity'] === 'string')
     && typeof v['prevInput'] === 'number'
     && typeof v['prevCached'] === 'number'
     && typeof v['prevCacheWrite'] === 'number'
@@ -728,6 +732,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
       // dropped. Once we've observed any event, we record its cumulative
       // total and dedup on equality regardless of whether it is zero.
       let prevCumulativeTotal: number | null = resume?.state.prevCumulativeTotal ?? null
+      let prevInfoIdentity: string | null = resume?.state.prevInfoIdentity ?? null
       let prevInput = resume?.state.prevInput ?? 0
       let prevCached = resume?.state.prevCached ?? 0
       let prevCacheWrite = resume?.state.prevCacheWrite ?? 0
@@ -910,6 +915,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             forkedFromId,
             forkCutoff,
             prevCumulativeTotal,
+            prevInfoIdentity,
             prevInput,
             prevCached,
             prevCacheWrite,
@@ -1155,13 +1161,23 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           }
 
           const cumulativeTotal = info.total_token_usage?.total_tokens ?? 0
-          // Dedup guard. Two consecutive events with cumulativeTotal=0 but
-          // non-empty last_token_usage would have been double-counted with
-          // the previous `> 0` clause. The null sentinel ensures the FIRST
-          // event always passes (so a session that never reports cumulative
-          // doesn't lose its opening turn).
-          if (prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
-          prevCumulativeTotal = cumulativeTotal
+          // Missing/null/partial cumulative data is not a repeated zero total.
+          const reportsCumulative = typeof info.total_token_usage?.total_tokens === 'number'
+            && Number.isFinite(info.total_token_usage.total_tokens)
+            && info.total_token_usage.total_tokens >= 0
+          // #257 regression half: a byte-identical consecutive record is a
+          // re-emission of the same token_count event, never a new request.
+          // This collapse applies with or without cumulative totals: measured
+          // on public Codex rollouts (codeset-ai/codeset-release-evals,
+          // 53 sessions / 1313 token_count events), 603 events are
+          // byte-identical repeats of their predecessor, all carrying the
+          // same cumulative snapshot. What the missing-cumulative path must
+          // preserve is records whose payload DIFFERS (distinct requests).
+          const infoIdentity = JSON.stringify(info)
+          if (infoIdentity === prevInfoIdentity) continue
+          prevInfoIdentity = infoIdentity
+          if (reportsCumulative && prevCumulativeTotal !== null && cumulativeTotal === prevCumulativeTotal) continue
+          prevCumulativeTotal = reportsCumulative ? cumulativeTotal : null
 
           const last = info.last_token_usage
           let inputTokens = 0
@@ -1240,12 +1256,21 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
           // are computed against a running `prev` that the fork advances
           // differently once the 5s cutoff skips some replays, so a delta-based
           // key would spuriously diverge on a replay and double-count it.
-          const dedupKey = `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+          // Without cumulative identity, equal usage can be distinct requests.
+          // Use the physical record position: stable on cache resume/re-read,
+          // but deliberately do not guess cross-file replay identity.
+          // Invariant (#1088, restored): anything dropped below is a record
+          // that survived both guards -- with cumulative identity it is a
+          // strictly-advanced total, so no tokens are lost and no active-time
+          // rescaling is needed; without it the record differs in payload
+          // from its predecessor and is treated as a distinct request, which
+          // deliberately weakens forkedFromId replay protection past the 5s
+          // fork cutoff (accepted trade-off: the alternative collapsed
+          // distinct requests wholesale).
+          const dedupKey = reportsCumulative
+            ? `codex:${forkedFromId || sessionId}:${cumulativeTotal}:${total?.input_tokens ?? 0}:${total?.cached_input_tokens ?? 0}:${total?.output_tokens ?? 0}:${total?.reasoning_output_tokens ?? 0}`
+            : `codex:record:${JSON.stringify([source.path, tracker.lastCompleteLineOffset])}`
 
-          // A drop here can only be a byte-identical replay: the
-          // prevCumulativeTotal guard above already discards a repeated
-          // running total, so nothing reaching this point ever loses real
-          // tokens -- no active-time rescaling needed (#1088 investigation).
           if (seenKeys.has(dedupKey)) continue
           seenKeys.add(dedupKey)
 

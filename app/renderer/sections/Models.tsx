@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
@@ -7,7 +7,6 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
-import { SwitchingBanner } from '../components/SwitchingBanner'
 import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
@@ -53,19 +52,23 @@ export function Models({
 }) {
   const [lens, setLens] = useState<ModelsLens>('model')
   const onAddAlias = () => onNavigate?.('settings', 'aliases')
+  const title = LENSES.find(entry => entry.value === lens)?.label ?? ''
+  // The lens picker and the compare shortcut live in the card header's right slot.
+  const controls = (
+    <span className="panel-controls">
+      <SegTabs options={LENSES} value={lens} onChange={value => setLens(value as ModelsLens)} />
+      {lens !== 'audit' && (
+        <button type="button" className="btn btn-s" onClick={() => onNavigate?.('compare')}>
+          Compare…
+        </button>
+      )}
+    </span>
+  )
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, alignSelf: 'flex-start' }}>
-        <SegTabs options={LENSES} value={lens} onChange={value => setLens(value as ModelsLens)} />
-        {lens !== 'audit' && (
-          <button type="button" className="btn btn-s" onClick={() => onNavigate?.('compare')}>
-            Compare…
-          </button>
-        )}
-      </div>
       {lens === 'audit' ? (
-        <AuditLens period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} />
+        <AuditLens period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} title={title} controls={controls} />
       ) : (
         <ModelsUsage
           period={period}
@@ -76,6 +79,8 @@ export function Models({
           onAddAlias={onAddAlias}
           onInvestigate={onInvestigate}
           ready={ready}
+          title={title}
+          controls={controls}
         />
       )}
     </>
@@ -91,6 +96,8 @@ function ModelsUsage({
   onAddAlias,
   onInvestigate,
   ready,
+  title,
+  controls,
 }: {
   period: Period
   provider: string
@@ -100,6 +107,8 @@ function ModelsUsage({
   onAddAlias: () => void
   onInvestigate?: (request: InvestigateRequest) => void
   ready: boolean
+  title: ReactNode
+  controls: ReactNode
 }) {
   const report = usePolled<ModelReportRow[]>(
     () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
@@ -114,9 +123,8 @@ function ModelsUsage({
 
   return (
     <>
-      {report.switching && <SwitchingBanner />}
       {report.error && <StaleBanner error={report.error} />}
-      <Panel className="scroll-x">
+      <Panel className="scroll-x" title={title} right={controls}>
         {report.data.length ? (
           <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
         ) : (
@@ -141,12 +149,16 @@ function AuditLens({
   range,
   refreshToken,
   ready,
+  title,
+  controls,
 }: {
   period: Period
   provider: string
   range: DateRange | null
   refreshToken: number
   ready: boolean
+  title: ReactNode
+  controls: ReactNode
 }) {
   const report = usePolled<AuditRow[]>(
     () => range ? codeburn.getAudit(period, provider, range) : codeburn.getAudit(period, provider),
@@ -161,9 +173,8 @@ function AuditLens({
 
   return (
     <>
-      {report.switching && <SwitchingBanner />}
       {report.error && <StaleBanner error={report.error} />}
-      <Panel className="scroll-x">
+      <Panel className="scroll-x" title={title} right={controls}>
         {report.data.length ? (
           <AuditTable rows={report.data} />
         ) : (

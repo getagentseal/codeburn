@@ -401,6 +401,11 @@ const BUILTIN_ALIASES: Record<string, string> = {
   // `codex-code-review` from the activity name "code review".
   'codex-auto-review':             'gpt-5.5',
   'grok-build':                    'grok-build-0.1',
+  // Grok Bot's desktop app serves opaque `sand-*` aliases and records no model
+  // id at all, so there is nothing truthful to price it by. It is xAI's own
+  // product, so it prices at xAI's published grok-4.6 rate ($2.00/M in,
+  // $6.00/M out, $0.50/M cached). Every grokbot call is costIsEstimated.
+  'grokbot-auto':                  'grok-4.6',
   'GPT-5.3 Codex (low reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (medium reasoning)': 'gpt-5.3-codex',
   'GPT-5.3 Codex (high reasoning)': 'gpt-5.3-codex',
@@ -1251,6 +1256,7 @@ const autoModelNames: Record<string, string> = {
   'ibm-bob-auto': 'IBM Bob (auto)',
   'kiro-auto': 'Kiro (auto)',
   'quickdesk-auto': 'Quick Desktop (auto)',
+  'grokbot-auto': 'Grok Bot (auto)',
   'cline-auto': 'Cline (auto)',
   'openclaw-auto': 'OpenClaw (auto)',
   'qwen-auto': 'Qwen (auto)',

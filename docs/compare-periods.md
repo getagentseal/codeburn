@@ -26,23 +26,40 @@ sides). Your selection is remembered when you leave the screen and come back.
 
 ## Reading the report
 
-**Totals** — API-equivalent cost, calls, sessions, every token component, and
+**Summary** — one sentence built from the report numbers (how much B cost
+against A, and whether sessions and cost per call moved together), then three
+tiles: total cost, cost per 100 calls and sessions, each with its absolute and
+relative change.
+
+**Cost per day, both ranges side by side** — paired bars per day index, A in
+the bar color and B in the accent color. Each pair is one day of A beside the
+same-numbered day of B, so the two series line up by index, not by date; the
+axis reads "Day 1" to "Day N", and hovering a day shows both sides' dates and
+costs. The
+per-day cost comes from the same sliced session trees as the totals (`daily.A`
+/ `daily.B` in the JSON).
+
+**What changed, biggest movers** — the five largest movers, by project or by
+model, with a link to expand to the full list. Everything below lives in the
+folded **All metrics** and **What is counted** sections.
+
+**Totals** (under All metrics) — API-equivalent cost, calls, sessions, every token component, and
 estimated-price cost, each with its absolute (B − A) and relative difference.
 Where a percentage is undefined (the A component is zero) the cell shows `—`
 rather than an invented number. API-equivalent cost is what the same usage
 would have cost at API rates; it is **not** a subscription invoice.
 
-**Normalized** — the same difference per calendar day and per 100 API calls.
+**Normalized** (under All metrics) — the same difference per calendar day and per 100 API calls.
 The denominators are printed under the table (A and B use *their own* day and
 call counts). A zero or unknown denominator renders as `—`, never as zero.
 
-**Contributions by project / by model** — the largest increases and decreases
-in each dimension, sorted by absolute movement. The two lenses are two
+The movers table lists the largest increases and decreases in each dimension,
+sorted by absolute movement. The two lenses are two
 *perspectives on the same global difference*; each complete lens alone sums to
 the total difference. Never add the lenses together.
 
-- A project or model that exists only in B is labeled **New** (no infinite
-  percentage). One that exists only in A is **Gone**.
+- A project or model that exists only in B is chipped **new this period** (no
+  infinite percentage). One that exists only in A is **not used this period**.
 - Click any row to inspect the sessions behind it: each session shows its cost
   in A and in B. A session that straddles the boundary appears once, with the
   part of its activity that falls inside each range — attribution follows each
@@ -55,7 +72,8 @@ the total difference. Never add the lenses together.
   as `—`), and a period that spent more in total but less per call shows as a
   decrease.
 
-**Coverage & basis** — what the numbers are made of:
+**What is counted** — folded away at the foot of the screen; what the numbers
+are made of:
 
 - Pricing coverage per range, and any models with usage but no price data
   ("unknown", not zero).

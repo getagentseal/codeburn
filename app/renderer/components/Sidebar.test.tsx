@@ -14,6 +14,16 @@ const bridge = vi.hoisted(() => ({
 }))
 vi.mock('../lib/ipc', () => ({ codeburn: bridge, normalizeCliError: (err: unknown) => err }))
 
+// This jsdom setup ships no Storage, and the sidebar's collapsed state is read
+// from one at first render.
+const store = new Map<string, string>()
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => store.get(key) ?? null,
+  setItem: (key: string, value: string) => { store.set(key, value) },
+  removeItem: (key: string) => { store.delete(key) },
+  clear: () => store.clear(),
+})
+
 function setPlatform(platform: string): void {
   ;(window as unknown as { codeburn?: { platform?: string } }).codeburn = { platform }
 }
@@ -25,18 +35,19 @@ describe('Sidebar', () => {
 
   afterEach(() => {
     delete (window as unknown as { codeburn?: { platform?: string } }).codeburn
+    store.clear()
     vi.clearAllMocks()
   })
 
   it.each([
     ['darwin', '⌘'],
     ['win32', 'Ctrl+'],
-  ] as const)('renders all nav items in the desktop order with %s keycaps', (platform, mod) => {
+  ] as const)('renders every nav item in its group with %s keycaps', (platform, mod) => {
     setPlatform(platform)
-    render(<Sidebar active="overview" onNavigate={() => {}} />)
+    const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
     const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const labels = screen.getAllByRole('button').map(item => item.textContent?.replace(/(⌘|Ctrl\+)[\d,.]/, ''))
-    expect(labels).toEqual(['Overview', 'Sessions', 'Pull requests', 'Spend', 'Optimize', 'Models', 'Compare', 'Compare periods', 'Plans', 'Settings', 'Plugins'])
+    const labels = [...container.querySelectorAll('.ni')].map(item => item.textContent?.replace(/(⌘|Ctrl\+)[\d,.]/, ''))
+    expect(labels).toEqual(['Overview', 'Sessions', 'Pull requests', 'Spend', 'Models', 'Optimize', 'Compare', 'Compare periods', 'Plans', 'Plugins', 'Settings'])
     expect(screen.getByRole('button', { name: new RegExp(`Sessions.*${esc(mod)}2`) })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: new RegExp(`Pull requests.*${esc(mod)}3`) })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: new RegExp(`Compare.*${esc(mod)}7`) })).toBeInTheDocument()
@@ -56,43 +67,89 @@ describe('Sidebar', () => {
     expect(screen.getByRole('button', { name: /Overview/ })).not.toHaveClass('on')
   })
 
-  it('renders the brand flame mark, static under the closed motion gate', () => {
+  it('renders the wordmark as animated text with no flame image', () => {
     const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
-    const flame = container.querySelector('.app .flamemark')
-    expect(flame?.tagName.toLowerCase()).toBe('img')
-    // motionEnabled() is off under vitest, so the idle flicker never attaches.
-    expect(container.querySelector('.fm-flicker')).toBeNull()
+    const mark = container.querySelector('.app b')
+    expect(mark).toHaveClass('flame-text')
+    expect(mark).toHaveTextContent('CodeBurn')
+    expect(container.querySelector('.app img')).toBeNull()
   })
 
-  it('keeps About and the social glyphs in the corner off Windows', () => {
+  it('groups the nav under muted section labels', () => {
+    const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
+    expect([...container.querySelectorAll('.grp-label')].map(el => el.textContent)).toEqual(['Usage', 'Insight', 'Account'])
+  })
+
+  it('shows the shortcut badges only while the modifier is held', () => {
+    const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
+    const nav = container.querySelector('.sb')
+
+    expect(nav).not.toHaveAttribute('data-show-keys')
+    fireEvent.keyDown(window, { key: 'Meta', metaKey: true })
+    expect(nav).toHaveAttribute('data-show-keys')
+    fireEvent.keyUp(window, { key: 'Meta' })
+    expect(nav).not.toHaveAttribute('data-show-keys')
+
+    fireEvent.keyDown(window, { key: 'Control', ctrlKey: true })
+    expect(nav).toHaveAttribute('data-show-keys')
+    fireEvent.blur(window)
+    expect(nav).not.toHaveAttribute('data-show-keys')
+  })
+
+  it('carries About and the version in the corner, with the links in the modal', async () => {
     setPlatform('darwin')
     const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
 
-    expect(screen.getByRole('link', { name: 'About' })).toBeInTheDocument()
-    expect([...container.querySelectorAll('.foot .social a')].map(a => a.getAttribute('aria-label')))
-      .toEqual(['GitHub', 'Discord', 'X', 'YouTube', 'LinkedIn'])
-  })
-
-  it('opens a glyph through the shell rather than navigating the window', () => {
-    setPlatform('linux')
-    render(<Sidebar active="overview" onNavigate={() => {}} />)
-
-    fireEvent.click(screen.getByRole('link', { name: 'GitHub' }))
-
-    expect(bridge.openExternal).toHaveBeenCalledWith('https://github.com/getagentseal/codeburn')
-  })
-
-  // Windows is the one platform that gives that corner to something else: the two companion
-  // switches sit above About, and a 186px sidebar has no room for both.
-  it('gives the corner to the companion switches on Windows', async () => {
-    setPlatform('win32')
-    const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
-
+    const about = screen.getByRole('link', { name: /About/ })
+    expect(about).toHaveTextContent(/^Aboutv\d+\.\d+\.\d+$/)
     expect(container.querySelector('.foot .social')).toBeNull()
-    // About still lists every one of them under Links, on every platform.
-    fireEvent.click(screen.getByRole('link', { name: 'About' }))
+
+    fireEvent.click(about)
     expect(await screen.findByRole('link', { name: /GitHub/ })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /LinkedIn/ })).toBeInTheDocument()
+  })
+
+  it('collapses to a rail, remembers it, and still navigates by icon', () => {
+    const onNavigate = vi.fn()
+    const { container, unmount } = render(<Sidebar active="overview" onNavigate={onNavigate} />)
+    const nav = container.querySelector('.sb')
+
+    expect(nav).not.toHaveClass('collapsed')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }))
+    expect(nav).toHaveClass('collapsed')
+    expect(localStorage.getItem('codeburn.sidebarCollapsed')).toBe('1')
+
+    // The label never leaves the DOM, so the row keeps its name on the rail.
+    fireEvent.click(screen.getByRole('button', { name: /Spend/ }))
+    expect(onNavigate).toHaveBeenCalledWith('spend')
+
+    unmount()
+    render(<Sidebar active="overview" onNavigate={() => {}} />)
+    expect(document.querySelector('.sb')).toHaveClass('collapsed')
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+  })
+
+  it.each([
+    ['darwin', { metaKey: true }],
+    ['win32', { ctrlKey: true }],
+  ] as const)('toggles the rail with the %s modifier chord and B', (platform, chord) => {
+    setPlatform(platform)
+    const { container } = render(<Sidebar active="overview" onNavigate={() => {}} />)
+    const nav = container.querySelector('.sb')
+
+    fireEvent.keyDown(window, { key: 'b', ...chord })
+    expect(nav).toHaveClass('collapsed')
+    fireEvent.keyDown(window, { key: 'b', ...chord })
+    expect(nav).not.toHaveClass('collapsed')
+  })
+
+  it('keeps the companion switches above About on Windows', async () => {
+    setPlatform('win32')
+    bridge.companionStatus.mockResolvedValue({ supported: true, menuBar: true, sidebar: true, store: false })
+    render(<Sidebar active="overview" onNavigate={() => {}} />)
+
+    expect(await screen.findByRole('switch', { name: 'Menu bar' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /About/ })).toBeInTheDocument()
   })
 })
 

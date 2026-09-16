@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useEscape } from '../hooks/useEscape'
 import { codeburn } from '../lib/ipc'
 import { showToast } from '../lib/toast'
 import styles from './Plugins.module.css'
+import { Icon } from '../components/icons'
 
 interface InstallFlowProps {
   onClose: () => void
@@ -20,13 +22,7 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
   const [installName, setInstallName] = useState('')
   const [installVersion, setInstallVersion] = useState('')
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && step === 1) onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [step, onClose])
+  useEscape(step === 1, onClose)
 
   const chooseFolder = async () => {
     const selected = await codeburn.chooseDirectory()
@@ -88,7 +84,7 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
   return (
     <div className={styles.modalBackdrop} onClick={handleClose}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
-        <button className={styles.modalClose} onClick={handleClose}>×</button>
+        <button className={styles.modalClose} onClick={handleClose}><Icon name="x" /></button>
         <div className={styles.modalContent}>
           {step === 1 && (
             <>
@@ -165,7 +161,7 @@ export function InstallFlowModal({ onClose, onSuccess }: InstallFlowProps) {
                   <div style={{ marginBottom: '1.5rem' }}>
                     <div className={styles.spinner} />
                   </div>
-                  <p>Installing plugin from {source === 'org' ? orgInput : folderPath}...</p>
+                  <p>Installing plugin from {source === 'org' ? orgInput : folderPath}…</p>
                 </div>
               )}
               {installError && (

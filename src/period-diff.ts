@@ -1,4 +1,5 @@
 import { getDaysInRange, type DailyCache, type DailyEntry } from './daily-cache.js'
+import { aggregateProjectsIntoDays } from './day-aggregator.js'
 import type { DateRange, ProjectSummary } from './types.js'
 import { buildPeriodData, canonicalSessionCountKey } from './usage-aggregator.js'
 import { inferSessionProvider } from './session-output.js'
@@ -105,6 +106,8 @@ export type AggregateDayRow = {
   aggregateOnly: number
 }
 
+export type DayCost = { date: string; cost: number }
+
 export type HistoryBasis = {
   historyCost: { A: number; B: number }
   detailCost: { A: number; B: number }
@@ -132,6 +135,9 @@ export type PeriodDiffReport = {
   /// Separate lens: the same global difference seen per model.
   models: Contribution[]
   normalized: NormalizedView
+  /// Cost per local calendar day for each side, in range order and zero-filled
+  /// so both series can be drawn day-index against day-index.
+  daily: { A: DayCost[]; B: DayCost[] }
   coverage: CoverageBlock
   history?: HistoryBasis
 }
@@ -442,6 +448,20 @@ function emptyHistoryBasis(): HistoryBasis {
   }
 }
 
+/// Per-day cost from the same sliced session trees the totals come from, so a
+/// straddling session lands on each call's own local day.
+function dailySeries(range: PeriodRangeKey, projects: ProjectSummary[]): DayCost[] {
+  const byDate = new Map(aggregateProjectsIntoDays(projects).map(day => [day.date, day.cost]))
+  const rows: DayCost[] = []
+  const [y, m, d] = range.from.split('-').map(Number) as [number, number, number]
+  const cursor = new Date(y, m - 1, d)
+  for (let key = localDateKey(cursor); key <= range.to; key = localDateKey(cursor)) {
+    rows.push({ date: key, cost: byDate.get(key) ?? 0 })
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return rows
+}
+
 export function buildPeriodDiffReport(args: {
   provider: string
   rangeA: PeriodRangeKey
@@ -469,6 +489,7 @@ export function buildPeriodDiffReport(args: {
     projects: projectContributions(args.projectsA, args.projectsB),
     models: modelContributions(args.projectsA, args.projectsB),
     normalized: normalizedView(totalsA, totalsB, infoA, infoB),
+    daily: { A: dailySeries(args.rangeA, args.projectsA), B: dailySeries(args.rangeB, args.projectsB) },
     coverage: {
       unpricedModelsA: sideA.unpriced,
       unpricedModelsB: sideB.unpriced,

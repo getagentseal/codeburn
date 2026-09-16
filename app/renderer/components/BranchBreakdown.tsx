@@ -7,7 +7,7 @@ import { ListRow } from './ListRow'
 import { Panel } from './Panel'
 import { SectionSkeleton } from './Skeleton'
 import { usePolled } from '../hooks/usePolled'
-import { formatCompact, formatDayShort, formatUsd } from '../lib/format'
+import { formatCompact, formatCount, formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type { BranchSpendProjectReport, BranchSpendReport, BranchSpendRow, BranchSpendSessionRow, BranchTokenSplit, DateRange, Period } from '../lib/types'
@@ -153,7 +153,7 @@ function CoverageNote({ scope }: { scope: BranchSpendProjectReport['coverage'] }
         {scope.noBranchDataSessions > 0 ? ` (${scope.noBranchDataSessions} ${scope.noBranchDataSessions === 1 ? 'session' : 'sessions'}${providers.length ? `: ${providers.join(', ')}` : ''})` : ''}
       </span>
       <span className="branch-coverage-note">
-        {scope.distinctSessions.toLocaleString('en-US')} distinct {scope.distinctSessions === 1 ? 'session' : 'sessions'} — a session that switched branches appears on each one, so rows are not summed.
+        {formatCount(scope.distinctSessions, 'distinct session')}. A session that switched branches appears on each one, so rows are not summed.
       </span>
     </div>
   )

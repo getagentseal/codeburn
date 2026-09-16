@@ -20,13 +20,13 @@ function entry(day: number): DailyHistoryEntry {
 }
 
 describe('StackedBars', () => {
-  it('renders every supplied day and axis ticks every fourth day plus the last', () => {
+  it('renders every supplied day and axis ticks every fourth day back from the last', () => {
     const daily = Array.from({ length: 16 }, (_, index) => entry(index + 1))
     const { container } = render(<StackedBars daily={daily} />)
 
     expect(container.querySelectorAll('.sbars .c')).toHaveLength(16)
-    const ticks = container.querySelectorAll('.sbars-wrap > .ov-xax span')
-    expect([...ticks].map(tick => tick.textContent)).toEqual(['Jul 1', 'Jul 5', 'Jul 9', 'Jul 13', 'Jul 16'])
+    const ticks = container.querySelectorAll('.sbars-wrap .ov-xax span')
+    expect([...ticks].map(tick => tick.textContent)).toEqual(['Jul 4', 'Jul 8', 'Jul 12', 'Jul 16'])
   })
 
   it('renders days before recorded history as no data, not a $0.00 column', () => {

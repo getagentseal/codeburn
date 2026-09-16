@@ -55,7 +55,6 @@ struct EarlyQuotaResetDetectorTests {
         #expect(event.percentBefore == 80.0)
         #expect(event.percentAfter == 0.0)
         #expect(event.notificationBody == "Claude's weekly limit reset 18h early. You're back to 100%.")
-        #expect(event.noticeText == "Weekly limit reset 18h early")
     }
 
     @Test("Usage emptying while the reset time stands still is an early reset")
@@ -71,8 +70,7 @@ struct EarlyQuotaResetDetectorTests {
         #expect(event.notificationTitle == "Claude quota cleared early")
         #expect(event.notificationBody
             == "Claude cleared your weekly usage 18h before its reset. You're back to 99%.")
-        #expect(event.noticeText == "Weekly usage cleared, 18h before reset")
-        for text in [event.notificationTitle, event.notificationBody, event.noticeText, event.noticeHelpText] {
+        for text in [event.notificationTitle, event.notificationBody] {
             #expect(!text.contains("reset early"))
         }
     }
@@ -294,136 +292,6 @@ struct EarlyQuotaResetDetectorTests {
     }
 }
 
-@Suite("Early quota reset history")
-struct EarlyQuotaResetHistoryTests {
-    private func snapshots(resetOffsets: [TimeInterval], windowKey: String = "seven_day") -> [SubscriptionSnapshot] {
-        resetOffsets.map { offset in
-            SubscriptionSnapshot(
-                windowKey: windowKey,
-                percent: 50,
-                resetsAt: now.addingTimeInterval(offset),
-                capturedAt: now.addingTimeInterval(offset - 3600),
-                effectiveTokens: nil
-            )
-        }
-    }
-
-    @Test("Three consecutive weekly cycles that each landed 18h early read as a pattern")
-    func consistentEarlyResets() {
-        let early: TimeInterval = 18 * 3600
-        // Each cycle ends a window after the previous reset, minus the lead.
-        var offsets: [TimeInterval] = [-3 * week]
-        for _ in 0..<3 { offsets.append(offsets.last! + week - early) }
-        let summary = EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: offsets),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        )
-        #expect(summary?.earlyResets == 3)
-        #expect(summary?.observedResets == 3)
-        #expect(summary?.typicalEarlyBySeconds == early)
-        #expect(summary?.caption == "Last 3 weekly resets came ~18h early")
-    }
-
-    @Test("Cycles that ran to schedule produce no summary")
-    func onScheduleResetsHaveNoPattern() {
-        let offsets: [TimeInterval] = [-3 * week, -2 * week, -week, 0]
-        #expect(EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: offsets),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        ) == nil)
-    }
-
-    @Test("A mixed record says how many of the observed resets were early")
-    func mixedRecord() {
-        let early: TimeInterval = 12 * 3600
-        let offsets: [TimeInterval] = [
-            -3 * week,
-            -3 * week + week - early,
-            -3 * week + 2 * week - early,
-            -3 * week + 3 * week - early * 2,
-        ]
-        let summary = EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: offsets),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        )
-        #expect(summary?.observedResets == 3)
-        #expect(summary?.earlyResets == 2)
-        #expect(summary?.caption == "2 of the last 3 weekly resets came ~12h early")
-    }
-
-    @Test("Short windows get no pattern, the same discipline the pace ETA uses")
-    func shortWindowsHaveNoPattern() {
-        let offsets: [TimeInterval] = [0, fiveHours - 2 * 3600, 2 * (fiveHours - 2 * 3600)]
-        #expect(EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: offsets, windowKey: "five_hour"),
-            windowKey: "five_hour",
-            windowName: "5-hour limit",
-            windowSeconds: 5 * 3600
-        ) == nil)
-    }
-
-    @Test("A single observed cycle is not a pattern")
-    func oneCycleHasNoPattern() {
-        #expect(EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: [0]),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        ) == nil)
-    }
-
-    @Test("Cycles the store never saw are not read as timing evidence")
-    func unobservedCyclesAreSkipped() {
-        // A gap of three windows: the app was closed. That pair says nothing.
-        #expect(EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: [-4 * week, -week]),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        ) == nil)
-    }
-
-    @Test("A gap in the record is not counted among the resets the summary speaks for")
-    func unobservedCyclesAreNotCounted() {
-        let early: TimeInterval = 18 * 3600
-        let first = -5 * week
-        // Three windows pass unobserved, then one cycle that landed early.
-        let resumed = first + 3 * week
-        let summary = EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: [first, resumed, resumed + week - early]),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        )
-        #expect(summary?.observedResets == 1)
-        #expect(summary?.earlyResets == 1)
-        #expect(summary?.caption == "Last weekly reset came ~18h early")
-    }
-
-    @Test("Jittered reset timestamps inside one cycle collapse to that cycle")
-    func jitterIsCollapsed() {
-        let early: TimeInterval = 18 * 3600
-        let first = -2 * week
-        let second = first + week - early
-        let offsets: [TimeInterval] = [first, first + 90, second, second + 120]
-        let summary = EarlyQuotaResetHistory.summarize(
-            snapshots: snapshots(resetOffsets: offsets),
-            windowKey: "seven_day",
-            windowName: "weekly limit",
-            windowSeconds: weekSeconds
-        )
-        #expect(summary?.observedResets == 1)
-        #expect(summary?.earlyResets == 1)
-        #expect(summary?.caption == "Last weekly reset came ~18h early")
-    }
-}
-
 @Suite("Early quota reset notifications")
 @MainActor
 struct EarlyQuotaResetMonitorTests {
@@ -503,7 +371,7 @@ struct EarlyQuotaResetMonitorTests {
         }
     }
 
-    @Test("Toggle off posts nothing and never asks for authorization, but the dock still shows it")
+    @Test("Toggle off posts nothing and never asks for authorization")
     func toggleOffStaysSilent() async throws {
         try await withIsolatedMonitor { monitor, notifier, defaults in
             defaults.set(false, forKey: EarlyQuotaResetPreference.defaultsKey)
@@ -517,7 +385,6 @@ struct EarlyQuotaResetMonitorTests {
             #expect(event != nil)
             #expect(notifier.posts.isEmpty)
             #expect(notifier.authorizationRequests == 0)
-            #expect(monitor.visibleEvent(providerID: "claude", now: now) != nil)
         }
     }
 
@@ -582,56 +449,9 @@ struct EarlyQuotaResetMonitorTests {
                 now: now
             )
             #expect(notifier.posts.isEmpty)
-            #expect(monitor.visibleEvent(providerID: "claude", now: now) == nil)
         }
     }
 
-    @Test("The dock band is bounded in time")
-    func noticeExpires() async throws {
-        try await withIsolatedMonitor { monitor, _, _ in
-            await seedBaseline(monitor)
-            await monitor.record(
-                providerID: "claude", providerName: "Claude", planLabel: "Max 20x",
-                baselineIsTrusted: true,
-                observations: [weeklyObservation(afterEarlyReset)],
-                now: now
-            )
-            // Literal twelve hours: reading the constant back would pin nothing.
-            let twelveHours: TimeInterval = 12 * 3600
-            #expect(monitor.visibleEvent(
-                providerID: "claude", now: now.addingTimeInterval(twelveHours - 60)
-            ) != nil)
-            #expect(monitor.visibleEvent(
-                providerID: "claude", now: now.addingTimeInterval(twelveHours + 60)
-            ) == nil)
-        }
-    }
-}
-
-@Suite("Capacity Dock early reset band")
-struct EarlyQuotaResetDockTests {
-    @Test("The band is a notice the computed panel height reserves")
-    func bandIsReserved() {
-        let quota = QuotaSummary(
-            providerFilter: .claude,
-            connection: .connected,
-            primary: nil,
-            details: [QuotaSummary.Window(label: "Weekly", percent: 0.2, resetsAt: now)],
-            planLabel: "Max 20x",
-            footerLines: []
-        )
-        func height(_ hasBand: Bool) -> CGFloat {
-            CapacityDockMetrics.detailHeight(
-                quota: quota,
-                sessionCount: 1,
-                hasToday: true,
-                tailEdge: .right,
-                scale: 1,
-                hasEarlyResetNotice: hasBand
-            )
-        }
-        #expect(height(true) == height(false) + CapacityDockGlance.noticeHeight)
-    }
 }
 
 // MARK: - Helpers
