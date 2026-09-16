@@ -6,6 +6,7 @@ import { fetchClaudeQuota } from './claude'
 import { fetchCodexQuota } from './codex'
 import { fetchCopilotQuota } from './copilot'
 import { fetchGeminiQuota } from './gemini'
+import { fetchGrokbotQuota, grokbotInstalled } from './grokbot'
 import { fetchKimiQuota } from './kimi'
 import { atomicWriteSecureFile, readSecureFile, sanitizeError } from './security'
 import type { ProviderName, QuotaProvider } from './types'
@@ -23,6 +24,8 @@ type QuotaDeps = {
   copilot: (options: FetcherOptions) => Promise<FetchResult>
   antigravity: (options: FetcherOptions) => Promise<FetchResult>
   kimi: (options: FetcherOptions) => Promise<FetchResult>
+  grokbot: (options: FetcherOptions) => Promise<FetchResult>
+  grokbotInstalled: () => boolean
   statePath: string
   readFile: typeof readSecureFile
   writeFile: typeof atomicWriteSecureFile
@@ -30,7 +33,7 @@ type QuotaDeps = {
   refreshMs: number
 }
 
-const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi']
+const PROVIDERS: ProviderName[] = ['claude', 'codex', 'gemini', 'copilot', 'antigravity', 'kimi', 'grokbot']
 
 const defaultDeps: QuotaDeps = {
   claude: fetchClaudeQuota,
@@ -41,6 +44,8 @@ const defaultDeps: QuotaDeps = {
   // no remote endpoints), so it ignores the abort/keychain options entirely.
   antigravity: async () => ({ quota: await fetchAntigravityQuota() }),
   kimi: fetchKimiQuota,
+  grokbot: options => fetchGrokbotQuota({ signal: options.signal }),
+  grokbotInstalled,
   statePath: path.join(os.homedir(), '.codeburn', 'quota-backoff.json'),
   readFile: readSecureFile,
   writeFile: atomicWriteSecureFile,
@@ -145,7 +150,11 @@ export class QuotaService {
       if (this.controllers[provider] === controller) this.controllers[provider] = undefined
       return retainOnFailure(result.quota)
     }
-    const value = await Promise.all(PROVIDERS.filter(provider => !disabled.has(provider)).map(provider =>
+    // Grok Bot is an optional desktop app rather than a signed-in account: with
+    // the app absent there is no row to show, only someone else's Cursor
+    // allowance under a Grok Bot label.
+    const pollable = PROVIDERS.filter(provider => provider !== 'grokbot' || this.deps.grokbotInstalled())
+    const value = await Promise.all(pollable.filter(provider => !disabled.has(provider)).map(provider =>
       provider === 'codex' && !codexQuotaSupported()
         ? Promise.resolve(unavailable('codex', 'disconnected'))
         : run(provider),

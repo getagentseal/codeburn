@@ -1,4 +1,5 @@
 import { Chalk } from 'chalk'
+import { maxOf } from './math-utils.js'
 
 export type TableColumn = { header: string; right?: boolean }
 
@@ -18,7 +19,7 @@ export function renderTable(
 ): string {
   const c = new Chalk(opts.color === false ? { level: 0 } : {})
   const bold = opts.boldRows ?? new Set<number>()
-  const widths = columns.map((col, i) => Math.max(vlen(col.header), ...rows.map((r) => vlen(r[i] ?? ''))))
+  const widths = columns.map((col, i) => maxOf(rows.map((r) => vlen(r[i] ?? '')), vlen(col.header)))
   const pad = (s: string, w: number, right?: boolean): string => {
     const fill = ' '.repeat(Math.max(0, w - vlen(s)))
     return right ? fill + s : s + fill

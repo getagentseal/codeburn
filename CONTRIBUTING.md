@@ -132,6 +132,7 @@ PRs that add a provider based solely on online documentation or AI-generated cod
 6. Fill in the description. A PR whose "Summary" is still the template is closed automatically; write what the change does and why, then reopen.
 7. If this is your first contribution and the change is over about 300 lines, open an issue first and reference it in the PR. Large work gets discussed before it is written; small fixes do not need this.
 8. Keep at most five pull requests open at a time. A sixth is closed automatically with a note and can be reopened once one of the others lands or closes. If you have more ideas than open slots, file an issue for each so the work is visible and can be discussed before it is written.
+9. UI change? Attach before and after screenshots of the affected screen to the PR. No screenshots, no review.
 
 ## Reporting Bugs
 

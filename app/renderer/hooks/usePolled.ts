@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { compressToUTF16, decompressFromUTF16 } from 'lz-string'
 
 import { normalizeCliError } from '../lib/ipc'
@@ -219,12 +219,34 @@ function removeOldestDurableSnapshot(storage: Storage, except: string): boolean 
   return true
 }
 
+// Every CLI-backed fetch in the app routes through load() below, so one counter
+// here is the whole app's "a refresh is in flight" signal.
+let inFlight = 0
+const inFlightListeners = new Set<() => void>()
+
+function addInFlight(delta: number): void {
+  inFlight += delta
+  for (const listener of inFlightListeners) listener()
+}
+
+function subscribeInFlight(listener: () => void): () => void {
+  inFlightListeners.add(listener)
+  return () => { inFlightListeners.delete(listener) }
+}
+
+/** True while any polled fetch is running, in any section. Drives the top
+ *  hairline and the footer refresh mark, both of which reserve their space. */
+export function usePolledInFlight(): boolean {
+  return useSyncExternalStore(subscribeInFlight, () => inFlight > 0, () => false)
+}
+
 /** Test-only: clear the module-level memo between renders so cached results from
  *  one test never bleed into the next. */
 export function __resetPolledMemo(): void {
   memoStore.clear()
   memoSizeChars = 0
   memoEpoch++
+  addInFlight(-inFlight)
 }
 
 /** Empty the instant-switch memo. Called when a Settings action mutates config
@@ -365,7 +387,15 @@ export function usePolled<T>(
     // shows a stale banner while it is still in flight; last-good `data` stays.
     setError(null)
     setErrorKey(null)
-    fetcher()
+    addInFlight(1)
+    let pending: Promise<T>
+    try {
+      pending = fetcher()
+    } catch (err) {
+      addInFlight(-1)
+      throw err
+    }
+    pending
       .then(result => {
         if (epochRef.current !== epoch || memoEpoch !== loadMemoEpoch) return
         setData(result)
@@ -383,6 +413,7 @@ export function usePolled<T>(
         setErrorKey(memoKey ?? null)
       })
       .finally(() => {
+        addInFlight(-1)
         if (epochRef.current !== epoch) return
         setLoading(false)
         setSwitching(false)

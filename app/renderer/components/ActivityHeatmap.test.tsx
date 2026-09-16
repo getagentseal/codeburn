@@ -48,3 +48,29 @@ describe('ActivityHeatmap no-data days (before recorded history)', () => {
     expect(tip.textContent).toContain('$0.00')
   })
 })
+
+describe('ActivityHeatmap active-days caption', () => {
+  // Four active days across the 26-week window; only the last falls inside the
+  // 12 weeks a narrow slot can draw.
+  const daily = [entry('2026-02-10', 5, 25), entry('2026-03-15', 7, 35), entry('2026-05-01', 3, 15), entry('2026-07-15', 6, 30)]
+
+  function renderAtSlotWidth(width: number) {
+    const clientWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width)
+    const view = render(<ActivityHeatmap daily={daily} />)
+    clientWidth.mockRestore()
+    return view
+  }
+
+  it('counts the whole data window, not the week columns that happen to fit', () => {
+    const counts = new Set<string>()
+    const weekColumns = new Set<number>()
+    for (const width of [166, 246, 574]) {
+      const { container, unmount } = renderAtSlotWidth(width)
+      counts.add(container.querySelector('.ov-active-days')!.textContent!)
+      weekColumns.add(container.querySelectorAll('.ov-heat-cell').length / 7)
+      unmount()
+    }
+    expect(weekColumns.size).toBeGreaterThan(1)
+    expect([...counts]).toEqual(['4 active days'])
+  })
+})

@@ -129,6 +129,37 @@ struct StatusItemPlacementPolicyTests {
         #expect(visibleStates == [false, true])
     }
 
+    @Test("a persistent menu bar does not strand the remaining pulses")
+    func persistentMenuBarKeepsRetrying() {
+        var recovery = StatusItemPlacementRecoveryCoordinator()
+        for attempt in 1...3 {
+            #expect(recovery.action(
+                for: .parked,
+                isMenuBarRevealed: true,
+                revealHasSettled: true,
+                menuBarAutoHides: false
+            ) == .pulse(attempt))
+        }
+        #expect(recovery.action(
+            for: .parked,
+            isMenuBarRevealed: true,
+            revealHasSettled: true,
+            menuBarAutoHides: false
+        ) == .stopExhausted)
+    }
+
+    @Test("classifies the menu bar by whether it shrinks the visible frame")
+    func detectsAutoHiddenMenuBar() {
+        #expect(StatusItemPlacementPolicy.menuBarAutoHides(
+            screenFrame: screen,
+            screenVisibleFrame: screen
+        ))
+        #expect(!StatusItemPlacementPolicy.menuBarAutoHides(
+            screenFrame: screen,
+            screenVisibleFrame: CGRect(x: 0, y: 0, width: 1_440, height: 870)
+        ))
+    }
+
     @Test("keeps a stable autosave identity across launches")
     func stableAutosaveIdentity() {
         #expect(StatusItemPlacementPolicy.autosaveName == "CodeBurnMenubar.MainStatusItem")

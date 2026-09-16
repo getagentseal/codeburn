@@ -85,42 +85,6 @@ struct EarlyQuotaResetEvent: Codable, Equatable, Sendable {
             )
         }
     }
-
-    /// The Capacity Dock band, e.g. "Weekly limit reset 18h early".
-    var noticeText: String {
-        let lead = EarlyQuotaResetFormat.lead(seconds: earlyBySeconds)
-        switch signal {
-        case .resetMovedForward:
-            return L(
-                "%1$@ reset %2$@ early",
-                EarlyQuotaResetFormat.capitalizedFirst(EarlyQuotaResetFormat.limitName(windowName)),
-                lead
-            )
-        case .usageDropped:
-            let usage = EarlyQuotaResetFormat.usageName(windowName)
-            return L("%1$@ cleared, %2$@ before reset", EarlyQuotaResetFormat.capitalizedFirst(usage), lead)
-        }
-    }
-
-    var noticeHelpText: String {
-        let lead = EarlyQuotaResetFormat.lead(seconds: earlyBySeconds)
-        let available = L(
-            "%lld%% of it was available when CodeBurn noticed.",
-            Int((100 - percentAfter).rounded())
-        )
-        switch signal {
-        case .resetMovedForward:
-            return L(
-                "%1$@ reset this %2$@ %3$@ before its scheduled time. %4$@",
-                providerName, EarlyQuotaResetFormat.limitName(windowName), lead, available
-            )
-        case .usageDropped:
-            return L(
-                "%1$@ cleared this %2$@ %3$@ before the window's scheduled reset, which has not moved. %4$@",
-                providerName, EarlyQuotaResetFormat.usageName(windowName), lead, available
-            )
-        }
-    }
 }
 
 /// Decides whether two consecutive readings of the same window are an early
@@ -238,118 +202,7 @@ enum EarlyQuotaResetDetector {
     }
 }
 
-/// How long the Capacity Dock keeps an early-reset band on screen.
-enum EarlyQuotaResetNotice {
-    static let visibleSeconds: TimeInterval = 12 * 3600
-
-    static func isVisible(_ event: EarlyQuotaResetEvent, now: Date) -> Bool {
-        let age = now.timeIntervalSince(event.detectedAt)
-        // A detection stamped in the future is skew, not a fresh event.
-        guard age.isFinite, age >= -EarlyQuotaResetDetector.skewTolerance else { return false }
-        return age <= visibleSeconds
-    }
-}
-
-/// A user's own record of early resets for one window, derived from the
-/// 30 days of snapshots already on disk. Local only.
-enum EarlyQuotaResetHistory {
-    /// Leads shorter than this are not claimed as a pattern: window starts are
-    /// rounded by vendors, so a sub-hour gap is not evidence of anything.
-    static let minimumLeadSeconds: TimeInterval = 60 * 60
-
-    struct Summary: Equatable, Sendable {
-        let windowKey: String
-        let windowName: String
-        /// Consecutive cycle transitions the store can see for this window.
-        let observedResets: Int
-        let earlyResets: Int
-        /// Median lead across the early resets.
-        let typicalEarlyBySeconds: TimeInterval
-
-        /// Hover-card caption, e.g. "Last 3 weekly resets came ~18h early".
-        var caption: String {
-            let noun = EarlyQuotaResetFormat.windowNoun(windowName)
-            let lead = EarlyQuotaResetFormat.approximateLead(seconds: typicalEarlyBySeconds)
-            if earlyResets == 1 && observedResets == 1 {
-                return L("Last %1$@ reset came ~%2$@ early", noun, lead)
-            }
-            if earlyResets == observedResets {
-                return L("Last %1$lld %2$@ resets came ~%3$@ early", earlyResets, noun, lead)
-            }
-            return L(
-                "%1$lld of the last %2$lld %3$@ resets came ~%4$@ early",
-                earlyResets, observedResets, noun, lead
-            )
-        }
-    }
-
-    /// The store keeps one entry per window cycle holding the cycle's highest
-    /// reading, so the moment a new cycle was first seen is not recoverable from
-    /// `capturedAt`. The reset times are: a fixed window that starts at moment t
-    /// resets at t + window, so a cycle that followed an early reset ends sooner
-    /// than a full window after the previous cycle's scheduled end. The lead is
-    /// `previous.resetsAt + window - next.resetsAt`.
-    ///
-    /// Short windows (at or under `QuotaPace.etaSuppressionMaxSeconds`) get no
-    /// summary, for the same reason they get no pace ETA: rounding of their start
-    /// times is a large share of the window.
-    static func summarize(
-        snapshots: [SubscriptionSnapshot],
-        windowKey: String,
-        windowName: String,
-        windowSeconds: Int?
-    ) -> Summary? {
-        guard let seconds = windowSeconds, seconds > 0 else { return nil }
-        let window = TimeInterval(seconds)
-        guard window > QuotaPace.etaSuppressionMaxSeconds else { return nil }
-
-        let resets = snapshots
-            .filter { $0.windowKey == windowKey }
-            .map(\.resetsAt)
-            .filter { $0.timeIntervalSince1970.isFinite }
-            .sorted()
-        // Jittered timestamps of one cycle collapse to that cycle's latest.
-        var cycles: [Date] = []
-        for reset in resets {
-            if let last = cycles.last,
-               reset.timeIntervalSince(last) < EarlyQuotaResetDetector.skewTolerance {
-                cycles[cycles.count - 1] = reset
-            } else {
-                cycles.append(reset)
-            }
-        }
-        guard cycles.count >= 2 else { return nil }
-
-        var observed = 0
-        var leads: [TimeInterval] = []
-        for (earlier, later) in zip(cycles, cycles.dropFirst()) {
-            let gap = later.timeIntervalSince(earlier)
-            // A gap longer than a window means cycles went unobserved (app closed,
-            // idle between short windows); that pair says nothing about timing.
-            guard gap <= window + EarlyQuotaResetDetector.cycleAnchorTolerance else { continue }
-            observed += 1
-            let lead = window - gap
-            if lead >= minimumLeadSeconds { leads.append(lead) }
-        }
-        guard !leads.isEmpty else { return nil }
-        return Summary(
-            windowKey: windowKey,
-            windowName: windowName,
-            observedResets: observed,
-            earlyResets: leads.count,
-            typicalEarlyBySeconds: median(leads)
-        )
-    }
-
-    private static func median(_ values: [TimeInterval]) -> TimeInterval {
-        let sorted = values.sorted()
-        let mid = sorted.count / 2
-        return sorted.count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
-    }
-}
-
-/// Window names and lead formatting shared by the notification, the dock band
-/// and the history caption.
+/// Window names and lead formatting for the notification.
 enum EarlyQuotaResetFormat {
     /// Copy names for the Claude windows the snapshot store records.
     static func claudeWindowName(forKey key: String) -> String {
@@ -371,13 +224,6 @@ enum EarlyQuotaResetFormat {
         guard hours >= 24 else { return L("%lldh", hours) }
         let rest = hours % 24
         return rest == 0 ? L("%lldd", hours / 24) : L("%1$lldd %2$lldh", hours / 24, rest)
-    }
-
-    /// "18h", "2d" — rounded, for a pattern that is only ever approximate.
-    static func approximateLead(seconds: TimeInterval) -> String {
-        let hours = Int((max(0, seconds) / 3600).rounded())
-        if hours >= 48 { return L("%lldd", Int((seconds / 86400).rounded())) }
-        return L("%lldh", max(hours, 1))
     }
 
     /// The three grammatical forms the copy needs from a window label.
@@ -420,10 +266,5 @@ enum EarlyQuotaResetFormat {
         case "Sonnet weekly limit": L("Sonnet weekly usage")
         default: L("%@ usage", windowNoun(name))
         }
-    }
-
-    static func capitalizedFirst(_ text: String) -> String {
-        guard let first = text.first else { return text }
-        return first.uppercased() + text.dropFirst()
     }
 }

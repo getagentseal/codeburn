@@ -28,9 +28,34 @@ describe('Onboarding', () => {
     expect(screen.getByText('Find the waste.')).toBeInTheDocument()
     next()
     expect(screen.getByText('Help improve CodeBurn')).toBeInTheDocument()
+    // Only the reached segments of the progress line are lit.
+    expect(document.querySelectorAll('.onboard-seg.on')).toHaveLength(4)
     // Back returns to the previous screen.
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByText('Find the waste.')).toBeInTheDocument()
+  })
+
+  it('skips straight to the consent screen, which is never skippable', () => {
+    render(<Onboarding defaultEnabled onDone={() => {}} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    expect(screen.getByText('Help improve CodeBurn')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Skip' })).not.toBeInTheDocument()
+  })
+
+  it('advances on ArrowRight and skips on Escape', () => {
+    const onDone = vi.fn()
+    render(<Onboarding defaultEnabled onDone={onDone} />)
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    expect(screen.getByText('Local-first by design.')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByText('Help improve CodeBurn')).toBeInTheDocument()
+
+    // Enter on the consent screen finishes rather than advancing past it.
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(onDone).toHaveBeenCalledWith(true)
   })
 
   it('seeds the toggle from the regional default and reports the final choice', () => {

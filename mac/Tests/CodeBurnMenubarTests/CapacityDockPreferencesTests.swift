@@ -84,7 +84,7 @@ struct CapacityDockPreferencesTests {
 
     @Test("every audited provider can be selected for Capacity Dock")
     func supportsCompleteProviderCatalog() {
-        #expect(CapacityDockPreferences.supportedProviders.count == 69)
+        #expect(CapacityDockPreferences.supportedProviders.count == 70)
         #expect(CapacityDockPreferences.supportedProviders.map(\.rawValue)
             == ProviderConnectionCatalog.providers.map(\.id))
         #expect(CapacityDockProvider(rawValue: "openrouter")?.displayName == "OpenRouter")

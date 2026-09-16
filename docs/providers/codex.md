@@ -40,7 +40,13 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
 
 ## Deduplication
 
-`codex:<sessionId>:<timestamp>:<cumulativeTotal>` for accounted events, plus `codex:<sessionId>:<timestamp>:est<n>` for estimated events that fall back to char-counting.
+Three layers, in order:
+
+1. **Byte-identity collapse (#257)**: a `token_count` event whose `info` payload is byte-identical to the previous event's is a re-emission of the same event, not a new request, and is skipped regardless of cumulative presence. Measured on public rollouts (53 sessions / 1313 events): 603 are such repeats.
+2. **Equal-cumulative guard**: with `total_token_usage.total_tokens` present, an event whose cumulative total equals the predecessor's is skipped.
+3. **`seenKeys` cross-session key**: with cumulative identity — `codex:<forkedFromId|sessionId>:<total>:<input>:<cached>:<output>:<reasoning>` (fork replays collide with the parent). Without cumulative — `codex:record:<path>:<line offset>`, i.e. physical record position: stable on cache resume/re-read, but it drops the `forkedFromId` identity #1383 adds for sub-agent parents, so if the missing-cumulative shape ever appeared in a sub-agent rollout the replayed parent history would double-count. Nothing hits this path in any examined corpus.
+
+Estimated events that fall back to char-counting use `codex:<sessionId>:<timestamp>:est<n>`.
 
 ## Quirks
 
@@ -48,7 +54,8 @@ A session that yielded zero parseable lines does **not** write to the cache (`co
   1. `last_token_usage` present: use it directly.
   2. Only cumulative: compute deltas against the prior turn.
   3. Neither: estimate from message text length (`CHARS_PER_TOKEN = 4`).
-- `prevCumulativeTotal` is initialized to `null`, not `0`. A session whose first event reports `total = 0` would otherwise be dropped as a "duplicate" of the initial state.
+- Sessions open with one `token_count` event carrying `info: null` (the rate-limit ping) — one per session in every corpus examined, including a 136k-event private one; those take the char-count estimate path, not the dedup path. Events with `info` present but `total_token_usage` absent have 0 observed occurrences (spread-sampled codeset-release-evals: 30 null-info, 0 partial); if that shape ever appears, the parser treats non-identical payloads as distinct requests and keys on record position.
+- `prevCumulativeTotal` is initialized to `null`, not `0`. A session whose first event reports `total = 0` would otherwise be dropped as a "duplicate" of the initial state. `prevInfoIdentity` (the byte-identity string) is persisted in the resume state alongside it.
 - `prev*` token counters are advanced on **every** event, including ones that used `last_token_usage`. Earlier code only updated them on the fallback branch, which double-counted any session that mixed modes.
 - OpenAI counts cached tokens **inside** `input_tokens`. The parser subtracts them so the rest of the codebase can assume Anthropic semantics (cached are separate).
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { useEscape } from '../hooks/useEscape'
 import { codeburn } from '../lib/ipc'
 import styles from './Plugins.module.css'
+import { Icon } from '../components/icons'
 
 interface PluginManifest {
   name: string
@@ -40,20 +42,14 @@ export function PluginDetailsModal({ pluginName, onClose }: PluginDetailsProps) 
     }
   }
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  useEscape(true, onClose)
 
   if (loading) {
     return (
       <div className={styles.modalBackdrop} onClick={onClose}>
         <div className={styles.modal} onClick={e => e.stopPropagation()}>
-          <button className={styles.modalClose} onClick={onClose}>×</button>
-          <div className={styles.modalContent}>Loading plugin details...</div>
+          <button className={styles.modalClose} onClick={onClose}><Icon name="x" /></button>
+          <div className={styles.modalContent}>Loading plugin details…</div>
         </div>
       </div>
     )
@@ -63,7 +59,7 @@ export function PluginDetailsModal({ pluginName, onClose }: PluginDetailsProps) 
     return (
       <div className={styles.modalBackdrop} onClick={onClose}>
         <div className={styles.modal} onClick={e => e.stopPropagation()}>
-          <button className={styles.modalClose} onClick={onClose}>×</button>
+          <button className={styles.modalClose} onClick={onClose}><Icon name="x" /></button>
           <div className={styles.modalContent}>
             <div className={styles.error}>{error || 'Failed to load plugin details'}</div>
           </div>
@@ -75,7 +71,7 @@ export function PluginDetailsModal({ pluginName, onClose }: PluginDetailsProps) 
   return (
     <div className={styles.modalBackdrop} onClick={onClose}>
       <div className={styles.modal} onClick={e => e.stopPropagation()}>
-        <button className={styles.modalClose} onClick={onClose}>×</button>
+        <button className={styles.modalClose} onClick={onClose}><Icon name="x" /></button>
         <div className={styles.modalContent}>
           <h2>{manifest.name}@{manifest.version}</h2>
           {manifest.description && <p className={styles.description}>{manifest.description}</p>}

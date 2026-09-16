@@ -1,4 +1,5 @@
 import { filterChipKey, filterChipLabel, type FilterDimension, type InvestigationFilters, withoutFilterValue } from '../lib/investigation'
+import { Icon } from './icons'
 
 /** Chip descriptor: one active filter value. */
 export type FilterChip = {
@@ -60,7 +61,7 @@ export function FilterChips({ filters, onChange }: {
             aria-label={`Remove ${DIMENSION_LABELS[chip.dimension]} filter ${filterChipLabel(chip.dimension, chip.value)}`}
             onClick={() => onChange(withoutFilterValue(filters, chip.dimension, chip.value))}
           >
-            ×
+            <Icon name="x" />
           </button>
         </span>
       ))}

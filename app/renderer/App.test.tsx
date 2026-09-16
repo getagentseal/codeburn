@@ -240,9 +240,8 @@ describe('App shortcuts', () => {
 
     expect(await screen.findByLabelText('Cached usage summary')).toBeInTheDocument()
     expect(screen.getAllByText('$12.34').length).toBeGreaterThan(0)
-    expect(screen.getByText(/sessions updating/)).toBeInTheDocument()
+    expect(screen.getByText('12 calls · sessions updating')).toBeInTheDocument()
     expect(screen.getByText('Updating detailed drill-downs…')).toBeInTheDocument()
-    expect(screen.getByText('Refreshing selected view…')).toBeInTheDocument()
     expect(mocks.getActReport).not.toHaveBeenCalled()
   })
 
@@ -403,7 +402,7 @@ describe('App shortcuts', () => {
     render(<App />)
 
     expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
-    expect(screen.getByText(`${mod}1-8,9`)).toBeInTheDocument()
+    expect(screen.getByText(`${mod}1-9`)).toBeInTheDocument()
     expect(screen.getAllByText(`${mod},`).length).toBeGreaterThan(0)
     expect(screen.getByText(`${mod}R`)).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
@@ -1403,5 +1402,47 @@ describe('sessions pagination', () => {
     const toolbar = document.querySelector('.sessions-toolbar') as HTMLElement
     fireEvent.click(within(toolbar).getByRole('tab', { name: 'Recent' }))
     expect(await screen.findByText(`Showing ${INITIAL_VISIBLE} of ${INITIAL_VISIBLE + 5}`)).toBeInTheDocument()
+  })
+})
+
+describe('refresh indicators', () => {
+  beforeEach(() => {
+    installDefaultMocks()
+    localStorage.clear()
+    localStorage.setItem('codeburn.defaultPeriod', '30days')
+    setPlatform('darwin')
+    __resetPolledMemo()
+  })
+
+  afterEach(() => {
+    clearPlatform()
+  })
+
+  it('lights the top hairline only while a fetch is in flight, and always reserves its 2px', async () => {
+    let settle: (payload: MenubarPayload) => void = () => {}
+    mocks.getOverview.mockReturnValue(new Promise<MenubarPayload>(resolve => { settle = resolve }))
+
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(container.querySelector('.switch-line.on')).not.toBeNull())
+
+    await act(async () => { settle(overviewPayload()); await Promise.resolve() })
+
+    await waitFor(() => expect(container.querySelector('.switch-line.on')).toBeNull())
+    expect(container.querySelector('.switch-line')).not.toBeNull()
+  })
+
+  it('spins the footer refresh mark only while a fetch is in flight', async () => {
+    let settle: (payload: MenubarPayload) => void = () => {}
+    mocks.getOverview.mockReturnValue(new Promise<MenubarPayload>(resolve => { settle = resolve }))
+
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(container.querySelector('.refresh-mark.spinning')).not.toBeNull())
+
+    await act(async () => { settle(overviewPayload()); await Promise.resolve() })
+
+    await waitFor(() => expect(container.querySelector('.refresh-mark.spinning')).toBeNull())
+    expect(container.querySelector('.refresh-mark')).not.toBeNull()
   })
 })

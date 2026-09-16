@@ -138,15 +138,5 @@ export function collectLauncherNotes(home = homedir()): LauncherNote[] {
       verdict: 'LAUNCHER (heuristic; billed via Codex)',
     })
   }
-  const grokStore = join(home, '.grok')
-  const grokBot = join(home, 'Library', 'Application Support', 'Grok Bot')
-  if (existsSync(grokBot) && existsSync(grokStore)) {
-    notes.push({
-      name: 'grok-bot',
-      path: grokBot,
-      billedVia: 'grok',
-      verdict: 'LAUNCHER (Electron cache; billed via ~/.grok)',
-    })
-  }
   return notes
 }

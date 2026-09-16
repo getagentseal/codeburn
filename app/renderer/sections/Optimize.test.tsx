@@ -332,7 +332,6 @@ describe('Optimize', () => {
     expect(screen.getByText('codeburn')).toBeInTheDocument()
     rerender(<OptimizeContent period="30days" overview={overview} refreshToken={1} />)
     await waitFor(() => expect(getYield).toHaveBeenCalledTimes(2))
-    expect(screen.getByRole('status')).toHaveTextContent('Refreshing selected view…')
     expect(screen.getByRole('tab', { name: 'Reverts $107.00' })).toBeInTheDocument()
     expect(screen.getByText('codeburn')).toBeInTheDocument()
   })
