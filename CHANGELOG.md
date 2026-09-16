@@ -49,7 +49,7 @@
 - **The desktop shell stops re-rendering the whole tree once a second.** AppMain owned a wall-clock `setInterval(1000)` that existed only so the footer could print "refreshed Ns ago", but every tick re-rendered the sidebar, the hero, the daily chart, the heatmap and every table 60 times a minute whether or not any data had changed. The per-second tick now lives in a leaf `RefreshedAt` component that owns just that label, and the shell itself re-renders only on real state changes plus a 15-second day check that fires exactly when the local calendar rolls over — that rollover matters because the overview memo keys bake in a today/month boundary, so midnight must produce one re-render to keep "Today" honest. Renderer render-count regressions are pinned by a churn test that fails if the shell re-renders on the per-second tick or on same-day clock checks.
 
 ### Fixed (desktop)
-- **The renderer ships a 53 kB flame, not a 712 kB one, and half the splash video weight.** The brand mark is a 880×880 PNG rendered at 20–76 CSS px, so every mount decoded 3.1 MB of RGBA to draw a 20 px sidebar logo and the browser downscaled it per frame afterwards; a 192 px lanczos cut of the same art (verified side-by-side at all three rendered sizes) replaces it, and the cold-start splash video is re-encoded at VP9 CRF 30 (SSIM 0.994 against the source), together cutting the renderer's bundled assets roughly in half.
+- **The renderer ships half the splash video weight.** The cold-start splash video is re-encoded at VP9 CRF 30 (SSIM 0.994 against the source), taking `app/renderer/assets/splash-loader.webm` from 2,582,836 bytes to 1,294,904 bytes — about half.
 
 ## 0.9.24 - 2026-09-04
 
