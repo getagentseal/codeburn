@@ -1,6 +1,7 @@
 import chalk from 'chalk'
 import type { ProjectSummary } from './types.js'
 import { behavioralCallCount } from './behavioral-weight.js'
+import { fmt, getCatalog } from './i18n/index.js'
 
 // Re-exported from currency.ts so existing imports from './format.js' keep working.
 // The currency-aware version applies exchange rate and symbol automatically.
@@ -23,7 +24,7 @@ export function markEstimated(costStr: string, isEstimated: boolean): string {
 /// doesn't read as inconsistent with detail views that can only see
 /// surviving session files.
 export function carriedCostNote(carriedCostUSD: number): string | null {
-  return carriedCostUSD > 0 ? `includes ${formatCost(carriedCostUSD)} preserved from expired session logs` : null
+  return carriedCostUSD > 0 ? fmt(getCatalog().overview.carried, { amount: formatCost(carriedCostUSD) }) : null
 }
 
 export function formatTokens(n: number): string {
@@ -56,6 +57,10 @@ export type StatusBarTotals = {
 }
 
 export function renderStatusBar(projects: ProjectSummary[], totals?: StatusBarTotals): string {
+  const statusBarLine = (todayCost: number, todayCalls: number, monthCost: number, monthCalls: number): string => {
+    const s = getCatalog().status
+    return `  ${chalk.bold(s.today)}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(fmt(s.calls, { n: todayCalls }))}    ${chalk.bold(s.month)}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(fmt(s.calls, { n: monthCalls }))}`
+  }
   const now = new Date()
   const today = localDateString(now)
   const monthStart = `${today.slice(0, 7)}-01`
@@ -65,7 +70,7 @@ export function renderStatusBar(projects: ProjectSummary[], totals?: StatusBarTo
     todayCost = totals.today.cost; todayCalls = totals.today.calls
     monthCost = totals.month.cost; monthCalls = totals.month.calls
     const lines: string[] = ['']
-    lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(`${monthCalls} calls`)}`)
+    lines.push(statusBarLine(todayCost, todayCalls, monthCost, monthCalls))
     lines.push('')
     return lines.join('\n')
   }
@@ -93,7 +98,7 @@ export function renderStatusBar(projects: ProjectSummary[], totals?: StatusBarTo
   }
 
   const lines: string[] = ['']
-  lines.push(`  ${chalk.bold('Today')}  ${chalk.yellowBright(formatCost(todayCost))}  ${chalk.dim(`${todayCalls} calls`)}    ${chalk.bold('Month')}  ${chalk.yellowBright(formatCost(monthCost))}  ${chalk.dim(`${monthCalls} calls`)}`)
+  lines.push(statusBarLine(todayCost, todayCalls, monthCost, monthCalls))
   lines.push('')
 
   return lines.join('\n')

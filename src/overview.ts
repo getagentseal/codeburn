@@ -2,16 +2,17 @@ import { Chalk, type ChalkInstance } from 'chalk'
 
 import { homedir } from 'os'
 
-import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { type ProjectSummary } from './types.js'
 import { formatCost as baseCost, getCurrency } from './currency.js'
-import { findUnpricedModels, getShortModelName, unpricedModelHint } from './models.js'
+import { findUnpricedModels, getShortModelName, unpricedModelHintLocalized } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated } from './format.js'
-import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
+import { formatSessionCountLocalized, sessionCountHelpLocalized, type SessionCountBasis } from './session-count-label.js'
 import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
 import type { DailyEntry } from './daily-cache.js'
 import type { BudgetStatus, BudgetTier } from './budget.js'
+import { displayWidth, fmt, getCatalog, localizedCategory, padEndDisplay, padStartDisplay } from './i18n/index.js'
 
 // Display-only helpers. The shared formatters omit thousands separators and
 // abbreviate; here we show full, comma-grouped numbers so the tables read like
@@ -71,19 +72,19 @@ type OverviewBudget = {
   inProgress: boolean
 }
 
-// Visible width, ignoring ANSI color codes, so padding stays aligned.
+// Visible width, ignoring ANSI color codes, so padding stays aligned. CJK
+// glyphs are double-width in terminals, so padding must use display width
+// rather than codepoint count (see src/i18n/index.ts:displayWidth).
 function vlen(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\[[0-9;]*m/g, '').length
+  return displayWidth(s)
 }
 
-function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
+export function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
   const widths = cols.map((col, i) =>
     Math.max(vlen(col.header), ...rows.map((r) => vlen(r[i] ?? ''))),
   )
   const pad = (s: string, w: number, right?: boolean): string => {
-    const fill = ' '.repeat(Math.max(0, w - vlen(s)))
-    return right ? fill + s : s + fill
+    return right ? padStartDisplay(s, w) : padEndDisplay(s, w)
   }
   const gap = '  ' // 2-space cell padding so columns breathe
   const sep = gap + c.dim('│') + gap
@@ -128,6 +129,7 @@ export function renderOverview(
   opts: { label: string; color: boolean; budget?: OverviewBudget; durable?: OverviewDurable },
 ): string {
   const c = new Chalk(opts.color ? {} : { level: 0 })
+  const L = getCatalog()
   const heading = (text: string): string => c.cyan.bold(text)
   const out: string[] = []
   const durable = opts.durable
@@ -136,7 +138,7 @@ export function renderOverview(
   out.push('')
 
   if (projects.length === 0 && !(durable && durable.cost > 0)) {
-    out.push(c.dim(`No usage found for ${opts.label}.`))
+    out.push(c.dim(fmt(L.overview.noUsage, { label: opts.label })))
     return out.join('\n') + '\n'
   }
 
@@ -238,16 +240,18 @@ export function renderOverview(
   const cacheHit = cacheHitDenom > 0 ? (cacheR / cacheHitDenom) * 100 : 0
 
   // Totals
-  out.push(heading('Totals'))
-  const kv = (k: string, v: string): string => '  ' + c.dim(k.padEnd(11)) + v
-  out.push(kv('Cost', c.bold(formatCost(cost))))
-  out.push(kv('Tokens', formatTokens(totalTokens) + c.dim('   (breakdown below)')))
-  out.push(kv('Calls', formatCount(calls) + c.dim('   ') + formatSessionCount(sessions, durable ? durable.sessionCountBasis : 'identity')))
+  out.push(heading(L.overview.totals))
+  // Long translated keys (e.g. fr "Détail des tokens") must never glue the
+  // value to the label: pad to at least one column past the key's own width.
+  const kv = (k: string, v: string): string => '  ' + c.dim(padEndDisplay(k, Math.max(11, displayWidth(k) + 1))) + v
+  out.push(kv(L.overview.cost, c.bold(formatCost(cost))))
+  out.push(kv(L.overview.tokens, formatTokens(totalTokens) + c.dim('   ' + L.overview.breakdownBelow)))
+  out.push(kv(L.overview.calls, formatCount(calls) + c.dim('   ') + formatSessionCountLocalized(sessions, durable ? durable.sessionCountBasis : 'identity')))
   if (durable && durable.sessionCountBasis !== 'identity' && sessions > 0) {
-    out.push(kv('', c.dim(SESSION_COUNT_HELP)))
+    out.push(kv('', c.dim(sessionCountHelpLocalized())))
   }
-  out.push(kv('Cache hit', `${cacheHit.toFixed(1)}%`))
-  if (savings > 0) out.push(kv('Savings', formatCost(savings) + c.dim(' (local models)')))
+  out.push(kv(L.overview.cacheHit, `${cacheHit.toFixed(1)}%`))
+  if (savings > 0) out.push(kv(L.overview.savings, formatCost(savings) + c.dim(' ' + L.overview.localModels)))
   const unpriced = findUnpricedModels(
     [...byModel.entries()].map(([model, d]) => ({ model, calls: d.calls, cost: d.cost, tokens: d.tokens })),
   )
@@ -255,38 +259,39 @@ export function renderOverview(
     const shown = unpriced.slice(0, 3)
       .map((u) => `${u.model} (${formatTokens(u.tokens)} tok)`)
       .join(', ')
-    const more = unpriced.length > 3 ? ` +${unpriced.length - 3} more` : ''
-    out.push(kv('Unpriced', c.yellow(`${unpriced.length} model${unpriced.length === 1 ? '' : 's'} at $0: `) + shown + more))
-    out.push(kv('', c.dim(unpricedModelHint())))
+    const more = unpriced.length > 3 ? fmt(L.overview.plusMore, { n: unpriced.length - 3 }) : ''
+    out.push(kv(L.overview.unpriced, c.yellow(fmt(unpriced.length === 1 ? L.overview.unpricedAtOne : L.overview.unpricedAtMany, { n: unpriced.length })) + shown + more))
+    out.push(kv('', c.dim(unpricedModelHintLocalized())))
   }
   if (opts.budget) {
     const label = opts.budget.tier === 'daily'
-      ? 'Daily'
+      ? L.overview.budgetDaily
       : opts.budget.tier === 'weekly'
-        ? 'Weekly'
-        : 'Monthly'
+        ? L.overview.budgetWeekly
+        : L.overview.budgetMonthly
     const status = opts.budget.status
     const pct = `${Math.floor(status.pct)}%`
     const statusColor = status.state === 'over' ? c.red : status.state === 'warn' ? c.yellow : c.green
+    const period = opts.budget.tier === 'monthly' ? L.overview.endMonth : opts.budget.tier === 'weekly' ? L.overview.endWeek : L.overview.endDay
     const projected = opts.budget.inProgress
-      ? c.dim(`  projected ${formatDisplayCost(status.projected)} by ${opts.budget.tier === 'monthly' ? 'month' : opts.budget.tier === 'weekly' ? 'week' : 'day'} end`)
+      ? c.dim(fmt(L.overview.projected, { amount: formatDisplayCost(status.projected), period }))
       : ''
-    out.push('  ' + statusColor(`${label} budget: ${formatDisplayCost(status.spent)} of ${formatDisplayCost(status.budget)} (${pct})`) + projected)
+    out.push('  ' + statusColor(fmt(L.overview.budgetLine, { label, spent: formatDisplayCost(status.spent), budget: formatDisplayCost(status.budget), pct })) + projected)
   }
   out.push('')
 
   // Tokens breakdown: input / output / cache in (written) / cache out (read)
   if (totalTokens > 0) {
     const share = (n: number): string => `${Math.round((n / totalTokens) * 100)}%`
-    out.push(heading('Tokens'))
+    out.push(heading(L.overview.tokens))
     out.push(renderTable(c,
-      [{ header: 'Type' }, { header: 'Tokens', right: true }, { header: 'Share', right: true }],
+      [{ header: L.headers.type }, { header: L.headers.tokens, right: true }, { header: L.headers.share, right: true }],
       [
-        ['Input', formatTokens(inTok), share(inTok)],
-        ['Output', formatTokens(outTok), share(outTok)],
-        ['Cache in', formatTokens(cacheW), share(cacheW)],
-        ['Cache out', formatTokens(cacheR), share(cacheR)],
-        ['Total', formatTokens(totalTokens), '100%'],
+        [L.headers.input, formatTokens(inTok), share(inTok)],
+        [L.headers.output, formatTokens(outTok), share(outTok)],
+        [L.headers.cacheIn, formatTokens(cacheW), share(cacheW)],
+        [L.headers.cacheOut, formatTokens(cacheR), share(cacheR)],
+        [L.headers.total, formatTokens(totalTokens), '100%'],
       ],
     ))
     out.push('')
@@ -297,9 +302,9 @@ export function renderOverview(
     .filter(([, v]) => v.cost > 0 || v.tokens > 0)
     .sort((a, b) => b[1].cost - a[1].cost)
   if (providerRows.length) {
-    out.push(heading('By tool'))
+    out.push(heading(L.overview.byTool))
     out.push(renderTable(c,
-      [{ header: 'Tool' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }, { header: 'Share', right: true }],
+      [{ header: L.headers.tool }, { header: L.headers.cost, right: true }, { header: L.headers.tokens, right: true }, { header: L.headers.share, right: true }],
       providerRows.map(([name, v]) => [name, formatCost(v.cost), formatTokens(v.tokens), cost > 0 ? `${Math.round((v.cost / cost) * 100)}%` : '0%']),
     ))
     out.push('')
@@ -308,13 +313,13 @@ export function renderOverview(
   // Top models
   const modelRows = [...byModel.entries()].filter(([, v]) => v.cost > 0 || v.tokens > 0).sort((a, b) => b[1].cost - a[1].cost).slice(0, 10)
   if (modelRows.length) {
-    out.push(heading('Top models'))
+    out.push(heading(L.overview.topModels))
     out.push(renderTable(c,
-      [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
+      [{ header: L.headers.model }, { header: L.headers.cost, right: true }, { header: L.headers.calls, right: true }, { header: L.headers.tokens, right: true }],
       modelRows.map(([m, v]) => [getShortModelName(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
     if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
-      out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
+      out.push('  ' + c.dim(L.overview.estimated))
     }
     out.push('')
   }
@@ -322,9 +327,9 @@ export function renderOverview(
   // Highest-value days
   const topDays = [...byDay.entries()].sort((a, b) => b[1].cost - a[1].cost).slice(0, 5)
   if (topDays.length) {
-    out.push(heading('Highest-value days'))
+    out.push(heading(L.overview.highestValueDays))
     out.push(renderTable(c,
-      [{ header: '#' }, { header: 'Date' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }],
+      [{ header: L.headers.rank }, { header: L.headers.date }, { header: L.headers.cost, right: true }, { header: L.headers.tokens, right: true }],
       topDays.map(([d, v], i) => [String(i + 1), d, formatCost(v.cost), formatTokens(v.tokens)]),
     ))
     out.push('')
@@ -338,9 +343,9 @@ export function renderOverview(
       const b = projectName(v.sample)
       basenameCounts.set(b, (basenameCounts.get(b) ?? 0) + 1)
     }
-    out.push(heading('Top projects'))
+    out.push(heading(L.overview.topProjects))
     out.push(renderTable(c,
-      [{ header: 'Project' }, { header: 'Cost', right: true }, { header: 'Sessions', right: true }],
+      [{ header: L.headers.project }, { header: L.headers.cost, right: true }, { header: L.headers.sessions, right: true }],
       projRows.map(([key, v]) => [disambiguatedProjectLabel(key, v.sample, basenameCounts), formatCost(v.cost), formatCount(v.sessions)]),
     ))
     out.push('')
@@ -349,9 +354,9 @@ export function renderOverview(
   // Daily
   const dailyRows = [...byDay.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   if (dailyRows.length) {
-    out.push(heading('Daily'))
+    out.push(heading(L.overview.daily))
     out.push(renderTable(c,
-      [{ header: 'Date' }, { header: 'Cost', right: true }, { header: 'Tokens', right: true }, { header: 'Providers' }],
+      [{ header: L.headers.date }, { header: L.headers.cost, right: true }, { header: L.headers.tokens, right: true }, { header: L.headers.providers }],
       dailyRows.map(([d, v]) => [d, formatCost(v.cost), formatTokens(v.tokens), [...v.providers].sort().join(', ')]),
     ))
     out.push('')
@@ -360,10 +365,10 @@ export function renderOverview(
   // By activity
   const catRows = [...byCat.entries()].filter(([, v]) => v.cost > 0 || v.turns > 0).sort((a, b) => b[1].cost - a[1].cost)
   if (catRows.length) {
-    out.push(heading('By activity'))
+    out.push(heading(L.overview.byActivity))
     out.push(renderTable(c,
-      [{ header: 'Activity' }, { header: 'Cost', right: true }, { header: 'Turns', right: true }],
-      catRows.map(([cat, v]) => [CATEGORY_LABELS[cat as TaskCategory] ?? cat, formatCost(v.cost), formatCount(v.turns)]),
+      [{ header: L.headers.activity }, { header: L.headers.cost, right: true }, { header: L.headers.turns, right: true }],
+      catRows.map(([cat, v]) => [localizedCategory(cat), formatCost(v.cost), formatCount(v.turns)]),
     ))
     out.push('')
   }
@@ -371,9 +376,9 @@ export function renderOverview(
   // Tools
   const toolRows = [...byTool.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)
   if (toolRows.length) {
-    out.push(heading('Tools'))
+    out.push(heading(L.overview.tools))
     out.push(renderTable(c,
-      [{ header: 'Tool' }, { header: 'Calls', right: true }],
+      [{ header: L.headers.tool }, { header: L.headers.calls, right: true }],
       toolRows.map(([t, n]) => [t, formatCount(n)]),
     ))
     out.push('')
@@ -381,21 +386,21 @@ export function renderOverview(
 
   const topTool = providerRows[0]?.[0]
   const topModel = modelRows[0] ? getShortModelName(modelRows[0][0]) : ''
-  const mostly = topTool ? `, mostly ${topTool}${topModel ? ` / ${topModel}` : ''}` : ''
-  out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatCost(cost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
+  const mostly = topTool ? fmt(L.overview.mostly, { tool: topTool, modelPart: topModel ? fmt(L.overview.modelPart, { model: topModel }) : '' }) : ''
+  out.push(c.dim(L.overview.bottomLinePrefix) + fmt(L.overview.bottomLine, { label: opts.label, cost: formatCost(cost), tokens: formatTokens(totalTokens), mostly }))
 
   // When some of the period's total came from days whose session logs have since
   // expired, say so once. The figure is real (preserved in the durable daily
   // cache); it just can't be re-derived from surviving files anymore.
   if (durable && durable.carriedCostUSD > 0) {
-    out.push(c.dim(`  includes ${formatCost(durable.carriedCostUSD)} preserved from expired session logs`))
+    out.push(c.dim('  ' + fmt(L.overview.carried, { amount: formatCost(durable.carriedCostUSD) })))
   }
 
   // A project filter cannot claim days the cache holds without a project split
   // (recorded before that split existed), so they sit outside this total. Say how
   // much rather than let the filtered figure look inexplicably short.
   if (durable && (durable.unattributedCostUSD ?? 0) > 0) {
-    out.push(c.dim(`  excludes ${formatCost(durable.unattributedCostUSD!)} from days with no per-project history`))
+    out.push(c.dim('  ' + fmt(L.overview.unattributed, { amount: formatCost(durable.unattributedCostUSD!) })))
   }
 
   return out.join('\n') + '\n'

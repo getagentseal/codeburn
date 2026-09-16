@@ -6,6 +6,7 @@ import { getCodeburnCacheDir } from './cache-dir.js'
 import snapshotData from './data/litellm-snapshot.json' with { type: 'json' }
 import fallbackData from './data/pricing-fallback.json' with { type: 'json' }
 import { fetchWithTimeout } from './fetch-utils.js'
+import { fmt, getCatalog } from './i18n/index.js'
 
 export type ModelCosts = {
   inputCostPerToken: number
@@ -764,6 +765,13 @@ export function isFlatRateModel(model: string): boolean {
 export function unpricedModelHint(model = '<model>'): string {
   const safe = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
   return `If a model is billed per token, map it with: codeburn model-alias "${safe}" <known-model>. If $0 is correct (subscription / flat-rate): codeburn model-flat-rate "${safe}".`
+}
+
+/// Locale-aware twin of unpricedModelHint for human-facing surfaces. Command
+/// names and placeholders stay English; only the prose is translated.
+export function unpricedModelHintLocalized(model = '<model>'): string {
+  const safe = model.replace(/[\x00-\x1F\x7F-\x9F]/g, '?').slice(0, 200)
+  return fmt(getCatalog().unpricedHint, { model: safe })
 }
 
 /// Stable hash of the model-alias map, for the same staleness class as the

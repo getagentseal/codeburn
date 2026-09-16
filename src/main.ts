@@ -62,6 +62,7 @@ const { version } = require('../package.json')
 // without importing the CLI entry point (which parses argv as a side effect).
 const STATUS_SNAPSHOT_SEMANTIC_KEY = statusSnapshotSemanticKey(version)
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
+import { forceLocale, fmt, getCatalog, normalizeLocale, reloadLocaleConfig } from './i18n/index.js'
 import { sessionCountIsExact } from './session-count-label.js'
 import { CodexThroughputReader, newestCodexSession, renderCodexThroughput } from './codex-throughput.js'
 
@@ -1119,6 +1120,9 @@ program
     assertFormat(opts.format, ['terminal', 'menubar-json', 'json'], 'status')
     assertScope(opts.scope, ['local', 'combined'], 'status')
     assertProvider(opts.provider, 'status')
+    // Machine-readable status output is a contract for the menubar/tray/GNOME
+    // clients; keep it English regardless of the user's UI language.
+    if (opts.format !== 'terminal') forceLocale('en')
     if (opts.day && (opts.from || opts.to)) {
       process.stderr.write('error: --day cannot be combined with --from or --to\n')
       process.exit(1)
@@ -1379,6 +1383,9 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['csv', 'json'], 'export')
+    // Exports are machine-readable; keep labels English for stable downstream
+    // parsing regardless of the user's UI language.
+    forceLocale('en')
     assertProvider(opts.provider, 'export')
     await loadPricing()
     const pf = opts.provider
@@ -1512,6 +1519,48 @@ program
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('language [code]')
+  .description('Set UI language (e.g. codeburn language zh-CN). Supported: en, zh-CN, zh-TW, ja, ko, fr')
+  .option('--reset', 'Reset to environment-based detection (removes language config)')
+  .action(async (code?: string, opts?: { reset?: boolean }) => {
+    if (opts?.reset) {
+      const config = await readConfig()
+      delete config.language
+      await saveConfig(config)
+      reloadLocaleConfig()
+      console.log('\n  ' + getCatalog().lang.reset + '\n')
+      return
+    }
+
+    if (!code) {
+      const config = await readConfig()
+      if (config.language) {
+        console.log('\n  ' + fmt(getCatalog().lang.current, { code: config.language }) + '\n')
+      } else {
+        console.log('\n  ' + getCatalog().lang.default + '\n')
+      }
+      return
+    }
+
+    const normalized = normalizeLocale(code)
+    if (!normalized) {
+      console.error('\n  ' + fmt(getCatalog().lang.invalid, { code }) + '\n')
+      process.exitCode = 1
+      return
+    }
+
+    const config = await readConfig()
+    config.language = normalized
+    await saveConfig(config)
+    reloadLocaleConfig()
+
+    // Confirm in the newly selected language so the user immediately sees
+    // what their choice looks like.
+    console.log('\n  ' + fmt(getCatalog().lang.set, { code: normalized }))
+    console.log('  ' + fmt(getCatalog().lang.configSaved, { path: getConfigFilePath() }) + '\n')
   })
 
 program
@@ -2924,6 +2973,9 @@ return program
 }
 
 if (process.argv[2] === 'serve') {
+  // The stdio serve protocol is a JSON contract for the desktop client; keep
+  // its labels English regardless of the user's UI language.
+  forceLocale('en')
   const { runStdioServe } = await import('./serve.js')
   // Bind the REAL exit before serving. runCaptured() replaces process.exit with
   // a throw for the duration of a request, and a request still in flight when

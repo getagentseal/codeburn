@@ -620,6 +620,21 @@ codeburn currency --reset      # back to USD
 
 Any [ISO 4217 currency code](https://en.wikipedia.org/wiki/ISO_4217#List_of_ISO_4217_currency_codes) is supported (162 currencies). Exchange rates fetched from [Frankfurter](https://www.frankfurter.app/) (European Central Bank data, free, no API key) and cached for 24 hours. Config stored at `~/.config/codeburn/config.json`. The currency setting applies everywhere: dashboard, status bar, menu bar, CSV/JSON exports, and JSON API output.
 
+### Language
+
+```bash
+codeburn language zh-CN        # Simplified Chinese
+codeburn language zh-TW        # Traditional Chinese
+codeburn language ja           # Japanese
+codeburn language ko           # Korean
+codeburn language fr           # French
+codeburn language en           # English (default)
+codeburn language              # show current setting
+codeburn language --reset      # back to environment detection
+```
+
+Terminal output (overview, status bar, interactive dashboard) renders in the selected language. Without a config setting, the language is detected from `CODEBURN_LANG`, then `LANG`/`LC_ALL` (e.g. `zh_CN.UTF-8`). Machine-readable outputs — `status --format json/menubar-json`, `export`, and the stdio serve protocol — always stay English so GUI clients and scripts see stable strings. Tables pad by terminal display width, so CJK columns stay aligned.
+
 ### Model Aliases
 
 If you see `$0.00` for some models, the model name reported by your provider does not match any entry in the LiteLLM pricing data. This commonly happens when using a proxy that rewrites model names.

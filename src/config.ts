@@ -27,6 +27,9 @@ export type CodeburnConfig = {
     code: string
     symbol?: string
   }
+  // UI language for terminal output (see src/i18n/). One of:
+  // en, zh-CN, zh-TW, ja, ko, fr. Absent means resolve from the environment.
+  language?: string
   devin?: {
     acuUsdRate?: number
   }
