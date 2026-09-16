@@ -79,11 +79,12 @@ export function formatDayLong(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-/** "2h 14m" / "47m" / "38s" from a duration in ms. */
+/** "12 days" / "2h 14m" / "47m" / "38s" from a duration in ms. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '—'
-  const totalMin = Math.round(ms / 60_000)
-  if (totalMin < 1) return `${Math.round(ms / 1000)}s`
+  const totalMin = Math.floor(ms / 60_000)
+  if (totalMin < 1) return `${Math.floor(ms / 1000)}s`
   if (totalMin < 60) return `${totalMin}m`
+  if (totalMin >= 2_880) return `${Math.round(totalMin / 1_440)} days`
   return `${Math.floor(totalMin / 60)}h ${totalMin % 60}m`
 }

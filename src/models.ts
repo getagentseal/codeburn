@@ -889,14 +889,17 @@ export function resolveCanonicalModelId(model: string): string {
 // rather than hand-listed so a vendor LiteLLM already knows (`x-ai/`, `qwen/`,
 // `nousresearch/`, …) is never dropped by a stale list.
 const EXTRA_NAMESPACES = [
-  // Routing wrappers (see ROUTER_PREFIXES); no catalog lists them.
-  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity', 'orcarouter',
+  // Routing wrappers (see ROUTER_PREFIXES); no catalog lists them. `cliproxy/`
+  // is codex-cliproxy-gateway's default route prefix over CLIProxyAPI.
+  'cp', 'cline-pass', 'cline-free', 'cmd', 'antigravity', 'orcarouter', 'cliproxy',
   // LiteLLM route prefixes that never appear as a key prefix.
   'litellm_proxy', 'openai_like',
   // Vendor spellings the catalog indexes under another name: `zhipu` is `z-ai`,
   // `mimo` is `xiaomi` (BUILTIN_ALIASES maps the bare MiMo ids to `xiaomi/`),
   // and `kimi/` is a client-side prefix (Codex records `kimi/k3[1m]`).
-  'zhipu', 'mimo', 'kimi',
+  // `zcode/` is CLIProxyAPI's provider spelling for the Z.ai coding plans; the
+  // bare `glm-*` leaf already prices via its own catalog row, which carries an explicit zero cache-write cost.
+  'zhipu', 'mimo', 'kimi', 'zcode',
 ]
 
 // Local runners. Their catalog rows are $0 stubs, so an unlisted local tag must
@@ -943,6 +946,12 @@ const ROUTER_PREFIXES = [
   /^cmd\//i,
   /^antigravity\//i,
   /^orcarouter\//i,
+  // codex-cliproxy-gateway keeps Codex's own OAuth routing native and forwards
+  // only `cliproxy/*` ids to CLIProxyAPI, so a routed session records
+  // `cliproxy/<id>` — and `<id>` can itself be a provider path
+  // (`cliproxy/zcode/glm-5.3-flash`). Peeling the wrapper lets the one
+  // known-namespace strip in getCanonicalName reach the priced leaf.
+  /^cliproxy\//i,
   // `xiaomi/` is NOT peeled: it is the vendor namespace LiteLLM prices under,
   // and BUILTIN_ALIASES maps the bare MiMo ids INTO it. Peeling would pull the
   // opposite way. It stays a known namespace via the catalog-derived set.

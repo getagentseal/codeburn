@@ -1,0 +1,57 @@
+name: Bug report
+description: Something is broken or a session is parsed wrong.
+labels:
+  - bug
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Output of `codeburn --version`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15.1, Ubuntu 24.04, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider involved
+      placeholder: e.g. Claude Code, Codex, Cursor
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Redacted JSONL or SQLite snippet
+      description: For parsing bugs, a redacted snippet that reproduces the issue.
+    validations:
+      required: false
+  - type: textarea
+    id: debug
+    attributes:
+      label: DEBUG=1 output
+      description: Output of the failing command with `DEBUG=1`, if applicable.
+    validations:
+      required: false

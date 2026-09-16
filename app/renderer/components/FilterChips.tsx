@@ -1,4 +1,4 @@
-import { filterChipLabel, type FilterDimension, type InvestigationFilters, withoutFilterValue } from '../lib/investigation'
+import { filterChipKey, filterChipLabel, type FilterDimension, type InvestigationFilters, withoutFilterValue } from '../lib/investigation'
 
 /** Chip descriptor: one active filter value. */
 export type FilterChip = {
@@ -45,8 +45,11 @@ export function FilterChips({ filters, onChange }: {
   return (
     <div className="drill-chips" role="group" aria-label="Active investigation filters">
       <span className="drill-chips-label">Investigating</span>
+      {/* Keyed by the chip's identity, never by its label: the label truncates
+          a session id and shortens a project path, so two chips in the same
+          dimension can read identically while selecting different things. */}
       {chips.map(chip => (
-        <span className={`drill-chip d-${chip.dimension}`} key={`${chip.dimension}:${filterChipLabel(chip.dimension, chip.value)}`}>
+        <span className={`drill-chip d-${chip.dimension}`} key={`${chip.dimension}:${filterChipKey(chip.dimension, chip.value)}`}>
           <span className="drill-chip-dim">{DIMENSION_LABELS[chip.dimension]}</span>
           <span className="drill-chip-value" title={chip.dimension === 'prs' ? String(chip.value) : undefined}>
             {filterChipLabel(chip.dimension, chip.value)}

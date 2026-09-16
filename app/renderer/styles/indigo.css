@@ -120,7 +120,7 @@ h2 { font-size: 20px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px
 
 .hint { display: flex; gap: 14px; padding: 8px 18px; border-top: 1px solid var(--line); font-size: 10.5px; color: var(--mut2); }
 .hint .k { font-family: var(--mono); border: 1px solid var(--line2); border-radius: 4px; padding: 0 4px; margin-right: 4px; color: var(--mut); }
-.hint .r { margin-left: auto; }
+.hint .r { margin-left: auto; display: flex; align-items: center; gap: 5px; min-width: 112px; justify-content: flex-end; }
 
 table { border-collapse: collapse; width: 100%; }
 th { font-size: 10.5px; color: var(--mut2); font-weight: 500; text-align: right; padding: 0 10px 7px; border-bottom: 1px solid var(--line2); }

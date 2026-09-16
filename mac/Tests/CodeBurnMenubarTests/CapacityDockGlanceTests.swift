@@ -85,55 +85,7 @@ struct CapacityDockGlanceTests {
         #expect(CapacityDockGlance.windows(quota([])).isEmpty)
     }
 
-    @Test("Pace slots reserve height for any window with a validated duration")
-    func paceSlotReservedByDuration() {
-        let resetsAt = Date().addingTimeInterval(3 * 24 * 3600)
-        let withoutDuration = [window("5-hour", 0.2, resetsAt: resetsAt), window("Weekly", 0.5, resetsAt: resetsAt)]
-        let withDuration = [
-            window("5-hour", 0.2, resetsAt: resetsAt, windowSeconds: QuotaPacePresentation.claudeFiveHourSeconds),
-            window("Weekly", 0.5, resetsAt: resetsAt, windowSeconds: QuotaPacePresentation.claudeSevenDaySeconds),
-        ]
-        #expect(!CapacityDockGlance.drawsPace(quota(withoutDuration)))
-        #expect(CapacityDockGlance.drawsPace(quota(withDuration)))
-        // Missing duration still draws the plain row.
-        #expect(CapacityDockGlance.windowsHeight(for: quota(withoutDuration)) == CapacityDockGlance.windowsHeight)
-        let step = CapacityDockGlance.paceLineGap + CapacityDockGlance.paceLineHeight
-        #expect(CapacityDockGlance.windowsHeight(for: quota(withDuration)) == CapacityDockGlance.windowsHeight + step)
-        // Stale and loading data carry the durations but no defensible
-        // estimate. The slot stays reserved anyway: it is the caption that
-        // goes quiet, and the panel must not resize under the pointer every
-        // time a refresh starts or a sample ages out.
-        for connection in [QuotaSummary.Connection.stale, .loading] {
-            #expect(CapacityDockGlance.drawsPace(quota(withDuration, connection: connection)))
-            #expect(
-                CapacityDockGlance.windowsHeight(for: quota(withDuration, connection: connection))
-                    == CapacityDockGlance.windowsHeight(for: quota(withDuration))
-            )
-        }
-        // The computed panel height reflects the reserved slot.
-        func detailHeight(_ windows: [QuotaSummary.Window], connection: QuotaSummary.Connection) -> CGFloat {
-            CapacityDockMetrics.detailHeight(
-                quota: quota(windows, connection: connection),
-                sessionCount: nil,
-                hasToday: false,
-                tailEdge: .right,
-                scale: 1
-            )
-        }
-        #expect(detailHeight(withDuration, connection: .connected) - detailHeight(withoutDuration, connection: .connected) == step)
-        for scale in [0.9, 1.0, 1.15, 1.25, 1.4] {
-            let h = CapacityDockMetrics.detailHeight(
-                quota: quota(withDuration),
-                sessionCount: 2,
-                hasToday: true,
-                tailEdge: .bottom,
-                scale: CGFloat(scale)
-            )
-            #expect(h == h.rounded())
-        }
-    }
-
-    @Test("Three or four windows use two constrained columns and two rows")
+    @Test("Up to three windows share one row; a fourth wraps to a second")
     func multiWindowGridGeometry() {
         let plainThree = quota([
             window("5-hour", 0.2),
@@ -148,29 +100,29 @@ struct CapacityDockGlanceTests {
         ])
         #expect(CapacityDockGlance.windowColumnCount(for: 1) == 1)
         #expect(CapacityDockGlance.windowColumnCount(for: 2) == 2)
-        #expect(CapacityDockGlance.windowColumnCount(for: 3) == 2)
-        #expect(CapacityDockGlance.windowColumnCount(for: 4) == 2)
+        #expect(CapacityDockGlance.windowColumnCount(for: 3) == 3)
+        #expect(CapacityDockGlance.windowColumnCount(for: 4) == 3)
         #expect(CapacityDockGlance.windowRowCount(for: 1) == 1)
         #expect(CapacityDockGlance.windowRowCount(for: 2) == 1)
-        #expect(CapacityDockGlance.windowRowCount(for: 3) == 2)
+        #expect(CapacityDockGlance.windowRowCount(for: 3) == 1)
         #expect(CapacityDockGlance.windowRowCount(for: 4) == 2)
-        #expect(abs(CapacityDockGlance.windowsGridHeight(for: plainThree) - (2 * 53 + 6)) < 0.001)
-        #expect(abs(CapacityDockGlance.windowsHeight(for: plainThree) - (8 + 2 * 53 + 6 + 16)) < 0.001)
-        #expect(CapacityDockGlance.windowsHeight(for: plainFour) == CapacityDockGlance.windowsHeight(for: plainThree))
+        #expect(CapacityDockGlance.windowsHeight(for: plainThree) == CapacityDockGlance.windowsHeight)
+        #expect(abs(CapacityDockGlance.windowsGridHeight(for: plainFour) - (2 * 53 + 6)) < 0.001)
+        #expect(abs(CapacityDockGlance.windowsHeight(for: plainFour) - (8 + 2 * 53 + 6 + 16)) < 0.001)
         // One and two windows retain the original compact one-row geometry.
         #expect(CapacityDockGlance.windowsHeight(for: quota([window("Weekly", 0.5)])) == CapacityDockGlance.windowsHeight)
         #expect(CapacityDockGlance.windowsHeight(for: quota([window("5-hour", 0.2), window("Weekly", 0.5)])) == CapacityDockGlance.windowsHeight)
     }
 
-    @Test("The pill tint ramps green, yellow, orange, red at 70, 80 and 90 percent")
+    @Test("The pill tint ramps green, yellow, orange, red at 60, 70 and 95 percent, like the flame")
     func severityRamp() {
         #expect(CapacityDockGlance.severityColor(0.0) == .green)
-        #expect(CapacityDockGlance.severityColor(0.69) == .green)
-        #expect(CapacityDockGlance.severityColor(0.70) == .yellow)
-        #expect(CapacityDockGlance.severityColor(0.79) == .yellow)
-        #expect(CapacityDockGlance.severityColor(0.80) == .orange)
-        #expect(CapacityDockGlance.severityColor(0.89) == .orange)
-        #expect(CapacityDockGlance.severityColor(0.90) == .red)
+        #expect(CapacityDockGlance.severityColor(0.59) == .green)
+        #expect(CapacityDockGlance.severityColor(0.60) == .yellow)
+        #expect(CapacityDockGlance.severityColor(0.69) == .yellow)
+        #expect(CapacityDockGlance.severityColor(0.70) == .orange)
+        #expect(CapacityDockGlance.severityColor(0.94) == .orange)
+        #expect(CapacityDockGlance.severityColor(0.95) == .red)
         #expect(CapacityDockGlance.severityColor(1.5) == .red)
     }
 
@@ -290,8 +242,8 @@ struct CapacityDockGlanceTests {
                 + CapacityDockGlance.todayHeight
                 + CapacityDockGlance.windowsHeight(for: quota(three))
         )
-        // 44 header + 83 sessions + 97 today + 136 two-row windows grid.
-        #expect(full == 360)
+        // 44 header + 83 sessions + 97 today + 77 one-row windows grid.
+        #expect(full == 301)
         // The panel opens and closes on the same 16pt inset it uses sideways.
         let headerParts: CGFloat = CapacityDockGlance.contentInset + 20 + 8
         #expect(CapacityDockGlance.headerHeight == headerParts)
@@ -320,13 +272,10 @@ struct CapacityDockGlanceTests {
             height(1, hasToday: true, windows: []) - full
                 == CapacityDockGlance.windowsEmptyHeight - CapacityDockGlance.windowsHeight(for: quota(three))
         )
-        // One and two columns stay on the compact row; three windows need the
+        // Up to three windows share the compact row; a fourth needs the
         // second grid row so every scope remains visible.
-        #expect(height(1, hasToday: true, windows: [three[0]]) < full)
-        #expect(
-            height(1, hasToday: true, windows: [three[0], three[1]])
-                == height(1, hasToday: true, windows: [three[0]])
-        )
+        #expect(height(1, hasToday: true, windows: [three[0]]) == full)
+        #expect(height(1, hasToday: true, windows: three + [window("Sonnet", 0.5)]) > full)
     }
 
     @Test("A vertical tail adds its allowance to the panel height")

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { delimiter as pathDelimiter, join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, type TestContext } from 'vitest'
 
 import { DAILY_CACHE_VERSION } from '../src/daily-cache.js'
 import { getDailyCacheConfigHash } from '../src/usage-aggregator.js'
@@ -22,10 +22,30 @@ function dateStringUtc(date: Date): string {
   return date.toISOString().slice(0, 10)
 }
 
-function dayAtUtcOffset(offset: number): string {
-  const now = new Date()
+function dayAtUtcOffset(now: Date, offset: number): string {
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   return dateStringUtc(new Date(today - offset * 24 * 60 * 60 * 1000))
+}
+
+// Seed times for a fresh Claude turn: the user line ten minutes back and the
+// assistant line one minute after it, both clamped into [today's UTC midnight,
+// now]. runCli pins TZ=UTC and the CLI reads the real clock, so a plain now-10m
+// lands on yesterday for the first ten minutes after UTC midnight and the fresh
+// slice drops out of `--days ...,today` and `--period today`. At exactly
+// midnight both lines share one timestamp, which the parser accepts
+// (cli-session-across-days seeds every turn that way).
+function freshTurnTimes(now: Date): { userAt: string; assistantAt: string } {
+  const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  const userAt = Math.max(todayUtcMidnight, now.getTime() - 10 * 60_000)
+  const assistantAt = Math.min(now.getTime(), userAt + 60_000)
+  return { userAt: new Date(userAt).toISOString(), assistantAt: new Date(assistantAt).toISOString() }
+}
+
+// The CLI subprocess has no injectable clock. If UTC midnight passes between
+// seeding and a CLI run finishing, that run answered for a different "today"
+// than the fixture describes, so skip rather than report a false regression.
+function skipIfUtcDayRolled(ctx: TestContext, seededDay: string): void {
+  ctx.skip(dateStringUtc(new Date()) !== seededDay, `UTC day rolled past ${seededDay} mid-test; the fixture no longer describes today`)
 }
 
 function seededDay(date: string, providers: Record<string, ProviderSeed>) {
@@ -73,12 +93,19 @@ function detail(payload: { current: { providerDetails: Array<{ id: string; cache
 }
 
 describe('status menubar cache-read pipeline', () => {
-  it('combines fresh and durable provider slices while honoring selected dates and unknown legacy fields', async () => {
+  it('combines fresh and durable provider slices while honoring selected dates and unknown legacy fields', async (ctx) => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cache-read-pipeline-'))
-    const knownDate = dayAtUtcOffset(10)
-    const excludedDate = dayAtUtcOffset(9)
-    const partialDate = dayAtUtcOffset(8)
-    const todayDate = dayAtUtcOffset(0)
+    const now = new Date()
+    const knownDate = dayAtUtcOffset(now, 10)
+    const excludedDate = dayAtUtcOffset(now, 9)
+    const partialDate = dayAtUtcOffset(now, 8)
+    const todayDate = dayAtUtcOffset(now, 0)
+    const fresh = freshTurnTimes(now)
+    const run = (args: string[]) => {
+      const result = runCli(args, home)
+      skipIfUtcDayRolled(ctx, todayDate)
+      return result
+    }
 
     try {
       await mkdir(join(home, '.claude', 'projects', 'fresh-project'), { recursive: true })
@@ -87,20 +114,19 @@ describe('status menubar cache-read pipeline', () => {
       await mkdir(join(home, '.desktop-sessions'), { recursive: true })
       await mkdir(join(home, '.cache', 'codeburn'), { recursive: true })
 
-      const freshTimestamp = new Date(Date.now() - 10 * 60_000).toISOString()
       await writeFile(
         join(home, '.claude', 'projects', 'fresh-project', 'fresh.jsonl'),
         [
           JSON.stringify({
             type: 'user',
             sessionId: 'fresh-cache-session',
-            timestamp: freshTimestamp,
+            timestamp: fresh.userAt,
             message: { role: 'user', content: 'exercise the durable cache path' },
           }),
           JSON.stringify({
             type: 'assistant',
             sessionId: 'fresh-cache-session',
-            timestamp: new Date(Date.now() - 9 * 60_000).toISOString(),
+            timestamp: fresh.assistantAt,
             message: {
               id: 'fresh-cache-message',
               type: 'message',
@@ -122,7 +148,7 @@ describe('status menubar cache-read pipeline', () => {
         version: DAILY_CACHE_VERSION,
         savingsConfigHash: getDailyCacheConfigHash(),
         tzKey: 'UTC',
-        lastComputedDate: dayAtUtcOffset(1),
+        lastComputedDate: dayAtUtcOffset(now, 1),
         complete: true,
         days: [
           seededDay(knownDate, {
@@ -159,7 +185,7 @@ describe('status menubar cache-read pipeline', () => {
         'status', '--format', 'menubar-json', '--provider', 'all', '--days', `${knownDate},${partialDate},${todayDate}`,
         '--no-optimize', '--no-timeline',
       ]
-      const all = runCli(args, home)
+      const all = run(args)
       expect(all.status, `stderr: ${all.stderr}`).toBe(0)
       const allPayload = JSON.parse(all.stdout) as { current: { providerDetails: Array<{ id: string; cacheReadTokens?: number; hasUsage?: boolean }> } }
 
@@ -172,34 +198,34 @@ describe('status menubar cache-read pipeline', () => {
       expect(detail(allPayload, 'hermes')).toMatchObject({ hasUsage: true })
       expect(detail(allPayload, 'hermes')).not.toHaveProperty('cacheReadTokens') // active legacy missing
 
-      const selectedClaude = runCli([
+      const selectedClaude = run([
         'status', '--format', 'menubar-json', '--provider', 'claude', '--days', `${knownDate},${partialDate},${todayDate}`,
         '--no-optimize', '--no-timeline',
-      ], home)
+      ])
       expect(selectedClaude.status, `stderr: ${selectedClaude.stderr}`).toBe(0)
       const claudePayload = JSON.parse(selectedClaude.stdout) as { current: { providerDetails: Array<{ id: string; cacheReadTokens?: number }> } }
       expect(detail(claudePayload, 'claude')?.cacheReadTokens).toBe(1811)
 
-      const selectedCodex = runCli([
+      const selectedCodex = run([
         'status', '--format', 'menubar-json', '--provider', 'codex', '--days', `${knownDate},${partialDate},${todayDate}`,
         '--no-optimize', '--no-timeline',
-      ], home)
+      ])
       expect(selectedCodex.status, `stderr: ${selectedCodex.stderr}`).toBe(0)
       const codexPayload = JSON.parse(selectedCodex.stdout) as { current: { providerDetails: Array<{ id: string; cacheReadTokens?: number }> } }
       expect(detail(codexPayload, 'codex')?.cacheReadTokens).toBe(2222)
 
-      const selectedGemini = runCli([
+      const selectedGemini = run([
         'status', '--format', 'menubar-json', '--provider', 'gemini', '--days', `${knownDate},${partialDate},${todayDate}`,
         '--no-optimize', '--no-timeline',
-      ], home)
+      ])
       expect(selectedGemini.status, `stderr: ${selectedGemini.stderr}`).toBe(0)
       const geminiPayload = JSON.parse(selectedGemini.stdout) as { current: { providerDetails: Array<{ id: string; cacheReadTokens?: number; hasUsage?: boolean }> } }
       expect(detail(geminiPayload, 'gemini')).toMatchObject({ hasUsage: false, cacheReadTokens: 0 })
 
-      const selectedHermes = runCli([
+      const selectedHermes = run([
         'status', '--format', 'menubar-json', '--provider', 'hermes', '--days', `${knownDate},${partialDate},${todayDate}`,
         '--no-optimize', '--no-timeline',
-      ], home)
+      ])
       expect(selectedHermes.status, `stderr: ${selectedHermes.stderr}`).toBe(0)
       const hermesPayload = JSON.parse(selectedHermes.stdout) as { current: { providerDetails: Array<{ id: string; cacheReadTokens?: number; hasUsage?: boolean }> } }
       expect(detail(hermesPayload, 'hermes')).toMatchObject({ hasUsage: true })
@@ -209,12 +235,13 @@ describe('status menubar cache-read pipeline', () => {
     }
   }, 120_000)
 
-  it('keeps fresh cache reads in a selected Claude config provider detail', async () => {
+  it('keeps fresh cache reads in a selected Claude config provider detail', async (ctx) => {
     const home = await mkdtemp(join(tmpdir(), 'codeburn-cache-read-config-scope-'))
     const work = join(home, 'claude-work')
     const personal = join(home, 'claude-personal')
-    const base = new Date(Date.now() - 10 * 60_000)
-    const ts = (offset: number) => new Date(base.getTime() + offset).toISOString()
+    const now = new Date()
+    const todayDate = dayAtUtcOffset(now, 0)
+    const fresh = freshTurnTimes(now)
     const assistant = (sessionId: string, timestamp: string, cacheRead: number) => JSON.stringify({
       type: 'assistant',
       sessionId,
@@ -237,6 +264,11 @@ describe('status menubar cache-read pipeline', () => {
       CLAUDE_CONFIG_DIR: '',
       CLAUDE_CONFIG_DIRS: [work, personal].join(pathDelimiter),
     }
+    const run = (args: string[]) => {
+      const result = runCli(args, home, sourceEnv)
+      skipIfUtcDayRolled(ctx, todayDate)
+      return result
+    }
 
     try {
       await mkdir(join(work, 'projects', 'selected'), { recursive: true })
@@ -245,21 +277,21 @@ describe('status menubar cache-read pipeline', () => {
       await writeFile(
         join(work, 'projects', 'selected', 'work.jsonl'),
         [
-          JSON.stringify({ type: 'user', sessionId: 'selected-session', timestamp: ts(0), message: { role: 'user', content: 'fixture' } }),
-          assistant('selected-session', ts(60_000), 4321),
+          JSON.stringify({ type: 'user', sessionId: 'selected-session', timestamp: fresh.userAt, message: { role: 'user', content: 'fixture' } }),
+          assistant('selected-session', fresh.assistantAt, 4321),
         ].join('\n') + '\n',
       )
       await writeFile(
         join(personal, 'projects', 'other', 'personal.jsonl'),
         [
-          JSON.stringify({ type: 'user', sessionId: 'other-session', timestamp: ts(0), message: { role: 'user', content: 'fixture' } }),
-          assistant('other-session', ts(60_000), 9876),
+          JSON.stringify({ type: 'user', sessionId: 'other-session', timestamp: fresh.userAt, message: { role: 'user', content: 'fixture' } }),
+          assistant('other-session', fresh.assistantAt, 9876),
         ].join('\n') + '\n',
       )
 
-      const all = runCli([
+      const all = run([
         'status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all', '--no-optimize', '--no-timeline',
-      ], home, sourceEnv)
+      ])
       expect(all.status, `stderr: ${all.stderr}`).toBe(0)
       const allPayload = JSON.parse(all.stdout) as {
         claudeConfigs?: { options: Array<{ id: string; label: string }> }
@@ -267,10 +299,10 @@ describe('status menubar cache-read pipeline', () => {
       const selectedId = allPayload.claudeConfigs?.options.find(option => option.label === 'claude-work')?.id
       expect(selectedId).toBeTruthy()
 
-      const selected = runCli([
+      const selected = run([
         'status', '--format', 'menubar-json', '--period', 'today', '--provider', 'all',
         '--claude-config-source', selectedId!, '--no-optimize', '--no-timeline',
-      ], home, sourceEnv)
+      ])
       expect(selected.status, `stderr: ${selected.stderr}`).toBe(0)
       const selectedPayload = JSON.parse(selected.stdout) as {
         current: { cacheReadTokens: number; providerDetails: Array<{ id: string; cacheReadTokens?: number }> }

@@ -18,7 +18,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true })
 })
 
-function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string; forked_from_id?: string; timestamp?: string } = {}) {
+function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: string; model?: string; forked_from_id?: string; source?: unknown; timestamp?: string } = {}) {
   return JSON.stringify({
     type: 'session_meta',
     timestamp: opts.timestamp ?? '2026-04-14T10:00:00Z',
@@ -28,6 +28,7 @@ function sessionMeta(opts: { cwd?: string; originator?: string; session_id?: str
       session_id: opts.session_id ?? 'sess-001',
       model: opts.model ?? 'gpt-5.3-codex',
       ...(opts.forked_from_id ? { forked_from_id: opts.forked_from_id } : {}),
+      ...(opts.source ? { source: opts.source } : {}),
     },
   })
 }
@@ -1262,6 +1263,30 @@ describe('codex provider - forked session dedupe', () => {
       tokenCount({ timestamp: '2026-04-14T10:00:12Z', last: { input: 400 }, total: { total: 1500 } }),
     ])
 
+    const { tokens } = await aggregateTokens(tmpDir)
+    expect(tokens).toBe(1500)
+  })
+
+  it('does not double-count a spawned sub-agent that replays its parent with the original timestamps', async () => {
+    // A MultiAgent sub-agent rollout names its parent under
+    // source.subagent.thread_spawn.parent_thread_id, never forked_from_id, and
+    // replays the parent's token_count events with their ORIGINAL timestamps,
+    // then adds its own work (+400). Parent 1100 + child 400 = 1500, not 2600.
+    await writeSession(tmpDir, '2026-04-14', 'rollout-1-parent.jsonl', [
+      sessionMeta({ session_id: 'sess-parent' }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', last: { input: 400 }, total: { total: 1100 } }),
+    ])
+    await writeSession(tmpDir, '2026-04-14', 'rollout-2-subagent.jsonl', [
+      sessionMeta({
+        session_id: 'sess-child',
+        timestamp: '2026-04-14T10:00:30Z',
+        source: { subagent: { thread_spawn: { parent_thread_id: 'sess-parent', agent_role: 'explorer' } } },
+      }),
+      tokenCount({ timestamp: '2026-04-14T10:00:01Z', last: { input: 700 }, total: { total: 700 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:02Z', last: { input: 400 }, total: { total: 1100 } }),
+      tokenCount({ timestamp: '2026-04-14T10:00:40Z', last: { input: 400 }, total: { total: 400 } }),
+    ])
     const { tokens } = await aggregateTokens(tmpDir)
     expect(tokens).toBe(1500)
   })

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discord
+    url: https://discord.gg/w2sw8mCqep
+    about: Chat with maintainers and other users.
+  - name: Discussions
+    url: https://github.com/getagentseal/codeburn/discussions
+    about: Ask questions that aren't bugs or feature requests.

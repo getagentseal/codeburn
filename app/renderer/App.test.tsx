@@ -7,7 +7,8 @@ import { sanitizeProps } from '../electron/telemetry'
 import { __resetPolledMemo, hasPolledMemo, primePolledMemo } from './hooks/usePolled'
 import { setActiveCurrency } from './lib/format'
 import { readOverviewHeadline, writeOverviewHeadline } from './lib/overviewSnapshot'
-import type { BranchSpendReport, DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SpendFlow } from './lib/types'
+import type { BranchSpendReport, DateRange, MenubarPayload, ModelReportRow, OptimizeJsonReport, SessionRow, SpendFlow } from './lib/types'
+import { INITIAL_VISIBLE } from './sections/Sessions'
 
 const stored = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -239,9 +240,8 @@ describe('App shortcuts', () => {
 
     expect(await screen.findByLabelText('Cached usage summary')).toBeInTheDocument()
     expect(screen.getAllByText('$12.34').length).toBeGreaterThan(0)
-    expect(screen.getByText(/sessions updating/)).toBeInTheDocument()
+    expect(screen.getByText('12 calls · sessions updating')).toBeInTheDocument()
     expect(screen.getByText('Updating detailed drill-downs…')).toBeInTheDocument()
-    expect(screen.getByText('Refreshing selected view…')).toBeInTheDocument()
     expect(mocks.getActReport).not.toHaveBeenCalled()
   })
 
@@ -1348,5 +1348,101 @@ describe('usage_snapshot telemetry props', () => {
       { name: 'coding', oneShotRate: 0.61 },
       { name: 'debugging', oneShotRate: -1 },
     ])
+  })
+})
+
+describe('sessions pagination', () => {
+  beforeEach(() => {
+    installDefaultMocks()
+    localStorage.clear()
+    localStorage.setItem('codeburn.defaultPeriod', '30days')
+    setPlatform('darwin')
+  })
+
+  afterEach(() => {
+    clearPlatform()
+    vi.useRealTimers()
+  })
+
+  function sessionRows(count: number): SessionRow[] {
+    return Array.from({ length: count }, (_, index) => ({
+      sessionId: `session-${index}`,
+      project: `project-${index}`,
+      provider: 'claude',
+      models: ['Opus 4.8'],
+      cost: count - index,
+      savingsUSD: 0,
+      calls: 1,
+      turns: 1,
+      inputTokens: 1_000,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      startedAt: '2026-09-10T10:00:00.000Z',
+      endedAt: '2026-09-10T10:01:00.000Z',
+      durationMs: 60_000,
+    }))
+  }
+
+  // 30s timeout: the list renders 120+ rows three times inside a full App
+  // render, and the suite runs its files in parallel.
+  it('returns a revealed sessions list to the first page when the sort changes', { timeout: 30_000 }, async () => {
+    mocks.getSessions.mockResolvedValue(sessionRows(INITIAL_VISIBLE + 5))
+    render(<App />)
+    expect(await screen.findByText('Most expensive sessions')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: '2', metaKey: true })
+    expect(await screen.findByText(`Showing ${INITIAL_VISIBLE} of ${INITIAL_VISIBLE + 5}`)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 5 more · 5 remaining' }))
+    expect(await screen.findByText(`Showing ${INITIAL_VISIBLE + 5} of ${INITIAL_VISIBLE + 5}`)).toBeInTheDocument()
+
+    // A new sort is a new ordering of the whole list: it starts at the first
+    // page again instead of holding the depth reached under the old one.
+    const toolbar = document.querySelector('.sessions-toolbar') as HTMLElement
+    fireEvent.click(within(toolbar).getByRole('tab', { name: 'Recent' }))
+    expect(await screen.findByText(`Showing ${INITIAL_VISIBLE} of ${INITIAL_VISIBLE + 5}`)).toBeInTheDocument()
+  })
+})
+
+describe('refresh indicators', () => {
+  beforeEach(() => {
+    installDefaultMocks()
+    localStorage.clear()
+    localStorage.setItem('codeburn.defaultPeriod', '30days')
+    setPlatform('darwin')
+    __resetPolledMemo()
+  })
+
+  afterEach(() => {
+    clearPlatform()
+  })
+
+  it('lights the top hairline only while a fetch is in flight, and always reserves its 2px', async () => {
+    let settle: (payload: MenubarPayload) => void = () => {}
+    mocks.getOverview.mockReturnValue(new Promise<MenubarPayload>(resolve => { settle = resolve }))
+
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(container.querySelector('.switch-line.on')).not.toBeNull())
+
+    await act(async () => { settle(overviewPayload()); await Promise.resolve() })
+
+    await waitFor(() => expect(container.querySelector('.switch-line.on')).toBeNull())
+    expect(container.querySelector('.switch-line')).not.toBeNull()
+  })
+
+  it('spins the footer refresh mark only while a fetch is in flight', async () => {
+    let settle: (payload: MenubarPayload) => void = () => {}
+    mocks.getOverview.mockReturnValue(new Promise<MenubarPayload>(resolve => { settle = resolve }))
+
+    const { container } = render(<App />)
+
+    await waitFor(() => expect(container.querySelector('.refresh-mark.spinning')).not.toBeNull())
+
+    await act(async () => { settle(overviewPayload()); await Promise.resolve() })
+
+    await waitFor(() => expect(container.querySelector('.refresh-mark.spinning')).toBeNull())
+    expect(container.querySelector('.refresh-mark')).not.toBeNull()
   })
 })

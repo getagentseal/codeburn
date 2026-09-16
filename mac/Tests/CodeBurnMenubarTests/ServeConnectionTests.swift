@@ -54,6 +54,7 @@ private actor ManualTimeoutClock {
     private var nextToken = 0
     private var waiters: [Int: Waiter] = [:]
     private var recorded: [UInt64] = []
+    private var fired = 0
 
     func sleep(_ nanoseconds: UInt64) async throws {
         let token = nextToken
@@ -78,8 +79,12 @@ private actor ManualTimeoutClock {
 
     func history() -> [UInt64] { recorded }
 
+    /// How many timeouts this clock has let fire.
+    func firedCount() -> Int { fired }
+
     func fireOldest() {
         guard let token = waiters.keys.min(), let waiter = waiters.removeValue(forKey: token) else { return }
+        fired += 1
         waiter.continuation.resume()
     }
 
@@ -129,6 +134,43 @@ private final class ProcessQueue: @unchecked Sendable {
     }
 }
 
+/// Real-time bound on waiting for an event. It is a hang guard for a
+/// regression, never the assertion: every fixture that relies on it either
+/// blocks until the test releases it or never finishes on its own, so a runner
+/// starved by concurrently scheduled suites makes the wait longer without
+/// changing the outcome (#1333).
+private let hangGuardNanoseconds: UInt64 = 30 * 1_000_000_000
+
+/// Polls a condition the test can only observe from outside the process, such
+/// as a file a fixture child writes, until it holds or the hang guard expires.
+private func eventually(_ condition: () async throws -> Bool) async rethrows -> Bool {
+    let deadline = DispatchTime.now().uptimeNanoseconds + hangGuardNanoseconds
+    while DispatchTime.now().uptimeNanoseconds < deadline {
+        if try await condition() { return true }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return try await condition()
+}
+
+/// Awaits `operation`. If it is still pending when the hang guard expires,
+/// `onExpiry` releases whatever it is blocked on, so a regression fails the
+/// assertions that follow instead of hanging the test run.
+private func withHangGuard<T>(
+    onExpiry: @escaping @Sendable () async -> Void,
+    _ operation: () async throws -> T
+) async rethrows -> T {
+    let expiry = Task {
+        do {
+            try await Task.sleep(nanoseconds: hangGuardNanoseconds)
+        } catch {
+            return
+        }
+        await onExpiry()
+    }
+    defer { expiry.cancel() }
+    return try await operation()
+}
+
 @Suite("ServeConnection", .serialized)
 struct ServeConnectionTests {
     @Test("the resident child starts at user-initiated QoS")
@@ -155,34 +197,51 @@ struct ServeConnectionTests {
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let requestMarker = dir + "/request-read"
+        let clock = ManualTimeoutClock()
 
-        let connection = ServeConnection { _, qualityOfService in
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: "/bin/sh")
-            child.arguments = ["-c", "IFS= read -r line; : > \"$1\"; sleep 1", "serve-fixture", requestMarker]
-            child.qualityOfService = qualityOfService
-            return child
-        }
+        // The child reads the request, then neither answers nor exits until its
+        // stdin closes, and the request's timeout fires only when the test fires
+        // it. Cancellation is the only event left that can resume the caller, so
+        // "promptly" is asserted as "before the timeout", not as a wall-clock
+        // budget a starved runner cannot keep (#1333). A child that exited on
+        // its own would instead be retried on replacements until the death
+        // budget surfaced ServeUnavailable.
+        let connection = ServeConnection(
+            makeProcess: { _, qualityOfService in
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = [
+                    "-c", "IFS= read -r line; : > \"$1\"; while IFS= read -r line; do :; done",
+                    "serve-fixture", requestMarker,
+                ]
+                child.qualityOfService = qualityOfService
+                return child
+            },
+            timeoutSleep: { nanoseconds in
+                try await clock.sleep(nanoseconds)
+            }
+        )
 
         let request = Task {
             try await connection.request(args: ["status", "--format", "menubar-json"])
         }
-        for _ in 0..<200 where !FileManager.default.fileExists(atPath: requestMarker) {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        #expect(FileManager.default.fileExists(atPath: requestMarker))
+        let childReadRequest = await eventually { FileManager.default.fileExists(atPath: requestMarker) }
+        #expect(childReadRequest)
+        let timeoutArmed = await eventually { await clock.snapshot() == [coldTimeoutNanoseconds] }
+        #expect(timeoutArmed)
 
-        let clock = ContinuousClock()
-        let started = clock.now
         request.cancel()
         do {
-            _ = try await request.value
+            // Firing the timeout on expiry turns a connection that ignores
+            // cancellation into a failed assertion below rather than a hang.
+            _ = try await withHangGuard(onExpiry: { await clock.fireOldest() }) {
+                try await request.value
+            }
             #expect(Bool(false), "cancelled request unexpectedly succeeded")
         } catch {
             #expect(error is CancellationError)
         }
-        let elapsed = started.duration(to: clock.now)
-        #expect(elapsed < .milliseconds(500))
+        #expect(await clock.firedCount() == 0)
         await connection.shutdown()
     }
 
@@ -194,7 +253,7 @@ struct ServeConnectionTests {
         let pidsFile = dir + "/pids"
         let eventsFile = dir + "/events"
         let releaseMarker = dir + "/release-first"
-        let recorder = TimeoutRecorder()
+        let clock = ManualTimeoutClock()
 
         let connection = ServeConnection(
             makeProcess: { _, qualityOfService in
@@ -218,23 +277,31 @@ struct ServeConnectionTests {
                 return child
             },
             timeoutSleep: { nanoseconds in
-                try await recorder.recordAndWait(nanoseconds)
+                try await clock.sleep(nanoseconds)
             }
         )
 
         let first = Task {
             try await connection.request(args: ["status", "--request", "first"])
         }
-        for _ in 0..<200 {
-            let events = (try? String(contentsOfFile: eventsFile, encoding: .utf8)) ?? ""
-            if events.contains("first-read\n") { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
+        let firstRead = await eventually {
+            ((try? String(contentsOfFile: eventsFile, encoding: .utf8)) ?? "").contains("first-read\n")
         }
+        #expect(firstRead)
         #expect(try String(contentsOfFile: eventsFile, encoding: .utf8) == "first-read\n")
+        // The timer is armed by a detached task, so it can register after the
+        // child has already read the line.
+        let coldTimeoutArmed = await eventually { await clock.history() == [coldTimeoutNanoseconds] }
+        #expect(coldTimeoutArmed)
 
         first.cancel()
         do {
-            _ = try await first.value
+            _ = try await withHangGuard(onExpiry: {
+                Issue.record("cancellation was not observed while the child was still hydrating")
+                _ = FileManager.default.createFile(atPath: releaseMarker, contents: Data())
+            }) {
+                try await first.value
+            }
             #expect(Bool(false), "cancelled request unexpectedly succeeded")
         } catch {
             #expect(error is CancellationError)
@@ -242,22 +309,37 @@ struct ServeConnectionTests {
 
         // Submit the next request while the child is still blocked hydrating
         // the cancelled first one. It stays client-side queued: neither its
-        // stdin line nor its own timeout may begin yet.
+        // stdin line nor its own timeout may begin yet. Nothing observable
+        // happens while it waits, so this settle can only miss a regression,
+        // never fail a correct run; the warm timeout asserted after the release
+        // is the deterministic proof that its line was written only after the
+        // late first reply.
         let second = Task {
             try await connection.request(args: ["status", "--request", "second"])
         }
         try await Task.sleep(nanoseconds: 100_000_000)
-        #expect(await recorder.snapshot() == [coldTimeoutNanoseconds])
+        #expect(await clock.history() == [coldTimeoutNanoseconds])
         #expect(try String(contentsOfFile: eventsFile, encoding: .utf8) == "first-read\n")
 
         _ = FileManager.default.createFile(atPath: releaseMarker, contents: Data())
-        let secondPayload = try await second.value
+        let secondPayload = try await withHangGuard(onExpiry: { await connection.shutdown() }) {
+            try await second.value
+        }
 
         #expect(String(decoding: secondPayload, as: UTF8.self) == "live-2")
-        #expect(await recorder.snapshot() == [coldTimeoutNanoseconds, warmTimeoutNanoseconds])
+        let warmTimeoutArmed = await eventually {
+            await clock.history() == [coldTimeoutNanoseconds, warmTimeoutNanoseconds]
+        }
+        #expect(warmTimeoutArmed)
         let pids = try String(contentsOfFile: pidsFile, encoding: .utf8)
             .split(separator: "\n")
         #expect(pids.count == 1)
+        // The child logs "second-replied" after writing the reply that resumed
+        // `second`, so wait for the log rather than racing the child to it.
+        let secondReplied = await eventually {
+            ((try? String(contentsOfFile: eventsFile, encoding: .utf8)) ?? "").contains("second-replied\n")
+        }
+        #expect(secondReplied)
         let events = try String(contentsOfFile: eventsFile, encoding: .utf8)
             .split(separator: "\n")
         #expect(events == ["first-read", "late-first", "second-read", "second-replied"])
@@ -522,53 +604,67 @@ struct ServeConnectionTests {
         let pidsFile = dir + "/pids"
         let requestsFile = dir + "/requests"
         let lateRepliesFile = dir + "/late-replies"
+        let clock = ManualTimeoutClock()
 
-        let connection = ServeConnection { _, qualityOfService in
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: "/bin/sh")
-            child.arguments = ["-c", """
-                printf '%s\n' "$$" >> "$1"
-                while IFS= read -r line; do
-                  printf r >> "$2"
-                  id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
-                  if [ "$id" -le 3 ]; then
-                    sleep 0.05
-                    printf '{"id":%s,"ok":true,"output":"late-%s"}\n' "$id" "$id"
-                    printf l >> "$3"
-                  else
-                    printf '{"id":%s,"ok":true,"output":"live-%s"}\n' "$id" "$id"
-                  fi
-                done
-                """, "serve-fixture", pidsFile, requestsFile, lateRepliesFile]
-            child.qualityOfService = qualityOfService
-            return child
-        }
+        // Ids 1-3 are answered only once the test has created release-<id>, so
+        // the late reply cannot beat the cancellation it is meant to follow
+        // (#1333).
+        let connection = ServeConnection(
+            makeProcess: { _, qualityOfService in
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", """
+                    printf '%s\n' "$$" >> "$1"
+                    while IFS= read -r line; do
+                      printf r >> "$2"
+                      id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\\1/')
+                      if [ "$id" -le 3 ]; then
+                        while [ ! -f "$4/release-$id" ]; do sleep 0.01; done
+                        printf '{"id":%s,"ok":true,"output":"late-%s"}\n' "$id" "$id"
+                        printf l >> "$3"
+                      else
+                        printf '{"id":%s,"ok":true,"output":"live-%s"}\n' "$id" "$id"
+                      fi
+                    done
+                    """, "serve-fixture", pidsFile, requestsFile, lateRepliesFile, dir]
+                child.qualityOfService = qualityOfService
+                return child
+            },
+            timeoutSleep: { nanoseconds in
+                try await clock.sleep(nanoseconds)
+            }
+        )
 
         for attempt in 0..<3 {
             let request = Task {
                 try await connection.request(args: ["status", "--attempt", String(attempt)])
             }
-            for _ in 0..<200 {
-                let reads = (try? String(contentsOfFile: requestsFile, encoding: .utf8).count) ?? 0
-                if reads >= attempt + 1 { break }
-                try await Task.sleep(nanoseconds: 10_000_000)
+            let requestRead = await eventually {
+                ((try? String(contentsOfFile: requestsFile, encoding: .utf8))?.count ?? 0) >= attempt + 1
             }
+            #expect(requestRead)
+            let releaseMarker = dir + "/release-\(attempt + 1)"
             request.cancel()
             do {
-                _ = try await request.value
+                _ = try await withHangGuard(onExpiry: {
+                    Issue.record("cancellation of attempt \(attempt) was not observed before its reply was released")
+                    _ = FileManager.default.createFile(atPath: releaseMarker, contents: Data())
+                }) {
+                    try await request.value
+                }
                 #expect(Bool(false), "cancelled request unexpectedly succeeded")
             } catch {
                 #expect(error is CancellationError)
             }
 
-            // The fake child deliberately emits the now-orphaned response after
-            // cancellation. It must be ignored without double-resuming anything,
-            // and the same resident child must remain available for the next id.
-            for _ in 0..<200 {
-                let replies = (try? String(contentsOfFile: lateRepliesFile, encoding: .utf8).count) ?? 0
-                if replies >= attempt + 1 { break }
-                try await Task.sleep(nanoseconds: 10_000_000)
+            // Only now does the fake child emit the orphaned response. It must
+            // be ignored without double-resuming anything, and the same
+            // resident child must remain available for the next id.
+            _ = FileManager.default.createFile(atPath: releaseMarker, contents: Data())
+            let lateReplyWritten = await eventually {
+                ((try? String(contentsOfFile: lateRepliesFile, encoding: .utf8))?.count ?? 0) >= attempt + 1
             }
+            #expect(lateReplyWritten)
             let replies = (try? String(contentsOfFile: lateRepliesFile, encoding: .utf8).count) ?? 0
             #expect(replies == attempt + 1)
         }

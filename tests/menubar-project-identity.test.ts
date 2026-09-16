@@ -334,7 +334,11 @@ describe('menubar project identity pipeline', () => {
     mkdirSync(desktopDir, { recursive: true })
 
     const now = new Date()
-    const todayTs = new Date(now.getTime() - 60_000).toISOString()
+    // A minute back, clamped inside the current UTC day (the setup file pins
+    // TZ=UTC): a plain now-1m lands on yesterday during the first minute after
+    // UTC midnight and zeroes every 'today' total below.
+    const todayUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    const todayTs = new Date(Math.max(todayUtcMidnight, now.getTime() - 60_000)).toISOString()
     const todayStr = toDateString(now)
     const opus = 'claude-opus-4-6'
     const sonnet = 'claude-sonnet-4-5'

@@ -182,7 +182,7 @@ private struct TrendInsight: View {
                     HStack(spacing: 3) {
                         Image(systemName: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
                             .font(.system(size: 9, weight: .bold))
-                        Text(L("%@%% vs prior %lldd", (delta >= 0 ? "+" : "") + String(format: "%.0f", delta), dayCount))
+                        Text(L("%1$@%% vs prior %2$lldd", (delta >= 0 ? "+" : "") + String(format: "%.0f", delta), dayCount))
                             .font(.system(size: 10.5))
                             .monospacedDigit()
                     }
@@ -218,7 +218,7 @@ private struct TrendInsight: View {
 
     private func peakLabel(_ peak: TrendBar?, metric: (TrendBar) -> Double, useTokens: Bool) -> String {
         guard let peak, metric(peak) > 0 else { return "—" }
-        return L("%@ on %@", formatValue(metric(peak), useTokens: useTokens), shortDate(peak.date))
+        return L("%1$@ on %2$@", formatValue(metric(peak), useTokens: useTokens), shortDate(peak.date))
     }
 
     private func formatTokens(_ n: Double) -> String {
@@ -344,11 +344,9 @@ private struct BarColumn: View {
 
 private struct BarTooltipCard: View {
     let bar: TrendBar
-    /// Value to display in the tooltip header. Matches the metric the trend chart
-    /// is currently using (tokens when the .all-providers view has token data,
-    /// cost when provider-filtered views force a $ fallback). Passing this in keeps
-    /// the tooltip in sync with the chart instead of always reading bar.tokens,
-    /// which is zero for provider-filtered days.
+    /// Value shown in the tooltip header on days without a model breakdown, in
+    /// the metric the trend chart is using (tokens when the bars carry any, else
+    /// cost). Days with a breakdown show a Total row instead.
     let value: Double
     let formatValue: (Double) -> String
     @Environment(\.colorScheme) private var colorScheme
@@ -380,9 +378,11 @@ private struct BarTooltipCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(primaryText)
                 Spacer()
-                Text("\(formatValue(value))")
-                    .font(.codeMono(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.brandAccent)
+                if bar.topModels.isEmpty {
+                    Text("\(formatValue(value))")
+                        .font(.codeMono(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Theme.brandAccent)
+                }
             }
 
             if !bar.topModels.isEmpty {
@@ -406,6 +406,30 @@ private struct BarTooltipCard: View {
                                 .font(.codeMono(size: 9.5, weight: .medium))
                                 .foregroundStyle(tertiaryText)
                         }
+                    }
+
+                    Rectangle()
+                        .fill(borderStroke)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 0.5)
+
+                    // Day totals from the payload, not a sum of the rows above:
+                    // only four models render and a day can carry more.
+                    HStack(spacing: 6) {
+                        Color.clear
+                            .frame(width: 3, height: 12)
+                        Text(L("Total"))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(primaryText)
+                        Spacer()
+                        if bar.cost > 0 {
+                            Text(bar.cost.asCompactCurrency())
+                                .font(.codeMono(size: 9.5, weight: .semibold))
+                                .foregroundStyle(Theme.brandAccent)
+                        }
+                        Text("\(formatTokensCompact(bar.tokens)) tok")
+                            .font(.codeMono(size: 9.5, weight: .medium))
+                            .foregroundStyle(tertiaryText)
                     }
                 }
             }
@@ -772,7 +796,7 @@ struct ContributionDay: Identifiable, Equatable {
         if isFuture { return L("%@: future day", prettyDate(date)) }
         if cost <= 0 && calls == 0 { return L("%@: no tracked usage", prettyDate(date)) }
         return L(
-            "%@: %@, %lld calls, %@ tokens",
+            "%1$@: %2$@, %3$lld calls, %4$@ tokens",
             prettyDate(date),
             cost.asCompactCurrency(),
             calls,
@@ -859,7 +883,7 @@ func buildContributionWeeks(
     let total = active.reduce(0.0) { $0 + $1.cost }
     let avg = active.isEmpty ? 0 : total / Double(active.count)
     let peak = active.max(by: { $0.cost < $1.cost })
-    let peakLabel = peak.map { L("%@ on %@", $0.cost.asCompactCurrency(), shortContributionDate($0.date)) } ?? "—"
+    let peakLabel = peak.map { L("%1$@ on %2$@", $0.cost.asCompactCurrency(), shortContributionDate($0.date)) } ?? "—"
 
     var streak = 0
     for day in days.reversed() {
@@ -949,7 +973,7 @@ private struct ForecastInsight: View {
         guard previous > 0 else { return L("no prior month") }
         let diff = ((projection - previous) / previous) * 100
         let sign = diff >= 0 ? "+" : ""
-        return L("%@%% vs last month (%@)", sign + String(format: "%.0f", diff), previous.asCompactCurrency())
+        return L("%1$@%% vs last month (%2$@)", sign + String(format: "%.0f", diff), previous.asCompactCurrency())
     }
 }
 
@@ -1189,8 +1213,8 @@ private struct OptimizeSavingsBadge: View {
         let tokens = savingsUSD / 9.0 * 1_000_000  // ~$9/M effective tokens (Sonnet-weighted approx)
         let tokensLabel = formatTokens(tokens)
         return findingCount == 1
-            ? L("Save ~%@ / ~%@ tokens · 1 finding", savingsUSD.asCompactCurrency(), tokensLabel)
-            : L("Save ~%@ / ~%@ tokens · %lld findings", savingsUSD.asCompactCurrency(), tokensLabel, findingCount)
+            ? L("Save ~%1$@ / ~%2$@ tokens · 1 finding", savingsUSD.asCompactCurrency(), tokensLabel)
+            : L("Save ~%1$@ / ~%2$@ tokens · %3$lld findings", savingsUSD.asCompactCurrency(), tokensLabel, findingCount)
     }
 
     private func openOptimize() {
@@ -1312,7 +1336,7 @@ private struct RetryTaxSection: View {
                     }
                 }
 
-                Text(L("%lld retries across %lld edits", retryTax.retries, retryTax.editTurns))
+                Text(L("%1$lld retries across %2$lld edits", retryTax.retries, retryTax.editTurns))
                     .font(.system(size: 9.5))
                     .foregroundStyle(.quaternary)
 
@@ -1625,7 +1649,7 @@ private struct RoutingWasteSection: View {
                 }
 
                 if !routingWaste.baselineModel.isEmpty {
-                    Text(L("vs %@ @ %@/edit", routingWaste.baselineModel, routingWaste.baselineCostPerEdit.asCompactCurrency()))
+                    Text(L("vs %1$@ @ %2$@/edit", routingWaste.baselineModel, routingWaste.baselineCostPerEdit.asCompactCurrency()))
                         .font(.system(size: 9.5))
                         .foregroundStyle(.quaternary)
                 }
@@ -2301,7 +2325,7 @@ private struct KimiPlanInsight: View {
     private func loadedBody(usage: KimiUsage, idle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(usage.plan ?? "Kimi Code")
+                Text(usage.plan ?? L("Kimi Code"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
@@ -2412,7 +2436,7 @@ private struct GeminiPlanInsight: View {
     private func loadedBody(usage: GeminiUsage, idle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(usage.plan ?? "Gemini")
+                Text(usage.plan ?? L("Gemini"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
@@ -2513,7 +2537,7 @@ private struct CopilotPlanInsight: View {
     private func loadedBody(usage: CopilotUsage, idle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(usage.plan ?? "Copilot")
+                Text(usage.plan ?? L("Copilot"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
@@ -2595,7 +2619,7 @@ private struct AntigravityPlanInsight: View {
     private func loadedBody(usage: AntigravityUsage, idle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(usage.plan ?? "Antigravity")
+                Text(usage.plan ?? L("Antigravity"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
@@ -2732,14 +2756,14 @@ private struct ProjectionCaption: View {
                 : L("%@%% in reserve", String(format: "%.0f", -delta))
             if projection.compact { return stage }
             if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return L("%@ · hits 100%% %@", stage, relativeReset(hit))
+                return L("%1$@ · hits 100%% %2$@", stage, relativeReset(hit))
             }
-            return L("%@ · %@ at reset", stage, projected)
+            return L("%1$@ · %2$@ at reset", stage, projected)
         }
         switch projection.source {
         case .linear:
             if projection.willOverflow, let hit = projection.hitsLimitAt {
-                return L("On pace: %@ at reset · hits 100%% %@", projected, relativeReset(hit))
+                return L("On pace: %1$@ at reset · hits 100%% %2$@", projected, relativeReset(hit))
             }
             return L("On pace: %@ at reset", projected)
         case .historicalBaseline:

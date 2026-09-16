@@ -6,6 +6,8 @@ import {
   categoryFilters,
   dayFilters,
   EMPTY_FILTERS,
+  filterChipKey,
+  filterChipLabel,
   filtersActive,
   filtersToKey,
   modelFilters,
@@ -279,5 +281,24 @@ describe('contribution math', () => {
     const result = applyInvestigation([child], categoryFilters('coding'))
     expect(result.cost).toBeCloseTo(0.4, 10)
     expect(result.included[0]!.row.parentSessionId).toBe('root-1')
+  })
+
+  it('keys a chip by its full identity, not by the label it truncates for display', () => {
+    // Two sessions whose ids share the first 12 characters, and two projects
+    // with the same last path segment, render the SAME chip label. The key
+    // that identifies the chip to React must still tell them apart.
+    const sessionA = { provider: 'claude', sessionId: 'session-abcdefgh-1111' }
+    const sessionB = { provider: 'claude', sessionId: 'session-abcdefgh-2222' }
+    expect(filterChipLabel('sessions', sessionA)).toBe(filterChipLabel('sessions', sessionB))
+    expect(filterChipKey('sessions', sessionA)).not.toBe(filterChipKey('sessions', sessionB))
+
+    const branchA = { project: '/work/app', branch: 'main' }
+    const branchB = { project: '/personal/app', branch: 'main' }
+    expect(filterChipLabel('branches', branchA)).toBe(filterChipLabel('branches', branchB))
+    expect(filterChipKey('branches', branchA)).not.toBe(filterChipKey('branches', branchB))
+
+    // A plain dimension keys by its own value, which is already its identity.
+    expect(filterChipKey('days', '2026-09-10')).toBe('2026-09-10')
+    expect(filterChipKey('prs', 'https://github.com/o/r/pull/7')).toBe('https://github.com/o/r/pull/7')
   })
 })

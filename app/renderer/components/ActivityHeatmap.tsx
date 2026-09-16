@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 
+import { ChartTip } from './ChartTip'
 import { formatUsd } from '../lib/format'
 import { dataStartKey, localDateKey } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
@@ -98,9 +98,7 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
   }, [days])
   const activeDays = days.filter(day => !day.isFuture && day.cost > 0).length
   const [tip, setTip] = useState<{ day: HeatmapDay; x: number; y: number } | null>(null)
-  const [tipPosition, setTipPosition] = useState<{ left: number; top: number } | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const tipRef = useRef<HTMLDivElement>(null)
   const stickToNewestRef = useRef(true)
 
   // The fixed 26-week grid is wider than the compact hero slot. Start at the
@@ -132,24 +130,6 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
       observer?.disconnect()
     }
   }, [])
-
-  useLayoutEffect(() => {
-    if (!tip) {
-      setTipPosition(null)
-      return
-    }
-    const width = tipRef.current?.offsetWidth ?? 180
-    const height = tipRef.current?.offsetHeight ?? 58
-    const gutter = 8
-    const cursorGap = 12
-    let left = tip.x + cursorGap
-    if (left + width > window.innerWidth - gutter) left = tip.x - width - cursorGap
-    left = Math.max(gutter, Math.min(left, window.innerWidth - width - gutter))
-    let top = tip.y - height - cursorGap
-    if (top < gutter) top = tip.y + cursorGap
-    top = Math.max(gutter, Math.min(top, window.innerHeight - height - gutter))
-    setTipPosition({ left, top })
-  }, [tip])
 
   const head = (
     <div className={bare ? 'ov-activity-head' : 'ov-panel-head'}>
@@ -206,13 +186,8 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
     </div>
   )
   const tooltip = tip
-    ? createPortal(
-        <div
-          ref={tipRef}
-          className={`chart-tip${tipPosition ? ' on' : ''}`}
-          style={{ position: 'fixed', ...(tipPosition ?? { left: 0, top: 0 }) }}
-          role="tooltip"
-        >
+    ? (
+        <ChartTip x={tip.x} y={tip.y}>
           <div className="chart-tip-d">{formatDate(tip.day.date)}</div>
           {tip.day.noData ? (
             <div className="chart-tip-s">No data recorded</div>
@@ -222,8 +197,7 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
               <div className="chart-tip-s">{tip.day.isFuture ? 'No activity yet' : `${tip.day.calls} calls`}</div>
             </>
           )}
-        </div>,
-        document.body,
+        </ChartTip>
       )
     : null
 

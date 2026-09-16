@@ -6,7 +6,6 @@ import { EmptyNote } from '../components/EmptyState'
 import { Panel } from '../components/Panel'
 import { SegTabs } from '../components/SegTabs'
 import { SectionSkeleton } from '../components/Skeleton'
-import { SwitchingBanner } from '../components/SwitchingBanner'
 import { usePolled } from '../hooks/usePolled'
 import {
   applyVolumeBand,
@@ -168,7 +167,6 @@ function ClassicCompare({
 
   return (
     <>
-      {models.switching && <SwitchingBanner />}
       {range && <RangeNote />}
       <div className="cmp-picker" aria-label="Models being compared">
         <Dropdown
@@ -440,7 +438,6 @@ function CohortCompare({
 
   return (
     <>
-      {facets.switching && <SwitchingBanner />}
       <div className="cmp-picker" aria-label="Cohort selection">
         <Dropdown
           id="cohort-first-model"

@@ -211,7 +211,7 @@ private struct CombinedDeviceBreakdown: View {
             HStack(spacing: 4) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: 10))
-                Text(L("%lld of %lld devices", usage.combined.reachableCount, usage.combined.deviceCount))
+                Text(L("%1$lld of %2$lld devices", usage.combined.reachableCount, usage.combined.deviceCount))
                     .font(.system(size: 11, weight: .medium))
             }
             .foregroundStyle(.secondary)

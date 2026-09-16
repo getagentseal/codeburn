@@ -57,14 +57,19 @@ function rowKeyDown(event: KeyboardEvent<HTMLDivElement>, toggle: () => void): v
 
 /** Standalone entry: self-fetches the overview payload (used in tests). The App
  *  passes its shared overview poll straight into PullRequestsContent instead. */
-export function PullRequests({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
+export function PullRequests({ period, provider, range = null, onInvestigate }: {
+  period: Period
+  provider: string
+  range?: DateRange | null
+  onInvestigate?: (request: InvestigateRequest) => void
+}) {
   const overview = usePolled<MenubarPayload>(
     () => range ? codeburn.getOverview(period, provider, range) : codeburn.getOverview(period, provider),
     [period, provider, range?.from, range?.to],
   )
   // The key remounts the content on a period/provider/range switch so row state
   // (an open expansion) never survives onto the same PR rendered from new data.
-  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} />
+  return <PullRequestsContent key={`${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}`} overview={overview} period={period} provider={provider} range={range} onInvestigate={onInvestigate} />
 }
 
 export function PullRequestsContent({ overview, period, provider, range = null, onInvestigate }: {
@@ -251,6 +256,22 @@ function PrRowView({ pr, expanded, onToggle, onInvestigate }: { pr: PrRow; expan
       </div>
       {expanded && (
         <div className="pr-detail-cell">
+            {/* Drill-through entry: a control of its own, never the row. The row
+                is a toggle, so hanging the investigation off it would cost the
+                expansion; this opens the sessions that composed the PR while the
+                row stays exactly as the reader left it. The PR URL is the
+                aggregation key of the by-PR report, so it selects at the
+                destination without a lookup. */}
+            {onInvestigate && (
+              <button
+                className="ov-link pr-drill"
+                type="button"
+                title={`View sessions for ${pr.label}`}
+                onClick={() => onInvestigate({ filters: prFilters(pr.url) })}
+              >
+                View sessions for this pull request →
+              </button>
+            )}
             {categories.length > 0 ? (
               <div className="pr-detail" role="region" aria-label={`${pr.label} cost breakdown`}>
                 <div className="pr-detail-head">

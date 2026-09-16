@@ -333,6 +333,23 @@ export function clearPersistedInvestigation(): void {
   try { globalThis.localStorage?.removeItem(INVESTIGATION_SNAPSHOT_KEY) } catch { /* storage can be unavailable */ }
 }
 
+/** Stable identity of one chip — the same composite identity normalizeFilters
+ *  dedupes by and withoutFilterValue removes by. The DISPLAY label truncates (a
+ *  session id to 12 characters, a project to its last path segment), so two
+ *  distinct values can read identically; this never collapses them, which is
+ *  why the chip list keys on it. */
+export function filterChipKey(dimension: FilterDimension, value: string | BranchFilter | SessionFilter): string {
+  if (dimension === 'branches') {
+    const b = value as BranchFilter
+    return `${b.project}\u0000${b.branch}`
+  }
+  if (dimension === 'sessions') {
+    const s = value as SessionFilter
+    return `${s.provider}\u0000${s.sessionId}`
+  }
+  return value as string
+}
+
 /** Display label for a filter chip. Values the destination can resolve from
  *  loaded data pass through; the rest show raw (still honest). */
 export function filterChipLabel(dimension: FilterDimension, value: string | BranchFilter | SessionFilter): string {

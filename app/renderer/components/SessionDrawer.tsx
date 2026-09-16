@@ -8,20 +8,24 @@ import { contributeRow } from '../lib/investigation'
 import type { SessionDrillRow } from '../lib/types'
 
 /**
- * The drill-through side drawer: a session's metadata, the cost/token figures
- * that matter in the CURRENT selection next to its full totals, and every link
- * the report carries (PR URLs). All content derives from the already-loaded
- * contributions report — no transcript text ever crosses the IPC boundary and
- * the heavy breakdowns below only render while the drawer is open (lazy by
- * mount, not by fetch), so the list behind it stays responsive.
+ * The drill-through side drawer: a plain-language read of one session, then the
+ * cost/token figures and every link the report carries (PR URLs). All content
+ * derives from the already-loaded contributions report: no transcript text
+ * ever crosses the IPC boundary and the heavy breakdowns below only render
+ * while the drawer is open (lazy by mount, not by fetch), so the list behind it
+ * stays responsive.
  *
  * A11y contract: role="dialog", Escape closes, focus moves into the panel on
  * open and the PARENT returns focus to the control that opened it (the opener
  * element is still alive behind the drawer). Tab is trapped inside.
  */
-export function SessionDrawer({ row, filters, onClose }: {
+export function SessionDrawer({ row, filters, medianCost, onClose }: {
   row: SessionDrillRow
   filters: InvestigationFilters
+  /** Median cost of the sessions the list is currently showing (the searched
+   *  and filtered set). Absent when the population is too small for the
+   *  comparison to mean anything. */
+  medianCost?: number
   onClose: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
@@ -57,6 +61,12 @@ export function SessionDrawer({ row, filters, onClose }: {
   const breakdown = useMemo(() => buildBreakdowns(row), [row])
   const cacheTotal = row.inputTokens + row.cacheReadTokens
   const cacheHit = cacheTotal > 0 ? Math.round(row.cacheReadTokens / cacheTotal * 100) : 0
+  const median = medianCost !== undefined && medianCost > 0 ? medianCost : null
+  const selectedCost = contribution !== null && contribution.cost < row.cost - 1e-9 ? contribution.cost : null
+  const leadCost = selectedCost ?? row.cost
+  // Past 100x the multiple says nothing the dollar figure has not already said.
+  const ratio = median === null || leadCost / median > 100 ? null : leadCost / median
+  const foldLabel = branchPrLabel(breakdown)
 
   return (
     <>
@@ -76,24 +86,35 @@ export function SessionDrawer({ row, filters, onClose }: {
               {row.provider} · {shortenProjectPath(row.project)} · <span className="mono">{row.sessionId.slice(0, 18)}</span>
             </div>
             <div className="drawer-sub">
-              {formatDayLong(row.startedAt)} → {formatDayLong(row.endedAt)} · {formatDuration(row.durationMs)}
+              {formatDayLong(row.startedAt)} → {formatDayLong(row.endedAt)}
+              {row.durationMs > 0 && <> · {formatDuration(row.durationMs)}</>}
             </div>
           </div>
           <button type="button" className="drawer-close" aria-label="Close session details" onClick={onClose}>×</button>
         </div>
 
-        <div className="stats">
-          <Stat label="Cost" value={formatUsd(row.cost)} delta="full session" />
-          {contribution !== null && (
-            <Stat label="In selection" value={formatUsd(contribution.cost)} delta={contribution.cost < row.cost - 1e-9 ? 'part of this session' : 'whole session'} />
-          )}
-          <Stat label="Calls" value={row.calls.toLocaleString()} delta="API calls" />
-          <Stat label="Turns" value={row.turns.toLocaleString()} delta="assistant turns" />
-          <Stat label="Saved" value={formatUsd(row.savingsUSD)} delta="vs baseline" />
-          <Stat label="Input" value={formatCompact(row.inputTokens)} delta="tokens sent" />
-          <Stat label="Output" value={formatCompact(row.outputTokens)} delta="tokens generated" />
-          <Stat label="Cache read" value={formatCompact(row.cacheReadTokens)} delta={`${cacheHit}% hit`} />
-          <Stat label="Cache write" value={formatCompact(row.cacheWriteTokens)} delta="tokens cached" />
+        <p className="drawer-lead">
+          {selectedCost === null ? 'This session cost ' : 'Your selection of this session cost '}
+          <b>{formatUsd(leadCost)}</b>
+          {ratio === null ? '.' : ratio < 0.1 ? ', a fraction of your usual.' : <>, about <b>{formatRatio(ratio)}x</b> your usual.</>}
+        </p>
+
+        <div className="stats drawer-tiles">
+          <Stat
+            label="Cost"
+            value={formatUsd(leadCost)}
+            delta={selectedCost !== null
+              ? `of ${formatUsd(row.cost)} total`
+              : ratio === null
+                ? 'full session'
+                : ratio < 0.1
+                  ? <span className="down">well below median</span>
+                  : <span className={ratio >= 1 ? 'up' : 'down'}>{formatRatio(ratio)}x your median</span>}
+          />
+          <Stat label="Turns" value={row.turns.toLocaleString()} delta={`${row.calls.toLocaleString()} ${row.calls === 1 ? 'call' : 'calls'}`} />
+          {row.durationMs > 0
+            ? <Stat label="Duration" value={formatDuration(row.durationMs)} delta="wall clock" />
+            : <Stat label="Calls" value={row.calls.toLocaleString()} delta="API calls" />}
         </div>
 
         {row.isSidechain && row.parentSessionId && (
@@ -102,15 +123,57 @@ export function SessionDrawer({ row, filters, onClose }: {
 
         <DrawerBreakdown label="Models" rows={breakdown.models} />
         <DrawerBreakdown label="Task categories" rows={breakdown.categories} />
-        <DrawerBreakdown label="Branches" rows={breakdown.branches} caption="Git branch carried across turns (Claude sessions only)." />
-        {breakdown.days.length > 1 && <DrawerBreakdown label="Days" rows={breakdown.days} />}
-        <DrawerBreakdown label="Pull requests" rows={breakdown.prs} caption="A turn split across several PRs contributes its share to each — rows are not an exclusive partition." link />
-        {breakdown.unattributedPrCost > 0 && (
-          <p className="drawer-note">Not tied to a specific PR: {formatUsd(breakdown.unattributedPrCost)}</p>
+
+        <details className="drawer-fold">
+          <summary>
+            Tokens: {formatCompact(row.inputTokens)} in, {formatCompact(row.outputTokens)} out,{' '}
+            {formatCompact(row.cacheWriteTokens)} written to cache, {cacheHit}% cache hits
+          </summary>
+          <div className="drawer-fold-body">
+            <div className="stats">
+              <Stat label="Input" value={formatCompact(row.inputTokens)} delta="tokens sent" />
+              <Stat label="Output" value={formatCompact(row.outputTokens)} delta="tokens generated" />
+              <Stat label="Cache read" value={formatCompact(row.cacheReadTokens)} delta={`${cacheHit}% hit`} />
+              <Stat label="Cache write" value={formatCompact(row.cacheWriteTokens)} delta="tokens cached" />
+            </div>
+          </div>
+        </details>
+
+        {foldLabel !== null && (
+          <details className="drawer-fold">
+            <summary>Branches and pull requests: {foldLabel}</summary>
+            <div className="drawer-fold-body">
+              <DrawerBreakdown label="Branches" rows={breakdown.branches} caption="Git branch carried across turns (Claude sessions only)." />
+              {breakdown.days.length > 1 && <DrawerBreakdown label="Days" rows={breakdown.days} />}
+              <DrawerBreakdown label="Pull requests" rows={breakdown.prs} caption="A turn that touched several PRs counts toward each of them, so the rows can add up to more than the total." link />
+              {breakdown.unattributedPrCost > 0 && (
+                <p className="drawer-note">Not tied to a specific PR: {formatUsd(breakdown.unattributedPrCost)}</p>
+              )}
+            </div>
+          </details>
         )}
+
+        <p className="drawer-note">
+          {row.savingsUSD > 0 ? `Saved vs baseline: ${formatUsd(row.savingsUSD)}.` : 'Saved vs baseline: none this session.'}
+        </p>
       </aside>
     </>
   )
+}
+
+function formatRatio(ratio: number): string {
+  return (ratio >= 10 ? Math.round(ratio) : Math.round(ratio * 10) / 10).toLocaleString('en-US')
+}
+
+function branchPrLabel({ branches, prs }: { branches: BreakdownRow[]; prs: BreakdownRow[] }): string | null {
+  const parts: string[] = []
+  // A lone `main` with no PRs is every session's default: nothing to unfold.
+  if (branches.length > 0 && !(branches.length === 1 && branches[0]!.label === 'main' && prs.length === 0)) {
+    const named = branches.slice(0, 2).map(entry => entry.label).join(', ')
+    parts.push(branches.length > 2 ? `${named}, +${branches.length - 2} more` : named)
+  }
+  if (prs.length > 0) parts.push(`${prs.length} PR${prs.length === 1 ? '' : 's'}`)
+  return parts.length > 0 ? parts.join(', ') : null
 }
 
 type BreakdownRow = { key: string; label: string; cost: number; approx?: boolean; url?: string }

@@ -399,6 +399,9 @@ private struct GeneralSettingsTab: View {
     @AppStorage(EarlyQuotaResetPreference.defaultsKey)
     private var notifyAboutEarlyResets: Bool = true
 
+    @AppStorage(QuotaCrossingPreference.defaultsKey)
+    private var notifyAboutQuotaCrossings: Bool = true
+
     private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
     private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
 
@@ -552,9 +555,10 @@ private struct GeneralSettingsTab: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Toggle(L("Notify me when a quota resets early"), isOn: $notifyAboutEarlyResets)
-                Text(L("Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back. The Capacity Dock shows the same notice for 12 hours either way."))
+                Text(L("Posts a notification when a provider resets a usage limit before its scheduled time, so you know the capacity is back."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                Toggle(L("Quota crossings (%1$lld%% and %2$lld%%)", 80, 100), isOn: $notifyAboutQuotaCrossings)
             }
 
             Section(L("Terminal")) {

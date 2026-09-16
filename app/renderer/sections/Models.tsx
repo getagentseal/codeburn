@@ -7,7 +7,6 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
-import { SwitchingBanner } from '../components/SwitchingBanner'
 import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
@@ -114,7 +113,6 @@ function ModelsUsage({
 
   return (
     <>
-      {report.switching && <SwitchingBanner />}
       {report.error && <StaleBanner error={report.error} />}
       <Panel className="scroll-x">
         {report.data.length ? (
@@ -161,7 +159,6 @@ function AuditLens({
 
   return (
     <>
-      {report.switching && <SwitchingBanner />}
       {report.error && <StaleBanner error={report.error} />}
       <Panel className="scroll-x">
         {report.data.length ? (

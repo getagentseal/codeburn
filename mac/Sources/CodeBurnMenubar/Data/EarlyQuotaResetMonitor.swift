@@ -16,25 +16,13 @@ import Foundation
 /// - the scheduled reset time of every announcement already made, matched with
 ///   the detector's own skew tolerance, so a vendor that briefly serves the old
 ///   cycle again — possibly from a replica whose timestamp differs by a minute
-///   or two — cannot announce the same reset twice, across relaunches included;
-/// - the latest event, for the Capacity Dock band;
-/// - one reset time per observed cycle, for the 30-day history summary.
-///
-/// Every key is scoped to one provider by the record it lives in, so an early
-/// reset on one provider cannot move another's baseline, dedupe record, band or
-/// history. The record's defaults key is unchanged from the one this feature
-/// first shipped with, so a Claude event a user has already been notified about
-/// is still recognised as announced after the update.
+///   or two — cannot announce the same reset twice, across relaunches included.
 @MainActor
 final class EarlyQuotaResetMonitor {
     struct Observation: Equatable {
         let windowKey: String
         let windowName: String
         let windowSeconds: Int?
-        /// Absolute usage in the provider's units, when reported; folded into
-        /// the stored reading so signal 2 can tell a cleared counter from a
-        /// raised limit.
-        var usedUnits: Double? { reading?.usedUnits }
         /// Nil when the window was not in this fetch.
         let reading: EarlyQuotaResetReading?
     }
@@ -44,14 +32,6 @@ final class EarlyQuotaResetMonitor {
         var windows: [String: EarlyQuotaResetReading]
         /// Scheduled reset times already announced, per window key.
         var announced: [String: [Date]]
-        var latestEvent: EarlyQuotaResetEvent?
-        /// One entry per observed cycle, per window key, oldest first, pruned to
-        /// the same 30-day horizon. The history summary is read from here for
-        /// every provider but Claude, which has the snapshot store on disk.
-        ///
-        /// Optional so a record written before this key existed still decodes:
-        /// a missing ledger is an empty one, not a corrupt state.
-        var observedResets: [String: [Date]]?
     }
 
     /// Announcements older than the snapshot store's horizon are dropped.
@@ -128,64 +108,16 @@ final class EarlyQuotaResetMonitor {
                 windows: windows,
                 announced: announced
                     .mapValues { $0.filter { $0 >= cutoff } }
-                    .filter { !$0.value.isEmpty },
-                latestEvent: headline ?? stored?.latestEvent,
-                observedResets: Self.recordCycles(
-                    observations,
-                    into: stored?.observedResets ?? [:],
-                    cutoff: cutoff
-                )
+                    .filter { !$0.value.isEmpty }
             ),
             providerID: providerID
         )
 
         guard let headline else { return nil }
         // Persisted before delivery: an event is one-shot even when the user has
-        // notifications off or denied, and the dock band still shows it.
+        // notifications off or denied.
         await post(headline)
         return headline
-    }
-
-    /// The latest announced event for the dock band, while it is still recent.
-    func visibleEvent(providerID: String, now: Date = Date()) -> EarlyQuotaResetEvent? {
-        guard let event = loadState(providerID: providerID)?.latestEvent else { return nil }
-        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
-    }
-
-    /// The reset times this provider's window has been seen carrying, oldest
-    /// first, for the 30-day history summary. Empty for a window this Mac has
-    /// no record of.
-    func observedResets(providerID: String, windowKey: String) -> [Date] {
-        loadState(providerID: providerID)?.observedResets?[windowKey] ?? []
-    }
-
-    /// Fold this fetch's readings into the per-window cycle ledger. One entry
-    /// per cycle, not per fetch: a reset time inside the detector's skew
-    /// tolerance of the newest entry is the same cycle re-reported with a
-    /// jittered timestamp, and replaces it. A reset time that moved backwards is
-    /// skew, and is dropped rather than recorded as a cycle that never ran.
-    private static func recordCycles(
-        _ observations: [Observation],
-        into stored: [String: [Date]],
-        cutoff: Date
-    ) -> [String: [Date]] {
-        var ledger = stored
-        for observation in observations {
-            guard let reading = observation.reading, reading.isWellFormed else { continue }
-            var cycles = ledger[observation.windowKey] ?? []
-            if let last = cycles.last {
-                let move = reading.resetsAt.timeIntervalSince(last)
-                if abs(move) < EarlyQuotaResetDetector.skewTolerance {
-                    cycles[cycles.count - 1] = reading.resetsAt
-                } else if move > 0 {
-                    cycles.append(reading.resetsAt)
-                }
-            } else {
-                cycles.append(reading.resetsAt)
-            }
-            ledger[observation.windowKey] = cycles.filter { $0 >= cutoff }
-        }
-        return ledger.filter { !$0.value.isEmpty }
     }
 
     /// Called on user disconnect so a reconnect, possibly to another account,

@@ -9,11 +9,10 @@ import { Panel } from './components/Panel'
 import { Sidebar, type Section } from './components/Sidebar'
 import { Splash } from './components/Splash'
 import { ToastHost } from './components/ToastHost'
-import { SwitchingBanner } from './components/SwitchingBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { rangeLabel, TopBar } from './components/TopBar'
 import { Window } from './components/Window'
-import { clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled } from './hooks/usePolled'
+import { clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled, usePolledInFlight } from './hooks/usePolled'
 import { readDailyBudget } from './lib/budget'
 import { formatCompact, formatUsd, setActiveCurrency } from './lib/format'
 import {
@@ -883,6 +882,7 @@ function AppMain() {
   const scopeCaption = scope === 'combined'
     ? `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · Combined`
     : `${customRange ? rangeLabel(customRange) : PERIOD_LABELS[period]} · ${providerLabel}${activeConfigLabel ? ` · ${activeConfigLabel}` : ''}`
+  const refreshing = usePolledInFlight() || overview.switching || (!!headlineSnapshot && overview.loading)
   const selectedReportKeys = selectedReportMemoKeys(section, period, provider, customRange, activeOverviewKey)
   const selectedReportTimestamps = selectedReportKeys.map(polledMemoTimestamp)
   const selectedLastSuccessAt = selectedReportKeys.length > 0 && selectedReportTimestamps.every((value): value is number => value != null)
@@ -895,9 +895,8 @@ function AppMain() {
       <ToastHost />
       <Splash hasData={overview.data != null || headlineSnapshot != null} hasError={overview.error != null && !overviewCold} />
       {onboardingStatus && <Onboarding defaultEnabled={onboardingStatus.defaultEnabled} onDone={finishOnboarding} />}
-      <div className="ct" aria-busy={overview.switching || (!!headlineSnapshot && overview.loading)}>
-        <div className={overview.switching || (!!headlineSnapshot && overview.loading) ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
-        {(overview.switching || (!!headlineSnapshot && overview.loading)) && <SwitchingBanner />}
+      <div className="ct" aria-busy={refreshing}>
+        <div className={refreshing ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
         <UpdateBanner />
         <IndexingBanner payload={overview.data ?? null} />
         <DailyBudgetBanner payload={overview.data ?? null} provider={provider} />
@@ -933,7 +932,11 @@ function AppMain() {
               {section === 'overview' ? (
                 <OverviewContent period={period} provider={provider} range={customRange} overview={overview} onNavigate={navigate} onInvestigate={investigate} ready={ready} scope={scope} headlineSnapshot={headlineSnapshot} />
               ) : section === 'sessions' ? (
-                <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={visibleProviderEntries} onProviderChange={onProviderSelect} ready={ready} filters={filters} onFiltersChange={next => commitNav({ filters: next })} openSessionId={openSessionId} onSessionOpen={key => commitNav({ sessionId: key })} onSessionClose={() => commitNav({ sessionId: null })} sort={nav.sort as SessionSort} onSortChange={value => commitNav({ sort: value })} visibleCount={nav.visibleCount} onVisibleCountChange={value => commitNav({ visibleCount: value })} />
+                // A new sort or a changed selection reorders the whole list, so
+                // the pagination depth resets IN THE SAME commit — one history
+                // entry, and the depth a Back/Forward restores stays whatever it
+                // was when that position was committed.
+                <Sessions period={period} provider={provider} range={customRange} refreshToken={refreshToken} detectedProviders={visibleProviderEntries} onProviderChange={onProviderSelect} ready={ready} filters={filters} onFiltersChange={next => commitNav({ filters: next, visibleCount: INITIAL_VISIBLE })} openSessionId={openSessionId} onSessionOpen={key => commitNav({ sessionId: key })} onSessionClose={() => commitNav({ sessionId: null })} sort={nav.sort as SessionSort} onSortChange={value => commitNav({ sort: value, visibleCount: INITIAL_VISIBLE })} visibleCount={nav.visibleCount} onVisibleCountChange={value => commitNav({ visibleCount: value })} />
               ) : section === 'pullRequests' ? (
                 <PullRequestsContent overview={overview} period={period} provider={provider} range={customRange} onInvestigate={investigate} />
               ) : section === 'spend' ? (
@@ -960,11 +963,37 @@ function AppMain() {
               { k: shortcutLabel(','), label: 'Settings' },
               { k: shortcutLabel('R'), label: 'Refresh' },
             ]}
-            right={refreshedLabel(selectedLastSuccessAt, false, now)}
+            right={<RefreshMark refreshing={refreshing} label={refreshedLabel(selectedLastSuccessAt, false, now)} />}
           />
         )}
       </div>
     </Window>
+  )
+}
+
+/** Footer refresh state. The icon is always in the DOM at a fixed 12px so the
+ *  "refreshed Ns ago" text never moves between idle and in-flight. */
+function RefreshMark({ refreshing, label }: { refreshing: boolean; label: string }) {
+  return (
+    <>
+      <svg
+        className={refreshing ? 'refresh-mark spinning' : 'refresh-mark'}
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M10.1 6a4.1 4.1 0 1 1-1.25-2.95" />
+        <path d="M10.6 1.3v2.9H7.7" />
+      </svg>
+      <span className="sr-only" role="status" aria-live="polite">{refreshing ? 'Refreshing' : ''}</span>
+      <span>{label}</span>
+    </>
   )
 }
 

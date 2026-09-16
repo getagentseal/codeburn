@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 
+import { calculateCost } from '../../src/models.js'
 import { createOpenCodeProvider } from '../../src/providers/opencode.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
 
@@ -101,6 +102,25 @@ describe('opencode file-based provider - discovery', () => {
 })
 
 describe('opencode file-based provider - parsing', () => {
+  it('bills reasoning tokens at the output rate', async () => {
+    await writeSession({
+      messages: [{
+        id: 'msg_a',
+        data: {
+          role: 'assistant', modelID: 'claude-sonnet-4-20250514', cost: 0,
+          tokens: { input: 1000, output: 200, reasoning: 500, cache: { read: 0, write: 0 } },
+          time: { created: 1 },
+        },
+        parts: [{ type: 'text', text: 'done' }],
+      }],
+    })
+    const calls = await parseAll()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.reasoningTokens).toBe(500)
+    // Same rule as the SQLite twin: reasoning is billed as output. (#1334)
+    expect(calls[0]!.costUSD).toBeCloseTo(calculateCost('claude-sonnet-4-20250514', 1000, 200 + 500, 0, 0, 0), 10)
+  })
+
   it('extracts tokens, tools, bash commands, and the preceding user message', async () => {
     await writeSession({
       messages: [

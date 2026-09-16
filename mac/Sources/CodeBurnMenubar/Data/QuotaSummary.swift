@@ -96,17 +96,17 @@ struct QuotaSummary: Equatable {
     /// to "you're over" (red) — matches what the user expects from a warning
     /// indicator in the menu bar.
     static func severity(for percent: Double) -> Severity {
-        if percent >= 0.9 { return .danger }
-        if percent >= 0.75 { return .critical }
-        if percent >= 0.5 { return .warning }
+        if percent >= 0.95 { return .danger }
+        if percent >= 0.7 { return .critical }
+        if percent >= 0.6 { return .warning }
         return .normal
     }
 
     enum Severity {
-        case normal     // <50%   green
-        case warning    // 50-75% yellow
-        case critical   // 75-90% orange
-        case danger     // >=90%  red
+        case normal     // <60%   green
+        case warning    // 60-70% yellow
+        case critical   // 70-95% orange
+        case danger     // >=95%  red
     }
 
     /// The glance value (percent + color) for Capacity Dock. Every provider is
@@ -169,8 +169,8 @@ extension QuotaSummary.Window {
         let hours = minutes / 60
         let days = hours / 24
         // d/h/m are unit abbreviations; zh-Hans uses 天/小时/分.
-        if days > 0 { return L("%lldd %lldh", days, hours % 24) }
-        if hours > 0 { return L("%lldh %lldm", hours, minutes % 60) }
+        if days > 0 { return L("%1$lldd %2$lldh", days, hours % 24) }
+        if hours > 0 { return L("%1$lldh %2$lldm", hours, minutes % 60) }
         return L("%lldm", minutes)
     }
 

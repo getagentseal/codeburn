@@ -120,8 +120,8 @@ enum CodexBankedResetPresentation {
         if let grant = credits.latestGrant, let grantedAt = grant.grantedAt {
             let type = resetTypeLabel(grant.resetType)
             parts.append(grantedAt > now
-                ? L("next %@ lands %@", type, compactAge(of: grantedAt, now: now))
-                : L("latest %@ granted %@", type, compactAge(of: grantedAt, now: now)))
+                ? L("next %1$@ lands %2$@", type, compactAge(of: grantedAt, now: now))
+                : L("latest %1$@ granted %2$@", type, compactAge(of: grantedAt, now: now)))
         }
         if let expiry = credits.nextExpiresAt {
             parts.append(L("next expires %@", compactAge(of: expiry, now: now)))
@@ -147,8 +147,8 @@ enum CodexBankedResetPresentation {
         var body: String
         if let grantedAt = grant.grantedAt {
             body = grantedAt > now
-                ? L("A %@ lands %@.", type, compactAge(of: grantedAt, now: now))
-                : L("A %@ was added to your account %@.", type, compactAge(of: grantedAt, now: now))
+                ? L("A %1$@ lands %2$@.", type, compactAge(of: grantedAt, now: now))
+                : L("A %1$@ was added to your account %2$@.", type, compactAge(of: grantedAt, now: now))
         } else {
             body = L("A %@ was added to your account.", type)
         }

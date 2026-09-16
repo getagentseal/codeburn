@@ -22,12 +22,47 @@ function getSalt(): string {
   return salt
 }
 
-export function pseudonym(name: string): string {
-  return `project-${createHash('sha256').update(getSalt() + name).digest('hex').slice(0, 6)}`
+function hashed(input: string): string {
+  return createHash('sha256').update(getSalt() + input).digest('hex').slice(0, 6)
 }
 
-function redactSessionDetails(details: Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }>): Array<{ cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; date: string; models: Array<{ name: string; cost: number; savingsUSD: number }> }> {
-  return details.map(d => ({ ...d, date: '', models: [] }))
+export function pseudonym(name: string): string {
+  return `project-${hashed(name)}`
+}
+
+/// Branch names carry ticket ids, customer names and feature codenames, so a
+/// caller that asked not to see project names must not see them either. Stable
+/// per branch like the project pseudonym, and domain-separated so a branch and a
+/// project sharing a name do not hash to the same digest.
+function branchPseudonym(branch: string): string {
+  return `branch-${hashed(`branch:${branch}`)}`
+}
+
+/// Drill-through session identity (`sessionId`): opaque, but it is the row key
+/// that pairs with `projectKey`, and a Codex id embeds the rollout timestamp
+/// that this pass blanks out of `date`. Pseudonymized rather than dropped so
+/// rows referring to the same session still line up.
+function sessionPseudonym(id: string): string {
+  return `session-${hashed(`session:${id}`)}`
+}
+
+/// PR rows name the repository in both the full URL (the aggregation key) and
+/// the `owner/repo#123` label, so a caller that asked not to see project names
+/// must not see them either. Pseudonymized from the URL so rows referring to
+/// the same PR still line up; the numbers stay untouched.
+function prPseudonym(url: string): string {
+  return `pr-${hashed(`pr:${url}`)}`
+}
+
+type SessionDetails = MenubarPayload['current']['topProjects'][number]['sessionDetails']
+
+function redactSessionDetails(details: SessionDetails): SessionDetails {
+  return details.map(d => ({
+    ...d,
+    date: '',
+    models: [],
+    ...(d.sessionId ? { sessionId: sessionPseudonym(d.sessionId) } : {}),
+  }))
 }
 
 export function redactProjectNames(payload: MenubarPayload, includeNames: boolean): MenubarPayload {
@@ -45,7 +80,37 @@ export function redactProjectNames(payload: MenubarPayload, includeNames: boolea
         ...(p.id ? { id: pseudonym(p.id) } : {}),
         sessionDetails: p.sessionDetails ? redactSessionDetails(p.sessionDetails) : [],
       })),
-      topSessions: payload.current.topSessions.map(s => ({ ...s, project: pseudonym(s.project) })),
+      topSessions: payload.current.topSessions.map(s => ({
+        ...s,
+        project: pseudonym(s.project),
+        // `projectKey` is the raw sessions-list row key: a dash-encoded absolute
+        // working directory. Hashed like `topProjects[].id`, which is the same
+        // kind of value.
+        ...(s.projectKey ? { projectKey: pseudonym(s.projectKey) } : {}),
+        ...(s.sessionId ? { sessionId: sessionPseudonym(s.sessionId) } : {}),
+      })),
+      ...(payload.current.byBranch
+        ? {
+            byBranch: payload.current.byBranch.map(b => ({
+              ...b,
+              // A null branch is unbranched spend inside a branch-bearing
+              // session, not a name: it stays null.
+              branch: b.branch === null ? null : branchPseudonym(b.branch),
+            })),
+          }
+        : {}),
+      ...(payload.current.pullRequests
+        ? {
+            pullRequests: {
+              ...payload.current.pullRequests,
+              rows: payload.current.pullRequests.rows.map(row => ({
+                ...row,
+                url: prPseudonym(row.url),
+                label: prPseudonym(row.url),
+              })),
+            },
+          }
+        : {}),
     },
     history: {
       ...payload.history,

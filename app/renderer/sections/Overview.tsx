@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import gsap from 'gsap'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { ActivityHeatmap } from '../components/ActivityHeatmap'
+import { ChartTip } from '../components/ChartTip'
 import { EmptyNote } from '../components/EmptyState'
 import { ListRow } from '../components/ListRow'
 import { SectionSkeleton } from '../components/Skeleton'
@@ -562,28 +562,8 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
   if (daily.length > 45 && tickIndexes.at(-1) !== daily.length - 1) tickIndexes.push(daily.length - 1)
   const ticks = tickIndexes.map(index => daily[index])
   const [tip, setTip] = useState<{ day: DailyHistoryEntry; x: number; y: number } | null>(null)
-  const [tipPosition, setTipPosition] = useState<{ left: number; top: number } | null>(null)
-  const tipRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<HTMLDivElement>(null)
   useBarGrowIn(chartRef, '.col', [animateKey])
-
-  useLayoutEffect(() => {
-    if (!tip) {
-      setTipPosition(null)
-      return
-    }
-    const width = tipRef.current?.offsetWidth ?? 220
-    const height = tipRef.current?.offsetHeight ?? 62
-    const gutter = 8
-    const cursorGap = 12
-    let left = tip.x + cursorGap
-    if (left + width > window.innerWidth - gutter) left = tip.x - width - cursorGap
-    left = Math.max(gutter, Math.min(left, window.innerWidth - width - gutter))
-    let top = tip.y - height - cursorGap
-    if (top < gutter) top = tip.y + cursorGap
-    top = Math.max(gutter, Math.min(top, window.innerHeight - height - gutter))
-    setTipPosition({ left, top })
-  }, [tip])
 
   return (
     <>
@@ -625,13 +605,8 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
         <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? `${formatUsd(peak.cost)} · ${formatShortDay(peak.date)}` : '$0.00'}</strong></div>
         <div className="ov-summary-chip"><span>Yesterday</span><strong>{formatUsd(yesterday?.cost ?? 0)}</strong></div>
       </div>
-      {tip && createPortal(
-        <div
-          ref={tipRef}
-          className={`chart-tip${tipPosition ? ' on' : ''}`}
-          style={{ position: 'fixed', ...(tipPosition ?? { left: 0, top: 0 }) }}
-          role="tooltip"
-        >
+      {tip && (
+        <ChartTip x={tip.x} y={tip.y}>
           <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
           {isNoData(tip.day) ? (
             <div className="chart-tip-s">No data recorded</div>
@@ -641,8 +616,7 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: {
               <div className="chart-tip-s">{tip.day.calls} calls · {tip.day.topModels[0]?.name ?? 'No model'} led</div>
             </>
           )}
-        </div>,
-        document.body,
+        </ChartTip>
       )}
     </>
   )
@@ -795,7 +769,6 @@ export function OverviewContent({
               <div className="ov-hero-top"><span className="ov-label">{headlineSnapshot.label}</span><span className="ov-streak">exact {capturedLabel}</span></div>
               <div className="ov-hero-num" data-countup={headlineSnapshot.cost}>{headlineCost}</div>
               <div className="ov-hero-sub">{headlineSnapshot.calls.toLocaleString('en-US')} calls · sessions updating</div>
-              <p className="ov-widget-caption">Current totals, charts, sessions, and efficiency are refreshing in the background.</p>
             </div>
           </div>
           <SectionSkeleton label="Updating detailed drill-downs…" rows={3} chart />
@@ -845,8 +818,8 @@ export function OverviewContent({
   const weeklyPct = weekPrior > 0 ? Math.round(Math.abs((weekNow - weekPrior) / weekPrior * 100)) : null
   const weeklyDirection = weekNow >= weekPrior ? 'higher' : 'lower'
   const topModel = data.current.topModels[0]
-  const saved = actReport.data?.totals.realizedCostUSD ?? 0
-  const applied = saved > 0 ? (actReport.data?.totals.measuredActions ?? 0) : 0
+  const saved = actReport.data?.totals?.realizedCostUSD ?? 0
+  const applied = saved > 0 ? (actReport.data?.totals?.measuredActions ?? 0) : 0
   const localSaved = data.current.localModelSavings.totalUSD
   // A custom range has no meaningful "vs last week" or month-to-date baseline.
   const signals = deriveSignals(data, now, rangeActive)

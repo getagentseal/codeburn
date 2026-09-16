@@ -6,7 +6,6 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import type { Section } from '../components/Sidebar'
 import { StaleBanner } from '../components/StaleBanner'
-import { SwitchingBanner } from '../components/SwitchingBanner'
 import { usePolled } from '../hooks/usePolled'
 import { formatConverted } from '../lib/format'
 import { codeburn } from '../lib/ipc'
@@ -102,7 +101,6 @@ export function Plans({ period, refreshToken = 0, onNavigate, ready = true }: { 
         </button>
       </div>
       <div className={motionClass('body', 'section-fade')}>
-        {(quota.switching || budgetReport.switching) && <SwitchingBanner />}
         {budgetReport.data && budgetReport.error && <StaleBanner error={budgetReport.error} />}
         {renderQuota(quota.data, quota.error, reconnect)}
         {renderBudgetPlans(budgetReport.data, budgetReport.error, manualPlans)}

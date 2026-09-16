@@ -250,7 +250,7 @@ private struct EmptyProviderState: View {
             Image(systemName: "tray")
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
-            Text(L("No %@ data for %@", provider.displayLabel, periodLabel))
+            Text(L("No %1$@ data for %2$@", provider.displayLabel, periodLabel))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -417,8 +417,8 @@ private struct Header: View {
                 AccentPicker()
             }
             // Compact warning row when any connected provider crosses 70%.
-            // Lists all warning providers with their worst-window percent so
-            // the user knows whether to slow down on Claude, Codex, or both.
+            // Lists every warning provider with its worst window: the label,
+            // percent and reset, so a 5-hour figure is never read as weekly.
             QuotaWarningRow(status: store.aggregateQuotaStatus)
         }
         .padding(.horizontal, 14)
@@ -429,51 +429,45 @@ private struct Header: View {
 
 private struct QuotaWarningRow: View {
     let status: AppStore.AggregateQuotaStatus
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if !status.warnings.isEmpty {
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: severityIcon)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(severityColor)
-                Text(message)
+                    .foregroundStyle(foreground)
+                // One line per provider: "Claude · 5-hour 71% · resets in 3h 12m".
+                Text(QuotaWarningPresentation.message(for: status.warnings))
                     .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(severityColor)
+                    .foregroundStyle(foreground)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(severityColor.opacity(0.12))
+                    .fill(pillFill)
             )
         }
     }
 
-    private var message: String {
-        let parts = status.warnings.map { "\($0.name) \(Int($0.percent.rounded()))%" }
-        if parts.count == 1 {
-            // Reads "Claude over limit (105%)" when any provider exceeds the
-            // quota cap, instead of the awkward "Claude 105% of quota used".
-            if case .danger = status.severity {
-                return L(
-                    "%@ over limit (%lld%%)",
-                    status.warnings[0].name,
-                    Int(status.warnings[0].percent.rounded())
-                )
-            }
-            return L("%@ of quota used", parts[0])
-        }
-        return parts.joined(separator: " · ")
+    private var tone: QuotaWarningPalette.Tone? { QuotaWarningPalette.Tone(status.severity) }
+
+    private var scheme: QuotaWarningPalette.Scheme { colorScheme == .dark ? .dark : .light }
+
+    /// Text and glyph. Not the tint itself: amber on a 12% amber wash is
+    /// unreadable in light mode, so each scheme has an AA-clearing foreground.
+    private var foreground: Color {
+        guard let tone else { return .secondary }
+        return Color(quotaWarning: QuotaWarningPalette.foreground(tone, scheme))
     }
 
-    private var severityColor: Color {
-        switch status.severity {
-        case .normal:   return .secondary
-        case .warning:  return .yellow
-        case .critical: return .orange
-        case .danger:   return .red
-        }
+    private var pillFill: Color {
+        guard let tone else { return Color.secondary.opacity(QuotaWarningPalette.pillOpacity) }
+        return Color(quotaWarning: QuotaWarningPalette.tint(tone, scheme))
+            .opacity(QuotaWarningPalette.pillOpacity)
     }
 
     private var severityIcon: String {
@@ -483,6 +477,12 @@ private struct QuotaWarningRow: View {
         case .critical: return "exclamationmark.triangle"
         case .danger:   return "octagon"
         }
+    }
+}
+
+private extension Color {
+    init(quotaWarning rgb: QuotaWarningPalette.RGB) {
+        self.init(.sRGB, red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 }
 

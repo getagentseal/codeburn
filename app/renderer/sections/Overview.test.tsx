@@ -454,6 +454,20 @@ describe('Overview', () => {
     expect(screen.queryByText(/across \d+ fix/)).not.toBeInTheDocument()
   })
 
+  it('renders when the act report carries no totals', async () => {
+    const now = new Date()
+    getOverview.mockResolvedValue(makePayload(now))
+    // A payload persisted by an older build (or any CLI that answered `{}`) is
+    // replayed from the durable report snapshot before revalidation.
+    getActReport.mockResolvedValue({} as ActReportJson)
+
+    render(<Overview period="30days" provider="all" />)
+
+    await waitFor(() => expect(getActReport).toHaveBeenCalled())
+    expect(await screen.findByText('$312.40')).toBeInTheDocument()
+    expect(screen.queryByText('Saved by applied fixes')).not.toBeInTheDocument()
+  })
+
   it('zero-fills a contiguous 30-day window from sparse history', async () => {
     const now = new Date()
     const payload = makePayload(now)

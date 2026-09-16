@@ -9,10 +9,11 @@ struct UsageDataSnapshot: Equatable, Sendable {
 /// full Node parse with a full Swift walk of the same corpus.
 enum UsageDataChangeGuard {
     /// Unchanged-skips are honored for at most this long after the last
-    /// successful fetch. The root list below tracks the CLI's provider
-    /// discovery by hand, so a provider missing from it must degrade to
-    /// "refreshes every 30 minutes", never "stale forever".
-    static let maxSkipIntervalSeconds: TimeInterval = 30 * 60
+    /// successful fetch. The snapshot below stats directories, so a session
+    /// appending to an existing transcript looks unchanged for as long as the
+    /// skip lasts; five minutes matches the resident serve child's own reuse
+    /// cap, which is what makes the refresh it forces cheap.
+    static let maxSkipIntervalSeconds: TimeInterval = 5 * 60
 
     static func shouldSkip(
         current: UsageDataSnapshot,
@@ -92,6 +93,8 @@ enum UsageDataChangeGuard {
         add(path(applicationSupport, "Kiro", "User", "workspaceStorage"), scanFirstLevelDirectories: false)
         let kimiHome = expand(environment["KIMI_SHARE_DIR"] ?? path(homeDirectory, ".kimi"), homeDirectory: homeDirectory)
         add(path(kimiHome, "sessions"), scanFirstLevelDirectories: false)
+        let kimiCodeHome = expand(environment["KIMI_CODE_HOME"] ?? path(homeDirectory, ".kimi-code"), homeDirectory: homeDirectory)
+        add(path(kimiCodeHome, "sessions"))
         add(path(homeDirectory, ".lingtai"), scanFirstLevelDirectories: false)
         add(path(homeDirectory, ".lingtai-tui"), scanFirstLevelDirectories: false)
         let vibeHome = expand(environment["VIBE_HOME"] ?? path(homeDirectory, ".vibe"), homeDirectory: homeDirectory)
@@ -154,7 +157,7 @@ enum UsageDataChangeGuard {
         return attributes[.modificationDate] as? Date
     }
 
-    private static func claudeConfigDirectories(environment: [String: String], homeDirectory: String) -> [String] {
+    static func claudeConfigDirectories(environment: [String: String], homeDirectory: String) -> [String] {
         if let multi = environment["CLAUDE_CONFIG_DIRS"], !multi.isEmpty {
             return multi.split(separator: ":").map { expand(String($0), homeDirectory: homeDirectory) }
         }

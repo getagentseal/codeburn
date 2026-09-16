@@ -110,10 +110,15 @@ function PluginsList() {
       <h1>Plugins</h1>
       {error && <div className={styles.error}>{error}</div>}
       {plugins.length === 0 ? (
-        <div className={styles.empty}>
-          <p>No plugins installed</p>
-          <button className="btnp" onClick={() => void loadPlugins()}>Refresh</button>
-          <button className="btnp btnp-primary" onClick={() => setShowInstallFlow(true)} style={{ marginLeft: '0.5rem' }}>Install plugin</button>
+        <div className={`card ${styles.empty}`}>
+          <h2 className={styles.emptyTitle}>Coming soon</h2>
+          <p className={styles.emptyBody}>
+            Plugins will let CodeBurn do more than count. The first one ships with CodeBurn Teams: it sends your session outcomes, retries and kind of work to your team dashboard, and nothing else.
+          </p>
+          <p className={styles.emptyBody}>Until then, everything on the other screens stays local to this machine.</p>
+          <p className={styles.emptyFooter}>
+            Have a plugin file already? <button type="button" className="set-text-button" onClick={() => setShowInstallFlow(true)}>Install it</button>
+          </p>
         </div>
       ) : (
         <div className={styles.list}>
@@ -167,9 +172,11 @@ function PluginsList() {
           ))}
         </div>
       )}
-      <button className="btnp btnp-primary" onClick={() => setShowInstallFlow(true)} style={{ marginTop: '1.5rem' }}>
-        Install plugin
-      </button>
+      {plugins.length > 0 && (
+        <button className="btnp btnp-primary" onClick={() => setShowInstallFlow(true)} style={{ marginTop: '1.5rem' }}>
+          Install plugin
+        </button>
+      )}
 
       {detailsPlugin && (
         <PluginDetailsModal

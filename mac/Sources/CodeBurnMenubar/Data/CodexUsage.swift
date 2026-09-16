@@ -147,7 +147,7 @@ struct CodexUsage: Sendable, Equatable {
             }
             // The two figures are already grouped by the formatter above, so
             // they are substituted formatted and only the sentence is translated.
-            let base = L("Monthly usage limit · %@ / %@ credits", text(used), text(limit))
+            let base = L("Monthly usage limit · %1$@ / %2$@ credits", text(used), text(limit))
             return reached ? L("%@ · limit reached", base) : base
         }
 

@@ -9,7 +9,6 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { SessionDrawer } from '../components/SessionDrawer'
 import { StaleBanner } from '../components/StaleBanner'
-import { SwitchingBanner } from '../components/SwitchingBanner'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
@@ -229,6 +228,16 @@ export function Sessions({
     ].some(value => value.toLowerCase().includes(q)))
   }, [selection, q])
 
+  // "Your usual" for the drawer's lead sentence: the median over the rows the
+  // list is actually showing. Under five rows a median is noise, so the drawer
+  // drops the comparison instead.
+  const medianCost = useMemo(() => {
+    if (searched.length < 5) return undefined
+    const sorted = searched.map(({ row }) => row.cost).sort((left, right) => left - right)
+    const mid = sorted.length >> 1
+    return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
+  }, [searched])
+
   const summary = useMemo(() => {
     if (investigating) {
       return {
@@ -251,7 +260,14 @@ export function Sessions({
   }, [investigating, searched, selection.unattributable])
   const included = summary.included
 
+  // Back to the first page when the list is reordered or re-populated under the
+  // reader. This writes the INTERNAL depth, so it applies to the uncontrolled
+  // wiring only: a parent that owns visibleCount (the app, which keeps it in the
+  // nav history) resets it in the same commit as the sort/selection change it
+  // owns. Pushing a reset from here would fire on a Back/Forward restore too,
+  // discarding the depth that was just restored.
   useEffect(() => {
+    if (controlledVisibleCount !== undefined) return
     setInternalVisibleCount(INITIAL_VISIBLE)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey, sort, report.data, q])
@@ -330,7 +346,6 @@ export function Sessions({
   if (!report.data.length) {
     return (
       <>
-        {report.switching && <SwitchingBanner />}
         <Panel title="Sessions">
           <ProviderFilterRow provider={provider} detectedProviders={detectedProviders} onProviderChange={onProviderChange} />
           {investigating && <FilterChips filters={filters} onChange={next => onFiltersChange?.(next)} />}
@@ -350,7 +365,6 @@ export function Sessions({
 
   return (
     <div className="sessions-list-view">
-      {report.switching && <SwitchingBanner />}
       {report.error && <StaleBanner error={report.error} />}
       <ProviderFilterRow provider={provider} detectedProviders={detectedProviders} onProviderChange={onProviderChange} />
       {investigating && <FilterChips filters={filters} onChange={next => onFiltersChange?.(next)} />}
@@ -468,6 +482,7 @@ export function Sessions({
         <SessionDrawer
           row={openRow}
           filters={filters}
+          medianCost={medianCost}
           onClose={closeDrawer}
         />
       )}

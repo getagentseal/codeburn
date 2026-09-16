@@ -175,15 +175,8 @@ final class AppStore {
     var subscriptionError: String?
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
-    /// Early quota resets seen for each provider, keyed by dock provider id, and
-    /// this Mac's own record of how early past resets landed. Both are derived
-    /// from data already on disk on the existing refresh lifecycle — no polling
-    /// of its own, no network (#725).
-    var earlyResetEvents: [String: EarlyQuotaResetEvent] = [:]
-    /// Keyed by dock provider id too, so one provider's pattern never captions
-    /// another's hover card.
-    var earlyResetHistory: [String: [EarlyQuotaResetHistory.Summary]] = [:]
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
+    @ObservationIgnored var quotaCrossingMonitor = QuotaCrossingMonitor()
 
     var codexUsage: CodexUsage?
     var codexError: String?
@@ -1625,7 +1618,7 @@ final class AppStore {
         subscriptionError = nil
         subscriptionLoadState = .notBootstrapped
         capacityEstimates = [:]
-        forgetEarlyResets(for: .claude)
+        earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.claude.rawValue)
         Task.detached { await SubscriptionSnapshotStore.clearAll() }
         // Notify the AppDelegate to clear its cadence-loop anchor so the next
         // reconnect doesn't measure against a pre-disconnect timestamp.
@@ -1644,11 +1637,7 @@ final class AppStore {
             await codexBankedResetAnnouncer.observe(usage.resetCredits)
             // A bootstrap is the far side of a gap, so this fetch only seeds a
             // baseline — the same discipline `bootstrapSubscription` uses.
-            await detectEarlyResets(
-                provider: .codex,
-                summary: codexQuotaSummary(filter: .codex),
-                baselineIsTrusted: false
-            )
+            await detectCodexEarlyResets(baselineIsTrusted: false)
         } catch let err as CodexSubscriptionService.FetchError {
             applyCodexFetchError(err)
         } catch {
@@ -1695,9 +1684,7 @@ final class AppStore {
             // side-effect of a successful fetch and must not be able to hold the
             // single-flight token open.
             await codexBankedResetAnnouncer.observe(usage.resetCredits)
-            await detectEarlyResets(
-                provider: .codex,
-                summary: codexQuotaSummary(filter: .codex),
+            await detectCodexEarlyResets(
                 baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
             )
             return true
@@ -1741,7 +1728,7 @@ final class AppStore {
         codexUsage = nil
         codexError = nil
         codexLoadState = .notBootstrapped
-        forgetEarlyResets(for: .codex)
+        earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.codex.rawValue)
         // Same reason the snapshot store is wiped on the Claude side: a
         // reconnect under a different account must baseline again rather than
         // announce that account's entire inventory as new grants.
@@ -1781,11 +1768,6 @@ final class AppStore {
             kimiUsage = usage
             kimiError = nil
             kimiLoadState = .loaded
-            await detectEarlyResets(
-                provider: .kimiCode,
-                summary: kimiQuotaSummary(filter: .kimiCode),
-                baselineIsTrusted: false
-            )
         } catch let err as KimiSubscriptionService.FetchError {
             guard gen == kimiRefreshGen else { return }
             applyKimiFetchError(err)
@@ -1810,10 +1792,6 @@ final class AppStore {
             if kimiLoadState != .notBootstrapped { kimiLoadState = .notBootstrapped }
             return false
         }
-        // Read before the state moves to `.loading`: whether the stored reading
-        // can be compared against this fetch is a fact about the state this
-        // fetch started from.
-        let stateBeforeFetch = kimiLoadState
         let gen = kimiRefreshGen
         if kimiUsage == nil { kimiLoadState = .loading }
         do {
@@ -1822,11 +1800,6 @@ final class AppStore {
             kimiUsage = usage
             kimiError = nil
             kimiLoadState = .loaded
-            await detectEarlyResets(
-                provider: .kimiCode,
-                summary: kimiQuotaSummary(filter: .kimiCode),
-                baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
-            )
             return true
         } catch let err as KimiSubscriptionService.FetchError {
             guard gen == kimiRefreshGen else { return false }
@@ -1846,7 +1819,6 @@ final class AppStore {
         kimiUsage = nil
         kimiError = nil
         kimiLoadState = .notBootstrapped
-        forgetEarlyResets(for: .kimiCode)
         NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
     }
 
@@ -1879,11 +1851,6 @@ final class AppStore {
             geminiUsage = usage
             geminiError = nil
             geminiLoadState = .loaded
-            await detectEarlyResets(
-                provider: .gemini,
-                summary: geminiQuotaSummary(filter: .gemini),
-                baselineIsTrusted: false
-            )
         } catch let err as GeminiSubscriptionService.FetchError {
             guard gen == geminiRefreshGen else { return }
             applyGeminiFetchError(err)
@@ -1908,7 +1875,6 @@ final class AppStore {
             if geminiLoadState != .notBootstrapped { geminiLoadState = .notBootstrapped }
             return false
         }
-        let stateBeforeFetch = geminiLoadState
         let gen = geminiRefreshGen
         if geminiUsage == nil { geminiLoadState = .loading }
         do {
@@ -1917,11 +1883,6 @@ final class AppStore {
             geminiUsage = usage
             geminiError = nil
             geminiLoadState = .loaded
-            await detectEarlyResets(
-                provider: .gemini,
-                summary: geminiQuotaSummary(filter: .gemini),
-                baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
-            )
             return true
         } catch let err as GeminiSubscriptionService.FetchError {
             guard gen == geminiRefreshGen else { return false }
@@ -1941,7 +1902,6 @@ final class AppStore {
         geminiUsage = nil
         geminiError = nil
         geminiLoadState = .notBootstrapped
-        forgetEarlyResets(for: .gemini)
         NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
     }
 
@@ -1982,11 +1942,6 @@ final class AppStore {
             copilotUsage = usage
             copilotError = nil
             copilotLoadState = .loaded
-            await detectEarlyResets(
-                provider: .copilot,
-                summary: copilotQuotaSummary(filter: .copilot),
-                baselineIsTrusted: false
-            )
         } catch let err as CopilotSubscriptionService.FetchError {
             guard gen == copilotRefreshGen else { return }
             applyCopilotFetchError(err)
@@ -2022,7 +1977,6 @@ final class AppStore {
             if copilotLoadState != .notBootstrapped { copilotLoadState = .notBootstrapped }
             return false
         }
-        let stateBeforeFetch = copilotLoadState
         let gen = copilotRefreshGen
         if copilotUsage == nil { copilotLoadState = .loading }
         do {
@@ -2031,11 +1985,6 @@ final class AppStore {
             copilotUsage = usage
             copilotError = nil
             copilotLoadState = .loaded
-            await detectEarlyResets(
-                provider: .copilot,
-                summary: copilotQuotaSummary(filter: .copilot),
-                baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
-            )
             return true
         } catch let err as CopilotSubscriptionService.FetchError {
             guard gen == copilotRefreshGen else { return false }
@@ -2056,7 +2005,6 @@ final class AppStore {
         copilotUsage = nil
         copilotError = nil
         copilotLoadState = .notBootstrapped
-        forgetEarlyResets(for: .copilot)
         NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
     }
 
@@ -2093,11 +2041,6 @@ final class AppStore {
             antigravityUsage = usage
             antigravityError = nil
             antigravityLoadState = .loaded
-            await detectEarlyResets(
-                provider: .antigravity,
-                summary: antigravityQuotaSummary(filter: .antigravity),
-                baselineIsTrusted: false
-            )
         } catch let err as AntigravitySubscriptionService.FetchError {
             guard gen == antigravityRefreshGen else { return }
             applyAntigravityFetchError(err)
@@ -2121,7 +2064,6 @@ final class AppStore {
         // Only an explicit Disconnect stops the cadence probe; there is no
         // credential file to poll for, the probe IS the availability check.
         if case .notBootstrapped = antigravityLoadState { return false }
-        let stateBeforeFetch = antigravityLoadState
         let gen = antigravityRefreshGen
         if antigravityUsage == nil { antigravityLoadState = .loading }
         do {
@@ -2130,11 +2072,6 @@ final class AppStore {
             antigravityUsage = usage
             antigravityError = nil
             antigravityLoadState = .loaded
-            await detectEarlyResets(
-                provider: .antigravity,
-                summary: antigravityQuotaSummary(filter: .antigravity),
-                baselineIsTrusted: stateBeforeFetch.earlyResetBaselineIsTrusted
-            )
             return true
         } catch let err as AntigravitySubscriptionService.FetchError {
             guard gen == antigravityRefreshGen else { return false }
@@ -2153,7 +2090,6 @@ final class AppStore {
         antigravityUsage = nil
         antigravityError = nil
         antigravityLoadState = .notBootstrapped
-        forgetEarlyResets(for: .antigravity)
         NotificationCenter.default.post(name: .codeBurnSubscriptionDisconnected, object: nil)
     }
 
@@ -2210,28 +2146,6 @@ final class AppStore {
         return cleaned
     }
 
-    /// The early-reset band for one dock provider, while it is still recent.
-    func capacityDockEarlyResetNotice(
-        for provider: CapacityDockProvider,
-        now: Date = Date()
-    ) -> EarlyQuotaResetEvent? {
-        guard let event = earlyResetEvents[provider.rawValue] else { return nil }
-        return EarlyQuotaResetNotice.isVisible(event, now: now) ? event : nil
-    }
-
-    /// This Mac's own early-reset pattern for the provider's windows, for the
-    /// quota hover card. Scoped to the provider asking: Claude's cycles never
-    /// caption Codex's card.
-    func earlyResetHistoryCaptions(for filter: ProviderFilter) -> [String] {
-        guard let provider = CapacityDockPreferences.supportedProviders
-            .first(where: { $0.legacyFilter == filter }) else { return [] }
-        return earlyResetHistoryCaptions(for: provider)
-    }
-
-    func earlyResetHistoryCaptions(for provider: CapacityDockProvider) -> [String] {
-        (earlyResetHistory[provider.rawValue] ?? []).map(\.caption)
-    }
-
     /// Snapshot of live quota state for a given provider. Returns nil when the user
     /// has not connected yet — the bar slot stays empty so we never trigger a
     /// source-owned Keychain prompt at startup. Once bootstrapped, the bar persists across all
@@ -2240,48 +2154,78 @@ final class AppStore {
     /// Aggregate quota status across all connected providers, used by the menu
     /// bar flame icon (color) and the popover warning row. Severity = worst
     /// observed across any provider's worst window. Warning providers are
-    /// every connected provider at >= 70% utilization.
+    /// every connected provider at >= 70% utilization, each carrying the window
+    /// that put it there so the row can name it (`QuotaWarningPresentation`).
     struct AggregateQuotaStatus {
         let severity: QuotaSummary.Severity
-        let warnings: [(name: String, percent: Double)]   // sorted desc by percent
+        let warnings: [QuotaWarning]   // sorted desc by percent
+    }
+
+    /// Every connected provider's quota windows, flattened. The warning banner
+    /// and the crossing notifier read the same list, so the two can never
+    /// disagree about what a provider is reporting.
+    var quotaWindows: [QuotaCrossingWindow] {
+        var windows: [QuotaCrossingWindow] = []
+        func include(_ name: String, _ candidates: [QuotaWarning.Candidate]) {
+            windows += candidates.map {
+                QuotaCrossingWindow(providerName: name, label: $0.label, percent: $0.percent, resetsAt: $0.resetsAt)
+            }
+        }
+        if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
+            // Labelled as `claudeQuotaSummary` labels them, so the warning row
+            // names a window the way the Plan tab and the Capacity Dock do.
+            include("Claude", [
+                .init(label: "5-hour", percent: usage.fiveHourPercent, resetsAt: usage.fiveHourResetsAt),
+                .init(label: "Weekly", percent: usage.sevenDayPercent, resetsAt: usage.sevenDayResetsAt),
+                .init(label: "Weekly · Opus", percent: usage.sevenDayOpusPercent, resetsAt: usage.sevenDayOpusResetsAt),
+                .init(label: "Weekly · Sonnet", percent: usage.sevenDaySonnetPercent, resetsAt: usage.sevenDaySonnetResetsAt),
+            ])
+        }
+        if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
+            include("Codex", [usage.primary, usage.secondary].compactMap { $0 }.map {
+                QuotaWarning.Candidate(label: $0.windowLabel, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = kimiUsage, shouldIncludeCachedQuota(loadState: kimiLoadState) {
+            var windows: [QuotaWarning.Candidate] = []
+            if let w = usage.primary {
+                windows.append(.init(label: w.label, percent: w.usedPercent, resetsAt: w.resetsAt))
+            }
+            windows += usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            }
+            include("Kimi Code", windows)
+        }
+        if let usage = geminiUsage, shouldIncludeCachedQuota(loadState: geminiLoadState) {
+            include("Gemini", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = copilotUsage, shouldIncludeCachedQuota(loadState: copilotLoadState) {
+            include("Copilot", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        if let usage = antigravityUsage, shouldIncludeCachedQuota(loadState: antigravityLoadState) {
+            include("Antigravity", usage.details.map {
+                QuotaWarning.Candidate(label: $0.label, percent: $0.usedPercent, resetsAt: $0.resetsAt)
+            })
+        }
+        return windows
     }
 
     var aggregateQuotaStatus: AggregateQuotaStatus {
-        var providers: [(name: String, percent: Double)] = []
-        if let usage = subscription, shouldIncludeCachedQuota(loadState: subscriptionLoadState) {
-            let worst = [
-                usage.fiveHourPercent,
-                usage.sevenDayPercent,
-                usage.sevenDayOpusPercent,
-                usage.sevenDaySonnetPercent,
-            ].compactMap { $0 }.max() ?? 0
-            if worst > 0 { providers.append(("Claude", worst)) }
+        var order: [String] = []
+        var byProvider: [String: [QuotaWarning.Candidate]] = [:]
+        for window in quotaWindows {
+            if byProvider[window.providerName] == nil { order.append(window.providerName) }
+            byProvider[window.providerName, default: []].append(
+                .init(label: window.label, percent: window.percent, resetsAt: window.resetsAt)
+            )
         }
-        if let usage = codexUsage, shouldIncludeCachedQuota(loadState: codexLoadState) {
-            let worst = max(usage.primary?.usedPercent ?? 0, usage.secondary?.usedPercent ?? 0)
-            if worst > 0 { providers.append(("Codex", worst)) }
-        }
-        if let usage = kimiUsage, shouldIncludeCachedQuota(loadState: kimiLoadState) {
-            let worst = max(usage.primary?.usedPercent ?? 0, usage.details.map(\.usedPercent).max() ?? 0)
-            if worst > 0 { providers.append(("Kimi Code", worst)) }
-        }
-        if let usage = geminiUsage, shouldIncludeCachedQuota(loadState: geminiLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Gemini", worst)) }
-        }
-        if let usage = copilotUsage, shouldIncludeCachedQuota(loadState: copilotLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Copilot", worst)) }
-        }
-        if let usage = antigravityUsage, shouldIncludeCachedQuota(loadState: antigravityLoadState) {
-            let worst = usage.details.map(\.usedPercent).max() ?? 0
-            if worst > 0 { providers.append(("Antigravity", worst)) }
-        }
-        let worst = providers.map(\.percent).max() ?? 0
-        let severity = QuotaSummary.severity(for: worst / 100)
-        let sorted = providers.sorted { $0.percent > $1.percent }
-        let warnings = sorted.filter { $0.percent >= 70 }
-        return AggregateQuotaStatus(severity: severity, warnings: warnings)
+        let providers = order.compactMap { QuotaWarning.worst(name: $0, windows: byProvider[$0] ?? []) }
+        let result = QuotaWarningPresentation.aggregate(providers)
+        return AggregateQuotaStatus(severity: result.severity, warnings: result.warnings)
     }
 
     private func shouldIncludeCachedQuota(loadState: SubscriptionLoadState) -> Bool {
@@ -2311,7 +2255,10 @@ final class AppStore {
     /// "none running".
     func capacityDockLiveSessions(for provider: CapacityDockProvider) -> [LiveSession]? {
         guard let block = menubarPayload?.liveSessions else { return nil }
-        return block.sessions.filter { $0.provider == provider.id }
+        // The CLI names providers by their own ids ("kimicode", "cursor-agent"),
+        // not by the dock's raw identifiers ("kimi"); match the payload ids.
+        let ids = provider.payloadProviderIDs
+        return block.sessions.filter { ids.contains($0.provider) }
     }
 
     /// Today's totals for the dock popover. The background loop keeps the
@@ -2502,9 +2449,6 @@ final class AppStore {
         capacityDockProviderErrors[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
-        // A new credential can be a different account, whose cycles the old
-        // baseline, band and pattern say nothing about.
-        forgetEarlyResets(for: provider)
     }
 
     func disconnectCapacityDockProvider(_ provider: CapacityDockProvider) async throws {
@@ -2534,7 +2478,6 @@ final class AppStore {
         capacityDockProviderErrors[provider.id] = nil
         capacityDockProvidersLoading.remove(provider.id)
         capacityDockProviderTransientFailures.remove(provider.id)
-        forgetEarlyResets(for: provider)
         // Drop the provider from the persisted dock selection too. A
         // credential-less adapter (Cursor) still selected there would be
         // silently reconnected by the next scheduled refresh, undoing the
@@ -2564,11 +2507,6 @@ final class AppStore {
             }
         }
 
-        // A provider with no stored summary is on the far side of a gap: either
-        // it has never been fetched, or its last failure was terminal enough to
-        // clear it. A transient failure keeps the summary, and keeps the
-        // baseline with it.
-        let baselineIsTrusted = capacityDockProviderSummaries[provider.id] != nil
         do {
             let credential = try await capacityDockCredentialLoader(provider.id)
             let summary = try await capacityDockProviderQuotaService.fetch(
@@ -2581,11 +2519,6 @@ final class AppStore {
             capacityDockProviderSummaries[provider.id] = summary
             capacityDockProviderErrors[provider.id] = nil
             capacityDockProviderTransientFailures.remove(provider.id)
-            await detectEarlyResets(
-                provider: provider,
-                summary: summary,
-                baselineIsTrusted: baselineIsTrusted
-            )
         } catch {
             guard capacityDockProviderRefreshGenerations[provider.id, default: 0] == generation else {
                 return
@@ -2968,7 +2901,6 @@ final class AppStore {
         }
 
         await refreshCapacityEstimates()
-        await refreshEarlyResetHistory()
     }
 
     /// Hand this fetch's windows to the early-reset monitor, which compares them
@@ -2993,8 +2925,9 @@ final class AppStore {
                 }()
             )
         }
-        await recordEarlyResets(
-            provider: provider,
+        await earlyQuotaResetMonitor.record(
+            providerID: provider.rawValue,
+            providerName: provider.displayName,
             planLabel: planLabel,
             baselineIsTrusted: baselineIsTrusted,
             observations: observations,
@@ -3002,41 +2935,20 @@ final class AppStore {
         )
     }
 
-    /// Hand one provider's freshly fetched quota windows to the same monitor,
-    /// for every provider that is not Claude. Claude keeps the call above, whose
-    /// window keys are the snapshot store's and must not change; here the
-    /// window's own display label is the identity, because that is the only
-    /// stable name these adapters give a window.
+    /// Hand Codex's freshly fetched windows to the same monitor. Codex windows
+    /// have no keys of their own, so each is identified by its pre-localization
+    /// `storageLabel` when the row has one, else by its display label (a period
+    /// or model name, which does not translate).
     ///
-    /// A window the fetch did not report is simply not passed, which reads as
-    /// absent and can never be a reset. A window with no `resetsAt` is passed
-    /// with no reading, and one with no validated duration with no duration:
-    /// both make the detector say nothing, which is why the providers whose
-    /// adapters carry neither are covered by this code and still silent.
-    @discardableResult
-    private func detectEarlyResets(
-        provider: CapacityDockProvider,
-        summary: QuotaSummary?,
-        baselineIsTrusted: Bool,
-        now: Date = Date()
-    ) async -> EarlyQuotaResetEvent? {
-        guard provider != .claude, let summary else { return nil }
-        // The headline window is not always in `details` — Cursor reports it
-        // separately — and a row repeated under two labels must not be observed
-        // twice under one key.
-        var rows = summary.details
-        if let primary = summary.primary, !rows.contains(primary) { rows.append(primary) }
+    /// A window with no `resetsAt` is passed with no reading, and one with no
+    /// validated duration with no duration: both make the detector say nothing.
+    private func detectCodexEarlyResets(baselineIsTrusted: Bool, now: Date = Date()) async {
+        guard let summary = codexQuotaSummary(filter: .codex) else { return }
+        let provider = CapacityDockProvider.codex
         var observations: [EarlyQuotaResetMonitor.Observation] = []
         var seen: Set<String> = []
-        for row in rows {
-            // Storage identity is the pre-localization `storageLabel` when the
-            // adapter provides one, else the display label — which must then be
-            // a stable English string (a period or model name), because a
-            // translated label would drop the baseline on a language switch and
-            // lets two translated siblings collide on one key.
+        for row in summary.details {
             let identity = row.storageLabel ?? row.label
-            // A blank identity is nothing to store under and no name to say out
-            // loud; two of them would also share one key.
             guard !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let key = EarlyQuotaResetFormat.windowKey(forLabel: identity)
             guard seen.insert(key).inserted else { continue }
@@ -3045,7 +2957,7 @@ final class AppStore {
                 windowName: EarlyQuotaResetFormat.windowName(forLabel: identity),
                 windowSeconds: row.windowSeconds,
                 // `QuotaSummary.Window` carries a 0...1 fraction; the detector
-                // reasons in the snapshot store's 0...100 points.
+                // reasons in 0...100 points.
                 reading: row.resetsAt.map {
                     EarlyQuotaResetReading(
                         percent: row.percent * 100,
@@ -3056,55 +2968,15 @@ final class AppStore {
                 }
             ))
         }
-        guard !observations.isEmpty else { return nil }
-        return await recordEarlyResets(
-            provider: provider,
+        guard !observations.isEmpty else { return }
+        await earlyQuotaResetMonitor.record(
+            providerID: provider.rawValue,
+            providerName: provider.displayName,
             planLabel: summary.planLabel,
             baselineIsTrusted: baselineIsTrusted,
             observations: observations,
             now: now
         )
-    }
-
-    /// The one path into the monitor, so every provider gets the same
-    /// announcement, the same dock band and the same history refresh, each
-    /// stored under its own provider id.
-    @discardableResult
-    private func recordEarlyResets(
-        provider: CapacityDockProvider,
-        planLabel: String?,
-        baselineIsTrusted: Bool,
-        observations: [EarlyQuotaResetMonitor.Observation],
-        now: Date
-    ) async -> EarlyQuotaResetEvent? {
-        let event = await earlyQuotaResetMonitor.record(
-            providerID: provider.rawValue,
-            providerName: provider.displayName,
-            planLabel: planLabel,
-            baselineIsTrusted: baselineIsTrusted,
-            observations: observations,
-            now: now
-        )
-        earlyResetEvents[provider.rawValue] = earlyQuotaResetMonitor.visibleEvent(
-            providerID: provider.rawValue,
-            now: now
-        )
-        // Claude's pattern comes from the snapshot store, which holds more than
-        // the monitor's ledger ever will; every other provider has only the
-        // ledger this fetch just extended.
-        if provider != .claude {
-            refreshEarlyResetHistory(provider: provider, observations: observations)
-        }
-        return event
-    }
-
-    /// Drop everything the early-reset feature knows about one provider, so a
-    /// reconnect — possibly to another account — starts without a baseline, a
-    /// band, or a pattern drawn from the old account's cycles.
-    private func forgetEarlyResets(for provider: CapacityDockProvider) {
-        earlyResetEvents[provider.rawValue] = nil
-        earlyResetHistory[provider.rawValue] = nil
-        earlyQuotaResetMonitor.forget(providerID: provider.rawValue)
     }
 
     /// Claude's rate-limit windows are fixed lengths, the same durations the
@@ -3115,48 +2987,6 @@ final class AppStore {
         case "seven_day", "seven_day_opus", "seven_day_sonnet": QuotaPacePresentation.claudeSevenDaySeconds
         default: nil
         }
-    }
-
-    /// Re-derive Claude's "past resets came this early" captions from the
-    /// snapshots already on disk. Local only: no network, no external feed.
-    private func refreshEarlyResetHistory() async {
-        var summaries: [EarlyQuotaResetHistory.Summary] = []
-        for key in ["seven_day", "seven_day_opus", "seven_day_sonnet"] {
-            let snapshots = await SubscriptionSnapshotStore.snapshots(for: key)
-            if let summary = EarlyQuotaResetHistory.summarize(
-                snapshots: snapshots,
-                windowKey: key,
-                windowName: EarlyQuotaResetFormat.claudeWindowName(forKey: key),
-                windowSeconds: Self.claudeWindowSeconds(forKey: key)
-            ) {
-                summaries.append(summary)
-            }
-        }
-        earlyResetHistory[CapacityDockProvider.claude.rawValue] = summaries
-    }
-
-    /// The same captions for a provider with no snapshot file, read from the
-    /// cycle ledger the monitor keeps beside its baseline. Also local only, and
-    /// it starts empty: a provider says nothing about its pattern until this Mac
-    /// has watched two of its cycles.
-    private func refreshEarlyResetHistory(
-        provider: CapacityDockProvider,
-        observations: [EarlyQuotaResetMonitor.Observation]
-    ) {
-        var summaries: [EarlyQuotaResetHistory.Summary] = []
-        for observation in observations {
-            guard let summary = EarlyQuotaResetHistory.summarize(
-                cycleResets: earlyQuotaResetMonitor.observedResets(
-                    providerID: provider.rawValue,
-                    windowKey: observation.windowKey
-                ),
-                windowKey: observation.windowKey,
-                windowName: observation.windowName,
-                windowSeconds: observation.windowSeconds
-            ) else { continue }
-            summaries.append(summary)
-        }
-        earlyResetHistory[provider.rawValue] = summaries
     }
 
     /// Sum effective tokens (input + 5*output + cache_creation + 0.1*cache_read) across the

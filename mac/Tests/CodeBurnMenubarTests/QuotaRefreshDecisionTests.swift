@@ -84,4 +84,46 @@ struct QuotaRefreshDecisionTests {
             threshold: 300
         ))
     }
+
+    @Test("a reset between the last check and now rolls over")
+    func resetInsideWindowRollsOver() {
+        #expect(QuotaRefreshDecision.windowRolledOver(
+            resetDates: [now.addingTimeInterval(-3600), now.addingTimeInterval(-10)],
+            lastCheckedAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+    }
+
+    @Test("a reset landing exactly on now rolls over")
+    func resetAtNowRollsOver() {
+        #expect(QuotaRefreshDecision.windowRolledOver(
+            resetDates: [now],
+            lastCheckedAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+    }
+
+    @Test("a reset already seen at the last check does not fire twice")
+    func resetAtLastCheckIsExcluded() {
+        let resetsAt = now.addingTimeInterval(-30)
+        #expect(!QuotaRefreshDecision.windowRolledOver(
+            resetDates: [resetsAt],
+            lastCheckedAt: resetsAt,
+            now: now
+        ))
+    }
+
+    @Test("a future reset and no reset dates hold the cadence")
+    func futureAndEmptyDoNotRollOver() {
+        #expect(!QuotaRefreshDecision.windowRolledOver(
+            resetDates: [now.addingTimeInterval(60)],
+            lastCheckedAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+        #expect(!QuotaRefreshDecision.windowRolledOver(
+            resetDates: [],
+            lastCheckedAt: now.addingTimeInterval(-30),
+            now: now
+        ))
+    }
 }
