@@ -182,7 +182,14 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v32: DSH session formats v1-v3 and inclusive reasoning accounting. Re-derive
 // finalized DSH days so migrated generations and retry attempts replace the
 // v0-only totals, and reasoning detail is not added on top of full output.
-export const DAILY_CACHE_VERSION = 32
+// v33: #1450 billing routes. `day.models` is keyed by modelRowKey (display
+// name + route label) instead of the raw provider id, so a route the provider
+// recorded in its own column (Hermes `billing_provider`) survives into the
+// finalized day; the raw id alone cannot carry it. A v32 day holds raw ids,
+// which re-derive to the same rows for direct calls and to "(Bedrock)" rows
+// for Bedrock-shaped ids, but its Hermes column routes are unrecoverable
+// without a re-parse, so hermes joins PENDING_REDERIVE_PROVIDER_VERSIONS.
+export const DAILY_CACHE_VERSION = 33
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
@@ -207,9 +214,11 @@ const MIN_SUPPORTED_VERSION = 28
 /// untouched, in both directions, and every other provider keeps the guard.
 const PENDING_REDERIVE_PROVIDER_VERSIONS: Readonly<Record<string, number>> = {
   copilot: 26,
-  // Tracks DAILY_CACHE_VERSION: a v30 file may have been written by #1132's
-  // accounting, which never carried the Hermes cost contract.
-  hermes: 31,
+  // 31: a v30 file may have been written by #1132's accounting, which never
+  // carried the Hermes cost contract. 33: day.models is keyed by route, and a
+  // v32 Hermes day cannot know which of its rows went through
+  // `billing_provider = bedrock` / `openrouter` (#1450).
+  hermes: 33,
   // DSH v0-only parsing and exclusive-reasoning display were both stale in
   // finalized days written before the multi-generation reader.
   dsh: 32,

@@ -6,7 +6,7 @@ import { type SessionCountBasis } from './session-count-label.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDays, filterProjectsByClaudeConfigSource, filterProjectsByDateRange, isSessionHydrationComplete, makeProjectFilter, type ProjectFilterTarget, sessionHydrationSnapshot } from './parser.js'
 type ProjectFilter = (entry: ProjectFilterTarget) => boolean
 
-import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel } from './models.js'
+import { findUnpricedModels, getFlatRateModelsConfigHash, getLocalModelSavingsConfigHash, getPriceOverridesConfigHash, getShortModelName, isExpectedFreeModel, modelRowKey } from './models.js'
 import { getAllProviders, safeDiscoverSessions } from './providers/index.js'
 import { loadPlugins, pluginPayloadSections } from './plugins/loader.js'
 import { collectLiveSessions } from './live-sessions.js'
@@ -320,7 +320,7 @@ export function mergeDayModelsByDisplayName(models: DailyEntry['models']): Array
   const merged = new Map<string, { cost: number; savingsUSD: number; calls: number; inputTokens: number; outputTokens: number; rawModels: string[] }>()
   for (const [raw, m] of Object.entries(models)) {
     if (raw === '<synthetic>') continue
-    const name = getShortModelName(raw)
+    const name = modelRowKey(raw)
     const acc = merged.get(name) ?? { cost: 0, savingsUSD: 0, calls: 0, inputTokens: 0, outputTokens: 0, rawModels: [] }
     acc.cost += m.cost
     acc.savingsUSD += m.savingsUSD ?? 0
@@ -1744,7 +1744,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
         const callWeight = isBehavioralCall(call) ? 1 : 0
         totalSavings += call.savingsUSD
         totalSavingsCalls += callWeight
-        const modelKey = getShortModelName(call.model)
+        const modelKey = modelRowKey(call.model, call.route)
         const acc = savingsByModel.get(modelKey) ?? { calls: 0, actualUSD: 0, savingsUSD: 0, baselineModel: call.savingsBaselineModel ?? '', inputTokens: 0, outputTokens: 0 }
         acc.calls += callWeight
         acc.actualUSD += call.costUSD

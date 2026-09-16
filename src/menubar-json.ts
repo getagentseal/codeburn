@@ -109,7 +109,7 @@ export type ProviderCost = {
 import type { OptimizeResult } from './optimize.js'
 import { getCurrency } from './currency.js'
 import type { GranularHistory } from './granular-history.js'
-import { getShortModelName } from './models.js'
+import { getShortModelName, modelRowKey } from './models.js'
 import type { ReworkedFile } from './workflow-insights.js'
 import type { PrRow, BranchRow } from './sessions-report.js'
 import type { LiveSessionsBlock } from './live-sessions.js'
@@ -502,7 +502,7 @@ function buildTopModels(models: PeriodData['models']): MenubarPayload['current']
   const merged = new Map<string, { cost: number; calls: number; savingsUSD: number; estimatedCostUSD: number }>()
   for (const m of models) {
     if (m.name === SYNTHETIC_MODEL_NAME) continue
-    const name = getShortModelName(m.name)
+    const name = modelRowKey(m.name)
     const acc = merged.get(name) ?? { cost: 0, calls: 0, savingsUSD: 0, estimatedCostUSD: 0 }
     acc.cost += m.cost
     acc.calls += m.calls

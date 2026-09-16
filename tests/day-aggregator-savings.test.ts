@@ -97,7 +97,7 @@ describe('aggregateProjectsIntoDays: savings totals', () => {
     expect(day.cost).toBe(2)
     expect(day.savingsUSD).toBe(5)
     expect(day.models['local-model']).toMatchObject({ calls: 1, cost: 0, savingsUSD: 5 })
-    expect(day.models['gpt-4o']).toMatchObject({ calls: 1, cost: 2, savingsUSD: 0 })
+    expect(day.models['GPT-4o']).toMatchObject({ calls: 1, cost: 2, savingsUSD: 0 })
     expect(day.providers['claude']).toMatchObject({ calls: 2, cost: 2, savingsUSD: 5 })
     expect(day.categories.coding).toMatchObject({ turns: 2, cost: 2, savingsUSD: 5 })
   })

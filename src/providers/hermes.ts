@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
-import { calculateCost, getShortModelName } from '../models.js'
+import { calculateCost, getShortModelName, routeFromProviderField } from '../models.js'
 import { isUserHomeRoot } from '../path-privacy.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -512,9 +512,23 @@ function observationToCall(
     workingDirectory?: string
     prLinks?: string[]
     costIsEstimated: boolean
+    /// Route id from the session's `billing_provider` column, when it names a
+    /// non-direct door (see routeFromProviderField). Undefined for direct or
+    /// unknown, and for the vanished-DB cursor path, whose row is gone.
+    route?: string
   },
 ): ParsedProviderCall {
   const later = observation.index > 0
+  // Billing mode, only where it is known. Hermes records `cost_status =
+  // included` for usage a fixed fee covers (ChatGPT plan) and `actual` for a
+  // recorded invoice amount; a metered door (Bedrock, OpenRouter) is metered
+  // by definition. A direct `anthropic` session with `cost_status = unknown`
+  // may be a Claude Max plan or an API key — Hermes cannot tell, so neither
+  // is asserted. The basis is persisted per observation in the ledger, so
+  // later deltas keep the same answer.
+  const billing = observation.costBasis === 'included' ? 'subscription' as const
+    : observation.costBasis === 'actual' || args.route ? 'metered' as const
+    : undefined
   return {
     provider: 'hermes',
     model: args.model,
@@ -547,6 +561,8 @@ function observationToCall(
     workingDirectory: args.workingDirectory,
     ...(later || !args.prLinks?.length ? {} : { prLinks: args.prLinks }),
     ...(later ? { supplementaryAccounting: true } : {}),
+    ...(args.route ? { route: args.route } : {}),
+    ...(billing ? { billing } : {}),
   }
 }
 
@@ -779,6 +795,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
             workingDirectory: workspace.workingDirectory,
             prLinks,
             costIsEstimated: cost.costIsEstimated,
+            route: routeFromProviderField(row.billing_provider)?.id,
           })),
         }
         }

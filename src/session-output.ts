@@ -1,4 +1,4 @@
-import { billableOutputTokens, getShortModelName } from './models.js'
+import { billableOutputTokens, modelRowKey } from './models.js'
 import type { SessionSummary } from './types.js'
 
 type UsageLike = {
@@ -13,14 +13,14 @@ type CallLike = {
 }
 
 /** Same key the parser uses for non-Devin `modelBreakdown` buckets. */
-export function modelBreakdownKey(call: { provider?: string; model?: string }): string | undefined {
+export function modelBreakdownKey(call: { provider?: string; model?: string; route?: string }): string | undefined {
   if (!call.model) return undefined
-  return call.provider === 'devin' ? call.model : getShortModelName(call.model)
+  return call.provider === 'devin' ? call.model : modelRowKey(call.model, call.route)
 }
 
 /**
  * Prefer a key that already exists on this session's modelBreakdown.
- * Parser sessions are keyed by getShortModelName. Fixtures and leftover
+ * Parser sessions are keyed by modelRowKey. Fixtures and leftover
  * summaries may still use the raw id. Inventing the other spelling
  * creates a $0 / 0-call orphan that findUnpricedModels flags as Unpriced.
  */

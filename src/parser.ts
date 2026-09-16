@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
@@ -1786,7 +1786,7 @@ function buildSessionSummary(
       // not distinct requests: no api-call or per-model call weight.
       if (isBehavioralCall(call)) apiCalls++
 
-      const modelKey = call.provider === 'devin' ? call.model : getShortModelName(call.model)
+      const modelKey = call.provider === 'devin' ? call.model : modelRowKey(call.model, call.route)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
           calls: 0,
@@ -2540,6 +2540,8 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     deduplicationKey: call.deduplicationKey,
     isEstimated: call.costIsEstimated,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
   })
 
   const prRefs = extractPrUrlsFromText(call.userMessage)
@@ -2587,6 +2589,8 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
     ...(call.editFailed ? { editFailed: call.editFailed } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
@@ -2633,6 +2637,8 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     ...(call.userModified ? { userModified: true } : {}),
     ...(call.toolErrors ? { toolErrors: call.toolErrors } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
@@ -2754,6 +2760,8 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.supplementaryAccounting || isHermesObservationKey(call.deduplicationKey)
       ? { supplementaryAccounting: true }
       : {}),

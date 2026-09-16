@@ -202,6 +202,19 @@ Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is 
 
 For the per-provider data location, storage format, parser quirks, and test coverage, see `docs/providers/`.
 
+### Model rows and billing routes (`src/models.ts`)
+
+Every report keys a model row on `modelRowKey(model, route)`, never on the raw id and never on `getShortModelName` directly. The key is the model's short name plus, when the call was billed through a door other than the vendor's own API, the door's label: `Haiku 4.5`, `Haiku 4.5 (Bedrock)`, `Haiku 4.5 (Bedrock us)`, `Sonnet 4.5 (OpenRouter)`. One SKU through one door is one row; the same key is used by `parser.ts` (`modelBreakdown`), `day-aggregator.ts` (`day.models`, since daily cache v33), `usage-aggregator.ts`, `menubar-json.ts`, `model-breakdown.ts`, `models-report.ts` (which folds on the alias-resolved id plus the route) and every renderer, so the surfaces cannot disagree about what one row is. The key is idempotent: a pre-v33 daily row keyed by display name re-keys to itself.
+
+A **route** is the door, and it has two sources feeding one `route` field on the call (`ParsedProviderCall` → `ParsedApiCall` → `CachedCall`):
+
+- the model id, when the door renames the model. `getModelRoute(id)` recognises Bedrock's `<vendor>.<model>[-vN:M]` with an optional cross-region profile prefix (`us.`, `eu.`, `global.`, …) for the vendors with coding sessions on disk (`anthropic`, `openai`). The profile is a dearer SKU and stays a distinct row (the `(Bedrock us)` variant).
+- the provider's own endpoint column, when it does not. `routeFromProviderField(value)` maps Hermes' `billing_provider` (`bedrock`, `bedrock-mantle`, `openrouter`, and their `openrouter/…` / `openrouter:…` spellings) to a route id; the direct doors (`anthropic`, `openai`, …) map to nothing, because the unsuffixed row *is* the direct row.
+
+Alongside the route, a call may carry `billing: 'metered' | 'subscription'` where that is known: Hermes states it per session (`cost_status = included` → subscription, `actual` → metered) and a metered door is metered by definition. A direct session Hermes marks `unknown` asserts neither — a Claude Max plan and an API key look the same to it. Capture-only for now; #1451 renders the split.
+
+Pricing never consults the route. `getModelCosts` runs on the raw id, and LiteLLM already carries the routed rows, so a route changes which row a cost lands on and never what it is.
+
 ## macOS Menubar (`mac/`)
 
 Swift package (`mac/Package.swift`), targets macOS 14, strict concurrency on. Layout under `mac/Sources/CodeBurnMenubar/`:

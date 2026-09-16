@@ -3,7 +3,7 @@ import { basename, join } from 'path'
 
 import type { ClassifiedTurn, ProjectSummary } from './types.js'
 import { isBehavioralCall } from './behavioral-weight.js'
-import { getShortModelName } from './models.js'
+import { modelRowKey } from './models.js'
 import { callBillableOutputTokens } from './session-output.js'
 
 const PLANNING_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'EnterPlanMode', 'ExitPlanMode'])
@@ -90,7 +90,7 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
 /// rather than a new alias table.
 export function findModelStat(models: ModelStats[], input: string): ModelStats | undefined {
   return models.find(m => m.model === input)
-    ?? models.find(m => getShortModelName(m.model).toLowerCase() === input.toLowerCase())
+    ?? models.find(m => modelRowKey(m.model).toLowerCase() === input.toLowerCase())
 }
 
 export type ComparisonRow = {

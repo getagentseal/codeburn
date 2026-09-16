@@ -1,4 +1,4 @@
-import { getShortModelName } from './models.js'
+import { modelRowKey } from './models.js'
 import type { ParsedApiCall, ProjectSummary } from './types.js'
 
 export type ModelEfficiency = {
@@ -20,7 +20,7 @@ function rate(num: number, den: number): number | null {
 }
 
 function modelKey(call: ParsedApiCall): string {
-  return call.provider === 'devin' ? call.model : getShortModelName(call.model)
+  return call.provider === 'devin' ? call.model : modelRowKey(call.model, call.route)
 }
 
 export function aggregateModelEfficiency(projects: ProjectSummary[]): Map<string, ModelEfficiency> {

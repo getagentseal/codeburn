@@ -30,6 +30,12 @@ Hermes stores durable token accounting at the session level, so CodeBurn emits o
 
 If Hermes recorded no positive cost, CodeBurn falls back to its normal model pricing table.
 
+## Billing route and mode
+
+Hermes records the door a session was billed through separately from the model: `sessions.billing_provider` is `anthropic`, `openai-codex`, `bedrock`, `bedrock-mantle`, `openrouter`, … The parser maps it through `routeFromProviderField` to the call's `route` (`bedrock`, `bedrock-mantle`, `openrouter`; the direct doors map to none), so a session on `--provider bedrock` lands in a `Fable 5.1 (Bedrock)` row and an OpenRouter session in `Sonnet 4.5 (OpenRouter)`, next to — never merged with — the direct row. For a Bedrock session the model column already carries Bedrock's id, so the id shape and the column agree.
+
+The cost provenance CodeBurn already reads (`cost_status`) also sets the call's `billing`: `included` is subscription-covered usage (a ChatGPT plan through `openai-codex`), `actual` and any metered door are `metered`. A direct `anthropic` session with `cost_status = unknown` sets neither — Hermes cannot tell a Claude Max plan from an API key. Both fields ride on the cached call; the `billing-route-v1` parse version forces one re-parse of sessions cached before they existed.
+
 ## Project grouping
 
 Discovery groups sessions by Hermes profile (`default`, `coder`, `analytics`, etc.). When a session message includes a clean `Current working directory: /path` line, parsing can attach that project path so CodeBurn can canonicalize worktrees. The parser deliberately ignores quoted or escaped prompt text that merely contains the phrase `Current working directory:`.
