@@ -88,8 +88,10 @@ function num(value: unknown): number | null {
   return null
 }
 
-/** Chromium stores Local Storage strings as raw bytes (latin-1 marker 0x00) or
- *  UTF-16 (marker 0x01); try the byte readings a key can hide in. */
+/** Each Local Storage string carries a one-byte flag: 0x01 marks one-byte
+ *  (Latin-1) characters, 0x00 marks UTF-16LE — recorded journals show the
+ *  z.ai login stored the first way, other entries the other way. The whole
+ *  file is read in both byte views so a key can be found in either. */
 function journalText(data: Buffer): string[] {
   const readings = [data.toString('latin1')]
   if (data.length % 2 === 0) readings.push(data.toString('utf16le'))
