@@ -1149,6 +1149,11 @@ describe('findUnpricedModels', () => {
     ])).toEqual([{ model: 'anthropic.claude-nonexistent-99-v1:0', calls: 3, tokens: 1000 }])
     // A priced Bedrock id is still not "expected free" — its $0 would be a gap.
     expect(isExpectedFreeModel('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(false)
+    // Not every Bedrock id spells the `v`: OpenAI and Cohere ids on Bedrock
+    // end in a bare `-<major>:<minor>`, and they are metered all the same.
+    expect(isExpectedFreeModel('openai.gpt-oss-120b-1:0')).toBe(false)
+    expect(isExpectedFreeModel('cohere.rerank-v3-5:0')).toBe(false)
+    expect(isExpectedFreeModel('us-gov-west-1/openai.gpt-oss-20b-1:0')).toBe(false)
     // Ollama tags keep their treatment; only the version shape is exempted.
     expect(isExpectedFreeModel('qwen3.6:35b-a3b-bf16')).toBe(true)
     expect(isExpectedFreeModel('gpt-oss:120b')).toBe(true)
