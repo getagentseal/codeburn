@@ -7,7 +7,7 @@ import { basename, dirname, join } from 'node:path'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { kimicodeHomes, projectFromWorkDir, readState as readKimicodeState } from './providers/kimicode.js'
 import { reportedContextWindow } from './context-tree.js'
-import { getShortModelName } from './models.js'
+import { modelRowKey } from './models.js'
 import type { ApiUsage, AssistantMessageContent, JournalEntry } from './types.js'
 
 export const LIVE_WINDOW_SECONDS = 600
@@ -181,7 +181,7 @@ export async function scanTranscript(filePath: string): Promise<ScannedFile> {
     if (context <= 0) continue
     result.contextTokens = context
     const rawModel = typeof assistant.model === 'string' ? assistant.model : ''
-    if (rawModel) result.model = getShortModelName(rawModel)
+    if (rawModel) result.model = modelRowKey(rawModel)
     // ponytail: the window comes from this one turn, so a session that compacted
     // below 220k on a 1M model reads as 200k until its next big turn. Track a
     // running max again if that misreport ever matters.

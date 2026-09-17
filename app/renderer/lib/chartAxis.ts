@@ -37,3 +37,28 @@ export function ticksClearOfPeak(ticks: number[], peak: number, axisMax: number,
   if (!(axisMax > 0) || !(peak > 0)) return ticks
   return ticks.filter(tick => Math.abs(tick - peak) / axisMax * PLOT_HEIGHT >= minGap)
 }
+
+// Narrowest plot the app supports (900px window, sidebar and axis gutter
+// removed). A column set that fits this fits every wider layout, so the chart
+// never overflows its card.
+const MIN_PLOT_PX = 520
+// Bar width and gap in descending comfort. The first row whose columns fit
+// MIN_PLOT_PX wins, so 30D keeps its airy bars and 6M tightens instead of
+// spilling past the card.
+const BAR_STEPS: ReadonlyArray<{ minWidth: number; gap: number }> = [
+  { minWidth: 2, gap: 4 },
+  { minWidth: 2, gap: 2 },
+  { minWidth: 1, gap: 1 },
+  { minWidth: 1, gap: 0 },
+]
+
+export function barLayout(count: number): { minWidth: number; gap: number } {
+  return BAR_STEPS.find(step => count * step.minWidth + Math.max(0, count - 1) * step.gap <= MIN_PLOT_PX)
+    ?? BAR_STEPS[BAR_STEPS.length - 1]
+}
+
+/** Days per column. Past one column per available pixel the chart aggregates to
+ *  whole weeks (multiples of 7 keep the x-axis reading as weeks). */
+export function barBucketDays(count: number): number {
+  return count <= MIN_PLOT_PX ? 1 : 7 * Math.ceil(count / (7 * MIN_PLOT_PX))
+}

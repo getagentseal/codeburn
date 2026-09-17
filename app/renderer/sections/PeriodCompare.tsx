@@ -3,6 +3,7 @@ import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
 import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
+import { AnchoredSurface } from '../components/AnchoredSurface'
 import { RangeCalendar } from '../components/RangeCalendar'
 import { useEscape } from '../hooks/useEscape'
 import { usePolled } from '../hooks/usePolled'
@@ -307,10 +308,13 @@ export function PeriodCompare({
 function RangeField({ label, value, onChange }: { label: string; value: DateRange; onChange: (range: DateRange) => void }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (!wrapRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
@@ -322,6 +326,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
     <div className="pcmp-range" ref={wrapRef}>
       <span className="pcmp-range-label">{label}</span>
       <button
+        ref={triggerRef}
         type="button"
         className="pcmp-range-trigger"
         aria-haspopup="dialog"
@@ -332,7 +337,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
         {formatDayShort(value.from)} – {formatDayShort(value.to)}
       </button>
       {open && (
-        <div className="calendar-popover" role="dialog" aria-label={`${label} date range`}>
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label={`${label} date range`}>
           <RangeCalendar
             value={value}
             onSelect={range => {
@@ -340,7 +345,7 @@ function RangeField({ label, value, onChange }: { label: string; value: DateRang
               setOpen(false)
             }}
           />
-        </div>
+        </AnchoredSurface>
       )}
     </div>
   )

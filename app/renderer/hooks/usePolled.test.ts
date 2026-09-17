@@ -4,7 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { render, renderHook, act } from '@testing-library/react'
 
 import { RefreshCadenceContext, type RefreshCadence } from '../lib/refreshCadence'
-import { __resetPolledMemo, clearPolledMemo, hasPolledMemo, primePolledMemo, usePolled } from './usePolled'
+import { __resetPolledMemo, clearPolledMemo, hasPolledMemo, polledMemoTimestamp, primePolledMemo, usePolled } from './usePolled'
 
 function cadenceWrapper(intervalMs: number | null) {
   const value: RefreshCadence = { value: 'x', intervalMs, setValue: () => {} }
@@ -230,6 +230,55 @@ describe('usePolled', () => {
     expect(second.result.current.data).toEqual({ total: 42 })
     expect(second.result.current.switching).toBe(true)
     expect(secondFetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('never reports a refresh time from a restored snapshot, not even for the render before switch effects run', async () => {
+    // Leave a durable snapshot for key B behind, then drop module memory: B is
+    // now reachable only from disk, as it would be after a restart.
+    const seed = renderHook(() => usePolled(vi.fn().mockResolvedValue({ total: 42 }), [], { memoKey: 'overview|B', intervalMs: null }))
+    await act(async () => {})
+    seed.unmount()
+    __resetPolledMemo()
+    const aged = Date.now() - 3 * 24 * 60 * 60 * 1000
+    for (const key of Object.keys(localStorage)) {
+      localStorage.setItem(key, (localStorage.getItem(key) ?? '').replace(/^\{"at":\d+/, `{"at":${aged}`))
+    }
+
+    // The consumers of `lastSuccessAt` (the generation and the persisted
+    // headline) read it every render, so sample every render, not the settled one.
+    const started = Date.now()
+    const stamps: Array<number | null> = []
+    const { rerender } = renderHook(
+      ({ k }: { k: string }) => {
+        const polled = usePolled(vi.fn().mockResolvedValue({ total: 43 }), [k], { memoKey: k, intervalMs: null })
+        stamps.push(polled.lastSuccessAt)
+        return polled
+      },
+      { initialProps: { k: 'overview|A' } },
+    )
+    await act(async () => {})
+    stamps.length = 0
+
+    rerender({ k: 'overview|B' })
+    expect(stamps.length).toBeGreaterThan(0)
+    expect(stamps.filter(at => at !== null && at < started)).toEqual([])
+  })
+
+  it('reports no refresh time for a snapshot restored from a previous app run', async () => {
+    const first = renderHook(() => usePolled(vi.fn().mockResolvedValue({ total: 42 }), [], { memoKey: 'overview|restart', intervalMs: null }))
+    await act(async () => {})
+    expect(polledMemoTimestamp('overview|restart')).toBeCloseTo(Date.now(), -3)
+    first.unmount()
+
+    // The restored payload is hours old and the refresh it describes never
+    // happened in this run: the footer must not announce it as one.
+    __resetPolledMemo()
+    expect(polledMemoTimestamp('overview|restart')).toBeNull()
+
+    const second = renderHook(() => usePolled(vi.fn().mockResolvedValue({ total: 43 }), [], { memoKey: 'overview|restart', intervalMs: null }))
+    await act(async () => {})
+    expect(polledMemoTimestamp('overview|restart')).toBeCloseTo(Date.now(), -3)
+    second.unmount()
   })
 
   it('compresses a heavy report snapshot before placing it in renderer storage', async () => {

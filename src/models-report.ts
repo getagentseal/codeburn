@@ -4,7 +4,7 @@ import stripAnsi from 'strip-ansi'
 import { isBehavioralCall } from './behavioral-weight.js'
 import { codexCredits } from './codex-credits.js'
 import { formatCost, formatTokens } from './format.js'
-import { billableOutputTokens, fallbackRawModelDisplayName, getShortModelName, resolveCanonicalModelId, sanitizeModelForDisplay } from './models.js'
+import { billableOutputTokens, fallbackRawModelDisplayName, getModelRoute, getRouteById, getShortModelName, modelRowKey, resolveCanonicalModelId, routeSuffix, sanitizeModelForDisplay } from './models.js'
 import { getProvider } from './providers/index.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 
@@ -33,6 +33,11 @@ export type ModelReportRow = {
   /// as "MiniMax M3"). Length 1 when nothing merged. Lets a cached vs
   /// uncached route stay visible even though the row is one model (#1239).
   rawModels: string[]
+  /// Billing route id this row's calls went through (`bedrock`), or null for
+  /// the direct door. Part of the row identity: the same model through two
+  /// doors is two rows (#1449). Additive; JSON consumers that predate it
+  /// ignore it.
+  route: string | null
   /// Codex credit consumption (issues #408/#495). null for non-Codex models or
   /// Codex models without a known credit rate. A merged row that mixed rated
   /// and unrated buckets stores the partial sum of the rated ones.
@@ -63,6 +68,11 @@ export type AggregateOptions = {
 type Bucket = {
   provider: string
   model: string
+  /// Route id the call recorded (see ParsedApiCall.route); the id shape fills
+  /// it at fold time when absent. Part of the bucket identity so a
+  /// `billing_provider = bedrock` call never shares a bucket with the direct
+  /// call of the same id.
+  route: string | null
   category: TaskCategory | null
   agentType: string | null
   inputTokens: number
@@ -78,8 +88,37 @@ type Bucket = {
 type ModelKey = string
 type CategoryKey = TaskCategory
 
-function bucketKey(provider: string, model: string, category: TaskCategory | null, agentType: string | null): string {
-  return `${provider} ${model} ${category ?? ''} ${agentType ?? ''}`
+/// Canonical identity of one SKU through one door: the alias-resolved id plus
+/// the door's suffix from the row key — never the route id. Two route ids can
+/// share one label (a door with two endpoint names), and folding on the id
+/// then prints two rows the reader cannot tell apart while every label-keyed
+/// surface shows one. The id is NOT peeled to its base: `us.anthropic.…`
+/// prices above `anthropic.…` and stays its own row, exactly as before #1450.
+/// Exported for the test that pins the row key, not the id, as the fold.
+export function modelFoldKey(model: string, routeId: string | null): string {
+  return `${resolveCanonicalModelId(model)} ${routeSuffix(model, routeId)}`
+}
+
+function rowFoldKey(row: Pick<ModelReportRow, 'provider' | 'model' | 'route'>): string {
+  return `${row.provider} ${modelFoldKey(row.model, row.route)}`
+}
+
+/// Provider-first label with the route kept visible. A provider's own table
+/// may already name the model ("Sonnet 4.5"); when the call went through a
+/// door, the door's label is appended the same way modelRowKey does it, so
+/// `models` reads "Sonnet 4.5 (Bedrock)" exactly where the menubar and the
+/// overview do. Without a route the provider label is returned unchanged.
+function routedDisplayName(providerLabel: string, model: string, routeId: string | null): string {
+  const suffix = routeSuffix(model, routeId)
+  if (!suffix) return providerLabel
+  // The provider had no local name for a Bedrock id and echoed it (or the
+  // global short name of it): the row key already resolves the base model.
+  if (providerLabel === model || providerLabel === getShortModelName(model)) return modelRowKey(model, routeId)
+  return providerLabel.endsWith(suffix) ? providerLabel : `${providerLabel} ${suffix}`
+}
+
+function bucketKey(provider: string, model: string, route: string | null, category: TaskCategory | null, agentType: string | null): string {
+  return `${provider} ${model} ${route ?? ''} ${category ?? ''} ${agentType ?? ''}`
 }
 
 /// Walks every parsed turn, attributes each assistant call to a
@@ -111,12 +150,14 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           // their spend all lands under '(main)'. That is correct: the report never
           // fabricates an agent for calls that were not driven by one.
           const agentType: string | null = opts.byAgent ? (session.agentType ?? '(main)') : null
-          const key = bucketKey(provider, model, category, agentType)
+          const route = call.route ?? null
+          const key = bucketKey(provider, model, route, category, agentType)
           let bucket = buckets.get(key)
           if (!bucket) {
             bucket = {
               provider,
               model,
+              route,
               category,
               agentType,
               inputTokens: 0,
@@ -147,7 +188,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
           // distinct requests, so they add no call weight (see behavioral-weight.ts).
           if (isBehavioralCall(call)) bucket.calls += 1
 
-          const modelKey = `${provider} ${model}`
+          const modelKey = `${provider} ${model} ${route ?? ''}`
           let perCat = perModelCategoryCost.get(modelKey)
           if (!perCat) {
             perCat = new Map()
@@ -186,9 +227,15 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
 
   for (const bucket of buckets.values()) {
     const meta = await resolveProvider(bucket.provider)
-    const modelDisplayName = meta.formatModel(bucket.model)
-    const canonicalId = resolveCanonicalModelId(bucket.model)
-    const resolvedKey = bucketKey(bucket.provider, canonicalId, bucket.category, bucket.agentType)
+    // Fold by canonical id AND the row key's door suffix, and label the row
+    // with the same key every other surface uses (modelRowKey), so `models`,
+    // the menubar payload and the overview agree on what one row is. The
+    // route is the persisted one when the provider recorded it, else what the
+    // id's shape names.
+    const routeId = getRouteById(bucket.route)?.id ?? getModelRoute(bucket.model)?.id ?? null
+    const modelDisplayName = sanitizeModelForDisplay(routedDisplayName(meta.formatModel(bucket.model), bucket.model, routeId))
+    const canonicalId = modelFoldKey(bucket.model, routeId)
+    const resolvedKey = bucketKey(bucket.provider, canonicalId, null, bucket.category, bucket.agentType)
     const foldKey = `${bucket.provider} ${canonicalId}`
     const total = bucket.inputTokens + bucket.outputTokens + bucket.cacheWriteTokens + bucket.cacheReadTokens
     // Credits are per raw id (aliases can have different rates). Sum the
@@ -233,6 +280,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
         providerDisplayName: meta.displayName,
         model: bucket.model,
         modelDisplayName,
+        route: routeId,
         category: bucket.category,
         agentType: bucket.agentType,
         inputTokens: bucket.inputTokens,
@@ -249,7 +297,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
       })
     }
 
-    const rawKey = `${bucket.provider} ${bucket.model}`
+    const rawKey = `${bucket.provider} ${bucket.model} ${bucket.route ?? ''}`
     if (!foldedRawSeen.has(rawKey)) {
       foldedRawSeen.add(rawKey)
       const rawCat = perModelCategoryCost.get(rawKey)
@@ -273,7 +321,7 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
   const rows = [...rowsByKey.values()]
   for (const row of rows) {
     if (opts.byTask || opts.byAgent) continue
-    const perCat = foldedCategoryCost.get(`${row.provider} ${resolveCanonicalModelId(row.model)}`)
+    const perCat = foldedCategoryCost.get(rowFoldKey(row))
     if (!perCat || perCat.size === 0) continue
     let topCat: TaskCategory = 'general'
     let topCost = -1
@@ -292,8 +340,8 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
 
   if (opts.byTask || opts.byAgent) {
     rows.sort((a, b) => {
-      const aTotal = foldedTotalCost.get(`${a.provider} ${resolveCanonicalModelId(a.model)}`) ?? 0
-      const bTotal = foldedTotalCost.get(`${b.provider} ${resolveCanonicalModelId(b.model)}`) ?? 0
+      const aTotal = foldedTotalCost.get(rowFoldKey(a)) ?? 0
+      const bTotal = foldedTotalCost.get(rowFoldKey(b)) ?? 0
       if (aTotal !== bTotal) return bTotal - aTotal
       if (a.provider !== b.provider) return a.provider.localeCompare(b.provider)
       if (a.modelDisplayName !== b.modelDisplayName) return a.modelDisplayName.localeCompare(b.modelDisplayName)
@@ -665,6 +713,7 @@ export function renderJson(rows: ModelReportRow[]): string {
       model: r.model,
       modelDisplayName: r.modelDisplayName,
       rawModels: r.rawModels,
+      route: r.route,
       category: r.category ?? r.topCategory ?? null,
       agentType: r.agentType ?? null,
       topCategory: r.topCategory ?? null,

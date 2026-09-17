@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 
 import { CliErrorText } from './CliErrorPanel'
 import { EmptyNote } from './EmptyState'
@@ -9,6 +9,7 @@ import { SectionSkeleton } from './Skeleton'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatCount, formatDayShort, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
+import { groupProjects } from '../lib/projectGroups'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import type { BranchSpendProjectReport, BranchSpendReport, BranchSpendRow, BranchSpendSessionRow, BranchTokenSplit, DateRange, Period } from '../lib/types'
 
@@ -62,6 +63,13 @@ function pathLabel(path: string): string {
   return parts.at(-1) || path
 }
 
+/** Parent directory plus name, so sibling checkouts named "clone" are told
+ *  apart without printing a full home path. */
+function homeRelativePath(path: string): string {
+  const parts = path.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.slice(-2).join('/') || path
+}
+
 function BranchSessionDetail({ session }: { session: BranchSpendSessionRow }) {
   return (
     <div className="spend-proj-detail branch-session-detail" role="region" aria-label={`Session ${session.sessionId} detail`}>
@@ -103,7 +111,7 @@ function BranchRowView({ row, index, showProject, expanded, onToggle }: {
           {row.worktrees.map(wt => (
             <div className="branch-detail-line" key={wt.path}>
               <span>Worktree</span>
-              <span title={wt.path}>{pathLabel(wt.path)} · {wt.sessions} {wt.sessions === 1 ? 'session' : 'sessions'} · {formatUsd(wt.cost)}</span>
+              <span title={wt.path}>{homeRelativePath(wt.path)} · {wt.sessions} {wt.sessions === 1 ? 'session' : 'sessions'} · {formatUsd(wt.cost)}</span>
             </div>
           ))}
           {row.sessionRows.map(session => {
@@ -165,23 +173,24 @@ function BranchPage({ report }: { report: BranchSpendReport }) {
   // when the chosen project no longer appears in a new report snapshot.
   const [selected, setSelected] = useState<string | null>(null)
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  const groups = useMemo(() => groupProjects(report.projects), [report.projects])
   const projectOptions = [
     { value: ALL_PROJECTS, label: 'All projects' },
-    ...report.projects.map(p => ({ value: p.id, label: p.label })),
+    ...groups.map(group => ({ value: group.id, label: group.label, note: group.note })),
   ]
   const chosen = selected !== null && selected !== ALL_PROJECTS
-    ? report.projects.find(p => p.id === selected)
+    ? groups.find(group => group.id === selected)
     : undefined
   const effectiveId = selected === ALL_PROJECTS
     ? ALL_PROJECTS
-    : chosen ? chosen.id : report.projects[0]?.id ?? ALL_PROJECTS
+    : chosen ? chosen.id : groups[0]?.id ?? ALL_PROJECTS
 
   const scope: BranchSpendProjectReport['coverage'] = effectiveId === ALL_PROJECTS
     ? report.totals
-    : report.projects.find(p => p.id === effectiveId)?.coverage ?? report.totals
+    : groups.find(group => group.id === effectiveId)?.coverage ?? report.totals
   const rows: BranchSpendRow[] = effectiveId === ALL_PROJECTS
-    ? report.projects.flatMap(p => p.branches)
-    : report.projects.find(p => p.id === effectiveId)?.branches ?? []
+    ? groups.flatMap(group => group.branches)
+    : groups.find(group => group.id === effectiveId)?.branches ?? []
   const showProject = effectiveId === ALL_PROJECTS
 
   // Reset any open expansion when the visible row set changes (project or
@@ -195,15 +204,17 @@ function BranchPage({ report }: { report: BranchSpendReport }) {
       right="spend per project and branch"
       className="spend-scroll"
     >
-      <div className="branch-picker">
-        <Dropdown
-          id="branch-project"
-          ariaLabel="Project for the By branch lens"
-          value={effectiveId}
-          options={projectOptions}
-          onChange={value => setSelected(value)}
-        />
-      </div>
+      {groups.length > 0 && (
+        <div className="branch-picker">
+          <Dropdown
+            id="branch-project"
+            ariaLabel="Project for the By branch lens"
+            value={effectiveId}
+            options={projectOptions}
+            onChange={value => setSelected(value)}
+          />
+        </div>
+      )}
       {rows.length ? (
         rows.map((row, i) => {
           const rowKey = `${row.projectId}|${row.branch ?? '__unknown__'}`
@@ -219,9 +230,9 @@ function BranchPage({ report }: { report: BranchSpendReport }) {
           )
         })
       ) : (
-        <EmptyNote>No branch activity for this project in the selected range yet. Branch metadata is captured per turn (Claude transcripts carry it today); sources without it are listed in the coverage note.</EmptyNote>
+        <EmptyNote>No branch data in this range</EmptyNote>
       )}
-      <CoverageNote scope={scope} />
+      {groups.length > 0 && <CoverageNote scope={scope} />}
     </Panel>
   )
 }

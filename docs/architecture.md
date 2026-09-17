@@ -202,6 +202,17 @@ Both lists hit the same `getAllProviders()` aggregator. A failed lazy import is 
 
 For the per-provider data location, storage format, parser quirks, and test coverage, see `docs/providers/`.
 
+### Model rows and billing routes (`src/models.ts`)
+
+Every report keys a model row on `modelRowKey(model, route)`, never on the raw id and never on `getShortModelName` directly. The key is the model's short name plus, when the call was billed through a door other than the vendor's own API, the door's label: `Haiku 4.5`, `Haiku 4.5 (Bedrock)`, `Haiku 4.5 (Bedrock us)`. One SKU through one door is one row; the same key is used by `parser.ts` (`modelBreakdown`), `day-aggregator.ts` (`day.models`, since daily cache v33), `usage-aggregator.ts`, `menubar-json.ts`, `model-breakdown.ts`, `models-report.ts` and every renderer, so the surfaces cannot disagree about what one row is. `models-report.ts` folds on the alias-resolved id plus that same row-key suffix, never on the route id, so two doors sharing one label land on one row instead of two the reader cannot tell apart. The key is idempotent: a pre-v33 daily row keyed by display name re-keys to itself. One surface is deliberately outside this: the desktop Trend timeline (`granular-history.ts`) still keys on the raw model id.
+
+A **route** is the door, and it has two sources feeding one `route` field on the call (`ParsedProviderCall` → `ParsedApiCall` → `CachedCall`):
+
+- the model id, when the door renames the model. `getModelRoute(id)` recognises Bedrock's `<vendor>.<model>[-vN:M]` with an optional cross-region profile prefix (`us.`, `eu.`, `global.`, …) for the vendors with coding sessions on disk (`anthropic`, `openai`). The profile is a dearer SKU and stays a distinct row (the `(Bedrock us)` variant).
+- the provider's own endpoint column, when it does not. `routeFromProviderField(value)` maps Hermes' `billing_provider` (`bedrock`) to a route id; the direct doors (`anthropic`, `openai`, …) map to nothing, because the unsuffixed row *is* the direct row. Only doors with real sessions on disk are registered, the same rule the id shapes follow.
+
+Pricing never consults the route. `getModelCosts` runs on the raw id, and LiteLLM already carries the routed rows, so a route changes which row a cost lands on and never what it is.
+
 ## macOS Menubar (`mac/`)
 
 Swift package (`mac/Package.swift`), targets macOS 14, strict concurrency on. Layout under `mac/Sources/CodeBurnMenubar/`:

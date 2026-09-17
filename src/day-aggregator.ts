@@ -2,7 +2,7 @@ import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cach
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { isBehavioralCall, isBehavioralTurn } from './behavioral-weight.js'
-import { billableOutputTokens } from './models.js'
+import { billableOutputTokens, modelRowKey } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
   return {
@@ -205,7 +205,11 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           dayProject.calls += callWeight
           dayProject.savingsUSD += callSavings
 
-          const model = callDay.models[call.model] ?? {
+          // Keyed by the same row key every report uses, so a route sourced
+          // from a provider column (Hermes `billing_provider`) survives into
+          // the finalized day: the raw id alone cannot carry it. v33.
+          const dayModelKey = modelRowKey(call.model, call.route)
+          const model = callDay.models[dayModelKey] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -217,7 +221,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           model.outputTokens += billableOut
           model.cacheReadTokens += call.usage.cacheReadInputTokens
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
-          callDay.models[call.model] = model
+          callDay.models[dayModelKey] = model
 
           const slice = ensureSlice(callDay, call.provider)
           slice.calls += callWeight
@@ -233,7 +237,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceProject.calls += callWeight
           sliceProject.savingsUSD += callSavings
 
-          const sliceModel = slice.models![call.model] ?? {
+          const sliceModel = slice.models![dayModelKey] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -245,7 +249,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceModel.outputTokens += billableOut
           sliceModel.cacheReadTokens += call.usage.cacheReadInputTokens
           sliceModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
-          slice.models![call.model] = sliceModel
+          slice.models![dayModelKey] = sliceModel
         }
       }
     }

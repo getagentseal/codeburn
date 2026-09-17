@@ -4,7 +4,7 @@ import { homedir } from 'os'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost as baseCost, getCurrency } from './currency.js'
-import { findUnpricedModels, getShortModelName, unpricedModelHint } from './models.js'
+import { findUnpricedModels, modelRowKey, unpricedModelHint } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated } from './format.js'
 import { maxOf } from './math-utils.js'
@@ -312,7 +312,7 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
     if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
       out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
@@ -381,7 +381,7 @@ export function renderOverview(
   }
 
   const topTool = providerRows[0]?.[0]
-  const topModel = modelRows[0] ? getShortModelName(modelRows[0][0]) : ''
+  const topModel = modelRows[0] ? modelRowKey(modelRows[0][0]) : ''
   const mostly = topTool ? `, mostly ${topTool}${topModel ? ` / ${topModel}` : ''}` : ''
   out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatCost(cost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
 
