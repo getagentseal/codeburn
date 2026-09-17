@@ -285,8 +285,7 @@ enum EarlyQuotaResetFormat {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         guard !trimmed.isEmpty else { return trimmed }
-        let ownNouns = ["limit", "usage", "quota", "credits", "window"]
-        return ownNouns.contains(where: trimmed.hasSuffix) ? trimmed : "\(trimmed) limit"
+        return trimmed.hasSuffix("limit") ? trimmed : "\(trimmed) limit"
     }
 
     /// "2d 3h", "18h", "40m" — rounded to the unit it prints, so a lead of
