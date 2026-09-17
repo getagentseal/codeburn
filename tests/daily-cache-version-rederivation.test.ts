@@ -145,8 +145,8 @@ describe('daily-cache adoption of a v30 file written under a different accountin
 
     const loaded = await loadDailyCache()
 
-    expect(DAILY_CACHE_VERSION).toBe(32)
-    expect(loaded.version).toBe(32)
+    expect(DAILY_CACHE_VERSION).toBe(33)
+    expect(loaded.version).toBe(33)
     // A v30 candidate must not satisfy same-version adoption, so its trust
     // markers cannot survive migration to the current cache version.
     expect(loaded.complete).toBe(false)

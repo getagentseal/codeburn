@@ -2,7 +2,7 @@ import type { DailyEntry, ProjectDayStats, ProviderDaySlice } from './daily-cach
 import type { PeriodData } from './menubar-json.js'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { isBehavioralCall, isBehavioralTurn } from './behavioral-weight.js'
-import { billableOutputTokens } from './models.js'
+import { billableOutputTokens, modelRowKey } from './models.js'
 
 function emptyEntry(date: string): DailyEntry {
   return {
@@ -205,7 +205,11 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           dayProject.calls += callWeight
           dayProject.savingsUSD += callSavings
 
-          const model = callDay.models[call.model] ?? {
+          // Keyed by the same row key every report uses, so a route sourced
+          // from a provider column (Hermes `billing_provider`) survives into
+          // the finalized day: the raw id alone cannot carry it. v33.
+          const dayModelKey = modelRowKey(call.model, call.route)
+          const model = callDay.models[dayModelKey] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -217,7 +221,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           model.outputTokens += billableOut
           model.cacheReadTokens += call.usage.cacheReadInputTokens
           model.cacheWriteTokens += call.usage.cacheCreationInputTokens
-          callDay.models[call.model] = model
+          callDay.models[dayModelKey] = model
 
           const slice = ensureSlice(callDay, call.provider)
           slice.calls += callWeight
@@ -233,7 +237,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceProject.calls += callWeight
           sliceProject.savingsUSD += callSavings
 
-          const sliceModel = slice.models![call.model] ?? {
+          const sliceModel = slice.models![dayModelKey] ?? {
             calls: 0, cost: 0, savingsUSD: 0,
             inputTokens: 0, outputTokens: 0,
             cacheReadTokens: 0, cacheWriteTokens: 0,
@@ -245,7 +249,7 @@ export function aggregateProjectsIntoDays(projects: ProjectSummary[], dateKeyFn:
           sliceModel.outputTokens += billableOut
           sliceModel.cacheReadTokens += call.usage.cacheReadInputTokens
           sliceModel.cacheWriteTokens += call.usage.cacheCreationInputTokens
-          slice.models![call.model] = sliceModel
+          slice.models![dayModelKey] = sliceModel
         }
       }
     }
@@ -258,7 +262,20 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
   let cost = 0, savingsUSD = 0, calls = 0, sessions = 0
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
   const catTotals: Record<string, { turns: number; cost: number; savingsUSD: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number; savingsUSD: number }> = {}
+  // Per-model token counts, normalized the same way the day entries were
+  // written (output already billable — day-aggregator folds reasoning in per
+  // call). Merge keys stay the raw ids here; the payload resolves display
+  // names later (buildTopModels), so both aggregation paths land in the same
+  // rows as cost.
+  const modelTotals: Record<string, {
+    calls: number
+    cost: number
+    savingsUSD: number
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+  }> = {}
 
   for (const d of days) {
     cost += d.cost
@@ -271,10 +288,17 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
     cacheWriteTokens += d.cacheWriteTokens
 
     for (const [name, m] of Object.entries(d.models)) {
-      const acc = modelTotals[name] ?? { calls: 0, cost: 0, savingsUSD: 0 }
+      const acc = modelTotals[name] ?? {
+        calls: 0, cost: 0, savingsUSD: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+      }
       acc.calls += m.calls
       acc.cost += m.cost
       acc.savingsUSD += (m.savingsUSD ?? 0)
+      acc.inputTokens += m.inputTokens
+      acc.outputTokens += m.outputTokens
+      acc.cacheReadTokens += m.cacheReadTokens
+      acc.cacheWriteTokens += m.cacheWriteTokens
       modelTotals[name] = acc
     }
     for (const [cat, c] of Object.entries(d.categories)) {

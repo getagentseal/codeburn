@@ -18,6 +18,10 @@ export type Polled<T> = {
   switching: boolean
   /** Wall-clock timestamp for the most recent successful fetch. */
   lastSuccessAt: number | null
+  /** The most recent result that was refused for being partial or stale while a
+   *  complete one was already on screen. `data` still holds the complete answer;
+   *  this is only here so the UI can say indexing is still running. */
+  degraded?: T | null
   /** Re-run the fetcher immediately (period/provider change, manual refresh). */
   refresh: () => void
 }
@@ -103,7 +107,18 @@ function snapshotHeader(raw: string | null): { at: number; generation?: number; 
   }
 }
 
-function isDurableSnapshotValue(value: unknown): boolean {
+/**
+ * Whether a report is a finished answer rather than a first paint the producer
+ * is still filling in, or a read-only serve that could not see real files.
+ *
+ * This is the one rule for both persistence AND display. Only persistence
+ * honoured it before, so after a local-day rollover the resident serve child
+ * re-derived the new day and the partials it served replaced a complete payload
+ * on screen: `history.daily` came back with about 27 cost-bearing rows instead
+ * of 125, and the streak, month-to-date and medians read off that same array
+ * were wrong with it.
+ */
+export function isCompleteReport(value: unknown): boolean {
   if (!value || typeof value !== 'object') return true
   const report = value as { stale?: unknown; hydration?: { complete?: unknown } }
   return report.stale !== true && report.hydration?.complete !== false
@@ -151,11 +166,16 @@ function memoSet(key: string, value: unknown): void {
   const at = Date.now()
   let json: string | undefined
   try { json = JSON.stringify(value) } catch { /* memory-only fallback */ }
+  // A degraded report never displaces a complete one, in memory or on disk: the
+  // memo is what a period switch paints from, so a partial cached here would
+  // resurface as the answer long after the producer had converged.
+  const held = memoStore.get(key)
+  if (!isCompleteReport(value) && held && isCompleteReport(held.value)) return
   const entry = { value, at, sizeChars: json?.length }
   memoPut(key, entry)
   // Partial hydration and stale read-only reports are useful last-good data for
   // the current renderer, but must never become the restart-time exact answer.
-  if (!isDurableSnapshotValue(value)) return
+  if (!isCompleteReport(value)) return
   try {
     const storage = globalThis.localStorage
     if (!storage) return
@@ -286,12 +306,15 @@ export function hasPolledMemo(key: string): boolean {
   return memoGet(key) !== undefined
 }
 
-/** Timestamp of the exact report snapshot currently available for `key`.
- * The app footer uses this to describe the selected destination instead of
- * repeating Overview's timestamp everywhere. Reading it may hydrate the
- * in-memory memo from the versioned durable snapshot, but never changes data. */
+/** Timestamp of the last fetch that produced the report for `key` IN THIS
+ * renderer. A snapshot restored from disk is painted but never reported as a
+ * refresh: it dates from an earlier app run, so claiming it here made the footer
+ * announce a refresh that was hours old and had not happened. Reading this may
+ * hydrate the in-memory memo from the versioned durable snapshot, but never
+ * changes data. */
 export function polledMemoTimestamp(key: string): number | null {
-  return memoGet(key)?.at ?? null
+  const entry = memoGet(key)
+  return entry && !entry.durable ? entry.at : null
 }
 
 /**
@@ -328,6 +351,12 @@ export function usePolled<T>(
   const [loading, setLoading] = useState(true)
   const [switching, setSwitching] = useState(false)
   const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null)
+  const [degraded, setDegraded] = useState<T | null>(null)
+  // Whether the value currently displayed is a finished answer, and the key it
+  // belongs to. Refs because the resolve handler must read the CURRENT state,
+  // not the one captured when the fetch started.
+  const completeRef = useRef(false)
+  const dataKeyRef = useRef<string | null>(null)
   // Generation counter: every load() (mount, deps change, interval, refresh)
   // claims the next epoch; a fetch applies its result only while its epoch is
   // still current. This is what keeps a slow fetch from an older deps/period
@@ -359,11 +388,18 @@ export function usePolled<T>(
       if (cached !== undefined) {
         setData(cached.value)
         setDataKey(memoKey)
+        dataKeyRef.current = memoKey
+        completeRef.current = isCompleteReport(cached.value)
+        setDegraded(null)
         servedCached = true
         // The footer's "refreshed Ns ago" must describe the payload on screen,
-        // not this hook instance's last fetch of some other key.
-        setLastSuccessAt(cached.at)
-        lastSuccessRef.current = cached.at
+        // not this hook instance's last fetch of some other key. A durable entry
+        // is a snapshot from an earlier app run, not a refresh this one made, so
+        // it stamps nothing: the fetch below is what sets the clock.
+        if (!cached.durable) {
+          setLastSuccessAt(cached.at)
+          lastSuccessRef.current = cached.at
+        }
         // Still fresh, and this is a switch rather than a poll/manual refresh:
         // the painted answer is good enough, so skip the CLI spawn entirely.
         // A durable entry came from an earlier renderer lifetime. Paint it, but
@@ -379,6 +415,9 @@ export function usePolled<T>(
       } else {
         setData(null)
         setDataKey(null)
+        dataKeyRef.current = null
+        completeRef.current = false
+        setDegraded(null)
       }
     }
     setLoading(true)
@@ -398,10 +437,20 @@ export function usePolled<T>(
     pending
       .then(result => {
         if (epochRef.current !== epoch || memoEpoch !== loadMemoEpoch) return
-        setData(result)
-        setDataKey(memoKey ?? null)
         setError(null)
         setErrorKey(null)
+        // A finished answer is never given up for an unfinished one. The producer
+        // keeps converging and the next poll replaces this; until then the screen
+        // keeps the complete numbers and says indexing is still running.
+        if (!isCompleteReport(result) && completeRef.current && dataKeyRef.current === (memoKey ?? null)) {
+          setDegraded(result)
+          return
+        }
+        setDegraded(null)
+        setData(result)
+        setDataKey(memoKey ?? null)
+        dataKeyRef.current = memoKey ?? null
+        completeRef.current = isCompleteReport(result)
         const at = Date.now()
         setLastSuccessAt(at)
         lastSuccessRef.current = at
@@ -464,7 +513,9 @@ export function usePolled<T>(
   const keyMismatch = memoKey !== undefined && dataKey !== memoKey
   const renderedData = keyMismatch ? renderMemo?.value ?? null : data
   const renderedDataKey = keyMismatch ? (renderMemo ? memoKey : null) : dataKey
-  const renderedLastSuccessAt = keyMismatch && renderMemo ? renderMemo.at : lastSuccessAt
+  // A durable entry dates from an earlier app run, so it stamps no refresh time
+  // here either — same rule as `polledMemoTimestamp`.
+  const renderedLastSuccessAt = keyMismatch && renderMemo ? (renderMemo.durable ? null : renderMemo.at) : lastSuccessAt
   const renderedLoading = keyMismatch ? true : loading
   const renderedSwitching = keyMismatch ? renderMemo !== undefined : switching
   const renderedError = memoKey !== undefined && errorKey !== memoKey ? null : error
@@ -474,8 +525,11 @@ export function usePolled<T>(
     dataKey: renderedDataKey,
     error: renderedError,
     loading: renderedLoading,
-    switching: renderedSwitching,
+    // A refused partial means the producer is still working, which reads as
+    // in-flight to every consumer of `switching`.
+    switching: renderedSwitching || (keyMismatch ? false : degraded !== null),
     lastSuccessAt: renderedLastSuccessAt,
+    degraded: keyMismatch ? null : degraded,
     refresh,
   }
 }

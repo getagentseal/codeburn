@@ -18,7 +18,7 @@ import { projectMatches, projectPattern } from '../lib/projectMatch'
 import { shortcutLabel } from '../lib/platform'
 import { motionClass } from '../lib/motion'
 import { clearOverviewHeadlines } from '../lib/overviewSnapshot'
-import { PROVIDER_NAMES, QUOTA_PROVIDERS, readDisabledProviders, writeDisabledProviders } from '../lib/providers'
+import { detectedProviders, PROVIDER_NAMES, QUOTA_PROVIDERS, readDisabledProviders, writeDisabledProviders } from '../lib/providers'
 import { REFRESH_OPTIONS, useRefreshCadence } from '../lib/refreshCadence'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { showToast } from '../lib/toast'
@@ -272,16 +272,10 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
 
 function ProvidersPane({ period, refreshToken }: { period: Period; refreshToken: number }) {
   const overview = usePolled<MenubarPayload>(() => codeburn.getOverview(period, 'all'), [period, refreshToken])
-  const details = overview.data?.current.providerDetails
-  // Prefer providerDetails (internal id + display label) so ProviderLogo keys on
-  // the internal id. Fall back to the providers map keys (lowercased display
-  // names) for older CLIs that omit providerDetails.
-  const providers = details
-    ? details.filter(entry => entry.hasUsage ?? true).map(entry => ({ id: entry.id, label: entry.label, cost: entry.cost }))
-    : Object.entries(overview.data?.current.providers ?? {}).map(([id, cost]) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1), cost }))
+  const providers = detectedProviders(overview.data?.current)
   return <section className="set-p on">
     <div><h3 className="set-h">Providers</h3><p className="set-sub">codeburn auto-detects coding tools from local session files. No setup needed.</p></div>
-    {overview.error ? <SettingsErrorText error={overview.error} /> : !overview.data ? <p className="set-cap">Loading detected providers…</p> : providers.length === 0 ? <p className="set-cap">No providers detected.</p> : providers.map(entry => <div className="card" key={entry.id}><div className="set-prov-head"><ProviderLogo provider={entry.id} /><span className="set-prov-name">{entry.label}</span><span className="set-status"><span className="set-dot ok" />Detected · {formatUsd(entry.cost)}</span></div></div>)}
+    {overview.error ? <SettingsErrorText error={overview.error} /> : !overview.data ? <p className="set-cap">Loading detected providers…</p> : providers.length === 0 ? <p className="set-cap">No providers detected.</p> : providers.map(entry => <div className="card" key={entry.id}><div className="set-prov-head"><ProviderLogo provider={entry.id} /><span className="set-prov-name">{entry.label}</span><span className="set-status"><span className={entry.idle ? 'set-dot' : 'set-dot ok'} />{entry.idle ? 'Detected · no usage this period' : `Detected · ${formatUsd(entry.cost)}`}</span></div></div>)}
   </section>
 }
 

@@ -268,6 +268,7 @@
 "Tokens" = "Token";
 "%@ in" = "输入 %@";
 "%@ out" = "输出 %@";
+"%1$@ in · %2$@ out · %3$@ cache read" = "输入 %1$@ · 输出 %2$@ · 缓存读取 %3$@";
 "%@%% cache hit" = "缓存命中 %@%%";
 
 /* MARK: Pull requests section */

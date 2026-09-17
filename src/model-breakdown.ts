@@ -1,4 +1,4 @@
-import { getShortModelName } from './models.js'
+import { modelRowKey } from './models.js'
 import type { ProjectSummary } from './types.js'
 
 export interface ModelTotals {
@@ -23,7 +23,7 @@ export function aggregateModelTotals(projects: ProjectSummary[]): Record<string,
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        const name = getShortModelName(model)
+        const name = modelRowKey(model)
         const totals = (modelTotals[name] ??= {
           calls: 0, costUSD: 0, estimatedCostUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0,
           activeDurationMs: 0, activeGeneratedTokens: 0,

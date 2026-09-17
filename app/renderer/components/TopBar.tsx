@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useEscape } from '../hooks/useEscape'
 import type { ClaudeConfigSelector, DateRange } from '../lib/types'
+import { AnchoredSurface } from './AnchoredSurface'
 import { Dropdown } from './Dropdown'
 import { Icon } from './icons'
 import { ProviderPop, type ProviderOption } from './ProviderPop'
@@ -147,11 +148,14 @@ export function rangeLabel(range: DateRange): string {
 function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (range: DateRange) => void }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (!wrapRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
@@ -163,6 +167,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
   return (
     <div className="calendar-wrap" ref={wrapRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={`calendar-trigger${value ? ' on' : ''}`}
         aria-label={label}
@@ -174,7 +179,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
         {value && <span>{label}</span>}
       </button>
       {open && (
-        <div className="calendar-popover" role="dialog" aria-label="Choose date range">
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label="Choose date range">
           <RangeCalendar
             value={value}
             onSelect={range => {
@@ -182,7 +187,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
               setOpen(false)
             }}
           />
-        </div>
+        </AnchoredSurface>
       )}
     </div>
   )

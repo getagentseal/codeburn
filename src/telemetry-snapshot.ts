@@ -1,5 +1,5 @@
 import { isBehavioralTurn } from './behavioral-weight.js'
-import { getShortModelName } from './models.js'
+import { getShortModelName, modelRowKey } from './models.js'
 import { CATEGORY_LABELS, type ProjectSummary } from './types.js'
 import type { MenubarPayload } from './menubar-json.js'
 
@@ -145,7 +145,7 @@ export function aggregateModelTaskTurns(projects: ProjectSummary[]): ModelTaskTu
         if (!isBehavioralTurn(turn)) continue
         const primary = turn.assistantCalls.find(call => getShortModelName(call.model) !== SYNTHETIC_MODEL_NAME)
         if (!primary) continue
-        const model = getShortModelName(primary.model)
+        const model = modelRowKey(primary.model, primary.route)
         const category = CATEGORY_LABELS[turn.category] ?? turn.category
         const key = `${model}\u0000${category}`
         let row = rows.get(key)
