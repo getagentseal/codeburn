@@ -17,10 +17,14 @@ import {
   computeEnvFingerprint,
   cleanupOrphanedTempFiles,
   clearLoadCacheMemo,
+  clearShardMemo,
+  evictShardMemo,
   loadCache,
+  loadShardMemoized,
   markCacheDirty,
   monthScopeForRange,
   saveCache,
+  shardMemoStats,
   sessionCacheDir,
   type CachedFile,
   type SessionCache,
@@ -838,5 +842,61 @@ describe('retiring an orphaned prior layout', () => {
     await cleanupOrphanedTempFiles()
     expect(existsSync(v8Dir)).toBe(false)
     expect(existsSync(v7)).toBe(false)
+  })
+})
+
+// Shards a resident process keeps parsed between requests. A shard file name
+// carries a fresh nonce on every write, so a name that is still published names
+// the same bytes: the memo needs no revalidation, only a bound on how much it
+// holds and for how long.
+describe('resident shard memo', () => {
+  const dir = join(tmpdir(), `codeburn-shard-memo-${process.pid}`)
+
+  beforeEach(async () => {
+    clearShardMemo()
+    await mkdir(dir, { recursive: true })
+  })
+  afterEach(async () => {
+    clearShardMemo()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  const write = async (name: string, path: string): Promise<void> => {
+    const file: CachedFile = { fingerprint: { dev: 1, ino: 2, mtimeMs: 3, sizeBytes: 4 }, mcpInventory: [], turns: [] }
+    await writeFile(join(dir, name), JSON.stringify({ [path]: file }), 'utf-8')
+  }
+
+  it('reads a shard once and serves the same parse afterwards', async () => {
+    await write('claude.2026-08.aaaa.json', '/sessions/a.jsonl')
+    const first = await loadShardMemoized(dir, 'claude.2026-08.aaaa.json')
+    await rm(join(dir, 'claude.2026-08.aaaa.json'))
+    const second = await loadShardMemoized(dir, 'claude.2026-08.aaaa.json')
+    expect(first).not.toBeNull()
+    expect(second).toBe(first)
+    expect(shardMemoStats().entries).toBe(1)
+  })
+
+  it('drops entries past the age bound', async () => {
+    await write('claude.2026-08.bbbb.json', '/sessions/b.jsonl')
+    await loadShardMemoized(dir, 'claude.2026-08.bbbb.json')
+    expect(shardMemoStats().entries).toBe(1)
+    evictShardMemo(Date.now() + 11 * 60 * 1000)
+    expect(shardMemoStats()).toEqual({ entries: 0, bytes: 0 })
+  })
+
+  it('evicts least recently used first when over the byte budget', async () => {
+    await write('claude.2026-07.cccc.json', '/sessions/c.jsonl')
+    await write('claude.2026-08.dddd.json', '/sessions/d.jsonl')
+    await loadShardMemoized(dir, 'claude.2026-07.cccc.json')
+    await loadShardMemoized(dir, 'claude.2026-08.dddd.json')
+    // Touch the older shard so the newer one becomes the eviction candidate.
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await loadShardMemoized(dir, 'claude.2026-07.cccc.json')
+    const { bytes } = shardMemoStats()
+    evictShardMemo(Date.now(), bytes - 1)
+    expect(shardMemoStats().entries).toBe(1)
+    await rm(join(dir, 'claude.2026-07.cccc.json'))
+    // The survivor is the one still served without touching the disk.
+    expect(await loadShardMemoized(dir, 'claude.2026-07.cccc.json')).not.toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import type { ProviderName } from './types'
+import type { MenubarPayload, ProviderName } from './types'
 
 export const PROVIDER_NAMES: Record<ProviderName, string> = {
   claude: 'Claude',
@@ -42,4 +42,38 @@ export function readDisabledProviders(): ProviderName[] {
 
 export function writeDisabledProviders(disabled: ProviderName[]): void {
   try { globalThis.localStorage?.setItem(DISABLED_KEY, JSON.stringify(disabled)) } catch { /* storage can be unavailable in hardened contexts */ }
+}
+
+export type DetectedProvider = { id: string; label: string; cost: number; idle: boolean }
+
+/**
+ * Every provider the CLI found on this machine, whether or not it billed
+ * anything in the selected period. `hasUsage: false` means "installed, idle this
+ * period" — a reason to grey the row, never to hide a provider the user has.
+ * Active providers lead by spend; idle ones follow alphabetically.
+ */
+export function detectedProviders(current: MenubarPayload['current'] | undefined): DetectedProvider[] {
+  if (!current) return []
+  if (current.providerDetails) {
+    return [...current.providerDetails]
+      .map(entry => ({ id: entry.id, label: entry.label, cost: entry.cost, idle: entry.hasUsage === false }))
+      .sort((a, b) => Number(a.idle) - Number(b.idle) || (a.idle ? a.label.localeCompare(b.label) : b.cost - a.cost))
+  }
+  // Fallback map keys are lowercased display names; ones with spaces ("grok
+  // build") cannot round-trip as --provider, so exclude them rather than offer a
+  // filter that is guaranteed to error.
+  return Object.entries(current.providers)
+    .filter(([key, cost]) => cost > 0 && /^[a-z0-9-]+$/.test(key))
+    .sort(([, a], [, b]) => b - a)
+    .map(([key, cost]) => ({ id: key, label: providerLabel(key), cost, idle: false }))
+}
+
+/** Title-cases a lowercased provider key from the legacy providers map. */
+export function providerLabel(provider: string): string {
+  if (provider === 'all') return 'All providers'
+  return provider
+    .split(/[-\s]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }

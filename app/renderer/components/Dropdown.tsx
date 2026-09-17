@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useEscape } from '../hooks/useEscape'
+import { AnchoredSurface } from './AnchoredSurface'
 import { Icon } from './icons'
 
-export type DropdownOption = { value: string; label: string }
+export type DropdownOption = { value: string; label: string; muted?: boolean; note?: string }
 
 export function Dropdown({
   value,
@@ -31,6 +32,7 @@ export function Dropdown({
   const [activeIndex, setActiveIndex] = useState(selectedIndex)
   const wrapRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
   const menuId = `${id}-menu`
   const selected = options.find(option => option.value === value)
@@ -38,7 +40,8 @@ export function Dropdown({
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
+      const target = event.target as Node
+      if (!wrapRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onPointerDown)
     return () => document.removeEventListener('mousedown', onPointerDown)
@@ -97,13 +100,13 @@ export function Dropdown({
         <Icon name="chevron-down" className="dropdown-chevron" />
       </button>
       {open && (
-        <div id={menuId} className="pop-menu dropdown-menu" role="listbox" aria-label={ariaLabel}>
+        <AnchoredSurface anchor={triggerRef} surfaceRef={menuRef} matchWidth id={menuId} className="pop-menu dropdown-menu" role="listbox" aria-label={ariaLabel}>
           {options.map((option, index) => (
             <button
               key={option.value}
               ref={node => { optionRefs.current[index] = node }}
               type="button"
-              className={`pop-item${option.value === value ? ' on' : ''}`}
+              className={`pop-item${option.value === value ? ' on' : ''}${option.muted ? ' muted' : ''}`}
               role="option"
               aria-selected={option.value === value}
               tabIndex={index === activeIndex ? 0 : -1}
@@ -125,11 +128,12 @@ export function Dropdown({
               }}
             >
               {renderIcon?.(option.value)}
-              {option.label}
+              <span className="pop-item-label">{option.label}</span>
+              {option.note && <span className="pop-item-note">{option.note}</span>}
             </button>
           ))}
           {footer && <div className="dropdown-foot">{footer}</div>}
-        </div>
+        </AnchoredSurface>
       )}
     </div>
   )

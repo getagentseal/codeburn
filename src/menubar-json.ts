@@ -221,6 +221,18 @@ export type HydrationState = {
 
 export type MenubarPayload = {
   generated: string
+  /// Cost and calls for the headline windows this payload's live scan covered,
+  /// all from the one aggregation that produced it. A client that lets the user
+  /// switch period shows these, so the windows it can display never come from
+  /// generations minutes apart; a window that is absent was not scanned and the
+  /// client falls back to that period's own payload. Omitted entirely on scoped
+  /// or filtered requests.
+  periodTotals?: Partial<Record<'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime', { cost: number; calls: number }>>
+  /// Consecutive days with any activity, ending today or yesterday. One value
+  /// for the machine: computed across every provider and independent of the
+  /// selected period and provider filter, so every surface shows the same
+  /// number. Omitted by producers that predate the field.
+  streak?: number
   /// Optional. Present and `true` only when this payload was assembled from a
   /// read-only stale serve (see `isSessionHydrationComplete` in `parser.ts`).
   /// Omitted — never `false` — on a fresh/complete payload, so absence always

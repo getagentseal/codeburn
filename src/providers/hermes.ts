@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
+import { readGitOriginUrl } from '../git-origin.js'
 import { calculateCost, getShortModelName } from '../models.js'
 import { isUserHomeRoot } from '../path-privacy.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
@@ -138,38 +139,10 @@ function stripCodeRegions(text: string): string {
   return out.join('\n')
 }
 
-function parseGitConfigSection(config: string, section: string, key: string): string | null {
-  const wanted = `[${section.toLowerCase()}]`
-  let inSection = false
-  for (const raw of config.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line || line.startsWith('#') || line.startsWith(';')) continue
-    if (line.startsWith('[')) {
-      inSection = line.toLowerCase() === wanted
-      continue
-    }
-    if (!inSection) continue
-    const eq = line.indexOf('=')
-    if (eq < 0) continue
-    if (line.slice(0, eq).trim().toLowerCase() !== key.toLowerCase()) continue
-    return line.slice(eq + 1).trim()
-  }
-  return null
-}
-
 function githubOwnerRepoFromUrl(url: string): { owner: string; repo: string } | null {
   const gh = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i)
   if (!gh) return null
   return { owner: gh[1].toLowerCase(), repo: gh[2].replace(/\.git$/i, '').toLowerCase() }
-}
-
-function resolveGitCommonDir(gitDir: string): string {
-  const marker = join(gitDir, 'commondir')
-  if (!existsSync(marker)) return gitDir
-  const rel = readFileSync(marker, 'utf8').trim()
-  if (!rel) return gitDir
-  if (rel.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(rel)) return rel
-  return join(gitDir, rel)
 }
 
 // Memoized per repo root: every session in the same repo would otherwise
@@ -186,33 +159,8 @@ function githubOwnerRepoFromRoot(repoRoot: string): { owner: string; repo: strin
 }
 
 function readGithubOwnerRepoFromRoot(repoRoot: string): { owner: string; repo: string } | null {
-  try {
-    let gitDir = join(repoRoot, '.git')
-    if (!existsSync(gitDir)) return null
-    const st = statSyncSafe(gitDir)
-    if (st === 'file') {
-      const body = readFileSync(gitDir, 'utf8')
-      const match = body.match(/^gitdir:\s*(.+?)\s*$/m)
-      if (!match?.[1]) return null
-      gitDir = match[1].startsWith('/') || /^[a-zA-Z]:[\\/]/.test(match[1])
-        ? match[1]
-        : join(repoRoot, match[1])
-    } else if (st !== 'dir') {
-      return null
-    }
-    const commonDir = resolveGitCommonDir(gitDir)
-    const configs = [join(gitDir, 'config'), join(commonDir, 'config')]
-    for (const configPath of configs) {
-      if (!existsSync(configPath)) continue
-      const url = parseGitConfigSection(readFileSync(configPath, 'utf8'), 'remote "origin"', 'url')
-      if (!url) continue
-      const identity = githubOwnerRepoFromUrl(url)
-      if (identity) return identity
-    }
-    return null
-  } catch {
-    return null
-  }
+  const url = readGitOriginUrl(repoRoot)
+  return url ? githubOwnerRepoFromUrl(url) : null
 }
 
 function extractGithubPullUrls(
