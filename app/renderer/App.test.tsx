@@ -561,7 +561,7 @@ describe('App shortcuts', () => {
     await waitFor(() => expect(mocks.getOverview).toHaveBeenCalledWith('30days', 'grok'))
   })
 
-  it('hides idle providers while preserving explicit zero-cost activity', async () => {
+  it('lists a provider that is installed but idle this period, greyed and last', async () => {
     const payload = overviewPayload()
     payload.current.providers = { claude: 10, hermes: 0, cursor: 0 }
     payload.current.providerDetails = [
@@ -577,7 +577,10 @@ describe('App shortcuts', () => {
     fireEvent.click(screen.getByText('All providers'))
     expect(await screen.findByRole('option', { name: 'Claude' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Cursor' })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: 'Hermes' })).not.toBeInTheDocument()
+    const idle = screen.getByRole('option', { name: 'Hermes' })
+    expect(idle).toHaveClass('muted')
+    const labels = screen.getAllByRole('option').map(option => option.textContent)
+    expect(labels.indexOf('Hermes')).toBe(labels.length - 1)
   })
 
   it('keeps zero-cost providers in the picker when the CLI omits hasUsage', async () => {

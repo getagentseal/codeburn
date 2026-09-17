@@ -1,7 +1,7 @@
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 import { createHash } from 'crypto'
-import { readdir, stat } from 'fs/promises'
+import { open, readdir, stat, type FileHandle } from 'fs/promises'
 import { existsSync, statSync } from 'fs'
 import { basename, join } from 'path'
 import { homedir } from 'os'
@@ -625,6 +625,9 @@ export type ToolCall = {
   input: Record<string, unknown>
   sessionId: string
   project: string
+  /// When the call happened. `recent` is derived from it against the scan's
+  /// cutoff, so a scanned file can be reused across scans whose cutoffs differ.
+  tsMs?: number
   recent?: boolean
   isSidechain?: boolean
 }
@@ -632,6 +635,7 @@ export type ToolCall = {
 export type ApiCallMeta = {
   cacheCreationTokens: number
   version: string
+  tsMs?: number
   recent?: boolean
 }
 
@@ -709,12 +713,13 @@ async function collectJsonlFiles(dirPath: string): Promise<string[]> {
   return result
 }
 
-async function isFileStaleForRange(filePath: string, range: DateRange | undefined): Promise<boolean> {
-  if (!range) return false
+/// Size and last write, the pair a scan memo keys on. Null when the file cannot
+/// be stat'd, which is how the scan already treats a file it cannot read.
+async function fileIdentity(filePath: string): Promise<{ size: number; mtimeMs: number } | null> {
   try {
     const s = await stat(filePath)
-    return s.mtimeMs < range.start.getTime()
-  } catch { return false }
+    return { size: s.size, mtimeMs: s.mtimeMs }
+  } catch { return null }
 }
 
 async function runWithConcurrency<T>(
@@ -783,9 +788,9 @@ function inRange(timestamp: string | undefined, range: DateRange | undefined): b
   return ts >= range.start && ts <= range.end
 }
 
-function isRecent(timestamp: string | undefined, cutoff: number): boolean {
-  if (!timestamp) return false
-  return new Date(timestamp).getTime() >= cutoff
+// An absent or unparseable timestamp is not recent: NaN >= cutoff is false.
+function isRecentAt(tsMs: number | undefined, cutoff: number): boolean {
+  return tsMs !== undefined && tsMs >= cutoff
 }
 
 export async function scanJsonlFile(
@@ -794,83 +799,155 @@ export async function scanJsonlFile(
   dateRange: DateRange | undefined,
   recentCutoffMs = Date.now() - RECENT_WINDOW_MS,
 ): Promise<ScanFileResult> {
-  const calls: ToolCall[] = []
-  const cwds: string[] = []
-  const apiCalls: ApiCallMeta[] = []
-  const userMessages: string[] = []
-  const openers: SessionOpener[] = []
-  const sessionId = basename(filePath, '.jsonl')
-  let lastVersion = ''
-  let fileIsSidechain = false
-  // The opening block is the first user message carrying text; anything
-  // later in the session is not what the user opens with.
-  let sawUserText = false
+  const { record } = await scanFileRecord(filePath, project)
+  return useProjection(projectRecord(record, dateRange), recentCutoffMs)
+}
 
-  const skipThreshold = dateRange
-    ? new Date(dateRange.start.getTime() - 86_400_000).toISOString()
-    : null
-  const skipFn = dateRange
-    ? (head: string) => shouldSkipLine(head, skipThreshold!)
-    : undefined
-  const lines = readSessionLines(filePath, skipFn, { largeLineAsBuffer: true })
+/// One file scanned once, independent of any query range: every item the
+/// detectors can ask for, each carrying the instant it happened, plus the small
+/// amount of state the line loop carried so a range filter can reproduce it.
+///
+/// The scan used to take the range with it - skipping lines below it, and
+/// collecting only what fell inside - which meant one stored result per period
+/// and three periods evicting each other. Scanning once and filtering per query
+/// lets one entry serve every period.
+type ScanFileRecord = {
+  calls: ToolCall[]
+  cwds: Array<{ value: string; tsMs: number }>
+  apiCalls: Array<{ call: ApiCallMeta; versionIndex: number }>
+  /// The version each line carried, in order, one entry per CHANGE of version:
+  /// a run of lines repeating one version collapses to a single event whose
+  /// anchor is the easiest of them to qualify (an unskippable line, else the
+  /// latest timestamp), because whichever member of the run survives a range's
+  /// skip threshold yields the same version string. Replayed per range, so a
+  /// file that changed version partway through resolves exactly as a scan
+  /// carrying that range would have.
+  versionEvents: Array<{ version: string; anchor: string | null }>
+  users: Array<{ tsMs: number; messages: string[]; opener: SessionOpener | null }>
+  /// A line marking the file as a sidechain qualifies unless the range filter
+  /// would have skipped it: `always` is one that can never be skipped, `maxTs`
+  /// the latest timestamp among those that can.
+  sidechainAlways: boolean
+  sidechainMaxTs: string | null
+}
+
+/// What the line loop carries across lines, and therefore what a resumed read
+/// has to be handed to continue where the last one stopped.
+type ScanCarry = { version: string }
+type ScanPass = { record: ScanFileRecord; carry: ScanCarry; offset: number }
+
+const emptyCarry = (): ScanCarry => ({ version: '' })
+const emptyRecord = (): ScanFileRecord => ({
+  calls: [], cwds: [], apiCalls: [], users: [], versionEvents: [],
+  sidechainAlways: false, sidechainMaxTs: null,
+})
+
+/// Can the range filter skip this line outright? Mirrors shouldSkipLine: only a
+/// user or assistant line carrying a usable timestamp is ever skipped, and then
+/// only for a threshold above it.
+function skipTimestampOf(entry: Record<string, unknown>): string | null {
+  const type = entry.type
+  if (type !== 'user' && type !== 'assistant') return null
+  const ts = entry.timestamp
+  return typeof ts === 'string' && ts.length >= 10 ? ts : null
+}
+
+async function scanFileRecord(
+  filePath: string,
+  project: string,
+  // Continue an earlier read of this same file: start at the byte after the
+  // last complete line it consumed, append into the record it produced, and
+  // carry the state the loop had reached. The caller proves the bytes below
+  // that offset have not changed before passing this.
+  resume?: { fromOffset: number; carry: ScanCarry; into: ScanFileRecord },
+): Promise<ScanPass> {
+  const record = resume?.into ?? emptyRecord()
+  const carry = resume ? { ...resume.carry } : emptyCarry()
+  const sessionId = basename(filePath, '.jsonl')
+
+  // Tracks the byte after the last complete line, so a partial line left by a
+  // writer mid-append is never consumed and is re-read whole next time.
+  const tracker = { lastCompleteLineOffset: resume?.fromOffset ?? 0 }
+  const lines = readSessionLines(filePath, undefined, {
+    largeLineAsBuffer: true,
+    byteOffsetTracker: tracker,
+    ...(resume ? { startByteOffset: resume.fromOffset } : {}),
+  })
   for await (const line of lines) {
     if (typeof line === 'string' && !line.trim()) continue
     if (Buffer.isBuffer(line) && line.length === 0) continue
     const parsed = parseJsonlLine(line)
     if (!parsed) continue
     const entry = parsed as Record<string, unknown>
+    const skipTs = skipTimestampOf(entry)
 
-    if (entry.isSidechain === true && !fileIsSidechain) {
-      fileIsSidechain = true
-      for (const call of calls) call.isSidechain = true
+    if (entry.isSidechain === true) {
+      if (skipTs === null) record.sidechainAlways = true
+      else if (record.sidechainMaxTs === null || skipTs > record.sidechainMaxTs) record.sidechainMaxTs = skipTs
     }
 
-    if (entry.version && typeof entry.version === 'string') lastVersion = entry.version
+    if (entry.version && typeof entry.version === 'string') {
+      const last = record.versionEvents[record.versionEvents.length - 1]
+      if (last && last.version === entry.version) {
+        // Same version again: keep whichever of the run a range is likeliest to
+        // still see - an unskippable line beats any timestamp, otherwise the
+        // latest one.
+        if (skipTs === null) last.anchor = null
+        else if (last.anchor !== null && skipTs > last.anchor) last.anchor = skipTs
+      } else {
+        record.versionEvents.push({ version: entry.version, anchor: skipTs })
+      }
+      carry.version = entry.version
+    }
 
     const ts = typeof entry.timestamp === 'string' ? entry.timestamp : undefined
-    const withinRange = inRange(ts, dateRange)
-    const recent = isRecent(ts, recentCutoffMs)
+    const tsMs = ts === undefined ? Number.NaN : Date.parse(ts)
 
-    if (entry.cwd && typeof entry.cwd === 'string' && withinRange) cwds.push(entry.cwd)
+    if (entry.cwd && typeof entry.cwd === 'string') record.cwds.push({ value: entry.cwd, tsMs })
 
     if (entry.type === 'user') {
-      if (!withinRange) continue
       const msg = entry.message as Record<string, unknown> | undefined
       const msgContent = msg?.content
+      const messages: string[] = []
+      let opener: SessionOpener | null = null
+      let sawText = false
       if (typeof msgContent === 'string') {
-        userMessages.push(msgContent.slice(0, OPTIMIZE_TEXT_CAP))
-        if (!sawUserText) {
-          sawUserText = true
-          const opener = isMachineWrittenPrompt(entry) ? null : toSessionOpener(msgContent, project)
-          if (opener) openers.push(opener)
-        }
+        messages.push(msgContent.slice(0, OPTIMIZE_TEXT_CAP))
+        sawText = true
+        opener = isMachineWrittenPrompt(entry) ? null : toSessionOpener(msgContent, project)
       } else if (Array.isArray(msgContent)) {
         let remaining = OPTIMIZE_TEXT_CAP
         for (const block of msgContent) {
           if (remaining <= 0) break
           if (block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
             const text = block.text.slice(0, remaining)
-            userMessages.push(text)
+            messages.push(text)
             remaining -= text.length
-            if (!sawUserText) {
-              sawUserText = true
-              const opener = isMachineWrittenPrompt(entry) ? null : toSessionOpener(block.text, project)
-              if (opener) openers.push(opener)
+            if (!sawText) {
+              sawText = true
+              opener = isMachineWrittenPrompt(entry) ? null : toSessionOpener(block.text, project)
             }
           }
         }
       }
+      // An entry with no text at all is not recorded: the opening block is the
+      // first user message that carries text, and this one never claims it.
+      if (messages.length > 0) record.users.push({ tsMs, messages, opener })
       continue
     }
 
     if (entry.type !== 'assistant') continue
-    if (!withinRange) continue
 
     const msg = entry.message as Record<string, unknown> | undefined
     const usage = msg?.usage as Record<string, unknown> | undefined
     if (usage) {
       const cacheCreate = (usage.cache_creation_input_tokens as number) ?? 0
-      if (cacheCreate > 0) apiCalls.push({ cacheCreationTokens: cacheCreate, version: lastVersion, recent })
+      if (cacheCreate > 0) {
+        record.apiCalls.push({
+          call: { cacheCreationTokens: cacheCreate, version: carry.version, tsMs },
+          versionIndex: record.versionEvents.length,
+        })
+      }
     }
 
     const blocks = msg?.content
@@ -879,18 +956,102 @@ export async function scanJsonlFile(
     for (const block of blocks) {
       if (block.type !== 'tool_use') continue
       const name = typeof block.name === 'string' ? block.name : ''
-      calls.push({
+      record.calls.push({
         name,
         input: compactOptimizeInput(name, block.input),
         sessionId,
         project,
-        recent,
-        isSidechain: fileIsSidechain,
+        tsMs,
       })
     }
   }
 
-  return { calls, cwds, apiCalls, userMessages, openers }
+  return { record, carry, offset: tracker.lastCompleteLineOffset }
+}
+
+/// One range's view of a scanned file: the items it selected, held by
+/// reference, plus the two values that depend on the range and are therefore
+/// stamped onto those items each time the view is used. Keeping the selection
+/// means a repeat of the same period walks what it returns rather than the
+/// whole file; re-stamping means two periods can share the items safely,
+/// because a request always stamps its own view before anything reads it.
+type ScanProjection = { result: ScanFileResult; sidechain: boolean; versions: string[] }
+
+function useProjection(projection: ScanProjection, recentCutoffMs: number): ScanFileResult {
+  // One pass for all three range-or-clock derived stamps. Walking the selected
+  // items twice - once to place the range's verdicts, once for recency - was
+  // the larger half of what a warm scan cost.
+  for (const call of projection.result.calls) {
+    call.isSidechain = projection.sidechain
+    call.recent = isRecentAt(call.tsMs, recentCutoffMs)
+  }
+  const apiCalls = projection.result.apiCalls
+  for (let i = 0; i < apiCalls.length; i++) {
+    const call = apiCalls[i]!
+    call.version = projection.versions[i]!
+    call.recent = isRecentAt(call.tsMs, recentCutoffMs)
+  }
+  return projection.result
+}
+
+/// Narrow one scanned file to a query range, reproducing exactly what a scan
+/// that had carried the range would have collected: the same items, the same
+/// order, the same carried version and sidechain verdict.
+function projectRecord(record: ScanFileRecord, dateRange: DateRange | undefined): ScanProjection {
+  // No range means everything, exactly as the range test did; with a range, an
+  // absent or unparseable instant is NaN and compares false, as it did.
+  const startMs = dateRange ? dateRange.start.getTime() : 0
+  const endMs = dateRange ? dateRange.end.getTime() : 0
+  const within = dateRange
+    ? (tsMs: number): boolean => tsMs >= startMs && tsMs <= endMs
+    : (): boolean => true
+  // The threshold the line-level skip used, as the same ISO string it compared.
+  const threshold = dateRange ? new Date(dateRange.start.getTime() - 86_400_000).toISOString() : null
+  const qualifies = (skipTs: string | null): boolean =>
+    threshold === null || skipTs === null || skipTs >= threshold
+  const isSidechain = record.sidechainAlways || (record.sidechainMaxTs !== null && qualifies(record.sidechainMaxTs))
+
+  // Stamped in place rather than copied, on the same terms as the recency flag
+  // below: the record is owned by one serialized request at a time, and every
+  // reader of these objects is downstream of this projection. Copying each call
+  // instead cost more per request than re-reading the file had.
+  const calls: ToolCall[] = []
+  for (const call of record.calls) {
+    if (!within(call.tsMs!)) continue
+    calls.push(call)
+  }
+  const cwds: string[] = []
+  for (const cwd of record.cwds) if (within(cwd.tsMs)) cwds.push(cwd.value)
+  const apiCalls: ApiCallMeta[] = []
+  // The version a call carried is the last version line before it that the
+  // range's own skip threshold would have left in place. Resolved for every
+  // position once, in one forward pass, rather than walked back per call: a
+  // range that skips every version line in a file would otherwise re-walk the
+  // whole list for each of that file's calls.
+  const versionBefore: string[] = new Array(record.versionEvents.length + 1)
+  versionBefore[0] = ''
+  for (let i = 0; i < record.versionEvents.length; i++) {
+    const event = record.versionEvents[i]!
+    versionBefore[i + 1] = qualifies(event.anchor) ? event.version : versionBefore[i]!
+  }
+  const versions: string[] = []
+  for (const entry of record.apiCalls) {
+    if (!within(entry.call.tsMs!)) continue
+    versions.push(versionBefore[entry.versionIndex]!)
+    apiCalls.push(entry.call)
+  }
+  const userMessages: string[] = []
+  const openers: SessionOpener[] = []
+  let sawUserText = false
+  for (const user of record.users) {
+    if (!within(user.tsMs)) continue
+    for (const message of user.messages) userMessages.push(message)
+    if (!sawUserText) {
+      sawUserText = true
+      if (user.opener) openers.push(user.opener)
+    }
+  }
+  return { result: { calls, cwds, apiCalls, userMessages, openers }, sidechain: isSidechain, versions }
 }
 
 // The session scan reads Claude Code transcripts only, so a `--provider` that
@@ -899,6 +1060,216 @@ export async function scanJsonlFile(
 // returned here is an absence of measurement, not a measurement of absence.
 export function providerCoversClaude(provider?: string): boolean {
   return !provider || provider === 'all' || provider === 'claude'
+}
+
+// Session files a resident process (codeburn serve) has already scanned for the
+// optimize detectors, keyed by the file's identity and the range it was scanned
+// for. The scan re-read every Claude transcript overlapping the period on every
+// request - about six of the seven seconds a desktop period switch cost - while
+// all but the handful of files written since the last request produce exactly
+// the same result. An unchanged file is served as it is; a file that only grew
+// is read from the byte after the last complete line the previous read consumed
+// and the new lines are merged in, which is what keeps a live transcript from
+// costing its whole length on every request. Anything else - a file that shrank,
+// or whose opening bytes changed - is read in full. The recency flag is stamped
+// afterwards, so a kept result is not pinned to the cutoff it was first scanned
+// under. Bounded by bytes with age and least-recently-used eviction, like the
+// shard memo.
+// Held heap, not text: measured against a live heap on a 7GB corpus, the
+// objects a scanned file retains cost about 1.8x the text they carry, so a
+// budget counted in text alone lets the memo grow past the resident-set guard -
+// which then drops every memo and hands the next request a cold scan.
+const SCAN_RETAINED_FACTOR = 1.8
+const CALL_SAMPLE_STRIDE = 16
+// How recently a file must have been written to be worth the digest that lets a
+// later read resume from an offset.
+const SCAN_RESUMABLE_AGE_MS = 24 * 60 * 60 * 1000
+// The desktop rotates through six named periods; holding a selection for each
+// of them per file is references only, and past that the oldest is dropped.
+const MAX_PROJECTIONS_PER_FILE = 6
+const SCAN_MEMO_MAX_BYTES = 160 * 1024 * 1024
+const SCAN_MEMO_MAX_AGE_MS = 10 * 60 * 1000
+// `head` is the digest of the file's first bytes as of the stored offset: the
+// cheapest proof that the bytes already consumed are still the same bytes, and
+// the one an in-place rewrite that happens to grow the file cannot fake.
+const SCAN_HEAD_BYTES = 4096
+type ScanMemoEntry = {
+  record: ScanFileRecord
+  // Least-recently-used order; `bytes` below counts these too.
+  projections: Map<string, ScanProjection>
+  carry: ScanCarry
+  offset: number
+  size: number
+  mtimeMs: number
+  head: string
+  /// The record plus every selection currently held for it.
+  bytes: number
+  usedAt: number
+}
+const scanFileMemo = new Map<string, ScanMemoEntry>()
+let scanFileMemoBytes = 0
+
+export function clearScanFileMemo(): void {
+  scanFileMemo.clear()
+  scanFileMemoBytes = 0
+}
+
+export function scanFileMemoStats(): { entries: number; bytes: number } {
+  return { entries: scanFileMemo.size, bytes: scanFileMemoBytes }
+}
+
+/// Drop entries unused past the age bound, then least-recently-used entries
+/// until the byte budget holds. `now` is injected so the rule is testable.
+export function evictScanFileMemo(now: number, maxBytes: number = SCAN_MEMO_MAX_BYTES): void {
+  // The map is held in least-recently-used order - a hit reinserts its entry at
+  // the back - so the oldest and the least recently used are the same walk from
+  // the front, and it stops at the first entry that is both fresh and within
+  // budget. Sorting the whole map per insertion instead made a scan whose
+  // working set does not fit cost more than having no memo at all.
+  for (const [key, entry] of scanFileMemo) {
+    if (scanFileMemoBytes <= maxBytes && now - entry.usedAt <= SCAN_MEMO_MAX_AGE_MS) break
+    scanFileMemo.delete(key)
+    scanFileMemoBytes -= entry.bytes
+  }
+}
+
+/// What one scanned file costs to keep, in held heap. Tool inputs are already
+/// compacted by the scanner and user messages are capped, so the text they hold
+/// plus a flat per-record overhead, scaled by the measured retention factor,
+/// tracks the real footprint closely enough to bound it.
+function scanResultBytes(record: ScanFileRecord): number {
+  let bytes = record.apiCalls.length * 96 + record.cwds.length * 80
+  // Sampled, not exhaustive: measuring every tool input meant serializing the
+  // whole corpus on every scan, which cost more than the memo saved.
+  let sampled = 0
+  let sampledBytes = 0
+  for (let i = 0; i < record.calls.length; i += CALL_SAMPLE_STRIDE) {
+    sampledBytes += JSON.stringify(record.calls[i]!.input).length
+    sampled++
+  }
+  const averageInput = sampled > 0 ? sampledBytes / sampled : 0
+  bytes += record.calls.length * (128 + averageInput)
+  for (const user of record.users) {
+    bytes += 96
+    for (const message of user.messages) bytes += message.length
+    if (user.opener) bytes += user.opener.preview.length + 96
+  }
+  return Math.round(bytes * SCAN_RETAINED_FACTOR)
+}
+
+/// Digest of a file's opening bytes, or null when they cannot be read.
+async function headDigest(filePath: string): Promise<string | null> {
+  let handle: FileHandle
+  try {
+    handle = await open(filePath, 'r')
+  } catch { return null }
+  try {
+    const buffer = Buffer.allocUnsafe(SCAN_HEAD_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, SCAN_HEAD_BYTES, 0)
+    return createHash('sha256').update(buffer.subarray(0, bytesRead)).digest('hex')
+  } catch {
+    return null
+  } finally {
+    await handle.close()
+  }
+}
+
+/// What one range's selection costs to keep: slots holding references, not the
+/// items themselves, which is the whole reason a period can have its own.
+function projectionBytes(projection: ScanProjection): number {
+  const { calls, cwds, apiCalls, userMessages, openers } = projection.result
+  const slots = calls.length + cwds.length + apiCalls.length + userMessages.length
+    + openers.length + projection.versions.length
+  return slots * 24
+}
+
+/// The view of a stored file for one range, built once and kept. Selections are
+/// held least-recently-used, so a period the desktop has moved on from is the
+/// one dropped; the record itself stays, and rebuilding a selection is a walk,
+/// not a read.
+function rangeProjection(entry: ScanMemoEntry, dateRange: DateRange | undefined, recentCutoffMs: number): ScanFileResult {
+  const rangeKey = dateRange ? `${dateRange.start.getTime()}-${dateRange.end.getTime()}` : 'all'
+  const existing = entry.projections.get(rangeKey)
+  if (existing) {
+    entry.projections.delete(rangeKey)
+    entry.projections.set(rangeKey, existing)
+    return useProjection(existing, recentCutoffMs)
+  }
+  const projection = projectRecord(entry.record, dateRange)
+  while (entry.projections.size >= MAX_PROJECTIONS_PER_FILE) {
+    const oldest = entry.projections.entries().next().value
+    if (oldest === undefined) break
+    entry.projections.delete(oldest[0])
+    const freed = projectionBytes(oldest[1])
+    entry.bytes -= freed
+    scanFileMemoBytes -= freed
+  }
+  entry.projections.set(rangeKey, projection)
+  const held = projectionBytes(projection)
+  entry.bytes += held
+  scanFileMemoBytes += held
+  return useProjection(projection, recentCutoffMs)
+}
+
+export async function scanJsonlFileMemoized(
+  filePath: string,
+  project: string,
+  dateRange: DateRange | undefined,
+  identity: { size: number; mtimeMs: number } | null,
+  recentCutoffMs: number = Date.now() - RECENT_WINDOW_MS,
+): Promise<ScanFileResult> {
+  if (identity === null) return useProjection(projectRecord((await scanFileRecord(filePath, project)).record, dateRange), recentCutoffMs)
+  // No range in the key: the record is what the file holds, not what one period
+  // asked of it, so one entry answers every period the desktop rotates through.
+  const key = `${filePath}\0${project}`
+  const now = Date.now()
+  const hit = scanFileMemo.get(key)
+  if (hit && hit.size === identity.size && hit.mtimeMs === identity.mtimeMs) {
+    hit.usedAt = now
+    scanFileMemo.delete(key)
+    scanFileMemo.set(key, hit)
+    return rangeProjection(hit, dateRange, recentCutoffMs)
+  }
+
+  // Only growth past a still-intact head can be read as an append. A file that
+  // shrank, or whose offset now sits past its end, is a different file as far
+  // as this scan is concerned and is read from the top.
+  let resume: { fromOffset: number; carry: ScanCarry; into: ScanFileRecord } | undefined
+  if (hit && hit.head !== '' && identity.size > hit.size && hit.offset <= identity.size) {
+    const head = await headDigest(filePath)
+    if (head !== null && head === hit.head) {
+      resume = { fromOffset: hit.offset, carry: hit.carry, into: hit.record }
+    }
+  }
+  if (hit) {
+    scanFileMemo.delete(key)
+    scanFileMemoBytes -= hit.bytes
+  }
+
+  const pass = await scanFileRecord(filePath, project, resume)
+  // Only a file that could still be written to is worth a head digest. Digesting
+  // every file in the window meant opening the whole corpus a second time on
+  // every scan, which cost more than the resume it enables; a file untouched for
+  // a day that then grows simply gets a full read.
+  const mayGrow = now - identity.mtimeMs < SCAN_RESUMABLE_AGE_MS
+  const head = resume ? hit!.head : mayGrow ? await headDigest(filePath) : null
+  if (head === null && mayGrow) return useProjection(projectRecord(pass.record, dateRange), recentCutoffMs)
+  const bytes = scanResultBytes(pass.record)
+  const entry: ScanMemoEntry = {
+    record: pass.record,
+    projections: new Map(),
+    carry: pass.carry,
+    offset: pass.offset,
+    size: identity.size,
+    mtimeMs: identity.mtimeMs,
+    head: head ?? '',
+    bytes,
+    usedAt: now,
+  }
+  scanFileMemo.set(key, entry)
+  scanFileMemoBytes += bytes
+  evictScanFileMemo(now)
+  return rangeProjection(entry, dateRange, recentCutoffMs)
 }
 
 async function scanSessions(dateRange?: DateRange, provider?: string): Promise<ScanData> {
@@ -912,17 +1283,25 @@ async function scanSessions(dateRange?: DateRange, provider?: string): Promise<S
   const allUserMessages: string[] = []
   const allOpeners: SessionOpener[] = []
 
-  const tasks: Array<{ file: string; project: string }> = []
+  const tasks: Array<{ file: string; project: string; identity: { size: number; mtimeMs: number } | null }> = []
   for (const source of sources) {
     const files = await collectJsonlFiles(source.path)
     for (const file of files) {
-      if (await isFileStaleForRange(file, dateRange)) continue
-      tasks.push({ file, project: source.project })
+      const identity = await fileIdentity(file)
+      // A file that cannot be stat'd is still scanned, as it always was; it
+      // just has no identity to memoize under.
+      if (identity && dateRange && identity.mtimeMs < dateRange.start.getTime()) continue
+      tasks.push({ file, project: source.project, identity })
     }
   }
 
-  await runWithConcurrency(tasks, FILE_READ_CONCURRENCY, async ({ file, project }) => {
-    const { calls, cwds, apiCalls, userMessages, openers } = await scanJsonlFile(file, project, dateRange)
+  // One cutoff for the whole scan rather than one per file, so every detector
+  // reads the same window and a memoized file is stamped with the same verdict
+  // a freshly read one would get.
+  const recentCutoffMs = Date.now() - RECENT_WINDOW_MS
+  await runWithConcurrency(tasks, FILE_READ_CONCURRENCY, async ({ file, project, identity }) => {
+    const { calls, cwds, apiCalls, userMessages, openers } =
+      await scanJsonlFileMemoized(file, project, dateRange, identity, recentCutoffMs)
     allCalls.push(...calls)
     for (const cwd of cwds) allCwds.add(cwd)
     allApiCalls.push(...apiCalls)

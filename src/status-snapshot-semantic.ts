@@ -18,7 +18,11 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 /// v7: providerDetails also carries per-provider cacheReadTokens, which a v6
 ///     record predates — the dock's cache-read row would stay hidden behind a
 ///     warm snapshot even once the live payload had the data.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 7
+/// v8: the payload carries `streak` and `periodTotals`. A v7 record predates
+///     both, so a warm snapshot would leave the streak pill and every period
+///     headline reading from the client's own fallback while the live payload
+///     already had the numbers.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 8
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

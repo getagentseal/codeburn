@@ -14,6 +14,7 @@ import {
   writeCachedCodexResults,
 } from '../src/codex-cache.js'
 import {
+  ANTIGRAVITY_CACHE_VERSION,
   antigravityCacheFileName,
   clearAntigravityCacheStates,
   createAntigravityProvider,
@@ -57,7 +58,7 @@ async function seedAntigravityCache(
   const sourceStat = await stat(sourcePath)
   await mkdir(cacheDir, { recursive: true })
   await writeFile(join(cacheDir, antigravityCacheFileName()), JSON.stringify({
-    version: 5,
+    version: ANTIGRAVITY_CACHE_VERSION,
     cascades: {
       shared: {
         mtimeMs: sourceStat.mtimeMs,

@@ -1084,6 +1084,12 @@ const warnedUnknownModels = new Set<string>()
 /// Users still get $0 in cost reports for them (correct — local inference is
 /// effectively free); the warning was just noise.
 function looksLikeLocalModel(name: string): boolean {
+  // Bedrock foundation-model ids end in a `-[v]<major>:<minor>` version
+  // (`anthropic.claude-haiku-4-5-20251001-v1:0`, `openai.gpt-oss-120b-1:0`).
+  // That colon is a version, not an Ollama tag: such a model is metered, and
+  // one with no price must reach the unpriced list rather than be treated as
+  // free local inference.
+  if (/-v?\d+:\d+$/.test(name)) return false
   // Ollama and LM Studio tags include `:tag` (e.g. qwen3.6:35b-a3b-bf16).
   if (name.includes(':') && !name.startsWith('http')) return true
   // GGUF / quantized fingerprints commonly seen in local inference.

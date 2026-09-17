@@ -1,7 +1,7 @@
 import { Dropdown } from './Dropdown'
 import { ProviderLogo } from './ProviderLogo'
 
-export type ProviderOption = { value: string; label: string }
+export type ProviderOption = { value: string; label: string; muted?: boolean }
 
 /**
  * Provider selector built on the Dropdown listbox (roving tabindex, arrow-key

@@ -20,6 +20,8 @@ import { scanUserCorrections, medianTimeToFirstEditMs, aggregateFileChurn, compu
 import { buildPrAttribution, aggregateByBranch } from './sessions-report.js'
 import { scanAndDetect } from './optimize.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, inferSessionProvider } from './session-output.js'
+import { getDateRange } from './cli-date.js'
+import { activityStreak } from './streak.js'
 import { getDaysInRange, ensureCacheHydrated, loadDailyCache, cachedProjectIdentities, emptyCache, mergeDayEntries, BACKFILL_DAYS, toDateString, type DailyCache, type DailyEntry, type ProjectDayStats, type ProviderDaySlice } from './daily-cache.js'
 import { buildGranularHistory } from './granular-history.js'
 import { spendProjectIdentity } from './spend-flow.js'
@@ -714,7 +716,18 @@ export type DurablePeriod = {
   todayAllDays: DailyEntry[]
   /// The scan range the live parse covered (today-only when the period is today).
   scanRange: DateRange
+  /// Cost and calls for every headline window this call's live scan covered,
+  /// from its own cache and today set. Switching period in a client must not mix
+  /// two aggregations taken minutes apart, so the windows it can show come from
+  /// one generation. Present only on the unscoped all-provider path with no
+  /// project filter or day selection; a scoped path must not scan what it does
+  /// not display.
+  periodTotals?: PeriodTotals
 }
+
+export const HEADLINE_PERIODS = ['today', 'week', '30days', 'month', 'all', 'lifetime'] as const
+export type HeadlinePeriod = typeof HEADLINE_PERIODS[number]
+export type PeriodTotals = Partial<Record<HeadlinePeriod, { cost: number; calls: number }>>
 
 export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: AggregateOpts = {}): Promise<DurablePeriod> {
   const pf = opts.provider ?? 'all'
@@ -863,7 +876,25 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
 
   const carriedCostUSD = days.reduce((s, d) => s + (d.carried ? d.cost : 0), 0)
   const knownProjects = [...seenProjects, ...cachedProjectIdentities(cache, rangeStartStr, rangeEndStr)]
-  return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange }
+  // Same cache, same today set, same live days as the headline above; only the
+  // window moves, so each entry is what a direct request for that period would
+  // return. A window that reaches back past `scanRange` is NOT emitted: the live
+  // parse never read those dates, so the cache would stand there unreconciled
+  // and the total would trail a direct request by whatever an under-read cached
+  // day is missing (#1217). A client falls back to the period's own payload for
+  // a window that is absent.
+  const scanStartStr = toDateString(scanRange.start)
+  const periodTotals = pf === 'all' && !daysSelection && !hasProjectFilter
+    ? Object.fromEntries(HEADLINE_PERIODS
+      .map(period => [period, getDateRange(period)] as const)
+      .filter(([, info]) => toDateString(info.range.start) >= scanStartStr)
+      .map(([period, info]) => {
+        const windowDays = unionDaysForPeriod(cache, todayAllDays, info, null, undefined, liveHistoricalDays)
+        const windowData = buildPeriodDataFromDays(windowDays, info.label)
+        return [period, { cost: windowData.cost, calls: windowData.calls }]
+      })) as PeriodTotals
+    : undefined
+  return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
 }
 
 type PayloadProject = NonNullable<PeriodData['projects']>[number]
@@ -1383,6 +1414,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   let scanProjects!: ProjectSummary[]
   let scanRange!: DateRange
   let cache: DailyCache = emptyCache()
+  let durablePeriodTotals: PeriodTotals | undefined
   /// The exact day set behind the all-provider headline (cache-backed
   /// historical days + today's live days, day-filtered). Non-null only on the
   /// unscoped all-provider path; it is the authority the projects view merges
@@ -1436,6 +1468,7 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
     cacheDaysForPeriod = durable.days
     cache = durable.cache
     todayAllDays = durable.todayAllDays
+    durablePeriodTotals = durable.periodTotals
   }
   claudeConfigs = claudeConfigs ?? await claudeConfigSelector(scanProjects, null)
 
@@ -1798,6 +1831,19 @@ export async function buildMenubarPayloadForRange(periodInfo: PeriodInfo, opts: 
   const partialFirstPaint = hydration?.deferredForFirstPaint === true
   const stale = hydration?.complete === false && !partialFirstPaint ? true : undefined
   const payload = buildMenubarPayload(currentData, providers, optimize, dailyHistory, retryTax, routingWaste, breakdowns, claudeConfigs, granularHistory, stale, hydrationStateFor(hydration))
+  // Deliberately NOT derived from this payload's own history: that is narrowed
+  // by the period, which made the same pill read a different number on every
+  // tab. Emitted only from the all-provider path, whose cache and today set are
+  // already the whole machine's: a provider-scoped render must not scan
+  // unrelated providers just to count days, so it omits the field and consumers
+  // keep the last one they were given.
+  if (durablePeriodTotals) payload.periodTotals = durablePeriodTotals
+  if (isAllProviders) {
+    payload.streak = activityStreak(
+      [...getDaysInRange(cache, historyStartStr, yesterdayStr), ...(await getTodayAllDays()).filter(d => d.date === todayStr)],
+      now,
+    )
+  }
   // Plugin socket: add-only sections from loaded plugins (empty socket by
   // default, so the payload is byte-identical without plugins installed).
   const pluginSections = await pluginPayloadSections(await loadPlugins())
