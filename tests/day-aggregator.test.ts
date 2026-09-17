@@ -625,24 +625,24 @@ describe('daily-cache ↔ report daily-bucket parity', () => {
 
 describe('billing routes in the finalized day (v33)', () => {
   it('keys day.models by route so a column-sourced route survives, and keeps Bedrock SKUs apart', () => {
-    // Hermes writes `billing_provider = openrouter` next to the plain vendor
-    // id; only the call's `route` can carry that into the day. The raw-id key
+    // Hermes writes `billing_provider = bedrock` next to a plain vendor id;
+    // only the call's `route` can carry that into the day. The raw-id key
     // (pre-v33) would have folded it into the direct row on re-derivation.
     const direct = makeCall('2026-08-05T10:00:00Z', 1, 'claude-sonnet-4-5', 'hermes')
-    const viaOpenRouter = { ...makeCall('2026-08-05T10:01:00Z', 2, 'claude-sonnet-4-5', 'hermes'), route: 'openrouter' }
-    const viaBedrock = makeCall('2026-08-05T10:02:00Z', 3, 'anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
-    const viaBedrockUs = makeCall('2026-08-05T10:03:00Z', 4, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
-    const day = aggregateProjectsIntoDays([makeSingleTurnProject([direct, viaOpenRouter, viaBedrock, viaBedrockUs])])[0]!
+    const viaColumn = { ...makeCall('2026-08-05T10:01:00Z', 2, 'claude-sonnet-4-5', 'hermes'), route: 'bedrock' }
+    const viaId = makeCall('2026-08-05T10:02:00Z', 3, 'anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
+    const viaIdUs = makeCall('2026-08-05T10:03:00Z', 4, 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude')
+    const day = aggregateProjectsIntoDays([makeSingleTurnProject([direct, viaColumn, viaId, viaIdUs])])[0]!
     expect(Object.keys(day.models).sort()).toEqual([
-      'Sonnet 4.5', 'Sonnet 4.5 (Bedrock us)', 'Sonnet 4.5 (Bedrock)', 'Sonnet 4.5 (OpenRouter)',
+      'Sonnet 4.5', 'Sonnet 4.5 (Bedrock us)', 'Sonnet 4.5 (Bedrock)',
     ])
     expect(day.models['Sonnet 4.5']!.cost).toBe(1)
-    expect(day.models['Sonnet 4.5 (OpenRouter)']!.cost).toBe(2)
-    expect(day.models['Sonnet 4.5 (Bedrock)']!.cost).toBe(3)
+    // The column-routed call and the id-shaped one are one row: same SKU, same door.
+    expect(day.models['Sonnet 4.5 (Bedrock)']!.cost).toBe(5)
     expect(day.models['Sonnet 4.5 (Bedrock us)']!.cost).toBe(4)
     // Provider slices carry the same keys, so a per-provider re-derivation
     // (the pending-rederive path) lands on the rows the day already holds.
-    expect(Object.keys(day.providers['hermes']!.models!).sort()).toEqual(['Sonnet 4.5', 'Sonnet 4.5 (OpenRouter)'])
+    expect(Object.keys(day.providers['hermes']!.models!).sort()).toEqual(['Sonnet 4.5', 'Sonnet 4.5 (Bedrock)'])
   })
 })
 

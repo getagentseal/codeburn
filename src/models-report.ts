@@ -33,10 +33,10 @@ export type ModelReportRow = {
   /// as "MiniMax M3"). Length 1 when nothing merged. Lets a cached vs
   /// uncached route stay visible even though the row is one model (#1239).
   rawModels: string[]
-  /// Billing route id this row's calls went through (`bedrock`, `openrouter`,
-  /// …), or null for the direct door. Part of the row identity: the same model
-  /// through two doors is two rows (#1449). Additive; JSON consumers that
-  /// predate it ignore it.
+  /// Billing route id this row's calls went through (`bedrock`), or null for
+  /// the direct door. Part of the row identity: the same model through two
+  /// doors is two rows (#1449). Additive; JSON consumers that predate it
+  /// ignore it.
   route: string | null
   /// Codex credit consumption (issues #408/#495). null for non-Codex models or
   /// Codex models without a known credit rate. A merged row that mixed rated
@@ -70,8 +70,8 @@ type Bucket = {
   model: string
   /// Route id the call recorded (see ParsedApiCall.route); the id shape fills
   /// it at fold time when absent. Part of the bucket identity so a
-  /// `billing_provider = openrouter` call never shares a bucket with the
-  /// direct call of the same id.
+  /// `billing_provider = bedrock` call never shares a bucket with the direct
+  /// call of the same id.
   route: string | null
   category: TaskCategory | null
   agentType: string | null
@@ -89,14 +89,18 @@ type ModelKey = string
 type CategoryKey = TaskCategory
 
 /// Canonical identity of one SKU through one door: the alias-resolved id plus
-/// the route id. The id is NOT peeled to its base: `us.anthropic.…` prices
-/// above `anthropic.…` and stays its own row, exactly as before #1450.
-function foldIdentity(model: string, routeId: string | null): string {
-  return `${resolveCanonicalModelId(model)}${routeId ? ` @${routeId}` : ''}`
+/// the door's suffix from the row key — never the route id. Two route ids can
+/// share one label (a door with two endpoint names), and folding on the id
+/// then prints two rows the reader cannot tell apart while every label-keyed
+/// surface shows one. The id is NOT peeled to its base: `us.anthropic.…`
+/// prices above `anthropic.…` and stays its own row, exactly as before #1450.
+/// Exported for the test that pins the row key, not the id, as the fold.
+export function modelFoldKey(model: string, routeId: string | null): string {
+  return `${resolveCanonicalModelId(model)} ${routeSuffix(model, routeId)}`
 }
 
 function rowFoldKey(row: Pick<ModelReportRow, 'provider' | 'model' | 'route'>): string {
-  return `${row.provider} ${foldIdentity(row.model, row.route)}`
+  return `${row.provider} ${modelFoldKey(row.model, row.route)}`
 }
 
 /// Provider-first label with the route kept visible. A provider's own table
@@ -223,13 +227,14 @@ export async function aggregateModels(projects: ProjectSummary[], opts: Aggregat
 
   for (const bucket of buckets.values()) {
     const meta = await resolveProvider(bucket.provider)
-    // Fold by canonical id AND route, and label the row with the same key
-    // every other surface uses (modelRowKey), so `models`, the menubar payload
-    // and the overview agree on what one row is. The route is the persisted
-    // one when the provider recorded it, else what the id's shape names.
+    // Fold by canonical id AND the row key's door suffix, and label the row
+    // with the same key every other surface uses (modelRowKey), so `models`,
+    // the menubar payload and the overview agree on what one row is. The
+    // route is the persisted one when the provider recorded it, else what the
+    // id's shape names.
     const routeId = getRouteById(bucket.route)?.id ?? getModelRoute(bucket.model)?.id ?? null
     const modelDisplayName = sanitizeModelForDisplay(routedDisplayName(meta.formatModel(bucket.model), bucket.model, routeId))
-    const canonicalId = foldIdentity(bucket.model, routeId)
+    const canonicalId = modelFoldKey(bucket.model, routeId)
     const resolvedKey = bucketKey(bucket.provider, canonicalId, null, bucket.category, bucket.agentType)
     const foldKey = `${bucket.provider} ${canonicalId}`
     const total = bucket.inputTokens + bucket.outputTokens + bucket.cacheWriteTokens + bucket.cacheReadTokens

@@ -1407,31 +1407,25 @@ export function getShortModelName(model: string): string {
 
 // --- Billing routes ---------------------------------------------------------
 //
-// The same model can be billed through more than one door, and the door decides
-// whether the call is metered: Claude through Anthropic's API or through AWS
-// Bedrock is metered per token; Claude Code on a Max plan or Codex on a ChatGPT
-// plan is covered by a fixed fee. Reports key model rows by display name, so
-// without a route the Bedrock and subscription spend of one model merge into a
-// single row and "how much metered API usage am I incurring on top of my
-// subscriptions?" has no answer.
+// The same model can be billed through more than one door: Claude through
+// Anthropic's API or through AWS Bedrock, Codex through OpenAI or a reseller.
+// Reports key model rows by display name, so without a route the Bedrock and
+// the direct spend of one model merge into a single row and "how much metered
+// API usage am I incurring on top of my subscriptions?" has no answer.
 //
 // A route has two possible sources, feeding one field on the call:
 //   * the model id, when the door renames the model (Bedrock writes
 //     `anthropic.claude-…-v1:0` where a direct call writes `claude-…`);
 //   * the provider's own endpoint column, when it does not (Hermes records
-//     `billing_provider = openrouter` next to the plain vendor id).
+//     `billing_provider = bedrock` next to the plain vendor id).
 // Pricing never consults the route: it runs on the raw id, and LiteLLM already
 // carries the routed rows. The route only decides which row the cost lands on.
 
-export type BillingMode = 'metered' | 'subscription'
-
 export type ModelRoute = {
-  /// Stable key, safe for filters and JSON (`bedrock`, `openrouter`).
+  /// Stable key, safe for filters and JSON (`bedrock`).
   id: string
   /// Suffix appended to the display name: "Fable 5.1 (Bedrock)".
   label: string
-  /// What the door bills by, unless the provider states otherwise for a call.
-  billing: BillingMode
 }
 
 type RouteEntry = ModelRoute & {
@@ -1439,17 +1433,13 @@ type RouteEntry = ModelRoute & {
   providerFields: readonly string[]
 }
 
-// Metered doors other than the vendor's own API. The direct door has no entry:
-// the unsuffixed row IS the direct row. Subscription doors (a ChatGPT plan, a
+// Doors other than the vendor's own API. The direct door has no entry: the
+// unsuffixed row IS the direct row. Subscription doors (a ChatGPT plan, a
 // Claude Max plan) are not routes either — they do not change which row a
-// model lands on; they change whether the call is metered, which is the
-// `billing` field on the call (Hermes states it per session).
+// model lands on. Only doors with real sessions on disk are listed, the same
+// rule the id shapes follow.
 const ROUTES: readonly RouteEntry[] = [
-  { id: 'bedrock', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock', 'aws-bedrock', 'amazon-bedrock'] },
-  // Bedrock's OpenAI-compatible endpoint. Hermes records it separately from
-  // `bedrock`; the invoice is the same AWS account, so it shares the label.
-  { id: 'bedrock-mantle', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock-mantle'] },
-  { id: 'openrouter', label: 'OpenRouter', billing: 'metered', providerFields: ['openrouter'] },
+  { id: 'bedrock', label: 'Bedrock', providerFields: ['bedrock'] },
 ]
 
 const ROUTES_BY_ID = new Map(ROUTES.map(route => [route.id, route]))
@@ -1489,19 +1479,11 @@ export function getModelRoute(model: string): RoutedModel | undefined {
 }
 
 /// The route a provider's endpoint column names (`billing_provider` in
-/// Hermes' state.db, `providerID` in OpenCode's session model, …), or
-/// undefined when the value is the direct door or unknown. Direct doors
-/// (`anthropic`, `openai`, `google`, …) deliberately have no route: the
-/// unsuffixed row IS the direct row.
+/// Hermes' state.db), or undefined when the value is the direct door or
+/// unknown. Direct doors (`anthropic`, `openai`, `google`, …) deliberately
+/// have no route: the unsuffixed row IS the direct row.
 export function routeFromProviderField(value: string | null | undefined): ModelRoute | undefined {
-  if (!value) return undefined
-  const key = value.trim().toLowerCase()
-  const direct = ROUTES_BY_FIELD.get(key)
-  if (direct) return direct
-  // `openrouter/anthropic/...` or `openrouter:...` spellings name the door in
-  // their first segment.
-  const head = key.split(/[/:]/, 1)[0] ?? ''
-  return head !== key ? ROUTES_BY_FIELD.get(head) : undefined
+  return value ? ROUTES_BY_FIELD.get(value.trim().toLowerCase()) : undefined
 }
 
 /// Route by stable id, for consumers that persisted the id (cached calls).
@@ -1510,7 +1492,7 @@ export function getRouteById(id: string | null | undefined): ModelRoute | undefi
 }
 
 /// The parenthetical a routed row carries after its short name — "(Bedrock)",
-/// "(Bedrock us)", "(OpenRouter)" — or an empty string for the direct door.
+/// "(Bedrock us)" — or an empty string for the direct door.
 /// `route` is the call's persisted route id when the provider supplied one;
 /// otherwise the id shape decides. Exported so a provider-first label
 /// (models-report) can append exactly what modelRowKey appends.

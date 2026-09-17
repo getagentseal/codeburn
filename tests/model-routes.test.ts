@@ -7,10 +7,12 @@ import {
   getShortModelName,
   loadPricing,
   modelRowKey,
+  resolveCanonicalModelId,
   routeFromProviderField,
   routeSuffix,
   setModelAliases,
 } from '../src/models.js'
+import { modelFoldKey } from '../src/models-report.js'
 
 beforeAll(async () => {
   await loadPricing()
@@ -28,7 +30,7 @@ afterEach(() => {
 describe('getModelRoute - Bedrock id shape', () => {
   it('recognises <vendor>.<model>[-vN:M] for the two vendors with sessions on disk', () => {
     expect(getModelRoute('anthropic.claude-haiku-4-5-20251001-v1:0')).toMatchObject({
-      id: 'bedrock', label: 'Bedrock', billing: 'metered', baseModel: 'claude-haiku-4-5-20251001',
+      id: 'bedrock', label: 'Bedrock', baseModel: 'claude-haiku-4-5-20251001',
     })
     expect(getModelRoute('anthropic.claude-fable-5-1')?.baseModel).toBe('claude-fable-5-1')
     expect(getModelRoute('openai.gpt-5.6-luna')?.baseModel).toBe('gpt-5.6-luna')
@@ -62,27 +64,23 @@ describe('getModelRoute - Bedrock id shape', () => {
 })
 
 describe('routeFromProviderField - the provider column', () => {
-  it('maps the door spellings Hermes writes, including path and colon forms', () => {
+  it('maps the door spelling Hermes writes', () => {
     expect(routeFromProviderField('bedrock')?.id).toBe('bedrock')
     expect(routeFromProviderField('Bedrock ')?.id).toBe('bedrock')
-    expect(routeFromProviderField('bedrock-mantle')?.id).toBe('bedrock-mantle')
-    expect(routeFromProviderField('openrouter')?.id).toBe('openrouter')
-    expect(routeFromProviderField('openrouter/anthropic/claude-sonnet-4-5')?.id).toBe('openrouter')
-    expect(routeFromProviderField('openrouter:anthropic/claude-sonnet-4-5')?.id).toBe('openrouter')
   })
 
-  it('returns undefined for the direct doors, subscription doors and unknowns', () => {
+  it('returns undefined for the direct doors, subscription doors and doors with no sessions yet', () => {
     // Direct: the unsuffixed row IS the direct row. Subscription: a ChatGPT
-    // plan does not change which row a model lands on, only whether it is
-    // metered, which is the call's `billing` field.
-    for (const v of ['anthropic', 'openai', 'openai-codex', 'google', 'moa', 'acme-gateway', '', null, undefined]) {
+    // plan does not change which row a model lands on. `openrouter` and
+    // `bedrock-mantle` are real Hermes values with no sessions on disk, so
+    // they are not registered yet and map to nothing.
+    for (const v of ['anthropic', 'openai', 'openai-codex', 'google', 'moa', 'acme-gateway', 'openrouter', 'bedrock-mantle', '', null, undefined]) {
       expect(routeFromProviderField(v), String(v)).toBeUndefined()
     }
   })
 
   it('round-trips a persisted id', () => {
-    expect(getRouteById('openrouter')?.label).toBe('OpenRouter')
-    expect(getRouteById('bedrock-mantle')?.label).toBe('Bedrock')
+    expect(getRouteById('bedrock')?.label).toBe('Bedrock')
     expect(getRouteById('nope')).toBeUndefined()
     expect(getRouteById(undefined)).toBeUndefined()
   })
@@ -106,10 +104,9 @@ describe('modelRowKey - one SKU through one door is one row', () => {
   })
 
   it('applies a column-sourced route to a plain vendor id', () => {
-    // Hermes `billing_provider = openrouter` next to `claude-sonnet-4-5`: the
-    // id alone says "direct"; the route says otherwise.
-    expect(modelRowKey('claude-sonnet-4-5', 'openrouter')).toBe('Sonnet 4.5 (OpenRouter)')
-    expect(modelRowKey('claude-sonnet-4-5', 'bedrock-mantle')).toBe('Sonnet 4.5 (Bedrock)')
+    // Hermes `billing_provider = bedrock` next to `claude-sonnet-4-5`: the id
+    // alone says "direct"; the route says otherwise.
+    expect(modelRowKey('claude-sonnet-4-5', 'bedrock')).toBe('Sonnet 4.5 (Bedrock)')
     expect(modelRowKey('claude-sonnet-4-5', null)).toBe('Sonnet 4.5')
     expect(modelRowKey('claude-sonnet-4-5', 'not-a-route')).toBe('Sonnet 4.5')
   })
@@ -122,7 +119,7 @@ describe('modelRowKey - one SKU through one door is one row', () => {
   })
 
   it('is idempotent, so a pre-v33 daily row keyed by display name re-keys to itself', () => {
-    for (const key of ['Haiku 4.5', 'Haiku 4.5 (Bedrock)', 'Haiku 4.5 (Bedrock us)', 'Sonnet 4.5 (OpenRouter)', 'GPT-5.6 Sol']) {
+    for (const key of ['Haiku 4.5', 'Haiku 4.5 (Bedrock)', 'Haiku 4.5 (Bedrock us)', 'GPT-5.6 Sol']) {
       expect(modelRowKey(key), key).toBe(key)
     }
   })
@@ -131,7 +128,22 @@ describe('modelRowKey - one SKU through one door is one row', () => {
     expect(routeSuffix('claude-haiku-4-5-20251001')).toBe('')
     expect(routeSuffix('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('(Bedrock)')
     expect(routeSuffix('us.anthropic.claude-haiku-4-5-20251001-v1:0')).toBe('(Bedrock us)')
-    expect(routeSuffix('claude-sonnet-4-5', 'openrouter')).toBe('(OpenRouter)')
+    expect(routeSuffix('claude-sonnet-4-5', 'bedrock')).toBe('(Bedrock)')
+  })
+
+  it('folds on the row key, so two route ids with one label cannot make two rows', () => {
+    // `bedrock` and `bedrock-mantle` are one door with two endpoint names.
+    // models-report folded on the route id and printed two rows both called
+    // "GPT-5.6 Sol (Bedrock)" while every label-keyed surface showed one. The
+    // fold key carries the row key's suffix and never the route id, so the
+    // next door added under an existing label folds instead of twinning.
+    const key = modelFoldKey('claude-sonnet-4-5', 'bedrock')
+    expect(key).toBe(`${resolveCanonicalModelId('claude-sonnet-4-5')} ${routeSuffix('claude-sonnet-4-5', 'bedrock')}`)
+    expect(key).toContain('(Bedrock)')
+    expect(key).not.toContain('bedrock')
+    // An id-shaped Bedrock call and a column-routed one of the same SKU are
+    // one row, whichever source named the door.
+    expect(modelFoldKey('anthropic.claude-sonnet-4-5', 'bedrock')).toBe(modelFoldKey('anthropic.claude-sonnet-4-5', null))
   })
 })
 

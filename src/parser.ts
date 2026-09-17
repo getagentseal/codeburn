@@ -2541,7 +2541,6 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     isEstimated: call.costIsEstimated,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
-    ...(call.billing ? { billing: call.billing } : {}),
   })
 
   const prRefs = extractPrUrlsFromText(call.userMessage)
@@ -2590,7 +2589,6 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.editFailed ? { editFailed: call.editFailed } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
-    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
@@ -2638,7 +2636,6 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     ...(call.toolErrors ? { toolErrors: call.toolErrors } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
-    ...(call.billing ? { billing: call.billing } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
@@ -2761,7 +2758,6 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     toolWaitMs: call.toolWaitMs,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
-    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.supplementaryAccounting || isHermesObservationKey(call.deduplicationKey)
       ? { supplementaryAccounting: true }
       : {}),

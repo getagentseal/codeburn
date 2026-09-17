@@ -519,16 +519,6 @@ function observationToCall(
   },
 ): ParsedProviderCall {
   const later = observation.index > 0
-  // Billing mode, only where it is known. Hermes records `cost_status =
-  // included` for usage a fixed fee covers (ChatGPT plan) and `actual` for a
-  // recorded invoice amount; a metered door (Bedrock, OpenRouter) is metered
-  // by definition. A direct `anthropic` session with `cost_status = unknown`
-  // may be a Claude Max plan or an API key — Hermes cannot tell, so neither
-  // is asserted. The basis is persisted per observation in the ledger, so
-  // later deltas keep the same answer.
-  const billing = observation.costBasis === 'included' ? 'subscription' as const
-    : observation.costBasis === 'actual' || args.route ? 'metered' as const
-    : undefined
   return {
     provider: 'hermes',
     model: args.model,
@@ -562,7 +552,6 @@ function observationToCall(
     ...(later || !args.prLinks?.length ? {} : { prLinks: args.prLinks }),
     ...(later ? { supplementaryAccounting: true } : {}),
     ...(args.route ? { route: args.route } : {}),
-    ...(billing ? { billing } : {}),
   }
 }
 
