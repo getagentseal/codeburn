@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
+import { useEscape } from '../hooks/useEscape'
 import type { ClaudeConfigSelector, DateRange } from '../lib/types'
+import { AnchoredSurface } from './AnchoredSurface'
 import { Dropdown } from './Dropdown'
+import { Icon } from './icons'
 import { ProviderPop, type ProviderOption } from './ProviderPop'
 import { RangeCalendar } from './RangeCalendar'
 import { SegTabs, type SegOption } from './SegTabs'
@@ -18,6 +21,40 @@ export const PERIOD_OPTIONS: SegOption[] = [
   { value: 'all', label: '6M' },
   { value: 'lifetime', label: 'Life' },
 ]
+
+/** Back/Forward history controls. Rendered on every screen so the title
+ *  keeps one position; the sections without history show them disabled. */
+export function BarNav({ canBack = false, canForward = false, onBack, onForward }: {
+  canBack?: boolean
+  canForward?: boolean
+  onBack?: () => void
+  onForward?: () => void
+}) {
+  return (
+    <div className="bar-nav" role="group" aria-label="Navigation history">
+      <button
+        type="button"
+        className="bar-nav-btn"
+        aria-label="Back"
+        title="Back"
+        disabled={!canBack}
+        onClick={() => { if (canBack) onBack?.() }}
+      >
+        <Icon name="chevron-left" />
+      </button>
+      <button
+        type="button"
+        className="bar-nav-btn"
+        aria-label="Forward"
+        title="Forward"
+        disabled={!canForward}
+        onClick={() => { if (canForward) onForward?.() }}
+      >
+        <Icon name="chevron-right" />
+      </button>
+    </div>
+  )
+}
 
 /** The `.bar` top bar: back/forward history controls, title, scope caption,
  *  period SegTabs, provider ProviderPop. */
@@ -62,31 +99,8 @@ export function TopBar({
 }) {
   return (
     <div className="bar">
-      {onBack && onForward && (
-        <div className="bar-nav" role="group" aria-label="Navigation history">
-          <button
-            type="button"
-            className="bar-nav-btn"
-            aria-label="Back"
-            title="Back"
-            disabled={!canBack}
-            onClick={() => { if (canBack) onBack() }}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            className="bar-nav-btn"
-            aria-label="Forward"
-            title="Forward"
-            disabled={!canForward}
-            onClick={() => { if (canForward) onForward() }}
-          >
-            ›
-          </button>
-        </div>
-      )}
-      <div className="t">{title}</div>
+      <BarNav canBack={canBack} canForward={canForward} onBack={onBack} onForward={onForward} />
+      <h1 className="t">{title}</h1>
       {scope !== undefined && <span className="scope">{scope}</span>}
       <div className="sp" />
       <SegTabs options={PERIOD_OPTIONS} value={customRange ? '' : period} onChange={onPeriodChange} />
@@ -134,27 +148,26 @@ export function rangeLabel(range: DateRange): string {
 function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (range: DateRange) => void }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      const target = event.target as Node
+      if (!wrapRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false)
     }
     document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
+    return () => document.removeEventListener('mousedown', onPointerDown)
   }, [open])
+
+  useEscape(open, () => setOpen(false))
 
   const label = value ? formatRange(value) : 'Choose date range'
   return (
     <div className="calendar-wrap" ref={wrapRef}>
       <button
+        ref={triggerRef}
         type="button"
         className={`calendar-trigger${value ? ' on' : ''}`}
         aria-label={label}
@@ -162,14 +175,11 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
         aria-expanded={open}
         onClick={() => setOpen(current => !current)}
       >
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="1.5" />
-          <path d="M5 1.75v3M11 1.75v3M2.5 6.25h11" />
-        </svg>
+        <Icon name="calendar" />
         {value && <span>{label}</span>}
       </button>
       {open && (
-        <div className="calendar-popover" role="dialog" aria-label="Choose date range">
+        <AnchoredSurface anchor={triggerRef} surfaceRef={popoverRef} className="calendar-popover" role="dialog" aria-label="Choose date range">
           <RangeCalendar
             value={value}
             onSelect={range => {
@@ -177,7 +187,7 @@ function CalendarPop({ value, onSelect }: { value: DateRange | null; onSelect: (
               setOpen(false)
             }}
           />
-        </div>
+        </AnchoredSurface>
       )}
     </div>
   )

@@ -27,6 +27,9 @@ struct SettingsView: View {
         // list, so they stay hidden until their adapter ships.
         CapacityDockPreferences.supportedProviders
             .filter { $0.catalogEntry.hasLiveCodeBurnQuotaAdapter }
+            // Grok Bot is an optional desktop app rather than a signed-in
+            // account, so its row only means something once it is on the Mac.
+            .filter { $0.id != "grokbot" || GrokBotSubscriptionService.isInstalled() }
             .map { provider in
                 ProviderPane(
                     id: provider.id,

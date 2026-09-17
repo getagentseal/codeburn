@@ -50,6 +50,12 @@ export function shortenProjectPath(value: string, maxSegments = 3): string {
   return displayParts.join('/') || trimmed
 }
 
+/** "1 session" / "2,048 sessions" — one count label for every count site, so the
+ *  separator and the noun form never drift between screens. */
+export function formatCount(n: number, singular: string, plural = `${singular}s`): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? singular : plural}`
+}
+
 /** Compact token/count formatting: 1_842 → "1.8K", 184_000 → "184K", 1_200_000 → "1.2M". */
 export function formatCompact(n: number): string {
   if (!Number.isFinite(n)) return '—'

@@ -6,7 +6,7 @@ struct ProviderConnectionCatalogTests {
     @Test("pins the complete provider inventory")
     func pinnedReferenceInventory() {
         #expect(ProviderConnectionCatalog.inventoryRevision == "714bff00815f0d98ae206e781d563595129ba185")
-        #expect(ProviderConnectionCatalog.providers.count == 69)
+        #expect(ProviderConnectionCatalog.providers.count == 70)
         #expect(ProviderConnectionCatalog.providers.map(\.id) == [
             "codex", "openai", "azureopenai", "claude", "clinepass", "cursor", "opencode",
             "opencodego", "alibaba", "alibabatokenplan", "qwencloud", "factory", "fireworks",
@@ -15,7 +15,7 @@ struct ProviderConnectionCatalogTests {
             "ollama", "synthetic", "openrouter", "elevenlabs", "warp", "windsurf", "zed",
             "perplexity", "mimo", "doubao", "sakana", "abacus", "mistral", "deepseek",
             "deepinfra", "codebuff", "crof", "venice", "commandcode", "qoder", "stepfun",
-            "bedrock", "grok", "groq", "llmproxy", "litellm", "deepgram", "poe", "chutes",
+            "bedrock", "grok", "grokbot", "groq", "llmproxy", "litellm", "deepgram", "poe", "chutes",
             "neuralwatt", "clawrouter", "longcat", "sub2api", "wayfinder", "zenmux", "aiand",
             "zoommate", "xai", "notion", "ibmbob",
         ])
@@ -33,9 +33,9 @@ struct ProviderConnectionCatalogTests {
     @Test("pins source-mode coverage")
     func pinnedSourceModeCoverage() {
         let providers = ProviderConnectionCatalog.providers
-        #expect(providers.count(with: .automatic) == 69)
+        #expect(providers.count(with: .automatic) == 70)
         #expect(providers.count(with: .web) == 30)
-        #expect(providers.count(with: .cli) == 14)
+        #expect(providers.count(with: .cli) == 15)
         #expect(providers.count(with: .oauth) == 5)
         #expect(providers.count(with: .api) == 44)
     }
@@ -46,7 +46,7 @@ struct ProviderConnectionCatalogTests {
             .filter(\.hasLiveCodeBurnQuotaAdapter)
             .map(\.id)
             .sorted()
-        #expect(live == ["antigravity", "claude", "clinepass", "codex", "copilot", "cursor", "gemini", "grok", "kimi", "zai"])
+        #expect(live == ["antigravity", "claude", "clinepass", "codex", "copilot", "cursor", "gemini", "grok", "grokbot", "kimi", "zai"])
     }
 
 }

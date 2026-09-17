@@ -3,7 +3,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from 'ink'
 
 import type { ModelStats, ComparisonRow, CategoryComparison, WorkingStyleRow } from './compare-stats.js'
 import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, findModelStat, projectSessionIds, scanSelfCorrections } from './compare-stats.js'
-import { formatCost } from './format.js'
+import { formatCost, formatTokens } from './format.js'
 import { filterProjectsByName, parseAllSessions, setInteractiveScanUI } from './parser.js'
 import { getAllProviders } from './providers/index.js'
 import type { ProjectSummary, DateRange } from './types.js'
@@ -235,17 +235,11 @@ function ComparisonResults({ modelA, modelB, rows, categories, workingStyle, onB
     sectionRows.get(row.section)!.push(row)
   }
 
-  const fmtTokens = (n: number) => {
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-    return String(n)
-  }
-
   const contextRows: { label: string; valueA: string; valueB: string }[] = [
     { label: 'Calls', valueA: modelA.calls.toLocaleString(), valueB: modelB.calls.toLocaleString() },
     { label: 'Total cost', valueA: formatCost(modelA.cost), valueB: formatCost(modelB.cost) },
-    { label: 'Input tokens', valueA: fmtTokens(modelA.inputTokens), valueB: fmtTokens(modelB.inputTokens) },
-    { label: 'Output tokens', valueA: fmtTokens(modelA.outputTokens), valueB: fmtTokens(modelB.outputTokens) },
+    { label: 'Input tokens', valueA: formatTokens(modelA.inputTokens), valueB: formatTokens(modelB.inputTokens) },
+    { label: 'Output tokens', valueA: formatTokens(modelA.outputTokens), valueB: formatTokens(modelB.outputTokens) },
     { label: 'Days of data', valueA: String(daysOfData(modelA.firstSeen, modelA.lastSeen)), valueB: String(daysOfData(modelB.firstSeen, modelB.lastSeen)) },
     { label: 'Edit turns', valueA: modelA.editTurns.toLocaleString(), valueB: modelB.editTurns.toLocaleString() },
     { label: 'Self-corrections', valueA: modelA.selfCorrections.toLocaleString(), valueB: modelB.selfCorrections.toLocaleString() },

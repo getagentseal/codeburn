@@ -148,7 +148,7 @@ describe('Sessions', () => {
     const search = await screen.findByRole('textbox', { name: 'Search sessions' })
 
     await user.type(search, 'codeb')
-    expect(screen.getByText('1 sessions · $8.41 · 1.5M tokens')).toBeInTheDocument()
+    expect(screen.getByText('1 session · $8.41 · 1.5M tokens')).toBeInTheDocument()
     expect(container.querySelectorAll('.session-row')).toHaveLength(1)
     expect(screen.getByText('projects/codeburn')).toBeInTheDocument()
     expect(screen.queryByText('client-api')).not.toBeInTheDocument()
@@ -398,7 +398,7 @@ describe('Sessions', () => {
     )
 
     // The chips bar explains the selection and offers per-chip removal + Clear.
-    await screen.findByText(/sessions in selection/)
+    await screen.findByText(/sessions? in selection/)
     const chips = screen.getByRole('group', { name: /active investigation filters/i })
     expect(within(chips).getByText('coding')).toBeInTheDocument()
     expect(within(chips).getByRole('button', { name: /remove category filter coding/i })).toBeInTheDocument()

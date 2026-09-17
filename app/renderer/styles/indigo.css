@@ -16,7 +16,7 @@
 
   --grad: linear-gradient(135deg, #5B8CFF, #8B7CF6);
   --grad-bar: linear-gradient(to top, rgba(91,140,255,.55), #6FA2FF 60%, #4DD8E6);
-  --mono: ui-monospace, "SF Mono", "Berkeley Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", "Berkeley Mono", Menlo, "Cascadia Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
 }
 body {
@@ -134,7 +134,7 @@ td.pos, td .pos { color: var(--ok); }
 .est { font-size: 9.5px; color: var(--mut2); font-family: var(--mono); }
 .alias { color: var(--accent); font-family: var(--sans); font-size: 11px; font-weight: 530; }
 
-.track { height: 5px; border-radius: 3px; background: rgba(160,175,255,.08); position: relative; margin-top: 8px; }
+.track { height: 5px; border-radius: 3px; background: var(--bar); position: relative; margin-top: 8px; }
 .track i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--grad); }
 .track i.over { background: linear-gradient(90deg, #F26D6D, #E8484F); }
 .track i.mut { background: #2A3145; }

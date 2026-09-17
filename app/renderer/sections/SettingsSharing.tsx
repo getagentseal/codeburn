@@ -80,8 +80,8 @@ export function SharingPane() {
   if (loading) {
     return (
       <section className="set-p on">
-        <div><h3 className="set-h">Automatic Sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
-        <p className="set-cap">Loading sync status...</p>
+        <div><h3 className="set-h">Automatic sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
+        <p className="set-cap">Loading sync status…</p>
       </section>
     )
   }
@@ -91,7 +91,7 @@ export function SharingPane() {
   if (!isConfigured && !showSetup) {
     return (
       <section className="set-p on">
-        <div><h3 className="set-h">Automatic Sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
+        <div><h3 className="set-h">Automatic sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
         <div className="card">
           <div className="about-sec set-last-sec">
             <p className="set-cap">Not configured. Set up automatic sync to share your session data.</p>
@@ -107,7 +107,7 @@ export function SharingPane() {
   if (showSetup) {
     return (
       <section className="set-p on">
-        <div><h3 className="set-h">Automatic Sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
+        <div><h3 className="set-h">Automatic sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
         <div className="card">
           <div className="about-sec">
             <div className="about-row">
@@ -168,7 +168,7 @@ export function SharingPane() {
                 Cancel
               </button>
               <button className="btnp btnp-primary" onClick={() => void handleAccept()} disabled={accepting}>
-                {accepting ? 'Accepting...' : 'Accept exactly this'}
+                {accepting ? 'Accepting…' : 'Accept exactly this'}
               </button>
             </div>
           </div>
@@ -179,7 +179,7 @@ export function SharingPane() {
 
   return (
     <section className="set-p on">
-      <div><h3 className="set-h">Automatic Sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
+      <div><h3 className="set-h">Automatic sync</h3><p className="set-sub">Share your session data automatically with your team.</p></div>
       {error && <div className={`set-error`} style={{ marginBottom: '1rem' }}>{error}</div>}
       <div className="card">
         <div className="about-sec">

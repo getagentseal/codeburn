@@ -14,6 +14,7 @@ import { fetchCopilotQuota } from './copilot.js'
 import { fetchCursorQuota } from './cursor.js'
 import { fetchGeminiQuota } from './gemini.js'
 import { fetchGrokQuota } from './grok.js'
+import { fetchGrokbotQuota, grokbotInstalled } from './grokbot.js'
 import { fetchKimiQuota } from './kimi.js'
 import type { ProviderName, QuotaProvider } from './types.js'
 import { fetchZaiQuota } from './zai.js'
@@ -48,8 +49,17 @@ const READERS: { id: ProviderName; name: string; read: ProviderReader }[] = [
   { id: 'cursor', name: 'Cursor', read: async signal => (await fetchCursorQuota({ signal })).quota },
   { id: 'zai', name: 'Z.ai', read: async signal => (await fetchZaiQuota({ signal })).quota },
   { id: 'grok', name: 'Grok', read: async signal => (await fetchGrokQuota({ signal })).quota },
+  { id: 'grokbot', name: 'Grok Bot', read: async signal => (await fetchGrokbotQuota({ signal })).quota },
   { id: 'clinepass', name: 'ClinePass', read: async signal => (await fetchClinePassQuota({ signal })).quota },
 ]
+
+/** Grok Bot is an optional desktop app rather than a signed-in account. With
+ *  the app absent its reader would still answer — with the Cursor allowance of
+ *  whoever is signed into Cursor, under a Grok Bot label — so the row is left
+ *  out entirely. */
+export function availableReaders(installed: () => boolean = grokbotInstalled): typeof READERS {
+  return READERS.filter(entry => entry.id !== 'grokbot' || installed())
+}
 
 const DEFAULT_TIMEOUT_MS = 5_000
 
@@ -92,7 +102,7 @@ export async function collectQuota(options: {
   readers?: { id: ProviderName; name: string; read: ProviderReader }[]
   timeoutMs?: number
 } = {}): Promise<QuotaReport> {
-  const readers = options.readers ?? READERS
+  const readers = options.readers ?? availableReaders()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const providers = await Promise.all(readers.map(async entry => {
     const controller = new AbortController()

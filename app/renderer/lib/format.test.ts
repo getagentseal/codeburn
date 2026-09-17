@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { formatCompact, formatConverted, formatDayLong, formatDayShort, formatDuration, formatUsd, setActiveCurrency } from './format'
+import { formatCompact, formatConverted, formatCount, formatDayLong, formatDayShort, formatDuration, formatUsd, setActiveCurrency } from './format'
 
 describe('currency-aware formatting', () => {
   afterEach(() => setActiveCurrency({ code: 'USD', symbol: '$', rate: 1 }))
@@ -56,5 +56,28 @@ describe('date and duration formatters', () => {
     expect(formatDuration(134 * 60_000)).toBe('2h 14m')
     expect(formatDuration(286 * 3_600_000 + 39 * 60_000)).toBe('12 days')
     expect(formatDuration(0)).toBe('—')
+  })
+})
+
+describe('formatCount', () => {
+  it('uses the singular noun for exactly one', () => {
+    expect(formatCount(1, 'session')).toBe('1 session')
+    expect(formatCount(1, 'finding')).toBe('1 finding')
+    expect(formatCount(1, 'distinct session')).toBe('1 distinct session')
+  })
+
+  it('uses the plural noun for zero and for more than one', () => {
+    expect(formatCount(0, 'session')).toBe('0 sessions')
+    expect(formatCount(2, 'session')).toBe('2 sessions')
+  })
+
+  it('groups thousands with the same separator everywhere', () => {
+    expect(formatCount(5084, 'session')).toBe('5,084 sessions')
+    expect(formatCount(6205, 'session')).toBe('6,205 sessions')
+  })
+
+  it('takes an irregular plural when the noun needs one', () => {
+    expect(formatCount(1, 'entry', 'entries')).toBe('1 entry')
+    expect(formatCount(3, 'entry', 'entries')).toBe('3 entries')
   })
 })

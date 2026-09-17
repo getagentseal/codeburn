@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, type ChildProcess } from 'child_process'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { join } from 'path'
-import { classifyRootReuse, createOutputMemoEntry } from '../src/serve.js'
+import { classifyRootReuse, createOutputMemoEntry, fileDaySpan, outputMemoKey, servedDayRange } from '../src/serve.js'
 
 it('timestamps a completed output memo before parsing begins', () => {
   const parseStartedAt = 100
@@ -25,6 +25,49 @@ it('classifies watcher gaps as unknown without confusing them with dirty roots',
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 100, healthy: false })).toBe('dirty')
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 100, healthy: true })).toBe('dirty')
   expect(classifyRootReuse(100, { startedAt: 50, lastEventAt: 99, healthy: true })).toBe('clean')
+})
+
+describe('day-scoped invalidation', () => {
+  const day = (d: string): number => new Date(`${d}T12:00:00`).getTime()
+  const startOfDay = (ms: number): number => {
+    const x = new Date(ms)
+    return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  }
+  const spanOf = (from: string, to: string) => fileDaySpan({ birthtimeMs: day(from), mtimeMs: day(to) }, startOfDay)
+  const august = { startMs: day('2026-08-20'), endMs: day('2026-08-20') + 3600_000 }
+  const dirty = { startedAt: 50, lastEventAt: 100, healthy: true }
+
+  it('covers every day between the creation of a file and its last write, plus a day of slack', () => {
+    const span = spanOf('2026-09-15', '2026-09-16')
+    expect(span.startMs).toBe(startOfDay(day('2026-09-14')))
+    expect(span.endMs).toBe(startOfDay(day('2026-09-17')) - 1)
+  })
+
+  it('keeps a finalized past range clean when only files from today changed', () => {
+    const state = { ...dirty, changedSince: () => ['/roots/today.jsonl'] }
+    expect(classifyRootReuse(100, state, august, () => spanOf('2026-09-16', '2026-09-16'))).toBe('clean')
+  })
+
+  it('dirties a range a changed file could have written into', () => {
+    const state = { ...dirty, changedSince: () => ['/roots/old.jsonl'] }
+    // Born before the queried day and still being appended: its own days reach
+    // into the range, so the range is not reusable.
+    expect(classifyRootReuse(100, state, august, () => spanOf('2026-08-19', '2026-09-16'))).toBe('dirty')
+  })
+
+  it('refuses to scope an event it cannot place', () => {
+    const unknownSpan = { ...dirty, changedSince: () => ['/roots/gone.jsonl'] }
+    expect(classifyRootReuse(100, unknownSpan, august, () => null)).toBe('dirty')
+    const unnamed = { ...dirty, changedSince: () => null }
+    expect(classifyRootReuse(100, unnamed, august, () => spanOf('2026-09-16', '2026-09-16'))).toBe('dirty')
+    // No range to scope against is the old, whole-corpus answer.
+    expect(classifyRootReuse(100, { ...dirty, changedSince: () => [] })).toBe('dirty')
+  })
+
+  it('still reports unknown coverage rather than clean', () => {
+    const state = { startedAt: 150, lastEventAt: 100, healthy: true, changedSince: () => ['/roots/today.jsonl'] }
+    expect(classifyRootReuse(100, state, august, () => spanOf('2026-09-16', '2026-09-16'))).toBe('unknown')
+  })
 })
 
 // End-to-end protocol test for `codeburn serve --stdio` (the desktop app's
@@ -119,6 +162,28 @@ describe('codeburn serve --stdio', () => {
     const todayLabel = (JSON.parse(today['output'] as string) as { current: { label: string } }).current.label
     expect(monthLabel).not.toBe(todayLabel)
     expect(todayLabel).toContain('Today')
+  }, 60_000)
+
+  it('stamps every answer with the generation it was derived in', async () => {
+    const first = await request(40, ['status', '--format', 'menubar-json', '--period', 'today'])
+    const second = await request(41, ['status', '--format', 'menubar-json', '--period', 'week'])
+    const firstGen = first['generation'] as { n: number; at: string }
+    const secondGen = second['generation'] as { n: number; at: string }
+    expect(firstGen.n).toBeGreaterThan(0)
+    // A distinct derivation advances the counter, and says when it happened.
+    expect(secondGen.n).toBeGreaterThan(firstGen.n)
+    expect(Number.isNaN(Date.parse(secondGen.at))).toBe(false)
+    expect(Date.parse(secondGen.at)).toBeGreaterThanOrEqual(Date.parse(firstGen.at))
+
+    // A repeat of the first query is either re-derived (a new counter) or
+    // served from the memo, in which case it carries the SAME stamp it was
+    // derived under rather than the moment it was handed over.
+    const repeat = await request(42, ['status', '--format', 'menubar-json', '--period', 'today'])
+    const repeatGen = repeat['generation'] as { n: number; at: string }
+    if (repeat['output'] === first['output']) {
+      expect([firstGen.n, secondGen.n + 1]).toContain(repeatGen.n)
+    }
+    expect(repeatGen.n).toBeGreaterThan(0)
   }, 60_000)
 
   it('refuses commands outside the read allowlist', async () => {
@@ -463,4 +528,64 @@ describe('codeburn serve --stdio', () => {
     // It waited for the request (not an instant return) but did not wait forever.
     expect(elapsed).toBeGreaterThanOrEqual(drainMs - 250)
   }, 30_000)
+})
+
+describe('output memo key', () => {
+  const args = ['status', '--format', 'menubar-json', '--period', 'today', '--no-timeline']
+
+  it('separates the same query asked on either side of local midnight', () => {
+    const before = outputMemoKey(args, new Date(2026, 8, 16, 23, 59))
+    const after = outputMemoKey(args, new Date(2026, 8, 17, 0, 1))
+    expect(before).not.toBe(after)
+  })
+
+  it('is stable for the same query within a day', () => {
+    expect(outputMemoKey(args, new Date(2026, 8, 16, 9, 0)))
+      .toBe(outputMemoKey(args, new Date(2026, 8, 16, 17, 30)))
+  })
+
+  it('separates queries whose resolved day range differs', () => {
+    const now = new Date(2026, 8, 16, 12, 0)
+    const day = ['report', '--format', 'json', '--day', '2026-08-20']
+    const otherDay = ['report', '--format', 'json', '--day', '2026-08-21']
+    expect(outputMemoKey(day, now)).not.toBe(outputMemoKey(otherDay, now))
+  })
+})
+
+describe('servedDayRange', () => {
+  const day = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+  it('reads an explicit day', () => {
+    expect(servedDayRange(['report', '--format', 'json', '--day', '2026-08-20']))
+      .toEqual({ from: '2026-08-20', to: '2026-08-20' })
+  })
+
+  it('reads an explicit from/to window', () => {
+    expect(servedDayRange(['status', '--format', 'menubar-json', '--from', '2026-08-01', '--to', '2026-08-31']))
+      .toEqual({ from: '2026-08-01', to: '2026-08-31' })
+  })
+
+  it('resolves a named period against today', () => {
+    const today = day(new Date())
+    expect(servedDayRange(['status', '--format', 'menubar-json', '--period', 'today']))
+      .toEqual({ from: today, to: today })
+    const week = servedDayRange(['status', '--format', 'menubar-json', '--period', 'week'])
+    expect(week?.to).toBe(today)
+    expect(week!.from < today).toBe(true)
+  })
+
+  it('accepts the short period flag and the inline form', () => {
+    expect(servedDayRange(['models', '--format', 'json', '-p', 'today']))
+      .toEqual(servedDayRange(['models', '--format', 'json', '--period', 'today']))
+    expect(servedDayRange(['models', '--format', 'json', '--period=today']))
+      .toEqual(servedDayRange(['models', '--format', 'json', '--period', 'today']))
+  })
+
+  it('says nothing rather than guessing a default or a bad value', () => {
+    // The command's own default period lives in main.ts; guessing it here would
+    // stamp a range the answer may not have used.
+    expect(servedDayRange(['status', '--format', 'menubar-json'])).toBeNull()
+    expect(servedDayRange(['status', '--format', 'menubar-json', '--period', 'fortnight'])).toBeNull()
+    expect(servedDayRange(['report', '--format', 'json', '--day', 'not-a-day'])).toBeNull()
+  })
 })

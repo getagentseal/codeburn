@@ -6,6 +6,7 @@ import { Panel } from '../components/Panel'
 import { SectionSkeleton } from '../components/Skeleton'
 import type { Section } from '../components/Sidebar'
 import { StaleBanner } from '../components/StaleBanner'
+import { BarNav } from '../components/TopBar'
 import { usePolled } from '../hooks/usePolled'
 import { formatConverted } from '../lib/format'
 import { codeburn } from '../lib/ipc'
@@ -94,7 +95,8 @@ export function Plans({ period, refreshToken = 0, onNavigate, ready = true }: { 
   return (
     <>
       <div className="bar">
-        <div className="t">Plans</div>
+        <BarNav />
+        <h1 className="t">Plans</h1>
         <div className="sp" />
         <button type="button" className="btn btn-s" onClick={() => onNavigate?.('settings', 'plans')}>
           Add plan…
@@ -179,7 +181,7 @@ function QuotaContent({ quota, onReconnect }: { quota: QuotaProvider; onReconnec
   if (quota.connection === 'loading') return <p className="quota-connection-note">Loading quota…</p>
   if (quota.connection === 'stale' || quota.connection === 'transientFailure') {
     if (quota.rateLimited) return <p className="quota-connection-note">{rateLimitedNote(quota.provider)}</p>
-    return <p className="quota-connection-note">waiting on the CLI…</p>
+    return <p className="quota-connection-note">Waiting on the CLI…</p>
   }
   if (quota.connection === 'terminalFailure') {
     // A provider that knows why (an expired Kimi login, a retired Gemini tier)
@@ -244,12 +246,11 @@ function PlanPanel({ plan }: { plan: JsonPlanSummary }) {
     : `${plan.provider} · pay as you go, no plan`
 
   return (
-    <Panel>
-      <div className="plrow">
-        <b>{PLAN_NAMES[plan.id]}</b>
-        <span>{detail}</span>
-        <span className="r">{right}</span>
-      </div>
+    <Panel
+      className="plan-card"
+      title={<span className="plan-title">{PLAN_NAMES[plan.id]}<small>{detail}</small></span>}
+      right={right}
+    >
       <div className="track" data-testid={`plan-track-${plan.provider}`}>
         <i className={trackClass} style={{ width: `${displayPercent}%` }} />
       </div>

@@ -143,6 +143,18 @@
 "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect." = "用量跟踪仍然有效。如需实时配额，请通过 Copilot 命令行工具或 gh auth login 登录，或在下方粘贴令牌，然后点按“连接”。";
 "Quota tracking disconnected. Credentials are untouched. Click Connect to resume." = "已断开配额跟踪。凭证不会受到影响。点按“连接”即可恢复。";
 
+/* MARK: Grok Bot quota copy */
+"Grok Bot is not installed. Install the Grok Bot app, then click Retry." = "尚未安装 Grok Bot。请先安装 Grok Bot 应用，然后点按“重试”。";
+"Sign in to the Cursor app with the account Grok Bot uses, then click Retry." = "请使用 Grok Bot 所用的账户登录 Cursor 应用，然后点按“重试”。";
+"Cursor rejected the current app session. Sign in again, then click Retry." = "Cursor 拒绝了当前的应用会话。请重新登录，然后点按“重试”。";
+"Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry." = "无法读取 Cursor 应用的本地会话数据。请退出并重新打开 Cursor，然后点按“重试”。";
+"This account has no included Grok Bot allowance." = "此账户不含 Grok Bot 用量额度。";
+"Grok Bot usage is drawn from a pooled enterprise allowance, which has no per-account reading." = "Grok Bot 用量来自企业共享额度，无法读取单个账户的数值。";
+"Cursor rate-limited the quota request." = "Cursor 限制了配额请求的频率。";
+"Grok Bot quota is temporarily unavailable." = "暂时无法获取 Grok Bot 配额。";
+"Cursor returned an unrecognized Grok Bot quota response." = "Cursor 返回了无法识别的 Grok Bot 配额响应。";
+"Network error fetching Grok Bot quota." = "获取 Grok Bot 配额时发生网络错误。";
+
 /* MARK: Updates */
 "Update Check Failed" = "检查更新失败";
 "CLI Update Failed" = "命令行工具更新失败";
@@ -256,6 +268,7 @@
 "Tokens" = "Token";
 "%@ in" = "输入 %@";
 "%@ out" = "输出 %@";
+"%1$@ in · %2$@ out · %3$@ cache read" = "输入 %1$@ · 输出 %2$@ · 缓存读取 %3$@";
 "%@%% cache hit" = "缓存命中 %@%%";
 
 /* MARK: Pull requests section */

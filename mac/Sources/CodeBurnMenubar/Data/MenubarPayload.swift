@@ -504,6 +504,41 @@ struct ModelEntry: Codable, Sendable {
     let savingsUSD: Double
     let savingsBaselineModel: String
     let calls: Int
+    /// Per-model token counts: input, output, cache read (reused input), and
+    /// cache write, kept separate so the two cache flavors are never summed.
+    /// Nil on every CLI up to the token-breakdown release and on any row whose
+    /// contributing legacy data lacked counts: absent means "unknown", which
+    /// renders as a dash — never as zero, and never as a period-wide figure.
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let cacheReadTokens: Int?
+    let cacheWriteTokens: Int?
+
+    /// Whether any per-model count arrived. A row with none (legacy payload)
+    /// renders without the secondary token line rather than as a run of dashes.
+    var hasTokenCounts: Bool {
+        inputTokens != nil || outputTokens != nil || cacheReadTokens != nil
+    }
+
+    init(name: String,
+         cost: Double,
+         savingsUSD: Double,
+         savingsBaselineModel: String,
+         calls: Int,
+         inputTokens: Int? = nil,
+         outputTokens: Int? = nil,
+         cacheReadTokens: Int? = nil,
+         cacheWriteTokens: Int? = nil) {
+        self.name = name
+        self.cost = cost
+        self.savingsUSD = savingsUSD
+        self.savingsBaselineModel = savingsBaselineModel
+        self.calls = calls
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cacheReadTokens = cacheReadTokens
+        self.cacheWriteTokens = cacheWriteTokens
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -512,10 +547,15 @@ struct ModelEntry: Codable, Sendable {
         savingsUSD = try c.decodeIfPresent(Double.self, forKey: .savingsUSD) ?? 0
         savingsBaselineModel = try c.decodeIfPresent(String.self, forKey: .savingsBaselineModel) ?? ""
         calls = try c.decode(Int.self, forKey: .calls)
+        inputTokens = try c.decodeIfPresent(Int.self, forKey: .inputTokens)
+        outputTokens = try c.decodeIfPresent(Int.self, forKey: .outputTokens)
+        cacheReadTokens = try c.decodeIfPresent(Int.self, forKey: .cacheReadTokens)
+        cacheWriteTokens = try c.decodeIfPresent(Int.self, forKey: .cacheWriteTokens)
     }
 
     private enum CodingKeys: String, CodingKey {
         case name, cost, savingsUSD, savingsBaselineModel, calls
+        case inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens
     }
 }
 

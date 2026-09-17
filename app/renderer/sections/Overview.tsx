@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import gsap from 'gsap'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
@@ -8,9 +8,9 @@ import { EmptyNote } from '../components/EmptyState'
 import { ListRow } from '../components/ListRow'
 import { SectionSkeleton } from '../components/Skeleton'
 import { StaleBanner } from '../components/StaleBanner'
-import { motionEnabled, useBarGrowIn } from '../lib/motion'
+import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCompact, formatUsd, formatUsdWithCurrency } from '../lib/format'
+import { formatCompact, formatCount, formatUsd, formatUsdWithCurrency } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import {
   categoryFilters,
@@ -21,6 +21,10 @@ import {
 } from '../lib/investigation'
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
+import { barBucketDays, barLayout, formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
+import { generationHeadline, rememberGeneration } from '../lib/generation'
+import { rememberStreak } from '../lib/streak'
+import { paceDirection, sparkArea, sparkPath, sparkPoints } from '../lib/spark'
 import type {
   ActReportJson,
   CombinedUsage,
@@ -33,6 +37,7 @@ import type {
 } from '../lib/types'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import { formatCombinedSessionCount, formatSessionCount, sessionCountIsExact, COMBINED_SESSION_COUNT_HELP, SESSION_COUNT_HELP } from '../lib/session-count-label'
+import { Icon } from '../components/icons'
 
 export { localDateKey } from '../lib/period'
 
@@ -62,6 +67,58 @@ function efficiencyGrade(score: number): EfficiencyGrade {
   return 'F'
 }
 
+/** Ring gauge geometry: 96px box, 10px stroke, so the arc radius is 43. */
+const GAUGE_BOX = 96
+const GAUGE_STROKE = 10
+const GAUGE_RADIUS = (GAUGE_BOX - GAUGE_STROKE) / 2
+const GAUGE_LENGTH = 2 * Math.PI * GAUGE_RADIUS
+
+/**
+ * Sweeps the arc up from zero once, on the first mount. A later score arriving
+ * under the 30s poll snaps to its new length: the ring is a reading, not a
+ * replayed animation.
+ */
+function RingGauge({ fraction, face, children }: { fraction: number; face: ReactNode; children: ReactNode }) {
+  const arcRef = useRef<SVGCircleElement>(null)
+  const swept = useRef(false)
+  const offset = GAUGE_LENGTH * (1 - clamp(fraction, 0, 1))
+
+  useEffect(() => {
+    const arc = arcRef.current
+    if (!arc || swept.current) return
+    swept.current = true
+    if (!motionEnabled()) return
+    const tween = gsap.fromTo(arc, { strokeDashoffset: GAUGE_LENGTH }, {
+      strokeDashoffset: offset,
+      duration: DUR.slow / 1000,
+      ease: 'power2.out',
+    })
+    return () => { tween.kill() }
+  }, [offset])
+
+  return (
+    <div className="ov-gauge">
+      <div className="ov-gauge-ring">
+        <svg viewBox={`0 0 ${GAUGE_BOX} ${GAUGE_BOX}`} aria-hidden="true">
+          <circle className="ov-gauge-track" cx={GAUGE_BOX / 2} cy={GAUGE_BOX / 2} r={GAUGE_RADIUS} />
+          <circle
+            ref={arcRef}
+            className="ov-gauge-arc"
+            cx={GAUGE_BOX / 2}
+            cy={GAUGE_BOX / 2}
+            r={GAUGE_RADIUS}
+            strokeDasharray={GAUGE_LENGTH}
+            strokeDashoffset={offset}
+            transform={`rotate(-90 ${GAUGE_BOX / 2} ${GAUGE_BOX / 2})`}
+          />
+        </svg>
+        <div className="ov-gauge-face">{face}</div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
 function EfficiencyScorecard({ current, bare = false }: { current: MenubarPayload['current']; bare?: boolean }) {
   const oneShot = current.oneShotRate ?? 0.6
   const cacheFrac = clamp(current.cacheHitPercent / 100, 0, 1)
@@ -71,35 +128,46 @@ function EfficiencyScorecard({ current, bare = false }: { current: MenubarPayloa
   // Missing one-shot data uses the specified neutral 0.6 and is disclosed below.
   const score = 100 * (0.45 * oneShot + 0.30 * cacheFrac + 0.25 * (1 - retryPenalty))
   const grade = efficiencyGrade(score)
-  const gradeTone = grade === 'A+' || grade === 'A'
-    ? 'grade-a'
-    : grade === 'D'
-      ? 'grade-d'
-      : grade === 'F'
-        ? 'grade-f'
-        : 'grade-bc'
+  const gradeTone = grade === 'C' ? 'grade-warn' : grade === 'D' || grade === 'F' ? 'grade-bad' : 'grade-ok'
 
   return (
     <div className={`${bare ? '' : 'ov-card '}ov-efficiency`}>
-      <div className="ov-efficiency-head">
-        <div><div className="ov-label">Efficiency</div><div className="ov-efficiency-score">{Math.round(score)} / 100</div></div>
-        <div className={`ov-grade ${gradeTone}`} aria-label={`Efficiency grade ${grade}`}>{grade}</div>
+      <div className="ov-activity-head">
+        <span className="ov-label">Efficiency</span>
+        <button
+          className="ov-info"
+          type="button"
+          aria-label="How the efficiency score is built"
+          title={`Composite of one-shot, cache hit, and retry tax.${current.oneShotRate === null ? ' Partial grade: one-shot is unavailable.' : ''}`}
+        >
+          <Icon name="info" />
+        </button>
       </div>
-      <div className="ov-component-list">
-        <div className="ov-component-row">
-          <div><span>One-shot</span><strong>{formatRate(current.oneShotRate)}</strong></div>
-          <div className="ov-component-track"><span style={{ width: `${oneShot * 100}%` }} /></div>
-        </div>
-        <div className="ov-component-row">
-          <div><span>Cache hit</span><strong>{Math.round(current.cacheHitPercent)}%</strong></div>
-          <div className="ov-component-track"><span style={{ width: `${cacheFrac * 100}%` }} /></div>
-        </div>
-        <div className="ov-component-row">
-          <div><span>Retry tax</span><strong>{formatUsd(current.retryTax.totalUSD)} · {(retrySpendFraction * 100).toFixed(1)}% of spend</strong></div>
-          <div className="ov-component-track adverse"><span style={{ width: `${retryPenalty * 100}%` }} /></div>
+      <div className="ov-efficiency-main">
+        <RingGauge
+          fraction={score / 100}
+          face={<>
+            <strong className="ov-gauge-score">{Math.round(score)}</strong>
+            <span className="ov-gauge-cap">/100</span>
+          </>}
+        >
+          <span className={`ov-grade ${gradeTone}`} aria-label={`Efficiency grade ${grade}`}>{grade}</span>
+        </RingGauge>
+        <div className="ov-component-list">
+          <div className="ov-component-row">
+            <div><span>One-shot</span><strong>{formatRate(current.oneShotRate)}</strong></div>
+            <div className="ov-component-track"><span style={{ width: `${oneShot * 100}%` }} /></div>
+          </div>
+          <div className="ov-component-row">
+            <div><span>Cache hit</span><strong>{Math.round(current.cacheHitPercent)}%</strong></div>
+            <div className="ov-component-track"><span style={{ width: `${cacheFrac * 100}%` }} /></div>
+          </div>
+          <div className="ov-component-row">
+            <div><span>Retry tax</span><strong>{formatUsd(current.retryTax.totalUSD)} · {(retrySpendFraction * 100).toFixed(1)}% of spend</strong></div>
+            <div className="ov-component-track adverse"><span style={{ width: `${retryPenalty * 100}%` }} /></div>
+          </div>
         </div>
       </div>
-      <p className="ov-widget-caption">Composite of one-shot, cache hit, and retry tax.{current.oneShotRate === null ? ' Partial grade: one-shot is unavailable.' : ''}</p>
     </div>
   )
 }
@@ -132,7 +200,7 @@ function CostPerOutcome({ outcome }: { outcome: Polled<YieldJsonReport> }) {
 
   return (
     <div className="ov-card ov-panel">
-      <div className="ov-panel-head"><h3>Cost per outcome</h3><span className="r">Yield</span></div>
+      <div className="ov-panel-head"><Icon name="scale" /><h3>Cost per outcome</h3><span className="r">Yield</span></div>
       <div className="ov-panel-body">
         {body}
         <p className="ov-widget-caption">Git-correlated. Reverted/abandoned = spend that didn't ship.</p>
@@ -165,10 +233,10 @@ type ReworkedFile = { path: string; sessions: number; edits: number }
 function workflowCoachingNote(workflow: WorkflowRollup, topReworked?: ReworkedFile): string | null {
   const { correctionRate, corrections, medianTimeToFirstEditMs } = workflow
   if (correctionRate !== null && correctionRate >= WORKFLOW_CORRECTION_RATE && corrections >= WORKFLOW_CORRECTION_COUNT) {
-    return `You corrected the assistant on ${Math.round(correctionRate * 100)}% of prompts (${corrections} times). State the requirements in the first message to cut the back and forth.`
+    return `You corrected the assistant on ${Math.round(correctionRate * 100)}% of prompts (${formatCount(corrections, 'time')}). State the requirements in the first message to cut the back and forth.`
   }
   if (topReworked && topReworked.sessions >= WORKFLOW_CHURN_SESSIONS) {
-    return `${topReworked.path} was reworked across ${topReworked.sessions} sessions (${topReworked.edits} edits). A focused pass on it may cost less than the repeated churn.`
+    return `${topReworked.path} was reworked across ${formatCount(topReworked.sessions, 'session')} (${formatCount(topReworked.edits, 'edit')}). A focused pass on it may cost less than the repeated churn.`
   }
   if (medianTimeToFirstEditMs !== null && medianTimeToFirstEditMs >= WORKFLOW_TTFE_SLOW_MS) {
     return `Median time to first edit is ${formatWorkflowDuration(medianTimeToFirstEditMs)}. Point the assistant at the target file to cut the exploration before it starts editing.`
@@ -196,6 +264,7 @@ function WorkflowCard({ current }: { current: MenubarPayload['current'] }) {
   return (
     <div className="ov-card ov-panel ov-workflow-widget">
       <div className="ov-panel-head">
+        <Icon name="sliders-horizontal" />
         <h3>Workflow</h3>
         {showCoverage && <span className="ov-priced-chip">{Math.min(99, Math.round(coverage * 100))}% priced</span>}
       </div>
@@ -239,7 +308,7 @@ export function deriveSignals(data: MenubarPayload, now: Date, rangeActive: bool
   const improvements: Signal[] = []
   const risks: Signal[] = []
 
-  const streak = streakDays(daily, now)
+  const streak = rememberStreak(data.streak) ?? streakDays(daily, now)
 
   // Week-over-week: mean of the last 7 active entries vs the prior 7 (matches the
   // coach's pacing line). Needs >= 14 entries for both windows to exist.
@@ -327,17 +396,17 @@ const SIGNAL_GROUPS = [
   {
     key: 'wins' as const,
     label: 'Wins',
-    icon: <><circle cx="12" cy="12" r="9" /><polyline points="8 12 11 15 16 9" /></>,
+    icon: <Icon name="circle-check" />,
   },
   {
     key: 'improvements' as const,
     label: 'Improvements',
-    icon: <><polyline points="7 17 17 7" /><polyline points="9 7 17 7 17 15" /></>,
+    icon: <Icon name="trending-up" />,
   },
   {
     key: 'risks' as const,
     label: 'Risks',
-    icon: <><path d="M12 4 21 19 3 19Z" /><line x1="12" y1="10" x2="12" y2="14" /><line x1="12" y1="16.5" x2="12" y2="16.6" /></>,
+    icon: <Icon name="triangle-alert" />,
   },
 ]
 
@@ -346,22 +415,24 @@ function SignalsCard({ signals }: { signals: SignalGroups }) {
   if (!groups.length) return null
   return (
     <div className="ov-card ov-signals" aria-label="Coaching signals">
-      {groups.map(group => (
-        <div className={`ov-signal-group ${group.key}`} key={group.key}>
-          <div className="ov-signal-head">
-            <svg viewBox="0 0 24 24" aria-hidden="true">{group.icon}</svg>
-            <span>{group.label}</span>
+      <div className="ov-card-inner ov-signal-grid">
+        {groups.map(group => (
+          <div className={`ov-signal-group ${group.key}`} key={group.key}>
+            <div className="ov-signal-head">
+              {group.icon}
+              <span>{group.label}</span>
+            </div>
+            <ul className="ov-signal-list">
+              {signals[group.key].map((signal, index) => (
+                <li className="ov-signal" key={`${signal.text}-${index}`}>
+                  <span title={signal.text}>{signal.text}</span>
+                  {signal.trailing && <span className="ov-signal-trailing">{signal.trailing}</span>}
+                </li>
+              ))}
+            </ul>
           </div>
-          <ul className="ov-signal-list">
-            {signals[group.key].map((signal, index) => (
-              <li className="ov-signal" key={`${signal.text}-${index}`}>
-                <span title={signal.text}>{signal.text}</span>
-                {signal.trailing && <span className="ov-signal-trailing">{signal.trailing}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   )
 }
@@ -373,13 +444,15 @@ function RoutingWhatIf({ routing, onNavigate }: {
   if (routing.totalSavingsUSD <= 0 || !routing.baselineModel) return null
   return (
     <div className="ov-card ov-routing">
-      <div><span className="ov-label">Routing what-if</span><p>Routing to <strong>{routing.baselineModel}</strong> could save ~<strong>{formatUsd(routing.totalSavingsUSD)}</strong> this period.</p></div>
-      <button className="ov-link" type="button" onClick={() => onNavigate?.('optimize')}>Optimize →</button>
+      <div className="ov-card-inner ov-routing-body">
+        <div><span className="ov-label">Routing what-if</span><p>Routing to <strong>{routing.baselineModel}</strong> could save ~<strong>{formatUsd(routing.totalSavingsUSD)}</strong> this period.</p></div>
+        <button className="ov-link" type="button" onClick={() => onNavigate?.('optimize')}>Optimize →</button>
+      </div>
     </div>
   )
 }
 
-function deriveStats(data: MenubarPayload, now: Date) {
+function deriveStats(data: MenubarPayload, now: Date, anchorKey = localDateKey(now)) {
   const daily = data.history.daily
   const todayKey = localDateKey(now)
   const todayEntry = daily.find(day => day.date === todayKey)
@@ -395,6 +468,23 @@ function deriveStats(data: MenubarPayload, now: Date) {
   const priorAverage = mean(priorEntries.map(day => day.cost))
   const currentAverage = mean(mtdEntries.map(day => day.cost))
   const pacePct = priorAverage > 0 ? ((currentAverage - priorAverage) / priorAverage) * 100 : null
+  // Cumulative spend, one point per calendar day of the month so far, so a
+  // silent day is a flat step rather than a missing column.
+  // Anchored to the last day of the selected window, not to today, so a custom
+  // range reports the days it actually covers.
+  const [anchorYear, anchorMonth, anchorDay] = anchorKey.split('-').map(Number)
+  const priorKey = localDateKey(new Date(anchorYear, anchorMonth - 1, anchorDay - 1))
+  const anchorCost = daily.find(day => day.date === anchorKey)?.cost ?? 0
+  const priorDayCost = daily.find(day => day.date === priorKey)?.cost ?? null
+  const upToAnchor = daily.filter(day => day.date <= anchorKey)
+  const sevenDayAvg = upToAnchor.length ? mean(upToAnchor.slice(-7).map(day => day.cost)) : null
+  const dayOverDayPct = priorDayCost !== null && priorDayCost > 0
+    ? ((anchorCost - priorDayCost) / priorDayCost) * 100
+    : null
+  let running = 0
+  const mtdSeries = contiguousDailyWindow(daily, `${monthPrefix}-01`, todayKey).map(day => (running += day.cost))
+  const remainingDays = Math.max(0, daysInMonth - now.getDate())
+  const projectedTail = Array.from({ length: remainingDays }, (_, index) => mtd + (projected - mtd) * ((index + 1) / remainingDays))
 
   return {
     todayEntry,
@@ -402,8 +492,53 @@ function deriveStats(data: MenubarPayload, now: Date) {
     mtd,
     projected,
     pacePct,
+    mtdSeries,
+    projectedTail,
+    priorDayCost,
+    sevenDayAvg,
+    dayOverDayPct,
     prevMonthName: prevMonth.toLocaleString('en-US', { month: 'long' }),
   }
+}
+
+const TREND_WIDTH = 160
+const TREND_HEIGHT = 64
+
+/**
+ * The card's corner curve: cumulative spend anchored to the inner surface's
+ * bottom-right, filled with a soft gradient in the delta's colour, with today
+ * marked and any projected tail drawn dashed.
+ */
+function SpendTrend({ values, tone, dashFrom }: { values: number[]; tone: 'good' | 'bad' | 'flat'; dashFrom?: number }) {
+  const id = useId()
+  const points = sparkPoints(values, TREND_WIDTH, TREND_HEIGHT, 6)
+  if (points.length < 2) return null
+  const solid = dashFrom === undefined ? points : points.slice(0, dashFrom + 1)
+  const dashed = dashFrom === undefined ? [] : points.slice(dashFrom)
+  const last = points.at(-1) ?? points[0]
+
+  return (
+    <div className={`ov-trend tone-${tone}`} aria-hidden="true">
+      <svg viewBox={`0 0 ${TREND_WIDTH} ${TREND_HEIGHT}`} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={`${id}-fill`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.22" />
+            <stop offset="70%" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+          <radialGradient id={`${id}-glow`}>
+            <stop offset="0%" stopColor="currentColor" stopOpacity="0.06" />
+            <stop offset="55%" stopColor="currentColor" stopOpacity="0.02" />
+            <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <ellipse cx={last[0]} cy={last[1]} rx={TREND_WIDTH * 0.7} ry={TREND_HEIGHT * 0.8} fill={`url(#${id}-glow)`} />
+        <path d={sparkArea(solid, TREND_HEIGHT)} fill={`url(#${id}-fill)`} />
+        <path className="ov-trend-line" d={sparkPath(solid)} vectorEffect="non-scaling-stroke" />
+        {dashed.length > 1 && <path className="ov-trend-line dashed" d={sparkPath(dashed)} vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <span className="ov-trend-dot" style={{ left: `${(last[0] / TREND_WIDTH) * 100}%`, top: `${(last[1] / TREND_HEIGHT) * 100}%` }} />
+    </div>
+  )
 }
 
 export function sessionModelKey(project: string, date: string, calls: number, cost: number): string {
@@ -423,12 +558,13 @@ function buildModelIndex(data: MenubarPayload): Map<string, string> {
 
 function streakDays(daily: DailyHistoryEntry[], now: Date): number {
   const byDate = new Map(daily.map(day => [day.date, day.cost]))
+  const spent = (offset: number) =>
+    (byDate.get(localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset))) ?? 0) > 0
+  // A day that has not happened yet does not end a streak: before the first
+  // session of the day the count runs from yesterday, so a long run of active
+  // days never reads as 0.
   let streak = 0
-  for (let offset = 0; ; offset++) {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset)
-    if ((byDate.get(localDateKey(date)) ?? 0) <= 0) break
-    streak++
-  }
+  for (let offset = spent(0) ? 0 : 1; spent(offset); offset++) streak++
   return streak
 }
 
@@ -463,6 +599,12 @@ function CountUp({ value, animateKey, animate = true }: { value: number; animate
   return <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'}>{formatUsd(value)}</div>
 }
 
+/** 0 = Sunday, from a local `YYYY-MM-DD` key. */
+function dayOfWeek(date: string): number {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day).getDay()
+}
+
 function formatShortDay(date: string): string {
   const [, month, day] = date.split('-').map(Number)
   return `${month}/${day}`
@@ -472,16 +614,25 @@ type AggregatedModel = {
   name: string
   cost: number
   calls: number
-  // Absent in provider-filtered mode: `current.topModels` carries no per-model
-  // token counts, so the table shows "—" rather than a misleading zero.
+  // Absent when the payload carries no count for the row (an older CLI, or a
+  // row whose contributing legacy data lacked counts): the table shows "—"
+  // rather than a misleading zero.
   inputTokens?: number
   outputTokens?: number
+  cacheReadTokens?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
 function topModelsToAggregated(models: MenubarPayload['current']['topModels']): AggregatedModel[] {
   return models
-    .map(model => ({ name: model.name, cost: model.cost, calls: model.calls }))
+    .map(model => ({
+      name: model.name,
+      cost: model.cost,
+      calls: model.calls,
+      ...(model.inputTokens === undefined ? {} : { inputTokens: model.inputTokens }),
+      ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
+      ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
+    }))
     .sort((a, b) => b.cost - a.cost)
 }
 
@@ -517,6 +668,8 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
             <th>Model</th>
             <th className="num">Input tok</th>
             <th className="num">Output tok</th>
+            {/* Reused input tokens: prompts the provider served from cache. */}
+            <th className="num" title="Reused input tokens served from the provider's cache">Cache read</th>
             <th className="num">Cost</th>
             <th className="num">Calls</th>
           </tr>
@@ -531,6 +684,7 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
               </td>
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
+              <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
               <td className="num mono">{formatUsd(model.cost)}</td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
@@ -548,77 +702,146 @@ export type InvestigateRequest = {
   sessionId?: string | null
 }
 
-function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay }: { daily: DailyHistoryEntry[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void }) {
-  const isNoData = (day: DailyHistoryEntry) => dataStart !== null && day.date < dataStart
+/** A drawn column: a single day, or a bucket that also carries the first day it covers. */
+type ChartDay = DailyHistoryEntry & { spanStart?: string }
+
+/** The days a column stands for. A bucket sums a week, so naming only its last
+ *  day presents a weekly figure as a daily one. */
+function spanLabel(day: ChartDay, format: (date: string) => string = date => date): string {
+  return day.spanStart && day.spanStart !== day.date ? `${format(day.spanStart)} to ${format(day.date)}` : format(day.date)
+}
+
+/** Fold `size` consecutive days into one column, dated by the last day it covers
+ *  so the axis label, the today highlight and the no-data cutoff stay truthful. */
+function bucketDays(daily: DailyHistoryEntry[], size: number): ChartDay[] {
+  if (size <= 1) return daily
+  const buckets: ChartDay[] = []
+  for (let start = 0; start < daily.length; start += size) {
+    const slice = daily.slice(start, start + size)
+    const lead = slice.reduce((best, day) => (day.cost > best.cost ? day : best), slice[0])
+    buckets.push({
+      ...slice[slice.length - 1],
+      spanStart: slice[0].date,
+      cost: slice.reduce((total, day) => total + day.cost, 0),
+      calls: slice.reduce((total, day) => total + day.calls, 0),
+      topModels: lead.topModels,
+    })
+  }
+  return buckets
+}
+
+function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay, bucketed = false }: { daily: ChartDay[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void; bucketed?: boolean }) {
+  const bars = barLayout(daily.length)
+  const isNoData = (day: ChartDay) => dataStart !== null && day.date < dataStart
   const max = Math.max(...daily.map(day => day.cost), 0)
+  // Bars are drawn against the top tick, not the raw peak, so a bar top and a
+  // gridline mean the same number.
+  const valueTicks = niceTicks(max)
+  const axisMax = valueTicks.at(-1) || 1
   const peakIndex = daily.reduce((peak, day, index) => day.cost > (daily[peak]?.cost ?? -1) ? index : peak, 0)
   const peak = daily[peakIndex]
-  const yesterday = daily.at(-2)
-  const average = mean(daily.map(day => day.cost))
+  const todayKey = localDateKey(new Date())
   // Weekly labels work for 30 days, but become unreadable at 6M/Life (26-53
   // labels). Long ranges use five even intervals plus the newest day.
   const tickStride = daily.length <= 45 ? 7 : Math.ceil((daily.length - 1) / 5)
   const tickIndexes = daily.map((_, index) => index).filter(index => index % tickStride === 0)
   if (daily.length > 45 && tickIndexes.at(-1) !== daily.length - 1) tickIndexes.push(daily.length - 1)
   const ticks = tickIndexes.map(index => daily[index])
-  const [tip, setTip] = useState<{ day: DailyHistoryEntry; x: number; y: number } | null>(null)
+  const [tip, setTip] = useState<{ day: ChartDay; x: number; y: number } | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
   useBarGrowIn(chartRef, '.col', [animateKey])
+  const columnCentre = (index: number) => ((index + 0.5) / Math.max(1, daily.length)) * 100
 
   return (
     <>
-      <div className="chart" ref={chartRef}>
-        {daily.map((day, index) => {
-          const noData = isNoData(day)
-          // A day with recorded activity is a drill-through entry: clicking it
-          // opens the sessions that were active that day (sessions started
-          // earlier included, within the source's day granularity).
-          const drillable = !noData && (day.cost > 0 || day.calls > 0) && onSelectDay !== undefined
-          return (
-            <button
-              type="button"
-              aria-label={`${day.date}: ${noData ? 'no data recorded' : formatUsd(day.cost)}${drillable ? ' — view sessions' : ''}`}
-              className={`col${index === peakIndex && !noData ? ' hi' : ''}${noData ? ' nodata' : ''}`}
-              key={day.date}
-              style={{ height: `${max > 0 ? Math.max(2, day.cost / max * 100) : 2}%` }}
-              data-date={day.date}
-              data-cost={day.cost}
-              data-calls={day.calls}
-              data-led={day.topModels[0]?.name ?? ''}
-              data-nodata={noData ? 'true' : 'false'}
-              onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
-              onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
-              onMouseLeave={() => setTip(null)}
-              onClick={drillable ? () => onSelectDay!(day.date) : undefined}
-            />
-          )
-        })}
-      </div>
-      <div className="ov-xax">
-        {ticks.map(day => {
-          const index = daily.indexOf(day)
-          return <span key={day.date} style={{ left: `${daily.length > 1 ? index / (daily.length - 1) * 100 : 0}%` }}>{formatChartDate(day.date)}</span>
-        })}
-      </div>
-      <div className="ov-chart-summaries" aria-label="Daily spend summary">
-        <div className="ov-summary-chip"><span>Avg/day</span><strong>{formatUsd(average)}</strong></div>
-        <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? `${formatUsd(peak.cost)} · ${formatShortDay(peak.date)}` : '$0.00'}</strong></div>
-        <div className="ov-summary-chip"><span>Yesterday</span><strong>{formatUsd(yesterday?.cost ?? 0)}</strong></div>
+      <div className="chart-frame">
+        <div className="chart-plot">
+          <div className="chart-grid" aria-hidden="true">
+            {valueTicks.map(tick => <span className="chart-gridline" key={tick} style={{ bottom: `${(tick / axisMax) * 100}%` }} />)}
+            {bucketed ? null : daily.map((day, index) => (dayOfWeek(day.date) === 0 && index > 0
+              ? <span className="chart-weekline" key={day.date} style={{ left: `${columnCentre(index) - (50 / Math.max(1, daily.length))}%` }} />
+              : null))}
+          </div>
+          <div className="chart" ref={chartRef} style={{ gap: `${bars.gap}px` }}>
+            {daily.map(day => {
+              const noData = isNoData(day)
+              // A day with recorded activity is a drill-through entry: clicking it
+              // opens the sessions that were active that day (sessions started
+              // earlier included, within the source's day granularity).
+              const drillable = !noData && (day.cost > 0 || day.calls > 0) && onSelectDay !== undefined
+              return (
+                <button
+                  type="button"
+                  aria-label={`${spanLabel(day)}: ${noData ? 'no data recorded' : formatUsd(day.cost)}${drillable ? ' — view sessions' : ''}`}
+                  className={`col${day.date === todayKey && !noData ? ' hi' : ''}${noData ? ' nodata' : ''}`}
+                  key={day.date}
+                  style={{ height: `${axisMax > 0 ? Math.max(2, (day.cost / axisMax) * 100) : 2}%`, minWidth: `${bars.minWidth}px` }}
+                  data-date={day.date}
+                  data-cost={day.cost}
+                  data-calls={day.calls}
+                  data-led={day.topModels[0]?.name ?? ''}
+                  data-nodata={noData ? 'true' : 'false'}
+                  onMouseEnter={event => setTip({ day, x: event.clientX, y: event.clientY })}
+                  onMouseMove={event => setTip({ day, x: event.clientX, y: event.clientY })}
+                  onMouseLeave={() => setTip(null)}
+                  onClick={drillable ? () => onSelectDay!(day.date) : undefined}
+                />
+              )
+            })}
+          </div>
+          {peak && peak.cost > 0 && (
+            <span className="chart-peak-guide" aria-hidden="true" style={{ bottom: `${(peak.cost / axisMax) * 100}%`, left: `${columnCentre(peakIndex)}%` }} />
+          )}
+        </div>
+        <div className="chart-axis" aria-hidden="true">
+          {ticksClearOfPeak(valueTicks, peak && peak.cost > 0 ? peak.cost : 0, axisMax).map(tick => <span className="chart-axis-tick" key={tick} style={{ bottom: `${(tick / axisMax) * 100}%` }}>{formatAxisMoney(tick)}</span>)}
+          {peak && peak.cost > 0 && (
+            <span className="chart-axis-peak" style={{ bottom: `${(peak.cost / axisMax) * 100}%` }}>{formatUsd(peak.cost)}</span>
+          )}
+        </div>
+        <div className="ov-xax">
+          {ticks.map(day => {
+            const index = daily.indexOf(day)
+            return <span key={day.date} style={{ left: `${daily.length > 1 ? index / (daily.length - 1) * 100 : 0}%` }}>{formatChartDate(day.date)}</span>
+          })}
+        </div>
       </div>
       {tip && (
         <ChartTip x={tip.x} y={tip.y}>
-          <div className="chart-tip-d">{formatChartDate(tip.day.date)}</div>
+          <div className="chart-tip-d">{spanLabel(tip.day, formatChartDate)}</div>
           {isNoData(tip.day) ? (
             <div className="chart-tip-s">No data recorded</div>
           ) : (
             <>
-              <div className="chart-tip-v">{formatUsd(tip.day.cost)}</div>
-              <div className="chart-tip-s">{tip.day.calls} calls · {tip.day.topModels[0]?.name ?? 'No model'} led</div>
+              <div className="chart-tip-row">
+                <i className={tip.day.date === todayKey ? 'chart-tip-sw hi' : 'chart-tip-sw'} />
+                <span>Spend</span>
+                <b>{formatUsd(tip.day.cost)}</b>
+              </div>
+              <div className="chart-tip-row">
+                <i className="chart-tip-sw mut" />
+                <span>{tip.day.topModels[0]?.name ?? 'No model'} led</span>
+                <b>{formatCount(tip.day.calls, 'call')}</b>
+              </div>
             </>
           )}
         </ChartTip>
       )}
     </>
+  )
+}
+
+/** The card header's right slot: the menubar's three daily figures, read off the drawn window. */
+function DailySummaries({ daily, anchorIsToday, bucketed = false }: { daily: DailyHistoryEntry[]; anchorIsToday: boolean; bucketed?: boolean }) {
+  const peak = daily.reduce<DailyHistoryEntry | undefined>((best, day) => (best && best.cost >= day.cost ? best : day), undefined)
+  const yesterday = daily.at(-2)
+  const average = mean(daily.map(day => day.cost))
+  return (
+    <div className="ov-chart-summaries" aria-label="Daily spend summary">
+      <div className="ov-summary-chip"><span>{bucketed ? 'Avg/week' : 'Avg/day'}</span><strong>{formatUsd(average)}</strong></div>
+      <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? `${formatUsd(peak.cost)} · ${formatShortDay(peak.date)}` : '$0.00'}</strong></div>
+      <div className="ov-summary-chip"><span>{bucketed ? 'Previous week' : anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{formatUsd(yesterday?.cost ?? 0)}</strong></div>
+    </div>
   )
 }
 
@@ -663,7 +886,7 @@ function TopActivities({ activities, onSelectCategory }: { activities: MenubarPa
               <strong>{formatUsd(activity.cost)}</strong>
             </div>
             <div className="ov-activity-meta">
-              <span>{activity.turns.toLocaleString('en-US')} turns</span>
+              <span>{formatCount(activity.turns, 'turn')}</span>
               <span>{formatRate(activity.oneShotRate)} one-shot</span>
             </div>
           </div>
@@ -684,7 +907,7 @@ export function Overview({ period, provider }: { period: Period; provider: strin
 function CombinedDevices({ usage }: { usage: CombinedUsage }) {
   return (
     <div className="ov-combined-devices">
-      <div className="ov-combined-head">{usage.combined.reachableCount} of {usage.combined.deviceCount} devices</div>
+      <div className="ov-combined-head">{usage.combined.reachableCount.toLocaleString('en-US')} of {formatCount(usage.combined.deviceCount, 'device')}</div>
       {usage.perDevice.map(device => (
         <div className={device.error ? 'ov-combined-row err' : 'ov-combined-row'} key={device.id}>
           <span className="ov-combined-name">{device.local ? `${device.name} · this device` : device.name}</span>
@@ -710,14 +933,14 @@ export function OverviewContent({
   provider?: string
   range?: DateRange | null
   overview: Polled<MenubarPayload>
-  onNavigate?: (section: 'optimize' | 'sessions' | 'periods') => void
+  onNavigate?: (section: 'optimize' | 'sessions' | 'spend' | 'plans') => void
   /** Drill-through entries: day bars, expensive sessions, models, categories. */
   onInvestigate?: (request: InvestigateRequest) => void
   ready?: boolean
   scope?: Scope
   headlineSnapshot?: OverviewHeadlineSnapshot | null
 }) {
-  const { data, error } = overview
+  const { data, error, lastSuccessAt } = overview
   const heroSelectionKey = `${period}|${provider}|${range?.from ?? ''}|${range?.to ?? ''}|${scope}`
   // Suppress only the single persisted-headline -> live-data handoff. A stored
   // headline remains available after that handoff, so testing the snapshot prop
@@ -764,11 +987,13 @@ export function OverviewContent({
         : formatUsd(headlineSnapshot.cost)
       return (
         <div className="ov-dashboard" aria-label="Cached usage summary">
-          <div className="ov-card ov-hero-split snapshot-hero">
-            <div className="ov-hero-main">
-              <div className="ov-hero-top"><span className="ov-label">{headlineSnapshot.label}</span><span className="ov-streak">exact {capturedLabel}</span></div>
-              <div className="ov-hero-num" data-countup={headlineSnapshot.cost}>{headlineCost}</div>
-              <div className="ov-hero-sub">{headlineSnapshot.calls.toLocaleString('en-US')} calls · sessions updating</div>
+          <div className="ov-card">
+            <div className="ov-panel-head"><Icon name="circle-dollar-sign" /><h3>{headlineSnapshot.label}</h3><span className="r"><span className="ov-streak">exact {capturedLabel}</span></span></div>
+            <div className="ov-card-inner ov-hero-split snapshot-hero">
+              <div className="ov-hero-main">
+                <div className="ov-hero-num" data-countup={headlineSnapshot.cost}>{headlineCost}</div>
+                <div className="ov-hero-sub">{formatCount(headlineSnapshot.calls, 'call')} · sessions updating</div>
+              </div>
             </div>
           </div>
           <SectionSkeleton label="Updating detailed drill-downs…" rows={3} chart />
@@ -784,8 +1009,15 @@ export function OverviewContent({
   // the menubar. Only the hero totals are aggregated; the detailed panels below
   // (daily chart, models) stay local — the combined payload carries totals only.
   const combined = scope === 'combined' ? data.combined : undefined
-  const heroCost = combined ? combined.combined.cost : data.current.cost
-  const heroCalls = combined ? combined.combined.calls : data.current.calls
+  // One generation behind every period the user can switch to. `periodTotals`
+  // is emitted only for an unscoped, unfiltered request, so its presence on THIS
+  // payload is the gate: under a provider, project or config filter the machine-
+  // wide generation must never stand in for the filtered headline.
+  const unfiltered = !rangeActive && !combined && !!data.periodTotals
+  rememberGeneration(unfiltered ? data : null, lastSuccessAt)
+  const headline = unfiltered ? generationHeadline(period, lastSuccessAt) : null
+  const heroCost = combined ? combined.combined.cost : headline?.cost ?? data.current.cost
+  const heroCalls = combined ? combined.combined.calls : headline?.calls ?? data.current.calls
   const heroSessions = combined ? combined.combined.sessions : data.current.sessions
   const heroSessionLabel = combined
     ? formatCombinedSessionCount()
@@ -794,7 +1026,9 @@ export function OverviewContent({
     ? COMBINED_SESSION_COUNT_HELP
     : (sessionCountIsExact(data.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
   const animateKey = heroSelectionKey
-  const stats = deriveStats(data, now)
+  const anchorKey = rangeActive ? range.to : localDateKey(now)
+  const anchorIsToday = anchorKey === localDateKey(now)
+  const stats = deriveStats(data, now, anchorKey)
   const periodDaily = sliceDailyToPeriod(data.history.daily, period, now)
   // Daily chart: contiguous zero-filled calendar window. A custom range spans
   // [from..to]; otherwise the trend covers at least the last 30 days, extended
@@ -807,9 +1041,29 @@ export function OverviewContent({
         periodDaily[0] && periodDaily[0].date < defaultChartStart ? periodDaily[0].date : defaultChartStart,
         localDateKey(now),
       )
-  // Provider-filtered history.daily has empty topModels, so source the models
-  // table from current.topModels (already period/range/provider-scoped) instead.
-  const models = provider !== 'all'
+  // The chips read the same series the chart draws. Past the fit ceiling the
+  // chart folds days into weeks, and a Peak taken from the raw days then named a
+  // day the chart has no bar for, so the guide and the chip disagreed.
+  const chartBucketSize = barBucketDays(chartDaily.length)
+  const drawnDaily = bucketDays(chartDaily, chartBucketSize)
+  // Models this period come from `current.topModels` — period/range/provider-
+  // scoped by the CLI, and (on CLIs that emit per-model counts) carrying input/
+  // output/cache-read counts for every model in the period, including days
+  // whose per-day top-5 history list no longer names them. history.daily is
+  // the fallback for payloads from older CLIs: its rows know input/output but
+  // not cache read, so the cache column shows "—" there. Provider-filtered
+  // history.daily has empty topModels, so a provider filter always sources
+  // from current.topModels.
+  //
+  // `current.topModels` is uncapped (#1318), so this table lists every model
+  // with usage in the period — the union-over-top-5 fallback it replaced was
+  // itself truncated per day, and a row cap would drop exactly the local and
+  // free models (qwen, llama, …) whose cost is $0 and therefore rank last.
+  // Consumers wanting fewer rows slice their own; this table scrolls instead.
+  const topModelsCarryCounts = data.current.topModels.some(model =>
+    model.inputTokens !== undefined || model.outputTokens !== undefined,
+  )
+  const models = provider !== 'all' || topModelsCarryCounts
     ? topModelsToAggregated(data.current.topModels)
     : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
   const recent14 = data.history.daily.slice(-14)
@@ -842,63 +1096,109 @@ export function OverviewContent({
   return (
     <div className="ov-dashboard">
       {error && <StaleBanner error={error} />}
-      <div className="ov-card ov-hero-split" aria-label="Key performance indicators">
-        <div className="ov-hero-main">
-          <div className="ov-hero-top"><span className="ov-label">{combined ? `Combined · ${data.current.label}` : data.current.label}</span><span className="ov-streak"><b>{streakDays(data.history.daily, now)}</b>-day streak</span></div>
-          {/* A returning launch already showed a truthful persisted headline.
-              Replaying the live hero from $0 on handoff makes that exact value
-              appear to collapse and recover; snap to the revalidated total. */}
-          <CountUp value={heroCost} animateKey={animateKey} animate={!suppressHeroReplay} />
-          <div className="ov-hero-sub" title={heroSessionHelp}>{heroCalls.toLocaleString('en-US')} calls · {heroSessionLabel}</div>
-          {combined
-            ? <CombinedDevices usage={combined} />
-            : (
-              <>
-                {saved > 0 && (
-                  <div className="ov-saved-line"><span>Saved by applied fixes</span><strong>{formatUsd(saved)}</strong><small>across {applied} {applied === 1 ? 'fix' : 'fixes'}</small></div>
-                )}
-                {localSaved > 0 && (
-                  <div className="ov-saved-line"><span>Saved via local models</span><strong>{formatUsd(localSaved)}</strong><small>local-model routing</small></div>
-                )}
-              </>
-            )}
+      <div className="ov-card">
+        <div className="ov-panel-head">
+          <Icon name="circle-dollar-sign" />
+          <h3>{combined ? `Combined · ${data.current.label}` : data.current.label}</h3>
+          <span className="r"><span className="ov-streak"><b>{rememberStreak(data.streak) ?? streakDays(data.history.daily, now)}</b>-day streak</span></span>
         </div>
-        <ActivityHeatmap daily={data.history.daily} bare />
-        <EfficiencyScorecard current={data.current} bare />
+        <div className="ov-card-inner ov-hero-split" aria-label="Key performance indicators">
+          <div className="ov-hero-main">
+            <div className="ov-hero-figures">
+              {/* A returning launch already showed a truthful persisted headline.
+                  Replaying the live hero from $0 on handoff makes that exact value
+                  appear to collapse and recover; snap to the revalidated total. */}
+              <CountUp value={heroCost} animateKey={animateKey} animate={!suppressHeroReplay} />
+              <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
+              {combined
+                ? <CombinedDevices usage={combined} />
+                : (
+                  <>
+                    {saved > 0 && (
+                      <div className="ov-saved-line"><span>Saved by applied fixes</span><strong>{formatUsd(saved)}</strong><small>across {applied} {applied === 1 ? 'fix' : 'fixes'}</small></div>
+                    )}
+                    {localSaved > 0 && (
+                      <div className="ov-saved-line"><span>Saved via local models</span><strong>{formatUsd(localSaved)}</strong><small>local-model routing</small></div>
+                    )}
+                  </>
+                )}
+            </div>
+            <div className="ov-hero-foot">
+              <div><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{stats.priorDayCost === null ? 'n/a' : formatUsd(stats.priorDayCost)}</strong></div>
+              <div><span>7-day avg</span><strong>{stats.sevenDayAvg === null ? 'n/a' : formatUsd(stats.sevenDayAvg)}</strong></div>
+              <div><span>{anchorIsToday ? 'vs yesterday' : 'vs previous day'}</span><strong className={stats.dayOverDayPct === null ? undefined : `tone-${paceDirection(stats.dayOverDayPct)}`}>{stats.dayOverDayPct === null ? 'n/a' : `${stats.dayOverDayPct >= 0 ? '+' : '-'}${Math.abs(Math.round(stats.dayOverDayPct))}%`}</strong></div>
+            </div>
+          </div>
+          <ActivityHeatmap daily={data.history.daily} bare />
+          <EfficiencyScorecard current={data.current} bare />
+        </div>
       </div>
 
       {!rangeActive && (
-        <div className="ov-card ov-stats3">
-          <div className="ov-stat"><div className="ov-label">Month to date</div><div className="v">{formatUsd(stats.mtd)}</div><div className="d">{stats.pacePct === null ? `No ${stats.prevMonthName} pace yet` : `${stats.pacePct >= 0 ? '+' : ''}${Math.round(stats.pacePct)}% vs ${stats.prevMonthName} pace`}</div></div>
-          <div className="ov-stat"><div className="ov-label">Projected month</div><div className="v">{formatUsd(stats.projected)} <small>est</small></div><div className="d warn">{formatUsd(Math.max(0, stats.projected - stats.mtd))} to go</div></div>
+        <div className="ov-stats3">
+          <div className="ov-card">
+            <div className="ov-panel-head"><Icon name="calendar" /><h3>Month to date</h3></div>
+            <div className="ov-card-inner ov-stat">
+              <SpendTrend values={stats.mtdSeries} tone={stats.pacePct === null ? 'flat' : paceDirection(stats.pacePct)} />
+              <div className="ov-stat-figures">
+                <div className="v">{formatUsd(stats.mtd)}</div>
+                {stats.pacePct === null ? (
+                  <div className="d">No {stats.prevMonthName} pace yet</div>
+                ) : (
+                  <>
+                    <span className={`ov-stat-pill tone-${paceDirection(stats.pacePct)}`}>
+                      <Icon name={stats.pacePct < 0 ? 'arrow-down' : 'arrow-up'} />
+                      {Math.abs(Math.round(stats.pacePct))}%
+                    </span>
+                    <div className="d">vs {stats.prevMonthName} pace</div>
+                  </>
+                )}
+              </div>
+              <div className="ov-stat-foot">
+                <button className="ov-link" type="button" onClick={() => onNavigate?.('spend')}>See spend <Icon name="arrow-right" /></button>
+              </div>
+            </div>
+          </div>
+          <div className="ov-card">
+            <div className="ov-panel-head"><Icon name="trending-up" /><h3>Projected month</h3></div>
+            <div className="ov-card-inner ov-stat">
+              <SpendTrend values={[...stats.mtdSeries, ...stats.projectedTail]} tone="flat" dashFrom={Math.max(0, stats.mtdSeries.length - 1)} />
+              <div className="ov-stat-figures">
+                <div className="v">{formatUsd(stats.projected)} <small>est</small></div>
+                <span className="ov-stat-pill tone-neutral">
+                  <b>{formatUsd(Math.max(0, stats.projected - stats.mtd))}</b> to go
+                </span>
+              </div>
+              <div className="ov-stat-foot">
+                <button className="ov-link" type="button" onClick={() => onNavigate?.('plans')}>See plans <Icon name="arrow-right" /></button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
       <div className="ov-card ov-panel ov-chart-widget">
-        <div className="ov-panel-head"><h3>Daily spend</h3><span className="r">{topModel ? `Biggest driver: ${topModel.name}` : 'No model driver yet'}</span></div>
-        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={chartDaily} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} onSelectDay={date => onInvestigate?.({ filters: dayFilters(date) })} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
+        <div className="ov-panel-head"><Icon name="chart-column" /><h3>Daily spend</h3>{data.history.daily.length ? <span className="r"><DailySummaries daily={drawnDaily} anchorIsToday={anchorIsToday} bucketed={chartBucketSize > 1} /></span> : null}</div>
+        <div className="ov-panel-body">{data.history.daily.length ? <DailyChart daily={drawnDaily} bucketed={chartBucketSize > 1} dataStart={dataStartKey(data.history.daily)} animateKey={animateKey} onSelectDay={date => onInvestigate?.({ filters: dayFilters(date) })} /> : <EmptyNote>No spend yet.</EmptyNote>}</div>
       </div>
 
       <WorkflowCard current={data.current} />
 
       <div className="ov-insight-band">
         <div className="ov-coach">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/></svg>
-          <div className="ov-coach-tx">
-            {rangeActive
-              ? <>{topModel ? <><span className="num">{topModel.name}</span> is the biggest driver in this range</> : 'No single model dominates this range'}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>
-              : <>{weeklyPct === null ? <>No prior-week pacing baseline yet</> : <>You're pacing <span className="num">{weeklyPct}% {weeklyDirection}</span> than last week</>}{topModel ? <>; <span className="num">{topModel.name}</span> is the biggest driver</> : ''}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>}
+          <div className="ov-card-inner ov-coach-inner">
+            <Icon name="trending-up" />
+            <div className="ov-coach-tx">
+              {rangeActive
+                ? <>{topModel ? <><span className="num">{topModel.name}</span> is the biggest driver in this range</> : 'No single model dominates this range'}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>
+                : <>{weeklyPct === null ? <>No prior-week pacing baseline yet</> : <>You're pacing <span className="num">{weeklyPct}% {weeklyDirection}</span> than last week</>}{topModel ? <>; <span className="num">{topModel.name}</span> is the biggest driver</> : ''}. <span className="num">{formatUsd(data.optimize.savingsUSD)}</span> is recoverable.</>}
+            </div>
+            <button className="ov-coach-cta" type="button" onClick={() => onNavigate?.('optimize')}>Review →</button>
           </div>
-          <button className="ov-coach-cta" type="button" onClick={() => onNavigate?.('optimize')}>Review →</button>
         </div>
       </div>
 
       <SignalsCard signals={signals} />
-
-      <div className="ov-card ov-routing" aria-label="Compare periods entry">
-        <div><span className="ov-label">Compare periods</span><p>Pick two ranges and see exactly what drove the change — projects, models, and the sessions behind them.</p></div>
-        <button className="ov-link" type="button" onClick={() => onNavigate?.('periods')}>Compare →</button>
-      </div>
 
       <div className="ov-analytics-row">
         <CostPerOutcome outcome={yieldReport} />
@@ -908,12 +1208,12 @@ export function OverviewContent({
       <div className="ov-body-grid">
         <div className="ov-main-column">
           <div className="ov-card ov-panel ov-models-widget">
-            <div className="ov-panel-head"><h3>Models this period</h3><span className="r">Sorted by cost</span></div>
+            <div className="ov-panel-head"><Icon name="box" /><h3>Models this period</h3><span className="r">Sorted by cost</span></div>
             <div className="ov-panel-body ov-model-panel"><ModelsTable models={models} onSelectModel={onInvestigate ? name => onInvestigate({ filters: modelFilters([name]) }) : undefined} /></div>
           </div>
 
           <div className="ov-card ov-panel ov-sessions-widget">
-            <div className="ov-panel-head"><h3>Most expensive sessions</h3><span className="r"><button className="ov-link" type="button" onClick={() => onNavigate?.('sessions')}>See all →</button></span></div>
+            <div className="ov-panel-head"><Icon name="coins" /><h3>Most expensive sessions</h3><span className="r"><button className="ov-link" type="button" onClick={() => onNavigate?.('sessions')}>See all →</button></span></div>
             <div className="ov-panel-body">
               {data.current.topSessions.length ? data.current.topSessions.map((session, index) => {
                 const model = modelIndex.get(sessionModelKey(session.project, session.date, session.calls, session.cost))
@@ -926,7 +1226,7 @@ export function OverviewContent({
 
         <div className="ov-side-column">
           <div className="ov-card ov-panel ov-activities-widget">
-            <div className="ov-panel-head"><h3>Top activities</h3><span className="r">Sorted by cost</span></div>
+            <div className="ov-panel-head"><Icon name="list" /><h3>Top activities</h3><span className="r">Sorted by cost</span></div>
             <div className="ov-panel-body"><TopActivities activities={data.current.topActivities} onSelectCategory={onInvestigate ? raw => onInvestigate({ filters: categoryFilters(raw) }) : undefined} /></div>
           </div>
         </div>

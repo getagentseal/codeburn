@@ -7,13 +7,17 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatCompact, formatUsd } from '../lib/format'
+import { formatCompact, formatCount, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
 import type { DateRange, FindingClass, MenubarPayload, OptimizeJsonReport, Period, SessionYieldJson, WasteAction, YieldJsonReport } from '../lib/types'
+import { Icon, type IconName } from '../components/icons'
 
 type OptimizeTab = 'waste' | 'reverts' | 'abandoned' | 'fixes'
+
+/** The card's header title: the tab the list below is showing. */
+const TAB_TITLES: Record<OptimizeTab, string> = { waste: 'Waste', reverts: 'Reverts', abandoned: 'Abandoned', fixes: 'Fixes' }
 
 export function Optimize({ period, provider, range = null }: { period: Period; provider: string; range?: DateRange | null }) {
   const overview = usePolled<MenubarPayload>(
@@ -71,13 +75,10 @@ export function OptimizeContent({
   return (
     <>
       {overview.error && <StaleBanner error={overview.error} />}
-      <SegTabs
-        options={options}
-        value={tab}
-        onChange={value => setTab(value as OptimizeTab)}
-        style={{ alignSelf: 'flex-start' }}
-      />
-      <Panel>
+      <Panel
+        title={TAB_TITLES[tab]}
+        right={<SegTabs options={options} value={tab} onChange={value => setTab(value as OptimizeTab)} />}
+      >
         {tab === 'waste' ? (
           <WasteRows report={optimizeReport} />
         ) : tab === 'reverts' ? (
@@ -101,7 +102,7 @@ function WasteRows({ report }: { report: Polled<OptimizeJsonReport> }) {
   return (
     <div className="opt-waste">
       <div className="opt-summary">
-        {report.data.summary.findingCount.toLocaleString('en-US')} findings · {formatUsd(report.data.summary.potentialSavingsCostUSD)} potential · health {report.data.summary.healthScore}/100
+        {formatCount(report.data.summary.findingCount, 'finding')} · {formatUsd(report.data.summary.potentialSavingsCostUSD)} potential · health {report.data.summary.healthScore}/100
       </div>
       <ActionableFindingRows findings={report.data.findings} byClass={report.data.summary.byClass} />
       <AppliedFixRows fixes={report.data.appliedFixes ?? []} />
@@ -154,10 +155,10 @@ function AppliedFixRows({ fixes }: { fixes: AppliedFix[] }) {
 
 type OptimizeFinding = OptimizeJsonReport['findings'][number]
 
-const IMPACT_ICON: Record<'high' | 'medium' | 'low', string> = {
-  high: '↑',
-  medium: '→',
-  low: '↓',
+const IMPACT_ICON: Record<'high' | 'medium' | 'low', IconName> = {
+  high: 'arrow-up',
+  medium: 'arrow-right',
+  low: 'arrow-down',
 }
 
 const CLASS_HEADERS: Record<FindingClass, string> = {
@@ -207,18 +208,18 @@ function ActionableFindingRows({ findings, byClass }: { findings: OptimizeFindin
               onClick={() => setExpandedId(current => current === finding.id ? null : finding.id)}
             >
               <span className={`opt-impact opt-impact-${finding.severity}`}>
-                <span aria-hidden="true">{IMPACT_ICON[finding.severity]}</span>
+                <Icon name={IMPACT_ICON[finding.severity]} className="opt-impact-mark" />
                 {finding.severity.charAt(0).toUpperCase() + finding.severity.slice(1)}
               </span>
               <span className="opt-finding-titlewrap">
                 <b className="opt-finding-title">{finding.title}</b>
                 {finding.trend === 'improving' && (
-                  <span className="opt-trend opt-trend-improving">improving<span aria-hidden="true"> ↓</span></span>
+                  <span className="opt-trend opt-trend-improving">improving<Icon name="arrow-down" className="opt-impact-mark" /></span>
                 )}
               </span>
               <span className="opt-finding-savings">{formatUsd(finding.estimatedSavingsUSD)}</span>
               <span className="opt-finding-tokens">{formatCompact(finding.tokensSaved)} tokens · {finding.basis}</span>
-              <span className="opt-finding-chevron" aria-hidden="true">›</span>
+              <span className="opt-finding-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
             </button>
             {expanded && (
               <div className="opt-finding-detail" role="region" aria-label={`${finding.title} details`}>
@@ -256,7 +257,7 @@ function FindingRows({ findings, empty }: { findings: Finding[]; empty: string }
           <span className="opt-finding-rank">{String(i + 1).padStart(2, '0')}</span>
           <b className="opt-finding-title">{finding.title}</b>
           <span className={`opt-impact opt-impact-${finding.impact}`}>
-            <span aria-hidden="true">{IMPACT_ICON[finding.impact]}</span>
+            <Icon name={IMPACT_ICON[finding.impact]} className="opt-impact-mark" />
             {finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)}
           </span>
           <span className="opt-finding-savings">{formatUsd(finding.savingsUSD)}</span>

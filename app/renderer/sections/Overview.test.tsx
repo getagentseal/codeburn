@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Polled } from '../hooks/usePolled'
 import { setActiveCurrency } from '../lib/format'
 import type { OverviewHeadlineSnapshot } from '../lib/overviewSnapshot'
 import type { ActReportJson, DailyHistoryEntry, MenubarPayload, YieldJsonReport } from '../lib/types'
+import { __resetGeneration } from '../lib/generation'
 import { Overview, OverviewContent, deriveSignals, localDateKey } from './Overview'
 
-function polled(data: MenubarPayload): Polled<MenubarPayload> {
-  return { data, error: null, loading: false, switching: false, lastSuccessAt: Date.now(), refresh: vi.fn() }
+function polled(data: MenubarPayload, lastSuccessAt = Date.now()): Polled<MenubarPayload> {
+  return { data, error: null, loading: false, switching: false, lastSuccessAt, refresh: vi.fn() }
 }
 
 // Mock the typed bridge so the section fetches our payload instead of spawning
@@ -183,6 +184,18 @@ describe('Overview', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
+    __resetGeneration()
+  })
+
+  it('counts the streak from yesterday when today has no spend yet', async () => {
+    const now = new Date()
+    const daily = consecutiveDays(now, 12, index => (index === 11 ? 0 : 5))
+    getOverview.mockResolvedValue({ ...makePayload(now), history: { daily } })
+
+    const { container } = render(<Overview period="30days" provider="all" />)
+
+    expect(await screen.findByText('Last 30 days')).toBeInTheDocument()
+    expect(container.querySelector('.ov-streak')).toHaveTextContent('11-day streak')
   })
 
   it("renders real hero, stats, model, saved, session, and daily-chart data", async () => {
@@ -220,16 +233,19 @@ describe('Overview', () => {
     // Session row title = the session's project (topSessions has no title field).
     expect(screen.getByText('parser-service')).toBeInTheDocument()
 
-    // The selected range produces one real bar per day and only its peak is highlighted.
+    // The selected range produces one real bar per day; today's is the accented one
+    // and the peak is called out on the value axis instead.
     const bars = container.querySelectorAll('.chart .col')
     expect(bars).toHaveLength(30)
-    expect(bars[10].classList.contains('hi')).toBe(true)
+    expect(bars[29].classList.contains('hi')).toBe(true)
     expect(container.querySelectorAll('.chart .col.hi')).toHaveLength(1)
+    expect(container.querySelector('.chart-axis-peak')).toHaveTextContent('$32.00')
     expect(bars[29]).toHaveAttribute('data-cost', '6.2')
     expect(bars[29]).toHaveAttribute('data-calls', '40')
     expect(bars[29]).toHaveAttribute('data-led', 'claude-opus-4')
     fireEvent.mouseEnter(bars[29], { clientX: 100, clientY: 80 })
-    expect(screen.getByText('40 calls · claude-opus-4 led')).toBeInTheDocument()
+    expect(screen.getByText('claude-opus-4 led')).toBeInTheDocument()
+    expect(screen.getByText('40 calls')).toBeInTheDocument()
     const tooltip = screen.getByRole('tooltip')
     expect(tooltip.parentElement).toBe(document.body)
     expect(tooltip).toHaveStyle({ position: 'fixed' })
@@ -271,10 +287,10 @@ describe('Overview', () => {
     // would match two cards.
     expect(within(kpis).getByText('$84.20')).toBeInTheDocument()
     expect(within(kpis).getByText('across 11 fixes')).toBeInTheDocument()
-    const statsCard = screen.getByText('Month to date').closest('.ov-stats3')
-    expect(statsCard).toHaveClass('ov-card')
-    expect(statsCard?.children).toHaveLength(2)
-    expect(within(statsCard as HTMLElement).getByText('Projected month')).toBeInTheDocument()
+    const statsRow = screen.getByText('Month to date').closest('.ov-stats3')
+    expect(statsRow?.children).toHaveLength(2)
+    expect(screen.getByText('Month to date').closest('.ov-card')).not.toBe(screen.getByText('Projected month').closest('.ov-card'))
+    expect(within(statsRow as HTMLElement).getByText('Projected month')).toBeInTheDocument()
     expect(screen.queryByText('Nearest limit')).not.toBeInTheDocument()
   })
 
@@ -296,129 +312,27 @@ describe('Overview', () => {
     expect(ticks.at(-1)).toHaveTextContent(now.toLocaleString('en-US', { month: 'short', day: 'numeric' }))
   })
 
-  it('opens the activity heatmap at the newest dates without pinning later manual scrolling', async () => {
-    const scrollWidth = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(520)
-    const clientWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320)
-    try {
-      const now = new Date()
-      getOverview.mockResolvedValue(makePayload(now))
-
-      const { container } = render(<Overview period="30days" provider="all" />)
-
-      expect(await screen.findByText('$312.40')).toBeInTheDocument()
-      const scroller = container.querySelector('.ov-heatmap-scroll') as HTMLDivElement
-      expect(scroller.scrollLeft).toBe(200)
-
-      scroller.scrollLeft = 24
-      fireEvent.scroll(scroller)
-      expect(scroller.scrollLeft).toBe(24)
-    } finally {
-      scrollWidth.mockRestore()
-      clientWidth.mockRestore()
-    }
-  })
-
-  it('waits for the compact heatmap slot to reach its final width before aligning newest dates', async () => {
-    let measuredScrollWidth = 320
-    let measuredClientWidth = 320
-    const scrollWidth = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get')
-      .mockImplementation(() => measuredScrollWidth)
-    const clientWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
-      .mockImplementation(() => measuredClientWidth)
-    let resizeCallback: ResizeObserverCallback | null = null
-    const disconnect = vi.fn()
-    class MockResizeObserver {
-      constructor(callback: ResizeObserverCallback) {
-        resizeCallback = callback
-      }
-      observe = vi.fn()
-      disconnect = disconnect
-      unobserve = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', MockResizeObserver)
-
-    try {
-      const now = new Date()
-      getOverview.mockResolvedValue(makePayload(now))
-
-      const { container } = render(<Overview period="30days" provider="all" />)
-
-      expect(await screen.findByText('$312.40')).toBeInTheDocument()
-      const scroller = container.querySelector('.ov-heatmap-scroll') as HTMLDivElement
-      expect(scroller.scrollLeft).toBe(0)
-
-      measuredScrollWidth = 520
-      measuredClientWidth = 320
-      act(() => resizeCallback?.([], {} as ResizeObserver))
-      expect(scroller.scrollLeft).toBe(200)
-      expect(disconnect).not.toHaveBeenCalled()
-
-      scroller.scrollLeft = 24
-      fireEvent.scroll(scroller)
-      act(() => resizeCallback?.([], {} as ResizeObserver))
-      expect(scroller.scrollLeft).toBe(24)
-    } finally {
-      vi.unstubAllGlobals()
-      scrollWidth.mockRestore()
-      clientWidth.mockRestore()
-    }
-  })
-
-  it('keeps following the newest dates across later resizes until the user scrolls away', async () => {
-    let measuredScrollWidth = 520
-    let measuredClientWidth = 320
-    const scrollWidth = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get')
-      .mockImplementation(() => measuredScrollWidth)
-    const clientWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
-      .mockImplementation(() => measuredClientWidth)
-    let resizeCallback: ResizeObserverCallback | null = null
-    class MockResizeObserver {
-      constructor(callback: ResizeObserverCallback) { resizeCallback = callback }
-      observe = vi.fn()
-      disconnect = vi.fn()
-      unobserve = vi.fn()
-    }
-    vi.stubGlobal('ResizeObserver', MockResizeObserver)
-
-    try {
-      const now = new Date()
-      getOverview.mockResolvedValue(makePayload(now))
-      const { container } = render(<Overview period="30days" provider="all" />)
-      expect(await screen.findByText('$312.40')).toBeInTheDocument()
-      const scroller = container.querySelector('.ov-heatmap-scroll') as HTMLDivElement
-      expect(scroller.scrollLeft).toBe(200)
-
-      measuredClientWidth = 240
-      act(() => resizeCallback?.([], {} as ResizeObserver))
-      expect(scroller.scrollLeft).toBe(280)
-
-      scroller.scrollLeft = 24
-      fireEvent.scroll(scroller)
-      measuredClientWidth = 200
-      act(() => resizeCallback?.([], {} as ResizeObserver))
-      expect(scroller.scrollLeft).toBe(24)
-    } finally {
-      vi.unstubAllGlobals()
-      scrollWidth.mockRestore()
-      clientWidth.mockRestore()
-    }
-  })
-
-  it('keeps weekday labels fixed while month context scrolls with the activity cells', async () => {
+  it('keeps weekday labels, and month labels on one row at least three columns apart', async () => {
     const now = new Date()
     getOverview.mockResolvedValue(makePayload(now))
 
-    render(<Overview period="30days" provider="all" />)
+    const { container } = render(<Overview period="30days" provider="all" />)
 
     expect(await screen.findByText('$312.40')).toBeInTheDocument()
-    const timeline = screen.getByRole('region', { name: 'Scrollable daily activity timeline' })
     const weekdayLabels = screen.getByLabelText('Weekday labels')
-
     expect(within(weekdayLabels).getByText('Mon')).toBeInTheDocument()
     expect(within(weekdayLabels).getByText('Wed')).toBeInTheDocument()
     expect(within(weekdayLabels).getByText('Fri')).toBeInTheDocument()
-    expect(within(timeline).queryByText('Mon')).not.toBeInTheDocument()
-    expect(within(timeline).getByText(now.toLocaleString('en-US', { month: 'short' }))).toBeInTheDocument()
+
+    const months = screen.getByLabelText('Month labels')
+    expect(within(months).getByText(now.toLocaleString('en-US', { month: 'short' }))).toBeInTheDocument()
+    const columns = [...months.querySelectorAll('span')]
+      .map(span => Number((span as HTMLElement).style.gridColumnStart))
+    expect(columns.length).toBeGreaterThan(1)
+    for (let index = 1; index < columns.length; index++) {
+      expect(columns[index]! - columns[index - 1]!).toBeGreaterThanOrEqual(3)
+    }
+    expect(container.querySelectorAll('.ov-heat-cell').length % 7).toBe(0)
   })
 
   it('renders efficiency, cost-per-outcome, and the weekday-spike risk signal', async () => {
@@ -536,10 +450,16 @@ describe('Overview', () => {
     expect(await screen.findByText('$99.20')).toBeInTheDocument()
     // Projected = MTD + median(trailing-7 = $5) × 16 days left = $179.20.
     expect(screen.getByText('$179.20')).toBeInTheDocument()
-    expect(screen.getByText('$80.00 to go')).toBeInTheDocument()
+    const projected = screen.getByText('Projected month').closest('.ov-card') as HTMLElement
+    expect(within(projected).getByText('$80.00')).toBeInTheDocument()
+    expect(within(projected).getByText('to go')).toBeInTheDocument()
     // Pace compares July's daily avg (6.613) to the PREVIOUS calendar month's
     // (June: 14×$5 + $32 = $102 / 15 = 6.8) → -3%, and the label names June.
-    expect(screen.getByText('-3% vs June pace')).toBeInTheDocument()
+    // The pill carries the arrow, so the figure itself is unsigned.
+    const monthToDate = screen.getByText('Month to date').closest('.ov-card') as HTMLElement
+    expect(within(monthToDate).getByText('3%')).toBeInTheDocument()
+    expect(within(monthToDate).getByText('vs June pace')).toBeInTheDocument()
+    expect(within(monthToDate).getByText('3%').closest('.ov-stat-pill')).toHaveClass('tone-good')
   })
 
   it('recovers a matched session model for the sub-line without a series dot', async () => {
@@ -652,8 +572,55 @@ describe('Overview', () => {
     expect(rows[1]).toHaveTextContent('$120.00')
     expect(rows[1]).toHaveTextContent('240')
     expect(rows[2]).toHaveTextContent('claude-opus-4')
-    // current.topModels carries no per-model tokens → both token cells show a dash.
-    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(2)
+    // This legacy-shaped payload carries no per-model counts → all three token
+    // cells (input, output, cache read) show a dash.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(3)
+  })
+
+  it('prefers current.topModels for the models table when the payload carries per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // New-CLI payload: per-model counts ride on current.topModels, including
+    // cache read. history.daily still carries different (per-day, truncated)
+    // aggregates that the table must NOT fall back to.
+    payload.current.topModels = [
+      { name: 'claude-opus-4', cost: 200, savingsUSD: 0, savingsBaselineModel: '', calls: 100, inputTokens: 1_200_000, outputTokens: 340_000, cacheReadTokens: 56_000_000, cacheWriteTokens: 7_000 },
+      { name: 'claude-haiku-4', cost: 4, savingsUSD: 0, savingsBaselineModel: '', calls: 12, inputTokens: 0, outputTokens: 0, cacheReadTokens: 900, cacheWriteTokens: 0 },
+    ]
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    expect(within(modelsTable).getByRole('columnheader', { name: 'Cache read' })).toBeInTheDocument()
+    const rows = within(modelsTable).getAllByRole('row')
+    // Counts come from current.topModels (1.2M in), not the daily aggregation (40M in).
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2M')
+    expect(rows[1]).toHaveTextContent('340K')
+    expect(rows[1]).toHaveTextContent('56M')
+    expect(within(modelsTable).queryByText('40M')).not.toBeInTheDocument()
+    // Known zeros stay zeros: haiku's fresh input/output render as 0, its cache
+    // read as the real 900.
+    expect(within(rows[2] as HTMLElement).getAllByText('0')).toHaveLength(2)
+    expect(within(rows[2] as HTMLElement).getByText('900')).toBeInTheDocument()
+  })
+
+  it('falls back to aggregating history.daily when the payload predates per-model counts', async () => {
+    const now = new Date()
+    const payload = makePayload(now)
+    // Legacy all-provider payload: current.topModels has no counts, history.daily
+    // does (input/output only — the CLI never emitted per-model cache read there).
+
+    render(<OverviewContent period="30days" provider="all" overview={polled(payload)} />)
+
+    const modelsTable = await screen.findByRole('table', { name: 'Models this period' })
+    const rows = within(modelsTable).getAllByRole('row')
+    // Input/output still come from the daily aggregation (30 days × 40M/2M) ...
+    expect(rows[1]).toHaveTextContent('claude-opus-4')
+    expect(rows[1]).toHaveTextContent('1.2B')
+    expect(rows[1]).toHaveTextContent('60M')
+    // ... and the absent per-model cache read shows as a dash, not zero.
+    expect(within(rows[1] as HTMLElement).getAllByText('—')).toHaveLength(1)
   })
 
   it('suppresses the week-over-week signal and MTD card for a custom range', async () => {
@@ -677,6 +644,28 @@ describe('Overview', () => {
     // The week-over-week Signals entry is suppressed under a custom range too.
     expect(screen.queryByText(/vs last 7 days|vs prior 7 days/)).toBeNull()
     expect(screen.getByText(/is the biggest driver in this range/)).toBeInTheDocument()
+  })
+
+  it('anchors the hero secondary row to the end of a custom range', async () => {
+    const now = new Date()
+    const overview = polled(makePayload(now))
+    const dayKey = (back: number) => localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - back))
+
+    const { container, rerender } = render(<OverviewContent period="30days" provider="all" overview={overview} />)
+    await screen.findByText('Month to date')
+    const foot = () => container.querySelector('.ov-hero-foot') as HTMLElement
+    // No range: the row still describes today and the day before it.
+    expect(within(foot()).getByText('Yesterday')).toBeInTheDocument()
+    expect(within(foot()).getByText('$5.17')).toBeInTheDocument()
+    expect(within(foot()).getByText('+24%')).toBeInTheDocument()
+
+    // Range ending on the $28.00 runner-up day, whose previous day is $5.00.
+    rerender(<OverviewContent period="30days" provider="all" range={{ from: dayKey(15), to: dayKey(9) }} overview={overview} />)
+    expect(within(foot()).getByText('Previous day')).toBeInTheDocument()
+    expect(within(foot()).getByText('$5.00')).toBeInTheDocument()
+    expect(within(foot()).getByText('$8.29')).toBeInTheDocument()
+    expect(within(foot()).getByText('vs previous day')).toBeInTheDocument()
+    expect(within(foot()).getByText('+460%')).toBeInTheDocument()
   })
 
   it('renders local-model savings in the hero only when present', async () => {
@@ -713,7 +702,7 @@ describe('Overview', () => {
     expect(within(kpis).getByText(/6,300 calls · Session count unavailable/)).toBeInTheDocument()
     expect(within(kpis).queryByText(/128 sessions/)).not.toBeInTheDocument()
     expect(within(kpis).queryByText(/At least/)).not.toBeInTheDocument()
-    expect(within(kpis).getByText('Combined · Last 30 days')).toBeInTheDocument()
+    expect(container.querySelector('.ov-panel-head h3')).toHaveTextContent('Combined · Last 30 days')
     expect(within(kpis).getByText('2 of 2 devices')).toBeInTheDocument()
     expect(within(kpis).getByText('workstation')).toBeInTheDocument()
     expect(within(kpis).getByText('laptop · this device')).toBeInTheDocument()
@@ -781,6 +770,56 @@ describe('Overview', () => {
     const kpis = document.querySelector('.ov-hero-main') as HTMLElement
     expect(within(kpis).getByText(/At least 3 sessions/)).toBeInTheDocument()
     expect(within(kpis).getByTitle('Older session logs may be unavailable.')).toBeInTheDocument()
+  })
+
+  it('never serves the machine-wide generation as the hero under a provider filter', async () => {
+    const now = new Date()
+    const all = makePayload(now)
+    // The unfiltered payload alone carries periodTotals; the generation it
+    // leaves behind is machine-wide.
+    all.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    const { unmount } = render(<OverviewContent period="30days" provider="all" overview={polled(all, 2_000)} />)
+    expect(within(document.querySelector('.ov-hero-main') as HTMLElement).getByText('$312.40')).toBeInTheDocument()
+    unmount()
+
+    // Codex spent nothing: its payload carries no periodTotals, and it is older
+    // than the generation (a switch back onto a memoized filtered report).
+    const codex = makePayload(now)
+    codex.current = { ...codex.current, cost: 0, calls: 0, sessions: 0, sessionCountBasis: 'identity' }
+
+    const { container } = render(<OverviewContent period="30days" provider="codex" overview={polled(codex, 1_000)} />)
+
+    const kpis = container.querySelector('.ov-hero-main') as HTMLElement
+    expect(within(kpis).getByText('$0.00')).toBeInTheDocument()
+    expect(within(kpis).queryByText('$312.40')).not.toBeInTheDocument()
+    expect(within(kpis).getByText(/0 calls · 0 sessions/)).toBeInTheDocument()
+  })
+
+  it('folds a long series into weekly buckets that keep the total, the peak and their date range', async () => {
+    const now = new Date()
+    // Past 520 days the chart draws whole weeks. The biggest single day ($500)
+    // sits in a quieter week than the biggest week (7 x $85 = $595), so a chip
+    // read off days and a guide read off buckets would disagree.
+    const daily = consecutiveDays(now, 800, index => (index === 100 ? 500 : index >= 700 && index <= 706 ? 85 : 5))
+    const payload = { ...makePayload(now), history: { daily } }
+
+    const { container } = render(<OverviewContent period="lifetime" provider="all" overview={polled(payload)} />)
+
+    const bars = Array.from(container.querySelectorAll('.chart .col')) as HTMLElement[]
+    const drawn = bars.reduce((total, bar) => total + Number(bar.dataset.cost), 0)
+    expect(bars.length).toBe(Math.ceil(800 / 7))
+    expect(drawn).toBeCloseTo(daily.reduce((total, day) => total + day.cost, 0), 6)
+
+    // Header chip and chart guide read the same series.
+    expect(container.querySelector('.chart-axis-peak')).toHaveTextContent('$595.00')
+    expect(container.querySelector('.ov-chart-summaries')).toHaveTextContent('$595.00')
+    expect(container.querySelector('.ov-chart-summaries')).not.toHaveTextContent('$500.00')
+
+    // A week's sum is never presented against one date.
+    const peakBar = bars.find(bar => Number(bar.dataset.cost) === 595) as HTMLElement
+    expect(peakBar.getAttribute('aria-label')).toMatch(/^\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}: \$595\.00/)
+    fireEvent.mouseEnter(peakBar, { clientX: 10, clientY: 10 })
+    expect(document.querySelector('.chart-tip-d')).toHaveTextContent(' to ')
   })
 
   it('keeps local hero totals when scope is local even if a combined payload is present', async () => {

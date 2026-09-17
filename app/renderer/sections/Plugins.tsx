@@ -5,6 +5,8 @@ import { PluginDetailsModal } from './PluginDetails'
 import { InstallFlowModal } from './InstallFlow'
 import styles from './Plugins.module.css'
 import { isWindowsPlatform } from '../lib/platform'
+import { Icon } from '../components/icons'
+import { BarNav } from '../components/TopBar'
 
 interface PluginInfo {
   name: string
@@ -28,12 +30,8 @@ interface PluginInfo {
 function PluginsComingSoon() {
   return (
     <div className={styles.container}>
-      <h1>Plugins</h1>
       <div className={styles.soon}>
-        <svg className={styles.soonMark} viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="1" />
-          <path d="M12 2v6m0 8v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M2 12h6m8 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24" />
-        </svg>
+        <Icon name="puzzle" className={styles.soonMark} />
         <div className={styles.soonTitle}>Plugins are coming to Windows</div>
         <p className={styles.soonBody}>
           They arrive in a later Windows release; on macOS and Linux they are available today.
@@ -45,7 +43,12 @@ function PluginsComingSoon() {
 
 export function PluginsSection() {
   // Decided before the loader renders rather than inside it, so its effects never run.
-  return isWindowsPlatform() ? <PluginsComingSoon /> : <PluginsList />
+  return (
+    <>
+      <div className="bar"><BarNav /><h1 className="t">Plugins</h1></div>
+      {isWindowsPlatform() ? <PluginsComingSoon /> : <PluginsList />}
+    </>
+  )
 }
 
 function PluginsList() {
@@ -68,7 +71,7 @@ function PluginsList() {
       setPlugins(result as PluginInfo[])
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : typeof err === 'object' && err !== null && 'message' in err ? String((err as { message: unknown }).message) : String(err))
       setPlugins([])
     } finally {
       setLoading(false)
@@ -102,16 +105,16 @@ function PluginsList() {
   }
 
   if (loading) {
-    return <div className={styles.container}>Loading plugins...</div>
+    return <div className={styles.container}>Loading plugins…</div>
   }
 
   return (
     <div className={styles.container}>
-      <h1>Plugins</h1>
       {error && <div className={styles.error}>{error}</div>}
       {plugins.length === 0 ? (
         <div className={`card ${styles.empty}`}>
           <h2 className={styles.emptyTitle}>Coming soon</h2>
+          <div className={styles.emptyBodyPanel}>
           <p className={styles.emptyBody}>
             Plugins will let CodeBurn do more than count. The first one ships with CodeBurn Teams: it sends your session outcomes, retries and kind of work to your team dashboard, and nothing else.
           </p>
@@ -119,6 +122,7 @@ function PluginsList() {
           <p className={styles.emptyFooter}>
             Have a plugin file already? <button type="button" className="set-text-button" onClick={() => setShowInstallFlow(true)}>Install it</button>
           </p>
+          </div>
         </div>
       ) : (
         <div className={styles.list}>
@@ -152,12 +156,12 @@ function PluginsList() {
                     Verify
                   </button>
                   {confirming === plugin.name ? (
-                    <span style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.875rem', color: 'var(--mut)' }}>Remove {plugin.name}?</span>
-                      <button className="btnp" onClick={() => void removePlugin(plugin.name)} disabled={removing === plugin.name} style={{ fontSize: '0.75rem' }}>
-                        {removing === plugin.name ? 'Removing...' : 'Yes'}
+                    <span style={{ display: 'flex', gap: 'var(--sp-1)', alignItems: 'center' }}>
+                      <span style={{ fontSize: 'var(--fs-body)', color: 'var(--mut)' }}>Remove {plugin.name}?</span>
+                      <button className="btnp" onClick={() => void removePlugin(plugin.name)} disabled={removing === plugin.name} style={{ fontSize: 'var(--fs-label)' }}>
+                        {removing === plugin.name ? 'Removing…' : 'Yes'}
                       </button>
-                      <button className="btnp" onClick={() => setConfirming(null)} style={{ fontSize: '0.75rem' }}>
+                      <button className="btnp" onClick={() => setConfirming(null)} style={{ fontSize: 'var(--fs-label)' }}>
                         No
                       </button>
                     </span>
@@ -173,7 +177,7 @@ function PluginsList() {
         </div>
       )}
       {plugins.length > 0 && (
-        <button className="btnp btnp-primary" onClick={() => setShowInstallFlow(true)} style={{ marginTop: '1.5rem' }}>
+        <button className="btnp btnp-primary" onClick={() => setShowInstallFlow(true)} style={{ marginTop: 'var(--sp-6)' }}>
           Install plugin
         </button>
       )}

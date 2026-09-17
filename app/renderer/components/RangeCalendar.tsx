@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { DateRange } from '../lib/types'
+import { Icon } from './icons'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -55,7 +56,7 @@ export function RangeCalendar({ value, onSelect }: { value: DateRange | null; on
           aria-label="Previous month"
           onClick={() => setMonth(current => new Date(current.getFullYear(), current.getMonth() - 1, 1))}
         >
-          ‹
+          <Icon name="chevron-left" />
         </button>
         <strong>{month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</strong>
         <button
@@ -65,7 +66,7 @@ export function RangeCalendar({ value, onSelect }: { value: DateRange | null; on
           disabled={month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth()}
           onClick={() => setMonth(current => new Date(current.getFullYear(), current.getMonth() + 1, 1))}
         >
-          ›
+          <Icon name="chevron-right" />
         </button>
       </div>
       <div className="calendar-grid">

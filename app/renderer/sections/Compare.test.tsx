@@ -55,6 +55,44 @@ describe('Compare', () => {
     mocks.telemetryTrack.mockReset().mockResolvedValue(true)
   })
 
+  it('shows an empty note instead of a bare legend when no category is comparable', async () => {
+    mocks.getCompareModels.mockResolvedValue([modelA, modelB])
+    mocks.getCompare.mockResolvedValue({ ...report, categories: [] })
+    render(<Compare period="30days" provider="all" />)
+
+    expect(await screen.findByText('No categories with usage in this range to compare.')).toBeInTheDocument()
+    expect(document.querySelector('.cmp-legend')).toBeNull()
+  })
+
+  it.each([
+    // The live shape: only one side has a rate, so its bar sits against an empty track.
+    ['one-sided rate', { category: 'coding', turnsA: 9, editTurnsA: 6, oneShotRateA: 100, turnsB: 2, editTurnsB: 0, oneShotRateB: null, winner: 'a' as const }],
+    // One side never worked in the only category at all.
+    ['one-sided usage', { category: 'coding', turnsA: 6, editTurnsA: 6, oneShotRateA: 100, turnsB: 0, editTurnsB: 0, oneShotRateB: null, winner: 'a' as const }],
+    // Categories exist but nobody logged a turn in them.
+    ['zero turns on both sides', { category: 'coding', turnsA: 0, editTurnsA: 0, oneShotRateA: null, turnsB: 0, editTurnsB: 0, oneShotRateB: null, winner: 'none' as const }],
+    // Both worked, but neither produced a rate to draw.
+    ['no rate on either side', { category: 'coding', turnsA: 4, editTurnsA: 4, oneShotRateA: null, turnsB: 3, editTurnsB: 3, oneShotRateB: null, winner: 'none' as const }],
+  ])('treats %s as an empty category chart, not a legend over nothing', async (_label, category) => {
+    mocks.getCompareModels.mockResolvedValue([modelA, modelB])
+    mocks.getCompare.mockResolvedValue({ ...report, categories: [category] })
+    render(<Compare period="30days" provider="all" />)
+
+    expect(await screen.findByText('No categories with usage in this range to compare.')).toBeInTheDocument()
+    expect(document.querySelector('.cmp-legend')).toBeNull()
+    expect(document.querySelector('.cmp-categories')).toBeNull()
+  })
+
+  it('still draws the chart when at least one category is a real head-to-head', async () => {
+    mocks.getCompareModels.mockResolvedValue([modelA, modelB])
+    mocks.getCompare.mockResolvedValue(report)
+    render(<Compare period="30days" provider="all" />)
+
+    expect(await screen.findByText('Coding')).toBeInTheDocument()
+    expect(document.querySelector('.cmp-legend')).not.toBeNull()
+    expect(screen.queryByText('No categories with usage in this range to compare.')).toBeNull()
+  })
+
   it('reports each distinct pair put on screen as a name-only compare_view', async () => {
     const user = userEvent.setup()
     mocks.getCompareModels.mockResolvedValue([modelA, modelB])

@@ -9,8 +9,9 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { SegTabs } from '../components/SegTabs'
 import { SessionDrawer } from '../components/SessionDrawer'
 import { StaleBanner } from '../components/StaleBanner'
+import { Icon } from '../components/icons'
 import { usePolled } from '../hooks/usePolled'
-import { formatCompact, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
+import { formatCompact, formatCount, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import {
   applyInvestigation,
@@ -42,7 +43,11 @@ export function sessionRowKey(row: Pick<SessionRow, 'provider' | 'project' | 'se
   return `${row.provider}\u0000${row.project}\u0000${row.sessionId}`
 }
 
-function providerName(provider: string): string {
+/** The CLI's own display name for a provider id ("kimicode" -> "Kimi Code"),
+ *  falling back to a title-cased id when the catalog has not loaded. */
+function providerName(provider: string, detected: Array<{ id: string; label: string }>): string {
+  const known = detected.find(entry => entry.id === provider)
+  if (known) return known.label
   return provider
     .split(/[-\s]+/)
     .filter(Boolean)
@@ -394,17 +399,17 @@ export function Sessions({
         {investigating
           ? (
               <>
-                {included.length.toLocaleString('en-US')} sessions in selection · <strong>{formatUsd(selectionCost)}</strong> in selection
+                {formatCount(included.length, 'session')} in selection · <strong>{formatUsd(selectionCost)}</strong> in selection
                 {summary.fullCost > selectionCost + 1e-9 && <> · full cost of these sessions {formatUsd(summary.fullCost)}</>}
                 {summary.tokens > 0 && <> · {formatCompact(summary.tokens)} tokens in selection</>}
                 {summary.unattributable > 0 && (
-                  <span className="sessions-unattributed"> · {summary.unattributable.toLocaleString('en-US')} {summary.unattributable === 1 ? 'session' : 'sessions'} could not be attributed to this selection</span>
+                  <span className="sessions-unattributed"> · {formatCount(summary.unattributable, 'session')} could not be attributed to this selection</span>
                 )}
               </>
             )
           : (
               <>
-                {included.length} sessions · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} tokens
+                {formatCount(included.length, 'session')} · {formatUsd(selectionCost)} · {formatCompact(summary.tokens)} tokens
               </>
             )}
       </div>
@@ -427,53 +432,55 @@ export function Sessions({
       ) : (
         <>
           <div className="session-list">
-            {renderedSequence.map(entry => entry.type === 'header' ? (
-              <div className="provider-h" key={`provider-${entry.provider}`}>
-                <span>{providerName(entry.provider)}</span>
-                <span className="provider-count">{entry.count.toLocaleString('en-US')} sessions</span>
-                <span className="provider-cost">{formatUsd(entry.cost)}</span>
-              </div>
-            ) : (
-              <Fragment key={sessionRowKey(entry.entry.row)}>
-                <button
-                  className="session-row"
-                  type="button"
-                  aria-expanded={effectiveOpenSessionId === sessionRowKey(entry.entry.row)}
-                  onClick={event => {
-                    lastOpenerRef.current = event.currentTarget
-                    setInternalOpenSessionId(sessionRowKey(entry.entry.row))
-                    onSessionOpen?.(sessionRowKey(entry.entry.row))
-                  }}
-                >
-                  <span className="session-primary">
-                    <span className="session-chevron" aria-hidden="true">›</span>
-                    <span className="session-project-copy">
-                      <span className="session-title" title={entry.entry.row.title || undefined}>{entry.entry.row.title || shortenProjectPath(entry.entry.row.project)}</span>
-                      <span className="session-project">{entry.entry.row.sessionId.slice(0, 18)}</span>
+            <div className="session-list-inner">
+              {renderedSequence.map(entry => entry.type === 'header' ? (
+                <div className="provider-h" key={`provider-${entry.provider}`}>
+                  <span className="provider-h-name"><ProviderLogo provider={entry.provider} size={13} />{providerName(entry.provider, detectedProviders)}</span>
+                  <span className="provider-count">{formatCount(entry.count, 'session')}</span>
+                  <span className="provider-cost">{formatUsd(entry.cost)}</span>
+                </div>
+              ) : (
+                <Fragment key={sessionRowKey(entry.entry.row)}>
+                  <button
+                    className="session-row"
+                    type="button"
+                    aria-expanded={effectiveOpenSessionId === sessionRowKey(entry.entry.row)}
+                    onClick={event => {
+                      lastOpenerRef.current = event.currentTarget
+                      setInternalOpenSessionId(sessionRowKey(entry.entry.row))
+                      onSessionOpen?.(sessionRowKey(entry.entry.row))
+                    }}
+                  >
+                    <span className="session-primary">
+                      <span className="session-chevron" aria-hidden="true"><Icon name="chevron-right" /></span>
+                      <span className="session-project-copy">
+                        <span className="session-title" title={entry.entry.row.title || undefined}>{entry.entry.row.title || shortenProjectPath(entry.entry.row.project)}</span>
+                        <span className="session-project">{entry.entry.row.sessionId.slice(0, 18)}</span>
+                      </span>
                     </span>
-                  </span>
-                  <span className="session-when">{formatDayShort(entry.entry.row.endedAt)}</span>
-                  <span className="session-models">{entry.entry.row.models.join(', ')}</span>
-                  <span>{entry.entry.row.turns}</span>
-                  {investigating ? (
-                    <span className="session-cost-split">
-                      <strong>{formatUsd(entry.entry.cost)}</strong>
-                      {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                        <small title="Full cost of the whole session"> of {formatUsd(entry.entry.row.cost)}</small>
-                      )}
-                    </span>
-                  ) : (
-                    <span>{formatUsd(entry.entry.row.cost)}</span>
-                  )}
-                  <span>{formatCompact(rowTokens(entry.entry.row))}</span>
-                </button>
-              </Fragment>
-            ))}
+                    <span className="session-when">{formatDayShort(entry.entry.row.endedAt)}</span>
+                    <span className="session-models">{entry.entry.row.models.join(', ')}</span>
+                    <span>{entry.entry.row.turns}</span>
+                    {investigating ? (
+                      <span className="session-cost-split">
+                        <strong>{formatUsd(entry.entry.cost)}</strong>
+                        {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
+                          <small title="Full cost of the whole session"> of {formatUsd(entry.entry.row.cost)}</small>
+                        )}
+                      </span>
+                    ) : (
+                      <span>{formatUsd(entry.entry.row.cost)}</span>
+                    )}
+                    <span>{formatCompact(rowTokens(entry.entry.row))}</span>
+                  </button>
+                </Fragment>
+              ))}
+            </div>
           </div>
-          <div className="sessions-more-caption">Showing {renderedRows} of {included.length}</div>
+          <div className="sessions-more-caption">Showing {renderedRows.toLocaleString('en-US')} of {included.length.toLocaleString('en-US')}</div>
           {remaining > 0 && (
             <button className="sessions-more" type="button" onClick={() => setVisibleCount(visibleCount + STEP)}>
-              Show {Math.min(STEP, remaining)} more · {remaining} remaining
+              Show {Math.min(STEP, remaining).toLocaleString('en-US')} more · {remaining.toLocaleString('en-US')} remaining
             </button>
           )}
         </>
@@ -481,6 +488,7 @@ export function Sessions({
       {openRow && (
         <SessionDrawer
           row={openRow}
+          openKey={sessionRowKey(openRow)}
           filters={filters}
           medianCost={medianCost}
           onClose={closeDrawer}

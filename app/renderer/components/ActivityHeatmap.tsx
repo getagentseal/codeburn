@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { ChartTip } from './ChartTip'
-import { formatUsd } from '../lib/format'
+import { formatCount, formatUsd } from '../lib/format'
 import { dataStartKey, localDateKey } from '../lib/period'
 import type { DailyHistoryEntry } from '../lib/types'
 
@@ -16,7 +16,13 @@ type HeatmapDay = {
   noData: boolean
 }
 
-const WEEK_COUNT = 26
+/** Cell box and gutter, in CSS px — must match `.ov-heat-cell` / `.ov-heatmap-cells`. */
+const CELL = 11
+const GAP = 3
+/** Six months of history: the most weeks the card ever draws. */
+const MAX_WEEKS = 26
+/** Fewest week columns between two month labels before the later one is dropped. */
+const MIN_LABEL_COLUMNS = 3
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function dateFromKey(key: string): Date {
@@ -41,24 +47,24 @@ function intensityLevel(cost: number, maxCost: number): number {
   return 4
 }
 
-function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date): HeatmapDay[] {
+function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date, weeks: number): HeatmapDay[] {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const startOfWeek = new Date(today)
   startOfWeek.setDate(today.getDate() - today.getDay())
   const firstDay = new Date(startOfWeek)
-  firstDay.setDate(startOfWeek.getDate() - (WEEK_COUNT - 1) * 7)
+  firstDay.setDate(startOfWeek.getDate() - (weeks - 1) * 7)
   const byDate = new Map(daily.map(day => [day.date, day]))
   const dataStart = dataStartKey(daily)
   const visibleCosts: number[] = []
 
-  for (let offset = 0; offset < WEEK_COUNT * 7; offset++) {
+  for (let offset = 0; offset < weeks * 7; offset++) {
     const date = new Date(firstDay)
     date.setDate(firstDay.getDate() + offset)
     if (date <= today) visibleCosts.push(byDate.get(localDateKey(date))?.cost ?? 0)
   }
   const maxCost = Math.max(...visibleCosts, 0)
 
-  return Array.from({ length: WEEK_COUNT * 7 }, (_, offset) => {
+  return Array.from({ length: weeks * 7 }, (_, offset) => {
     const date = new Date(firstDay)
     date.setDate(firstDay.getDate() + offset)
     const key = localDateKey(date)
@@ -78,7 +84,9 @@ function buildHeatmapDays(daily: DailyHistoryEntry[], now: Date): HeatmapDay[] {
 }
 
 export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEntry[]; bare?: boolean }) {
-  const days = useMemo(() => buildHeatmapDays(daily, new Date()), [daily])
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [weeks, setWeeks] = useState(MAX_WEEKS)
+  const days = useMemo(() => buildHeatmapDays(daily, new Date(), weeks), [daily, weeks])
   const monthMarkers = useMemo(() => {
     const markers: Array<{ key: string; label: string; week: number }> = []
     const seen = new Set<string>()
@@ -88,47 +96,36 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
       const key = `${date.getFullYear()}-${date.getMonth()}`
       if (seen.has(key)) continue
       seen.add(key)
-      markers.push({
-        key,
-        label: date.toLocaleString('en-US', { month: 'short' }),
-        week: Math.floor(index / 7),
-      })
+      markers.push({ key, label: date.toLocaleString('en-US', { month: 'short' }), week: Math.floor(index / 7) })
     }
-    return markers
+    // Two labels closer than MIN_LABEL_COLUMNS would collide. Real month starts
+    // are always four or five weeks apart, so this only ever drops the leading
+    // partial month, keeping the label that actually sits over its own weeks.
+    return markers.filter((marker, index) => {
+      const next = markers[index + 1]
+      return !next || next.week - marker.week >= MIN_LABEL_COLUMNS
+    })
   }, [days])
-  const activeDays = days.filter(day => !day.isFuture && day.cost > 0).length
+  const activeDays = useMemo(
+    () => buildHeatmapDays(daily, new Date(), MAX_WEEKS).filter(day => !day.isFuture && day.cost > 0).length,
+    [daily],
+  )
   const [tip, setTip] = useState<{ day: HeatmapDay; x: number; y: number } | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const stickToNewestRef = useRef(true)
 
-  // The fixed 26-week grid is wider than the compact hero slot. Start at the
-  // newest weeks, then leave the user's scroll position alone.
+  // Draw only as many week columns as the slot can hold, right-anchored on the
+  // current week, so the grid never scrolls and never hides its newest days.
   useLayoutEffect(() => {
-    const scroller = scrollRef.current
-    if (!scroller) return
-
-    const alignNewest = (): void => {
-      if (!stickToNewestRef.current) return
-      const newestOffset = Math.max(0, scroller.scrollWidth - scroller.clientWidth)
-      scroller.scrollLeft = newestOffset
+    const slot = scrollRef.current
+    if (!slot) return
+    const fit = (): void => {
+      const width = slot.clientWidth
+      if (width <= 0) return
+      setWeeks(Math.max(1, Math.min(MAX_WEEKS, Math.floor((width + GAP) / (CELL + GAP)))))
     }
-
-    alignNewest()
-
-    // Electron can mount this card while its parent still has the wider
-    // skeleton measurement, then compact it before first paint. Keep observing
-    // later resizes too while the user remains pinned to newest; once they
-    // deliberately scroll away, their position is left alone.
-    const observer = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(alignNewest)
-    observer?.observe(scroller)
-    const frame = window.requestAnimationFrame(alignNewest)
-
-    return () => {
-      window.cancelAnimationFrame(frame)
-      observer?.disconnect()
-    }
+    fit()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
+    observer?.observe(slot)
+    return () => observer?.disconnect()
   }, [])
 
   const head = (
@@ -145,19 +142,7 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
           <span key={weekday}>{index === 1 || index === 3 || index === 5 ? weekday : ''}</span>
         ))}
       </div>
-      <div
-        className="ov-heatmap-scroll"
-        ref={scrollRef}
-        role="region"
-        aria-label="Scrollable daily activity timeline"
-        tabIndex={0}
-        onScroll={() => {
-          const scroller = scrollRef.current
-          if (!scroller) return
-          const newestOffset = Math.max(0, scroller.scrollWidth - scroller.clientWidth)
-          stickToNewestRef.current = Math.abs(scroller.scrollLeft - newestOffset) <= 1
-        }}
-      >
+      <div className="ov-heatmap-scroll" ref={scrollRef} role="region" aria-label="Daily activity timeline">
         <div className="ov-heatmap-track">
           <div className="ov-heatmap-months" aria-label="Month labels">
             {monthMarkers.map(marker => (
@@ -171,7 +156,7 @@ export function ActivityHeatmap({ daily, bare = false }: { daily: DailyHistoryEn
                 role="gridcell"
                 key={day.date}
                 className={`ov-heat-cell heat-level-${day.level}${day.isFuture ? ' future' : ''}${day.noData ? ' nodata' : ''}`}
-                aria-label={`${formatDate(day.date)}: ${day.noData ? 'no data recorded' : day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${day.calls} calls`}`}
+                aria-label={`${formatDate(day.date)}: ${day.noData ? 'no data recorded' : day.isFuture ? 'future day' : `${formatUsd(day.cost)}, ${formatCount(day.calls, 'call')}`}`}
                 data-date={day.date}
                 data-cost={day.cost}
                 data-active={!day.isFuture && !day.noData && day.cost > 0 ? 'true' : 'false'}

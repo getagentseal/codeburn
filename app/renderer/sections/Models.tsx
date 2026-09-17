@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { EmptyNote } from '../components/EmptyState'
@@ -52,19 +52,23 @@ export function Models({
 }) {
   const [lens, setLens] = useState<ModelsLens>('model')
   const onAddAlias = () => onNavigate?.('settings', 'aliases')
+  const title = LENSES.find(entry => entry.value === lens)?.label ?? ''
+  // The lens picker and the compare shortcut live in the card header's right slot.
+  const controls = (
+    <span className="panel-controls">
+      <SegTabs options={LENSES} value={lens} onChange={value => setLens(value as ModelsLens)} />
+      {lens !== 'audit' && (
+        <button type="button" className="btn btn-s" onClick={() => onNavigate?.('compare')}>
+          Compare…
+        </button>
+      )}
+    </span>
+  )
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, alignSelf: 'flex-start' }}>
-        <SegTabs options={LENSES} value={lens} onChange={value => setLens(value as ModelsLens)} />
-        {lens !== 'audit' && (
-          <button type="button" className="btn btn-s" onClick={() => onNavigate?.('compare')}>
-            Compare…
-          </button>
-        )}
-      </div>
       {lens === 'audit' ? (
-        <AuditLens period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} />
+        <AuditLens period={period} provider={provider} range={range} refreshToken={refreshToken} ready={ready} title={title} controls={controls} />
       ) : (
         <ModelsUsage
           period={period}
@@ -75,6 +79,8 @@ export function Models({
           onAddAlias={onAddAlias}
           onInvestigate={onInvestigate}
           ready={ready}
+          title={title}
+          controls={controls}
         />
       )}
     </>
@@ -90,6 +96,8 @@ function ModelsUsage({
   onAddAlias,
   onInvestigate,
   ready,
+  title,
+  controls,
 }: {
   period: Period
   provider: string
@@ -99,6 +107,8 @@ function ModelsUsage({
   onAddAlias: () => void
   onInvestigate?: (request: InvestigateRequest) => void
   ready: boolean
+  title: ReactNode
+  controls: ReactNode
 }) {
   const report = usePolled<ModelReportRow[]>(
     () => range ? codeburn.getModels(period, provider, byTask, range) : codeburn.getModels(period, provider, byTask),
@@ -114,7 +124,7 @@ function ModelsUsage({
   return (
     <>
       {report.error && <StaleBanner error={report.error} />}
-      <Panel className="scroll-x">
+      <Panel className="scroll-x" title={title} right={controls}>
         {report.data.length ? (
           <ModelsTable rows={report.data} byTask={byTask} onAddAlias={onAddAlias} onInvestigate={onInvestigate} />
         ) : (
@@ -139,12 +149,16 @@ function AuditLens({
   range,
   refreshToken,
   ready,
+  title,
+  controls,
 }: {
   period: Period
   provider: string
   range: DateRange | null
   refreshToken: number
   ready: boolean
+  title: ReactNode
+  controls: ReactNode
 }) {
   const report = usePolled<AuditRow[]>(
     () => range ? codeburn.getAudit(period, provider, range) : codeburn.getAudit(period, provider),
@@ -160,7 +174,7 @@ function AuditLens({
   return (
     <>
       {report.error && <StaleBanner error={report.error} />}
-      <Panel className="scroll-x">
+      <Panel className="scroll-x" title={title} right={controls}>
         {report.data.length ? (
           <AuditTable rows={report.data} />
         ) : (
@@ -284,7 +298,11 @@ function ModelsByTaskTable({ rows, onAddAlias, onInvestigate }: {
 function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow; onAddAlias: () => void; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
-  const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
+  // Calls and token columns are observed usage, not a pricing artifact: a
+  // model with no pricing entry still made real calls and burned real
+  // input/output/cache-read tokens, so they render at full weight. Only
+  // cost/saved collapse to dashes behind the alias affordance — there is no
+  // attributed cost to show for them.
   const dotStyle = {
     display: 'inline-block',
     background: seriesColorForModel(row.modelDisplayName || row.model),
@@ -309,10 +327,10 @@ function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow
         ) : null}
         <span style={{ ...providerTagStyle, display: 'block', marginTop: 2, paddingLeft: 16 }}>{row.providerDisplayName}</span>
       </td>
-      <td className={cellClass}>{fmtInt(row.calls)}</td>
-      <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.outputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.cacheReadTokens)}</td>
+      <td>{fmtInt(row.calls)}</td>
+      <td>{formatCompact(row.inputTokens)}</td>
+      <td>{formatCompact(row.outputTokens)}</td>
+      <td>{formatCompact(row.cacheReadTokens)}</td>
       <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>
@@ -346,7 +364,7 @@ function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportR
           {unpriced ? <button type="button" className="alias" onClick={onAddAlias}>add alias ›</button> : null}
         </span>
       </td>
-      <td className={unpriced ? 'dim' : undefined}>{fmtInt(calls)}</td>
+      <td>{fmtInt(calls)}</td>
       <td aria-label="No aggregate input" />
       <td aria-label="No aggregate output" />
       <td aria-label="No aggregate cache read" />
@@ -359,7 +377,6 @@ function ModelGroupRow({ rows, onAddAlias, onInvestigate }: { rows: ModelReportR
 function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestigate?: (request: InvestigateRequest) => void }) {
   const unpriced = row.costUSD === 0 && row.savingsUSD === 0
   const cellClass = unpriced ? 'dim' : undefined
-  const tokenValue = (value: number) => (unpriced ? '—' : formatCompact(value))
 
   return (
     <tr className="model-task-row">
@@ -368,10 +385,11 @@ function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestiga
           <button type="button" className="ov-link" title={`View ${row.category} sessions`} onClick={() => onInvestigate({ filters: categoryFilters(row.category!) })}>{row.category ?? 'general'}</button>
         ) : row.category ?? 'general'}
       </td>
-      <td className={cellClass}>{fmtInt(row.calls)}</td>
-      <td className={cellClass}>{tokenValue(row.inputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.outputTokens)}</td>
-      <td className={cellClass}>{tokenValue(row.cacheReadTokens)}</td>
+      <td>{fmtInt(row.calls)}</td>
+      {/* Observed usage renders even for unpriced models — see ModelTableRow. */}
+      <td>{formatCompact(row.inputTokens)}</td>
+      <td>{formatCompact(row.outputTokens)}</td>
+      <td>{formatCompact(row.cacheReadTokens)}</td>
       <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>

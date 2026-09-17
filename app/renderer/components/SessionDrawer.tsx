@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react'
 
 import { Stat } from './Stat'
+import { useEscape } from '../hooks/useEscape'
 import { formatCompact, formatDayLong, formatDuration, formatUsd, shortenProjectPath } from '../lib/format'
+import { DUR, useExitAnimation } from '../lib/motion'
 import { codeburn } from '../lib/ipc'
 import type { InvestigationFilters } from '../lib/investigation'
 import { contributeRow } from '../lib/investigation'
 import type { SessionDrillRow } from '../lib/types'
+import { Icon } from './icons'
 
 /**
  * The drill-through side drawer: a plain-language read of one session, then the
@@ -19,8 +22,11 @@ import type { SessionDrillRow } from '../lib/types'
  * open and the PARENT returns focus to the control that opened it (the opener
  * element is still alive behind the drawer). Tab is trapped inside.
  */
-export function SessionDrawer({ row, filters, medianCost, onClose }: {
+export function SessionDrawer({ row, openKey, filters, medianCost, onClose }: {
   row: SessionDrillRow
+  /** Row identity, so a drawer still exiting on the old row disarms its close
+   *  when the user picks a new one. */
+  openKey: string
   filters: InvestigationFilters
   /** Median cost of the sessions the list is currently showing (the searched
    *  and filtered set). Absent when the population is too small for the
@@ -29,16 +35,14 @@ export function SessionDrawer({ row, filters, medianCost, onClose }: {
   onClose: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
+  const { closing, beginExit } = useExitAnimation(onClose, DUR.slow, openKey)
+
+  useEscape(true, beginExit)
 
   useEffect(() => {
     const panel = panelRef.current
     panel?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation()
-        onClose()
-        return
-      }
       if (event.key !== 'Tab' || !panel) return
       // Keep Tab cycling inside the drawer while it is open.
       const focusable = panel.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
@@ -55,7 +59,7 @@ export function SessionDrawer({ row, filters, medianCost, onClose }: {
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose])
+  }, [])
 
   const contribution = useMemo(() => contributeRow(row, filters), [row, filters])
   const breakdown = useMemo(() => buildBreakdowns(row), [row])
@@ -70,10 +74,10 @@ export function SessionDrawer({ row, filters, medianCost, onClose }: {
 
   return (
     <>
-      <div className="drawer-scrim" aria-hidden="true" onClick={onClose} />
+      <div className={closing ? 'drawer-scrim closing' : 'drawer-scrim'} aria-hidden="true" onClick={beginExit} />
       <aside
         ref={panelRef}
-        className="session-drawer"
+        className={closing ? 'session-drawer closing' : 'session-drawer'}
         role="dialog"
         aria-modal="true"
         aria-label={`Session details: ${row.title || shortenProjectPath(row.project)}`}
@@ -90,7 +94,7 @@ export function SessionDrawer({ row, filters, medianCost, onClose }: {
               {row.durationMs > 0 && <> · {formatDuration(row.durationMs)}</>}
             </div>
           </div>
-          <button type="button" className="drawer-close" aria-label="Close session details" onClick={onClose}>×</button>
+          <button type="button" className="drawer-close" aria-label="Close session details" onClick={beginExit}><Icon name="x" /></button>
         </div>
 
         <p className="drawer-lead">

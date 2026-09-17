@@ -4,9 +4,10 @@ import { homedir } from 'os'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { formatCost as baseCost, getCurrency } from './currency.js'
-import { findUnpricedModels, getShortModelName, unpricedModelHint } from './models.js'
+import { findUnpricedModels, modelRowKey, unpricedModelHint } from './models.js'
 import { callBillableOutputTokens, sessionBillableOutputTokens, sessionModelBillableOutputTokens } from './session-output.js'
 import { markEstimated } from './format.js'
+import { maxOf } from './math-utils.js'
 import { formatSessionCount, SESSION_COUNT_HELP, type SessionCountBasis } from './session-count-label.js'
 import { normalizeAbsProjectPathKey } from './parser.js'
 import { dateKey } from './day-aggregator.js'
@@ -79,7 +80,7 @@ function vlen(s: string): number {
 
 function renderTable(c: ChalkInstance, cols: Col[], rows: string[][]): string {
   const widths = cols.map((col, i) =>
-    Math.max(vlen(col.header), ...rows.map((r) => vlen(r[i] ?? ''))),
+    maxOf(rows.map((r) => vlen(r[i] ?? '')), vlen(col.header)),
   )
   const pad = (s: string, w: number, right?: boolean): string => {
     const fill = ' '.repeat(Math.max(0, w - vlen(s)))
@@ -311,7 +312,7 @@ export function renderOverview(
     out.push(heading('Top models'))
     out.push(renderTable(c,
       [{ header: 'Model' }, { header: 'Cost', right: true }, { header: 'Calls', right: true }, { header: 'Tokens', right: true }],
-      modelRows.map(([m, v]) => [getShortModelName(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
+      modelRows.map(([m, v]) => [modelRowKey(m), markEstimated(formatCost(v.cost), v.estimatedCost > 0), formatCount(v.calls), formatTokens(v.tokens)]),
     ))
     if (modelRows.some(([, v]) => v.estimatedCost > 0)) {
       out.push('  ' + c.dim('~ estimated cost (priced from estimated tokens)'))
@@ -380,7 +381,7 @@ export function renderOverview(
   }
 
   const topTool = providerRows[0]?.[0]
-  const topModel = modelRows[0] ? getShortModelName(modelRows[0][0]) : ''
+  const topModel = modelRows[0] ? modelRowKey(modelRows[0][0]) : ''
   const mostly = topTool ? `, mostly ${topTool}${topModel ? ` / ${topModel}` : ''}` : ''
   out.push(c.dim('Bottom line: ') + `${opts.label} totals ${formatCost(cost)} across ${formatTokens(totalTokens)} tokens${mostly}.`)
 

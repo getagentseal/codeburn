@@ -340,6 +340,13 @@ describe('getLayout - dashboard width breakpoints', () => {
     expect(getDashboardMaxWidth([long])).toBe(256)
     expect(getDashboardMaxWidth([short])).toBeLessThan(256)
   })
+
+  it('measures a breakdown with 200,000 keys without overflowing the stack', () => {
+    const session = makeSession('huge', 1)
+    for (let i = 0; i < 200_000; i++) session.toolBreakdown[`tool-${i}`] = { calls: 1 }
+
+    expect(getDashboardMaxWidth([makeProject('huge', [session])])).toBeGreaterThan(0)
+  })
 })
 
 describe('Daily Activity viewport', () => {

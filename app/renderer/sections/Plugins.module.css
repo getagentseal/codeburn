@@ -1,63 +1,74 @@
 .container {
-  padding: 1rem;
+  padding: var(--sp-5);
   flex: 1;
   overflow-y: auto;
+  margin-bottom: var(--sp-2);
+  background: var(--page);
+  border-radius: 12px;
 }
 
-.container h1 {
-  margin: 0 0 1.5rem;
-  font-size: 1.5rem;
-  font-weight: 600;
-}
 
 .error {
-  padding: 0.75rem 1rem;
-  margin-bottom: 1rem;
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-4);
   background: var(--color-error-bg);
   border: 1px solid var(--color-error-border);
   border-radius: 4px;
   color: var(--color-error-text);
-  font-size: 0.875rem;
+  font-size: var(--fs-body);
 }
 
 .empty {
   max-width: 560px;
   margin: 0 auto;
-  padding: 32px 28px;
+  padding: 0 2px 2px;
   text-align: center;
 }
 
+.emptyBodyPanel {
+  padding: var(--sp-7) var(--sp-6);
+  background: var(--card-inner);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--card-inner-shadow);
+}
+
 .emptyTitle {
-  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 17px;
   color: var(--ink);
-  font-size: 20px;
-  font-weight: 640;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-subhead);
 }
 
 .emptyBody {
-  margin: 0 0 10px;
+  margin: 0 0 var(--sp-3);
   color: var(--mut);
-  font-size: 13px;
+  font-size: var(--fs-subhead);
   line-height: 1.55;
 }
 
 .emptyFooter {
-  margin: 18px 0 0;
+  margin: var(--sp-5) 0 0;
   color: var(--mut2);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: var(--sp-3);
 }
 
 .row {
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  background: var(--color-bg-secondary);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--card-shadow);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -75,24 +86,24 @@
 .name {
   font-weight: 600;
   color: var(--color-text);
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--sp-1);
 }
 
 .reason {
-  font-size: 0.875rem;
+  font-size: var(--fs-body);
   color: var(--color-text-secondary);
-  margin-top: 0.25rem;
+  margin-top: var(--sp-1);
 }
 
 .caps {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
-  font-size: 0.75rem;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  font-size: var(--fs-label);
 }
 
 .caps span {
-  padding: 0.25rem 0.5rem;
+  padding: var(--sp-1) var(--sp-2);
   background: var(--color-bg-hover);
   border-radius: 3px;
   color: var(--color-text-secondary);
@@ -100,15 +111,15 @@
 
 .actions {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--sp-2);
   align-items: center;
 }
 
 .actions button {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.875rem;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-body);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--panel);
   color: var(--ink);
   cursor: pointer;
@@ -160,11 +171,16 @@
   background: transparent;
   color: var(--mut);
   font: inherit;
-  font-size: 24px;
+  font-size: var(--fs-kpi);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.modalClose .icon {
+  width: 14px;
+  height: 14px;
 }
 
 .modalClose:hover {
@@ -173,47 +189,47 @@
 }
 
 .modalContent {
-  padding: 24px;
+  padding: var(--sp-6);
 }
 
 .modalContent h2 {
-  margin: 0 0 1rem;
-  font-size: 1.25rem;
-  font-weight: 600;
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-subhead);
 }
 
 .modalContent h3 {
-  margin: 1.5rem 0 0.75rem;
-  font-size: 1rem;
-  font-weight: 600;
+  margin: var(--sp-6) 0 var(--sp-3);
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-subhead);
 }
 
 .modalContent p {
-  margin: 0.5rem 0;
-  font-size: 0.9375rem;
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-body);
   line-height: 1.5;
 }
 
 .description {
   color: var(--mut);
-  font-size: 0.875rem;
+  font-size: var(--fs-body);
 }
 
 .section {
-  margin: 1rem 0;
-  padding: 0.75rem;
+  margin: var(--sp-4) 0;
+  padding: var(--sp-3);
   background: var(--fill);
   border-radius: 4px;
 }
 
 .section ul {
-  margin: 0.5rem 0;
+  margin: var(--sp-2) 0;
   padding-left: 1.5rem;
 }
 
 .section li {
-  margin: 0.5rem 0;
-  font-size: 0.875rem;
+  margin: var(--sp-2) 0;
+  font-size: var(--fs-body);
 }
 
 .section strong {
@@ -222,10 +238,10 @@
 }
 
 .disclosure {
-  font-size: 0.75rem;
+  font-size: var(--fs-label);
   color: var(--mut);
   font-style: italic;
-  margin-top: 0.25rem;
+  margin-top: var(--sp-1);
 }
 
 .spinner {
@@ -251,8 +267,8 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 10px;
-  padding: 44px 24px;
+  gap: var(--sp-3);
+  padding: var(--sp-7) var(--sp-6);
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--fill);
@@ -261,24 +277,20 @@
 .soonMark {
   width: 30px;
   height: 30px;
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  color: var(--accent);
   opacity: .9;
 }
 
 .soonTitle {
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--fs-subhead);
+  font-weight: var(--fw-subhead);
 }
 
 .soonBody {
   margin: 0;
   max-width: 42ch;
   color: var(--mut);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1.55;
 }

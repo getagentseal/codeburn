@@ -167,6 +167,10 @@ export type ParsedApiCall = {
   /// Threaded from CachedCall / ParsedProviderCall so plan math can sum credits.
   /// Absent on older stores and on JSONL / shutdown-rollup siblings.
   nanoAiu?: number
+  /// Billing route id the provider recorded (see ParsedProviderCall.route).
+  /// Reports key model rows on `modelRowKey(model, route)`, so a call routed
+  /// through Bedrock lands in its own row.
+  route?: string
 }
 
 export type ToolCall = {

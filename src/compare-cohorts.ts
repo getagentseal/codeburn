@@ -24,7 +24,7 @@ import type { ClassifiedTurn, ProjectSummary, TaskCategory } from './types.js'
 import { CATEGORY_LABELS } from './types.js'
 import { isBehavioralCall } from './behavioral-weight.js'
 import { callBillableOutputTokens, inferSessionProvider } from './session-output.js'
-import { getShortModelName, isExpectedFreeModel } from './models.js'
+import { isExpectedFreeModel, modelRowKey } from './models.js'
 import { aggregateModelStats, findModelStat, type ModelStats } from './compare-stats.js'
 import { spendProjectIdentity } from './spend-flow.js'
 
@@ -306,7 +306,7 @@ export function computeCohortStats(model: string, observations: readonly CohortO
 
   return {
     model,
-    label: getShortModelName(model),
+    label: modelRowKey(model),
     observationCount: n,
     distinctSessionCount: sessionKeys.size,
     retryCount,
@@ -396,7 +396,7 @@ export function buildCohortComparison(
     const observations = perModel.get(model) ?? []
     return {
       model,
-      label: getShortModelName(model),
+      label: modelRowKey(model),
       stats: computeCohortStats(model, observations),
       observations,
       exclusions: sharedExclusions,

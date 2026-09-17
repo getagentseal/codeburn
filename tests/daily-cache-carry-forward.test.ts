@@ -800,7 +800,9 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['dsh'])
+    // From v32 only hermes (contract 33: day.models keyed by route) is owed a
+    // re-derivation; dsh's v32 contract is already satisfied.
+    expect(loaded.pendingRederive).toEqual(['hermes'])
   })
 
   it('preserves an older cache pending repair while adding a newer provider repair', async () => {
@@ -820,7 +822,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     )
 
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['copilot', 'dsh'])
+    expect(loaded.pendingRederive).toEqual(['copilot', 'hermes'])
   })
 
   it('still carries the slice whole when the sources are gone (never-lose, #1033)', async () => {

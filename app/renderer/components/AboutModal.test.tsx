@@ -20,7 +20,7 @@ const SAME: UpdateStatus = { currentVersion: '0.9.17', latestVersion: '0.9.17', 
 const UNKNOWN: UpdateStatus = { currentVersion: '0.9.17', latestVersion: null, updateAvailable: false, tag: null }
 
 function renderAbout() {
-  return render(<AboutModal socials={[]} onClose={() => {}} />)
+  return render(<AboutModal socials={[]} openKey="1" onClose={() => {}} />)
 }
 
 describe('AboutModal update check', () => {

@@ -1158,17 +1158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
 
             while !Task.isCancelled && clock.now < deadline {
                 let placement = self.statusItemPlacementState
-                let revealed = placement.screen.map { screen in
-                    StatusItemPlacementPolicy.isMenuBarRevealed(
-                        pointer: NSEvent.mouseLocation,
-                        screenFrame: screen.frame,
-                        screenVisibleFrame: screen.visibleFrame
-                    )
-                } ?? false
+                let menuBar = Self.menuBarState(for: placement.screen)
                 switch recovery.action(
                     for: placement.geometry,
-                    isMenuBarRevealed: revealed,
-                    revealHasSettled: false
+                    isMenuBarRevealed: menuBar.revealed,
+                    revealHasSettled: false,
+                    menuBarAutoHides: menuBar.autoHides
                 ) {
                 case .stopHealthy:
                     return
@@ -1184,17 +1179,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                     try? await Task.sleep(for: .milliseconds(500))
                     guard !Task.isCancelled else { return }
                     let settledPlacement = self.statusItemPlacementState
-                    let settledReveal = settledPlacement.screen.map { screen in
-                        StatusItemPlacementPolicy.isMenuBarRevealed(
-                            pointer: NSEvent.mouseLocation,
-                            screenFrame: screen.frame,
-                            screenVisibleFrame: screen.visibleFrame
-                        )
-                    } ?? false
+                    let settledMenuBar = Self.menuBarState(for: settledPlacement.screen)
                     switch recovery.action(
                         for: settledPlacement.geometry,
-                        isMenuBarRevealed: settledReveal,
-                        revealHasSettled: true
+                        isMenuBarRevealed: settledMenuBar.revealed,
+                        revealHasSettled: true,
+                        menuBarAutoHides: settledMenuBar.autoHides
                     ) {
                     case .stopHealthy:
                         return
@@ -1227,6 +1217,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 NSLog("CodeBurn: status item stayed parked without a menu-bar reveal")
             }
         }
+    }
+
+    private static func menuBarState(for screen: NSScreen?) -> (revealed: Bool, autoHides: Bool) {
+        guard let screen else { return (false, true) }
+        return (
+            StatusItemPlacementPolicy.isMenuBarRevealed(
+                pointer: NSEvent.mouseLocation,
+                screenFrame: screen.frame,
+                screenVisibleFrame: screen.visibleFrame
+            ),
+            StatusItemPlacementPolicy.menuBarAutoHides(
+                screenFrame: screen.frame,
+                screenVisibleFrame: screen.visibleFrame
+            )
+        )
     }
 
     private func stopStatusItemPlacementRecovery() {

@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { performance } from 'node:perf_hooks'
 import { basename, dirname, join, resolve, sep } from 'path'
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from './fs-utils.js'
-import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
+import { billableOutputTokens, calculateCost, calculateLocalModelSavings, getShortModelName, modelRowKey, isProxiedPath, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash } from './models.js'
 import { resolveSubagentAttribution, sessionIdentity } from './sessions-report.js'
 import { normalizeContentBlocks, flatSlice, flatString } from './content-utils.js'
 import { discoverAllSessions, discoverAllSessionsWithFailures, getProvider } from './providers/index.js'
@@ -1786,7 +1786,7 @@ function buildSessionSummary(
       // not distinct requests: no api-call or per-model call weight.
       if (isBehavioralCall(call)) apiCalls++
 
-      const modelKey = call.provider === 'devin' ? call.model : getShortModelName(call.model)
+      const modelKey = call.provider === 'devin' ? call.model : modelRowKey(call.model, call.route)
       if (!modelBreakdown[modelKey]) {
         modelBreakdown[modelKey] = {
           calls: 0,
@@ -2540,6 +2540,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     deduplicationKey: call.deduplicationKey,
     isEstimated: call.costIsEstimated,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
   })
 
   const prRefs = extractPrUrlsFromText(call.userMessage)
@@ -2587,6 +2588,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.locRemoved ? { locRemoved: call.locRemoved } : {}),
     ...(call.editFailed ? { editFailed: call.editFailed } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
@@ -2633,6 +2635,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     ...(call.userModified ? { userModified: true } : {}),
     ...(call.toolErrors ? { toolErrors: call.toolErrors } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
@@ -2754,12 +2757,26 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
+    ...(call.route ? { route: call.route } : {}),
     ...(call.supplementaryAccounting || isHermesObservationKey(call.deduplicationKey)
       ? { supplementaryAccounting: true }
       : {}),
   })
 }
 
+// NOT memoizable as it stands, though it looks pure and is the obvious next
+// place to cache: a resident process that reused one derived turn across two
+// parses accumulated state on it and over-reported PR-linked spend. Four places
+// write to a turn (or to the calls inside it) after it is built, so the second
+// parse sees the first parse's edits:
+//   - parser.ts, the cache builder seeding a turn's `prRefs` from its text
+//   - parser.ts, the Copilot fold replacing a turn's `assistantCalls`
+//   - parser.ts, `seedSessionPrLinks` writing `prRefs` onto a session's first turn
+//   - usage-aggregator.ts, the cache-read pass setting `hasCache` on a call
+// Removing those four writes - deriving the values instead of stamping them -
+// is the work that makes a classified-turn memo safe. Until then this stays a
+// fresh derivation per parse.
+//
 // `resolvedBranch` restores the turn's git branch after the cache's per-turn
 // dedup (branch stored only when it changes). Callers that serve a full session's
 // turns in order carry the last stored value forward and pass it here, so each
@@ -4329,7 +4346,11 @@ function parseBurstWindowMs(): number {
 // unavailable or began too late) falls back to the ordinary exact TTL / short
 // burst rather than disabling caching. Null keeps those ordinary semantics.
 export type ParseReuseValidation = 'clean' | 'dirty' | 'unknown'
-type ParseReuseValidator = (sinceTs: number) => ParseReuseValidation
+// `coveredRange` is the span the candidate result answers for. A validator that
+// knows WHICH files changed can then answer day-scoped: a write to a session
+// file whose own days sit outside the range does not dirty it, so a finalized
+// past range is not re-derived because an agent is writing today.
+type ParseReuseValidator = (sinceTs: number, coveredRange?: { startMs: number; endMs: number }) => ParseReuseValidation
 let parseReuseValidator: ParseReuseValidator | null = null
 const VALIDATED_REUSE_CAP_MS = 5 * 60 * 1000
 
@@ -4345,7 +4366,9 @@ function burstReuse(dateRange: DateRange, sig: string): ProjectSummary[] | null 
   const endMs = dateRange.end.getTime()
   for (const entry of sessionCache.values()) {
     if (entry.sig !== sig || entry.startMs !== startMs || entry.endMs === undefined) continue
-    const validation = parseReuseValidator?.(entry.validatedFrom) ?? 'unknown'
+    // Validated against the span actually SERVED: the entry's own range widened
+    // to the requested end, since that is what the caller receives.
+    const validation = parseReuseValidator?.(entry.validatedFrom, { startMs: entry.startMs!, endMs: Math.max(entry.endMs, endMs) }) ?? 'unknown'
     // A dirty event during the producing parse must not be hidden even by the
     // short burst. Unknown coverage, however, retains that bounded fallback.
     if (validation === 'dirty') continue
@@ -5437,7 +5460,10 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   const cached = sessionCache.get(key)
   if (cached) {
     const age = Date.now() - cached.createdAt
-    const validation = parseReuseValidator?.(cached.validatedFrom) ?? 'unknown'
+    const coveredRange = cached.startMs !== undefined && cached.endMs !== undefined
+      ? { startMs: cached.startMs, endMs: cached.endMs }
+      : undefined
+    const validation = parseReuseValidator?.(cached.validatedFrom, coveredRange) ?? 'unknown'
     if (
       validation !== 'dirty'
       // The validated-clean extension serves entries the watcher can vouch

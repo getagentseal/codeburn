@@ -149,6 +149,18 @@
 "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect." = "Usage tracking still works. For live quota, sign in with the Copilot CLI or gh auth login, or paste a token below, then click Connect.";
 "Quota tracking disconnected. Credentials are untouched. Click Connect to resume." = "Quota tracking disconnected. Credentials are untouched. Click Connect to resume.";
 
+/* MARK: Grok Bot quota copy */
+"Grok Bot is not installed. Install the Grok Bot app, then click Retry." = "Grok Bot is not installed. Install the Grok Bot app, then click Retry.";
+"Sign in to the Cursor app with the account Grok Bot uses, then click Retry." = "Sign in to the Cursor app with the account Grok Bot uses, then click Retry.";
+"Cursor rejected the current app session. Sign in again, then click Retry." = "Cursor rejected the current app session. Sign in again, then click Retry.";
+"Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry." = "Could not read the Cursor app's local session data. Quit and reopen Cursor, then click Retry.";
+"This account has no included Grok Bot allowance." = "This account has no included Grok Bot allowance.";
+"Grok Bot usage is drawn from a pooled enterprise allowance, which has no per-account reading." = "Grok Bot usage is drawn from a pooled enterprise allowance, which has no per-account reading.";
+"Cursor rate-limited the quota request." = "Cursor rate-limited the quota request.";
+"Grok Bot quota is temporarily unavailable." = "Grok Bot quota is temporarily unavailable.";
+"Cursor returned an unrecognized Grok Bot quota response." = "Cursor returned an unrecognized Grok Bot quota response.";
+"Network error fetching Grok Bot quota." = "Network error fetching Grok Bot quota.";
+
 /* MARK: Updates */
 "Update Check Failed" = "Update Check Failed";
 "CLI Update Failed" = "CLI Update Failed";
@@ -262,6 +274,7 @@
 "Tokens" = "Tokens";
 "%@ in" = "%@ in";
 "%@ out" = "%@ out";
+"%1$@ in · %2$@ out · %3$@ cache read" = "%1$@ in · %2$@ out · %3$@ cache read";
 "%@%% cache hit" = "%@%% cache hit";
 
 /* MARK: Pull requests section */

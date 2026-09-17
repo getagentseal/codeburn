@@ -271,6 +271,18 @@ describe('PeriodCompare', () => {
     expect(tile('Sessions').querySelector('.pcmp-tile-change')!.className.trim()).toBe('pcmp-tile-change')
   })
 
+  it('draws the paired-day bars on a gridded value axis with the peak called out', async () => {
+    mocks.getPeriodCompare.mockResolvedValue(report)
+    render(<PeriodCompare provider="all" />)
+    await screen.findByText('Cost per day, both ranges side by side')
+    const chart = document.querySelector('.pcmp-chart')!
+    // Peak across both ranges is B's $30, so the axis tops out at $30 and names it.
+    expect([...chart.querySelectorAll('.chart-axis-tick')].map(tick => tick.textContent)).toEqual(['$0', '$10', '$20'])
+    expect(chart.querySelector('.chart-axis-peak')).toHaveTextContent('$30.00')
+    expect(chart.querySelector('.chart-peak-guide')).toBeInTheDocument()
+    expect(chart.querySelectorAll('.chart-gridline')).toHaveLength(4)
+  })
+
   it('labels the day axis on a stride instead of one label per day', async () => {
     const long = Array.from({ length: 100 }, (_, i) => {
       const day = new Date(2026, 2, 2)

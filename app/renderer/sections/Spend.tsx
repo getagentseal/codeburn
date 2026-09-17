@@ -11,7 +11,7 @@ import { SectionSkeleton } from '../components/Skeleton'
 import { StackedBars } from '../components/StackedBars'
 import { StaleBanner } from '../components/StaleBanner'
 import { type Polled, usePolled } from '../hooks/usePolled'
-import { formatUsd } from '../lib/format'
+import { formatCount, formatUsd } from '../lib/format'
 import { codeburn } from '../lib/ipc'
 import { contiguousDailyWindow, dataStartKey, localDateKey } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
@@ -140,13 +140,13 @@ function SpendPage({
         ...data.current.topActivities.map(row => ({
           key: `activity-${row.name}`,
           title: row.name,
-          sub: `${row.turns.toLocaleString('en-US')} turns`,
+          sub: formatCount(row.turns, 'turn'),
           value: formatUsd(row.cost),
         })),
         ...data.current.skills.map(row => ({
           key: `skill-${row.name}`,
           title: row.name,
-          sub: `${row.turns.toLocaleString('en-US')} turns · skill`,
+          sub: `${formatCount(row.turns, 'turn')} · skill`,
           value: formatUsd(row.cost),
         })),
       ],
@@ -156,7 +156,7 @@ function SpendPage({
       rows: data.current.tools.map(row => ({
         key: row.name,
         title: row.name,
-        sub: `${row.calls.toLocaleString('en-US')} calls`,
+        sub: formatCount(row.calls, 'call'),
         value: undefined,
       })),
     },
@@ -165,7 +165,7 @@ function SpendPage({
       rows: data.current.mcpServers.map(row => ({
         key: row.name,
         title: row.name,
-        sub: `${row.calls.toLocaleString('en-US')} calls`,
+        sub: formatCount(row.calls, 'call'),
         value: undefined,
       })),
     },
@@ -174,7 +174,7 @@ function SpendPage({
       rows: data.current.subagents.map(row => ({
         key: row.name,
         title: row.name,
-        sub: `${row.calls.toLocaleString('en-US')} calls`,
+        sub: formatCount(row.calls, 'call'),
         value: formatUsd(row.cost),
       })),
     },
@@ -252,7 +252,7 @@ function ProjectBreakdown({ projects, onInvestigate }: { projects: Project[]; on
                       <div className="spend-proj-session" key={`${session.date}-${j}`}>
                         <span className="sps-date">{formatProjectDay(session.date)}</span>
                         <span className="sps-model">{session.models[0]?.name ?? '—'}</span>
-                        <span className="sps-calls">{session.calls.toLocaleString('en-US')} calls</span>
+                        <span className="sps-calls">{formatCount(session.calls, 'call')}</span>
                         <span className="sps-cost">{formatUsd(session.cost)}</span>
                       </div>
                     ))
