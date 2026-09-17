@@ -327,9 +327,6 @@ export function buildPeriodDataFromDays(days: DailyEntry[], label: string): Peri
       .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, rawCategory: cat, ...d })),
     models: Object.entries(modelTotals)
       .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({
-        name,
-        ...d,
-      })),
+      .map(([name, d]) => ({ name, ...d })),
   }
 }
