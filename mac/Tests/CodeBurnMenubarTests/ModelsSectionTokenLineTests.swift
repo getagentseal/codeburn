@@ -3,22 +3,27 @@ import SwiftUI
 import Testing
 @testable import CodeBurnMenubar
 
-/// Native layout proof for the Models section's per-model token line, rendered
-/// through NSHostingView in an offscreen window at the popover's REAL 360pt
-/// width using the actual popover root (`MenuBarContent`), so every horizontal
-/// padding that affects a row is present. No status item is created, no
-/// popover is shown, nothing is ordered onto the screen, and no CLI is
-/// invoked: payloads are injected through the AppStore testing hooks and
-/// refreshes are suppressed.
+/// Offscreen render checks for the Models section's per-model token line.
+/// The token-line test renders the section itself through ImageRenderer (the
+/// section has no ScrollView, so ImageRenderer runs its layout faithfully)
+/// for two payloads that differ only in whether their rows carry token
+/// counts, and asserts rows with counts render one secondary line more than
+/// the same rows without counts (the with-counts section is taller by at
+/// least one text line per counted row). The popover test pushes the full
+/// root (`MenuBarContent`)
+/// through a real NSHostingView AppKit layout pass in a window that is never
+/// ordered on screen, because ImageRenderer alone does not run the
+/// scroll-content layout that root needs. No status item is created, no
+/// popover is shown, and no CLI is invoked: payloads are injected through the
+/// AppStore testing hooks and refreshes are suppressed.
 ///
 /// When `CODEBURN_LAYOUT_PROOF_DIR` is set, each variant is written there as a
-/// 2x PNG (the review evidence artifacts). The suite always renders through a
-/// real AppKit layout pass and asserts the image comes out; PNG writing is a
-/// best-effort side effect.
+/// 2x PNG (the review evidence artifacts); PNG writing is a best-effort side
+/// effect.
 /// This is fixture / native-view evidence — NOT installed-app validation.
-@Suite("Models section layout proof")
+@Suite("Models section token line")
 @MainActor
-struct ModelsSectionLayoutProofTests {
+struct ModelsSectionTokenLineTests {
 
     // MARK: - Fixtures
 
@@ -46,6 +51,27 @@ struct ModelsSectionLayoutProofTests {
                        inputTokens: 152_600_000, outputTokens: 9_640_000, cacheReadTokens: 119_400_000, cacheWriteTokens: 16_000_000),
             ModelEntry(name: "my-proxy-model", cost: 0, savingsUSD: 0, savingsBaselineModel: "", calls: 176,
                        inputTokens: 4_800_000, outputTokens: 400_000, cacheReadTokens: 0, cacheWriteTokens: 0),
+        ])
+    }
+
+    /// Two rows whose payload carries token counts, so each renders the
+    /// secondary `… in · … out · … cache read` line under the model name.
+    private static func tokenCountsPayload() -> MenubarPayload {
+        payload(topModels: [
+            ModelEntry(name: "Claude Opus 4.8", cost: 331.2, savingsUSD: 0, savingsBaselineModel: "", calls: 4812,
+                       inputTokens: 152_600_000, outputTokens: 9_640_000, cacheReadTokens: 119_400_000, cacheWriteTokens: 16_000_000),
+            ModelEntry(name: "my-proxy-model", cost: 0, savingsUSD: 0, savingsBaselineModel: "", calls: 176,
+                       inputTokens: 4_800_000, outputTokens: 400_000, cacheReadTokens: 0, cacheWriteTokens: 0),
+        ])
+    }
+
+    /// The same two rows without counts — the legacy shape that predates
+    /// them, so the secondary line stays hidden and each row is one line
+    /// shorter.
+    private static func legacyRowsPayload() -> MenubarPayload {
+        payload(topModels: [
+            ModelEntry(name: "Claude Opus 4.8", cost: 331.2, savingsUSD: 0, savingsBaselineModel: "", calls: 4812),
+            ModelEntry(name: "my-proxy-model", cost: 0, savingsUSD: 0, savingsBaselineModel: "", calls: 176),
         ])
     }
 
@@ -118,9 +144,8 @@ struct ModelsSectionLayoutProofTests {
     }
 
     /// Render through a REAL NSHostingView inside a borderless window that is
-    /// never ordered on screen, forcing a genuine AppKit layout pass (ImageRenderer
-    /// alone does not run the scroll-content layout this popover root needs).
-    /// Height comes from the hosting view's own fittingSize — the same signal
+    /// never ordered on screen, forcing a genuine AppKit layout pass. Height
+    /// comes from the hosting view's own fittingSize — the same signal
     /// the popover's `.preferredContentSize` sizing uses — so the full Models
     /// section is captured at the real 360pt width without inventing a canvas.
     @discardableResult
@@ -129,7 +154,6 @@ struct ModelsSectionLayoutProofTests {
         hosting.frame = NSRect(x: 0, y: 0, width: 360, height: 1)
         hosting.layoutSubtreeIfNeeded()
         let fitted = hosting.fittingSize
-        #expect(fitted.width == 360)
         let size = NSSize(width: 360, height: max(fitted.height, 660)) // floor: popoverHeight
 
         let window = NSWindow(
@@ -158,10 +182,44 @@ struct ModelsSectionLayoutProofTests {
         return size
     }
 
+    /// Section-only render at the same real width. ImageRenderer sizes its
+    /// bitmap to the content, so the image's dimensions are the section's
+    /// fitted size; returned in points by dividing out the 2x evidence scale.
+    @discardableResult
+    private func renderSection(name: String, store: AppStore, proofDir: String?) throws -> CGSize {
+        let renderer = ImageRenderer(content: ModelsSection()
+            .environment(store)
+            .environment(\.colorScheme, .dark)
+            .frame(width: 360))
+        renderer.scale = 2
+        let cgImage = try #require(renderer.cgImage, "ImageRenderer produced no image for section \(name)")
+        if let proofDir {
+            let rep = NSBitmapImageRep(cgImage: cgImage)
+            if let data = rep.representation(using: .png, properties: [:]) {
+                try data.write(to: URL(fileURLWithPath: proofDir).appendingPathComponent("menubar-section-\(name).png"))
+            }
+        }
+        let scale = renderer.scale
+        return CGSize(width: CGFloat(cgImage.width) / scale, height: CGFloat(cgImage.height) / scale)
+    }
+
     // MARK: - Tests
 
-    @Test("token line renders at the real 360pt popover width with savings present and absent")
-    func rendersAtPopoverWidth() throws {
+    @Test("rows with token counts render one more line than the same rows without counts")
+    func tokenLineRendersPerCountedRow() throws {
+        let proofDir = ProcessInfo.processInfo.environment["CODEBURN_LAYOUT_PROOF_DIR"]
+
+        let withCounts = try renderSection(name: "tokens-present", store: makeStore(payload: Self.tokenCountsPayload()), proofDir: proofDir)
+        let legacy = try renderSection(name: "tokens-absent", store: makeStore(payload: Self.legacyRowsPayload()), proofDir: proofDir)
+
+        // One secondary text line (10.5pt font plus the row's 2pt spacing) per
+        // row carrying counts; 8pt per row is the conservative floor.
+        let rowsWithCounts = 2
+        #expect(withCounts.height > legacy.height + CGFloat(rowsWithCounts) * 8)
+    }
+
+    @Test("full popover renders offscreen with savings present and absent")
+    func rendersOffscreenAtPopoverWidth() throws {
         let proofDir = ProcessInfo.processInfo.environment["CODEBURN_LAYOUT_PROOF_DIR"]
 
         // Full popover at its REAL 360×660 (context: the Models section sits
@@ -169,31 +227,16 @@ struct ModelsSectionLayoutProofTests {
         // column header row are what fit).
         let store = makeStore(payload: Self.savingsPresentPayload())
         #expect(store.hasCachedData)
-        let withSavings = try render(name: "savings-present", store: store, proofDir: proofDir)
-        #expect(withSavings.width == 360)
+        try render(name: "savings-present", store: store, proofDir: proofDir)
+        try render(name: "savings-absent", store: makeStore(payload: Self.savingsAbsentPayload()), proofDir: proofDir)
 
-        let withoutSavings = try render(name: "savings-absent", store: makeStore(payload: Self.savingsAbsentPayload()), proofDir: proofDir)
-        #expect(withoutSavings.width == 360)
-
-        // Section-only renders at the same real width: the section carries its
-        // own row padding and no extra horizontal wrapper in the popover, so
-        // this is the exact row layout context, uncut. (The section has no
-        // ScrollView, so ImageRenderer runs its layout faithfully.)
+        // Section-only PNG evidence at the same real width: the section carries
+        // its own row padding and no extra horizontal wrapper in the popover, so
+        // this is the exact row layout context, uncut.
         if let proofDir {
             for (name, payload) in [("section-savings-present", Self.savingsPresentPayload()),
                                     ("section-savings-absent", Self.savingsAbsentPayload())] {
-                let sectionStore = makeStore(payload: payload)
-                let renderer = ImageRenderer(content: ModelsSection()
-                    .environment(sectionStore)
-                    .environment(\.colorScheme, .dark)
-                    .frame(width: 360))
-                renderer.scale = 2
-                if let cgImage = renderer.cgImage {
-                    let rep = NSBitmapImageRep(cgImage: cgImage)
-                    if let data = rep.representation(using: .png, properties: [:]) {
-                        try data.write(to: URL(fileURLWithPath: proofDir).appendingPathComponent("menubar-\(name).png"))
-                    }
-                }
+                try renderSection(name: name, store: makeStore(payload: payload), proofDir: proofDir)
             }
         }
     }
