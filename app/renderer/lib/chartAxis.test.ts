@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatAxisMoney, niceTicks, ticksClearOfPeak } from './chartAxis'
+import { barBucketDays, barLayout, formatAxisMoney, niceTicks, ticksClearOfPeak } from './chartAxis'
 
 describe('niceTicks', () => {
   it('rounds up to a 1/2/2.5/5 step and always starts at zero', () => {
@@ -55,5 +55,45 @@ describe('ticksClearOfPeak', () => {
 
   it('leaves the axis alone when there is no peak to mark', () => {
     expect(ticksClearOfPeak([0, 1, 2], 0, 2)).toEqual([0, 1, 2])
+  })
+})
+
+// The narrowest plot the app supports; the layout rule is only correct if the
+// columns it picks fit inside it.
+const MIN_PLOT_PX = 520
+
+function barsWidth(count: number): number {
+  const { minWidth, gap } = barLayout(count)
+  return count * minWidth + Math.max(0, count - 1) * gap
+}
+
+describe('barLayout', () => {
+  it('keeps the comfortable 2px bar and 4px gap while the days fit', () => {
+    expect(barLayout(1)).toEqual({ minWidth: 2, gap: 4 })
+    expect(barLayout(30)).toEqual({ minWidth: 2, gap: 4 })
+  })
+
+  it('tightens instead of overflowing as the day count grows', () => {
+    expect(barLayout(183).gap).toBeLessThan(4)
+    for (const count of [1, 7, 30, 31, 90, 183, 365, 520]) {
+      expect(barsWidth(count)).toBeLessThanOrEqual(MIN_PLOT_PX)
+    }
+  })
+})
+
+describe('barBucketDays', () => {
+  it('draws one column per day while that fits', () => {
+    expect(barBucketDays(183)).toBe(1)
+    expect(barBucketDays(520)).toBe(1)
+  })
+
+  it('folds longer histories into whole weeks that still fit', () => {
+    expect(barBucketDays(521)).toBe(7)
+    expect(barBucketDays(3640)).toBe(7)
+    for (const days of [521, 1000, 3650, 20000]) {
+      const size = barBucketDays(days)
+      expect(size % 7).toBe(0)
+      expect(barsWidth(Math.ceil(days / size))).toBeLessThanOrEqual(MIN_PLOT_PX)
+    }
   })
 })

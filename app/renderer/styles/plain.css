@@ -325,24 +325,27 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .pop-wrap, .calendar-wrap { position: relative; }
 .pop { background: var(--panel); color: var(--ink); cursor: pointer; user-select: none; }
 .pop-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; min-width: 150px; padding: 4px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.14); z-index: 20;
-  transform-origin: top right; animation: pop-in var(--dur-fast) var(--ease-out) backwards;
+  min-width: 150px; max-width: 320px; padding: 4px; overflow-y: auto;
+  background: var(--card-inner); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14); z-index: 200;
+  transform-origin: top left; animation: pop-in var(--dur-fast) var(--ease-out) backwards;
 }
 /* Every anchored surface grows out of its trigger edge: 2px of travel, no more. */
 @keyframes pop-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
-.pop-item { display: flex; align-items: center; gap: 6px; padding: 6px 11px; font-size: var(--fs-body); border-radius: 6px; cursor: pointer; color: var(--ink); white-space: nowrap; }
+.pop-item { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; font-size: var(--fs-body); line-height: 1.5; border-radius: 6px; cursor: pointer; color: var(--ink); white-space: nowrap; }
 .pop-item:hover, .pop-item:focus-visible { background: var(--hover); }
 .pop-item.on { color: var(--accent-text); font-weight: 560; }
+.pop-item.muted { color: var(--mut); }
 .dropdown { max-width: 100%; }
 .dropdown-trigger { width: 100%; justify-content: space-between; border: 1px solid var(--line2); font: inherit; text-align: left; }
 .dropdown-trigger::after { content: none; }
 .dropdown-trigger:focus-visible { border-color: var(--accent); }
 .dropdown-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dropdown-chevron { width: 14px; height: 14px; color: var(--mut2); }
-.dropdown-menu { max-height: 240px; overflow-y: auto; }
-.dropdown-menu .pop-item { width: 100%; border: 0; background: transparent; font: inherit; text-align: left; }
+.dropdown-menu { overflow-y: auto; }
+.dropdown-menu .pop-item { width: 100%; min-width: 0; border: 0; background: transparent; font: inherit; font-size: var(--fs-body); text-align: left; }
+.pop-item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pop-item-note { flex: 0 0 auto; margin-left: auto; padding-left: 8px; color: var(--mut2); font-size: var(--fs-label); }
 .dropdown-menu .pop-item:hover, .dropdown-menu .pop-item:focus-visible { background: var(--hover); }
 .dropdown-foot { max-width: 220px; margin-top: 4px; padding: 7px 11px 2px; border-top: 1px solid var(--line2); color: var(--mut2); font-size: var(--fs-label); line-height: 1.35; white-space: normal; }
 .calendar-trigger {
@@ -354,7 +357,7 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .calendar-trigger { transition: color var(--dur-fast) var(--ease-out); }
 .calendar-trigger svg { width: 14px; height: 14px; }
 .calendar-popover {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 286px;
+  z-index: 200; width: 286px;
   padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,.14);
   transform-origin: top right; animation: pop-in var(--dur-fast) var(--ease-out) backwards;
@@ -1613,7 +1616,6 @@ html.page-hidden *::after {
 .pcmp-range-label { font-size: var(--fs-label); font-weight: var(--fw-subhead); text-transform: uppercase; letter-spacing: 0.04em; color: var(--mut2); }
 .pcmp-range-trigger { min-height: 29px; padding: 6px 10px; font-size: var(--fs-meta); border-radius: 7px; border: 1px solid var(--line, rgba(128,128,128,0.25)); background: transparent; color: inherit; cursor: pointer; }
 .pcmp-range-trigger:hover { border-color: var(--acc, currentColor); }
-.pcmp-range .calendar-popover { right: auto; left: 0; }
 .pcmp-meta { margin: 0; font-size: var(--fs-meta); color: var(--mut); }
 .pcmp-table { display: flex; flex-direction: column; overflow-x: auto; font-size: var(--fs-meta); }
 .pcmp-tr { display: grid; grid-template-columns: minmax(140px, 2fr) repeat(4, minmax(64px, 1fr)); gap: 8px; align-items: center; padding: 5px 6px; border-radius: 6px; text-align: left; }

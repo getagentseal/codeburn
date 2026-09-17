@@ -421,7 +421,12 @@ describe('scanJsonlFile', () => {
       message: { content: [{ type: 'tool_use', name: 'Bash', input: {} }] },
     }))
     await scanJsonlFile(filePath, 'p1', undefined)
-    expect(readSessionLinesSpy).toHaveBeenCalledWith(filePath, undefined, { largeLineAsBuffer: true })
+    // The tracker rides along so a later read can resume after the last
+    // complete line; what this test guards is that the file is streamed.
+    expect(readSessionLinesSpy).toHaveBeenCalledWith(filePath, undefined, {
+      largeLineAsBuffer: true,
+      byteOffsetTracker: { lastCompleteLineOffset: expect.any(Number) },
+    })
     expect(readSessionFileSpy).not.toHaveBeenCalled()
     readSessionLinesSpy.mockRestore()
     readSessionFileSpy.mockRestore()

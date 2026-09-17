@@ -1,6 +1,7 @@
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
 import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { toDateString } from './daily-cache.js'
+import { gitOriginKey } from './git-origin.js'
 import { filterProjectsByName, parseAllSessions } from './parser.js'
 import { inferSessionProvider } from './session-output.js'
 import { behavioralCallCount } from './behavioral-weight.js'
@@ -119,6 +120,10 @@ export type BranchSpendCoverage = {
 export type BranchSpendProjectReport = {
   id: string
   label: string
+  /// Normalized `origin` remote of this checkout, when it has one. Clones and
+  /// worktrees of one repository share it, so surfaces can fold a throwaway
+  /// checkout into the repository it belongs to instead of listing it twice.
+  originKey?: string | null
   /// The project's full in-range cost across all its sessions, including the
   /// no-branch-data share — the same number the By project view reports.
   totalCost: number
@@ -360,6 +365,7 @@ export function buildBranchSpendReport(projects: ProjectSummary[], range: DateRa
     out.push({
       id: projectId,
       label: projectLabel,
+      originKey: gitOriginKey(projectId),
       totalCost,
       branches: sorted.map(acc => toRow(acc, projectId, projectLabel)),
       coverage,
