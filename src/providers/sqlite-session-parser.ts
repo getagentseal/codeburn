@@ -57,7 +57,6 @@ type V2MessageRow = {
   data: Uint8Array | string
 }
 
-
 /**
  * OpenCode 2.x generations (issue #1293): v2 writes `session_v2` + `session_message`
  * (its FK points at `session_v2(id)`), while the legacy `session`/`message`/`part`
@@ -145,7 +144,6 @@ function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; pa
 
   return { messages, partsByMsg }
 }
-
 
 function parseSessionModel(value: Uint8Array | string | undefined): string | undefined {
   try {
@@ -254,7 +252,8 @@ export function createSqliteSessionParser(
       try {
         const generation = detectGeneration(db)
         if (generation === null) {
-          warnUnrecognizedSchemaOnce(config.displayName, ['session', 'message', 'part'])
+          const schema = validateSchemaDetailed(db)
+          if (!schema.ok) warnUnrecognizedSchemaOnce(config.displayName, schema.missing)
           return
         }
 
