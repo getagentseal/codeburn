@@ -469,6 +469,38 @@ describe('buildPeriodDataFromDays', () => {
     expect(coding.cost).toBeCloseTo(15)
   })
 
+  // The hero's token popover reads the period totals; the Models table sums the
+  // per-model rows. Both come out of here, so they must be the same numbers.
+  it('period token totals equal the day sums and the per-model sums', () => {
+    const split = (date: string, factor: number) => {
+      const models = {
+        'Opus 4.7': { calls: 8, cost: 8 * factor, savingsUSD: 0, inputTokens: 80 * factor, outputTokens: 160 * factor, cacheReadTokens: 240 * factor, cacheWriteTokens: 40 * factor },
+        'Haiku 4.5': { calls: 2, cost: 2 * factor, savingsUSD: 0, inputTokens: 20 * factor, outputTokens: 40 * factor, cacheReadTokens: 60 * factor, cacheWriteTokens: 10 * factor },
+      }
+      return {
+        ...makeDay(date, 10 * factor),
+        inputTokens: 100 * factor,
+        outputTokens: 200 * factor,
+        cacheReadTokens: 300 * factor,
+        cacheWriteTokens: 50 * factor,
+        models,
+      }
+    }
+    const days = [split('2026-04-09', 1), split('2026-04-10', 3)]
+    const pd = buildPeriodDataFromDays(days, '7 Days')
+    const sumOf = (field: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens') => ({
+      period: pd[field],
+      overDays: days.reduce((sum, day) => sum + day[field], 0),
+      overModels: pd.models.reduce((sum, model) => sum + model[field], 0),
+    })
+    for (const field of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const) {
+      const { period, overDays, overModels } = sumOf(field)
+      expect(period).toBe(overDays)
+      expect(period).toBe(overModels)
+    }
+    expect(pd.calls).toBe(days.reduce((sum, day) => sum + day.calls, 0))
+  })
+
   it('returns empty period totals when no days supplied', () => {
     const pd = buildPeriodDataFromDays([], 'Today')
     expect(pd.cost).toBe(0)

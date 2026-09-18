@@ -12,6 +12,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { Icon } from '../components/icons'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatCount, formatDayShort, formatUsd, shortenProjectPath } from '../lib/format'
+import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
   applyInvestigation,
@@ -465,11 +466,11 @@ export function Sessions({
                       <span className="session-cost-split">
                         <strong>{formatUsd(entry.entry.cost)}</strong>
                         {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                          <small title="Full cost of the whole session"> of {formatUsd(entry.entry.row.cost)}</small>
+                          <small title="Full cost of the whole session"> of <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></small>
                         )}
                       </span>
                     ) : (
-                      <span>{formatUsd(entry.entry.row.cost)}</span>
+                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
                   </button>

@@ -10,6 +10,7 @@ import { usePolled } from '../hooks/usePolled'
 import { ChartTip } from '../components/ChartTip'
 import { formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
 import { formatCompact, formatUsd, shortenProjectPath } from '../lib/format'
+import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { trackEvent } from '../lib/track'
@@ -384,7 +385,7 @@ function SummaryCard({ report }: { report: PeriodDiffReport }) {
   // Only the two money tiles carry the cost semantics: more sessions is not a
   // bill going up, so the Sessions tile stays neutral.
   const tiles = [
-    { label: 'Total cost', value: formatUsd(report.totals.B.cost), change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
+    { label: 'Total cost', value: <Usd value={report.totals.B.cost} tokens={tokensOf(report.totals.B)} />, change: signedUsd(report.totals.diff.cost), tone: diffClass(report.totals.diff.cost, 'cost'), pct: report.totals.pct.cost },
     { label: 'Cost per 100 calls', value: per100.b === null ? '—' : formatUsd(per100.b), change: per100.diff === null ? '—' : signedUsd(per100.diff), tone: diffClass(per100.diff ?? 0, 'cost'), pct: per100.pct },
     { label: 'Sessions', value: report.totals.B.sessions.toLocaleString('en-US'), change: signedCount(report.totals.diff.sessions), tone: '', pct: report.totals.pct.sessions },
   ]

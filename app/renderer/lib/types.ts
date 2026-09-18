@@ -145,7 +145,7 @@ export type MenubarPayload = {
    *  all from the one aggregation that produced it. A window that is absent was
    *  not scanned, so the client falls back to that period's own payload.
    *  Omitted entirely on scoped or filtered requests. */
-  periodTotals?: Partial<Record<'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime', { cost: number; calls: number }>>
+  periodTotals?: Partial<Record<'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime', { cost: number; calls: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }>>
   // Optional: older CLIs omit it. Present and true only on a stale read-only
   // serve; absent otherwise. Absence must always be read as "assume fresh."
   stale?: boolean

@@ -11,6 +11,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import { DUR, motionEnabled, useBarGrowIn } from '../lib/motion'
 import { type Polled, usePolled } from '../hooks/usePolled'
 import { formatCompact, formatCount, formatUsd, formatUsdWithCurrency } from '../lib/format'
+import { Usd, sumTokens, tokensOf, useUsdPop } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import {
   categoryFilters,
@@ -489,6 +490,9 @@ function deriveStats(data: MenubarPayload, now: Date, anchorKey = localDateKey(n
   return {
     todayEntry,
     todayCost: todayEntry?.cost ?? 0,
+    mtdEntries,
+    priorDayEntry: daily.find(day => day.date === priorKey),
+    sevenDayEntries: upToAnchor.slice(-7),
     mtd,
     projected,
     pacePct,
@@ -573,8 +577,9 @@ function streakDays(daily: DailyHistoryEntry[], now: Date): number {
  * changes (a user action), but never on the 30s poll: a value that arrives
  * under the same `animateKey` snaps in place instead of re-animating.
  */
-function CountUp({ value, animateKey, animate = true }: { value: number; animateKey: string; animate?: boolean }) {
-  const ref = useRef<HTMLDivElement>(null)
+function CountUp({ value, tokens, animateKey, animate = true }: { value: number; tokens?: ReturnType<typeof tokensOf>; animateKey: string; animate?: boolean }) {
+  const pop = useUsdPop<HTMLDivElement>(tokens)
+  const ref = pop.ref
   const keyRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -596,7 +601,12 @@ function CountUp({ value, animateKey, animate = true }: { value: number; animate
     return () => { tween.kill() }
   }, [value, animateKey, animate])
 
-  return <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'}>{formatUsd(value)}</div>
+  return (
+    <>
+      <div ref={ref} className="ov-hero-num" data-countup={value} data-countup-animation={animate ? 'enabled' : 'suppressed'} {...pop.props}>{formatUsd(value)}</div>
+      {pop.pop}
+    </>
+  )
 }
 
 /** 0 = Sunday, from a local `YYYY-MM-DD` key. */
@@ -620,6 +630,8 @@ type AggregatedModel = {
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
+  // No column of its own; the cost cell's token popover reads it.
+  cacheWriteTokens?: number
 }
 
 /** Provider-filtered source: `current.topModels` is already period/range/provider-scoped by the CLI. */
@@ -632,6 +644,7 @@ function topModelsToAggregated(models: MenubarPayload['current']['topModels']): 
       ...(model.inputTokens === undefined ? {} : { inputTokens: model.inputTokens }),
       ...(model.outputTokens === undefined ? {} : { outputTokens: model.outputTokens }),
       ...(model.cacheReadTokens === undefined ? {} : { cacheReadTokens: model.cacheReadTokens }),
+      ...(model.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: model.cacheWriteTokens }),
     }))
     .sort((a, b) => b.cost - a.cost)
 }
@@ -685,7 +698,7 @@ function ModelsTable({ models, onSelectModel }: { models: AggregatedModel[]; onS
               <td className="num mono">{model.inputTokens === undefined ? '—' : formatCompact(model.inputTokens)}</td>
               <td className="num mono">{model.outputTokens === undefined ? '—' : formatCompact(model.outputTokens)}</td>
               <td className="num mono">{model.cacheReadTokens === undefined ? '—' : formatCompact(model.cacheReadTokens)}</td>
-              <td className="num mono">{formatUsd(model.cost)}</td>
+              <td className="num mono"><Usd value={model.cost} tokens={tokensOf(model)} /></td>
               <td className="num">{model.calls.toLocaleString('en-US')}</td>
             </tr>
           ))}
@@ -724,11 +737,23 @@ function bucketDays(daily: DailyHistoryEntry[], size: number): ChartDay[] {
       spanStart: slice[0].date,
       cost: slice.reduce((total, day) => total + day.cost, 0),
       calls: slice.reduce((total, day) => total + day.calls, 0),
+      inputTokens: slice.reduce((total, day) => total + day.inputTokens, 0),
+      outputTokens: slice.reduce((total, day) => total + day.outputTokens, 0),
+      cacheReadTokens: slice.reduce((total, day) => total + day.cacheReadTokens, 0),
+      cacheWriteTokens: slice.reduce((total, day) => total + day.cacheWriteTokens, 0),
       topModels: lead.topModels,
     })
   }
   return buckets
 }
+
+/** The token breakdown behind a bar's amount, in the chart tip's own skin. */
+const TOKEN_TIP_ROWS = [
+  ['Input', 'inputTokens'],
+  ['Output', 'outputTokens'],
+  ['Cache read', 'cacheReadTokens'],
+  ['Cache write', 'cacheWriteTokens'],
+] as const
 
 function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay, bucketed = false }: { daily: ChartDay[]; dataStart?: string | null; animateKey?: string; onSelectDay?: (date: string) => void; bucketed?: boolean }) {
   const bars = barLayout(daily.length)
@@ -823,6 +848,13 @@ function DailyChart({ daily, dataStart = null, animateKey = '', onSelectDay, buc
                 <span>{tip.day.topModels[0]?.name ?? 'No model'} led</span>
                 <b>{formatCount(tip.day.calls, 'call')}</b>
               </div>
+              {TOKEN_TIP_ROWS.map(([label, key]) => (
+                <div className="chart-tip-row" key={key}>
+                  <i className="chart-tip-sw" />
+                  <span>{label}</span>
+                  <b>{formatCompact(tip.day[key])}</b>
+                </div>
+              ))}
             </>
           )}
         </ChartTip>
@@ -838,9 +870,9 @@ function DailySummaries({ daily, anchorIsToday, bucketed = false }: { daily: Dai
   const average = mean(daily.map(day => day.cost))
   return (
     <div className="ov-chart-summaries" aria-label="Daily spend summary">
-      <div className="ov-summary-chip"><span>{bucketed ? 'Avg/week' : 'Avg/day'}</span><strong>{formatUsd(average)}</strong></div>
-      <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? `${formatUsd(peak.cost)} · ${formatShortDay(peak.date)}` : '$0.00'}</strong></div>
-      <div className="ov-summary-chip"><span>{bucketed ? 'Previous week' : anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{formatUsd(yesterday?.cost ?? 0)}</strong></div>
+      <div className="ov-summary-chip"><span>{bucketed ? 'Avg/week' : 'Avg/day'}</span><strong><Usd value={average} tokens={sumTokens(daily, daily.length)} /></strong></div>
+      <div className="ov-summary-chip"><span>Peak</span><strong>{peak ? <><Usd value={peak.cost} tokens={tokensOf(peak)} /> · {formatShortDay(peak.date)}</> : '$0.00'}</strong></div>
+      <div className="ov-summary-chip"><span>{bucketed ? 'Previous week' : anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong><Usd value={yesterday?.cost ?? 0} tokens={tokensOf(yesterday)} /></strong></div>
     </div>
   )
 }
@@ -1022,6 +1054,11 @@ export function OverviewContent({
   const heroSessionLabel = combined
     ? formatCombinedSessionCount()
     : formatSessionCount(heroSessions, data.current.sessionCountBasis)
+  // The breakdown must belong to the number on screen: the combined aggregate,
+  // the generation window, or this payload's own period — never a mix.
+  const heroTokens = combined
+    ? tokensOf({ ...combined.combined, cacheWriteTokens: combined.combined.cacheCreateTokens })
+    : tokensOf(headline ?? data.current)
   const heroSessionHelp = combined
     ? COMBINED_SESSION_COUNT_HELP
     : (sessionCountIsExact(data.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
@@ -1108,7 +1145,7 @@ export function OverviewContent({
               {/* A returning launch already showed a truthful persisted headline.
                   Replaying the live hero from $0 on handoff makes that exact value
                   appear to collapse and recover; snap to the revalidated total. */}
-              <CountUp value={heroCost} animateKey={animateKey} animate={!suppressHeroReplay} />
+              <CountUp value={heroCost} tokens={heroTokens} animateKey={animateKey} animate={!suppressHeroReplay} />
               <div className="ov-hero-sub" title={heroSessionHelp}>{formatCount(heroCalls, 'call')} · {heroSessionLabel}</div>
               {combined
                 ? <CombinedDevices usage={combined} />
@@ -1124,8 +1161,8 @@ export function OverviewContent({
                 )}
             </div>
             <div className="ov-hero-foot">
-              <div><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{stats.priorDayCost === null ? 'n/a' : formatUsd(stats.priorDayCost)}</strong></div>
-              <div><span>7-day avg</span><strong>{stats.sevenDayAvg === null ? 'n/a' : formatUsd(stats.sevenDayAvg)}</strong></div>
+              <div><span>{anchorIsToday ? 'Yesterday' : 'Previous day'}</span><strong>{stats.priorDayCost === null ? 'n/a' : <Usd value={stats.priorDayCost} tokens={tokensOf(stats.priorDayEntry)} />}</strong></div>
+              <div><span>7-day avg</span><strong>{stats.sevenDayAvg === null ? 'n/a' : <Usd value={stats.sevenDayAvg} tokens={sumTokens(stats.sevenDayEntries, stats.sevenDayEntries.length)} />}</strong></div>
               <div><span>{anchorIsToday ? 'vs yesterday' : 'vs previous day'}</span><strong className={stats.dayOverDayPct === null ? undefined : `tone-${paceDirection(stats.dayOverDayPct)}`}>{stats.dayOverDayPct === null ? 'n/a' : `${stats.dayOverDayPct >= 0 ? '+' : '-'}${Math.abs(Math.round(stats.dayOverDayPct))}%`}</strong></div>
             </div>
           </div>
@@ -1141,7 +1178,7 @@ export function OverviewContent({
             <div className="ov-card-inner ov-stat">
               <SpendTrend values={stats.mtdSeries} tone={stats.pacePct === null ? 'flat' : paceDirection(stats.pacePct)} />
               <div className="ov-stat-figures">
-                <div className="v">{formatUsd(stats.mtd)}</div>
+                <div className="v"><Usd value={stats.mtd} tokens={sumTokens(stats.mtdEntries)} /></div>
                 {stats.pacePct === null ? (
                   <div className="d">No {stats.prevMonthName} pace yet</div>
                 ) : (

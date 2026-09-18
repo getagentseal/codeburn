@@ -10,6 +10,7 @@ import { StaleBanner } from '../components/StaleBanner'
 import type { Section } from '../components/Sidebar'
 import { usePolled } from '../hooks/usePolled'
 import { formatCompact, formatUsd } from '../lib/format'
+import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import { categoryFilters, modelFilters } from '../lib/investigation'
 import { reportMemoKey } from '../lib/reportMemoKey'
@@ -331,7 +332,7 @@ function ModelTableRow({ row, onAddAlias, onInvestigate }: { row: ModelReportRow
       <td>{formatCompact(row.inputTokens)}</td>
       <td>{formatCompact(row.outputTokens)}</td>
       <td>{formatCompact(row.cacheReadTokens)}</td>
-      <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
+      <td className={cellClass}>{unpriced ? '—' : <Usd value={row.costUSD} tokens={tokensOf(row)} />}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>
   )
@@ -390,7 +391,7 @@ function ModelTaskRow({ row, onInvestigate }: { row: ModelReportRow; onInvestiga
       <td>{formatCompact(row.inputTokens)}</td>
       <td>{formatCompact(row.outputTokens)}</td>
       <td>{formatCompact(row.cacheReadTokens)}</td>
-      <td className={cellClass}>{unpriced ? '—' : formatUsd(row.costUSD)}</td>
+      <td className={cellClass}>{unpriced ? '—' : <Usd value={row.costUSD} tokens={tokensOf(row)} />}</td>
       <td className={unpriced ? 'dim' : row.savingsUSD > 0 ? 'pos' : undefined}>{unpriced ? '—' : formatUsd(row.savingsUSD)}</td>
     </tr>
   )

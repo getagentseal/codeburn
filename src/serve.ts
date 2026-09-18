@@ -10,6 +10,7 @@ import { getConfigFilePath } from './config.js'
 import type { ParseReuseValidation } from './parser.js'
 import { SERVE_HYDRATION_ENV } from './usage-aggregator.js'
 import { suppressProjectFilterWarnings } from './project-filter-warnings.js'
+import { isPathBlocked } from './sqlite.js'
 
 // ---------------------------------------------------------------------------
 // codeburn serve --stdio: a resident query server for the desktop app.
@@ -508,6 +509,9 @@ async function startRootWatchers(): Promise<RootWatcherState | null> {
       }
     }
     for (const root of roots) {
+      // A root we refuse to open contributes no sessions, so nothing about it
+      // can go stale; watching it would hang this loop the way opening it does.
+      if (isPathBlocked(root)) continue
       let info: Awaited<ReturnType<typeof stat>>
       try {
         info = await stat(root)

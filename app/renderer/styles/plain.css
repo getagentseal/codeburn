@@ -336,6 +336,13 @@ body { overflow: hidden; background: var(--bg); color: var(--ink); }
 .pop-item:hover, .pop-item:focus-visible { background: var(--hover); }
 .pop-item.on { color: var(--accent-text); font-weight: 560; }
 .pop-item.muted { color: var(--mut); }
+/* Token breakdown behind a dollar amount: the pop-menu surface, small mono counts. */
+[data-usd] { cursor: help; }
+.usd-pop { min-width: 0; padding: 7px 9px; }
+.usd-pop-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4); font-size: var(--fs-meta); line-height: 1.5; white-space: nowrap; }
+.usd-pop-row span { color: var(--mut); }
+.usd-pop-row b { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: var(--fw-kpi); color: var(--ink); }
+.usd-pop-row.calls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line2); }
 .dropdown { max-width: 100%; }
 .dropdown-trigger { width: 100%; justify-content: space-between; border: 1px solid var(--line2); font: inherit; text-align: left; }
 .dropdown-trigger::after { content: none; }

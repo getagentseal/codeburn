@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { CliErrorPanel } from '../components/CliErrorPanel'
 import { Dropdown } from '../components/Dropdown'
@@ -14,6 +14,7 @@ import {
   type VolumeMeasure,
 } from '../lib/cohortStats'
 import { formatCompact, formatCount, formatUsd, shortenProjectPath } from '../lib/format'
+import { Usd, tokensOf } from '../components/Usd'
 import { codeburn } from '../lib/ipc'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { sessionFilters } from '../lib/investigation'
@@ -350,9 +351,9 @@ function daysOfData(model: ModelStats): string {
 }
 
 function ContextCard({ modelA, modelB }: { modelA: ModelStats; modelB: ModelStats }) {
-  const rows = [
+  const rows: Array<[string, ReactNode, ReactNode]> = [
     ['Calls', modelA.calls.toLocaleString(), modelB.calls.toLocaleString()],
-    ['Total cost', formatUsd(modelA.cost), formatUsd(modelB.cost)],
+    ['Total cost', <Usd value={modelA.cost} tokens={tokensOf(modelA)} />, <Usd value={modelB.cost} tokens={tokensOf(modelB)} />],
     ['Input tokens', formatCompact(modelA.inputTokens), formatCompact(modelB.inputTokens)],
     ['Output tokens', formatCompact(modelA.outputTokens), formatCompact(modelB.outputTokens)],
     ['Edit turns', modelA.editTurns.toLocaleString(), modelB.editTurns.toLocaleString()],

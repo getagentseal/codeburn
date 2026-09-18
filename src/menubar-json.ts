@@ -246,7 +246,7 @@ export type MenubarPayload = {
   /// generations minutes apart; a window that is absent was not scanned and the
   /// client falls back to that period's own payload. Omitted entirely on scoped
   /// or filtered requests.
-  periodTotals?: Partial<Record<'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime', { cost: number; calls: number }>>
+  periodTotals?: Partial<Record<'today' | 'week' | '30days' | 'month' | 'all' | 'lifetime', { cost: number; calls: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }>>
   /// Consecutive days with any activity, ending today or yesterday. One value
   /// for the machine: computed across every provider and independent of the
   /// selected period and provider filter, so every surface shows the same
