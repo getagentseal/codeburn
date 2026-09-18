@@ -1,7 +1,9 @@
 import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
@@ -407,10 +409,73 @@ function openReadonlyCache(path: string, originalError: unknown): DatabaseSyncIn
   return new Driver(cachedPath, { readOnly: true })
 }
 
+/// macOS keeps `~/Library/Group Containers` behind Full Disk Access. When the
+/// process running codeburn has no consent and cannot show the prompt, open()
+/// on a database in there never returns: the whole run wedges before printing
+/// anything, and so does the resident `serve` child. fs.accessSync/openSync
+/// block the same way, so the only safe probe is a child we can kill.
+const GROUP_CONTAINERS_PREFIX = join(homedir(), 'Library', 'Group Containers') + sep
+const TCC_PROBE = "try{require('node:fs').closeSync(require('node:fs').openSync(process.argv[1],'r'))}catch(e){process.exit(e.code==='ENOENT'?2:1)}"
+const TCC_PROBE_TIMEOUT_MS = 3000
+/// Short enough that granting access recovers on the next `serve` refresh,
+/// long enough that a resident process does not fork per request.
+const TCC_PROBE_CACHE_MS = 60_000
+
+const tccProbeCache = new Map<string, { blocked: boolean; at: number }>()
+let warnedTccBlocked = false
+
+export function isBlockedDatabaseError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'codeburnBlocked' in err
+}
+
+/// `script` and `execPath` are only ever overridden by tests, which cannot make
+/// a real open() hang on demand nor break the spawn itself.
+export function probeDatabaseBlocked(path: string, script = TCC_PROBE, execPath = process.execPath): boolean {
+  const now = Date.now()
+  const key = `${script}\u0000${path}`
+  const cached = tccProbeCache.get(key)
+  if (cached && now - cached.at < TCC_PROBE_CACHE_MS) return cached.blocked
+
+  const probe = spawnSync(execPath, ['-e', script, path], {
+    timeout: TCC_PROBE_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    stdio: 'ignore',
+    // process.execPath is Electron's binary in the desktop app; without this it
+    // would launch a second app window instead of running the script.
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  })
+  // 0 readable, 2 missing (let the real open report that); the timeout kill and
+  // any other exit mean we must not touch this file. A probe we could not run
+  // at all says nothing about the file, so it must not block it.
+  const blocked = probe.signal === 'SIGKILL' || (!probe.error && probe.status !== 0 && probe.status !== 2)
+  tccProbeCache.set(key, { blocked, at: now })
+  return blocked
+}
+
+/// True for a Group Container path this process must not open: kqueue-backed
+/// fs.watch hangs on it exactly like DatabaseSync does.
+export function isPathBlocked(path: string, script = TCC_PROBE): boolean {
+  return path.startsWith(GROUP_CONTAINERS_PREFIX) && probeDatabaseBlocked(path, script)
+}
+
+export function assertDatabaseReadable(path: string, script = TCC_PROBE): void {
+  if (!isPathBlocked(path, script)) return
+
+  if (!warnedTccBlocked) {
+    warnedTccBlocked = true
+    process.stderr.write(
+      "codeburn: skipped warp: macOS blocked access to Warp's database; grant Full Disk Access to the app " +
+      'running codeburn (System Settings > Privacy & Security) and retry\n',
+    )
+  }
+  throw Object.assign(new Error(`macOS blocked access to ${path}`), { codeburnBlocked: true })
+}
+
 export function openDatabase(path: string): SqliteDatabase {
   if (!loadDriver() || DatabaseSync === null) {
     throw new Error(getSqliteLoadError())
   }
+  assertDatabaseReadable(path)
 
   let db: DatabaseSyncInstance
   let fallbackUsed = false

@@ -571,7 +571,11 @@ export function createBridgeHandlers(deps: Deps = { spawnCli, spawnCliAction, re
     'codeburn:getPlans': run((period: string) => ['status', '--format', 'json', '--period', vPeriod(period)], 1),
     'codeburn:getActReport': run(() => ['act', 'report', '--json']),
     'codeburn:getModels': run((period: string, provider: string, byTask: boolean, range?: DateRange) => [
-      'models', '--format', 'json', '--period', vPeriod(period),
+      // The CLI defaults minCost to $0.01, which silently dropped every row
+      // below a cent — including ALL unpriced rows, so the dimming and
+      // add-alias affordances could never fire. Ask for the whole table;
+      // the renderer already distinguishes unpriced rows (#1465).
+      'models', '--format', 'json', '--period', vPeriod(period), '--min-cost', '0',
       ...providerArgs(vProvider(provider)),
       ...projectArgs(),
       ...(byTask ? ['--by-task'] : []),

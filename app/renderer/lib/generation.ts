@@ -58,7 +58,7 @@ export function rememberGeneration(payload: MenubarPayload | null | undefined, a
  * windows it actually carries — the CLI omits the ones its live scan did not
  * reach, because the cache alone trails a direct request there.
  */
-export function generationHeadline(period: Period, payloadAt: number | null): { cost: number; calls: number } | null {
+export function generationHeadline(period: Period, payloadAt: number | null): NonNullable<PeriodTotals[keyof PeriodTotals]> | null {
   if (!current || payloadAt == null || current.at <= payloadAt) return null
   return current.totals[period as keyof PeriodTotals] ?? null
 }

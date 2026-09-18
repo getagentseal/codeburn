@@ -63,16 +63,18 @@ async function startHydratingDashboard(): Promise<RunningDashboard> {
   await mkdir(sessionsDir, { recursive: true })
 
   // Keep the real background hydration in flight long enough to exercise the
-  // public keystroke-to-process-exit seam without mocking cache ownership.
-  const body = '{}\n'.repeat(10_000)
+  // public keystroke-to-process-exit seam without mocking cache ownership. How
+  // long it stays in flight scales with the BYTES the index has to parse, while
+  // the setup and teardown cost scales with the FILE COUNT - and 2000 creates
+  // plus 2000 utimes on a cold temp dir, then 2000 unlinks, is what pushed this
+  // past the 30s limit on Windows CI. Same 60 MB, a twentieth of the files.
+  const body = '{}\n'.repeat(200_000)
   const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1_000)
-  for (let batch = 0; batch < 40; batch++) {
-    await Promise.all(Array.from({ length: 50 }, async (_, offset) => {
-      const sessionPath = join(sessionsDir, `old-${batch * 50 + offset}.jsonl`)
-      await writeFile(sessionPath, body)
-      await utimes(sessionPath, old, old)
-    }))
-  }
+  await Promise.all(Array.from({ length: 100 }, async (_, offset) => {
+    const sessionPath = join(sessionsDir, `old-${offset}.jsonl`)
+    await writeFile(sessionPath, body)
+    await utimes(sessionPath, old, old)
+  }))
 
   const bootstrap = `
     const define = (target, key, value) => Object.defineProperty(target, key, { configurable: true, value });
@@ -117,8 +119,18 @@ async function startHydratingDashboard(): Promise<RunningDashboard> {
 
   const dashboard = { child, home, hydrationLock: join(cacheDir, 'hydrating.lock'), readOutput: () => output }
   running.push(dashboard)
+  // The cold background index takes and releases the hydration lock once per
+  // phase, and its opening phases cover windows these 200-day-old sessions fall
+  // outside of, so the lock blinks for a few ms before the lifetime phase holds
+  // it for seconds. Returning on a blink hands back a process that has already
+  // let go, so require the lock to survive a settle.
   await waitFor(
-    () => output.includes('progressive startup on') && pathExists(dashboard.hydrationLock),
+    async () => {
+      if (!output.includes('progressive startup on')) return false
+      if (!await pathExists(dashboard.hydrationLock)) return false
+      await new Promise(resolve => setTimeout(resolve, 150))
+      return pathExists(dashboard.hydrationLock)
+    },
     15_000,
     `dashboard never entered background hydration; output:\n${output.slice(-2_000)}`,
   )

@@ -276,7 +276,9 @@ describe('Overview', () => {
     expect(within(summaries).getByText('Avg/day')).toBeInTheDocument()
     expect(within(summaries).getByText('$6.71')).toBeInTheDocument()
     expect(within(summaries).getByText('Peak')).toBeInTheDocument()
-    expect(within(summaries).getByText(/\$32\.00 · \d{1,2}\/\d{1,2}/)).toBeInTheDocument()
+    // The amount is its own element (it carries the token popover); the chip
+    // still reads "$32.00 · 5/12".
+    expect(within(summaries).getByText('Peak').nextElementSibling).toHaveTextContent(/^\$32\.00 · \d{1,2}\/\d{1,2}$/)
     expect(within(summaries).getByText('Yesterday')).toBeInTheDocument()
     expect(within(summaries).getByText('$5.00')).toBeInTheDocument()
 

@@ -591,18 +591,39 @@ function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<s
   return modelId || 'unknown'
 }
 
-function extractChatSessionTools(metadata: Record<string, unknown>): string[] {
+function extractStructuredSkill(raw: unknown): string | null {
+  const payload = typeof raw === 'string'
+    ? (() => {
+        try {
+          return JSON.parse(raw) as unknown
+        } catch {
+          return null
+        }
+      })()
+    : raw
+  if (!isRecord(payload)) return null
+  const skill = payload['skill']
+  return typeof skill === 'string' && skill.trim() ? skill.trim() : null
+}
+
+function extractChatSessionTools(metadata: Record<string, unknown>): { tools: string[]; skills: string[] } {
   const rounds = metadata['toolCallRounds']
-  if (!Array.isArray(rounds)) return []
+  if (!Array.isArray(rounds)) return { tools: [], skills: [] }
 
   const names = new Set<string>()
+  const skills = new Set<string>()
   const addName = (raw: unknown): void => {
     if (typeof raw === 'string' && raw.trim()) names.add(normalizeTool(raw))
   }
   const addFromRecord = (record: Record<string, unknown>): void => {
-    addName(record['toolName'])
-    addName(record['name'])
-    addName(record['tool'])
+    for (const key of ['toolName', 'name', 'tool']) {
+      const raw = record[key]
+      addName(raw)
+      if (typeof raw !== 'string' || normalizeTool(raw) !== 'Skill') continue
+      const skill = extractStructuredSkill(record['arguments'])
+        ?? extractStructuredSkill(record['input'])
+      if (skill) skills.add(skill)
+    }
   }
 
   for (const round of rounds) {
@@ -622,7 +643,7 @@ function extractChatSessionTools(metadata: Record<string, unknown>): string[] {
     }
   }
 
-  return [...names]
+  return { tools: [...names], skills: [...skills] }
 }
 
 /**
@@ -1121,6 +1142,8 @@ function createChatSessionParser(
         const costUSD = calculateCost(model, inputTokens, outputTokens, 0, 0, 0)
         const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
 
+        const extracted = extractChatSessionTools(metadata)
+
         yield {
           provider: 'copilot',
           sessionId,
@@ -1134,8 +1157,9 @@ function createChatSessionParser(
           reasoningTokens: 0,
           webSearchRequests: 0,
           costUSD,
-          tools: extractChatSessionTools(metadata),
+          tools: extracted.tools,
           bashCommands: [],
+          skills: extracted.skills.length > 0 ? extracted.skills : undefined,
           timestamp,
           speed: 'standard' as const,
           deduplicationKey: dedupKey,
@@ -1846,6 +1870,7 @@ function createOtelParser(
           // subagent's own chat spans, so attributing the agent name per-trace
           // labels exactly the subagent's calls.
           const toolsByTrace = new Map<string, string[]>()
+          const skillsByTrace = new Map<string, string[]>()
           const bashByTrace = new Map<string, string[]>()
           const subagentsByTrace = new Map<string, string[]>()
           const chatSpanIds: string[] = []
@@ -1865,9 +1890,19 @@ function createOtelParser(
               const attrs = loadSpanAttributesFromTable(db, span.span_id)
               const rawToolName = attrs['gen_ai.tool.name'] as string | undefined
               if (rawToolName) {
+                const normalizedTool = normalizeTool(rawToolName)
                 const existing = toolsByTrace.get(span.trace_id) ?? []
-                existing.push(normalizeTool(rawToolName))
+                existing.push(normalizedTool)
                 toolsByTrace.set(span.trace_id, existing)
+
+                if (normalizedTool === 'Skill') {
+                  const skill = extractStructuredSkill(attrs['gen_ai.tool.call.arguments'])
+                  if (skill) {
+                    const skills = skillsByTrace.get(span.trace_id) ?? []
+                    skills.push(skill)
+                    skillsByTrace.set(span.trace_id, skills)
+                  }
+                }
 
                 // For shell tools, extract command names via the OTEL-specific
                 // normaliser (handles the full multi-line scripts the OTEL store
@@ -1936,6 +1971,7 @@ function createOtelParser(
             }
 
             const tools = toolsByTrace.get(spanMetadata.trace_id) ?? []
+            const skills = skillsByTrace.get(spanMetadata.trace_id) ?? []
             const bashCommands = bashByTrace.get(spanMetadata.trace_id) ?? []
             const subagentTypes = subagentsByTrace.get(spanMetadata.trace_id)
             const timestamp = epochToISO(spanMetadata.start_time_ms)
@@ -1965,6 +2001,7 @@ function createOtelParser(
               costUSD,
               tools,
               bashCommands,
+              skills: skills.length > 0 ? skills : undefined,
               subagentTypes: subagentTypes && subagentTypes.length > 0 ? subagentTypes : undefined,
               timestamp,
               speed: 'standard' as const,

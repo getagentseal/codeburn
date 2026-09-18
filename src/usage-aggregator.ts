@@ -762,7 +762,7 @@ export type DurablePeriod = {
 
 export const HEADLINE_PERIODS = ['today', 'week', '30days', 'month', 'all', 'lifetime'] as const
 export type HeadlinePeriod = typeof HEADLINE_PERIODS[number]
-export type PeriodTotals = Partial<Record<HeadlinePeriod, { cost: number; calls: number }>>
+export type PeriodTotals = Partial<Record<HeadlinePeriod, { cost: number; calls: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number }>>
 
 export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: AggregateOpts = {}): Promise<DurablePeriod> {
   const pf = opts.provider ?? 'all'
@@ -926,7 +926,14 @@ export async function buildDurablePeriod(periodInfo: PeriodInfo, opts: Aggregate
       .map(([period, info]) => {
         const windowDays = unionDaysForPeriod(cache, todayAllDays, info, null, undefined, liveHistoricalDays)
         const windowData = buildPeriodDataFromDays(windowDays, info.label)
-        return [period, { cost: windowData.cost, calls: windowData.calls }]
+        return [period, {
+          cost: windowData.cost,
+          calls: windowData.calls,
+          inputTokens: windowData.inputTokens,
+          outputTokens: windowData.outputTokens,
+          cacheReadTokens: windowData.cacheReadTokens,
+          cacheWriteTokens: windowData.cacheWriteTokens,
+        }]
       })) as PeriodTotals
     : undefined
   return { data, days, carriedCostUSD, unattributedCostUSD, liveProjects, knownProjects, cache, todayAllDays, scanRange, periodTotals }
