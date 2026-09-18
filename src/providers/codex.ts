@@ -1145,7 +1145,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             if (seenKeys.has(dedupKey)) { pendingTools = []; pendingToolSequence = []; pendingSkills = []; pendingUserMessage = ''; pendingOutputChars = 0; pendingLocAdded = 0; pendingLocRemoved = 0; pendingEditFailed = 0; continue }
             seenKeys.add(dedupKey)
 
-            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0)
+            const costUSD = calculateCost(model, estInput, estOutput, 0, 0, 0, 'standard', 0, 'codex')
 
             pendingTaskCalls.push({
               provider: 'codex',
@@ -1312,6 +1312,9 @@ function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { 
             billedCacheWriteTokens,
             cachedInputTokens,
             0,
+            'standard',
+            0,
+            'codex',
           )
 
           pendingTaskCalls.push({

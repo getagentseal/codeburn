@@ -64,11 +64,36 @@ if (!res.ok) throw new Error(`HTTP ${res.status}`)
 const data = await res.json()
 const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 
+// The plain context-length tiers only: `input_cost_per_token_above_272k_tokens`
+// and siblings. Service-tier variants (`_above_272k_priority_tokens`,
+// `_above_272k_flex_tokens`) and the 1-hour cache-write combination are NOT
+// context thresholds and are deliberately not matched. The threshold comes
+// from the key suffix (272k -> 272000) because LiteLLM carries no numeric
+// threshold field (#1076). Mirrored in src/models.ts parseLiteLLMEntry.
+const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
+
+function tierOf(entry) {
+  const rates = {}
+  let threshold = null
+  for (const [key, value] of Object.entries(entry)) {
+    const m = TIER_KEY_RE.exec(key)
+    if (!m || typeof value !== 'number') continue
+    const tokens = Number(m[2]) * 1000
+    threshold = threshold === null ? tokens : Math.max(threshold, tokens)
+    if (m[1] === 'input_cost_per_token') rates.input = value
+    else if (m[1] === 'output_cost_per_token') rates.output = value
+    else if (m[1] === 'cache_read_input_token_cost') rates.cacheRead = value
+    else rates.cacheWrite = value
+  }
+  if (threshold === null || rates.input == null || rates.output == null) return null
+  return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
+}
+
 function toVal(entry) {
   const inp = entry.input_cost_per_token
   const out = entry.output_cost_per_token
   if (inp == null || out == null) return null
-  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null]
+  return [inp, out, entry.cache_creation_input_token_cost ?? null, entry.cache_read_input_token_cost ?? null, entry.provider_specific_entry?.fast ?? null, tierOf(entry)]
 }
 
 // Pass 1: direct entries (no prefix) get priority
