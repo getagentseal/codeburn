@@ -1,5 +1,5 @@
 import { isBehavioralCall } from './behavioral-weight.js'
-import { billableOutputTokens, fallbackRawModelDisplayName, getModelCosts, getShortModelName, sanitizeModelForDisplay, type ModelCosts } from './models.js'
+import { billableOutputTokens, fallbackRawModelDisplayName, getModelCosts, getShortModelName, sanitizeModelForDisplay, tieredCostsFor, type ModelCosts } from './models.js'
 import { getProvider } from './providers/index.js'
 import { formatCost, formatTokens } from './format.js'
 import { renderTable, type TableColumn } from './text-table.js'
@@ -135,12 +135,18 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
       cacheReadTokens: bucket.cacheReadDisplayed,
     }
     const rates = getModelCosts(bucket.model)
+    // Recompute through the same tier swap calculateCost applies (prompt
+    // tokens = input + cached input), so a long-context request shows the
+    // rates that actually priced it instead of a phantom gap versus the base
+    // row. Fast-mode and the 1-hour cache-write rate remain visible gaps on
+    // purpose; the tier no longer is one.
+    const tiered = rates ? tieredCostsFor(bucket.model, rates, displayed.inputTokens + displayed.cacheReadTokens, bucket.provider) : null
     const cost = {
-      input: rates ? displayed.inputTokens * rates.inputCostPerToken : 0,
-      output: rates ? displayed.outputTokens * rates.outputCostPerToken : 0,
-      cacheWrite: rates ? displayed.cacheWriteTokens * rates.cacheWriteCostPerToken : 0,
-      cacheRead: rates ? displayed.cacheReadTokens * rates.cacheReadCostPerToken : 0,
-      webSearch: rates ? bucket.raw.webSearchRequests * rates.webSearchCostPerRequest : 0,
+      input: tiered ? displayed.inputTokens * tiered.inputCostPerToken : 0,
+      output: tiered ? displayed.outputTokens * tiered.outputCostPerToken : 0,
+      cacheWrite: tiered ? displayed.cacheWriteTokens * tiered.cacheWriteCostPerToken : 0,
+      cacheRead: tiered ? displayed.cacheReadTokens * tiered.cacheReadCostPerToken : 0,
+      webSearch: tiered ? bucket.raw.webSearchRequests * tiered.webSearchCostPerRequest : 0,
       recomputedTotalUSD: 0,
     }
     cost.recomputedTotalUSD = cost.input + cost.output + cost.cacheWrite + cost.cacheRead + cost.webSearch

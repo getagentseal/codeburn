@@ -1363,7 +1363,7 @@ describe('codex auto-review pricing (#1047)', () => {
     }
     expect(calls).toHaveLength(1)
     expect(calls[0]!.model).toBe('codex-auto-review')
-    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0))
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
   })
 
   it('discards a warm v11 versioned $0 exact hit so unchanged rollouts reprice', async () => {
@@ -1410,7 +1410,7 @@ describe('codex auto-review pricing (#1047)', () => {
       }
       expect(calls).toHaveLength(1)
       expect(calls[0]!.costUSD).toBeGreaterThan(0)
-      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0))
+      expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 1_000_000, 1_000_000, 0, 0, 0, 'standard', 0, 'codex'))
     } finally {
       clearCodexMemCaches()
       if (prev === undefined) delete process.env['CODEBURN_CACHE_DIR']
