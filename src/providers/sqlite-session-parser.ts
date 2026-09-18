@@ -1,7 +1,7 @@
 import { readdir } from 'fs/promises'
 import { join } from 'path'
 
-import { billableOutputTokens, calculateCost } from '../models.js'
+import { billableOutputTokens, calculateCost, routeFromProviderField } from '../models.js'
 import {
   isSqliteAvailable,
   getSqliteLoadError,
@@ -113,6 +113,7 @@ function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; pa
       const ref = model as Record<string, unknown>
       const id = typeof ref['id'] === 'string' ? ref['id'] : ''
       const providerID = typeof ref['providerID'] === 'string' ? ref['providerID'] : ''
+      if (providerID) data.providerID = providerID
       if (id && providerID) data.modelID = `${providerID}/${id}`
     }
     if (typeof payload['cost'] === 'number') data.cost = payload['cost']
@@ -145,15 +146,16 @@ function v2RowsToLegacyShape(rows: V2MessageRow[]): { messages: MessageRow[]; pa
   return { messages, partsByMsg }
 }
 
-function parseSessionModel(value: Uint8Array | string | undefined): string | undefined {
+function parseSessionModel(value: Uint8Array | string | undefined): { model: string; providerID: string } | undefined {
   try {
     const parsed: unknown = JSON.parse(blobToText(value))
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
 
     const model = parsed as Record<string, unknown>
     const id = typeof model['id'] === 'string' ? model['id'].trim() : ''
-    const providerID = typeof model['providerID'] === 'string' ? model['providerID'].trim() : ''
-    return id && providerID ? `${providerID}/${id}` : undefined
+    const providerID = typeof model['providerID'] === 'string' ? model['providerID'] : ''
+    const normalizedProviderID = providerID.trim()
+    return id && normalizedProviderID ? { model: `${normalizedProviderID}/${id}`, providerID } : undefined
   } catch {
     return undefined
   }
@@ -161,7 +163,7 @@ function parseSessionModel(value: Uint8Array | string | undefined): string | und
 
 function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string, generation: 'v2' | 'legacy'): {
   cost: number; input: number; output: number; reasoning: number
-  cacheRead: number; cacheWrite: number; model: string | undefined
+  cacheRead: number; cacheWrite: number; model: string | undefined; providerID: string | undefined
 } | null {
   try {
     // Both generations expose the same token columns; only the table name moves.
@@ -174,6 +176,7 @@ function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string, generation
     )
     if (rows.length === 0) return null
     const r = rows[0]!
+    const parsedModel = parseSessionModel(r.model)
     return {
       cost: r.cost ?? 0,
       input: r.tokens_input ?? 0,
@@ -181,7 +184,8 @@ function tryQuerySessionTokens(db: SqliteDatabase, sessionId: string, generation
       reasoning: r.tokens_reasoning ?? 0,
       cacheRead: r.tokens_cache_read ?? 0,
       cacheWrite: r.tokens_cache_write ?? 0,
-      model: parseSessionModel(r.model),
+      model: parsedModel?.model,
+      providerID: parsedModel?.providerID,
     }
   } catch {
     return null
@@ -378,6 +382,7 @@ export function createSqliteSessionParser(
             if (!seenKeys.has(dedupKey)) {
               seenKeys.add(dedupKey)
               const model = sessionTokens.model ?? 'unknown'
+              const route = routeFromProviderField(sessionTokens.providerID)?.id
               // OpenCode stores reasoning in its own session column and bills it
               // at the output rate, so it has to join the output bucket here the
               // same way the per-message path does. Routed through
@@ -389,6 +394,7 @@ export function createSqliteSessionParser(
               yield {
                 provider: config.providerName,
                 model,
+                ...(route ? { route } : {}),
                 inputTokens: sessionTokens.input,
                 outputTokens: sessionTokens.output,
                 cacheCreationInputTokens: sessionTokens.cacheWrite,

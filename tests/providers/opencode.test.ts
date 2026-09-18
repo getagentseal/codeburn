@@ -78,6 +78,7 @@ function insertSession(
 type MessageFixture = {
   role: string
   modelID?: string
+  providerID?: string
   cost?: number
   tokens?: {
     input: number
@@ -337,6 +338,30 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(call.sessionId).toBe('sess-1')
     expect(call.timestamp).toBe(new Date(1700000001000).toISOString())
     expect(call.deduplicationKey).toBe('opencode:sess-1:msg-2')
+  })
+
+  it('carries the exact OpenRouter provider field as the billing route', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-openrouter')
+      insertMessage(db, 'msg-openrouter', 'sess-openrouter', 1700000001000, {
+        role: 'assistant',
+        providerID: 'openrouter',
+        modelID: 'cohere/north-mini-code:free',
+        cost: 0,
+        tokens: { input: 22_928, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      insertPart(db, 'part-openrouter', 'msg-openrouter', 'sess-openrouter', { type: 'text', text: 'route test' })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-openrouter')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      provider: 'opencode',
+      model: 'cohere/north-mini-code:free',
+      route: 'openrouter',
+      costUSD: 0,
+    })
   })
 
   it('normalizes opencode MCP tool names for shared MCP reporting', async () => {
@@ -1153,6 +1178,27 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(call.costUSD).toBeGreaterThan(0)
   })
 
+  it('preserves the OpenRouter provider field in v2 messages', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_v2_openrouter')
+      insertV2Message(db, 'msg_v2_openrouter', 'ses_v2_openrouter', 'assistant', 1, 1700000000123, {
+        model: { id: 'cohere/north-mini-code:free', providerID: 'openrouter' },
+        content: [{ type: 'text', text: 'route test' }],
+        cost: 0,
+        tokens: { input: 22_928, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_v2_openrouter')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      model: 'openrouter/cohere/north-mini-code:free',
+      route: 'openrouter',
+      costUSD: 0,
+    })
+  })
+
   it('counts compaction usage and skips rows with nothing to report', async () => {
     const dbPath = createV2TestDb(tmpDir)
     withTestDb(dbPath, (db) => {
@@ -1254,6 +1300,53 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
 
     const legacyCalls = await collectCalls(provider, dbPath, 'ses_legacy_frozen')
     expect(legacyCalls).toHaveLength(0)
+  })
+
+  it('keeps fallback model prefixes normalized without accepting malformed routes', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.prepare(`
+        INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version,
+          cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+          model, time_created, time_updated, time_archived)
+        VALUES ('ses_spaced_provider', 'proj-1', NULL, 'slug-1', '/home/user/myproject', 't', '2.0.3',
+          0, 100, 10, 0, 0, 0, ?, 1700000000000, 1700000000000, NULL)
+      `).run(JSON.stringify({ id: 'gpt-4o', providerID: ' openai ' }))
+      insertV2Message(db, 'msg_spaced_provider', 'ses_spaced_provider', 'assistant', 1, 1700000000100, {
+        model: { id: 'gpt-4o', providerID: ' openai ' },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_spaced_provider')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.model).toBe('openai/gpt-4o')
+    expect(calls[0]!.route).toBeUndefined()
+    expect(calls[0]!.costUSD).toBeGreaterThan(0)
+  })
+
+  it('preserves the OpenRouter route in session-level rollup fallbacks', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      db.prepare(`
+        INSERT INTO session_v2 (id, project_id, parent_id, slug, directory, title, version,
+          cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
+          model, time_created, time_updated, time_archived)
+        VALUES ('ses_openrouter_roll', 'proj-1', NULL, 'slug-1', '/home/user/myproject', 't', '2.0.3',
+          0, 22928, 10, 0, 0, 0, ?, 1700000000000, 1700000000000, NULL)
+      `).run(JSON.stringify({ id: 'cohere/north-mini-code:free', providerID: 'openrouter' }))
+      insertV2Message(db, 'msg_openrouter_roll', 'ses_openrouter_roll', 'assistant', 1, 1700000000100, {
+        model: { id: 'cohere/north-mini-code:free', providerID: 'openrouter' },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_openrouter_roll')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      model: 'openrouter/cohere/north-mini-code:free',
+      route: 'openrouter',
+      inputTokens: 22_928,
+      costUSD: 0,
+    })
   })
 
   it('falls back to session_v2 rollups when v2 messages carry no tokens', async () => {

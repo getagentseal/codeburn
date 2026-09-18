@@ -1,4 +1,4 @@
-import { billableOutputTokens, calculateCost } from '../models.js'
+import { billableOutputTokens, calculateCost, routeFromProviderField } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import type { ParsedProviderCall } from './types.js'
 
@@ -8,6 +8,7 @@ import type { ParsedProviderCall } from './types.js'
 export type MessageData = {
   role: string
   modelID?: string
+  providerID?: string
   model?: string
   cost?: number
   tokens?: {
@@ -130,6 +131,7 @@ export function buildAssistantCall(opts: {
     .filter(Boolean)
 
   const model = data.modelID ?? data.model ?? 'unknown'
+  const route = routeFromProviderField(data.providerID)?.id
   let costUSD = calculateCost(
     model,
     tokens.input,
@@ -149,6 +151,7 @@ export function buildAssistantCall(opts: {
   return {
     provider: opts.providerName,
     model,
+    ...(route ? { route } : {}),
     inputTokens: tokens.input,
     outputTokens: tokens.output,
     cacheCreationInputTokens: tokens.cacheWrite,
