@@ -406,9 +406,11 @@ async function findLastBoundary(filePath: string): Promise<{
 }
 
 // Claude models with a 1M window: opus-4-8 (auto-compactions on disk show
-// ~1.0M preTokens) and the "[1m]" long-context variants. Others default to
-// 200K unless the session itself proves bigger.
-const MILLION_WINDOW_RE = /opus-4-8|\[1m\]/
+// ~1.0M preTokens), the Claude 5 Fable / Mythos ids (claude-fable-5-1 and
+// claude-mythos-5-1 run a 1M window from the first turn), and the "[1m]"
+// long-context variants. Others default to 200K unless the session itself
+// proves bigger.
+const MILLION_WINDOW_RE = /opus-4-8|fable-5|mythos-5|\[1m\]/
 
 export function reportedContextWindow(model: string, maxSeenTokens: number): number {
   return MILLION_WINDOW_RE.test(model) || maxSeenTokens > 220_000 ? 1_000_000 : 200_000
