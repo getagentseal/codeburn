@@ -189,8 +189,8 @@ import type { DateRange, ProjectSummary } from './types.js'
 // which re-derive to the same rows for direct calls and to "(Bedrock)" rows
 // for Bedrock-shaped ids, but its Hermes column routes are unrecoverable
 // without a re-parse, so hermes joins PENDING_REDERIVE_PROVIDER_VERSIONS.
-export const DAILY_CACHE_VERSION = 33
-const MIN_SUPPORTED_VERSION = 28
+export const DAILY_CACHE_VERSION = 34
+const MIN_SUPPORTED_VERSION = 34
 
 /// Providers whose per-day CALL COUNT means something different at
 /// DAILY_CACHE_VERSION 26 than it did before it. Copilot's supplementary

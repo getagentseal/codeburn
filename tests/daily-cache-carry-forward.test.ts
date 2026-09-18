@@ -791,7 +791,7 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
     expect(out.pendingRederive).toBeUndefined()
   })
 
-  it('does not re-open Copilot re-derivation for a cache already past its contract change', async () => {
+  it('a v(N-1) tierless cache is below the floor and is not adopted (#1076: warm caches re-derive)', async () => {
     await writeFile(
       join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`),
       JSON.stringify({
@@ -806,13 +806,16 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
       'utf-8',
     )
 
+    // DAILY_CACHE_VERSION moved to 34 with MIN_SUPPORTED_VERSION raised to
+    // match, so a 33 file no longer sits in the adopt-with-repairs window:
+    // its tierless totals must not survive, and the days re-derive off the
+    // warm session cache instead (adoptOlderDailyCaches keeps the file as the
+    // never-lose baseline for days whose sources are gone).
     const loaded = await loadDailyCache()
-    // From v32 only hermes (contract 33: day.models keyed by route) is owed a
-    // re-derivation; dsh's v32 contract is already satisfied.
-    expect(loaded.pendingRederive).toEqual(['hermes'])
+    expect(loaded.pendingRederive).toBeUndefined()
   })
 
-  it('preserves an older cache pending repair while adding a newer provider repair', async () => {
+  it('a below-floor cache carries no repair ledger forward (full re-derivation instead)', async () => {
     await writeFile(
       join(TMP_CACHE_ROOT, `daily-cache.v${DAILY_CACHE_VERSION - 1}.json`),
       JSON.stringify({
@@ -828,8 +831,12 @@ describe('#946: a migration re-derives copilot instead of carrying it', () => {
       'utf-8',
     )
 
+    // With the floor at CURRENT, no version-diff repairs are merged into a
+    // below-floor file (hermes is NOT added): the file is not adoptable as
+    // the current cache, so its days re-derive rather than ride the ledger.
+    // Its own recorded pending entry survives verbatim.
     const loaded = await loadDailyCache()
-    expect(loaded.pendingRederive).toEqual(['copilot', 'hermes'])
+    expect(loaded.pendingRederive).toEqual(['copilot'])
   })
 
   it('still carries the slice whole when the sources are gone (never-lose, #1033)', async () => {

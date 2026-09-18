@@ -57,6 +57,12 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
     attributedCostUSD: number
     cacheReadDisplayed: number
     raw: AuditRow['raw']
+    /** Per-call recomputed components, each priced with THAT call's tier swap —
+     *  a (provider, model) bucket's summed tokens must never cross the
+     *  per-call 272k threshold on their own (review: a $4,979 phantom gap). */
+    recomputed: { input: number, output: number, cacheWrite: number, cacheRead: number, webSearch: number }
+    /** Resolved rates for the bucket's model, fetched once per bucket. */
+    rates: ModelCosts | null
   }
   const buckets = new Map<string, Bucket>()
 
@@ -75,6 +81,8 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
               calls: 0,
               attributedCostUSD: 0,
               cacheReadDisplayed: 0,
+              recomputed: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, webSearch: 0 },
+              rates: null,
               raw: {
                 inputTokens: 0,
                 outputTokens: 0,
@@ -85,6 +93,7 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
                 webSearchRequests: 0,
               },
             }
+            bucket.rates = getModelCosts(bucket.model)
             buckets.set(key, bucket)
           }
           const u = call.usage
@@ -97,8 +106,25 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
           bucket.raw.webSearchRequests += u.webSearchRequests
           // Per-call max (then summed) mirrors how the reports collapse the two
           // cache-read vocabularies, so the audit's displayed total matches.
-          bucket.cacheReadDisplayed += Math.max(u.cacheReadInputTokens, u.cachedInputTokens)
+          const cacheReadForCall = Math.max(u.cacheReadInputTokens, u.cachedInputTokens)
+          bucket.cacheReadDisplayed += cacheReadForCall
           bucket.attributedCostUSD += call.costUSD
+          // Recompute per call through the same tier swap calculateCost applies
+          // (prompt tokens = input + cached input of THIS call), so a
+          // long-context request shows the rates that priced it while a bucket
+          // of small calls never crosses the threshold on the sum. Fast-mode
+          // and the 1-hour cache-write rate remain visible gaps on purpose.
+          if (bucket.rates) {
+            const promptTokens = u.inputTokens + cacheReadForCall
+            const tiered = tieredCostsFor(bucket.model, bucket.rates, promptTokens, bucket.provider)
+            const outputForCall = billableOutputTokens(bucket.provider, u.outputTokens, u.reasoningTokens)
+            bucket.recomputed.input += u.inputTokens * tiered.inputCostPerToken
+            bucket.recomputed.output += outputForCall * tiered.outputCostPerToken
+            bucket.recomputed.cacheWrite += u.cacheCreationInputTokens * tiered.cacheWriteCostPerToken
+            bucket.recomputed.cacheRead += cacheReadForCall * tiered.cacheReadCostPerToken
+            // Web search never participates in a tier; keep it on the base row.
+            bucket.recomputed.webSearch += u.webSearchRequests * bucket.rates.webSearchCostPerRequest
+          }
           // Supplementary accounting calls keep their tokens and cost above but are not
           // distinct requests, so they add no call weight (see behavioral-weight.ts).
           if (isBehavioralCall(call)) bucket.calls += 1
@@ -134,22 +160,15 @@ export async function aggregateAudit(projects: ProjectSummary[]): Promise<AuditR
       cacheWriteTokens: bucket.raw.cacheCreationInputTokens,
       cacheReadTokens: bucket.cacheReadDisplayed,
     }
-    const rates = getModelCosts(bucket.model)
-    // Recompute through the same tier swap calculateCost applies (prompt
-    // tokens = input + cached input), so a long-context request shows the
-    // rates that actually priced it instead of a phantom gap versus the base
-    // row. Fast-mode and the 1-hour cache-write rate remain visible gaps on
-    // purpose; the tier no longer is one.
-    const tiered = rates ? tieredCostsFor(bucket.model, rates, displayed.inputTokens + displayed.cacheReadTokens, bucket.provider) : null
     const cost = {
-      input: tiered ? displayed.inputTokens * tiered.inputCostPerToken : 0,
-      output: tiered ? displayed.outputTokens * tiered.outputCostPerToken : 0,
-      cacheWrite: tiered ? displayed.cacheWriteTokens * tiered.cacheWriteCostPerToken : 0,
-      cacheRead: tiered ? displayed.cacheReadTokens * tiered.cacheReadCostPerToken : 0,
-      webSearch: tiered ? bucket.raw.webSearchRequests * tiered.webSearchCostPerRequest : 0,
-      recomputedTotalUSD: 0,
+      input: bucket.recomputed.input,
+      output: bucket.recomputed.output,
+      cacheWrite: bucket.recomputed.cacheWrite,
+      cacheRead: bucket.recomputed.cacheRead,
+      webSearch: bucket.recomputed.webSearch,
+      recomputedTotalUSD: bucket.recomputed.input + bucket.recomputed.output + bucket.recomputed.cacheWrite + bucket.recomputed.cacheRead + bucket.recomputed.webSearch,
     }
-    cost.recomputedTotalUSD = cost.input + cost.output + cost.cacheWrite + cost.cacheRead + cost.webSearch
+    const rates = bucket.rates
     rows.push({
       provider: bucket.provider,
       providerDisplayName: meta.displayName,
