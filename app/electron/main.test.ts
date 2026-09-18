@@ -102,8 +102,8 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getOverview', args: ['30days', 'all'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline'] },
   { channel: 'codeburn:getPlans', args: ['week'], argv: ['status', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getActReport', args: [], argv: ['act', 'report', '--json'] },
-  { channel: 'codeburn:getModels', args: ['week', 'claude', true], argv: ['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task'] },
-  { channel: 'codeburn:getModels', args: ['week', 'all', false], argv: ['models', '--format', 'json', '--period', 'week'] },
+  { channel: 'codeburn:getModels', args: ['week', 'claude', true], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task'] },
+  { channel: 'codeburn:getModels', args: ['week', 'all', false], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0'] },
   { channel: 'codeburn:getSessions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--period', 'week'] },
   { channel: 'codeburn:getSessions', args: ['30days', 'claude', { from: '2026-07-01', to: '2026-07-11' }], argv: ['sessions', '--format', 'json', '--period', '30days', '--provider', 'claude', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSessionsContributions', args: ['week', 'all'], argv: ['sessions', '--format', 'json', '--contributions', '--period', 'week'] },
@@ -132,7 +132,7 @@ const ARGV_CASES: Array<{ channel: string; args: unknown[]; argv: string[] }> = 
   { channel: 'codeburn:getOverview', args: ['30days', 'all', undefined, undefined, undefined, 'combined'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--scope', 'combined'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'claude', undefined, undefined, undefined, 'combined'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--scope', 'combined'] },
   { channel: 'codeburn:getOverview', args: ['30days', 'claude', undefined, undefined, undefined, 'local'], argv: ['status', '--format', 'menubar-json', '--period', '30days', '--no-timeline', '--provider', 'claude'] },
-  { channel: 'codeburn:getModels', args: ['week', 'claude', true, { from: '2026-07-01', to: '2026-07-11' }], argv: ['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task', '--from', '2026-07-01', '--to', '2026-07-11'] },
+  { channel: 'codeburn:getModels', args: ['week', 'claude', true, { from: '2026-07-01', to: '2026-07-11' }], argv: ['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getYield', args: ['today', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['yield', '--format', 'json', '--period', 'today', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getSpendFlow', args: ['month', 'all', { from: '2026-07-01', to: '2026-07-11' }], argv: ['spend', '--format', 'flow-json', '--period', 'month', '--from', '2026-07-01', '--to', '2026-07-11'] },
   { channel: 'codeburn:getBranchSpend', args: ['month', 'openai'], argv: ['spend', '--format', 'branch-json', '--period', 'month', '--provider', 'openai'] },
@@ -231,7 +231,7 @@ describe('createBridgeHandlers (IPC wiring)', () => {
     const { spawnCli, spawnCliAction, calls } = fakeSpawn([])
     const handlers = createBridgeHandlers(withQuota({ spawnCli, spawnCliAction, resolveCodeburnPath: () => null }))
     await handlers['codeburn:getModels']!('week', 'claude', true)
-    expect(calls[0]).toEqual(['models', '--format', 'json', '--period', 'week', '--provider', 'claude', '--by-task'])
+    expect(calls[0]).toEqual(['models', '--format', 'json', '--period', 'week', '--min-cost', '0', '--provider', 'claude', '--by-task'])
   })
 
   it('returns an error envelope carrying the CliError kind', async () => {
