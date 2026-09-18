@@ -1346,6 +1346,35 @@ describe('codex provider - forked session dedupe', () => {
 })
 
 describe('codex auto-review pricing (#1047)', () => {
+  it('prices an auto-review whose prompt crosses gpt-5.5\'s above-272k tier at the tier (#1076)', async () => {
+    // End-to-end through the codex provider path: the gate is keyed on the
+    // provider string threaded from codex.ts, so a typo there would leave the
+    // call at base rates and fail this. 400k input puts the prompt well past
+    // 272,000 with no cache needed.
+    const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review-tier.jsonl', [
+      sessionMeta({ session_id: 'sess-auto-tier', model: 'codex-auto-review' }),
+      userMessage('review the PR'),
+      tokenCount({
+        timestamp: '2026-04-14T10:01:00Z',
+        last: { input: 400_000, output: 1_000 },
+        total: { total: 401_000 },
+      }),
+    ])
+    const provider = createCodexProvider(tmpDir)
+    const calls: ParsedProviderCall[] = []
+    for await (const call of provider.createSessionParser({ path: filePath, project: 'test', provider: 'codex' }, new Set()).parse()) {
+      calls.push(call)
+    }
+    expect(calls).toHaveLength(1)
+    // gpt-5.5 tier (bundled): input 1e-5, output 4.5e-5 - explicit arithmetic,
+    // not just self-consistency with calculateCost.
+    expect(calls[0]!.costUSD).toBeCloseTo(400_000 * 1e-5 + 1_000 * 4.5e-5, 12)
+    expect(calls[0]!.costUSD).toBe(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0, 'standard', 0, 'codex'))
+    // The same call without the codex provider stays at base rates (the
+    // refreshed bundle's gpt-5.5 base is 5e-6/3e-5) - the gate that keeps the
+    // real Copilot billing of tests/parser.test.ts (c4) intact.
+    expect(calculateCost('gpt-5.5', 400_000, 1_000, 0, 0, 0)).toBeCloseTo(400_000 * 5e-6 + 1_000 * 3e-5, 12)
+  })
   it('parses auto-review as itself and prices it as GPT-5.5', async () => {
     const filePath = await writeSession(tmpDir, '2026-04-14', 'rollout-auto-review.jsonl', [
       sessionMeta({ session_id: 'sess-auto', model: 'codex-auto-review' }),

@@ -153,11 +153,16 @@ const GROK_4_6_HIGH_PROMPT_COSTS = buildCosts(4e-6, 12e-6, null, 1e-6, null)
 // Copilot session on gpt-5.6-terra with ~6M-token prompts billed at the base
 // rate (tests/parser.test.ts "(c4) attributed cost tracks recomputed cost") —
 // applying the tier there fabricates spend, the exact class #1075 warned
-// about. Adding a provider here requires that kind of billing evidence.
+// about. Adding a provider here requires that kind of billing evidence AND
+// threading its provider through every calculateCost site that prices it (the
+// codex sites and the parser.ts central recompute pass it; the Claude journal
+// paths and the copilot residual path do not, so a newly added provider whose
+// calls flow through those sites would silently stay tierless).
 export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex'])
 
 // Swap in the vendor's high tier when a request's prompt crosses the published
-// threshold. A user-set exact priceOverride still wins over any tier. The
+// threshold. A user-set priceOverride wins over any tier: the override row
+// is rebuilt without one, exact or aliased. The
 // generic branch serves the models of TIERED_PRICING_PROVIDERS whose rates
 // carry a longContextTier (OpenAI's above-272k family, Anthropic's above-200k);
 // grok-4.6 predates the data plumbing and stays hardcoded. Each tier rate the
@@ -276,16 +281,22 @@ function safePerTokenRate(n: number | undefined): number | null {
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
 
 function tierOfLiteLLMEntry(entry: LiteLLMEntry): SnapshotTier | null {
-  const rates: Partial<Record<string, number>> = {}
-  let threshold: number | null = null
+  // Rates are read ONLY from the largest threshold a model carries, mirroring
+  // scripts/bundle-litellm.mjs tierOf, so a two-tier entry can never mix a
+  // smaller tier's rates under the bigger threshold.
+  const byThreshold = new Map<number, Partial<Record<string, number>>>()
   for (const [key, value] of Object.entries(entry)) {
     const match = TIER_KEY_RE.exec(key)
     if (!match || typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
     const tokens = Number(match[2]) * 1000
-    threshold = threshold === null ? tokens : Math.max(threshold, tokens)
+    const rates = byThreshold.get(tokens) ?? {}
     rates[match[1]] = value
+    byThreshold.set(tokens, rates)
   }
-  if (threshold === null || rates.input_cost_per_token === undefined || rates.output_cost_per_token === undefined) return null
+  if (byThreshold.size === 0) return null
+  const threshold = Math.max(...byThreshold.keys())
+  const rates = byThreshold.get(threshold)!
+  if (rates.input_cost_per_token === undefined || rates.output_cost_per_token === undefined) return null
   return {
     threshold,
     input: rates.input_cost_per_token,

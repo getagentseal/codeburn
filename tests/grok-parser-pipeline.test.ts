@@ -197,6 +197,11 @@ describe('Grok parser through the session-cache pipeline', () => {
     // prices through it and chooseAuthoritativeModel prefers the actual
     // modelUsage id over the summary's grok-latest — the documented "price
     // the real id" rule. The totals assertions are what this test exists for.
+    // The refreshed bundle dropped the fallback that priced `grok-latest`,
+    // while `grok-build` (the existingModel branch) still resolves through
+    // the new upstream grok-build-* rows — so the authoritative pick lands on
+    // grok-build by the documented "prefer what prices" rule. The totals
+    // assertions are what this test exists for and are unchanged.
     const expected = calculateCost('grok-build', 2300, 300, 100, 600, 0)
 
     expect(cold.turns).toHaveLength(1)
