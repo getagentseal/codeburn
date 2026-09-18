@@ -73,19 +73,26 @@ const entries = Object.entries(data).filter(([k]) => k !== 'sample_spec')
 const TIER_KEY_RE = /^(input_cost_per_token|output_cost_per_token|cache_read_input_token_cost|cache_creation_input_token_cost)_above_(\d+)k_tokens$/
 
 function tierOf(entry) {
-  const rates = {}
-  let threshold = null
+  // Rates are read ONLY from the largest threshold a model carries, so a
+  // hypothetical entry with two tiers can never mix a smaller tier's rates
+  // under the bigger threshold. Values must be finite and non-negative, the
+  // same validation src/models.ts applies on the live path.
+  const byThreshold = new Map()
   for (const [key, value] of Object.entries(entry)) {
     const m = TIER_KEY_RE.exec(key)
-    if (!m || typeof value !== 'number') continue
+    if (!m || typeof value !== 'number' || !Number.isFinite(value) || value < 0) continue
     const tokens = Number(m[2]) * 1000
-    threshold = threshold === null ? tokens : Math.max(threshold, tokens)
+    const rates = byThreshold.get(tokens) ?? {}
     if (m[1] === 'input_cost_per_token') rates.input = value
     else if (m[1] === 'output_cost_per_token') rates.output = value
     else if (m[1] === 'cache_read_input_token_cost') rates.cacheRead = value
     else rates.cacheWrite = value
+    byThreshold.set(tokens, rates)
   }
-  if (threshold === null || rates.input == null || rates.output == null) return null
+  if (byThreshold.size === 0) return null
+  const threshold = Math.max(...byThreshold.keys())
+  const rates = byThreshold.get(threshold)
+  if (rates.input == null || rates.output == null) return null
   return { threshold, input: rates.input, output: rates.output, cacheWrite: rates.cacheWrite ?? null, cacheRead: rates.cacheRead ?? null }
 }
 
