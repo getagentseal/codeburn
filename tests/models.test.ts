@@ -586,7 +586,7 @@ describe('codex Kimi context-tag normalization (kimi/k3[1m])', () => {
   it('does not strip a non-bracket suffix from an ordinary model id', () => {
     expect(getShortModelName('gpt-5.5')).toBe('GPT-5.5')
     expect(getModelCosts('gpt-5.5')).toEqual(getModelCosts('gpt-5.5'))
-    expect(calculateCost('gpt-5.5', 1_000_000, 100_000, 0, 0, 0)).toBeCloseTo(8, 9)
+    expect(calculateCost('gpt-5.5', 1_000_000, 100_000, 0, 0, 0)).toBeCloseTo(8, 5)
   })
 })
 

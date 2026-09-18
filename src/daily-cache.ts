@@ -223,7 +223,9 @@ import type { DateRange, ProjectSummary } from './types.js'
 // v40: Codex fork usage after the copied-history burst was clipped by the old
 // 5s window. Re-derive Codex slices from the updated session cache so settled
 // days recover those calls and tokens.
-export const DAILY_CACHE_VERSION = 40
+// v41: #1076 long-context tiers. A Codex call past a model's published
+// long-context threshold prices at the tier rate, so settled days re-derive.
+export const DAILY_CACHE_VERSION = 41
 const MIN_SUPPORTED_VERSION = 28
 
 /// Providers whose per-day CALL COUNT means something different at
