@@ -316,6 +316,17 @@ struct CurrentBlock: Codable, Sendable {
     /// only). Optional so payloads from older CLIs still decode; absent or
     /// empty -> the Pull requests section hides.
     var pullRequests: PullRequestsBlock? = nil
+    /// Models with recorded usage whose cost prices at $0 for lack of pricing
+    /// data (#1420). Their usage ran, so the figure is unknown, not zero —
+    /// but no cost-table floor ever shows them. Empty on older CLI payloads;
+    /// absent or empty -> the Models section's unpriced line hides.
+    var unpricedModels: [UnpricedModelEntry] = []
+}
+
+struct UnpricedModelEntry: Codable, Sendable, Equatable {
+    let model: String
+    let calls: Int
+    let tokens: Int
 }
 
 struct PullRequestsBlock: Codable, Sendable {
@@ -335,7 +346,7 @@ extension CurrentBlock {
              cacheHitPercent, codexCredits, topActivities, topModels, localModelSavings, providers, providerDetails, topProjects,
              modelEfficiency, topSessions, retryTax, routingWaste,
              tools, skills, subagents, mcpServers,
-             workflow, topReworkedFiles, pullRequests
+             workflow, topReworkedFiles, pullRequests, unpricedModels
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -366,6 +377,7 @@ extension CurrentBlock {
         workflow = try c.decodeIfPresent(WorkflowBlock.self, forKey: .workflow)
         topReworkedFiles = try c.decodeIfPresent([ReworkedFileEntry].self, forKey: .topReworkedFiles) ?? []
         pullRequests = try c.decodeIfPresent(PullRequestsBlock.self, forKey: .pullRequests)
+        unpricedModels = try c.decodeIfPresent([UnpricedModelEntry].self, forKey: .unpricedModels) ?? []
     }
 }
 

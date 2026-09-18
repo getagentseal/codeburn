@@ -36,6 +36,14 @@ struct ModelsSection: View {
 
                 TokensLine()
                     .padding(.top, 5)
+
+                // The $0-cost rows below the table's floor never render as
+                // rows; without this line "cheap" and "uncounted" read the
+                // same. Hidden entirely when the payload predates the block.
+                if !store.payload.current.unpricedModels.isEmpty {
+                    UnpricedLine()
+                        .padding(.top, 3)
+                }
             }
         }
     }
@@ -180,5 +188,43 @@ private struct TokensLine: View {
 
     private func formatTokens(_ n: Int) -> String {
         compactTokenCount(n)
+    }
+}
+
+/// One secondary line under the models table naming the usage the cost floor
+/// hid (#1420): models whose recorded usage prices at $0 for lack of pricing
+/// data. Compact rounding visible, exact counts in the accessibility label —
+/// the same contract as the token line. "Counted at $0" is the phrase every
+/// other consumer of the block uses (`codeburn mcp`, the desktop compare
+/// view), so the popover names the same condition the same way.
+private struct UnpricedLine: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        let unpriced = store.payload.current.unpricedModels
+        let tokens = unpriced.reduce(0) { $0 + $1.tokens }
+        let tok = compactTokenCount(tokens)
+
+        HStack(spacing: 4) {
+            Text(unpriced.count == 1
+                ? L("1 model unpriced, counted at $0 · %@ tokens", tok)
+                : L("%1$lld models unpriced, counted at $0 · %2$@ tokens", unpriced.count, tok))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+        }
+        .font(.system(size: 10.5))
+        .monospacedDigit()
+        .accessibilityLabel(unpricedAccessibilityText(unpriced))
+    }
+
+    /// Exact ids and counts for assistive tech; computed, not a literal, the
+    /// same opt-out the per-row token label uses.
+    private func unpricedAccessibilityText(_ unpriced: [UnpricedModelEntry]) -> String {
+        let rows = unpriced.map { entry in
+            "\(entry.model): \(entry.calls) calls, \(entry.tokens) tokens"
+        }
+        return "Unpriced, counted at $0 — " + rows.joined(separator: ", ")
     }
 }

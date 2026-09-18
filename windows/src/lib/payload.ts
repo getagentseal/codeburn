@@ -36,6 +36,10 @@ export type MenubarPayload = {
     /// Spend attributed to pull requests. Emitted for all-provider payloads only, so a
     /// provider-scoped view has none and the section hides.
     pullRequests?: { rows: PullRequestRow[] }
+    /// Models with recorded usage whose cost prices at $0 for lack of pricing
+    /// data — the usage ran, so the figure is unknown, not zero (#1420).
+    /// Absent on older CLI payloads; absent or empty -> the Models footnote hides.
+    unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
     providers: Record<string, number>
     providerDetails?: Array<{
       id: string

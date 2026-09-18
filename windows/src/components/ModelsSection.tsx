@@ -14,12 +14,15 @@ type Props = {
   outputTokens: number
   cacheHitPercent: number
   currency: CurrencyState
+  unpricedModels?: Array<{ model: string; calls: number; tokens: number }>
 }
 
-export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPercent, currency }: Props) {
+export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPercent, currency, unpricedModels }: Props) {
   if (models.length === 0) return null
   const maxCost = Math.max(...models.map(m => m.cost), 0.01)
   const showSavings = models.some(m => (m.savingsUSD ?? 0) > 0)
+  const unpriced = unpricedModels ?? []
+  const unpricedTokens = unpriced.reduce((sum, m) => sum + m.tokens, 0)
 
   return (
     <CollapsibleSection
@@ -56,6 +59,19 @@ export function ModelsSection({ models, inputTokens, outputTokens, cacheHitPerce
           <span className="tokens-value">{formatTokens(outputTokens)} out</span>
           <span className="tokens-sep">·</span>
           <span className="tokens-value">{Math.round(cacheHitPercent)}% cache hit</span>
+        </div>
+      )}
+      {/* The $0-cost rows below the table's floor never render as rows; without
+          this line "cheap" and "uncounted" read the same (#1420). Same wording
+          as every other consumer of the block ("counted at $0"). */}
+      {unpriced.length > 0 && (
+        <div className="tokens-line" title={unpriced.map(m => `${m.model} (${m.calls} calls)`).join(', ')}>
+          <span className="tokens-label">Unpriced</span>
+          <span className="tokens-value">
+            {unpriced.length === 1
+              ? `1 model counted at $0 · ${formatTokens(unpricedTokens)} tokens`
+              : `${unpriced.length} models counted at $0 · ${formatTokens(unpricedTokens)} tokens`}
+          </span>
         </div>
       )}
     </CollapsibleSection>

@@ -10,7 +10,7 @@ import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
 import { getClaudeConfigDirs, getDesktopSessionsDirs } from './providers/claude.js'
 import { convertCost, formatCost } from './currency.js'
-import { renderStatusBar } from './format.js'
+import { formatTokens, renderStatusBar } from './format.js'
 import { toDateString } from './daily-cache.js'
 import { statusSnapshotSemanticKey } from './status-snapshot-semantic.js'
 import { dateKey } from './day-aggregator.js'
@@ -2561,17 +2561,45 @@ program
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
     const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
     const topN = typeof opts.top === 'number' && Number.isFinite(opts.top) ? opts.top : undefined
-    let rows = await aggregateModels(projects, {
+    const explicitMinCost = typeof opts.minCost === 'number' && Number.isFinite(opts.minCost)
+    // `aggregateModels` filters and slices before the unpriced filter. Its
+    // rows are sorted cost-first, so a small --top would remove exactly the
+    // rows `--unpriced` exists to show, and its default $0.01 floor would drop
+    // them before the default flow can say what the table omitted (#1420).
+    // Take the whole set here; apply floor and slice after instead.
+    const all = await aggregateModels(projects, {
       byTask: !!opts.byTask,
       byAgent: !!opts.byAgent,
       taskFilter: opts.task,
-      // `aggregateModels` filters and slices before the unpriced filter. Its
-      // rows are sorted cost-first, so a small --top would remove exactly the
-      // rows `--unpriced` exists to show. Take the whole set here and slice
-      // after filtering and ranking instead.
-      topN: opts.unpriced ? undefined : topN,
-      minCost: typeof opts.minCost === 'number' && Number.isFinite(opts.minCost) ? opts.minCost : (opts.unpriced ? 0 : 0.01),
+      topN: undefined,
+      minCost: explicitMinCost ? opts.minCost : 0,
     })
+    const floor = opts.unpriced ? undefined : explicitMinCost ? opts.minCost : 0.01
+    let rows = floor === undefined ? all : all.filter(r => r.costUSD >= floor || r.savingsUSD >= floor)
+    if (!opts.unpriced && topN !== undefined) rows = rows.slice(0, topN)
+    // Models the default floor removed carry $0 by definition, so the default
+    // table read "cheap" and "uncounted" identically. Say they exist — but only
+    // when the floor was the default: an explicit --min-cost is a user's own
+    // cut and gets no nagging. Breakdown modes emit several rows per model, so
+    // the count needs the set folded per model first.
+    let droppedUnpriced: ReturnType<typeof findUnpricedModels> = []
+    if (!explicitMinCost && floor !== undefined) {
+      const perModel = new Map<string, { model: string; calls: number; cost: number; tokens: number }>()
+      for (const r of all) {
+        // Here floor is always the implicit default: the guard above excludes
+        // both --unpriced (no floor) and an explicit --min-cost.
+        if (r.costUSD >= floor! || r.savingsUSD >= floor!) continue
+        const agg = perModel.get(r.model) ?? { model: r.model, calls: 0, cost: 0, tokens: 0 }
+        agg.calls += r.calls
+        agg.cost += r.costUSD
+        agg.tokens += r.totalTokens
+        perModel.set(r.model, agg)
+      }
+      droppedUnpriced = findUnpricedModels(perModel.values())
+    }
+    const unpricedLine = droppedUnpriced.length > 0
+      ? `${droppedUnpriced.length} more model${droppedUnpriced.length === 1 ? '' : 's'} price${droppedUnpriced.length === 1 ? 's' : ''} at $0 (${formatTokens(droppedUnpriced.reduce((sum, u) => sum + u.tokens, 0))} tok) — codeburn models --unpriced to see them`
+      : null
     if (opts.unpriced) {
       const unpriced = findUnpricedModels(rows.map(row => ({
         model: row.model,
@@ -2596,6 +2624,9 @@ program
       process.stdout.write(opts.unpriced
         ? 'No unpriced models found for the selected period.\n'
         : 'No model usage found for the selected period.\n')
+      // An empty default table with unpriced usage behind it is the whole of
+      // #1420 in one screen: "no usage found" while millions of tokens ran.
+      if (!opts.unpriced && fmt === 'table' && unpricedLine) process.stdout.write(unpricedLine + '\n')
       return
     }
     // The friendly name is useless for `model-alias`, which keys on the raw ID.
@@ -2614,6 +2645,7 @@ program
       // Never advise aliasing unconditionally: a subscription or flat-rate model
       // is correctly $0, and mapping it onto another model's rate invents spend.
       if (opts.unpriced) process.stdout.write(unpricedModelHint() + '\n')
+      else if (unpricedLine) process.stdout.write(unpricedLine + '\n')
     } else {
       process.stderr.write(`codeburn: unknown --format "${opts.format}". Choose table, markdown, json, or csv.\n`)
       process.exit(1)
