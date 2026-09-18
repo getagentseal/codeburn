@@ -64,7 +64,7 @@ import { join, basename, dirname, posix, win32 } from 'path'
 import { existsSync } from 'fs'
 import { createHash } from 'crypto'
 import { readSessionFile } from '../fs-utils.js'
-import { calculateCost } from '../models.js'
+import { calculateCost, getShortModelName } from '../models.js'
 import { extractBashCommands } from '../bash-utils.js'
 import { estimateTokens } from '../context-tree.js'
 import type {
@@ -75,6 +75,771 @@ import type {
   ParsedProviderCall,
 } from './types.js'
 
+const COPILOT_OPENAI_AUTO = 'copilot-openai-auto'
+const COPILOT_ANTHROPIC_AUTO = 'copilot-anthropic-auto'
+
+const transcriptToolCallModelHints: Array<{ prefix: string; model: string }> = [
+  // Anthropic tool-call ID variants observed in Copilot transcript logs.
+  { prefix: 'toolu_bdrk_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'toolu_vrtx_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'tooluse_', model: COPILOT_ANTHROPIC_AUTO },
+  { prefix: 'toolu_', model: COPILOT_ANTHROPIC_AUTO },
+  // OpenAI tool-call IDs.
+  { prefix: 'call_', model: COPILOT_OPENAI_AUTO },
+]
+
+// ---------------------------------------------------------------------------
+// Legacy chat-session JSON format helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise the model ID emitted by the legacy chatSessions JSON format.
+ * Examples:
+ *   "copilot/claude-sonnet-4.5" → "claude-sonnet-4-5"
+ *   "copilot/gpt-4o"           → "gpt-4o"
+ *
+ * The alias table in models.ts (BUILTIN_ALIASES) maps dot-separated Claude
+ * versions ("claude-sonnet-4.5") to dash-separated ones ("claude-sonnet-4-5")
+ * so calculateCost() will already resolve them correctly, but we also
+ * normalise here so the stored `model` field matches what modelDisplayName()
+ * expects (dash-separated).
+ */
+function stripCopilotPrefix(raw: string): string {
+  return raw.replace(/^(?:copilot|github\.copilot-chat)\//, '').trim()
+}
+
+const CHARS_PER_TOKEN_LEGACY = 4
+
+/**
+ * A leaf text node inside a VSCode render tree.
+ * These appear at arbitrary depths; `type === 2` marks a concrete text segment.
+ */
+interface LegacyRenderNode {
+  type?: number
+  text?: string
+  children?: LegacyRenderNode[]
+}
+
+// Most of the types below are extracted from https://github.com/microsoft/vscode-copilot-chat/
+
+export interface ChatCompletionContentPartText {
+  /**
+   * The text content.
+   */
+  text: string;
+
+  /**
+   * The type of the content part.
+   */
+  type: ChatCompletionContentPartKind.Text;
+}
+
+export interface ChatCompletionContentPartCacheBreakpoint {
+  type: ChatCompletionContentPartKind.CacheBreakpoint;
+  /**
+   * Optional implementation-specific type of the breakpoint.
+   */
+  cacheType?: string;
+}
+
+export enum ChatCompletionContentPartKind {
+  Image,
+  Text,
+  Opaque,
+  CacheBreakpoint,
+  Document,
+}
+
+export type ChatCompletionContentPart = ChatCompletionContentPartText | ChatCompletionContentPartCacheBreakpoint;
+
+export const openAIContextManagementCompactionType = 'compaction';
+
+export interface OpenAIContextManagementResponse {
+  encrypted_content: string;
+  type: typeof openAIContextManagementCompactionType;
+  id: string;
+}
+
+export interface ThinkingData {
+  id: string;
+  text: string | string[];
+  metadata?: { [key: string]: any };
+  tokens?: number;
+  encrypted?: string;
+}
+
+export interface IToolCall {
+  name: string;
+  arguments: string;
+  id: string;
+}
+
+export interface IToolCallRound {
+  id: string;
+  summary?: string;
+  response: string;
+  toolInputRetry: number;
+  toolCalls: IToolCall[];
+  thinking?: ThinkingData;
+  statefulMarker?: string;
+  /** Compaction data from the Responses API, round-tripped in outgoing requests */
+  compaction?: OpenAIContextManagementResponse;
+  /** Epoch millis (`Date.now()`) when this round started. */
+  timestamp?: number;
+  /**
+   * Additional context from a hook that was executed after this round completed.
+   * For example, when a stop hook blocks the agent from stopping, this contains
+   * the message to show the model about what requirements must be addressed.
+   */
+  hookContext?: string;
+  /** The phase of the agent loop during which this tool call round occurred. */
+  phase?: string;
+  /** The model ID that produced the phase value. */
+  phaseModelId?: string;
+}
+
+// (native VScode types are hidden behind a `vscode` import, these are relevant bits)
+interface LanguageModelToolResult {
+  content?: Array<{
+    value?: string | { node?: LegacyRenderNode }
+  }>
+}
+
+interface IResultMetadata {
+  metadata?: {
+    renderedUserMessage?: ChatCompletionContentPart[]
+    renderedGlobalContext?: ChatCompletionContentPart[]
+    toolCallRounds?: readonly IToolCallRound[]
+    /**
+     * Keyed by the tool call ID from toolCallRounds[].toolCalls[].id.
+     * Each entry holds the rendered result the model receives as tool-use
+     * input for its next reasoning step (file contents, command output, etc.).
+     * content[x].value is either a plain string ($mid:21 form) or an object
+     * with a .node render tree ($mid:23 form).
+     */
+    toolCallResults?: Record<string, LanguageModelToolResult>
+  }
+  details?: string
+}
+
+export interface IParsedChatRequestPart {
+  readonly kind: string; // for serialization
+  readonly range: unknown;
+  readonly editorRange: unknown;
+  readonly text: string;
+  /** How this part is represented in the prompt going to the agent */
+  readonly promptText: string;
+}
+
+
+export interface IParsedChatRequest {
+  readonly parts: ReadonlyArray<IParsedChatRequestPart>;
+  readonly text: string;
+}
+
+// https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/chat/common/model/chatModel.ts#L1648
+export interface SerializedChatResponsePart {
+  kind?: string
+  value?: string
+  invocationMessage?: string
+  toolSpecificData?: unknown
+}
+
+/** Shape of a single request entry in the legacy chatSessions JSON. */
+interface LegacyChatRequest {
+  requestId: string
+  message?: string | IParsedChatRequest
+  variableData?: unknown
+  response?: SerializedChatResponsePart[]
+  timestamp?: number
+  modelId?: string
+  result?: IResultMetadata
+  promptTokens?: number
+  completionTokens?: number
+  outputTokens?: number
+}
+
+interface LegacyChatSession {
+  sessionId?: string
+  customTitle?: string
+  creationDate?: number
+  lastMessageDate?: number
+  requests?: LegacyChatRequest[]
+  inputState?: {
+    selectedModel?: {
+      identifier?: string
+      metadata?: {
+        version?: string
+        family?: string
+      }
+    }
+  }
+}
+
+/**
+ * Recursively collect all text strings from a VSCode render-tree node.
+ *
+ * The render tree stores content as leaf nodes with `type === 2` and a `.text`
+ * string at arbitrary nesting depth via `.children[]` arrays. Every tool
+ * result (file reads, terminal output, edit confirmations, …) uses this shape,
+ * regardless of the root `ctorName` (`tse`, `Wy`, etc.).
+ */
+function extractRenderNodeTexts(node: LegacyRenderNode | null | undefined): string {
+  if (!node || typeof node !== 'object') return ''
+  let out = ''
+  if (node.type === 2 && typeof node.text === 'string') {
+    out += node.text
+  }
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      out += extractRenderNodeTexts(child)
+    }
+  }
+  return out
+}
+
+/**
+ * Extract text from a toolCallResults entry's content array.
+ * Handles two observed shapes:
+ *  - $mid:21 — value is a plain string (terminal output, error messages)
+ *  - $mid:23 — value is an object with a .node render tree (edit confirmations, etc.)
+ */
+function extractToolCallResultContent(
+  results: NonNullable<NonNullable<LegacyChatRequest['result']>['metadata']>['toolCallResults'],
+): string {
+  if (!results) return ''
+  let out = ''
+  for (const result of Object.values(results)) {
+    for (const item of result.content ?? []) {
+      if (typeof item.value === 'string') {
+        out += item.value + '\n'
+      } else if (item.value && typeof item.value === 'object' && 'node' in item.value) {
+        out += extractRenderNodeTexts(item.value.node) + '\n'
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * Extract the model's output text from toolCallRounds.
+ * This is more accurate than scanning req.response, because req.response also
+ * embeds terminal output (toolSpecificData.terminalCommandOutput.text) via its
+ * generic .text key — which inflates the apparent output size with content that
+ * is actually a tool result fed back as input, not model-generated output.
+ *
+ * Sources included:
+ *  - toolCallRounds[x].response  — the model's text reply per reasoning round
+ *  - toolCallRounds[x].toolCalls[x].arguments  — JSON args the model emitted
+ *  - response[x].invocationMessage  — short narration strings ("Using 'Run in Terminal'")
+ */
+
+interface LegacyResponsePart {
+  kind?: string
+  value?: string | string[]
+  content?: string | { value?: string }
+  toolCallId?: string
+  toolId?: string
+  toolSpecificData?: {
+    terminalCommandOutput?: {
+      text?: string
+    }
+  }
+  resultDetails?: {
+    output?: {
+      type?: string
+      base64Data?: string
+    }
+  }
+}
+
+interface LegacyResultMetadata {
+  promptTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cachedTokens?: number
+  cacheCreationTokens?: number
+  cacheWriteTokens?: number
+  metadata?: {
+    promptTokens?: number
+    outputTokens?: number
+    cacheReadTokens?: number
+    cachedTokens?: number
+    cacheCreationTokens?: number
+    cacheWriteTokens?: number
+  }
+  usage?: {
+    promptTokens?: number
+    prompt_tokens?: number
+    completionTokens?: number
+    completion_tokens?: number
+    cacheReadTokens?: number
+    cache_read_tokens?: number
+    cachedTokens?: number
+    cached_tokens?: number
+    cacheCreationTokens?: number
+    cache_creation_tokens?: number
+    cacheWriteTokens?: number
+    cache_write_tokens?: number
+  }
+}
+
+function inferModelFromLegacySession(session: LegacyChatSession): string {
+  // 1. Try to find the first request that has a non-empty, non-auto modelId
+  for (const req of session.requests ?? []) {
+    if (req.modelId) {
+      const stripped = stripCopilotPrefix(req.modelId)
+      if (stripped && stripped !== 'auto' && stripped !== 'copilot-auto' && stripped !== 'unknown') {
+        return stripped
+      }
+    }
+  }
+
+  // 1.5. Look in inputState.selectedModel
+  const selectedModel = session.inputState?.selectedModel
+  if (selectedModel) {
+    const version = selectedModel.metadata?.version || selectedModel.metadata?.family || selectedModel.identifier
+    if (version) {
+      const stripped = stripCopilotPrefix(version)
+      if (stripped && stripped !== 'copilot/auto' && stripped !== 'auto' && stripped !== 'copilot-auto') {
+        return stripped
+      }
+    }
+  }
+
+  // 2. Try to find if there are any tool calls or IDs that hint at the model
+  for (const req of session.requests ?? []) {
+    const rawRounds = (req.result?.metadata as Record<string, unknown> | undefined)?.['toolCallRounds'] ??
+      (isRecord(req.result) ? (req.result as Record<string, unknown>)['toolCallRounds'] : null)
+    const rounds: IToolCallRound[] = Array.isArray(rawRounds) ? rawRounds : []
+    for (const round of rounds) {
+      for (const tc of round.toolCalls ?? []) {
+        const id = tc.id ?? ''
+        for (const hint of transcriptToolCallModelHints) {
+          if (id.startsWith(hint.prefix)) {
+            return hint.model
+          }
+        }
+      }
+    }
+    const response = req.response
+    for (const item of response ?? []) {
+      if (item && typeof item === 'object') {
+        const itemTyped = item as LegacyResponsePart
+        const id = itemTyped.toolCallId ?? ''
+        for (const hint of transcriptToolCallModelHints) {
+          if (id.startsWith(hint.prefix)) {
+            return hint.model
+          }
+        }
+      }
+    }
+  }
+
+  return 'unknown'
+}
+
+function extractToolCallResultContentFromParts(response: LegacyChatRequest['response']): string {
+  if (!response) return ''
+  let out = ''
+  for (const item of response) {
+    if (!item || typeof item !== 'object') continue
+    if (item.kind === 'toolInvocationSerialized') {
+      const itemTyped = item as LegacyResponsePart
+      const spec = itemTyped.toolSpecificData
+      if (spec) {
+        // Handle terminal commands output
+        if (spec.terminalCommandOutput && typeof spec.terminalCommandOutput.text === 'string') {
+          out += spec.terminalCommandOutput.text + '\n'
+        }
+      }
+
+      // Handle resultDetails containing base64 data
+      const resultDetails = itemTyped.resultDetails
+      if (resultDetails && typeof resultDetails === 'object') {
+        if (resultDetails.output && resultDetails.output.type === 'data') {
+          const base64 = resultDetails.output.base64Data
+          if (typeof base64 === 'string') {
+            const decoded = Buffer.from(base64, 'base64').toString('utf8')
+            out += decoded + '\n'
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
+interface LegacyOutputs {
+  outputText: string
+  reasoningText: string
+}
+
+function extractLegacyOutputs(req: LegacyChatRequest): LegacyOutputs {
+  let outputText = ''
+  let reasoningText = ''
+
+  const rounds = req.result?.metadata?.toolCallRounds
+  const response = req.response
+
+  if (rounds && rounds.length > 0) {
+    for (const round of rounds) {
+      if (typeof round.response === 'string' && round.response) {
+        outputText += round.response + '\n'
+      }
+      for (const tc of round.toolCalls ?? []) {
+        if (typeof tc.arguments === 'string' && tc.arguments) {
+          outputText += tc.arguments + '\n'
+        }
+      }
+      if (round.thinking) {
+        const text = round.thinking.text
+        if (typeof text === 'string' && text) {
+          reasoningText += text + '\n'
+        } else if (Array.isArray(text)) {
+          reasoningText += text.join('\n') + '\n'
+        }
+      }
+    }
+  } else if (response && response.length > 0) {
+    // Fallback: extract from response parts
+    for (const itemRaw of response) {
+      if (!itemRaw || typeof itemRaw !== 'object') continue
+      const item = itemRaw as LegacyResponsePart
+
+      // Plain IMarkdownString or item.kind === 'markdownContent' or item.kind === 'markdownVuln'
+      if ('value' in item && typeof item.value === 'string' && !('kind' in item)) {
+        outputText += item.value + '\n'
+      } else if ((item.kind === 'markdownContent' || item.kind === 'markdownVuln') && item.content) {
+        if (typeof item.content === 'string') {
+          outputText += item.content + '\n'
+        } else if (typeof item.content === 'object' && item.content !== null && 'value' in item.content && typeof item.content.value === 'string') {
+          outputText += item.content.value + '\n'
+        }
+      } else if (item.kind === 'thinking' && item.value) {
+        if (typeof item.value === 'string') {
+          reasoningText += item.value + '\n'
+        } else if (Array.isArray(item.value)) {
+          reasoningText += item.value.join('\n') + '\n'
+        }
+      } else if (item.kind === 'textEditGroup') {
+        const edits = (item as { edits?: unknown[] }).edits
+        if (Array.isArray(edits)) {
+          for (const edit of edits) {
+            if (Array.isArray(edit)) {
+              for (const e of edit) {
+                if (e && typeof e === 'object' && 'text' in e && typeof (e as { text: unknown }).text === 'string') {
+                  outputText += (e as { text: string }).text + '\n'
+                }
+              }
+            } else if (edit && typeof edit === 'object' && 'text' in edit && typeof (edit as { text: unknown }).text === 'string') {
+              outputText += (edit as { text: string }).text + '\n'
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // invocationMessage strings are model narration in the UI ("Checking terminal output",
+  // "Using 'Multi-Replace String'", etc.) — short but part of model output.
+  for (const item of response ?? []) {
+    if (item && typeof item === 'object') {
+      const inv = (item as { invocationMessage?: unknown }).invocationMessage
+      if (typeof inv === 'string' && inv) {
+        outputText += inv + '\n'
+      } else if (inv && typeof inv === 'object' && 'value' in inv && typeof (inv as { value: unknown }).value === 'string') {
+        outputText += (inv as { value: string }).value + '\n'
+      }
+    }
+  }
+
+  return { outputText, reasoningText }
+}
+
+function extractModelFromRequest(req: LegacyChatRequest, session: LegacyChatSession): string {
+  const result = isRecord(req.result) ? (req.result as Record<string, unknown>) : undefined
+  const metadata = isRecord(result?.['metadata']) ? (result?.['metadata'] as Record<string, unknown>) : undefined
+
+  // 1. Check resolved model from result metadata
+  const resolvedMeta = readString(metadata?.['resolvedModel']) || readString(metadata?.['model'])
+  if (resolvedMeta) {
+    const stripped = stripCopilotPrefix(resolvedMeta)
+    if (stripped && stripped !== 'auto' && stripped !== 'copilot-auto') {
+      return stripped
+    }
+  }
+
+  // 2. Check resolved model directly on result
+  const resultResolved = readString(result?.['resolvedModel']) || readString(result?.['model'])
+  if (resultResolved) {
+    const stripped = stripCopilotPrefix(resultResolved)
+    if (stripped && stripped !== 'auto' && stripped !== 'copilot-auto') {
+      return stripped
+    }
+  }
+
+  // 3. Check response parts for autoModeResolution or model info
+  for (const part of req.response ?? []) {
+    if (part && typeof part === 'object') {
+      const p = part as Record<string, unknown>
+      if (p['kind'] === 'autoModeResolution') {
+        const resolved = readString(p['resolvedModel']) || readString(p['model']) || readString(p['modelId'])
+        if (resolved) {
+          const stripped = stripCopilotPrefix(resolved)
+          if (stripped && stripped !== 'auto' && stripped !== 'copilot-auto') {
+            return stripped
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Check request modelId
+  if (req.modelId) {
+    const stripped = stripCopilotPrefix(req.modelId)
+    if (stripped && stripped !== 'auto' && stripped !== 'copilot-auto') {
+      return stripped
+    }
+  }
+
+  // 5. Inferred session model or fallback
+  const inferred = inferModelFromLegacySession(session)
+  if (inferred && inferred !== 'auto' && inferred !== 'copilot-auto' && inferred !== 'unknown') {
+    return inferred
+  }
+
+  return 'unknown'
+}
+
+function parseLegacyChatSession(
+  session: LegacyChatSession,
+  sessionId: string,
+  project: string,
+  seenKeys: Set<string>,
+  isJsonl: boolean,
+): ParsedProviderCall[] {
+  if (!session || !Array.isArray(session.requests)) return []
+
+  const results: ParsedProviderCall[] = []
+
+  for (const [reqIndex, req] of session.requests.entries()) {
+    const resultObj = isRecord(req.result) ? (req.result as Record<string, unknown>) : null
+    const meta = isRecord(resultObj?.['metadata']) ? (resultObj?.['metadata'] as Record<string, unknown>) : null
+    const usage = isRecord(resultObj?.['usage']) ? (resultObj?.['usage'] as Record<string, unknown>) : null
+
+    // Exact token extraction: check metadata, result, root req, and usage independently
+    const exactPromptTokens =
+      numberOrZero(meta?.['promptTokens']) ||
+      numberOrZero(resultObj?.['promptTokens']) ||
+      numberOrZero(req.promptTokens) ||
+      numberOrZero(usage?.['promptTokens']) ||
+      numberOrZero(usage?.['prompt_tokens']) ||
+      undefined
+
+    const exactOutputTokens =
+      numberOrZero(meta?.['outputTokens']) ||
+      numberOrZero(resultObj?.['outputTokens']) ||
+      numberOrZero(req.completionTokens) ||
+      numberOrZero(req.outputTokens) ||
+      numberOrZero(usage?.['completionTokens']) ||
+      numberOrZero(usage?.['completion_tokens']) ||
+      undefined
+
+    const exactCacheRead =
+      numberOrZero(meta?.['cacheReadTokens']) ||
+      numberOrZero(meta?.['cachedTokens']) ||
+      numberOrZero(resultObj?.['cacheReadTokens']) ||
+      numberOrZero(resultObj?.['cachedTokens']) ||
+      numberOrZero(usage?.['cacheReadTokens']) ||
+      numberOrZero(usage?.['cache_read_tokens']) ||
+      numberOrZero(usage?.['cachedTokens']) ||
+      numberOrZero(usage?.['cached_tokens']) ||
+      0
+
+    const exactCacheCreation =
+      numberOrZero(meta?.['cacheCreationTokens']) ||
+      numberOrZero(meta?.['cacheWriteTokens']) ||
+      numberOrZero(resultObj?.['cacheCreationTokens']) ||
+      numberOrZero(resultObj?.['cacheWriteTokens']) ||
+      numberOrZero(usage?.['cacheCreationTokens']) ||
+      numberOrZero(usage?.['cache_creation_tokens']) ||
+      numberOrZero(usage?.['cacheWriteTokens']) ||
+      numberOrZero(usage?.['cache_write_tokens']) ||
+      0
+
+    const hasExactTokens = exactPromptTokens !== undefined || exactOutputTokens !== undefined
+
+    // Regressed .jsonl path fix: modern .jsonl sessions never char-estimate.
+    // Rows with no token fields (or 0 tokens) are skipped.
+    if (isJsonl) {
+      if (!hasExactTokens || ((exactPromptTokens ?? 0) === 0 && (exactOutputTokens ?? 0) === 0)) {
+        continue
+      }
+    }
+
+    const model = extractModelFromRequest(req, session)
+
+    // Extract tool calls / tools
+    const rawRounds = (meta?.['toolCallRounds'] ?? resultObj?.['toolCallRounds'])
+    const rounds: IToolCallRound[] = Array.isArray(rawRounds) ? (rawRounds as IToolCallRound[]) : []
+    const toolNamesSet = new Set<string>()
+
+    const addTool = (raw: unknown): void => {
+      if (typeof raw === 'string' && raw.trim()) {
+        toolNamesSet.add(normalizeTool(raw.trim()))
+      }
+    }
+
+    for (const round of rounds) {
+      if (!isRecord(round)) continue
+      addTool(round.summary)
+      addTool(round.phase)
+      if (Array.isArray(round.toolCalls)) {
+        for (const tc of round.toolCalls) {
+          if (isRecord(tc)) {
+            addTool(tc.name)
+            addTool(tc.id)
+          }
+        }
+      }
+    }
+    if (Array.isArray(req.response)) {
+      for (const item of req.response) {
+        if (item && typeof item === 'object') {
+          if ((item as LegacyResponsePart).kind === 'toolInvocationSerialized') {
+            addTool((item as LegacyResponsePart).toolId)
+          }
+        }
+      }
+    }
+    const tools = [...toolNamesSet]
+
+    const msgText = typeof req.message === 'string' ? req.message : (req.message?.text ?? '')
+    const { outputText, reasoningText } = extractLegacyOutputs(req)
+
+    let totalInputTokens: number
+    let outputTokens: number
+    let cacheReadInputTokens = exactCacheRead
+    let cacheCreationInputTokens = exactCacheCreation
+    let reasoningTokens = 0
+    let isEstimated = false
+
+    // Extract reasoning tokens
+    if (reasoningText.length > 0) {
+      reasoningTokens = Math.ceil(reasoningText.length / CHARS_PER_TOKEN_LEGACY)
+    }
+    for (const round of rounds) {
+      if (round.thinking?.tokens && typeof round.thinking.tokens === 'number') {
+        reasoningTokens = Math.max(reasoningTokens, round.thinking.tokens)
+      }
+    }
+
+    if (hasExactTokens) {
+      totalInputTokens = exactPromptTokens ?? 0
+      outputTokens = exactOutputTokens ?? 0
+      isEstimated = false
+    } else {
+      isEstimated = true
+
+      const globalParts = ((meta?.['renderedGlobalContext'] as unknown[]) ?? []).filter(
+        (p): p is ChatCompletionContentPartText => isRecord(p) && p.type === ChatCompletionContentPartKind.Text && typeof p.text === 'string'
+      )
+      const userParts = ((meta?.['renderedUserMessage'] as unknown[]) ?? []).filter(
+        (p): p is ChatCompletionContentPartText => isRecord(p) && p.type === ChatCompletionContentPartKind.Text && typeof p.text === 'string'
+      )
+      const globalCacheMarkers = ((meta?.['renderedGlobalContext'] as unknown[]) ?? []).filter(
+        (p): p is ChatCompletionContentPartCacheBreakpoint => isRecord(p) && p.type === ChatCompletionContentPartKind.CacheBreakpoint
+      )
+      const userCacheMarkers = ((meta?.['renderedUserMessage'] as unknown[]) ?? []).filter(
+        (p): p is ChatCompletionContentPartCacheBreakpoint => isRecord(p) && p.type === ChatCompletionContentPartKind.CacheBreakpoint
+      )
+
+      let inputTokens = 0
+      const hasRenderedMetadata = globalParts.length > 0 || userParts.length > 0
+
+      if (hasRenderedMetadata) {
+        const globalText = globalParts.map((p) => p.text).join('\n')
+        const userText = userParts.map((p) => p.text).join('\n')
+
+        if (globalCacheMarkers.length > 0 || userCacheMarkers.length > 0) {
+          if (globalCacheMarkers.length > 0) {
+            cacheReadInputTokens = Math.ceil(globalText.length / CHARS_PER_TOKEN_LEGACY)
+          } else {
+            inputTokens = Math.ceil(globalText.length / CHARS_PER_TOKEN_LEGACY)
+          }
+
+          const attachmentText = userText.replace(msgText, '')
+          if (userCacheMarkers.length > 0 && attachmentText.length > 0) {
+            cacheCreationInputTokens = Math.ceil(attachmentText.length / CHARS_PER_TOKEN_LEGACY)
+          } else if (userCacheMarkers.length === 0) {
+            inputTokens += Math.ceil(userText.length / CHARS_PER_TOKEN_LEGACY)
+            inputTokens -= Math.ceil(msgText.length / CHARS_PER_TOKEN_LEGACY)
+          }
+          inputTokens += Math.ceil(msgText.length / CHARS_PER_TOKEN_LEGACY)
+        } else {
+          inputTokens = Math.ceil((globalText + '\n' + userText).length / CHARS_PER_TOKEN_LEGACY)
+        }
+      } else {
+        inputTokens = Math.ceil(msgText.length / CHARS_PER_TOKEN_LEGACY)
+      }
+
+      let toolResultText = extractToolCallResultContent(meta?.['toolCallResults'] as NonNullable<NonNullable<LegacyChatRequest['result']>['metadata']>['toolCallResults'])
+      if (!toolResultText) {
+        toolResultText = extractToolCallResultContentFromParts(req.response)
+      }
+      const toolResultTokens = Math.ceil(toolResultText.length / CHARS_PER_TOKEN_LEGACY)
+
+      totalInputTokens = inputTokens + toolResultTokens
+      outputTokens = Math.ceil(outputText.length / CHARS_PER_TOKEN_LEGACY)
+
+      if (outputTokens === 0 && totalInputTokens === 0 && cacheCreationInputTokens === 0 && reasoningTokens === 0) {
+        continue
+      }
+    }
+
+    const reqId = readString(req.requestId) || `request-${reqIndex}`
+    const dedupKey = `copilot-chatsession:${sessionId}:${reqId}`
+    if (seenKeys.has(dedupKey)) continue
+    seenKeys.add(dedupKey)
+
+    const costUSD = calculateCost(
+      model,
+      totalInputTokens,
+      outputTokens + reasoningTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      0,
+    )
+
+    const ts = timestampToISO(req.timestamp) || timestampToISO(session.creationDate)
+
+    results.push({
+      provider: 'copilot',
+      model,
+      inputTokens: totalInputTokens,
+      outputTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      cachedInputTokens: 0,
+      reasoningTokens,
+      webSearchRequests: 0,
+      costUSD,
+      costIsEstimated: isEstimated,
+      tools,
+      bashCommands: [],
+      timestamp: ts,
+      speed: 'standard',
+      deduplicationKey: dedupKey,
+      userMessage: msgText.slice(0, 500),
+      sessionId,
+      project,
+    })
+  }
+
+  return results
+}
+
 // ---------------------------------------------------------------------------
 // Model display names (unchanged from original)
 // ---------------------------------------------------------------------------
@@ -82,12 +847,44 @@ const modelDisplayNames: Record<string, string> = {
   'gpt-4.1-nano': 'GPT-4.1 Nano',
   'gpt-4.1-mini': 'GPT-4.1 Mini',
   'gpt-4.1': 'GPT-4.1',
+  'gpt-4-1': 'GPT-4.1',
   'gpt-4o-mini': 'GPT-4o Mini',
-  'gpt-4o': 'GPT-4o',
+  'gpt-5.4': 'GPT-5.4',
+  'gpt-5-4': 'GPT-5.4',
+  'gpt-5.3-codex': 'GPT-5.3 Codex',
+  'gpt-5-3-codex': 'GPT-5.3 Codex',
+  'gpt-5.2-codex': 'GPT-5.2 Codex',
+  'gpt-5-2-codex': 'GPT-5.2 Codex',
+  'gpt-5.1-codex-max': 'GPT-5.1 Codex Max',
+  'gpt-5-1-codex-max': 'GPT-5.1 Codex Max',
+  'gpt-5.4-mini': 'GPT-5.4 Mini',
+  'gpt-5-4-mini': 'GPT-5.4 Mini',
   'gpt-5-mini': 'GPT-5 Mini',
   'gpt-5': 'GPT-5',
+  // Dot-form spellings emitted by Copilot's native model IDs (e.g. copilot/claude-sonnet-4.5)
+  // and their equivalent dash-form counterparts that other sources may store.
+  'claude-sonnet-4.6': 'Sonnet 4.6',
+  'claude-sonnet-4-6': 'Sonnet 4.6',
+  'claude-sonnet-4.5': 'Sonnet 4.5',
   'claude-sonnet-4-5': 'Sonnet 4.5',
   'claude-sonnet-4': 'Sonnet 4',
+  'claude-opus-4.7': 'Opus 4.7',
+  'claude-opus-4-7': 'Opus 4.7',
+  'claude-opus-4.6': 'Opus 4.6',
+  'claude-opus-4-6': 'Opus 4.6',
+  'claude-opus-4.5': 'Opus 4.5',
+  'claude-opus-4-5': 'Opus 4.5',
+  'claude-3-7-sonnet': 'Sonnet 3.7',
+  'claude-3-5-sonnet': 'Sonnet 3.5',
+  'claude-haiku-4.5': 'Haiku 4.5',
+  'claude-haiku-4-5': 'Haiku 4.5',
+  'gemini-3-1-pro-preview': 'Gemini 3.1 Pro',
+  'gemini-3-pro-preview': 'Gemini 3 Pro',
+  'gemini-2-5-pro': 'Gemini 2.5 Pro',
+  'o4-mini': 'o4-mini',
+  'o3': 'o3',
+  'copilot-auto': 'Copilot (auto)',
+  'auto': 'Copilot (auto)',
   'copilot-openai-auto': 'Copilot (OpenAI auto)',
   'copilot-anthropic-auto': 'Copilot (Anthropic auto)',
 }
@@ -174,6 +971,20 @@ type SessionStartData = {
   selectedModel?: string
 }
 
+
+// --- Parser ---
+
+function isChatSessionJsonFormat(path: string, content: string): boolean {
+  // The legacy chatSessions files are plain .json files (not .jsonl).
+  if (!path.endsWith('.json')) return false
+  try {
+    const obj = JSON.parse(content) as Record<string, unknown>
+    return Array.isArray(obj['requests'])
+  } catch {
+    return false
+  }
+}
+
 type ModelChangeData = {
   newModel: string
   previousModel?: string
@@ -236,11 +1047,11 @@ type CopilotEvent =
   | { type: 'subagent.started'; data: SubagentSelectedData; timestamp?: string }
   | { type: 'subagent.completed'; data: SubagentSelectedData; timestamp?: string }
   | { type: 'session.shutdown'; data: SessionShutdownData; timestamp?: string }
+  | { type: 'llm_request' | 'llm.request'; attrs?: { model?: string }; timestamp?: string; data?: any }
   | { type: 'session.compaction_start'; data: Record<string, unknown>; timestamp?: string }
   | { type: 'session.compaction_complete'; data: SessionCompactionCompleteData; timestamp?: string }
 
 type ChatJournalPathSegment = string | number
-type ChatSessionRequest = Record<string, unknown>
 
 // ---------------------------------------------------------------------------
 // Types for OTel span rows from agent-traces.db
@@ -399,7 +1210,7 @@ function loadSpanAttributesFromTable(
         try {
           // Try to parse numeric values
           const numValue = Number(row.value)
-          attrs[row.key as keyof SpanAttributes] = Number.isNaN(numValue) 
+          attrs[row.key as keyof SpanAttributes] = Number.isNaN(numValue)
             ? row.value
             : numValue
         } catch {
@@ -480,7 +1291,7 @@ function getReplayValue(container: object, segment: ChatJournalPathSegment): unk
 }
 
 function setReplayValue(container: object, segment: ChatJournalPathSegment, value: unknown): void {
-  ;(container as Record<string, unknown>)[String(segment)] = value
+  ; (container as Record<string, unknown>)[String(segment)] = value
 }
 
 function createContainerForNext(segment: ChatJournalPathSegment): unknown[] | Record<string, unknown> {
@@ -583,48 +1394,6 @@ function readString(raw: unknown): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-function modelFromChatSessionRequest(req: ChatSessionRequest, metadata: Record<string, unknown>): string {
-  const resolved = readString(metadata['resolvedModel'])
-  if (resolved) return resolved
-
-  const modelId = readString(req['modelId']).replace(/^copilot\//, '')
-  return modelId || 'unknown'
-}
-
-function extractChatSessionTools(metadata: Record<string, unknown>): string[] {
-  const rounds = metadata['toolCallRounds']
-  if (!Array.isArray(rounds)) return []
-
-  const names = new Set<string>()
-  const addName = (raw: unknown): void => {
-    if (typeof raw === 'string' && raw.trim()) names.add(normalizeTool(raw))
-  }
-  const addFromRecord = (record: Record<string, unknown>): void => {
-    addName(record['toolName'])
-    addName(record['name'])
-    addName(record['tool'])
-  }
-
-  for (const round of rounds) {
-    if (!isRecord(round)) continue
-    addFromRecord(round)
-
-    for (const key of ['tools', 'toolCalls', 'toolRequests']) {
-      const entries = round[key]
-      if (!Array.isArray(entries)) continue
-      for (const entry of entries) {
-        if (typeof entry === 'string') {
-          addName(entry)
-        } else if (isRecord(entry)) {
-          addFromRecord(entry)
-        }
-      }
-    }
-  }
-
-  return [...names]
-}
-
 /**
  * Extract a shell command string from an OTel execute_tool span's
  * `gen_ai.tool.call.arguments` attribute. The attribute is a JSON-encoded
@@ -698,6 +1467,7 @@ function inferTranscriptModel(lines: string[]): string {
   for (const line of lines) {
     try {
       const event = JSON.parse(line) as CopilotEvent
+
       if (event.type !== 'assistant.message') continue
       const data = event.data as AssistantMessageData & { toolRequests?: Array<{ toolCallId?: string }> }
       const reqs = coerceToolRequests(data.toolRequests)
@@ -738,6 +1508,7 @@ function createJsonlParser(
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       const content = await readSessionFile(source.path)
       if (!content) return
+
       // CLI session-state files live at <sessionId>/events.jsonl; transcripts
       // at transcripts/<sessionId>.jsonl — keying the latter on the parent dir
       // would collapse every transcript into one "transcripts" session (and
@@ -1082,7 +1853,7 @@ function createJsonlParser(
 }
 
 function createChatSessionParser(
-  source: SessionSource,
+  source: ChatSessionSource,
   seenKeys: Set<string>
 ): SessionParser {
   return {
@@ -1090,57 +1861,28 @@ function createChatSessionParser(
       const content = await readSessionFile(source.path)
       if (!content) return
 
-      const root = replayChatSessionJournal(content)
-      if (!isRecord(root)) return
+      const isJson = source.path.endsWith('.json') || isChatSessionJsonFormat(source.path, content)
+      let session: LegacyChatSession | null = null
 
-      const sessionId = readString(root['sessionId']) || basename(source.path, '.jsonl')
-      const sessionCreatedAt = timestampToISO(root['creationDate'])
-      const requests = Array.isArray(root['requests']) ? root['requests'] : []
-
-      for (let index = 0; index < requests.length; index++) {
-        const rawReq = requests[index]
-        if (!isRecord(rawReq)) continue
-
-        const result = rawReq['result']
-        const resultRecord = isRecord(result) ? result : null
-        const rawMetadata = resultRecord?.['metadata']
-        const metadata = isRecord(rawMetadata) ? rawMetadata : createReplayObject()
-
-        const inputTokens = numberOrZero(metadata['promptTokens'])
-        const metadataOutputTokens = numberOrZero(metadata['outputTokens'])
-        const outputTokens = metadataOutputTokens || numberOrZero(rawReq['completionTokens'])
-
-        if (inputTokens === 0 && outputTokens === 0) continue
-
-        const requestId = readString(rawReq['requestId']) || `request-${index}`
-        const dedupKey = `copilot-chatsession:${sessionId}:${requestId}`
-        if (seenKeys.has(dedupKey)) continue
-        seenKeys.add(dedupKey)
-
-        const model = modelFromChatSessionRequest(rawReq, metadata)
-        const costUSD = calculateCost(model, inputTokens, outputTokens, 0, 0, 0)
-        const timestamp = timestampToISO(rawReq['timestamp']) || sessionCreatedAt
-
-        yield {
-          provider: 'copilot',
-          sessionId,
-          project: source.project,
-          model,
-          inputTokens,
-          outputTokens,
-          cacheCreationInputTokens: 0,
-          cacheReadInputTokens: 0,
-          cachedInputTokens: 0,
-          reasoningTokens: 0,
-          webSearchRequests: 0,
-          costUSD,
-          tools: extractChatSessionTools(metadata),
-          bashCommands: [],
-          timestamp,
-          speed: 'standard' as const,
-          deduplicationKey: dedupKey,
-          userMessage: '',
+      if (isJson) {
+        try {
+          session = JSON.parse(content) as LegacyChatSession
+        } catch {
+          return
         }
+      } else {
+        const root = replayChatSessionJournal(content)
+        if (!isRecord(root)) return
+        session = root as unknown as LegacyChatSession
+      }
+
+      if (!session) return
+
+      const fallbackSessionId = basename(source.path, isJson ? '.json' : '.jsonl')
+      const sessionId = readString(session.sessionId) || fallbackSessionId
+      const calls = parseLegacyChatSession(session, sessionId, source.project, seenKeys, !isJson)
+      for (const call of calls) {
+        yield call
       }
     },
   }
@@ -2354,7 +3096,7 @@ function isOtelSource(source: SessionSource): source is OTelSessionSource {
 }
 
 function isChatSessionSource(source: SessionSource): source is ChatSessionSource {
-  return (source as ChatSessionSource).sourceType === 'chatsession'
+  return (source as ChatSessionSource).sourceType === 'chatsession' || source.path.endsWith('.json')
 }
 
 function isJetBrainsSource(source: SessionSource): source is JetBrainsSessionSource {
@@ -2706,7 +3448,7 @@ async function hasChatSessionFiles(chatSessionsDir: string): Promise<boolean> {
   }
 
   for (const file of files) {
-    if (!file.endsWith('.jsonl')) continue
+    if (!file.endsWith('.jsonl') && !file.endsWith('.json')) continue
     const s = await stat(join(chatSessionsDir, file)).catch(() => null)
     if (s?.isFile()) return true
   }
@@ -2731,26 +3473,41 @@ async function discoverWorkspaceChatSessions(
     }
 
     for (const hashDir of hashDirs) {
-      const chatSessionsDir = join(wsDir, hashDir, 'chatSessions')
-      let files: string[]
-      try {
-        files = await readdir(chatSessionsDir)
-      } catch {
-        continue
-      }
+      const candidates = [
+        join(wsDir, hashDir, 'chatSessions'),
+        join(wsDir, hashDir, 'GitHub.copilot-chat', 'chatSessions'),
+        join(wsDir, hashDir, 'github.copilot-chat', 'chatSessions'),
+        join(wsDir, hashDir, 'GitHub.copilot', 'chatSessions'),
+        join(wsDir, hashDir, 'github.copilot', 'chatSessions'),
+      ]
 
-      const project = await resolveWorkspaceProject(wsDir, hashDir)
-      for (const file of files) {
-        if (!file.endsWith('.jsonl')) continue
-        const path = join(chatSessionsDir, file)
-        const s = await stat(path).catch(() => null)
-        if (!s?.isFile()) continue
-        sources.push({
-          path,
-          project,
-          provider: 'copilot',
-          sourceType: 'chatsession',
-        })
+      let project: string | undefined
+
+      for (const chatSessionsDir of candidates) {
+        if (!existsSync(chatSessionsDir)) continue
+        let files: string[]
+        try {
+          files = await readdir(chatSessionsDir)
+        } catch {
+          continue
+        }
+
+        if (project === undefined) {
+          project = await resolveWorkspaceProject(wsDir, hashDir)
+        }
+
+        for (const file of files) {
+          if (!file.endsWith('.json') && !file.endsWith('.jsonl')) continue
+          const path = join(chatSessionsDir, file)
+          const s = await stat(path).catch(() => null)
+          if (!s?.isFile()) continue
+          sources.push({
+            path,
+            project,
+            provider: 'copilot',
+            sourceType: 'chatsession',
+          })
+        }
       }
     }
   }
@@ -2773,7 +3530,7 @@ async function discoverEmptyWindowChatSessions(
     }
 
     for (const file of files) {
-      if (!file.endsWith('.jsonl')) continue
+      if (!file.endsWith('.json') && !file.endsWith('.jsonl')) continue
       const path = join(chatSessionsDir, file)
       const s = await stat(path).catch(() => null)
       if (!s?.isFile()) continue
@@ -2902,9 +3659,9 @@ export function createCopilotProvider(
 
     modelDisplayName(model: string): string {
       for (const [key, display] of modelDisplayEntries) {
-        if (model.includes(key)) return display
+        if (model === key || model.startsWith(key + '-')) return display
       }
-      return model
+      return getShortModelName(model)
     },
 
     toolDisplayName(rawTool: string): string {
