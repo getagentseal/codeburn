@@ -387,7 +387,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // it identifies the request, and moving it would leave the cached output-0
   // copy beside the new row - so only this bump re-parses a v2 cache into the
   // corrected shape.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3',
+  // chatsession-otel-skills-v1: structured Skill calls are now extracted from
+  // VS Code chatSessions and OTel execute_tool spans. Cached calls lack those
+  // fields, so force one re-parse before serving period breakdowns.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

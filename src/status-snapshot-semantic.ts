@@ -31,7 +31,10 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 ///     treated as a miss (one real recompute per query), then the fresh record
 ///     is served; daily/session caches are separate version domains and are
 ///     not touched.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 9
+// v10: current.skills is rebuilt from the newly reparsed Copilot
+// chatSessions/OTel calls; older snapshots can contain stale or empty skill
+// breakdowns for otherwise identical period queries.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 10
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)
