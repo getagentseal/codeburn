@@ -433,7 +433,13 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   pi: 'cwd-project-path-v1-project-group-by-abs-v1',
   // project-group-by-abs-v1: shared Pi/OMP serve grouping uses abs identity.
   omp: 'nested-agent-v1-reported-cost-v2-cwd-project-path-v1-project-group-by-abs-v1',
-  opencode: 'session-model-v1',
+  // archived-subtree-v1 (#1362): the subtree walk no longer filters
+  // `time_archived IS NULL`. An archived ROOT self-heals — it was evicted as an
+  // undiscovered non-durable source and comes back new — but a root whose CHILD
+  // was archived stays a present, unchanged source: every opencode entry
+  // fingerprints the same database file, so a warm cache keeps serving the
+  // parse that dropped the child's calls until the database is written again.
+  opencode: 'session-model-v1-archived-subtree-v1',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
@@ -444,7 +450,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // additive; every cost / token / call total is byte-identical to a build
   // that omits it.
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1',
+  // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v6',
