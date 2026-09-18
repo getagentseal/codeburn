@@ -73,6 +73,12 @@ describe('routeFromProviderField - the provider column', () => {
     expect(routeFromProviderField('Bedrock ')?.id).toBe('bedrock')
   })
 
+  it('maps only the exact Amazon Bedrock provider field OpenCode writes', () => {
+    expect(routeFromProviderField('amazon-bedrock')).toMatchObject({ id: 'bedrock', label: 'Bedrock' })
+    expect(routeFromProviderField('Amazon-Bedrock')).toBeUndefined()
+    expect(routeFromProviderField(' amazon-bedrock ')).toBeUndefined()
+  })
+
   it('maps only the exact OpenRouter provider field now that usage-bearing sessions exist', () => {
     // Two Hermes sessions ran through OpenRouter on 2026-09-18 with the exact
     // `billing_provider = openrouter`; unlike legacy Bedrock normalization, no

@@ -1454,7 +1454,7 @@ type RouteEntry = ModelRoute & {
 // model lands on. Only doors with real sessions on disk are listed, the same
 // rule the id shapes follow.
 const ROUTES: readonly RouteEntry[] = [
-  { id: 'bedrock', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock'] },
+  { id: 'bedrock', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock', 'amazon-bedrock'] },
   { id: 'openrouter', label: 'OpenRouter', billing: 'metered', providerFields: ['openrouter'] },
 ]
 
@@ -1494,17 +1494,17 @@ export function getModelRoute(model: string): RoutedModel | undefined {
   return undefined
 }
 
-/// The route a provider's endpoint column names (`billing_provider` in
-/// Hermes' state.db), or undefined when the value is the direct door or
+/// The route a provider's endpoint field names (`billing_provider` in Hermes,
+/// `providerID` in OpenCode), or undefined when the value is the direct door or
 /// unknown. Direct doors (`anthropic`, `openai`, `google`, …) deliberately
 /// have no route: the unsuffixed row IS the direct row.
 export function routeFromProviderField(value: string | null | undefined): ModelRoute | undefined {
   if (!value) return undefined
   const normalized = value.trim().toLowerCase()
-  // Only the literal value exists in usage-bearing OpenRouter sessions. Keep
-  // Bedrock's shipped case/whitespace normalization, but do not invent the
-  // same aliases for a newly registered door without evidence.
-  if (normalized === 'openrouter' && value !== 'openrouter') return undefined
+  // Only the literal values exist in usage-bearing OpenCode/OpenRouter sessions.
+  // Keep Hermes' shipped `bedrock` case/whitespace normalization, but do not
+  // invent aliases for the provider spellings OpenCode records.
+  if ((normalized === 'openrouter' || normalized === 'amazon-bedrock') && value !== normalized) return undefined
   return ROUTES_BY_FIELD.get(normalized)
 }
 

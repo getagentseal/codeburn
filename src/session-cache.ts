@@ -451,9 +451,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // was archived stays a present, unchanged source: every opencode entry
   // fingerprints the same database file, so a warm cache keeps serving the
   // parse that dropped the child's calls until the database is written again.
-  // openrouter-route-v1: OpenCode's exact `providerID: openrouter` now rides on
-  // every parsed call as `route`. Cached calls hold none, so they must re-parse.
-  opencode: 'session-model-v1-archived-subtree-v1-openrouter-route-v1',
+  // billing-routes-v2: OpenCode's exact `providerID` values now ride on every
+  // parsed call as `route`: `openrouter` and `amazon-bedrock`. Cached calls hold
+  // neither, so they must re-parse. v2 also invalidates the OpenRouter-only
+  // fingerprint used by pre-merge builds of #1486.
+  opencode: 'session-model-v1-archived-subtree-v1-billing-routes-v2',
   quickdesk: 'emf-sqlite-v2-est-cost',
   // session-lineage-capture-v1: SessionLineage (CB-1, slice 1) is now carried
   // on the cached file for every kimicode wire. Child evidence is the
@@ -465,8 +467,8 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // that omits it.
   kimicode: 'wire-usage-v1-est-cost-session-lineage-capture-v1',
   // archived-subtree-v1: KiloCode shares the SQLite parser and the same schema.
-  // openrouter-route-v1: its warm cache must move with the shared parser too.
-  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-openrouter-route-v1',
+  // billing-routes-v2: its warm cache must move with both shared route fields.
+  'kilo-code': 'worktree-project-grouping-v1-session-model-v1-archived-subtree-v1-billing-routes-v2',
   'roo-code': 'worktree-project-grouping-v1',
   warp: 'worktree-project-grouping-v1-est-cost',
   antigravity: 'worktree-project-grouping-v6',

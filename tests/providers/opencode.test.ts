@@ -364,6 +364,28 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     })
   })
 
+  it('carries the exact Amazon Bedrock field without relying on a model-id shape', async () => {
+    const dbPath = createTestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, 'sess-amazon-bedrock')
+      insertMessage(db, 'msg-amazon-bedrock', 'sess-amazon-bedrock', 1700000001000, {
+        role: 'assistant',
+        providerID: 'amazon-bedrock',
+        modelID: 'amazon.nova-2-lite-v1:0',
+        cost: 0.01,
+        tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'sess-amazon-bedrock')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      provider: 'opencode',
+      model: 'amazon.nova-2-lite-v1:0',
+      route: 'bedrock',
+    })
+  })
+
   it('normalizes opencode MCP tool names for shared MCP reporting', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
