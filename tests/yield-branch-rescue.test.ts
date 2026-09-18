@@ -144,17 +144,16 @@ describe('yield merged-branch rescue (issue #1442)', () => {
     expect(category).toBe('abandoned')
   })
 
-  it('rescues through a ref parked inside main history — topologically identical to a merged branch', async () => {
-    // A ref pointing into main's history (a fully merged branch after the
-    // merge, or a branch cut from main and never advanced) carries nothing
-    // that is not already on main: everything at or below it shipped. The
-    // ancestry rule deliberately does not try to tell the two apart —
-    // post-merge, a merged branch IS such a ref.
+  it('never rescues through a ref parked inside main history (review: the parked-ref trap)', async () => {
+    // A branch cut from main and never advanced is an ancestor of main by
+    // construction and its tip tree is an OLD main tree. It must not rescue:
+    // on the reviewer's corpus, 567 of 600 first-draft rescues came from one
+    // such ref ($6,705 of $6,970 mislabeled productive).
     git(repoDir, ['switch', '-c', 'feature-parked', 'main'])
     git(repoDir, ['switch', 'main'])
 
     const category = await categorize(repoDir, makeSession({ sessionId: 'parked-branch-session', branch: 'feature-parked' }))
-    expect(category).toBe('productive')
+    expect(category).toBe('abandoned')
   })
 
   it('rescues on a master-based repository (main-branch resolution path)', async () => {
@@ -179,16 +178,16 @@ describe('yield merged-branch rescue (issue #1442)', () => {
     }
   })
 
-  it('rescues via ancestry when the branch itself was merged (true merge)', async () => {
+  it('does not rescue a session whose window contains none of the branch\'s commits (review: per-session contribution)', async () => {
     git(repoDir, ['merge', '--no-ff', 'feature-x', '-m', 'chore: merge feature-x'], {
       GIT_AUTHOR_DATE: '2026-01-06T09:00:00Z',
       GIT_COMMITTER_DATE: '2026-01-06T09:00:00Z',
     })
 
-    // Commits on the feature branch now exist in main by SHA, so this specific
-    // session would already be productive via inMain; use a session whose
-    // window contains NO commits at all (work committed after the window) to
-    // exercise the ancestry path on its own.
+    // The branch shipped (its tip tree is the merge commit's tree, which is on
+    // main), but this session ran 15:00-16:00 while every branch commit was
+    // made at 10:30: nothing ties the session to the work, so it stays
+    // abandoned — riding a shipped branch is not contributing to it.
     const lateSession = makeSession({
       sessionId: 'late-session',
       branch: 'feature-x',
@@ -196,7 +195,49 @@ describe('yield merged-branch rescue (issue #1442)', () => {
       lastTimestamp: '2026-01-01T16:00:00.000Z',
     })
     const category = await categorize(repoDir, lateSession)
+    expect(category).toBe('abandoned')
+  })
+
+  it('rescues a true-merge session whose window overlaps the branch\'s own commits', async () => {
+    // Same repository state: the 10:00-11:00 session overlapped the 10:30
+    // branch commit, and the merge left the branch tip's tree on main, so the
+    // squash rule's evidence (tip tree on main + own commits + window overlap)
+    // holds for true merges too.
+    const worker = makeSession({ sessionId: 'worker-session', branch: 'feature-x' })
+    const category = await categorize(repoDir, worker)
     expect(category).toBe('productive')
+  })
+
+  it('examines every matching ref: a stale local copy cannot hide a merged remote-tracking ref (review)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'codeburn-yield-candidates-'))
+    try {
+      git(repo, ['init', '-b', 'main'])
+      git(repo, ['config', 'user.email', 'test@example.com'])
+      git(repo, ['config', 'user.name', 'Test'])
+      realCommit(repo, 'chore: base', 'base.txt', 'base\n', '2025-12-01T09:00:00Z')
+      git(repo, ['switch', '-c', 'feature-r'])
+      realCommit(repo, 'feat: real work', 'work.txt', 'real\n', '2026-01-01T10:30:00Z')
+      // Simulate the remote-tracking ref holding the merged work...
+      const tip = git(repo, ['rev-parse', 'HEAD'])
+      git(repo, ['update-ref', `refs/remotes/origin/feature-r`, tip])
+      // ...while the local ref is reset back to the branch point (stale copy).
+      git(repo, ['reset', '--hard', 'main'])
+      git(repo, ['switch', 'main'])
+      // Squash-merge the work so only the tree signature survives.
+      git(repo, ['merge', '--squash', 'origin/feature-r'], {
+        GIT_AUTHOR_DATE: '2026-01-05T09:00:00Z',
+        GIT_COMMITTER_DATE: '2026-01-05T09:00:00Z',
+      })
+      git(repo, ['commit', '-m', 'feat: real work (#2)'], {
+        GIT_AUTHOR_DATE: '2026-01-05T09:00:00Z',
+        GIT_COMMITTER_DATE: '2026-01-05T09:00:00Z',
+      })
+
+      const category = await categorize(repo, makeSession({ sessionId: 'r-session', branch: 'feature-r' }))
+      expect(category).toBe('productive')
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
   })
 
   it('leaves sessions without branch metadata untouched', async () => {
