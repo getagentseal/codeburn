@@ -315,6 +315,132 @@ function sessionWindow(session: SessionSummary): SessionWindow | null {
   return { start, end, sessionId: session.sessionId }
 }
 
+/**
+ * Branch names a session was observed on, from its turns' `gitBranch` metadata
+ * (recorded by providers that capture it, e.g. Claude Code). Empty for
+ * providers without branch metadata — the merged-branch rescue is additive and
+ * simply never fires for those.
+ */
+function sessionBranches(session: SessionSummary): Set<string> {
+  const names = new Set<string>()
+  for (const turn of session.turns) {
+    const branch = turn.gitBranch
+    if (typeof branch === 'string' && branch) names.add(branch)
+  }
+  return names
+}
+
+function refMatchesSessionBranch(ref: string, branch: string): boolean {
+  if (ref === branch) return true
+  // Only the remote-tracking shape (`origin/<branch>`, `upstream/<branch>`):
+  // a bare suffix match would let an unrelated `topic/<branch>` rescue a
+  // session that never touched it.
+  if (!ref.endsWith(`/${branch}`)) return false
+  const prefix = ref.slice(0, ref.length - branch.length - 1)
+  return prefix.length > 0 && !prefix.includes('/')
+}
+
+type MergedBranchIndex = {
+  /** Short ref names whose tips are ancestors of main (`git branch --merged`). */
+  readonly ancestorRefs: ReadonlySet<string>
+  /** All tree hashes reachable on main, for squash-merge detection. */
+  readonly mainTrees: ReadonlySet<string>
+  /** Resolved tip tree per candidate ref for the session-observed branches. */
+  readonly refTrees: ReadonlyMap<string, string>
+  /** Merge-base tree per candidate ref, for the squash rule's self-revert guard. */
+  readonly refBaseTrees: ReadonlyMap<string, string>
+  /** Whether the ref carries at least one commit beyond its merge base. */
+  readonly refOwnCommits: ReadonlyMap<string, boolean>
+  /** The main branch's own short name, so it can never rescue a session. */
+  readonly mainBranch: string
+}
+
+/**
+ * Resolve, for the branch names sessions were observed on, whether each
+ * actually shipped to main — whenever that happened:
+ *
+ * 1. Ancestry — the branch tip is an ancestor of main (a true merge or a
+ *    rebase-merge keeps the branch's commits in main's history).
+ * 2. Tree equality — the branch tip's tree hash matches some commit on main.
+ *    A GitHub squash merge lands the work under a brand-new SHA, so ancestry
+ *    can never see it; the squashed tree is byte-identical to the branch tip.
+ *    Guarded by requiring the tip tree to differ from the branch's merge-base
+ *    tree, so an untouched branch cannot match main's pre-existing trees and
+ *    rescue a session for nothing.
+ *
+ * Only refs matching `wanted` names are resolved; everything else is ignored.
+ */
+function buildMergedBranchIndex(
+  gitDir: string,
+  mainBranch: string,
+  wanted: ReadonlySet<string>,
+): MergedBranchIndex | null {
+  if (wanted.size === 0) return null
+
+  const merged = runGit(['branch', `--merged=${mainBranch}`, '-a', '--format=%(refname:short)'], gitDir) ?? ''
+  const ancestorRefs = new Set(
+    merged.split('\n').map(l => l.trim().replace(/^\*\s+/, '')).filter(Boolean),
+  )
+
+  const mainLog = runGit(['log', mainBranch, '--format=%T'], gitDir) ?? ''
+  const mainTrees = new Set(mainLog.split('\n').filter(Boolean))
+
+  // Candidate refs for the wanted names: local refs first (exact name or a
+  // remote-tracking ref like origin/<branch>), resolved to tip + merge-base
+  // trees. Local wins: it is the branch as the session left it, while a remote
+  // tracking ref may have moved past the session's work.
+  const allRefs = (runGit(['for-each-ref', 'refs/heads', 'refs/remotes', '--format=%(refname:short)'], gitDir) ?? '')
+    .split('\n').map(l => l.trim()).filter(Boolean)
+  const refTrees = new Map<string, string>()
+  const refBaseTrees = new Map<string, string>()
+  const refOwnCommits = new Map<string, boolean>()
+  for (const branch of wanted) {
+    if (branch === mainBranch) continue
+    const candidates = allRefs.filter(ref => refMatchesSessionBranch(ref, branch))
+    candidates.sort((a, b) => Number(a.includes('/')) - Number(b.includes('/')))
+    for (const ref of candidates) {
+      const tree = runGit(['rev-parse', `${ref}^{tree}`], gitDir)
+      if (!tree) continue
+      const base = runGit(['merge-base', ref, mainBranch], gitDir)
+      const baseTree = base ? runGit(['rev-parse', `${base}^{tree}`], gitDir) : null
+      // Own-commit count for the squash rule's guard. Note it is meaningless
+      // for the ancestry rule: once a branch is fully merged its merge base
+      // IS its tip, so base..ref is empty — a merged branch and a ref parked
+      // inside main's history are the same topological object, and everything
+      // at or below either is in main.
+      const ownCount = base ? Number(runGit(['rev-list', '--count', `${base}..${ref}`], gitDir) ?? '0') : 0
+      refTrees.set(ref, tree)
+      refBaseTrees.set(ref, baseTree ?? tree)
+      refOwnCommits.set(ref, ownCount > 0)
+      break
+    }
+  }
+
+  return { ancestorRefs, mainTrees, refTrees, refBaseTrees, refOwnCommits, mainBranch }
+}
+
+/** Whether any branch this session was observed on shipped to main by either rule. */
+function sessionBranchShipped(branches: ReadonlySet<string>, index: MergedBranchIndex): boolean {
+  for (const branch of branches) {
+    if (branch === index.mainBranch) continue
+    for (const [ref, tree] of index.refTrees) {
+      if (!refMatchesSessionBranch(ref, branch)) continue
+      // Ancestry: everything at or below the ref is in main. A merged branch
+      // and a ref parked inside main's history are the same object here; in
+      // both cases the state the session worked toward is on main.
+      if (index.ancestorRefs.has(ref)) return true
+      // Squash rule: the branch must carry commits of its own and its tip
+      // tree must match a main tree while differing from its base tree, so
+      // neither an untouched branch nor one that reverted itself back to its
+      // base can match through the base's own tree.
+      if (index.refOwnCommits.get(ref) === true
+        && index.mainTrees.has(tree)
+        && tree !== index.refBaseTrees.get(ref)) return true
+    }
+  }
+  return false
+}
+
 function attributeCommits(
   sessions: SessionSummary[],
   commits: CommitInfo[],
@@ -480,13 +606,39 @@ export async function computeYield(range: DateRange, cwd: string, provider: stri
 
   for (const group of repoGroups.values()) {
     const attributions = attributeCommits(group.sessions, group.commits)
+    // All branch names observed across this group's sessions, so one index
+    // covers every session; built lazily below only if a rescue is attempted.
+    const groupBranches = new Set<string>()
+    for (const session of group.sessions) {
+      for (const branch of sessionBranches(session)) groupBranches.add(branch)
+    }
+    let mergedBranchIndex: MergedBranchIndex | null | undefined
+    const rescueIfShipped = (branches: ReadonlySet<string>): boolean => {
+      if (groupBranches.size === 0 || !group.gitDir) return false
+      if (mergedBranchIndex === undefined) {
+        mergedBranchIndex = buildMergedBranchIndex(group.gitDir, getMainBranch(group.gitDir), groupBranches)
+      }
+      return mergedBranchIndex !== null && sessionBranchShipped(branches, mergedBranchIndex)
+    }
+
     for (const [index, session] of group.sessions.entries()) {
       const attribution = attributions[index]
-      const { category, commitCount } = categorizeSession(
+      let { category, commitCount } = categorizeSession(
         session,
         attribution?.commits ?? [],
         attribution?.lostCandidacy ?? false,
       )
+      // #1442: the timestamp-window heuristics call work abandoned that later
+      // shipped — a feature branch merged after the session's window (or under
+      // a squash SHA) leaves the session looking dead. When the session was
+      // observed on a branch that demonstrably reached main — by ancestry or by
+      // squash tree equality — it is productive. Reverted stays reverted: that
+      // verdict already describes work that shipped and was then undone.
+      if (category === 'abandoned' || category === 'ambiguous') {
+        if (rescueIfShipped(sessionBranches(session))) {
+          category = 'productive'
+        }
+      }
 
       summary[category].cost += session.totalCostUSD
       summary[category].sessions += 1
@@ -519,7 +671,7 @@ export function formatYieldSummary(summary: YieldSummary): string {
     `Abandoned:   ${fmt(abandoned.cost).padStart(8)} (${pct(abandoned.cost)}%) - ${abandoned.sessions} sessions never committed`,
     `Ambiguous:   ${fmt(ambiguous.cost).padStart(8)} (${pct(ambiguous.cost)}%) - ${ambiguous.sessions} sessions lost commits to concurrent sessions`,
     '',
-    'Attribution: timestamp-window based (heuristic)',
+    'Attribution: timestamp-window + merged-branch evidence (heuristic)',
     '',
     `Total:       ${fmt(total.cost).padStart(8)}     - ${total.sessions} sessions`,
     '',

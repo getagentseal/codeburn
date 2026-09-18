@@ -272,7 +272,7 @@ Did the spend actually ship? `codeburn yield` correlates AI sessions with git co
 | Abandoned | No commits near session, or commits never merged |
 | Ambiguous | Session ran parallel to another and its window's commits were attributed to the tighter one |
 
-Attribution is timestamp-window based (heuristic): each commit is credited to at most one session, the tightest window containing it. The JSON report carries `methodology: "timestamp-window"`.
+Attribution is timestamp-window based (heuristic): each commit is credited to at most one session, the tightest window containing it. The JSON report carries `methodology: "timestamp-window"`. A session the window heuristics would leave as abandoned or ambiguous is rescued to productive when a branch it was observed on demonstrably reached main — by ancestry (true or rebase merge) or by tree equality with a main commit (a GitHub squash merge lands the work under a new SHA, so ancestry alone cannot see it); the rescue needs branch metadata in the session logs, which Claude Code records and most other providers do not.
 
 Requires a git repository. Run from your project directory.
 
