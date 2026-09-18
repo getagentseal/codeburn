@@ -91,11 +91,11 @@ try {
 // Every parseable line is a path to a production package instance. Map each
 // to its top-level node_modules entry (`name` or `@scope/name`), then copy
 // those dirs whole — a package's own nested node_modules comes with it, which
-// is exactly the closure it needs at runtime. Names are extracted relative to
-// the first `node_modules/` segment rather than matched against the checkout's
-// absolute path: npm 12 redacts UUID-shaped path segments to `***` in this
-// output, so a checkout under a UUID directory (CI runners, scratch worktrees)
-// broke the absolute-prefix match and staged an empty closure (#1466).
+// is exactly the closure it needs at runtime. Names are extracted by segment
+// position rather than matched against the checkout's absolute path: npm 11
+// and later redact UUID-shaped path segments to `***` in this output, so a
+// checkout under a UUID directory (CI runners, scratch worktrees) broke the
+// absolute-prefix match and staged an empty closure (#1466).
 const topLevel = topLevelPackagesFromNpmLs(listed, rootModules)
 if (topLevel.size === 0) {
   throw new Error('stage-cli: production dependency closure is empty — is the root `npm install`ed?')

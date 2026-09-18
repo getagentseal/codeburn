@@ -3,13 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { topLevelPackagesFromNpmLs } from './stage-cli-packages.mjs'
 
 // `npm ls --parseable` parsed without anchoring on the absolute checkout path.
-// npm 12 redacts UUID-shaped path segments to `***` (observed with npm 12.0.2:
-// a checkout at /tmp/1a2b3c4d-1111-2222-3333-444455556666/probe prints
-// /private/tmp/***/probe as its root line), which is why #1466's absolute-prefix
-// match aborted packaging on any UUID-containing path. These fixtures pin the
-// real output shapes, redacted and not. The root's node_modules is located by
-// segment position — however many `/node_modules/` segments the root path
-// itself contains, the top-level name sits one past that count.
+// npm 11 and later redact UUID-shaped path segments to `***` (observed with
+// npm 11.19.0: a checkout at /tmp/1a2b3c4d-1111-2222-3333-444455556666/probe
+// prints /private/tmp/***/probe as its root line), which is why #1466's
+// absolute-prefix match aborted packaging on any UUID-containing path. These
+// fixtures pin the real output shapes, redacted and not. The root's
+// node_modules is located by segment position — however many `/node_modules/`
+// segments the root path itself contains, the top-level name sits one past
+// that count.
 
 const ROOT_MODULES = '/repo/codeburn/node_modules'
 
@@ -24,8 +25,8 @@ describe('topLevelPackagesFromNpmLs', () => {
     expect(topLevelPackagesFromNpmLs(listed, ROOT_MODULES)).toEqual(new Set(['@modelcontextprotocol/sdk', 'chalk', 'react']))
   })
 
-  it('keeps the npm 12 redacted shape working, which the old prefix match could not', () => {
-    // This is the literal output npm 12.0.2 prints for the checkout above: the
+  it('keeps the redacted shape working, which the old prefix match could not', () => {
+    // This is the literal output npm 11.19.0 prints for the checkout above: the
     // UUID segment is `***` on every line. The old absolute-prefix match found
     // zero packages here and aborted the build.
     const listed = [
