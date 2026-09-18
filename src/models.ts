@@ -1427,11 +1427,20 @@ export function getShortModelName(model: string): string {
 // Pricing never consults the route: it runs on the raw id, and LiteLLM already
 // carries the routed rows. The route only decides which row the cost lands on.
 
+/// Who pays for a call: a metered API account bills per call, a subscription
+/// has already paid for it. Exactly these two — a call whose evidence names
+/// neither carries no mode at all rather than being guessed into one.
+export type BillingMode = 'metered' | 'subscription'
+
 export type ModelRoute = {
   /// Stable key, safe for filters and JSON (`bedrock`).
   id: string
   /// Suffix appended to the display name: "Fable 5.1 (Bedrock)".
   label: string
+  /// How this door bills when the call itself says nothing: every registered
+  /// door is a metered API account. A call's own recorded basis still wins
+  /// (see `callBillingMode`) — this is the default, not an override.
+  billing: BillingMode
 }
 
 type RouteEntry = ModelRoute & {
@@ -1445,7 +1454,8 @@ type RouteEntry = ModelRoute & {
 // model lands on. Only doors with real sessions on disk are listed, the same
 // rule the id shapes follow.
 const ROUTES: readonly RouteEntry[] = [
-  { id: 'bedrock', label: 'Bedrock', providerFields: ['bedrock'] },
+  { id: 'bedrock', label: 'Bedrock', billing: 'metered', providerFields: ['bedrock'] },
+  { id: 'openrouter', label: 'OpenRouter', billing: 'metered', providerFields: ['openrouter'] },
 ]
 
 const ROUTES_BY_ID = new Map(ROUTES.map(route => [route.id, route]))
@@ -1489,12 +1499,53 @@ export function getModelRoute(model: string): RoutedModel | undefined {
 /// unknown. Direct doors (`anthropic`, `openai`, `google`, …) deliberately
 /// have no route: the unsuffixed row IS the direct row.
 export function routeFromProviderField(value: string | null | undefined): ModelRoute | undefined {
-  return value ? ROUTES_BY_FIELD.get(value.trim().toLowerCase()) : undefined
+  if (!value) return undefined
+  const normalized = value.trim().toLowerCase()
+  // Only the literal value exists in usage-bearing OpenRouter sessions. Keep
+  // Bedrock's shipped case/whitespace normalization, but do not invent the
+  // same aliases for a newly registered door without evidence.
+  if (normalized === 'openrouter' && value !== 'openrouter') return undefined
+  return ROUTES_BY_FIELD.get(normalized)
 }
 
 /// Route by stable id, for consumers that persisted the id (cached calls).
 export function getRouteById(id: string | null | undefined): ModelRoute | undefined {
   return id ? ROUTES_BY_ID.get(id) : undefined
+}
+
+/// Every registered route id, for a CLI that validates a `--route` value
+/// before it parses anything.
+export function registeredRouteIds(): string[] {
+  return ROUTES.map(route => route.id)
+}
+
+/// The door a call actually went through: the route the provider recorded
+/// when it recorded one, else the one the model id names, else null for the
+/// direct door. Null also covers a persisted id no route registers, so an
+/// unrecognised value degrades to direct rather than to a phantom door.
+export function effectiveRouteId(model: string, route?: string | null): string | null {
+  return getRouteById(route)?.id ?? getModelRoute(model)?.id ?? null
+}
+
+/// A billing mode from a persisted or user-supplied value, or undefined when
+/// it is neither mode. The single gate every validator and conversion uses,
+/// so `metered|subscription` cannot drift between the CLI, the cache and the
+/// providers.
+export function parseBillingMode(value: string | null | undefined): BillingMode | undefined {
+  return value === 'metered' || value === 'subscription' ? value : undefined
+}
+
+/// Who billed a call, from the call's own evidence. A mode the provider
+/// observed (Hermes' resolved cost basis: `included` is subscription-covered,
+/// `actual` is a recorded invoice amount) is a fact and wins outright. Only
+/// when the call states no fact does an effective registered route supply its
+/// default. A direct call whose cost is estimated or calculated stays
+/// unknown: an estimate says nothing about which account was charged.
+export function callBillingMode(call: { model: string; route?: string | null; billing?: string | null }): BillingMode | undefined {
+  const observed = parseBillingMode(call.billing)
+  if (observed) return observed
+  const route = effectiveRouteId(call.model, call.route)
+  return route ? ROUTES_BY_ID.get(route)!.billing : undefined
 }
 
 /// The parenthetical a routed row carries after its short name — "(Bedrock)",

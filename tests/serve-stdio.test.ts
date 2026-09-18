@@ -264,6 +264,19 @@ describe('codeburn serve --stdio', () => {
     }
   }, 60_000)
 
+  // #1451: --route/--billing are call-level slicers on models/sessions/audit,
+  // the same shape as --project/--exclude, and must be servable the same way.
+  it('routes --route/--billing for every command that declares them', async () => {
+    const commands: Array<[number, string[]]> = [
+      [350, ['models', '--format', 'json', '--period', 'today', '--route', 'bedrock']],
+      [351, ['sessions', '--format', 'json', '--period', 'today', '--billing', 'metered']],
+      [352, ['audit', '--format', 'json', '--period', 'today', '--route', 'direct', '--billing', 'subscription']],
+    ]
+    for (const [id, args] of commands) {
+      expect(await request(id, args)).toMatchObject({ ok: true })
+    }
+  }, 60_000)
+
   // `report` is the interactive dashboard on every format but json, and a TUI
   // inside a child whose stdout is the wire would write frames nobody can read.
   // Only its JSON form is servable; the rest is refused and falls back to a

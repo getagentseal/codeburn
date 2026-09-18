@@ -2541,6 +2541,7 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
     isEstimated: call.costIsEstimated,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
   })
 
   const prRefs = extractPrUrlsFromText(call.userMessage)
@@ -2589,6 +2590,7 @@ function providerCallToCachedCall(call: ParsedProviderCall): CachedCall {
     ...(call.editFailed ? { editFailed: call.editFailed } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.requestMultiplier != null ? { requestMultiplier: call.requestMultiplier } : {}),
     ...(call.compactedAt ? { compactedAt: call.compactedAt } : {}),
     ...(call.initiator ? { initiator: call.initiator } : {}),
@@ -2636,6 +2638,7 @@ function apiCallToCachedCall(call: ParsedApiCall): CachedCall {
     ...(call.toolErrors ? { toolErrors: call.toolErrors } : {}),
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     activeDurationMs: call.activeDurationMs,
     activeGeneratedTokens: call.activeGeneratedTokens,
     toolWaitMs: call.toolWaitMs,
@@ -2758,6 +2761,7 @@ function cachedCallToApiCall(call: CachedCall): ParsedApiCall {
     toolWaitMs: call.toolWaitMs,
     ...(call.nanoAiu != null ? { nanoAiu: call.nanoAiu } : {}),
     ...(call.route ? { route: call.route } : {}),
+    ...(call.billing ? { billing: call.billing } : {}),
     ...(call.supplementaryAccounting || isHermesObservationKey(call.deduplicationKey)
       ? { supplementaryAccounting: true }
       : {}),
@@ -3305,6 +3309,19 @@ function classifiedTurnSlicedToRange(turn: ClassifiedTurn, dateRange: DateRange)
   if (!inRangeCalls) return null
   if (inRangeCalls.length === turn.assistantCalls.length) return turn
   return { ...turn, assistantCalls: inRangeCalls, timestamp: inRangeCalls[0]!.timestamp }
+}
+
+// Predicate variant of classifiedTurnSlicedToRange for filters that select
+// individual calls rather than a time window (`--route`, `--billing`). Same
+// split rule and the same invariant: only `assistantCalls` is trimmed, and
+// `category`/`subCategory`/`retries`/`hasEdits` stay as classified from the
+// complete turn. Re-anchor partial turns to the first retained call because
+// downstream exports and day rollups bucket on the turn timestamp.
+function classifiedTurnSlicedToCalls(turn: ClassifiedTurn, keep: (call: ParsedApiCall) => boolean): ClassifiedTurn | null {
+  const kept = turn.assistantCalls.filter(keep)
+  if (kept.length === 0) return null
+  if (kept.length === turn.assistantCalls.length) return turn
+  return { ...turn, assistantCalls: kept, timestamp: kept[0]!.timestamp }
 }
 
 // Day-set variant of classifiedTurnSlicedToRange for the menubar/history day
@@ -4567,6 +4584,8 @@ function carryLinkageFields(rebuilt: SessionSummary, original: SessionSummary): 
   if (original.ambiguousSpawnAgentIds?.length) rebuilt.ambiguousSpawnAgentIds = original.ambiguousSpawnAgentIds
   if (original.title) rebuilt.title = original.title
   if (original.agentType) rebuilt.agentType = original.agentType
+  if (original.agentName) rebuilt.agentName = original.agentName
+  if (original.agentStartedAt) rebuilt.agentStartedAt = original.agentStartedAt
   if (original.lineage) rebuilt.lineage = original.lineage
 }
 
@@ -5030,6 +5049,42 @@ export function filterProjectsByClaudeConfigSource(projects: ProjectSummary[], s
     const anchors = (project.subagentAnchors ?? []).filter(anchor => anchor.source?.id === sourceId)
     if (sessions.length === 0 && anchors.length === 0) continue
     filtered.push(summarizeProject(project.project, project.projectPath, sessions, anchors))
+  }
+  return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
+}
+
+/// Keep only the assistant calls `keep` accepts, and rebuild every nested
+/// total from what survived: the same rebuild the date filters run, minus the
+/// range-start recomputation. A call filter is a provenance filter, not a date
+/// filter (see filterProjectsByClaudeConfigSource), so the slice's time
+/// boundary has not moved and the original `prRefsAtRangeStart` still holds.
+/// A spawn parent the filter emptied becomes a 0-cost fold anchor rather than
+/// disappearing, so an in-slice child still resolves to its PR.
+export function filterProjectsByCall(projects: ProjectSummary[], keep: (call: ParsedApiCall) => boolean): ProjectSummary[] {
+  const filtered: ProjectSummary[] = []
+  for (const project of projects) {
+    const sessions: SessionSummary[] = []
+    const anchors: SessionSummary[] = [...(project.subagentAnchors ?? [])]
+    const survivingIdentities = new Set<string>()
+    for (const session of project.sessions) {
+      const turns = session.turns.flatMap(turn => {
+        const sliced = classifiedTurnSlicedToCalls(turn, keep)
+        return sliced ? [sliced] : []
+      })
+      if (turns.length === 0) {
+        if (isSpawnParent(session)) anchors.push(session)
+        continue
+      }
+      const rebuilt = buildSessionSummary(session.sessionId, session.project, turns, session.mcpInventory, session.source)
+      carryLinkageFields(rebuilt, session)
+      if (session.prRefsAtRangeStart?.length) rebuilt.prRefsAtRangeStart = session.prRefsAtRangeStart
+      survivingIdentities.add(sessionIdentity(session))
+      sessions.push(rebuilt)
+    }
+
+    const dedupedAnchors = dedupeAnchors(anchors, survivingIdentities)
+    if (sessions.length === 0 && dedupedAnchors.length === 0) continue
+    filtered.push(summarizeProject(project.project, project.projectPath, sessions, dedupedAnchors))
   }
   return filtered.sort((a, b) => b.totalCostUSD - a.totalCostUSD)
 }

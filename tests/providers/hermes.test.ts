@@ -129,6 +129,7 @@ function insertSession(db: TestDb, values: {
   cwd?: string | null
   gitRepoRoot?: string | null
   billingProvider?: string
+  costStatus?: string
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -145,8 +146,8 @@ function insertSession(db: TestDb, values: {
     `INSERT INTO sessions (
       id, source, model, cwd, git_repo_root, billing_provider, input_tokens, output_tokens,
       cache_read_tokens, cache_write_tokens, reasoning_tokens, estimated_cost_usd,
-      actual_cost_usd, api_call_count, tool_call_count, started_at, title
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      actual_cost_usd, cost_status, api_call_count, tool_call_count, started_at, title
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     values.id,
     values.source ?? 'cli',
@@ -161,6 +162,7 @@ function insertSession(db: TestDb, values: {
     values.reasoningTokens,
     values.estimatedCost ?? null,
     values.actualCost ?? null,
+    values.costStatus ?? null,
     values.apiCalls ?? 1,
     values.toolCalls ?? 0,
     values.startedAt,
@@ -322,9 +324,9 @@ skipUnlessSqlite('hermes provider', () => {
   it('carries the billing route the session recorded, and stays silent for every other door', async () => {
     // billing_provider is the door the call went through; it was SELECTed and
     // dropped before #1450. The direct `anthropic` door has no route: its row
-    // IS the direct row. `openrouter` and `bedrock-mantle` are real Hermes
-    // values with no sessions on disk yet, so they are not registered and are
-    // treated the same as an unknown door.
+    // IS the direct row. `openrouter` joined `bedrock` once usage-bearing
+    // sessions existed (#1451); `bedrock-mantle` is still a real Hermes value
+    // with no sessions on disk, so it is treated as an unknown door.
     const dbPath = createHermesDb(tmpDir)
     withTestDb(dbPath, (db) => {
       const rows: Array<[string, string, string]> = [
@@ -333,6 +335,7 @@ skipUnlessSqlite('hermes provider', () => {
         ['route-openrouter', 'claude-sonnet-4-5', 'openrouter'],
         ['route-codex', 'gpt-5.6-sol', 'openai-codex'],
         ['route-anthropic', 'claude-fable-5-1', 'anthropic'],
+        ['route-mantle', 'claude-fable-5-1', 'bedrock-mantle'],
       ]
       for (const [id, model, billingProvider] of rows) {
         insertSession(db, { id, model, billingProvider, inputTokens: 1000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200 })
@@ -341,15 +344,60 @@ skipUnlessSqlite('hermes provider', () => {
     })
 
     const byId = new Map<string, ParsedProviderCall>()
-    for (const id of ['route-bedrock', 'route-plain-id-bedrock', 'route-openrouter', 'route-codex', 'route-anthropic']) {
+    for (const id of ['route-bedrock', 'route-plain-id-bedrock', 'route-openrouter', 'route-codex', 'route-anthropic', 'route-mantle']) {
       const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=${id}`)
       expect(calls, id).toHaveLength(1)
       byId.set(id, calls[0]!)
     }
     expect(byId.get('route-bedrock')!.route).toBe('bedrock')
     expect(byId.get('route-plain-id-bedrock')!.route).toBe('bedrock')
-    for (const id of ['route-openrouter', 'route-codex', 'route-anthropic']) {
+    expect(byId.get('route-openrouter')!.route).toBe('openrouter')
+    for (const id of ['route-codex', 'route-anthropic', 'route-mantle']) {
       expect(byId.get(id)!.route, id).toBeUndefined()
+    }
+  })
+
+  it('carries the billing mode only where the session recorded the cost basis', async () => {
+    // Hermes resolves each session's cost to a basis. `included` is usage a
+    // subscription already paid for; an `actual` amount is a recorded invoice
+    // line, so it is metered — an explicit $0 still counts as recorded, which
+    // is what the two OpenRouter `:free` sessions of 2026-09-18 look like. An
+    // estimate proves nothing about which account was charged, so it carries
+    // no mode at all rather than being guessed into one.
+    const dbPath = createHermesDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      const rows: Array<{ id: string; billingProvider: string; costStatus?: string; actualCost?: number | null }> = [
+        { id: 'basis-included', billingProvider: 'openai-codex', costStatus: 'included' },
+        { id: 'basis-actual', billingProvider: 'anthropic', actualCost: 0.42 },
+        { id: 'basis-openrouter-free', billingProvider: 'openrouter', actualCost: 0 },
+        { id: 'basis-estimated', billingProvider: 'anthropic', costStatus: 'estimated' },
+        { id: 'basis-calculated', billingProvider: 'anthropic' },
+        // A recorded `included` outranks the door's own metered default.
+        { id: 'basis-included-on-bedrock', billingProvider: 'bedrock', costStatus: 'included' },
+      ]
+      for (const row of rows) {
+        insertSession(db, {
+          id: row.id, model: 'claude-sonnet-4-5', billingProvider: row.billingProvider,
+          costStatus: row.costStatus, actualCost: row.actualCost ?? null, estimatedCost: row.costStatus === 'estimated' ? 0.01 : null,
+          inputTokens: 1000, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, startedAt: 1779549200,
+        })
+        db.prepare('INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)').run(row.id, 'user', 'hi', 1779549201)
+      }
+    })
+
+    const byId = new Map<string, ParsedProviderCall>()
+    for (const id of ['basis-included', 'basis-actual', 'basis-openrouter-free', 'basis-estimated', 'basis-calculated', 'basis-included-on-bedrock']) {
+      const calls = await collectCalls(tmpDir, `${dbPath}#hermes-session=${id}`)
+      expect(calls, id).toHaveLength(1)
+      byId.set(id, calls[0]!)
+    }
+    expect(byId.get('basis-included')!.billing).toBe('subscription')
+    expect(byId.get('basis-included-on-bedrock')!.billing).toBe('subscription')
+    expect(byId.get('basis-actual')!.billing).toBe('metered')
+    expect(byId.get('basis-openrouter-free')!.billing).toBe('metered')
+    expect(byId.get('basis-openrouter-free')!.route).toBe('openrouter')
+    for (const id of ['basis-estimated', 'basis-calculated']) {
+      expect(byId.get(id)!.billing, id).toBeUndefined()
     }
   })
 

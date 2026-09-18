@@ -166,6 +166,62 @@ describe('loadCache / saveCache', () => {
     expect(calls?.[1]?.isEstimated).toBeUndefined()
   })
 
+  it('round-trips the billing route and mode, and leaves an unstated mode unknown', async () => {
+    // Both ride on the cached call so a warm read keys the same model row and
+    // answers the same --route/--billing question a cold parse would (#1451).
+    const source = '/path/to/state.db#hermes-session=s1'
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        hermes: {
+          envFingerprint: 'abc123',
+          files: {
+            [source]: makeCachedFile({
+              turns: [makeTurn({ calls: [
+                makeCall({ deduplicationKey: 'routed', route: 'openrouter', billing: 'metered' }),
+                makeCall({ deduplicationKey: 'covered', billing: 'subscription' }),
+                makeCall({ deduplicationKey: 'plain' }),
+              ] })],
+            }),
+          },
+        },
+      },
+    }
+
+    await writeCacheOnDisk(cache)
+    const loaded = await readCacheOnDisk()
+    const calls = loaded.providers['hermes']?.files[source]?.turns[0]?.calls
+    expect(calls?.[0]).toMatchObject({ route: 'openrouter', billing: 'metered' })
+    expect(calls?.[1]?.billing).toBe('subscription')
+    expect(calls?.[1]?.route).toBeUndefined()
+    // No mode stated is unknown, never coerced into one of the two.
+    expect(calls?.[2]?.billing).toBeUndefined()
+  })
+
+  it('rejects a cached call whose billing mode is not one of the two', async () => {
+    // Same treatment `speed` gets: an out-of-contract value is not a value to
+    // be coerced, it is a shard that cannot be trusted, so it is dropped and
+    // re-parsed rather than silently filtered as `metered`.
+    const source = '/path/to/state.db#hermes-session=bad'
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      providers: {
+        hermes: {
+          envFingerprint: 'abc123',
+          files: {
+            [source]: makeCachedFile({
+              turns: [makeTurn({ calls: [makeCall({ billing: 'included' as never })] })],
+            }),
+          },
+        },
+      },
+    }
+
+    await writeCacheOnDisk(cache)
+    const loaded = await readCacheOnDisk()
+    expect(loaded.providers['hermes']?.files[source]).toBeUndefined()
+  })
+
   it('returns empty cache on version mismatch', async () => {
     const bad: SessionCache = { version: 999, providers: { claude: { envFingerprint: 'x', files: {} } } }
     await mkdir(TMP_DIR, { recursive: true })

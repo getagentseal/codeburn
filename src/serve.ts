@@ -153,13 +153,15 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
   },
   models: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
-    '--provider': 'value', '--task': 'value', '--by-task': 'flag', '--by-agent': 'flag',
+    '--provider': 'value', '--route': 'value', '--billing': 'value',
+    '--task': 'value', '--by-task': 'flag', '--by-agent': 'flag',
     '--top': 'value', '--min-cost': 'value', '--no-totals': 'flag', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
   },
   sessions: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
-    '--provider': 'value', '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
+    '--provider': 'value', '--route': 'value', '--billing': 'value',
+    '--format': 'value', '--by-pr': 'flag', '--no-pager': 'flag',
     '--project': 'value', '--exclude': 'value',
     '--contributions': 'flag',
   },
@@ -186,7 +188,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
   },
   audit: {
     '-p': 'value', '--period': 'value', '--from': 'value', '--to': 'value',
-    '--provider': 'value', '--format': 'value',
+    '--provider': 'value', '--route': 'value', '--billing': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
   },
 }

@@ -167,6 +167,23 @@ describe('hermes session ledger unit', () => {
     expect(cursor.lastSeen.costBasis).toBe('estimated')
   })
 
+  it('does not relabel a genuine multi-observation history on a basis-only change', () => {
+    const first = applyHermesSnapshot(undefined, snap({ costUSD: 0 })).cursor
+    const grown = applyHermesSnapshot(first, snap({
+      tokens: { inputTokens: 150, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+      costUSD: 0,
+      costBasis: 'actual',
+    })).cursor
+    const corrected = applyHermesSnapshot(grown, snap({
+      tokens: { inputTokens: 150, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+      costUSD: 0,
+      costBasis: 'included',
+    })).cursor
+
+    expect(corrected.observations.map(observation => observation.costBasis)).toEqual(['actual', 'actual'])
+    expect(corrected.lastSeen.costBasis).toBe('included')
+  })
+
   it('clock is injectable for observation timestamps', async () => {
     setHermesLedgerNow(() => new Date('2026-08-22T15:30:00.000Z'))
     const cursor = await recordHermesSnapshot(snap({
@@ -233,6 +250,48 @@ describe('hermes session ledger unit', () => {
     const second = loadHermesSessionLedger()
     expect(second.cursors['default']!['seeded']!.observations).toHaveLength(1)
     expect(second.cursors['default']!['seeded']!.lastSeen.inputTokens).toBe(100)
+  })
+
+  it('seeds cached subscription billing as included, not actual', async () => {
+    const call: CachedCall = {
+      provider: 'hermes',
+      model: 'gpt-5.6-sol',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cachedInputTokens: 0,
+        reasoningTokens: 0,
+        webSearchRequests: 0,
+        cacheCreationOneHourTokens: 0,
+      },
+      costUSD: 0,
+      isEstimated: false,
+      billing: 'subscription',
+      speed: 'standard',
+      timestamp: '2026-08-21T10:00:00.000Z',
+      tools: [],
+      bashCommands: [],
+      skills: [],
+      subagentTypes: [],
+      deduplicationKey: 'hermes:default:subscription-seed',
+    }
+    const section: ProviderSection = {
+      envFingerprint: 'test',
+      files: {
+        '/tmp/state.db#hermes-session=subscription-seed': {
+          fingerprint: { dev: 1, ino: 1, mtimeMs: 1, sizeBytes: 1 },
+          mcpInventory: [],
+          turns: [{ timestamp: call.timestamp, sessionId: 'subscription-seed', userMessage: 'hi', calls: [call] }],
+        },
+      },
+    }
+
+    await seedHermesCursorsFromProviderSection(section)
+
+    const observation = loadHermesSessionLedger().cursors['default']!['subscription-seed']!.observations[0]!
+    expect(observation.costBasis).toBe('included')
   })
 
   it('publication failure is a typed retryable error', async () => {

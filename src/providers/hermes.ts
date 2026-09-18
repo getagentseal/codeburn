@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
 import { readGitOriginUrl } from '../git-origin.js'
-import { calculateCost, getShortModelName, routeFromProviderField } from '../models.js'
+import { calculateCost, getShortModelName, routeFromProviderField, type BillingMode } from '../models.js'
 import { isUserHomeRoot } from '../path-privacy.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, isSqliteBusyError, type SqliteDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
@@ -445,6 +445,17 @@ function resolveHermesCost(
   return { costUSD: calculatedCost, costIsEstimated: true, costBasis: 'calculated' }
 }
 
+/// Who billed a call, read off the basis Hermes resolved its cost to.
+/// `included` is usage a subscription already paid for; an `actual` amount is
+/// a recorded invoice line, so it is metered — an explicit $0 (a free-tier
+/// OpenRouter model) is still recorded. An estimate names no account, so it
+/// yields no mode rather than a guess.
+function billingFromCostBasis(basis: HermesCostBasis): BillingMode | undefined {
+  if (basis === 'included') return 'subscription'
+  if (basis === 'actual') return 'metered'
+  return undefined
+}
+
 function observationToCall(
   observation: HermesObservation,
   args: {
@@ -467,6 +478,7 @@ function observationToCall(
   },
 ): ParsedProviderCall {
   const later = observation.index > 0
+  const billing = billingFromCostBasis(observation.costBasis)
   return {
     provider: 'hermes',
     model: args.model,
@@ -500,6 +512,7 @@ function observationToCall(
     ...(later || !args.prLinks?.length ? {} : { prLinks: args.prLinks }),
     ...(later ? { supplementaryAccounting: true } : {}),
     ...(args.route ? { route: args.route } : {}),
+    ...(billing ? { billing } : {}),
   }
 }
 

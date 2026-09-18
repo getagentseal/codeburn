@@ -1,3 +1,4 @@
+import type { BillingMode } from '../models.js'
 import type { DateRange, ToolCall } from '../types.js'
 
 export type SessionSource = {
@@ -94,6 +95,13 @@ export type ParsedProviderCall = {
   // shape decides at aggregation. Undefined means "direct door or unknown",
   // never "not routed".
   route?: string
+  // Who billed this call, when the provider recorded the fact: `subscription`
+  // for usage a plan already covers (Hermes' `included` cost basis),
+  // `metered` for a recorded invoice amount (an `actual` amount, an explicit
+  // $0 included). Absent means the provider stated no fact — the effective
+  // route's own default decides, and a direct call stays unknown. Never
+  // inferred from an estimate.
+  billing?: BillingMode
   // Exact provider-recorded cwd, kept separately because projectPath may later
   // canonicalize a linked worktree to its main repository.
   workingDirectory?: string

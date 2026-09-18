@@ -73,6 +73,8 @@ function createHermesDb(homeDir: string): string {
       reasoning_tokens INTEGER DEFAULT 0,
       estimated_cost_usd REAL,
       actual_cost_usd REAL,
+      cost_status TEXT,
+      cost_source TEXT,
       api_call_count INTEGER DEFAULT 0,
       tool_call_count INTEGER DEFAULT 0,
       started_at REAL,
@@ -118,15 +120,17 @@ function insertSession(db: TestDb, values: {
   outputTokens?: number
   actualCost?: number | null
   estimatedCost?: number | null
+  costStatus?: string | null
+  costSource?: string | null
   startedAt: number
   model?: string
 }): void {
   db.prepare(
     `INSERT INTO sessions (
       id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-      reasoning_tokens, estimated_cost_usd, actual_cost_usd, api_call_count, tool_call_count,
-      started_at, title
-    ) VALUES (?, 'cli', ?, ?, ?, 0, 0, 0, ?, ?, 1, 0, ?, ?)`,
+      reasoning_tokens, estimated_cost_usd, actual_cost_usd, cost_status, cost_source,
+      api_call_count, tool_call_count, started_at, title
+    ) VALUES (?, 'cli', ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, 1, 0, ?, ?)`,
   ).run(
     values.id,
     values.model ?? 'gpt-5.5',
@@ -134,6 +138,8 @@ function insertSession(db: TestDb, values: {
     values.outputTokens ?? 0,
     values.estimatedCost ?? null,
     values.actualCost ?? null,
+    values.costStatus ?? null,
+    values.costSource ?? null,
     values.startedAt,
     values.id,
   )
@@ -349,6 +355,54 @@ skipUnlessSqlite('hermes post-finalization ledger proofs', () => {
     expect(cursor?.observations[0]?.supplementaryAccounting).toBe(false)
     expect(cursor?.observations[0]?.inputTokens).toBe(100)
     expect(dateKey(cursor!.observations[0]!.timestamp)).toBe(started.key)
+  })
+
+  it('P5b: a cached included baseline stays subscription-covered after its source row vanishes', async () => {
+    const started = localDay(-1)
+    const dbPath = createHermesDb(hermesHome)
+    withTestDb(dbPath, (db) => {
+      insertSession(db, {
+        id: 'p5-subscription',
+        inputTokens: 100,
+        estimatedCost: 0,
+        costStatus: 'included',
+        costSource: 'provider_reported',
+        startedAt: started.unixSec,
+      })
+    })
+
+    const parser = await loadParser()
+    const ledgerMod = await import('../../src/hermes-session-ledger.js')
+    const { filterProjectsByBillingRoute } = await import('../../src/billing-filter.js')
+
+    // Pre-patch v3 warm-cache recovery classified every non-estimated baseline
+    // as actual. Reproduce that durable cursor before the live included row is
+    // parsed under the new code.
+    await ledgerMod.recordHermesSnapshot({
+      profile: 'default',
+      sessionId: 'p5-subscription',
+      startedAt: started.iso,
+      observedAt: started.iso,
+      tokens: { inputTokens: 100, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 },
+      costUSD: 0,
+      costBasis: 'actual',
+    })
+
+    parser.clearSessionCache()
+    const upgraded = await parser.parseAllSessions(undefined, 'hermes')
+    const upgradedCall = upgraded.flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)[0]!
+    expect(upgradedCall.billing).toBe('subscription')
+    expect(ledgerMod.loadHermesSessionLedger().cursors['default']!['p5-subscription']!.observations[0]!.costBasis).toBe('included')
+    ledgerMod.resetHermesSessionLedgerForTests()
+
+    // Once corrected, the observation is the only provenance left if Hermes
+    // prunes the source row; the subscription filter must keep it.
+    withTestDb(dbPath, (db) => db.prepare('DELETE FROM sessions WHERE id = ?').run('p5-subscription'))
+    parser.clearSessionCache()
+    const vanished = await parser.parseAllSessions(undefined, 'hermes')
+    const call = vanished.flatMap(p => p.sessions).flatMap(s => s.turns).flatMap(t => t.assistantCalls)[0]!
+    expect(call.billing).toBe('subscription')
+    expect(filterProjectsByBillingRoute(vanished, { billing: 'subscription' }).flatMap(p => p.sessions)).toHaveLength(1)
   })
 
   it('P6: unwritable ledger is retryable and does not advance lastComputedDate', async () => {

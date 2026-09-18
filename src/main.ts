@@ -5,6 +5,7 @@ import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { findUnpricedModels, modelRowKey, loadPricing, sanitizeModelForDisplay, setModelAliases, setPriceOverrides, setLocalModelSavings, setFlatRateModels, setFlatRateRemoved, setProxyPaths, normalizeProxyPath, unpricedModelHint, isBuiltInFlatRateModel, isSameFlatRateModel, getProxyPathsConfigHash, getModelAliasesConfigHash, getPriceOverridesConfigHash, getLocalModelSavingsConfigHash, getFlatRateModelsConfigHash, getPricingGenerationKey } from './models.js'
 import { cachedProjectIdentitiesForRange } from './daily-cache.js'
 import { reportUnmatchedProjectPatterns } from './project-filter-warnings.js'
+import { BILLING_FILTER_VALUES, ROUTE_FILTER_VALUES, filterProjectsByBillingRoute } from './billing-filter.js'
 import { parseAllSessions, filterProjectsByName, filterProjectsByDateRange, clearSessionCache, setInteractiveScanUI, computeCorpusFingerprint, isSessionHydrationComplete } from './parser.js'
 import { allProviderNames, getAllProviders } from './providers/index.js'
 import { getProvider } from './providers/index.js'
@@ -484,6 +485,24 @@ function assertScope(value: string, allowed: readonly string[], command: string)
     )
     process.exit(1)
   }
+}
+
+/** `--route`: a registered door plus `direct`, its complement. Undefined/absent is not validated (no filter). */
+function assertRoute(value: string | undefined, command: string): void {
+  if (value === undefined || (ROUTE_FILTER_VALUES as readonly string[]).includes(value)) return
+  process.stderr.write(
+    `codeburn ${command}: unknown route "${value}". Valid values: ${ROUTE_FILTER_VALUES.join(', ')}.\n`
+  )
+  process.exit(1)
+}
+
+/** `--billing`: exactly metered|subscription. Undefined/absent is not validated (no filter). */
+function assertBilling(value: string | undefined, command: string): void {
+  if (value === undefined || (BILLING_FILTER_VALUES as readonly string[]).includes(value)) return
+  process.stderr.write(
+    `codeburn ${command}: unknown billing mode "${value}". Valid values: ${BILLING_FILTER_VALUES.join(', ')}.\n`
+  )
+  process.exit(1)
 }
 
 // Wrapped in a factory because commander option state is sticky across
@@ -1374,11 +1393,15 @@ program
   .option('--from <date>', 'Start date (YYYY-MM-DD). Exports a single custom period when set')
   .option('--to <date>', 'End date (YYYY-MM-DD). Exports a single custom period when set')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, gemini, cursor, copilot)', 'all')
+  .option('--route <route>', `Filter by billing route (${ROUTE_FILTER_VALUES.join('|')}; direct includes unknown)`)
+  .option('--billing <mode>', `Filter by billing mode (${BILLING_FILTER_VALUES.join('|')})`)
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertFormat(opts.format, ['csv', 'json'], 'export')
     assertProvider(opts.provider, 'export')
+    assertRoute(opts.route, 'export')
+    assertBilling(opts.billing, 'export')
     await loadPricing()
     const pf = opts.provider
     // Both callers below pass a whole-period parse, so the first one is the
@@ -1387,7 +1410,10 @@ program
     let widestParse: ProjectSummary[] | null = null
     const fp = (p: ProjectSummary[]) => {
       widestParse ??= p
-      return filterProjectsByName(p, opts.project, opts.exclude)
+      return filterProjectsByBillingRoute(
+        filterProjectsByName(p, opts.project, opts.exclude),
+        { route: opts.route, billing: opts.billing },
+      )
     }
     let customRange: DateRange | null = null
     try {
@@ -2482,11 +2508,15 @@ program
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--route <route>', `Filter by billing route (${ROUTE_FILTER_VALUES.join('|')}; direct includes unknown)`)
+  .option('--billing <mode>', `Filter by billing mode (${BILLING_FILTER_VALUES.join('|')})`)
   .option('--format <format>', 'Output format: table, json', 'table')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'audit')
+    assertRoute(opts.route, 'audit')
+    assertBilling(opts.billing, 'audit')
     const { aggregateAudit, renderAuditTable, renderAuditJson } = await import('./audit-report.js')
     await loadPricing()
 
@@ -2504,7 +2534,10 @@ program
 
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
-    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+    const projects = filterProjectsByBillingRoute(
+      filterProjectsByName(parsed, opts.project, opts.exclude),
+      { route: opts.route, billing: opts.billing },
+    )
     const rows = await aggregateAudit(projects)
 
     const fmt = (opts.format ?? 'table').toLowerCase()
@@ -2526,6 +2559,8 @@ program
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--route <route>', `Filter by billing route (${ROUTE_FILTER_VALUES.join('|')}; direct includes unknown)`)
+  .option('--billing <mode>', `Filter by billing mode (${BILLING_FILTER_VALUES.join('|')})`)
   .option('--task <category>', 'Filter to one task type (e.g. feature, debugging, refactoring)')
   .option('--by-task', 'One row per (provider, model, task) instead of one row per (provider, model)')
   .option('--by-agent', 'One row per (provider, model, agent) instead of one row per (provider, model). Claude subagent transcripts only; other providers and main sessions bucket under "main"')
@@ -2538,6 +2573,8 @@ program
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
   .action(async (opts) => {
     assertProvider(opts.provider, 'models')
+    assertRoute(opts.route, 'models')
+    assertBilling(opts.billing, 'models')
     if (opts.byTask && opts.byAgent) {
       process.stderr.write('codeburn: --by-task and --by-agent cannot be combined. Pick one breakdown.\n')
       process.exit(1)
@@ -2559,7 +2596,10 @@ program
 
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
-    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+    const projects = filterProjectsByBillingRoute(
+      filterProjectsByName(parsed, opts.project, opts.exclude),
+      { route: opts.route, billing: opts.billing },
+    )
     const topN = typeof opts.top === 'number' && Number.isFinite(opts.top) ? opts.top : undefined
     let rows = await aggregateModels(projects, {
       byTask: !!opts.byTask,
@@ -2570,7 +2610,12 @@ program
       // rows `--unpriced` exists to show. Take the whole set here and slice
       // after filtering and ranking instead.
       topN: opts.unpriced ? undefined : topN,
-      minCost: typeof opts.minCost === 'number' && Number.isFinite(opts.minCost) ? opts.minCost : (opts.unpriced ? 0 : 0.01),
+      // A route/billing filter is itself an explicit request for those rows.
+      // Subscription-covered and free routed calls legitimately cost $0, so
+      // the ordinary noise floor must not erase the complete filtered answer.
+      minCost: typeof opts.minCost === 'number' && Number.isFinite(opts.minCost)
+        ? opts.minCost
+        : (opts.unpriced || opts.route || opts.billing ? 0 : 0.01),
     })
     if (opts.unpriced) {
       const unpriced = findUnpricedModels(rows.map(row => ({
@@ -2627,6 +2672,8 @@ program
   .option('--from <date>', 'Custom range start (YYYY-MM-DD)')
   .option('--to <date>', 'Custom range end (YYYY-MM-DD)')
   .option('--provider <provider>', 'Filter by provider (e.g. claude, codex, cursor)', 'all')
+  .option('--route <route>', `Filter by billing route (${ROUTE_FILTER_VALUES.join('|')}; direct includes unknown)`)
+  .option('--billing <mode>', `Filter by billing mode (${BILLING_FILTER_VALUES.join('|')})`)
   .option('--format <format>', 'Output format: table, json', 'table')
   .option('--by-pr', 'Group spend by the pull requests each session referenced')
   .option('--by-work-unit', 'Group sessions into provider-recorded work units: one row per orchestration root with its delegated children folded beneath')
@@ -2637,6 +2684,12 @@ program
   .action(async (opts) => {
     assertProvider(opts.provider, 'sessions')
     assertFormat(opts.format, ['table', 'json'], 'sessions')
+    assertRoute(opts.route, 'sessions')
+    assertBilling(opts.billing, 'sessions')
+    if (opts.byWorkUnit && (opts.route || opts.billing)) {
+      process.stderr.write('codeburn sessions: --by-work-unit cannot be combined with --route or --billing.\n')
+      process.exit(1)
+    }
     if (opts.contributions && (opts.byPr || opts.byWorkUnit || opts.format !== 'json')) {
       process.stderr.write('codeburn: --contributions requires plain --format json (no --by-pr/--by-work-unit)\n')
       process.exit(1)
@@ -2660,7 +2713,10 @@ program
 
     const parsed = await parseAllSessions(range, opts.provider)
     await reportUnmatchedProjectPatterns(parsed, opts.project, opts.exclude, () => cachedProjectIdentitiesForRange(range))
-    const projects = filterProjectsByName(parsed, opts.project, opts.exclude)
+    const projects = filterProjectsByBillingRoute(
+      filterProjectsByName(parsed, opts.project, opts.exclude),
+      { route: opts.route, billing: opts.billing },
+    )
     if (opts.byPr) {
       const { rows: prRows, totals } = buildPrAttribution(projects)
       if (opts.format === 'json') {

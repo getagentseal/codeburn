@@ -246,6 +246,32 @@ export function applyHermesSnapshot(
   const costGrew = snapshot.costUSD >= last.costUSD
   const costDelta = costGrew ? snapshot.costUSD - last.costUSD : 0
 
+  // Before billing-mode-v1, warm-cache recovery labelled every non-estimated
+  // baseline `actual`, including an included $0 subscription call. Repair only
+  // that exact one-observation seed when the live cumulative row now supplies
+  // the stronger included fact. Multi-observation histories are real deltas and
+  // keep each stored basis unchanged.
+  const first = existing.observations[0]
+  const legacyIncludedSeed = snapshot.costBasis === 'included'
+    && snapshot.costUSD === 0
+    && last.costBasis === 'actual'
+    && last.costUSD === 0
+    && existing.observations.length === 1
+    && first?.index === 0
+    && first.costBasis === 'actual'
+    && first.costUSD === 0
+    && tokensEqual(first, snapshot.tokens)
+  if (!positiveTokens && costDelta === 0 && legacyIncludedSeed) {
+    return {
+      cursor: {
+        ...existing,
+        lastSeen: { ...snapshot.tokens, costUSD: 0, costBasis: 'included' },
+        observations: [{ ...first, costBasis: 'included' }],
+      },
+      dirty: true,
+    }
+  }
+
   if (!positiveTokens && costDelta === 0) {
     // Tokens held (or only cost reset / basis change). Advance last-seen, no observation.
     return {
@@ -455,7 +481,11 @@ export async function seedHermesCursorsFromProviderSection(section: ProviderSect
         if (getHermesCursor(next, parsed.profile, parsed.sessionId)) continue
         const tokens = cachedCallToSnapshotTokens(call)
         const costUSD = call.costUSD ?? 0
-        const costBasis: HermesCostBasis = call.isEstimated ? 'calculated' : 'actual'
+        const costBasis: HermesCostBasis = call.billing === 'subscription'
+          ? 'included'
+          : call.billing === 'metered'
+            ? 'actual'
+            : call.isEstimated ? 'calculated' : 'actual'
         const cursor: HermesSessionCursor = {
           profile: parsed.profile,
           sessionId: parsed.sessionId,

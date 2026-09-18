@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 
 import {
+  callBillingMode,
   calculateCost,
+  effectiveRouteId,
   getModelRoute,
   getRouteById,
   getShortModelName,
   loadPricing,
   modelRowKey,
+  parseBillingMode,
+  registeredRouteIds,
   resolveCanonicalModelId,
   routeFromProviderField,
   routeSuffix,
@@ -69,12 +73,22 @@ describe('routeFromProviderField - the provider column', () => {
     expect(routeFromProviderField('Bedrock ')?.id).toBe('bedrock')
   })
 
+  it('maps only the exact OpenRouter provider field now that usage-bearing sessions exist', () => {
+    // Two Hermes sessions ran through OpenRouter on 2026-09-18 with the exact
+    // `billing_provider = openrouter`; unlike legacy Bedrock normalization, no
+    // case or whitespace aliases have real data behind them.
+    expect(routeFromProviderField('openrouter')).toMatchObject({ id: 'openrouter', label: 'OpenRouter' })
+    expect(routeFromProviderField('OpenRouter')).toBeUndefined()
+    expect(routeFromProviderField(' openrouter ')).toBeUndefined()
+  })
+
   it('returns undefined for the direct doors, subscription doors and doors with no sessions yet', () => {
     // Direct: the unsuffixed row IS the direct row. Subscription: a ChatGPT
-    // plan does not change which row a model lands on. `openrouter` and
-    // `bedrock-mantle` are real Hermes values with no sessions on disk, so
-    // they are not registered yet and map to nothing.
-    for (const v of ['anthropic', 'openai', 'openai-codex', 'google', 'moa', 'acme-gateway', 'openrouter', 'bedrock-mantle', '', null, undefined]) {
+    // plan does not change which row a model lands on. `bedrock-mantle` is a
+    // real Hermes value with no sessions on disk, so it is not registered yet
+    // and maps to nothing. Only the exact field spelling counts: OpenRouter's
+    // own `openrouter/<vendor>/<model>` ids are model names, not doors.
+    for (const v of ['anthropic', 'openai', 'openai-codex', 'google', 'moa', 'acme-gateway', 'bedrock-mantle', 'openrouter/auto', 'openrouter:free', '', null, undefined]) {
       expect(routeFromProviderField(v), String(v)).toBeUndefined()
     }
   })
@@ -155,5 +169,73 @@ describe('routes never move a dollar', () => {
     expect(bare).toBeCloseTo(direct, 6)
     expect(profile).toBeGreaterThan(bare)
     expect(getShortModelName('us.anthropic.claude-haiku-4-5-20251001-v1:0')).not.toContain('Bedrock') // display resolver untouched
+  })
+})
+
+// Billing mode is the second half of the same question: the route says which
+// door, the mode says whether that door charges per call (`metered`) or the
+// usage is already paid for by a subscription. It is optional everywhere —
+// unknown stays unknown and is never coerced into either mode (#1451).
+
+describe('effectiveRouteId - the door that actually applies', () => {
+  it('prefers the persisted route and falls back to the id shape', () => {
+    expect(effectiveRouteId('claude-sonnet-4-5', 'bedrock')).toBe('bedrock')
+    expect(effectiveRouteId('claude-sonnet-4-5', 'openrouter')).toBe('openrouter')
+    expect(effectiveRouteId('anthropic.claude-haiku-4-5-20251001-v1:0', null)).toBe('bedrock')
+    expect(effectiveRouteId('us.anthropic.claude-haiku-4-5-20251001-v1:0', undefined)).toBe('bedrock')
+  })
+
+  it('is null for the direct door and for a route id nothing registers', () => {
+    expect(effectiveRouteId('claude-sonnet-4-5', null)).toBeNull()
+    expect(effectiveRouteId('claude-sonnet-4-5', 'not-a-route')).toBeNull()
+    // OpenRouter names its models `openrouter/<vendor>/<model>`; that is a
+    // model id, not a door, and must never be read as one.
+    expect(effectiveRouteId('openrouter/anthropic/claude-sonnet-4.5', null)).toBeNull()
+    expect(effectiveRouteId('openrouter/auto', null)).toBeNull()
+  })
+
+  it('lists the registered ids for the CLI to validate against', () => {
+    expect(registeredRouteIds()).toEqual(['bedrock', 'openrouter'])
+  })
+})
+
+describe('parseBillingMode - exactly two modes', () => {
+  it('accepts the two modes and nothing else', () => {
+    expect(parseBillingMode('metered')).toBe('metered')
+    expect(parseBillingMode('subscription')).toBe('subscription')
+    for (const v of ['Metered', 'included', 'actual', 'unknown', 'direct', '', null, undefined]) {
+      expect(parseBillingMode(v), String(v)).toBeUndefined()
+    }
+  })
+})
+
+describe('callBillingMode - the call\'s own evidence first', () => {
+  it('takes a provider-observed fact over everything else', () => {
+    // Hermes records the resolved cost basis: `included` is subscription-covered
+    // usage, `actual` is a recorded invoice amount.
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', billing: 'subscription' })).toBe('subscription')
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', billing: 'metered' })).toBe('metered')
+  })
+
+  it('lets an observed subscription override a registered route default', () => {
+    // A door registered as metered does not get to overrule a recorded
+    // `included` basis — the fact outranks the default.
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', route: 'bedrock', billing: 'subscription' })).toBe('subscription')
+    expect(callBillingMode({ model: 'anthropic.claude-fable-5-1', billing: 'subscription' })).toBe('subscription')
+  })
+
+  it('falls back to the effective route default when the call states no fact', () => {
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', route: 'bedrock' })).toBe('metered')
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', route: 'openrouter' })).toBe('metered')
+    expect(callBillingMode({ model: 'anthropic.claude-haiku-4-5-20251001-v1:0' })).toBe('metered')
+  })
+
+  it('leaves a direct call with no recorded basis unknown', () => {
+    // An estimated or calculated cost on the direct door proves nothing about
+    // who billed it, so it is neither metered nor subscription.
+    expect(callBillingMode({ model: 'claude-sonnet-4-5' })).toBeUndefined()
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', route: null, billing: null })).toBeUndefined()
+    expect(callBillingMode({ model: 'claude-sonnet-4-5', route: 'not-a-route' })).toBeUndefined()
+    expect(callBillingMode({ model: 'openrouter/auto' })).toBeUndefined()
   })
 })

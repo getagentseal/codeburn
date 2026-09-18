@@ -1,3 +1,5 @@
+import type { BillingMode } from './models.js'
+
 export type TokenUsage = {
   inputTokens: number
   outputTokens: number
@@ -171,6 +173,11 @@ export type ParsedApiCall = {
   /// Reports key model rows on `modelRowKey(model, route)`, so a call routed
   /// through Bedrock lands in its own row.
   route?: string
+  /// Billing mode the provider recorded (see ParsedProviderCall.billing).
+  /// `--billing` reads it through `callBillingMode`, which falls back to the
+  /// effective route's default; absent here means the provider stated no
+  /// fact, never that the call is unbilled.
+  billing?: BillingMode
 }
 
 export type ToolCall = {

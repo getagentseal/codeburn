@@ -5,6 +5,7 @@ import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
+import { parseBillingMode, type BillingMode } from './models.js'
 import type { ToolCall } from './types.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -77,6 +78,11 @@ export type CachedCall = {
   // a direct-door call or one parsed before the provider carried the column
   // (its parse version forces a re-parse).
   route?: string
+  // Billing mode the provider recorded (see ParsedProviderCall.billing).
+  // Persisted so a warm read answers the same --billing question a cold parse
+  // would. Absent means the provider stated no fact; a value outside the two
+  // modes fails validation rather than being coerced into one.
+  billing?: BillingMode
 }
 
 export type CachedTurn = {
@@ -406,7 +412,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // produced under v2 can turn historical accounting deltas into today's use.
   // billing-route-v1: the session's `billing_provider` column now rides on
   // each call as `route`. Cached calls hold none, so they must re-parse.
-  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1',
+  // billing-mode-v1: the resolved cost basis now rides on each call as
+  // `billing` (`included` -> subscription, `actual` -> metered). Cached calls
+  // hold none, so they must re-parse.
+  hermes: 'reasoning-output-accounting-v1-est-cost-routed-ids-workspace-pr-v5-cost-provenance-v3-billing-route-v1-billing-mode-v1',
   'lingtai-tui': 'token-ledger-registry-activity-v3',
   'ibm-bob': 'worktree-project-grouping-v1',
   // project-path-v1: the parser now records the session's full working
@@ -784,6 +793,7 @@ function validateCall(c: unknown): c is CachedCall {
     && isOptionalNum(o['editFailed'])
     && isOptionalBool(o['supplementaryAccounting'])
     && isOptionalString(o['route'])
+    && (o['billing'] === undefined || parseBillingMode(o['billing'] as string) !== undefined)
     && validateUsage(o['usage'])
 }
 
