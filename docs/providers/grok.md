@@ -11,6 +11,27 @@ Grok Build, xAI's coding CLI. Sessions use the `grok-build` model by default.
 `$GROK_HOME/sessions/` (or `~/.grok/sessions/`), one directory per session:
 `sessions/<url-encoded-cwd>/<uuid>/`. The parser reads `summary.json`, `signals.json`, and `updates.jsonl` from each session directory.
 
+Scan several data directories together with `GROK_HOMES`. Unix/macOS:
+
+```bash
+GROK_HOMES="$HOME/.grok:$HOME/.grok2" codeburn
+```
+
+Windows PowerShell:
+
+```powershell
+$env:GROK_HOMES = "$HOME\.grok;$HOME\.grok2"
+codeburn
+```
+
+The separator is `path.delimiter`: `:` on Unix/macOS, `;` on Windows.
+Precedence: `GROK_HOMES` > `GROK_HOME` > `~/.grok`. The legacy
+`GROK_HOME` remains supported. Empty entries are ignored; an entirely
+empty list falls back to the legacy home. Multi-directory paths support `~`.
+Missing, empty or unreadable directories are skipped. Sessions from all homes
+are aggregated under the existing `grok` provider; duplicate session IDs
+(or directory UUIDs when no ID is recorded) are scanned once, preferring the first listed home.
+
 ## Storage format
 
 JSON + JSONL. `summary.json` holds the session id, cwd, timestamps, and `current_model_id`. `signals.json` holds `modelsUsed`, `toolsUsed`, and `contextTokensUsed`. `updates.jsonl` is the ACP log: streamed chunks carry `params._meta.totalTokens` (running context size) and `params._meta.promptId` (one per turn); newer CLI versions also append `params.update.sessionUpdate: "turn_completed"` with snake_case `prompt_id` and a provider-recorded `usage` object.

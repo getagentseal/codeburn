@@ -1,7 +1,7 @@
 import { readdir, stat } from 'fs/promises'
 import { existsSync } from 'fs'
 import { basename, join } from 'path'
-import { homedir } from 'os'
+import { getCodexHomes } from './provider-dirs.js'
 
 import { readSessionLines } from './fs-utils.js'
 import { estimateTokensFromChars } from './token-estimate.js'
@@ -245,26 +245,21 @@ export async function buildCodexContextTree(session: SessionRef): Promise<Contex
 
 const ROLLOUT_RE = /^rollout-.{19}-(.+)\.jsonl$/
 
-// Mirrors the CODEX_HOME handling of providers/codex.ts.
-function codexSessionsRoot(): string {
-  return join(process.env['CODEX_HOME'] ?? join(homedir(), '.codex'), 'sessions')
-}
-
 type RolloutFile = { filePath: string; sessionId: string }
 
 async function listRolloutFiles(): Promise<RolloutFile[]> {
-  const root = codexSessionsRoot()
-  if (!existsSync(root)) return []
-  let files: string[]
-  try {
-    files = await readdir(root, { recursive: true })
-  } catch {
-    return []
-  }
   const rollouts: RolloutFile[] = []
-  for (const rel of files) {
-    const match = ROLLOUT_RE.exec(basename(rel))
-    if (match) rollouts.push({ filePath: join(root, rel), sessionId: match[1] })
+  const seen = new Set<string>()
+  for (const home of getCodexHomes()) {
+    const root = join(home, 'sessions')
+    if (!existsSync(root)) continue
+    const files = await readdir(root, { recursive: true }).catch(() => [] as string[])
+    for (const rel of files) {
+      const match = ROLLOUT_RE.exec(basename(rel))
+      if (!match || seen.has(match[1])) continue
+      seen.add(match[1])
+      rollouts.push({ filePath: join(root, rel), sessionId: match[1] })
+    }
   }
   return rollouts
 }

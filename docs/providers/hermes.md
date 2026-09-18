@@ -13,6 +13,31 @@ Hermes Agent CLI profiles.
 | Default Hermes profile | `$HERMES_HOME/state.db` if set, otherwise `~/.hermes/state.db` |
 | Named Hermes profiles | `$HERMES_HOME/profiles/<profile>/state.db` |
 
+Scan several homes together with `HERMES_HOMES`. Each home is scanned for both
+`state.db` and `profiles/<profile>/state.db`.
+
+Unix/macOS:
+
+```bash
+HERMES_HOMES="$HOME/.hermes:$HOME/.hermes2" codeburn
+```
+
+Windows PowerShell:
+
+```powershell
+$env:HERMES_HOMES = "$HOME\.hermes;$HOME\.hermes2"
+codeburn
+```
+
+Precedence: `HERMES_HOMES` > `HERMES_HOME` > `~/.hermes`. The legacy
+`HERMES_HOME` remains supported. The separator is `path.delimiter`: `:` on
+Unix/macOS, `;` on Windows. Empty entries are ignored; an entirely empty list
+falls back to the legacy home. Multi-home paths support `~`. Missing, empty
+or unreadable directories and invalid databases are skipped.
+Sessions retain their existing profile/session IDs; copies are scanned once,
+with real database rows preferred over ledger-only entries and the first
+listed home winning ties.
+
 ## Storage format
 
 SQLite. The provider reads Hermes' aggregate `sessions` token/cost counters and the matching `messages` rows for user prompt and tool-call context.
@@ -55,7 +80,7 @@ Terminal command arguments are exposed as `bashCommands` for CodeBurn's command 
 
 ## Caching
 
-The shared session cache fingerprints Hermes state DB files. `HERMES_HOME` is included in the provider environment fingerprint so changing the runtime home invalidates stale cached results.
+The shared session cache fingerprints Hermes state DB files. `HERMES_HOME` and `HERMES_HOMES` are included in the provider environment fingerprint so changing the runtime home invalidates stale cached results.
 
 ## Quirks
 

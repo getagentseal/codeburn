@@ -22,6 +22,27 @@ Archived sessions are stored in a flat directory and are included in usage repor
 
 The active-session discovery walk uses strict regex (`^\d{4}$`, `^\d{2}$`) on each path component.
 
+Scan several data directories together with `CODEX_HOMES`. Unix/macOS:
+
+```bash
+CODEX_HOMES="$HOME/.codex:$HOME/.codex2" codeburn
+```
+
+Windows PowerShell:
+
+```powershell
+$env:CODEX_HOMES = "$HOME\.codex;$HOME\.codex2"
+codeburn
+```
+
+The separator is `path.delimiter`: `:` on Unix/macOS, `;` on Windows.
+Precedence: `CODEX_HOMES` > `CODEX_HOME` > `~/.codex`. The legacy
+`CODEX_HOME` remains supported. Empty entries are ignored; an entirely
+empty list falls back to the legacy home. Multi-directory paths support `~`.
+Missing, empty or unreadable directories are skipped. Sessions from all homes
+are aggregated under the existing `codex` provider; duplicate rollout filenames
+are scanned once, preferring the first listed home.
+
 ## Storage format
 
 JSONL. Validation of the first line is **structural**: it must parse as JSON, have `type === "session_meta"`, and carry a `payload` that is a plain object (not missing, not a scalar, not an array). Files that fail this check are silently skipped.

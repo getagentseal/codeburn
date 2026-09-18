@@ -1,6 +1,6 @@
-import { readdir, stat } from 'fs/promises'
+import { readdir, realpath, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
-import { homedir } from 'os'
+import { getGrokHomes } from '../provider-dirs.js'
 
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionFile } from '../fs-utils.js'
 import { calculateCost, getModelCosts, getShortModelName } from '../models.js'
@@ -8,8 +8,8 @@ import { extractBashCommands } from '../bash-utils.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
 // Grok Build (xAI's coding CLI) stores one session per directory at
-// <grok-home>/sessions/<url-encoded-cwd>/<uuid>/, where grok-home is $GROK_HOME
-// or ~/.grok. Each session dir holds summary.json, signals.json, and the ACP
+// <grok-home>/sessions/<url-encoded-cwd>/<uuid>/, where homes come from
+// $GROK_HOMES, $GROK_HOME or ~/.grok. Each session dir holds summary.json, signals.json, and the ACP
 // log updates.jsonl.
 //
 // Newer Grok CLI versions append a `turn_completed` update with provider-recorded
@@ -40,11 +40,6 @@ const toolNameMap: Record<string, string> = {
   search_replace: 'Edit',
   todo_write: 'TodoWrite',
   spawn_subagent: 'Agent',
-}
-
-function defaultSessionsDir(): string {
-  const home = process.env['GROK_HOME'] ?? join(homedir(), '.grok')
-  return join(home, 'sessions')
 }
 
 type GrokSummary = {
@@ -448,7 +443,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
   }
 }
 
-async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
+async function discoverSessions(sessionsDir: string, seen: Set<string>): Promise<SessionSource[]> {
   const sources: SessionSource[] = []
 
   let cwdDirs: string[]
@@ -476,23 +471,29 @@ async function discoverSessions(sessionsDir: string): Promise<SessionSource[]> {
     const summary = await readJson<GrokSummary>(join(sessionPath, 'summary.json'))
     if (!summary) return null
     const cwd = summary.info?.cwd ?? safeDecode(cwdName)
-    return { path: join(sessionPath, 'updates.jsonl'), project: basename(cwd), provider: 'grok' } as SessionSource
+    const path = join(sessionPath, 'updates.jsonl')
+    const key = summary.info?.id || basename(await realpath(sessionPath).catch(() => sessionPath))
+    return { key, source: { path, project: basename(cwd), provider: 'grok' } as SessionSource }
   })
 
-  for (const source of sessions) if (source) sources.push(source)
+  for (const session of sessions) {
+    if (!session || seen.has(session.key)) continue
+    seen.add(session.key)
+    sources.push(session.source)
+  }
 
   return sources
 }
 
 export function createGrokProvider(sessionsDir?: string): Provider {
-  const dir = sessionsDir ?? defaultSessionsDir()
+  const dirs = sessionsDir === undefined ? getGrokHomes().map(home => join(home, 'sessions')) : [sessionsDir]
 
   return {
     name: 'grok',
     displayName: 'Grok Build',
 
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [{ path: dir, label: 'sessions' }]
+      return dirs.map(path => ({ path, label: 'sessions' }))
     },
 
     modelDisplayName(model: string): string {
@@ -505,7 +506,12 @@ export function createGrokProvider(sessionsDir?: string): Provider {
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
-      return discoverSessions(dir)
+      const sources: SessionSource[] = []
+      const seen = new Set<string>()
+      for (const dir of dirs) {
+        sources.push(...await discoverSessions(dir, seen))
+      }
+      return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

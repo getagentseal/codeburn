@@ -851,9 +851,14 @@ boolean before it leaves the machine.
 | `CLAUDE_CONFIG_DIR` | Override Claude Code data directory (default: `~/.claude`) |
 | `CLAUDE_CONFIG_DIRS` | OS-delimited list of Claude data directories to scan together (e.g. `~/.claude-work:~/.claude-personal`). Sessions merge into one row per project. Overrides `CLAUDE_CONFIG_DIR` when set. |
 | `CODEX_HOME` | Override Codex data directory (default: `~/.codex`) |
+| `CODEX_HOMES` | Multiple Codex data directories; `:` on Unix/macOS, `;` on Windows. Overrides `CODEX_HOME`; empty entries and inaccessible directories are skipped. |
 | `CODEBUFF_DATA_DIR` | Override Codebuff data directory (default: `~/.config/manicode`) |
 | `CODEWHALE_HOME` | Override the exact CodeWhale home directory; sessions are read from `<CODEWHALE_HOME>/sessions` |
 | `FACTORY_DIR` | Override Droid data directory (default: `~/.factory`) |
+| `GROK_HOME` | Override Grok data directory (default: `~/.grok`); remains supported. |
+| `GROK_HOMES` | Multiple Grok data directories; `:` on Unix/macOS, `;` on Windows. Overrides `GROK_HOME`; empty entries and inaccessible directories are skipped. |
+| `HERMES_HOME` | Override Hermes home (default: `~/.hermes`); remains supported. |
+| `HERMES_HOMES` | Multiple Hermes homes, including named profiles; `:` on Unix/macOS, `;` on Windows. Overrides `HERMES_HOME`; empty entries and inaccessible directories are skipped. |
 | `KIMI_SHARE_DIR` | Override Kimi Code CLI share directory (default: `~/.kimi`) |
 | `KIMI_MODEL_NAME` | Override Kimi model name when Kimi sessions do not record the model |
 | `LINGTAI_HOME` | Override LingTai data directory (default: `~/.lingtai`) |

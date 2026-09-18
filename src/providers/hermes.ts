@@ -1,7 +1,8 @@
-import { readdir, stat } from 'fs/promises'
+import { readdir, realpath, stat } from 'fs/promises'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
+import { getHermesHomes } from '../provider-dirs.js'
 
 import { readGitOriginUrl } from '../git-origin.js'
 import { calculateCost, getShortModelName, routeFromProviderField } from '../models.js'
@@ -101,10 +102,6 @@ const toolNameMap: Record<string, string> = {
   skills_list: 'Skill',
   memory: 'Memory',
   session_search: 'SessionSearch',
-}
-
-function getHermesHome(override?: string): string {
-  return override ?? process.env['HERMES_HOME'] ?? join(homedir(), '.hermes')
 }
 
 function displayProjectForProfile(profile: string): string {
@@ -207,10 +204,12 @@ function sanitizeProject(raw: string): string {
   return trimmed.replace(/^[/\\]+/, '').replace(/[:/\\]/g, '-')
 }
 
-function parseProfileName(dbPath: string, hermesHome: string): string {
-  const profilesDir = join(hermesHome, 'profiles')
+function parseProfileName(dbPath: string, hermesHomes: string[]): string {
   const dir = dirname(dbPath)
-  if (dirname(dir) === profilesDir) return basename(dir)
+  for (const home of hermesHomes) {
+    if (dbPath === join(home, 'state.db')) return 'default'
+    if (dirname(dir) === join(home, 'profiles')) return basename(dir)
+  }
   return 'default'
 }
 
@@ -516,7 +515,7 @@ function inferProject(messages: HermesMessageRow[], fallback: string): { project
   return { project: fallback }
 }
 
-async function discoverFromDb(dbPath: string, profile: string): Promise<SessionSource[]> {
+async function discoverFromDb(dbPath: string, profile: string, cursorSources: SessionSource[]): Promise<SessionSource[]> {
   let db: SqliteDatabase
   try {
     db = openDatabase(dbPath)
@@ -555,7 +554,7 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
     const ledger = loadHermesSessionLedger()
     for (const sessionId of listHermesCursorSessionIds(ledger, profile)) {
       if (discoveredIds.has(sessionId)) continue
-      sources.push({
+      cursorSources.push({
         path: encodeSourcePath(dbPath, sessionId),
         project: displayProjectForProfile(profile),
         provider: 'hermes',
@@ -571,7 +570,7 @@ async function discoverFromDb(dbPath: string, profile: string): Promise<SessionS
   }
 }
 
-function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: string): SessionParser {
+function createParser(source: SessionSource, seenKeys: Set<string>, hermesHomes: string[]): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
       if (!isSqliteAvailable()) {
@@ -581,7 +580,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
 
       const decoded = decodeSourcePath(source.path)
       if (!decoded) return
-      const profile = parseProfileName(decoded.dbPath, hermesHome)
+      const profile = parseProfileName(decoded.dbPath, hermesHomes)
 
       let db: SqliteDatabase
       try {
@@ -756,7 +755,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>, hermesHome: 
 }
 
 export function createHermesProvider(hermesHomeOverride?: string): Provider {
-  const hermesHome = getHermesHome(hermesHomeOverride)
+  const hermesHomes = hermesHomeOverride === undefined ? getHermesHomes() : [hermesHomeOverride]
   return {
     name: 'hermes',
     displayName: 'Hermes Agent',
@@ -770,21 +769,39 @@ export function createHermesProvider(hermesHomeOverride?: string): Provider {
     },
 
     async probeRoots(): Promise<ProbeRoot[]> {
-      return [{ path: hermesHome, label: 'home' }]
+      return hermesHomes.map(path => ({ path, label: 'home' }))
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
       if (!isSqliteAvailable()) return []
-      const dbs = await findStateDbs(hermesHome)
+      const sources: SessionSource[] = []
+      const cursorSources: SessionSource[] = []
+      const seenDbs = new Set<string>()
+      for (const home of hermesHomes) {
+        for (const { dbPath, profile } of await findStateDbs(home)) {
+          const canonicalPath = await realpath(dbPath).catch(() => dbPath)
+          if (seenDbs.has(canonicalPath)) continue
+          seenDbs.add(canonicalPath)
+          sources.push(...await discoverFromDb(dbPath, profile, cursorSources))
+        }
+      }
       const sessions: SessionSource[] = []
-      for (const { dbPath, profile } of dbs) {
-        sessions.push(...await discoverFromDb(dbPath, profile))
+      const seen = new Set<string>()
+      // Real rows across all homes must win over ledger-only cursor sources.
+      // Keep the existing profile/session identity and prefer the first home.
+      for (const source of [...sources, ...cursorSources]) {
+        const decoded = decodeSourcePath(source.path)!
+        const profile = parseProfileName(decoded.dbPath, hermesHomes)
+        const key = hermesBaselineKey(profile, decoded.sessionId)
+        if (seen.has(key)) continue
+        seen.add(key)
+        sessions.push(source)
       }
       return sessions
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys, hermesHome)
+      return createParser(source, seenKeys, hermesHomes)
     },
   }
 }

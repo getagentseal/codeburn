@@ -2,7 +2,7 @@ import { readdir, stat } from 'fs/promises'
 import { createReadStream } from 'fs'
 import { createInterface } from 'readline'
 import { basename, join, resolve } from 'path'
-import { homedir } from 'os'
+import { getCodexHomes } from '../provider-dirs.js'
 
 import { FS_SCAN_CONCURRENCY, mapWithConcurrency, readSessionLines } from '../fs-utils.js'
 import { billableOutputTokens, calculateCost, getModelCosts } from '../models.js'
@@ -171,10 +171,6 @@ type CodexTokenUsage = {
 
 const RAW_HEAD_BYTES = 64 * 1024
 const LARGE_TEXT_CAP = 2000
-
-function getCodexDir(override?: string): string {
-  return override ?? process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
-}
 
 function sanitizeProject(cwd: string): string {
   return cwd.replace(/^\//, '').replace(/\//g, '-')
@@ -1386,7 +1382,8 @@ export function createCodexProvider(
   codexDir?: string,
   opts?: { primaryDir?: string; launcherRoots?: string[] },
 ): Provider {
-  const dir = getCodexDir(codexDir)
+  const dirs = codexDir === undefined ? getCodexHomes() : [codexDir]
+  const dir = dirs[0]
   const primaryDir = opts?.primaryDir ?? defaultBilledCodexHome()
   const launcherRoots = opts?.launcherRoots ?? defaultLauncherRoots()
   // Explicit nest factory whose path is a realpath alias of the billed home:
@@ -1396,11 +1393,11 @@ export function createCodexProvider(
     codexDir !== undefined &&
     sameCodexHome(dir, primaryDir) &&
     resolve(dir) !== resolve(primaryDir)
-  const nestHome = isNestedLauncherCodexHome(dir, { primaryDir, launcherRoots })
+  const nestedHomes = new Set(dirs.filter(home => isNestedLauncherCodexHome(home, { primaryDir, launcherRoots })))
   // Production `codex` singleton is createCodexProvider() with no args. When
-  // the resolved dir is a launcher nest and ~/.codex is a distinct existing
-  // tree, walk BOTH and drop nest sources whose session id is already billed.
-  const scanBoth = nestHome && codexDir === undefined
+  // a resolved dir is a launcher nest and ~/.codex is a distinct existing
+  // tree, include the billed home and drop nest sources whose session id is already billed.
+  const scanBoth = nestedHomes.size > 0 && codexDir === undefined
 
   return {
     name: 'codex',
@@ -1417,25 +1414,34 @@ export function createCodexProvider(
       return toolNameMap[rawTool] ?? rawTool
     },
 
-    // Trees discoverSessions actually walks. Honors CODEX_HOME; when the
+    // Trees discoverSessions actually walks. Honors CODEX_HOMES/CODEX_HOME; when the
     // production singleton scans nest + billed home, both appear here.
     async probeRoots(): Promise<ProbeRoot[]> {
       if (duplicateHome) return []
-      if (scanBoth) return [...rootsFor(primaryDir), ...rootsFor(dir)]
-      return rootsFor(dir)
+      if (scanBoth) return [...new Set([primaryDir, ...dirs])].flatMap(rootsFor)
+      return dirs.flatMap(rootsFor)
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
       // Same physical tree via two factories is complete overlap, not a
       // distinct nest. isNestedLauncherCodexHome is false in that case.
       if (duplicateHome) return []
-      const sources = await discoverSessionsInDir(dir)
-      if (scanBoth) {
-        const billed = await discoverSessionsInDir(primaryDir)
-        return [...billed, ...dropOverlappingNestSources(sources, primaryDir)]
+      const sources: SessionSource[] = []
+      const seenBasenames = new Set<string>()
+      const homes = scanBoth ? [...new Set([primaryDir, ...dirs])] : dirs
+      for (const home of homes) {
+        let discovered = await discoverSessionsInDir(home)
+        if (nestedHomes.has(home)) {
+          discovered = dropOverlappingNestSources(discovered, primaryDir)
+        }
+        for (const source of discovered) {
+          const key = basename(source.path)
+          if (seenBasenames.has(key)) continue
+          seenBasenames.add(key)
+          sources.push(source)
+        }
       }
-      if (!nestHome) return sources
-      return dropOverlappingNestSources(sources, primaryDir)
+      return sources
     },
 
     createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {

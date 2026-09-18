@@ -306,6 +306,9 @@ describe('provider env overrides invalidate the fingerprint (#920)', () => {
     ['goose', 'GOOSE_PATH_ROOT'],
     ['crush', 'CRUSH_GLOBAL_DATA'],
     ['codex', 'CODEX_HOME'],
+    ['codex', 'CODEX_HOMES'],
+    ['hermes', 'HERMES_HOMES'],
+    ['grok', 'GROK_HOMES'],
   ]
   const VARS = CASES.map(([, varName]) => varName)
 
