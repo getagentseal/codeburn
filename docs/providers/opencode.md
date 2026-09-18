@@ -49,6 +49,22 @@ None.
 
 Per `<sessionId>:<messageId>`.
 
+## Billing routes
+
+OpenCode stores the transport in each assistant message's `providerID`. CodeBurn
+preserves the exact usage-bearing values across legacy SQLite, v2
+`session_message`, file storage, and session-level rollup fallbacks:
+
+- `openrouter` → OpenRouter, metered
+- `amazon-bedrock` → Bedrock, metered
+
+Case or whitespace variants of those two values are not inferred. The Bedrock
+model-id detector remains a fallback for recognised Anthropic and OpenAI
+foundation-model ids, but `providerID=amazon-bedrock` also covers model families
+such as Nova whose ids do not match that detector. Direct provider values remain
+unrouted/unknown. OpenCode and KiloCode session-cache fingerprints move whenever
+this shared provider-field mapping changes, so warm and cold reads agree.
+
 ## Quirks
 
 - **Schema validation is loud.** When a required table is missing, the parser logs an actionable warning telling the user which table is gone and what version of OpenCode it expects. This is the right behavior; do not silently swallow these.
