@@ -1126,6 +1126,27 @@ describe('copilot provider - chatSessions parsing', () => {
     expect(calls[0]!.skills).toEqual(['ponytail'])
   })
 
+  it('keeps every tool name a round record carries', async () => {
+    const filePath = join(tmpDir, 'multi-tool.jsonl')
+    await createChatSessionFile(filePath, [
+      { kind: 0, v: { version: 3, creationDate: 1780157113020, sessionId: 'chat-multi', requests: [] } },
+      { kind: 2, k: ['requests'], v: [chatSessionSampleRequest({
+        result: {
+          metadata: {
+            promptTokens: 100,
+            outputTokens: 20,
+            resolvedModel: 'claude-sonnet-4-6',
+            toolCallRounds: [{ toolCalls: [{ name: 'read_file', tool: 'bash' }] }],
+          },
+        },
+      })] },
+    ])
+
+    const calls = await collectCalls({ path: filePath, project: 'myproject', provider: 'copilot', sourceType: 'chatsession' })
+
+    expect(calls[0]!.tools).toEqual(['Read', 'Bash'])
+  })
+
   it('returns no calls for an empty reconstructed requests array', async () => {
     const filePath = join(tmpDir, 'empty.jsonl')
     await createChatSessionFile(filePath, [

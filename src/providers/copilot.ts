@@ -616,9 +616,10 @@ function extractChatSessionTools(metadata: Record<string, unknown>): { tools: st
     if (typeof raw === 'string' && raw.trim()) names.add(normalizeTool(raw))
   }
   const addFromRecord = (record: Record<string, unknown>): void => {
-    const rawName = record['toolName'] ?? record['name'] ?? record['tool']
-    addName(rawName)
-    if (typeof rawName === 'string' && normalizeTool(rawName) === 'Skill') {
+    for (const key of ['toolName', 'name', 'tool']) {
+      const raw = record[key]
+      addName(raw)
+      if (typeof raw !== 'string' || normalizeTool(raw) !== 'Skill') continue
       const skill = extractStructuredSkill(record['arguments'])
         ?? extractStructuredSkill(record['input'])
       if (skill) skills.add(skill)
