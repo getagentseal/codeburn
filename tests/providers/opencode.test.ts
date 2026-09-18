@@ -183,7 +183,7 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     expect(sessions[0]!.path).toBe(`${dbPath}:sess-1`)
   })
 
-  it('excludes archived sessions', async () => {
+  it('discovers archived sessions (#1362: the archive is organizational, the rows stay)', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'sess-archived', { archived: 1700000001000 })
@@ -191,7 +191,8 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
 
     const provider = createOpenCodeProvider(tmpDir)
     const sessions = await provider.discoverSessions()
-    expect(sessions).toHaveLength(0)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.path).toBe(`${dbPath}:sess-archived`)
   })
 
   it('excludes child sessions', async () => {
@@ -757,7 +758,7 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
     expect(calls[2]!.bashCommands).toEqual(['npm'])
   })
 
-  it('does not include archived child sessions in the root subtree', async () => {
+  it('includes archived child sessions in the root subtree (#1362)', async () => {
     const dbPath = createTestDb(tmpDir)
     withTestDb(dbPath, (db) => {
       insertSession(db, 'root')
@@ -780,8 +781,9 @@ skipUnlessSqlite('opencode provider - session parsing', () => {
 
     const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'root')
 
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
     expect(calls[0]!.deduplicationKey).toBe('opencode:root:msg-root-assistant')
+    expect(calls[1]!.deduplicationKey).toBe('opencode:archived-child:msg-child-assistant')
   })
 
   it('joins multiple text parts in user messages', async () => {
@@ -1206,6 +1208,23 @@ skipUnlessSqlite('opencode provider - v2 generation (session_v2 + session_messag
     expect(calls).toHaveLength(1)
     expect(calls[0]!.sessionId).toBe('ses_parent')
     expect(calls[0]!.inputTokens).toBe(7)
+  })
+
+  it('walks archived v2 child sessions too (#1362: the archive is organizational)', async () => {
+    const dbPath = createV2TestDb(tmpDir)
+    withTestDb(dbPath, (db) => {
+      insertV2Session(db, 'ses_parent')
+      insertV2Session(db, 'ses_archived_child', { parentId: 'ses_parent', archived: 1700000009000 })
+      insertV2Message(db, 'msg_ac1', 'ses_archived_child', 'assistant', 1, 1700000000500, {
+        model: { id: 'm', providerID: 'opencode' },
+        content: [{ type: 'text', text: 'archived child work' }],
+        tokens: { input: 11, output: 4, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    const calls = await collectCalls(createOpenCodeProvider(tmpDir), dbPath, 'ses_parent')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.inputTokens).toBe(11)
   })
 
   it('prefers the v2 generation on an upgraded database with both table sets', async () => {

@@ -268,7 +268,6 @@ export function createSqliteSessionParser(
               SELECT child.id
               FROM session_v2 child
               JOIN session_tree parent ON child.parent_id = parent.id
-              WHERE child.time_archived IS NULL
             )
             SELECT session_id, id, type, seq, time_created, CAST(data AS BLOB) AS data
             FROM session_message
@@ -287,7 +286,6 @@ export function createSqliteSessionParser(
               SELECT child.id
               FROM session child
               JOIN session_tree parent ON child.parent_id = parent.id
-              WHERE child.time_archived IS NULL
             )
             SELECT session_id, id, time_created, CAST(data AS BLOB) AS data
             FROM message
@@ -303,7 +301,6 @@ export function createSqliteSessionParser(
               SELECT child.id
               FROM session child
               JOIN session_tree parent ON child.parent_id = parent.id
-              WHERE child.time_archived IS NULL
             )
             SELECT message_id, CAST(data AS BLOB) AS data
             FROM part
@@ -462,7 +459,7 @@ export async function discoverSqliteSessions(
       const table = generation === 'v2' ? 'session_v2' : 'session'
       const rows = db.query<SessionRow>(
         `SELECT id, CAST(directory AS BLOB) AS directory, CAST(title AS BLOB) AS title, time_created
-         FROM ${table} WHERE time_archived IS NULL AND parent_id IS NULL ORDER BY time_created DESC`,
+         FROM ${table} WHERE parent_id IS NULL ORDER BY time_created DESC`,
       )
 
       for (const row of rows) {
