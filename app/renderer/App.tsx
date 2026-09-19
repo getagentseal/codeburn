@@ -4,7 +4,6 @@ import { isColdHydrating } from './components/CliErrorPanel'
 import { EmptyNote } from './components/EmptyState'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Hint } from './components/Hint'
-import { Onboarding } from './components/Onboarding'
 import { Panel } from './components/Panel'
 import { Sidebar, type Section } from './components/Sidebar'
 import { Splash } from './components/Splash'
@@ -55,7 +54,7 @@ import { Plans } from './sections/Plans'
 import { Settings, type SettingsPane } from './sections/Settings'
 import { SpendContent } from './sections/Spend'
 import { PluginsSection } from './sections/Plugins'
-import type { DateRange, MenubarPayload, ModelReportRow, Period, Scope, TelemetryStatus } from './lib/types'
+import type { DateRange, MenubarPayload, ModelReportRow, Period, Scope } from './lib/types'
 import { Icon } from './components/icons'
 
 // Bucket raw dollar amounts before they leave the machine: telemetry carries
@@ -514,19 +513,19 @@ function AppMain() {
     if (overview.data != null || (overview.error != null && !overviewCold)) setReady(true)
   }, [overview.data, overview.error, overviewCold])
 
-  // First-launch onboarding: shown until the telemetry consent screen has been
-  // completed once. All telemetry bridge calls are typeof-guarded so an older
-  // preload (or the test bridge mock) degrades to "no onboarding, no tracking".
-  const [onboardingStatus, setOnboardingStatus] = useState<TelemetryStatus | null>(null)
+  // Telemetry onboarding page is hidden for now (component kept for later). On
+  // first launch, silently complete onboarding with the region-aware default
+  // (on outside EU/EEA/UK/CH, off inside); users change it in Settings. Bridge
+  // calls stay typeof-guarded so an older preload degrades to no tracking.
   useEffect(() => {
     if (typeof codeburn.telemetryStatus !== 'function') return
     codeburn.telemetryStatus()
-      .then(status => { if (status && !status.onboarded) setOnboardingStatus(status) })
-      .catch(() => { /* telemetry unavailable — skip onboarding */ })
-  }, [])
-  const finishOnboarding = useCallback((enabled: boolean) => {
-    setOnboardingStatus(null)
-    if (typeof codeburn.completeOnboarding === 'function') void codeburn.completeOnboarding(enabled).catch(() => {})
+      .then(status => {
+        if (status && !status.onboarded && typeof codeburn.completeOnboarding === 'function') {
+          void codeburn.completeOnboarding(status.defaultEnabled).catch(() => {})
+        }
+      })
+      .catch(() => { /* telemetry unavailable */ })
   }, [])
 
   // Once-per-day anonymous usage aggregate, only from the canonical view
@@ -937,7 +936,6 @@ function AppMain() {
       <Sidebar active={section} onNavigate={navigate} status={<StatusLine polled={overview} snapshot={headlineSnapshot} />} />
       <ToastHost />
       <Splash hasData={overview.data != null || headlineSnapshot != null} hasError={overview.error != null && !overviewCold} />
-      {onboardingStatus && <Onboarding defaultEnabled={onboardingStatus.defaultEnabled} onDone={finishOnboarding} />}
       <div className="ct" aria-busy={refreshing}>
         <div className={refreshing ? 'switch-line on' : 'switch-line'} aria-hidden="true" />
         <UpdateBanner />
