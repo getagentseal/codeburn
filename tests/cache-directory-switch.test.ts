@@ -260,6 +260,10 @@ describe('call-time CODEBURN_CACHE_DIR isolation', () => {
     process.env['CODEBURN_CACHE_DIR'] = cacheDir
     await writeCachedCodexResults(codexSource, 'project', [call('codex', 'before')], (await fingerprintFile(codexSource))!)
     await flushCodexCache()
+    // Populate the resident snapshot while disk still says 'before': without
+    // the clear below, lookups keep serving this warm copy (flush releases
+    // unflushed writes but never the snapshots they were read into).
+    expect((await readCachedCodexResults(codexSource))?.calls.map(entry => entry.model)).toEqual(['before'])
     expect(await readAntigravityModel(antigravitySource)).toBe('before')
 
     // Another process republishes both cache files. Without the clear, the

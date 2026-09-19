@@ -4,8 +4,10 @@ import { createHash, randomBytes } from 'crypto'
 import { join } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
+import { flattenJsonStrings } from './content-utils.js'
 import { acquireCacheRefreshLock, releaseOwnedRefreshLocksForExit } from './cache-refresh-lock.js'
 import type { ToolCall } from './types.js'
+import { streamShardArrayField, streamShardEntries } from './shard-stream.js'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -105,6 +107,65 @@ export type FileFingerprint = {
   sizeBytes: number
 }
 
+/// Keep-or-drop predicate over a cached turn, decided by the caller that owns
+/// the query range. Dropping is turn-granular only: a kept turn is always the
+/// WHOLE turn (all calls), because `cachedTurnToClassified` classifies from
+/// the full call list and the serve loops trim calls to the range themselves.
+/// A predicate that trims calls would silently change activity/retry/tool
+/// categories on midnight-straddling turns.
+export type TurnFilter = (turn: CachedTurn) => boolean
+
+/// Options for loadCache. `turnFilter` is the ranged-query projection: when
+/// present (and the provider is neither durable nor fingerprint-mismatched),
+/// each shard is streamed and only turns the predicate keeps are retained.
+/// `providerFilter` narrows the load to one provider (`'all'` or absent loads
+/// everything): other sections come back as empty shells — no shards read —
+/// so a provider-scoped query never decodes unrelated corpora. Shells still
+/// carry their envelope refs through the next save untouched (see the
+/// unloaded-months carry in saveCache). Cross-provider dedup seeding and
+/// cross-provider PR correlation only see loaded providers, the same class of
+/// weakening month scoping already accepts; unscoped runs are unaffected.
+export type LoadCacheOptions = {
+  turnFilter?: TurnFilter
+  providerFilter?: string
+}
+
+/// Metadata carried on a file whose turns were narrowed by a TurnFilter at
+/// load. The on-disk shard bytes stay authoritative for everything dropped:
+/// records carrying this marker must never be serialized back into a shard
+/// (see saveCache), and a hypothetical on-disk record carrying it fails
+/// validation (see validateCachedFile), so the marker is memory-only in both
+/// directions. Every read path below consults these scalars instead of the
+/// absent turns.
+export type RangeFilteredMeta = {
+  /// Pre-filter month span: `bucket` is the oldest turn's month (the shard the
+  /// file lives in), `until` the newest. Appends never move a file, so the
+  /// span recorded at decode stays correct while the file is unchanged.
+  span: { bucket: string; until: string }
+  /// Newest call timestamp in the FULL pre-filter turn list (for the 90-day
+  /// durable age-out, which reads past the retained turns).
+  newestCallMs: number
+  /// `turns[0].calls[0].project` of the FULL pre-filter list (for orphan
+  /// identity fallbacks that read past the retained turns).
+  firstTurnProject?: string
+  /// Deduplication keys of the dropped turns, in file walk order. Added to
+  /// the shared dedup sets wherever the serve loops open the file. Exact if
+  /// and only if no key appears in both a kept and a dropped turn of this
+  /// file — the decoder keeps the whole file (unflagged) on any such
+  /// overlap, so a retained turn can never be suppressed by a dropped later
+  /// duplicate (or vice versa) differently than the full walk would.
+  droppedKeys: string[]
+  /// Branch/PR state carried into the first kept turn, walked from the dropped
+  /// Exact on append-only transcripts, where kept turns always form a suffix;
+  /// files whose dropped turns also carry branch/PR state between kept turns
+  /// (intra-file time disorder) are kept whole instead (see above).
+  carryBranch?: string
+  carryPrRefs?: string[]
+  /// Any dropped turn carried a git branch: feeds `everHadBranch` exactly,
+  /// since that judgment is order-independent (anywhere in the file counts).
+  droppedHadBranch?: boolean
+}
+
 export type CachedFile = {
   fingerprint: FileFingerprint
   lastCompleteLineOffset?: number
@@ -114,6 +175,12 @@ export type CachedFile = {
   canonicalProjectName?: string
   mcpInventory: string[]
   turns: CachedTurn[]
+  // Set only by a range-filtered load (see TurnFilter): the turns list holds
+  // just the in-range turns, and this marker carries everything the dropped
+  // turns contributed (dedup keys, span, scalars). Memory-only: the on-disk
+  // shard bytes stay authoritative, so save paths must exclude flagged
+  // records from every write set (see saveCache) or history is truncated.
+  rangeFiltered?: RangeFilteredMeta
   // Claude Code only: for a subagent transcript (`subagents/.../agent-*.jsonl`),
   // the `agentType` from its sibling `.meta.json` (e.g. `workflow-subagent`,
   // `Explore`, `general-purpose`). Drives the Claude-scoped agent-type breakdown.
@@ -529,6 +596,46 @@ export function cacheBucketMonth(file: CachedFile): string {
   return cacheFileSpan(file).bucket
 }
 
+/// Month span honoring a range-filtered record's carried span. Filtered files
+/// keep only in-range turns, so recomputing from `turns` would misbucket them;
+/// the span recorded at decode (over the full pre-filter list) stays correct
+/// while the file is unchanged, and a re-parse replaces the record wholesale.
+export function fileSpan(file: CachedFile): { bucket: string; until: string } {
+  return file.rangeFiltered?.span ?? cacheFileSpan(file)
+}
+
+/// Newest call timestamp in milliseconds, mirroring the 90-day durable age-out
+/// computation exactly (NaN stamps ignored, 0 when none) for unfiltered files.
+export function fileNewestCallMs(file: CachedFile): number {
+  if (file.rangeFiltered) return file.rangeFiltered.newestCallMs
+  let max = 0
+  for (const turn of file.turns) {
+    for (const call of turn.calls) {
+      const ts = new Date(call.timestamp).getTime()
+      if (!Number.isNaN(ts) && ts > max) max = ts
+    }
+  }
+  return max
+}
+
+/// First turn's first-call project of the FULL pre-filter list. Serve paths
+/// fall back to it when the retained turns start later (or are gone).
+export function fileFirstTurnProject(file: CachedFile): string | undefined {
+  return file.rangeFiltered?.firstTurnProject ?? file.turns[0]?.calls[0]?.project
+}
+
+/// Add a filtered file's dropped dedup keys to a shared set. Call sites must
+/// invoke this when the serve walk OPENS the file (before its turns), in walk
+/// order: that reproduces cross-file suppression exactly, because the full
+/// walk adds an out-of-range turn's keys at the same file position. Within a
+/// file the decoder keeps the record whole on any kept/dropped key overlap,
+/// so no reordering hazard remains. No-op for unfiltered files.
+export function seedDroppedKeys(seen: Set<string>, file: CachedFile): void {
+  const marker = file.rangeFiltered
+  if (!marker) return
+  for (const key of marker.droppedKeys) seen.add(key)
+}
+
 // Save bookkeeping, held beside the cache rather than on it so it never lands in
 // a shard's JSON or in a caller's deep-equality.
 type CacheState = {
@@ -546,6 +653,8 @@ type CacheState = {
   bucketOf: Map<string, string>
   /** The load scope this cache was read under, for the cross-request memo. */
   scope: string
+  /** The provider this cache was narrowed to (`'all'` when unscoped). */
+  scopeProvider: string
 }
 const cacheStates = new WeakMap<SessionCache, CacheState>()
 
@@ -560,6 +669,7 @@ function stateOf(cache: SessionCache): CacheState {
       fingerprints: new Map(),
       bucketOf: new Map(),
       scope: 'all',
+      scopeProvider: 'all',
     }
     cacheStates.set(cache, state)
   }
@@ -589,7 +699,10 @@ export function markCacheDirty(cache: SessionCache, provider: string, filePath?:
   const prior = state.bucketOf.get(`${provider}\0${filePath}`)
   if (prior !== undefined) markBucketDirty(state, provider, prior)
   const file = cache.providers[provider]?.files[filePath]
-  if (file) markBucketDirty(state, provider, cacheBucketMonth(file))
+  // fileSpan, not cacheBucketMonth: a range-filtered record's turns are a
+  // slice, so recomputing the bucket from them would dirty the wrong month
+  // and resurrect a deleted file from the carried shard on the next save.
+  if (file) markBucketDirty(state, provider, fileSpan(file).bucket)
   // A path with neither a prior bucket nor a live entry (deleted before this
   // process ever saw it) still has to move `dirty`, or the save is skipped.
   state.dirty = true
@@ -822,6 +935,12 @@ function validateCachedFile(f: unknown): f is CachedFile {
     && isOptionalLineage(o['lineage'])
     && Array.isArray(o['turns'])
     && (o['turns'] as unknown[]).every(validateTurn)
+    // `rangeFiltered` is memory-only (see RangeFilteredMeta): a record carrying
+    // it on disk is either corrupt or from a writer bug, so reject the file
+    // rather than serving a partial turn list as complete. Save paths exclude
+    // flagged records from every write set, so this branch is unreachable
+    // through the shipped code — it exists to fail closed, not to trigger.
+    && o['rangeFiltered'] === undefined
 }
 
 // A shard's payload: the provider's `files` map, restricted to one month.
@@ -938,7 +1057,7 @@ async function adoptNewestPriorCache(): Promise<SessionCache | null> {
 // process mints a new nonce and forces a reload, so cross-process freshness is
 // preserved; saveCache updates the memo write-through so the object handed out
 // stays the canonical one after a refresh.
-let cacheMemo: { dir: string; nonce: string; scope: string; cache: SessionCache } | null = null
+let cacheMemo: { dir: string; nonce: string; scope: string; provider: string; cache: SessionCache } | null = null
 
 export function clearLoadCacheMemo(): void {
   cacheMemo = null
@@ -1010,13 +1129,31 @@ async function readEnvelope(dir: string): Promise<CacheEnvelope | null> {
 // A shard that is missing or malformed costs exactly the provider-months it
 // held, not the provider and never the whole cache: those files re-parse while
 // every other month keeps serving.
-async function loadShard(path: string): Promise<Record<string, CachedFile> | null> {
+/// Assemble a whole shard without ever materializing its text: files past
+/// ~512MB exceed V8's max string length, so readFile+JSON.parse hard-fails
+/// (RangeError) regardless of heap. Per-record streaming bounds transients by
+/// the largest single record instead. Any invalid record drops the whole
+/// shard, mirroring validateFiles entry for entry.
+async function loadShardStreaming(path: string): Promise<Record<string, CachedFile> | null> {
+  const files: Record<string, CachedFile> = {}
   try {
-    const parsed = JSON.parse(await readFile(path, 'utf-8'))
-    return validateFiles(parsed) ? parsed : null
+    await streamShardEntries(path, ({ key, value }) => {
+      if (!validateCachedFile(value)) throw new Error(`shard record invalid: ${path}`)
+      // Detach before storing: unlike streamShardArrayField (whose
+      // assembleTokens detaches at the token level), this pipeline is
+      // parser→streamObject direct, so values arrive as tokenizer slices.
+      // In place on the decoder-owned value — no copy, no serialization
+      // transient (see flattenJsonStrings). Keys arrive pre-flattened.
+      files[key] = flattenJsonStrings(value)
+    })
   } catch {
     return null
   }
+  return files
+}
+
+async function loadShard(path: string): Promise<Record<string, CachedFile> | null> {
+  return loadShardStreaming(path)
 }
 
 // Shards a resident process (codeburn serve) keeps parsed between requests,
@@ -1070,54 +1207,490 @@ export async function loadShardMemoized(dir: string, name: string): Promise<Reco
     shardMemo.set(key, hit)
     return hit.files
   }
-  let raw: string
-  try {
-    raw = await readFile(join(dir, name), 'utf-8')
-  } catch {
-    return null
-  }
-  let files: Record<string, CachedFile>
-  try {
-    const parsed = JSON.parse(raw)
-    if (!validateFiles(parsed)) return null
-    files = parsed
-  } catch {
-    return null
-  }
-  const bytes = Buffer.byteLength(raw)
+  const files = await loadShardStreaming(join(dir, name))
+  if (!files) return null
+  const st = await stat(join(dir, name)).catch(() => null)
+  // Vanished mid-load: serve the self-consistent bytes once, but never
+  // memoize them (a name-keyed memo would serve ghost data afterwards).
+  if (!st) return files
+  const bytes = st.size
   shardMemo.set(key, { files, bytes, usedAt: now })
   shardMemoBytes += bytes
   evictShardMemo(now)
   return files
 }
 
+type SliceItem = {
+  keep: boolean
+  turn: CachedTurn | null
+  /// Dedup keys of this turn's calls, for the overlap check and the marker.
+  keys: string[]
+  gitBranch?: string
+  prRefs?: string[]
+  month: string | null
+  newestMs: number
+}
+function turnNewestCallMs(turn: CachedTurn): number {
+  let max = 0
+  for (const call of turn.calls) {
+    const ts = new Date(call.timestamp).getTime()
+    if (!Number.isNaN(ts) && ts > max) max = ts
+  }
+  return max
+}
+
+function droppedTurnKeys(turn: CachedTurn, into: string[]): void {
+  for (const call of turn.calls) into.push(call.deduplicationKey)
+}
+
+function sliceItemFor(turn: CachedTurn, keep: boolean): SliceItem {
+  const keys: string[] = []
+  droppedTurnKeys(turn, keys)
+  return {
+    keep,
+    turn: keep ? turn : null,
+    keys,
+    gitBranch: turn.gitBranch,
+    prRefs: turn.prRefs,
+    month: monthKey(turn.timestamp),
+    newestMs: turnNewestCallMs(turn),
+  }
+}
+
+/// Incremental projection accumulator: the common-path replacement for
+/// collecting one SliceItem per turn. For a 30k-turn file that was 30k
+/// wrappers plus key arrays retained to file end; the accumulator keeps
+/// only what the marker and output need — kept turns, dropped keys, kept
+/// keys, counters, and scalar carry/suffix state. Decision logic lives in
+/// finishSlice (shared with projectTurnSlice), so the second-pass fallback
+/// in filterShardFile behaves identically.
+type SliceAccumulator = {
+  kept: CachedTurn[]
+  droppedKeys: string[]
+  keptKeys: Set<string>
+  total: number
+  keptCount: number
+  firstKept: number
+  lastKept: number
+  seenKept: boolean
+  carryBranch: string | undefined
+  carryPrRefs: string[] | undefined
+  prefixHadBranch: boolean
+  suffixHadBranch: boolean
+  anyBranch: boolean
+}
+
+function createSliceAccumulator(): SliceAccumulator {
+  return {
+    kept: [],
+    droppedKeys: [],
+    keptKeys: new Set(),
+    total: 0,
+    keptCount: 0,
+    firstKept: -1,
+    lastKept: -1,
+    seenKept: false,
+    carryBranch: undefined,
+    carryPrRefs: undefined,
+    prefixHadBranch: false,
+    suffixHadBranch: false,
+    anyBranch: false,
+  }
+}
+
+/// Fold one live turn with zero per-turn allocation beyond the key strings
+/// themselves: keys stream straight into the shared arrays, scalars update
+/// counters. Mirrors sliceItemFor plus the carry and suffix-branch scans
+/// positionally (last-wins carry, suffix reset on kept).
+function foldLiveTurn(acc: SliceAccumulator, turn: CachedTurn, keep: boolean): void {
+  if (keep) {
+    const index = acc.total++
+    acc.kept.push(turn)
+    for (const call of turn.calls) {
+      acc.keptKeys.add(call.deduplicationKey)
+    }
+    acc.keptCount++
+    if (!acc.seenKept) {
+      acc.seenKept = true
+      acc.firstKept = index
+    }
+    acc.lastKept = index
+    // The suffix scan restarts at the newest kept turn.
+    acc.suffixHadBranch = turn.gitBranch ? true : false
+    if (turn.gitBranch) acc.anyBranch = true
+    return
+  }
+  acc.total++
+  for (const call of turn.calls) {
+    acc.droppedKeys.push(call.deduplicationKey)
+  }
+  if (!acc.seenKept) {
+    if (turn.gitBranch) {
+      acc.prefixHadBranch = true
+      acc.carryBranch = turn.gitBranch
+    }
+    if (turn.prRefs?.length) acc.carryPrRefs = turn.prRefs
+  } else if (turn.gitBranch) {
+    acc.suffixHadBranch = true
+  }
+  if (turn.gitBranch) acc.anyBranch = true
+}
+
+/// Fold one pre-built SliceItem (second-pass path only): same scalar state
+/// as foldLiveTurn, reading the item's stored arrays instead of the turn.
+function foldItem(acc: SliceAccumulator, item: SliceItem): void {
+  if (item.keep) {
+    const index = acc.total++
+    acc.kept.push(item.turn!)
+    for (const key of item.keys) acc.keptKeys.add(key)
+    acc.keptCount++
+    if (!acc.seenKept) {
+      acc.seenKept = true
+      acc.firstKept = index
+    }
+    acc.lastKept = index
+    acc.suffixHadBranch = item.gitBranch ? true : false
+    if (item.gitBranch) acc.anyBranch = true
+    return
+  }
+  acc.total++
+  for (const key of item.keys) acc.droppedKeys.push(key)
+  if (!acc.seenKept) {
+    if (item.gitBranch) {
+      acc.prefixHadBranch = true
+      acc.carryBranch = item.gitBranch
+    }
+    if (item.prRefs?.length) acc.carryPrRefs = item.prRefs
+  } else if (item.gitBranch) {
+    acc.suffixHadBranch = true
+  }
+  if (item.gitBranch) acc.anyBranch = true
+}
+
+/// Shared projection decision + marker assembly. Contiguity and key-overlap
+/// match projectTurnSlice exactly; the all-dropped file keeps the suffix
+/// scan's whole-list coverage via anyBranch.
+function finishSlice(
+  base: Record<string, unknown>,
+  acc: SliceAccumulator,
+  span: { bucket: string; until: string },
+  newestMs: number,
+  firstTurnProject: string | undefined,
+): { whole: true } | { whole: false; file: CachedFile } {
+  if (acc.keptCount > 0 && acc.lastKept - acc.firstKept + 1 !== acc.keptCount) return { whole: true }
+  for (const key of acc.droppedKeys) if (acc.keptKeys.has(key)) return { whole: true }
+  const droppedHadBranch = acc.prefixHadBranch || (acc.keptCount === 0 ? acc.anyBranch : acc.suffixHadBranch)
+  // No flattening here either: every turn passing through the accumulator
+  // was assembled by assembleTokens (already detached), so carry refs, first
+  // project, and kept turns retain directly.
+  return {
+    whole: false,
+    file: {
+      ...base,
+      turns: acc.kept,
+      rangeFiltered: {
+        span,
+        newestCallMs: newestMs,
+        ...(firstTurnProject !== undefined ? { firstTurnProject } : {}),
+        droppedKeys: acc.droppedKeys,
+        // Carry needs a kept block to carry INTO: with zero kept turns the
+        // old prefix loop ran zero times (firstKept === -1), so the fields
+        // stay absent. droppedHadBranch still reports via anyBranch.
+        ...(acc.keptCount > 0 && acc.carryBranch !== undefined ? { carryBranch: acc.carryBranch } : {}),
+        ...(acc.keptCount > 0 && acc.carryPrRefs !== undefined ? { carryPrRefs: acc.carryPrRefs } : {}),
+        ...(droppedHadBranch ? { droppedHadBranch: true } : {}),
+      },
+    } as CachedFile,
+  }
+}
+
+/// Project one decoded shard record through a TurnFilter. Returns the record
+/// unchanged (no marker) unless turns are actually dropped. Projection applies
+/// only when it is exact, otherwise the caller must keep the whole record:
+/// - PR-linked files stay whole: the PR-anchor logic reads spawn sets across
+///   the full turn list (checked by the caller, which sees the metadata).
+/// - kept turns must form ONE contiguous block in file order (a prefix, a
+///   suffix, or all of them): the carry state below is walked positionally.
+///   Append-only layouts yield a kept suffix; newest-first layouts a prefix.
+/// - no dedup key may appear on both sides: the shared sets suppress in walk
+///   order, and only single-sided keys preserve that order.
+/// Kept turns are always whole objects — calls are never trimmed here, so
+/// serve-time classification sees the identical input (see TurnFilter).
+/// `span`/`newestMs`/`firstTurnProject` are aggregates over the FULL
+/// pre-filter turn list (the marker carries them past the dropped turns).
+function projectTurnSlice(
+  base: Record<string, unknown>,
+  items: SliceItem[],
+  span: { bucket: string; until: string },
+  newestMs: number,
+  firstTurnProject: string | undefined,
+): { whole: true } | { whole: false; file: CachedFile } {
+  const keepFlags = items.map(item => item.keep)
+  const keptCount = keepFlags.filter(keep => keep).length
+  if (keptCount === items.length) {
+    return { whole: false, file: { ...base, turns: items.map(item => item.turn!) } as CachedFile }
+  }
+  const acc = createSliceAccumulator()
+  for (const item of items) foldItem(acc, item)
+  return finishSlice(base, acc, span, newestMs, firstTurnProject)
+}
+
+function filterShardFile(value: unknown, keepTurn: TurnFilter): CachedFile | null {
+  if (!validateCachedFile(value)) return null
+  const file = value
+  if (file.turns.length === 0) return file
+  if (file.prLinks?.length) return file
+  const items = file.turns.map(turn => sliceItemFor(turn, keepTurn(turn)))
+  if (items.every(item => item.keep)) return file
+  const sliced = projectTurnSlice(
+    file,
+    items,
+    cacheFileSpan(file),
+    fileNewestCallMs(file),
+    file.turns[0]?.calls[0]?.project,
+  )
+  return sliced.whole ? file : sliced.file
+}
+
+/// Decode one shard with a TurnFilter, streaming turns so peak heap tracks
+/// the retained slice plus one turn rather than the shard. Turns are
+/// validated as decoded (kept or dropped); the unmarked reconstruction is
+/// validated at file end, so an invalid record anywhere drops the whole
+/// shard exactly as the whole-file decoder did. Any decode failure (including
+/// a single invalid record) drops the WHOLE shard — mirroring validateFiles —
+/// so a torn shard can never partially commit.
+///
+/// Whole-file gates (PR links, gappy kept turns, cross-side key overlap) are
+/// collected during the stream and decoded whole in one second pass over the
+/// shard: rare cases pay a re-read while the common path stays bounded.
+export async function loadShardFiltered(
+  dir: string,
+  name: string,
+  turnFilter: TurnFilter,
+): Promise<Record<string, CachedFile> | null> {
+  const files: Record<string, CachedFile> = {}
+  const needsFull = new Set<string>()
+  type Build = {
+    meta: Record<string, unknown>
+    acc: SliceAccumulator
+    spanMin: string | null
+    spanMax: string | null
+    newestMs: number
+    firstTurnProject?: string
+  }
+  const builds = new Map<string, Build>()
+  const shardPath = join(dir, name)
+  const fingerprintOf = async (): Promise<string | null> =>
+    stat(shardPath).then(s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`, () => null)
+  const before = await fingerprintOf()
+  try {
+    await streamShardArrayField(shardPath, 'turns', {
+      onFileStart: key => {
+        builds.set(key, { meta: {}, acc: createSliceAccumulator(), spanMin: null, spanMax: null, newestMs: 0 })
+      },
+      onField: (key, field, value) => {
+        // `rangeFiltered` is memory-only: a record carrying it on disk is
+        // corrupt or a writer bug, and the whole-file decoder rejects it, so
+        // fail the same way instead of serving a partial list as complete.
+        if (field === 'rangeFiltered') throw new Error(`shard record invalid: ${name}`)
+        // The turns array streams element-wise; a field-shaped `turns` value
+        // is corrupt (or a duplicate key). The whole-file decoder failed
+        // validation here, so fail the same way instead of serving metadata
+        // without turns as complete.
+        if (field === 'turns') throw new Error(`shard record invalid: ${name}`)
+        builds.get(key)!.meta[field] = value
+      },
+      onElement: (key, index, value) => {
+        const build = builds.get(key)!
+        if (!validateTurn(value)) throw new Error(`shard record invalid: ${name}`)
+        const turn = value
+        // Fold straight into the accumulator: no per-turn wrapper or key
+        // arrays (see SliceAccumulator). Scalars mirror sliceItemFor.
+        foldLiveTurn(build.acc, turn, turnFilter(turn))
+        const month = monthKey(turn.timestamp)
+        if (month !== null) {
+          if (build.spanMin === null || month < build.spanMin) build.spanMin = month
+          if (build.spanMax === null || month > build.spanMax) build.spanMax = month
+        }
+        const newestMs = turnNewestCallMs(turn)
+        if (newestMs > build.newestMs) build.newestMs = newestMs
+        if (index === 0) build.firstTurnProject = turn.calls[0]?.project
+      },
+      onFileEnd: (key, _count, arraySeen) => {
+        const build = builds.get(key)!
+        builds.delete(key)
+        // No turns field at all: the whole-file decoder failed validation
+        // here, so fail the same way.
+        if (!arraySeen) throw new Error(`shard record invalid: ${name}`)
+        if ((build.meta['prLinks'] as unknown[] | undefined)?.length) {
+          needsFull.add(key)
+          return
+        }
+        // Nothing dropped: serve the kept turns with no marker (the contract
+        // adds rangeFiltered only when turns were actually dropped).
+        if (build.acc.keptCount === build.acc.total) {
+          const file = { ...build.meta, turns: build.acc.kept } as CachedFile
+          if (!validateCachedFile(file)) throw new Error(`shard record invalid: ${name}`)
+          files[key] = file
+          return
+        }
+        const span = build.spanMin === null
+          ? { bucket: UNDATED_BUCKET, until: UNDATED_BUCKET }
+          : { bucket: build.spanMin, until: build.spanMax! }
+        const sliced = finishSlice({ ...build.meta }, build.acc, span, build.newestMs, build.firstTurnProject)
+        if (sliced.whole) {
+          needsFull.add(key)
+          return
+        }
+        // The marker is memory-only and fails validation by design, so
+        // validate the unmarked reconstruction: every turn was already
+        // validated at decode, which leaves exactly the metadata covered.
+        const { rangeFiltered: _marker, ...rest } = sliced.file
+        if (!validateCachedFile(rest)) throw new Error(`shard record invalid: ${name}`)
+        files[key] = sliced.file
+      },
+    })
+  } catch {
+    return null
+  }
+  if (needsFull.size > 0) {
+    // A concurrent atomic publish between the passes would apply pass-one
+    // decisions to pass-two bytes (or silently miss a needsFull key), so
+    // prove the file is untouched and every key completed, else drop the
+    // shard exactly as a torn file would.
+    const after = await stat(shardPath).then(
+      s => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`,
+      () => null,
+    )
+    if (after === null || after !== before) return null
+    const completed = new Set<string>()
+    const wholeBuilds = new Map<string, { meta: Record<string, unknown>; turns: CachedTurn[] }>()
+    try {
+      await streamShardArrayField(shardPath, 'turns', {
+        onFileStart: key => {
+          if (needsFull.has(key)) wholeBuilds.set(key, { meta: {}, turns: [] })
+        },
+        onField: (key, field, value) => {
+          const build = wholeBuilds.get(key)
+          if (build) build.meta[field] = value
+        },
+        onElement: (key, _index, value) => {
+          const build = wholeBuilds.get(key)
+          if (!build) return
+          if (!validateTurn(value)) throw new Error(`shard record invalid: ${name}`)
+          build.turns.push(value)
+        },
+        onFileEnd: (key, _count, arraySeen) => {
+          const build = wholeBuilds.get(key)
+          if (!build) return
+          wholeBuilds.delete(key)
+          if (!arraySeen) throw new Error(`shard record invalid: ${name}`)
+          const file = filterShardFile({ ...build.meta, turns: build.turns }, turnFilter)
+          if (!file) throw new Error(`shard record invalid: ${name}`)
+          files[key] = file
+          completed.add(key)
+        },
+      })
+    } catch {
+      return null
+    }
+    for (const key of needsFull) {
+      if (!completed.has(key)) return null
+    }
+    // A replacement during pass two would mix old decisions with new bytes.
+    if ((await fingerprintOf()) !== before) return null
+  }
+  return files
+}
+
+/// Strip range-filtered records from a write payload. Filtered records carry
+/// only a slice of their turns; persisting them would truncate history. The
+/// published shard bytes stay authoritative for stripped paths (see the merge
+/// path in saveCache, which overlays memory records onto the published shard
+/// instead of rewriting from memory alone).
+function stripFilteredForWrite(files: Record<string, CachedFile>): Record<string, CachedFile> {
+  let stripped: Record<string, CachedFile> | null = null
+  for (const file of Object.values(files)) {
+    if (!file.rangeFiltered) continue
+    if (!stripped) {
+      stripped = {}
+      for (const [p, f] of Object.entries(files)) {
+        if (!f.rangeFiltered) stripped[p] = f
+      }
+      break
+    }
+  }
+  return stripped ?? files
+}
+
+/// Whether any record in a write payload carries the range-filtered marker.
+function groupHasFiltered(files: Record<string, CachedFile>): boolean {
+  return Object.values(files).some(f => f.rangeFiltered !== undefined)
+}
+
+/// Whether any record anywhere in the cache carries the range-filtered
+/// marker. Guards the save write-through memo (a filtered object must never
+/// be served to a later full-scope load in this process).
+function cacheHasFilteredRecords(cache: SessionCache): boolean {
+  return Object.values(cache.providers).some(section =>
+    Object.values(section.files).some(file => file.rangeFiltered !== undefined))
+}
+
 /**
  * Read the cache. With a `scope`, only the shards whose months can contribute a
  * turn to that range are read — everything else stays on disk and is carried
- * across the next save untouched (see saveCache). Durable providers and any
- * provider whose recorded fingerprint no longer matches are always read in
- * full: the first because its cache is the only surviving record of pruned
- * usage, the second because a fingerprint change discards the whole section and
- * must see every entry it is discarding.
+* across the next save untouched (see saveCache). Durable providers are always
+* read in full: their cache is the only surviving record of pruned usage. A
+* provider whose recorded fingerprint no longer matches is likewise never
+* scoped: it is read in full so migration and lossless loads see every entry
+* (orphaned paths cannot re-parse), and so the fingerprint reset inspects
+* the complete prior section before the parse replaces it. Durable sections
+* additionally carry their orphans forward across the reset itself (see
+* getOrCreateProviderSection); non-durable entries are re-derived by the
+* re-parse that follows.
  *
  * `CODEBURN_CACHE_SCOPE=all` is the escape hatch: it drops the scope here, at
  * the one place every caller routes through, so a suspect scoped read can be
  * compared against a full one without a rebuild. It is a READ policy and
  * deliberately not part of any env fingerprint (PROVIDER_ENV_VARS) — setting or
  * unsetting it must never invalidate a cache, only change how much of it is read.
+*
+* `opts.turnFilter` narrows turns at decode time for ranged queries: a kept
+* turn is always whole (see TurnFilter), dropped turns contribute only their
+* dedup keys plus carried scalars (see RangeFilteredMeta); PR-linked files,
+* files with kept/dropped key overlap, and non-contiguous projections stay
+* whole. Filtered loads bypass both memos. Durable sections are never
+* filtered: orphan reconciliation reads the complete serve set.
  */
-export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
+export async function loadCache(scope?: CacheLoadScope, opts?: LoadCacheOptions): Promise<SessionCache> {
   if (process.env['CODEBURN_CACHE_SCOPE'] === 'all') scope = undefined
   const dir = sessionCacheDir()
   const envelope = await readEnvelope(dir)
   if (!envelope) return afterMissingShardCache()
   const scopeKey = scope ? `${scope.fromMonth}..${scope.toMonth}` : 'all'
-  if (cacheMemo && cacheMemo.dir === dir && cacheMemo.nonce === envelope.nonce
-    && (cacheMemo.scope === 'all' || cacheMemo.scope === scopeKey)) return cacheMemo.cache
+  // A filtered load must never reuse a memoized full cache (it would serve
+  // unfiltered turns), and a full load must never reuse a filtered one — the
+  // write gate below guarantees only full results are stored, so skipping the
+  // read whenever a filter is active is both safe and sufficient. Provider
+  // identity joins the key by exact match (no 'all'-covers-scoped): a scoped
+  // memo must never serve an all-provider load (it holds shells), and an
+  // all-provider memo must never serve a scoped load (it defeats the bound).
+  const memoProvider = opts?.providerFilter ?? 'all'
+  if (!opts?.turnFilter && cacheMemo && cacheMemo.dir === dir && cacheMemo.nonce === envelope.nonce
+    && (cacheMemo.scope === 'all' || cacheMemo.scope === scopeKey)
+    && cacheMemo.provider === memoProvider) return cacheMemo.cache
 
   const cache: SessionCache = { version: CACHE_VERSION, providers: {}, complete: envelope.complete === true }
   const state = stateOf(cache)
-  const reads: Promise<void>[] = []
+  // Every selected shard, in envelope order. Reads run SERIALLY through this
+  // one queue: starting each provider's loads eagerly (and all providers at
+  // once) overlaps multi-hundred-MB tokenizer transients and OOMs small heaps
+  // even when every individual shard would fit. Thunks start no I/O until
+  // awaited below, so peak tracks one shard's transient plus the retained
+  // slices. Envelope order also keeps the merge deterministic: a path in two
+  // shards resolves to the freshest fingerprint, and the next save prunes the
+  // loser instead of letting it linger.
+  const pending: { provider: string; section: ProviderSection; bucket: string; run: () => Promise<Record<string, CachedFile> | null> }[] = []
   for (const [provider, meta] of Object.entries(envelope.providers)) {
     const section: ProviderSection = {
       envFingerprint: meta.envFingerprint,
@@ -1131,50 +1704,67 @@ export async function loadCache(scope?: CacheLoadScope): Promise<SessionCache> {
     // belong to, and what stops the reconcile from re-parsing under a
     // fingerprint the envelope already agrees with.
     cache.providers[provider] = section
-    // Durable providers are ALWAYS loaded in full, by name as well as by the
+    // Provider-scoped query: other sections come back as empty shells (no
+    // shard reads) and ride the next save untouched via the unloaded-months
+    // carry. `loaded` is an empty set (nothing loaded) with full prior refs,
+    // exactly like an out-of-scope month set.
+    if (opts?.providerFilter !== undefined && opts.providerFilter !== 'all' && opts.providerFilter !== provider) {
+      state.loaded.set(provider, new Set())
+      state.shards.set(provider, meta.shards)
+      state.fingerprints.set(provider, meta.envFingerprint)
+      continue
+    }
     // envelope flag: copilot's serve-time reconciliation pairs store rows and
     // retires residuals over the complete cached serve set, so a scoped load
     // of a copilot section persisted before the durable stamp landed would
     // make pairing range-dependent. The name check closes that window.
-    const full = !scope || meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider) || meta.envFingerprint !== computeEnvFingerprint(provider)
+    const fingerprintMismatch = meta.envFingerprint !== computeEnvFingerprint(provider)
+    const durableSection = meta.durable === true || DURABLE_PROVIDER_NAMES.has(provider)
+    const full = !scope || durableSection || fingerprintMismatch
     const loaded: Set<string> | null = full ? null : new Set()
-    // Shards are read concurrently but merged in envelope order, so the result
-    // never depends on which read finished first. A path that somehow ended up
-    // in two shards resolves to the FRESHEST fingerprint and dirties both
-    // buckets, so the next save prunes the loser instead of letting it linger.
-    const pending: { bucket: string; files: Promise<Record<string, CachedFile> | null> }[] = []
+    const useFilter = opts?.turnFilter && !full
     for (const [bucket, ref] of Object.entries(meta.shards)) {
       if (loaded && !shardInScope(bucket, ref.until, scope!)) continue
-      loaded?.add(bucket)
-      pending.push({ bucket, files: loadShardMemoized(dir, ref.name) })
+      // A ranged query narrows turns at decode time (see TurnFilter): the full
+      // month shard is streamed but only in-range turns are retained, bounding
+      // peak heap by the query instead of the corpus. Durable sections and
+      // fingerprint-mismatched sections always decode whole: orphan
+      // reconciliation and the fingerprint reset read the complete serve set.
+      const shardName = ref.name
+      pending.push({
+        provider,
+        section,
+        bucket,
+        run: useFilter
+          ? () => loadShardFiltered(dir, shardName, opts!.turnFilter!)
+          : () => loadShardMemoized(dir, shardName),
+      })
     }
-    reads.push((async () => {
-      for (const { bucket, files: read } of pending) {
-        const files = await read
-        // Unreadable: the bucket counts as loaded-and-empty and is marked
-        // dirty, so the re-parsed files replace it instead of the stale shard
-        // being carried forward forever.
-        if (!files) { markBucketDirty(state, provider, bucket); continue }
-        for (const [path, file] of Object.entries(files)) {
-          const key = `${provider}\0${path}`
-          const seenIn = state.bucketOf.get(key)
-          if (seenIn !== undefined) {
-            markBucketDirty(state, provider, seenIn)
-            markBucketDirty(state, provider, bucket)
-            if (section.files[path]!.fingerprint.mtimeMs >= file.fingerprint.mtimeMs) continue
-          }
-          state.bucketOf.set(key, bucket)
-          section.files[path] = file
-        }
-      }
-    })())
     state.loaded.set(provider, loaded)
     state.shards.set(provider, meta.shards)
     state.fingerprints.set(provider, meta.envFingerprint)
   }
-  await Promise.all(reads)
+  for (const { provider, section, bucket, run } of pending) {
+    const files = await run()
+    // Unreadable: the bucket counts as loaded-and-empty and is marked
+    // dirty, so the re-parsed files replace it instead of the stale shard
+    // being carried forward forever.
+    if (!files) { markBucketDirty(state, provider, bucket); continue }
+    for (const [path, file] of Object.entries(files)) {
+      const key = `${provider}\0${path}`
+      const seenIn = state.bucketOf.get(key)
+      if (seenIn !== undefined) {
+        markBucketDirty(state, provider, seenIn)
+        markBucketDirty(state, provider, bucket)
+        if (section.files[path]!.fingerprint.mtimeMs >= file.fingerprint.mtimeMs) continue
+      }
+      state.bucketOf.set(key, bucket)
+      section.files[path] = file
+    }
+  }
   state.scope = scopeKey
-  cacheMemo = { dir, nonce: envelope.nonce, scope: scopeKey, cache }
+  state.scopeProvider = opts?.providerFilter ?? 'all'
+  if (!opts?.turnFilter) cacheMemo = { dir, nonce: envelope.nonce, scope: scopeKey, provider: state.scopeProvider, cache }
   return cache
 }
 
@@ -1299,7 +1889,7 @@ function bucketFiles(section: ProviderSection): { groups: Map<string, Record<str
   const groups = new Map<string, Record<string, CachedFile>>()
   const until = new Map<string, string>()
   for (const [path, file] of Object.entries(section.files)) {
-    const span = cacheFileSpan(file)
+    const span = fileSpan(file)
     let group = groups.get(span.bucket)
     if (!group) { group = {}; groups.set(span.bucket, group) }
     group[path] = file
@@ -1312,7 +1902,7 @@ function bucketFiles(section: ProviderSection): { groups: Map<string, Record<str
 function untilMonth(files: Record<string, CachedFile>): string {
   let until = UNDATED_BUCKET
   for (const file of Object.values(files)) {
-    const month = cacheFileSpan(file).until
+    const month = fileSpan(file).until
     if (month > until) until = month
   }
   return until
@@ -1343,6 +1933,15 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise(resolve => setImmediate(resolve))
 }
 
+/// A bucket holding range-filtered records cannot be published without its
+/// authoritative shard bytes (they live only on disk). Raised instead of
+/// truncating; saveCache converts it to a failed save so callers degrade to
+/// a read-only serve and retry.
+class MergeAuthorityError extends Error {
+  constructor(bucket: string) {
+    super(`cannot publish bucket without its authoritative shard: ${bucket}`)
+  }
+}
 export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Promise<boolean>): Promise<boolean> {
   const dir = sessionCacheDir()
   if (!existsSync(dir)) await mkdir(dir, { recursive: true, mode: 0o700 })
@@ -1361,9 +1960,24 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
   // Overlay this run's entries for `bucket` onto the published shard `from`,
   // minus any path that has since moved to another month.
   const mergeShard = async (provider: string, plan: ProviderPlan, bucket: string, from: string | undefined): Promise<ShardRef> => {
-    const files = plan.groups.get(bucket)!
+    // Buckets holding range-filtered records merge by streaming (below):
+    // materializing the published shard would reintroduce the OOM this
+    // feature removes. Unflagged buckets keep the in-memory merge verbatim.
+    if (groupHasFiltered(plan.groups.get(bucket)!)) {
+      return streamMergeBucket(provider, plan, bucket, from)
+    }
+    // Range-filtered records are never written: the published bytes stay
+    // authoritative for their paths, so the merge overlays only complete
+    // records and carries everything else verbatim (see RangeFilteredMeta).
+    const files = stripFilteredForWrite(plan.groups.get(bucket)!)
+    const hadFiltered = groupHasFiltered(plan.groups.get(bucket)!)
     const onDisk = from ? await loadShard(join(dir, from)) : null
-    if (!onDisk) return writeShard(provider, bucket, files)
+    if (!onDisk) {
+      // Without the published bytes there is nothing to carry the filtered
+      // paths from: writing the stripped set would truncate history.
+      if (hadFiltered) throw new MergeAuthorityError(bucket)
+      return writeShard(provider, bucket, files)
+    }
     // A file whose month this run never loaded has no visible cache entry, so it
     // looks uncached and is re-parsed into the same bucket — re-deriving the
     // entry the shard already holds. Republishing then churns the shard's nonce
@@ -1375,6 +1989,112 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
     if (!adds && !removes) return { name: from!, until: untilMonth(onDisk) }
     for (const path of plan.moved) delete onDisk[path]
     return writeShard(provider, bucket, { ...onDisk, ...files })
+  }
+
+  // Streaming merge for buckets holding range-filtered records: the published
+  // shard is far too large to materialize, so entries stream through one at a
+  // time. Dirty complete records substitute, moved paths drop, everything else
+  // is carried verbatim. Memory stays bounded by the largest single record
+  // plus the dirty set, never the shard. A missing/unreadable/torn published
+  // shard aborts the save (MergeAuthorityError) instead of publishing a
+  // truncation; write failures propagate like any other save I/O error.
+  const streamMergeBucket = async (
+    provider: string,
+    plan: ProviderPlan,
+    bucket: string,
+    from: string | undefined,
+  ): Promise<ShardRef> => {
+    if (!from || !existsSync(join(dir, from))) throw new MergeAuthorityError(bucket)
+    const group = plan.groups.get(bucket)!
+    const overwrites = new Map<string, CachedFile>()
+    for (const [path, file] of Object.entries(group)) {
+      if (!file.rangeFiltered) overwrites.set(path, file)
+    }
+    const name = shardFileName(provider, bucket)
+    const finalPath = join(dir, name)
+    const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
+    const handle = await open(tempPath, 'w', 0o600)
+    // Write a whole chunk: FileHandle.write may write partially (bytesWritten),
+    // especially for large serialized entries, and a short write without a loop
+    // produces a corrupt shard. Loop until the buffer is fully flushed.
+    const writeAll = async (text: string): Promise<void> => {
+      const buffer = Buffer.from(text, 'utf-8')
+      let offset = 0
+      while (offset < buffer.length) {
+        const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset, null)
+        offset += bytesWritten
+      }
+    }
+    let changed = false
+    let first = true
+    let until = UNDATED_BUCKET
+    const fail = async (err: unknown): Promise<never> => {
+      try { await handle.close() } catch {}
+      await retryCacheFileMutation(() => unlink(tempPath))
+      throw err
+    }
+    const emitPair = async (key: string, value: unknown): Promise<void> => {
+      await writeAll(`${first ? '' : ','}${JSON.stringify(key)}:${JSON.stringify(value)}`)
+      first = false
+    }
+    const trackUntil = (month: string): void => {
+      if (month > until) until = month
+    }
+    try {
+      await writeAll('{')
+      await streamShardEntries(join(dir, from), async ({ key, value }) => {
+        if (plan.moved.has(key)) {
+          changed = true
+          return
+        }
+        const overwrite = overwrites.get(key)
+        if (overwrite !== undefined) {
+          overwrites.delete(key)
+          if (JSON.stringify(value) !== JSON.stringify(overwrite)) changed = true
+          await emitPair(key, overwrite)
+          trackUntil(fileSpan(overwrite).until)
+          return
+        }
+        if (!validateCachedFile(value)) throw new MergeAuthorityError(bucket)
+        await emitPair(key, value)
+        trackUntil(fileSpan(value).until)
+      })
+      for (const [key, file] of overwrites) {
+        changed = true
+        await emitPair(key, file)
+        trackUntil(fileSpan(file).until)
+      }
+      await writeAll('}')
+      await handle.sync()
+      await handle.close()
+    } catch (err) {
+      const code = (err as { code?: string })?.code
+      if (err instanceof MergeAuthorityError || code === 'ENOENT') {
+        await fail(new MergeAuthorityError(bucket))
+      }
+      await fail(err)
+    }
+    if (!changed) {
+      await retryCacheFileMutation(() => unlink(tempPath))
+      return { name: from, until }
+    }
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await rename(tempPath, finalPath)
+          break
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code
+          if ((code !== 'EPERM' && code !== 'EBUSY') || attempt === 2) throw err
+          await new Promise(resolve => { setTimeout(resolve, 10 * (attempt + 1)) })
+        }
+      }
+    } catch (err) {
+      await retryCacheFileMutation(() => unlink(tempPath))
+      throw err
+    }
+    written.add(name)
+    return { name, until }
   }
 
   try {
@@ -1393,6 +2113,18 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       const plan: ProviderPlan = { section, groups, loaded, priorRefs, reset, moved: new Set(), deferred: [], mergedFrom: new Map(), refs: {} }
       plans.set(provider, plan)
 
+      // Reset (fingerprint change): old refs are retirement-only authority,
+      // never merge input and never reuse candidates. Write only freshly
+      // parsed groups, drop every old ref, and skip moved inference (stale
+      // bucketOf mappings would misfire on the replaced section).
+      if (plan.reset) {
+        for (const [bucket, files] of groups) {
+          plan.refs[bucket] = await writeShard(provider, bucket, stripFilteredForWrite(files))
+          await yieldToEventLoop()
+        }
+        continue
+      }
+
       // An entry whose bucket this run never loaded may ALSO still exist, under
       // an older month, in a shard we are about to carry across verbatim — a
       // re-parse that shifted the file's oldest turn, or (the common #441 path)
@@ -1403,7 +2135,7 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       if (loaded) {
         for (const [path, file] of Object.entries(section.files)) {
           if (state.bucketOf.has(`${provider}\0${path}`)) continue
-          const bucket = cacheFileSpan(file).bucket
+          const bucket = fileSpan(file).bucket
           if (!loaded.has(bucket) || bucket === UNDATED_BUCKET) plan.moved.add(path)
         }
       }
@@ -1422,8 +2154,11 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
         // into the bucket, so the published shard's other entries have to be
         // merged back in or the save would drop them. Deferred to phase two so
         // the read happens against the CURRENT shard, not a stale name.
-        if (loaded && !loaded.has(bucket) && prior) { plan.deferred.push(bucket); continue }
-        plan.refs[bucket] = await writeShard(provider, bucket, files)
+        // Dirty plus range-filtered: memory holds only a slice of this bucket,
+        // so like a dirty-but-unloaded bucket it must merge against the
+        // CURRENT published shard rather than rewriting from memory alone.
+        if ((loaded && !loaded.has(bucket) && prior) || groupHasFiltered(files)) { plan.deferred.push(bucket); continue }
+        plan.refs[bucket] = await writeShard(provider, bucket, stripFilteredForWrite(files))
         // Surrender the event loop between shard writes so an interactive
         // TTY's stdin handler (Ink's useInput) can run while a long save
         // publishes a 21k-file cache. The yield is BETWEEN shards - never
@@ -1512,7 +2247,13 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       const shards: Record<string, ShardRef> = {}
       for (const [bucket, ref] of Object.entries(plan.refs)) {
         if (written.has(ref.name) || existsSync(join(dir, ref.name))) { shards[bucket] = ref; continue }
-        const files = plan.groups.get(bucket)
+        const group = plan.groups.get(bucket)
+        // A filtered record can never stand in for its published bytes: if the
+        // authoritative shard vanished mid-save, abort rather than publish a
+        // truncation (callers degrade to a read-only serve and retry). Only
+        // complete groups may be rewritten here.
+        if (group && groupHasFiltered(group)) throw new MergeAuthorityError(bucket)
+        const files = group && stripFilteredForWrite(group)
         // A carried month whose file vanished and whose content was never in
         // memory cannot be rewritten; dropping the reference is the only honest
         // option, and the sweep retires the name.
@@ -1557,17 +2298,23 @@ export async function saveCache(cache: SessionCache, verifyStillOwner?: () => Pr
       state.shards.set(provider, meta.shards)
       state.fingerprints.set(provider, meta.envFingerprint)
       for (const [path, file] of Object.entries(cache.providers[provider]!.files)) {
-        state.bucketOf.set(`${provider}\0${path}`, cacheFileSpan(file).bucket)
+        state.bucketOf.set(`${provider}\0${path}`, fileSpan(file).bucket)
       }
     }
     // Write-through: the object just published IS the freshest state, so the
     // next loadCache in this process reuses it instead of re-parsing. Its scope
     // is whatever was loaded, not `all` — a save never widens what is in memory.
-    cacheMemo = { dir, nonce: envelope.nonce, scope: state.scope, cache }
+    // A filtered cache object must never enter the memo: a later full-scope
+    // load in this process would serve its missing turns as complete.
+    if (!cacheHasFilteredRecords(cache)) cacheMemo = { dir, nonce: envelope.nonce, scope: state.scope, provider: state.scopeProvider, cache }
     for (const name of retired) await retryCacheFileMutation(() => unlink(join(dir, name)))
     return true
   } catch (err) {
     for (const name of written) await retryCacheFileMutation(() => unlink(join(dir, name)))
+    // Merge-authority abort: a flagged bucket lost its published shard
+    // mid-save. Fail the save (callers degrade to a read-only serve and
+    // retry) rather than publish a truncated shard.
+    if (err instanceof MergeAuthorityError) return false
     throw err
   }
 }
@@ -1715,6 +2462,12 @@ export function reconcileFile(
     return { action: 'unchanged' }
   }
 
+  // A range-filtered record holds only a slice of its turns: an append would
+  // merge the fresh tail onto that slice, keep the marker, and lose the parse
+  // at the next save (which strips flagged records). Force a full re-parse
+  // from byte 0 so the replacement is a complete unmarked record. Unchanged
+  // files (fingerprint match above) keep serving from the slice.
+  if (cached.rangeFiltered) return { action: 'modified' }
   if (
     cached.lastCompleteLineOffset !== undefined &&
     // Defensive: never resume past the file's current end. A truncate-then-regrow

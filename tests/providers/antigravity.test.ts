@@ -393,7 +393,7 @@ describe('antigravity provider helpers', () => {
         path: getAntigravityStatusLineEventsPath(),
         project: 'antigravity-cli',
         provider: 'antigravity',
-      }, new Set(['antigravity:rpc-covered-conversation:0']))
+       }, new Set(['antigravity:rpc-covered-conversation:0']))
 
       const calls = []
       for await (const call of parser.parse()) calls.push(call)

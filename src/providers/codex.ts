@@ -701,10 +701,12 @@ export type CodexCacheWrite = {
 // written comes back through `capture` for the caller to install. That is what
 // lets a worker thread run this exact decode without owning the cache module's
 // per-directory state.
-function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { write?: CodexCacheWrite }): SessionParser {
+function createParser(source: SessionSource, seenKeys: Set<string>, capture?: { write?: CodexCacheWrite }, rangeStartMs?: number): SessionParser {
   return {
     async *parse(): AsyncGenerator<ParsedProviderCall> {
-      const hit = capture ? null : await readCachedCodexResults(source.path)
+       // PR-A scope: unfiltered lookup (range-filtered serve rides the stacked
+       // codex-cache rewrite); downstream turn slicing still bounds the report.
+       const hit = capture ? null : await readCachedCodexResults(source.path)
       if (hit?.kind === 'exact') {
         for (const call of hit.calls) {
           if (seenKeys.has(call.deduplicationKey)) continue
@@ -1438,8 +1440,12 @@ export function createCodexProvider(
       return dropOverlappingNestSources(sources, primaryDir)
     },
 
-    createSessionParser(source: SessionSource, seenKeys: Set<string>): SessionParser {
-      return createParser(source, seenKeys)
+    createSessionParser(
+      source: SessionSource,
+      seenKeys: Set<string>,
+      dateRange?: { start: Date; end: Date },
+    ): SessionParser {
+      return createParser(source, seenKeys, undefined, dateRange?.start.getTime())
     },
   }
 }

@@ -1246,6 +1246,8 @@ function parseStatusLineEvent(input: unknown): StatusLineEvent | null {
   }
 }
 
+/// True when the shared dedup set already holds an RPC-cache entry for this
+/// conversation (raw prefix scan over the exact keys).
 function hasRpcCacheForConversation(seenKeys: Set<string>, conversationId: string): boolean {
   const prefix = `antigravity:${conversationId}:`
   for (const key of seenKeys) {
@@ -1254,10 +1256,10 @@ function hasRpcCacheForConversation(seenKeys: Set<string>, conversationId: strin
   return false
 }
 
+
 async function parseStatusLineCalls(source: SessionSource, seenKeys: Set<string>): Promise<ParsedProviderCall[]> {
   const raw = await readFile(source.path, 'utf-8').catch(() => '')
   const runsByConversation = new Map<string, Array<{ event: StatusLineEvent; signature: string; count: number }>>()
-
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue
     let parsed: unknown

@@ -1008,10 +1008,10 @@ function createParser(
             process.stderr.write('codeburn: Cursor storage format not recognized. You may need to update CodeBurn.\n')
             return
           }
-          // Use a fresh local Set for intra-parse dedup so the global
-          // seenKeys is not mutated by calls that the workspace filter is
-          // about to drop. Cross-source dedup happens at yield time.
-          const localSeen = new Set<string>()
+           // Use a fresh local Set for intra-parse dedup so the global
+           // seenKeys is not mutated by calls that the workspace filter is
+           // about to drop. Cross-source dedup happens at yield time.
+           const localSeen = new Set<string>()
           // agentKv rows carry no timestamps; sessions found only there get
           // the DB's last-write time.
           let agentKvTimestamp: string

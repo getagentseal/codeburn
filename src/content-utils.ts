@@ -56,3 +56,47 @@ export function flatSlice(s: string, max: number): string {
 export function flatString(s: string): string {
   return Buffer.from(s, 'utf16le').toString('utf16le')
 }
+/// Flatten every string token in a decoded JSON graph IN PLACE (see
+/// `flatString`, including object keys) and return the same graph.
+///
+/// The streaming decoders hand values whose strings are slices of
+/// multi-hundred-MB input chunks; structures memoized long-term must not pin
+/// those chunks. The decoded graph is decoder-owned (fresh containers per
+/// record, discarded by the pipeline after the callback), so mutating it is
+/// safe — and unlike a deep copy it adds no parallel-graph transient.
+/// Re-keying deletes and re-inserts every key in snapshot order, so relative
+/// key order is unchanged; duplicate-flattened keys cannot occur (object
+/// keys are already unique by content).
+export function flattenJsonStrings<T>(value: T): T {
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const element: unknown = value[i]
+      value[i] = typeof element === 'string' ? flatString(element) : flattenJsonStrings(element)
+    }
+    return value
+  }
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    for (const key of Object.keys(record)) {
+      const field: unknown = record[key]
+      const flatField = typeof field === 'string' ? flatString(field) : flattenJsonStrings(field)
+      const flatKey = flatString(key)
+      delete record[key]
+      // `__proto__` assignment would invoke the prototype setter (losing the
+      // own key and changing the prototype); valid JSON can carry it as an
+      // own key (JSON.parse preserves it), so reinsert declaratively.
+      if (flatKey === '__proto__') {
+        Object.defineProperty(record, '__proto__', {
+          value: flatField,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        })
+      } else {
+        record[flatKey] = flatField
+      }
+    }
+    return value
+  }
+  return typeof value === 'string' ? (flatString(value) as T) : value
+}
