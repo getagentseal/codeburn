@@ -582,6 +582,88 @@ describe('scoped load', () => {
   })
 })
 
+describe('provider-scoped load', () => {
+  async function seedTwoProviders(): Promise<void> {
+    const cache: SessionCache = {
+      version: CACHE_VERSION,
+      complete: true,
+      providers: {
+        claude: {
+          envFingerprint: computeEnvFingerprint('claude'),
+          files: { '/live/c.jsonl': fileSpanning('2026-06-10T10:00:00Z') },
+        },
+        codex: {
+          envFingerprint: computeEnvFingerprint('codex'),
+          files: { '/live/x.jsonl': fileSpanning('2026-06-10T10:00:00Z') },
+        },
+      },
+    }
+    markCacheDirty(cache, 'claude')
+    markCacheDirty(cache, 'codex')
+    await saveCache(cache)
+  }
+
+  const juneScope = monthScopeForRange(new Date('2026-06-01T00:00:00Z'), new Date('2026-06-30T23:59:59Z'))
+
+  it('loads only the selected provider, others come back as empty shells', async () => {
+    await seedTwoProviders()
+    clearLoadCacheMemo()
+    const scoped = await loadCache(juneScope, { providerFilter: 'codex' })
+    expect(Object.keys(scoped.providers['codex']!.files)).toEqual(['/live/x.jsonl'])
+    expect(scoped.providers['claude']).toBeDefined()
+    expect(Object.keys(scoped.providers['claude']!.files)).toEqual([])
+  })
+
+  it('save from a narrowed load leaves other providers byte-identical', async () => {
+    await seedTwoProviders()
+    const before = await shardBytes()
+    const kept = (await envelope()).providers['claude']!.shards['2026-06']!.name
+
+    clearLoadCacheMemo()
+    const scoped = await loadCache(juneScope, { providerFilter: 'codex' })
+    scoped.providers['codex']!.files['/live/x2.jsonl'] = fileSpanning('2026-06-20T10:00:00Z')
+    markCacheDirty(scoped, 'codex', '/live/x2.jsonl')
+    await saveCache(scoped)
+
+    const after = await shardBytes()
+    expect(after.get(kept), 'narrowed-out provider rewritten').toBe(before.get(kept))
+
+    clearLoadCacheMemo()
+    const full = await loadCache()
+    expect(Object.keys(full.providers['claude']!.files)).toEqual(['/live/c.jsonl'])
+    expect(Object.keys(full.providers['codex']!.files).sort()).toEqual(['/live/x.jsonl', '/live/x2.jsonl'])
+  })
+
+  it('isolates memos across sequential provider loads', async () => {
+    await seedTwoProviders()
+    clearLoadCacheMemo()
+    const a = await loadCache(juneScope, { providerFilter: 'claude' })
+    expect(Object.keys(a.providers['claude']!.files)).toEqual(['/live/c.jsonl'])
+    expect(Object.keys(a.providers['codex']!.files)).toEqual([])
+    // Same request reuses the memo (identical object).
+    expect(await loadCache(juneScope, { providerFilter: 'claude' })).toBe(a)
+    // Another provider never observes the first load's shells...
+    const b = await loadCache(juneScope, { providerFilter: 'codex' })
+    expect(b).not.toBe(a)
+    expect(Object.keys(b.providers['codex']!.files)).toEqual(['/live/x.jsonl'])
+    expect(Object.keys(b.providers['claude']!.files)).toEqual([])
+    // ...and the all-provider load still sees everything.
+    const all = await loadCache(juneScope)
+    expect(all).not.toBe(a)
+    expect(all).not.toBe(b)
+    expect(Object.keys(all.providers['claude']!.files)).toEqual(['/live/c.jsonl'])
+    expect(Object.keys(all.providers['codex']!.files)).toEqual(['/live/x.jsonl'])
+  })
+  it('narrows undated lifetime loads by provider too', async () => {
+    await seedTwoProviders()
+    clearLoadCacheMemo()
+    const scoped = await loadCache(undefined, { providerFilter: 'codex' })
+    expect(Object.keys(scoped.providers['codex']!.files)).toEqual(['/live/x.jsonl'])
+    expect(scoped.providers['claude']).toBeDefined()
+    expect(Object.keys(scoped.providers['claude']!.files)).toEqual([])
+  })
+})
+
 describe('v8 -> v9 migration', () => {
   it('re-buckets the v8 provider shards losslessly and retires the v8 directory', async () => {
     const v8Dir = join(TMP_DIR, 'session-cache.v8')

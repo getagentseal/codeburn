@@ -8,9 +8,9 @@ import https from 'https'
 
 import { getCodeburnCacheDir, readExistingTextFile } from '../cache-dir.js'
 import { calculateCost } from '../models.js'
+import { DedupSet } from '../session-cache.js'
 import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
 import type { ProbeRoot, Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
-
 type AntigravityConversationRoot = {
   dir: string
   project: string
@@ -1246,7 +1246,13 @@ function parseStatusLineEvent(input: unknown): StatusLineEvent | null {
   }
 }
 
+/// True when the shared dedup set already holds an RPC-cache entry for this
+/// conversation. DedupSets hold digests (prefix matching is impossible), so
+/// those check the bare conversation key, which trackAntigravityKey pairs
+/// with every RPC-form insert; plain Sets keep the historical raw-prefix
+/// scan for direct unit-test and API callers.
 function hasRpcCacheForConversation(seenKeys: Set<string>, conversationId: string): boolean {
+  if (seenKeys instanceof DedupSet) return seenKeys.has(`antigravity:${conversationId}`)
   const prefix = `antigravity:${conversationId}:`
   for (const key of seenKeys) {
     if (key.startsWith(prefix)) return true
@@ -1254,10 +1260,10 @@ function hasRpcCacheForConversation(seenKeys: Set<string>, conversationId: strin
   return false
 }
 
+
 async function parseStatusLineCalls(source: SessionSource, seenKeys: Set<string>): Promise<ParsedProviderCall[]> {
   const raw = await readFile(source.path, 'utf-8').catch(() => '')
   const runsByConversation = new Map<string, Array<{ event: StatusLineEvent; signature: string; count: number }>>()
-
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue
     let parsed: unknown

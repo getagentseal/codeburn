@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
 
 import { isSqliteAvailable } from '../../src/sqlite.js'
+import { DedupSet } from '../../src/session-cache.js'
 import {
   antigravityAppDataDirFromSourcePath,
   antigravityCascadeIdFromPath,
@@ -394,6 +395,44 @@ describe('antigravity provider helpers', () => {
         project: 'antigravity-cli',
         provider: 'antigravity',
       }, new Set(['antigravity:rpc-covered-conversation:0']))
+
+      const calls = []
+      for await (const call of parser.parse()) calls.push(call)
+
+      expect(calls).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips statusLine fallback under digests via paired bare keys', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeburn-antigravity-statusline-rpc-dedup-'))
+    process.env['CODEBURN_CACHE_DIR'] = dir
+
+    try {
+      expect(await recordAntigravityStatusLinePayload({
+        conversation_id: 'rpc-covered-conversation',
+        session_id: 'session-1',
+        model: 'Gemini 3.5 Flash (High)',
+        context_window: {
+          current_usage: {
+            input_tokens: 1000,
+            output_tokens: 100,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      })).toBe(true)
+
+      // Production sets hold digests: the RPC key pairs its bare form on
+      // insert, so the conversation check resolves without prefix scanning.
+      const seen = new DedupSet()
+      seen.add('antigravity:rpc-covered-conversation:0')
+      const parser = createAntigravityProvider().createSessionParser({
+        path: getAntigravityStatusLineEventsPath(),
+        project: 'antigravity-cli',
+        provider: 'antigravity',
+      }, seen)
 
       const calls = []
       for await (const call of parser.parse()) calls.push(call)

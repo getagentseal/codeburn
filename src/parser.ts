@@ -24,12 +24,17 @@ import {
   type CachedCall,
   type CachedFile,
   type CachedTurn,
+  type LoadCacheOptions,
   type ProviderSection,
   type SessionCache,
   beginColdHydration,
   cleanupOrphanedTempFiles,
   computeEnvFingerprint,
+  DedupSet,
   DURABLE_PROVIDER_NAMES,
+  emptyCache,
+  fileFirstTurnProject,
+  fileNewestCallMs,
   fingerprintFile,
   isCacheComplete,
   isCacheDirty,
@@ -39,6 +44,7 @@ import {
   monthScopeForRange,
   reconcileFile,
   saveCache,
+  seedDroppedKeys,
   sourcePathStatCandidates,
 } from './session-cache.js'
 import { acquireCacheRefreshLock, type RefreshLockHandle, type RefreshLockOutcome } from './cache-refresh-lock.js'
@@ -1983,7 +1989,7 @@ export async function readAgentType(filePath: string): Promise<string | undefine
 
 async function scanProjectDirs(
   dirs: Array<{ path: string; name: string; source?: SessionSourceMetadata }>,
-  seenMsgIds: Set<string>,
+  seenMsgIds: DedupSet,
   diskCache: SessionCache,
   dateRange?: DateRange,
   // Cold-run robustness: called after every parsed Claude file so a throttled
@@ -2057,13 +2063,15 @@ async function scanProjectDirs(
     if (allDiscoveredFiles.has(filePath)) continue
     if (!readOnly && !cached.prLinks?.length) continue
     const dirName = cached.canonicalProjectName
-      ?? cached.turns[0]?.calls[0]?.project
+      ?? fileFirstTurnProject(cached)
       ?? basename(dirname(filePath))
     unchangedFiles.push({ filePath, dirName, cached })
   }
 
   // Pre-seed dedup set from cached (unchanged) files
   for (const { cached } of unchangedFiles) {
+    // Dropped turns contribute only dedup keys (see RangeFilteredMeta).
+    seedDroppedKeys(seenMsgIds, cached)
     for (const turn of cached.turns) {
       for (const call of turn.calls) {
         seenMsgIds.add(call.deduplicationKey)
@@ -2350,12 +2358,12 @@ async function scanProjectDirs(
     // stores a turn's branch only when it changes, so resolving here (over the
     // full ordered turn list) means a later date slice can drop the anchor turn
     // without the surviving turns losing their branch.
-    let carriedBranch: string | undefined
+    let carriedBranch: string | undefined = cachedFile.rangeFiltered?.carryBranch
     // The PR set active going into the report range: carried across the FULL turn
     // list, frozen the moment the first in-range turn is reached. Lets per-turn PR
     // attribution seed from a reference made before the window (see
     // attributeSessionPrSpend); the branch carry above solves the same problem.
-    let carriedPrRefs: string[] | undefined
+    let carriedPrRefs: string[] | undefined = cachedFile.rangeFiltered?.carryPrRefs
     let prRefsAtRangeStart: string[] | undefined
     let frozePrRefs = !dateRange
     // The keep/drop decision is taken on the RAW turn, before classifying it:
@@ -2385,7 +2393,9 @@ async function scanProjectDirs(
     // Captured from the FULL turn list, which the date slice above can strip of
     // the turn a branch was first seen on. Lets the by-branch report keep this
     // session's in-range unbranched spend as `null` instead of discarding it.
-    const everHadBranch = carriedBranch !== undefined
+    // A filtered load initializes the carries below from the dropped prefix;
+    // droppedHadBranch covers branches that only ever appear out of range.
+    const everHadBranch = carriedBranch !== undefined || (cachedFile.rangeFiltered?.droppedHadBranch ?? false)
 
     // Built from the FULL (pre-slice) turn list: each subagent-spawn tool_use id ->
     // the PR set active at the turn that emitted it. Lets a subagent fold into the
@@ -3293,6 +3303,14 @@ function turnSlicedToRange(turn: CachedTurn, dateRange: DateRange): CachedTurn |
   return { ...turn, calls: inRangeCalls, timestamp: inRangeCalls[0]!.timestamp }
 }
 
+/// Load-time keep/drop rule for one cached turn under a date range: true when
+/// any call intersects (the same null-rule as turnSlicedToRange, which the
+/// serve loops still apply themselves for call trimming and classification).
+/// Exported so range-filtered loads project exactly what serving would keep.
+export function turnIntersectsRange(turn: CachedTurn, dateRange: DateRange): boolean {
+  return turnSlicedToRange(turn, dateRange) !== null
+}
+
 // Same slice, applied post-classification (scanProjectDirs classifies each
 // surviving turn from its FULL call list, before date filtering — see the
 // carriedBranch/carriedPrRefs comments in scanProjectDirs — so this only
@@ -3323,7 +3341,7 @@ function classifiedTurnSlicedToDays(turn: ClassifiedTurn, days: Set<string>): Cl
 export async function parseProviderSources(
   providerName: string,
   sources: SessionSource[],
-  seenKeys: Set<string>,
+  seenKeys: DedupSet,
   diskCache: SessionCache,
   dateRange?: DateRange,
   // Cold-run robustness: called after each source's cache entry lands (mirrors
@@ -3433,7 +3451,7 @@ export async function parseProviderSources(
       servedSources.push({
         provider: providerName,
         path,
-        project: cached.turns[0]?.calls[0]?.project ?? providerName,
+        project: fileFirstTurnProject(cached) ?? providerName,
       })
       allDiscoveredFiles.add(path)
       unchangedSources.push({ source: servedSources[servedSources.length - 1]!, cached })
@@ -3457,8 +3475,17 @@ export async function parseProviderSources(
 
   // Parser dedup: cross-provider keys + cached file keys.
   // Separate from seenKeys so parsing doesn't suppress query-time output.
-  const parserDedup = new Set(seenKeys)
+  const parserDedup = new DedupSet()
+  // Clone preserving representation: production sets already hold digests
+  // (copy verbatim), while unit tests may pass raw sets (digest on the way
+  // in) — either way live inserts below stay comparable.
+  for (const key of seenKeys) {
+    if (seenKeys instanceof DedupSet) parserDedup.addHashed(key)
+    else parserDedup.add(key)
+  }
   for (const { cached } of unchangedSources) {
+    // Dropped turns contribute only dedup keys (see RangeFilteredMeta).
+    seedDroppedKeys(parserDedup, cached)
     for (const turn of cached.turns) {
       for (const call of turn.calls) {
         parserDedup.add(call.deduplicationKey)
@@ -3483,7 +3510,7 @@ export async function parseProviderSources(
   if (providerName === 'codex' && !readOnly) {
     for (const { source, fp } of changedSources) {
       if (dateRange && fp.mtimeMs < dateRange.start.getTime()) continue
-      if (await readCachedCodexResults(source.path)) continue
+      if (await readCachedCodexResults(source.path, dateRange ? { rangeStartMs: dateRange.start.getTime() } : undefined)) continue
       workerJobs.push({ kind: 'codex', source })
       workerPaths.add(source.path)
       pendingBytes += fp.sizeBytes
@@ -3752,11 +3779,7 @@ export async function parseProviderSources(
     const cutoffMs = Date.now() - 90 * 24 * 60 * 60 * 1000
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
       if (retainPaths.has(cachedPath)) continue
-      const newestTs = cachedFile.turns
-        .flatMap(t => t.calls)
-        .map(c => new Date(c.timestamp).getTime())
-        .filter(ts => !isNaN(ts))
-        .reduce((max, ts) => Math.max(max, ts), 0)
+      const newestTs = fileNewestCallMs(cachedFile)
       if (!allDiscoveredFiles.has(cachedPath) && newestTs > 0 && newestTs < cutoffMs) {
         delete section.files[cachedPath]
         markCacheDirty(diskCache, providerName, cachedPath)
@@ -4006,7 +4029,10 @@ export async function parseProviderSources(
   for (const source of servedSources) {
     const cachedFile = section.files[source.path]
     if (!cachedFile) continue
-
+    // Dropped turns contribute only dedup keys (see RangeFilteredMeta): the
+    // full walk would have added them at this same file position, so later
+    // files suppress identically.
+    seedDroppedKeys(seenKeys, cachedFile)
     for (const rawTurn of cachedFile.turns) {
       const turn = reconcileCopilotCalls(rawTurn)
       if (!turn) continue
@@ -4082,7 +4108,9 @@ export async function parseProviderSources(
   if (provider.durableSources) {
     for (const [cachedPath, cachedFile] of Object.entries(section.files)) {
       if (allDiscoveredFiles.has(cachedPath)) continue  // already counted above
-
+      // Dropped turns contribute only dedup keys (see RangeFilteredMeta): the
+      // full walk would have added them at this same file position.
+      seedDroppedKeys(seenKeys, cachedFile)
       for (const rawTurn of cachedFile.turns) {
         const turn = reconcileCopilotCalls(rawTurn)
         if (!turn) continue
@@ -5500,7 +5528,7 @@ async function parseAllSessionsInCacheScope(dateRange?: DateRange, providerFilte
   const loadScope = dateRange ? monthScopeForRange(dateRange.start, dateRange.end) : undefined
   const rangeStartMs = dateRange?.start.getTime()
   const cacheLoadStarted = performance.now()
-  let diskCache = await loadCache(loadScope)
+  let diskCache = await loadCache(loadScope, cacheLoadOpts(dateRange, providerFilter))
   await cleanupOrphanedTempFiles()
   if (process.env['CODEBURN_VERBOSE'] === '1') {
     process.stderr.write(`codeburn: startup timing cache-load=${(performance.now() - cacheLoadStarted).toFixed(1)}ms complete=${isCacheComplete(diskCache, providerFilter, rangeStartMs)}\n`)
@@ -5623,8 +5651,8 @@ async function runParseInner(
   deferredRetryableSource = false
   firstPaintDeferredThisRun = 0
   dateFloorSkippedProviders.clear()
-  const seenMsgIds = new Set<string>()
-  const seenKeys = new Set<string>()
+  const seenMsgIds = new DedupSet()
+  const seenKeys = new DedupSet()
   const discovery = snapshotOnly
     ? { sources: [], failedProviders: [] }
     : await discoverAllSessionsWithFailures(providerFilter)
