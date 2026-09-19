@@ -153,6 +153,58 @@ describe('loadDailyCache', () => {
     expect(JSON.parse(await readFile(legacy, 'utf-8'))).toEqual(saved)
   })
 
+  it('credits a token remainder to the carried row even when cost and calls reconcile', async () => {
+    const saved = {
+      version: 5,
+      lastComputedDate: '2026-05-02',
+      days: [
+        {
+          // cost + calls reconcile with the model rows, but the model tokens
+          // fall 200 input / 100 output short of the day totals.
+          date: '2026-05-02',
+          cost: 10, calls: 5, sessions: 1,
+          inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0,
+          editTurns: 0, oneShotTurns: 0,
+          models: { 'Opus 4.7': { calls: 5, cost: 10, savingsUSD: 0, inputTokens: 800, outputTokens: 400, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+          categories: {}, providers: {},
+        },
+        {
+          // Fully reconciled — must not grow a carried row.
+          date: '2026-05-03',
+          cost: 4, calls: 2, sessions: 1,
+          inputTokens: 600, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0,
+          editTurns: 0, oneShotTurns: 0,
+          models: { 'Opus 4.7': { calls: 2, cost: 4, savingsUSD: 0, inputTokens: 600, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0 } },
+          categories: {}, providers: {},
+        },
+      ],
+    }
+    const { writeFile, mkdir } = await import('fs/promises')
+    await mkdir(TMP_CACHE_ROOT, { recursive: true })
+    await writeFile(join(TMP_CACHE_ROOT, 'daily-cache.json'), JSON.stringify(saved), 'utf-8')
+
+    const cache = await loadDailyCache()
+    const short = cache.days.find(d => d.date === '2026-05-02')!
+    const reconciled = cache.days.find(d => d.date === '2026-05-03')!
+
+    // The carried row picks up exactly the missing tokens, with no calls/cost.
+    const carried = short.models['Unknown (carried)']!
+    expect(carried).toBeDefined()
+    expect(carried.inputTokens).toBe(200)
+    expect(carried.outputTokens).toBe(100)
+    expect(carried.calls).toBe(0)
+    expect(carried.cost).toBe(0)
+    // Cost and calls are untouched; token sums now reconcile.
+    expect(short.cost).toBe(10)
+    expect(short.calls).toBe(5)
+    const sum = (k: 'inputTokens' | 'outputTokens') => Object.values(short.models).reduce((a, m) => a + m[k], 0)
+    expect(sum('inputTokens')).toBe(short.inputTokens)
+    expect(sum('outputTokens')).toBe(short.outputTokens)
+
+    // A fully reconciled day gets no carried row (idempotent).
+    expect(reconciled.models['Unknown (carried)']).toBeUndefined()
+  })
+
   it('adopts a legacy file whose version matches the current one, once, without deleting it', async () => {
     const saved = {
       version: DAILY_CACHE_VERSION,

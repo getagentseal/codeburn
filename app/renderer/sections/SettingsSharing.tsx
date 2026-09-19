@@ -154,7 +154,7 @@ export function SharingPane() {
               padding: '1rem',
               marginBottom: '1rem',
               fontFamily: 'monospace',
-              fontSize: '0.75rem',
+              fontSize: 'var(--fs-meta)',
               color: 'var(--ink)',
               maxHeight: '200px',
               overflow: 'auto',
@@ -198,7 +198,7 @@ export function SharingPane() {
           {syncStatus?.fingerprint && (
             <div className="about-row">
               <span className="tx">Fingerprint</span>
-              <span className="r" style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--mut)' }}>
+              <span className="r" style={{ fontFamily: 'monospace', fontSize: 'var(--fs-meta)', color: 'var(--mut)' }}>
                 {syncStatus.fingerprint.split(':').slice(0, 2).join(':')}:…:{syncStatus.fingerprint.split(':').slice(-1)[0]}
               </span>
             </div>
@@ -230,7 +230,7 @@ export function SharingPane() {
               {syncStatus.receipts.slice(0, 5).map((receipt, i) => (
                 <div key={i} style={{ fontSize: '0.875rem', color: 'var(--mut)', borderTop: i > 0 ? '1px solid var(--line)' : undefined, paddingTop: i > 0 ? '0.5rem' : undefined }}>
                   <span>{receipt.result}</span>
-                  <span style={{ display: 'block', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                  <span style={{ display: 'block', fontSize: 'var(--fs-meta)', marginTop: '0.25rem' }}>
                     {new Date(receipt.timestamp).toLocaleString()}
                   </span>
                 </div>

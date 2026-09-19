@@ -806,7 +806,7 @@ describe('antigravity provider helpers', () => {
         'find_by_name',
         'write_to_file',
       ])
-      expect(firstCall.bashCommands).toEqual(['git status'])
+      expect(firstCall.bashCommands).toEqual(['git'])
       expect(firstCall.skills).toEqual(['graphify'])
       expect(firstCall.subagentTypes).toEqual(['Codebase Researcher'])
     })
@@ -974,7 +974,7 @@ describe('antigravity provider helpers', () => {
 
       // Turn 0 has tools and bash command
       expect(calls[0]!.tools).toEqual(['run_command', 'view_file'])
-      expect(calls[0]!.bashCommands).toEqual(['npm test'])
+      expect(calls[0]!.bashCommands).toEqual(['npm'])
 
       // Turn 1 has no tools (send_message skipped) and no bash commands (did not leak from Turn 0)
       expect(calls[1]!.tools).toEqual([])
@@ -1044,8 +1044,68 @@ describe('antigravity provider helpers', () => {
       const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
       expect(calls).toHaveLength(1)
       expect(calls[0]!.tools).toEqual(['run_command', 'view_file'])
-      expect(calls[0]!.bashCommands).toEqual(['git status'])
+      expect(calls[0]!.bashCommands).toEqual(['git'])
     })
   })
+
+  it('stores only the basename for run_command, never the secret-bearing flags', async () => {
+    if (!isSqliteAvailable()) return
+
+      await withTempAntigravityHome('codeburn-antigravity-secret-', async (tempHome) => {
+        const fixture = JSON.parse(await readFile(
+          new URL('../fixtures/antigravity-cli-current/gen-metadata.json', import.meta.url),
+          'utf-8',
+        )) as CurrentCliFixture
+
+        const conversationsDir = join(tempHome, '.gemini', 'antigravity', 'conversations')
+        await mkdir(conversationsDir, { recursive: true })
+        const dbPath = join(conversationsDir, `${fixture.conversationId}.db`)
+        createCurrentAntigravityCliDb(dbPath, fixture)
+
+        const varint = (n: number): number[] => {
+          const out: number[] = []
+          let v = n
+          while (v > 0x7f) { out.push((v & 0x7f) | 0x80); v = Math.floor(v / 128) }
+          out.push(v)
+          return out
+        }
+        const tag = (field: number, wire: number): number[] => varint(field * 8 + wire)
+        const lenField = (field: number, bytes: number[]): number[] => [...tag(field, 2), ...varint(bytes.length), ...bytes]
+        const strField = (field: number, str: string): number[] => lenField(field, Array.from(Buffer.from(str, 'utf-8')))
+        const encodeToolStepMetadata = (toolName: string, argsJson: string): Buffer => Buffer.from(lenField(4, [
+          ...strField(1, 'call_secret'),
+          ...strField(2, toolName),
+          ...strField(3, argsJson),
+        ]))
+        const withStepIndices = (fixtureHex: string, indices: number[]): Buffer => {
+          const rest = Buffer.from(fixtureHex, 'hex').subarray(4)
+          const packed = Buffer.from(indices.flatMap(n => varint(n)))
+          return Buffer.concat([Buffer.from([...tag(2, 2), ...varint(packed.length), ...packed]), rest])
+        }
+
+        const { DatabaseSync: Database } = requireForTest('node:sqlite')
+        const db = new Database(dbPath) as TestDb
+        try {
+          db.prepare('UPDATE gen_metadata SET data = ? WHERE idx = 0').run(
+            withStepIndices(fixture.rows[0]!.hex, [1]),
+          )
+          db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, metadata blob)')
+          const stmt = db.prepare('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)')
+          stmt.run(0, 15, null)
+          stmt.run(1, 21, encodeToolStepMetadata('run_command', JSON.stringify({ CommandLine: 'curl --api-key=secret123 https://example.com' })))
+        } finally {
+          db.close()
+        }
+
+        const calls = await collectAntigravityCalls({ path: dbPath, project: 'antigravity', provider: 'antigravity' })
+        expect(calls.length).toBeGreaterThan(0)
+        // Tool breakdown still records the run_command call.
+        expect(calls[0]!.tools).toEqual(['run_command'])
+        // Command breakdown carries the basename only — no secret reaches disk.
+        expect(calls[0]!.bashCommands).toEqual(['curl'])
+        expect(JSON.stringify(calls[0]!)).not.toContain('secret123')
+        expect(JSON.stringify(calls[0]!)).not.toContain('--api-key')
+      })
+    })
 })
 

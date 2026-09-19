@@ -89,6 +89,19 @@ const bridge = {
   setTrayAppPref: (patch: Record<string, unknown>) => invoke('codeburn:setTrayAppPref', patch),
   setTrayDockPref: (patch: Record<string, unknown>) => invoke('codeburn:setTrayDockPref', patch),
   setLaunchAtLogin: (enabled: boolean) => invoke('codeburn:setLaunchAtLogin', enabled),
+  // The macOS menubar app's card on the Plugins page.
+  macMenubarStatus: () => invoke('codeburn:macMenubarStatus'),
+  macMenubarInstall: () => invoke('codeburn:macMenubarInstall'),
+  macMenubarOpen: () => invoke('codeburn:macMenubarOpen'),
+  macMenubarSetDock: (enabled: boolean) => invoke('codeburn:macMenubarSetDock', enabled),
+  macMenubarSettings: () => invoke('codeburn:macMenubarSettings'),
+  macMenubarQuit: () => invoke('codeburn:macMenubarQuit'),
+  macMenubarUninstall: () => invoke('codeburn:macMenubarUninstall'),
+  onMacMenubarProgress: (cb: (phase: string) => void) => {
+    const listener = (_e: unknown, phase: string) => cb(phase)
+    ipcRenderer.on('codeburn:macMenubarProgress', listener)
+    return () => { ipcRenderer.removeListener('codeburn:macMenubarProgress', listener) }
+  },
   // Plugin management
   pluginList: () => invoke('codeburn:pluginList'),
   pluginInfo: (name: string) => invoke('codeburn:pluginInfo', name),

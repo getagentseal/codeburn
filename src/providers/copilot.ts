@@ -1934,6 +1934,19 @@ function createOtelParser(
             }
           }
 
+          // Attribute trace-level tool/skill/bash metadata to a single chat
+          // span. execute_tool spans happen ONCE in a trace, not once per chat
+          // span, so re-reading them for every span billed a 5-span trace's one
+          // skill call ~5x turns/cost (and split it across periods when the
+          // trace crossed midnight). Order spans by start time and credit the
+          // first one that actually yields, so the metadata lands on exactly one
+          // call in the trace's opening period. Subagent names stay per-trace:
+          // every chat span in a subagent's trace is genuinely that subagent's
+          // call, so all of them are correctly labelled.
+          chatSpanIds.sort((a, b) =>
+            (spanMetaById.get(a)?.start_time_ms ?? 0) - (spanMetaById.get(b)?.start_time_ms ?? 0))
+          const creditedTraces = new Set<string>()
+
           // Yield one ParsedProviderCall per chat span
           for (const spanId of chatSpanIds) {
             const attrs = loadSpanAttributesFromTable(db, spanId)
@@ -1970,9 +1983,11 @@ function createOtelParser(
               seenKeys.add(jsonlDedupKey)
             }
 
-            const tools = toolsByTrace.get(spanMetadata.trace_id) ?? []
-            const skills = skillsByTrace.get(spanMetadata.trace_id) ?? []
-            const bashCommands = bashByTrace.get(spanMetadata.trace_id) ?? []
+            const ownsTraceMetadata = !creditedTraces.has(spanMetadata.trace_id)
+            if (ownsTraceMetadata) creditedTraces.add(spanMetadata.trace_id)
+            const tools = ownsTraceMetadata ? (toolsByTrace.get(spanMetadata.trace_id) ?? []) : []
+            const skills = ownsTraceMetadata ? (skillsByTrace.get(spanMetadata.trace_id) ?? []) : []
+            const bashCommands = ownsTraceMetadata ? (bashByTrace.get(spanMetadata.trace_id) ?? []) : []
             const subagentTypes = subagentsByTrace.get(spanMetadata.trace_id)
             const timestamp = epochToISO(spanMetadata.start_time_ms)
 

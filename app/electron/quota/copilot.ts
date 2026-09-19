@@ -136,7 +136,7 @@ export async function fetchCopilotQuota(options: Partial<CopilotDeps> & { signal
       const seconds = raw === null ? NaN : Number(raw)
       return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(seconds) ? Math.ceil(seconds) : 300, 60) }
     }
-    if (!response.ok) return { quota: empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure') }
+    if (!response.ok) return { quota: { ...empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure'), ...(response.status === 401 || response.status === 403 ? { connectable: true } : {}) } }
     return { quota: decodeCopilotUsage(await response.json()) }
   } catch (error) {
     console.warn(`Copilot quota unavailable: ${sanitizeError(error)}`)

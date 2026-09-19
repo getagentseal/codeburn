@@ -186,7 +186,9 @@ function GeneralPane({ period, refreshToken, claudeConfigs, claudeConfigSource, 
   })
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = readSetting('codeburn.theme')
-    return saved === 'light' || saved === 'dark' ? saved : 'system'
+    // No saved choice defaults to light (a fresh install), not to the OS setting; an explicit
+    // "system" choice is kept.
+    return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'light'
   })
   const [defaultPeriod, setDefaultPeriod] = useState(() => readSetting('codeburn.defaultPeriod') ?? 'today')
   const cadence = useRefreshCadence()

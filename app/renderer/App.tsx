@@ -521,7 +521,10 @@ function AppMain() {
     let saved: string | null = null
     try { saved = globalThis.localStorage?.getItem('codeburn.theme') ?? null } catch { /* storage can be unavailable */ }
     if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved)
-    else document.documentElement.removeAttribute('data-theme')
+    // An explicit "system" choice still follows the OS; only a fresh install with no choice at
+    // all defaults to light rather than to the OS setting.
+    else if (saved === 'system') document.documentElement.removeAttribute('data-theme')
+    else document.documentElement.setAttribute('data-theme', 'light')
   }, [])
 
   useEffect(() => {

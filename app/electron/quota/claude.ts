@@ -142,7 +142,7 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
       const parsed = typeof hint === 'number' ? hint : typeof hint === 'string' ? Number(hint) : NaN
       return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(parsed) ? parsed : 300, 60) }
     }
-    if (!response.ok) return { quota: empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure') }
+    if (!response.ok) return { quota: { ...empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure'), ...(response.status === 401 || response.status === 403 ? { connectable: true } : {}) } }
     return { quota: decodeClaudeUsage(await response.json(), credential) }
   } catch (error) {
     // Deliberately sanitize before the only diagnostic sink. Tokens are never returned.

@@ -2624,7 +2624,7 @@ final class AppStore {
         return QuotaSummary(providerFilter: filter, connection: connection, primary: primary, details: details, planLabel: plan, footerLines: [])
     }
 
-    private func codexQuotaSummary(filter: ProviderFilter) -> QuotaSummary? {
+    private func codexQuotaSummary(filter: ProviderFilter, includeZeroAdditionalLimits: Bool = false) -> QuotaSummary? {
         if case .notBootstrapped = codexLoadState { return nil }
         if case .bootstrapping = codexLoadState { return nil }
         if case .noCredentials = codexLoadState { return nil }
@@ -2670,16 +2670,17 @@ final class AppStore {
             // Surface per-model additional rate limits (e.g. "GPT-5.3-Codex-Spark")
             // only when the user has actually hit them. Skipping zero rows keeps
             // the popover compact for the common case where the user only uses
-            // the main Codex window.
+            // the main Codex window. The early-reset detector opts in to the
+            // zero rows: a window can reset early while still sitting at 0%.
             for extra in usage.additionalLimits {
-                if let p = extra.primary, p.usedPercent > 0 {
+                if let p = extra.primary, includeZeroAdditionalLimits || p.usedPercent > 0 {
                     details.append(.init(
                         label: "\(extra.name) · \(p.windowLabel)", percent: p.usedPercent / 100, resetsAt: p.resetsAt,
                         windowSeconds: p.limitWindowSeconds,
                         fetchedAt: usage.fetchedAt
                     ))
                 }
-                if let s = extra.secondary, s.usedPercent > 0 {
+                if let s = extra.secondary, includeZeroAdditionalLimits || s.usedPercent > 0 {
                     details.append(.init(
                         label: "\(extra.name) · \(s.windowLabel)", percent: s.usedPercent / 100, resetsAt: s.resetsAt,
                         windowSeconds: s.limitWindowSeconds,
@@ -2943,7 +2944,7 @@ final class AppStore {
     /// A window with no `resetsAt` is passed with no reading, and one with no
     /// validated duration with no duration: both make the detector say nothing.
     private func detectCodexEarlyResets(baselineIsTrusted: Bool, now: Date = Date()) async {
-        guard let summary = codexQuotaSummary(filter: .codex) else { return }
+        guard let summary = codexQuotaSummary(filter: .codex, includeZeroAdditionalLimits: true) else { return }
         let provider = CapacityDockProvider.codex
         var observations: [EarlyQuotaResetMonitor.Observation] = []
         var seen: Set<String> = []

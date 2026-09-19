@@ -7,6 +7,7 @@ import {
   buildPersistentCodeburnLookupPath,
   downloadToFile,
   formatGitHubReleaseLookupError,
+  hasRunnableRecordedCli,
   isMissingDirectAssetError,
   resolveLatestMenubarReleaseAssets,
   resolveMenubarReleaseAssets,
@@ -438,5 +439,53 @@ describe('release asset download retry', () => {
     }).catch((err: unknown) => { captured = err })
 
     expect((captured as Error).cause).toBe(original)
+  })
+})
+
+describe('hasRunnableRecordedCli', () => {
+  // The desktop app writes a launcher for the CLI it carries and records it here before it
+  // asks for an install; `codeburn menubar` keeps that record rather than refusing when
+  // nothing named codeburn is on PATH (a .dmg-only machine).
+  let dir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'codeburn-cli-record-'))
+  })
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  it('is false when nothing was ever recorded', async () => {
+    expect(await hasRunnableRecordedCli(join(dir, 'missing.v1'))).toBe(false)
+  })
+
+  it('is false for a relative path', async () => {
+    const record = join(dir, 'record.v1')
+    await writeFile(record, 'codeburn\n')
+    expect(await hasRunnableRecordedCli(record)).toBe(false)
+  })
+
+  it('is false when the recorded file is gone', async () => {
+    const record = join(dir, 'record.v1')
+    await writeFile(record, `${join(dir, 'gone.sh')}\n`)
+    expect(await hasRunnableRecordedCli(record)).toBe(false)
+  })
+
+  // Windows fs.access(X_OK) ignores the executable bit; this launcher guard is a
+  // macOS-only install path, so the not-executable case is only meaningful on Unix.
+  it.skipIf(process.platform === 'win32')('is false when the recorded file is not executable', async () => {
+    const launcher = join(dir, 'launcher.sh')
+    await writeFile(launcher, '#!/bin/sh\n', { mode: 0o644 })
+    const record = join(dir, 'record.v1')
+    await writeFile(record, `${launcher}\n`)
+    expect(await hasRunnableRecordedCli(record)).toBe(false)
+  })
+
+  it('is true for an absolute executable file, trailing newline and all', async () => {
+    const launcher = join(dir, 'launcher.sh')
+    await writeFile(launcher, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const record = join(dir, 'record.v1')
+    await writeFile(record, `${launcher}\n`)
+    expect(await hasRunnableRecordedCli(record)).toBe(true)
   })
 })

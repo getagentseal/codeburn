@@ -23,7 +23,7 @@ import {
 import { contiguousDailyWindow, dataStartKey, formatChartDate, localDateKey, sliceDailyToPeriod, sliceDailyToRange } from '../lib/period'
 import { reportMemoKey } from '../lib/reportMemoKey'
 import { barBucketDays, barLayout, formatAxisMoney, niceTicks, ticksClearOfPeak } from '../lib/chartAxis'
-import { generationHeadline, rememberGeneration } from '../lib/generation'
+import { generationHeadline, generationModels, rememberGeneration } from '../lib/generation'
 import { rememberStreak } from '../lib/streak'
 import { paceDirection, sparkArea, sparkPath, sparkPoints } from '../lib/spark'
 import type {
@@ -1046,10 +1046,15 @@ export function OverviewContent({
   // payload is the gate: under a provider, project or config filter the machine-
   // wide generation must never stand in for the filtered headline.
   const unfiltered = !rangeActive && !combined && !!data.periodTotals
-  rememberGeneration(unfiltered ? data : null, lastSuccessAt)
+  rememberGeneration(unfiltered ? data : null, lastSuccessAt, period)
   const headline = unfiltered ? generationHeadline(period, lastSuccessAt) : null
-  const heroCost = combined ? combined.combined.cost : headline?.cost ?? data.current.cost
-  const heroCalls = combined ? combined.combined.calls : headline?.calls ?? data.current.calls
+  // The hero stands in with the generation only when the models table can stand in
+  // with the same one; a generation from another period carries the wrong models,
+  // so both fall back to this payload rather than disagreeing for a moment.
+  const genModels = unfiltered ? generationModels(period, lastSuccessAt) : null
+  const useGeneration = headline != null && genModels != null
+  const heroCost = combined ? combined.combined.cost : useGeneration ? headline.cost : data.current.cost
+  const heroCalls = combined ? combined.combined.calls : useGeneration ? headline.calls : data.current.calls
   const heroSessions = combined ? combined.combined.sessions : data.current.sessions
   const heroSessionLabel = combined
     ? formatCombinedSessionCount()
@@ -1058,7 +1063,7 @@ export function OverviewContent({
   // the generation window, or this payload's own period — never a mix.
   const heroTokens = combined
     ? tokensOf({ ...combined.combined, cacheWriteTokens: combined.combined.cacheCreateTokens })
-    : tokensOf(headline ?? data.current)
+    : tokensOf(useGeneration ? headline : data.current)
   const heroSessionHelp = combined
     ? COMBINED_SESSION_COUNT_HELP
     : (sessionCountIsExact(data.current.sessionCountBasis) ? undefined : SESSION_COUNT_HELP)
@@ -1100,9 +1105,11 @@ export function OverviewContent({
   const topModelsCarryCounts = data.current.topModels.some(model =>
     model.inputTokens !== undefined || model.outputTokens !== undefined,
   )
-  const models = provider !== 'all' || topModelsCarryCounts
-    ? topModelsToAggregated(data.current.topModels)
-    : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
+  const models = useGeneration
+    ? topModelsToAggregated(genModels)
+    : provider !== 'all' || topModelsCarryCounts
+      ? topModelsToAggregated(data.current.topModels)
+      : aggregateModels(rangeActive ? sliceDailyToRange(data.history.daily, range.from, range.to) : periodDaily)
   const recent14 = data.history.daily.slice(-14)
   const weekNow = mean(recent14.slice(-7).map(day => day.cost))
   const weekPrior = mean(recent14.slice(-14, -7).map(day => day.cost))

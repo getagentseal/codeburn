@@ -61,7 +61,7 @@ export function sumTokens(rows: readonly PartialBreakdown[], divideBy = 1): Toke
  * renders its own text. `Usd` is the ordinary case; the hero's count-up owns its
  * text node, so it takes the parts directly.
  */
-export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null | undefined): {
+export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null | undefined, nested = false): {
   ref: RefObject<T | null>
   props: Record<string, unknown>
   pop: ReactElement | null
@@ -73,16 +73,18 @@ export function useUsdPop<T extends HTMLElement>(tokens: TokenBreakdown | null |
   useEscape(open, () => setOpen(false))
 
   if (!tokens) return { ref, props: {}, pop: null }
+  // Inside an interactive row (a session-row button) the trigger must not add its
+  // own tab stop or steal the row's Enter, so there it is hover/mouse-only and
+  // out of the tab order; standalone it stays keyboard-focusable.
   return {
     ref,
     props: {
       'data-usd': '',
-      tabIndex: 0,
+      tabIndex: nested ? -1 : 0,
       'aria-describedby': open ? id : undefined,
       onMouseEnter: () => setOpen(true),
       onMouseLeave: () => setOpen(false),
-      onFocus: () => setOpen(true),
-      onBlur: () => setOpen(false),
+      ...(nested ? {} : { onFocus: () => setOpen(true), onBlur: () => setOpen(false) }),
     },
     pop: open ? (
       <AnchoredSurface anchor={ref} surfaceRef={surfaceRef} id={id} className="pop-menu usd-pop" role="tooltip">
@@ -107,8 +109,8 @@ export function TokenRows({ tokens }: { tokens: TokenBreakdown }): ReactElement 
 
 /** A dollar amount that reveals its token breakdown on hover or focus. Without
  *  `tokens` it is the plain formatted amount and nothing else. */
-export function Usd({ value, tokens, className }: { value: number; tokens?: TokenBreakdown | null; className?: string }): ReactElement {
-  const pop = useUsdPop<HTMLSpanElement>(tokens)
+export function Usd({ value, tokens, className, nested }: { value: number; tokens?: TokenBreakdown | null; className?: string; nested?: boolean }): ReactElement {
+  const pop = useUsdPop<HTMLSpanElement>(tokens, nested)
   return (
     <>
       <span ref={pop.ref} className={className} {...pop.props}>{formatUsd(value)}</span>

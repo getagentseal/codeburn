@@ -466,11 +466,11 @@ export function Sessions({
                       <span className="session-cost-split">
                         <strong>{formatUsd(entry.entry.cost)}</strong>
                         {entry.entry.cost < entry.entry.row.cost - 1e-9 && (
-                          <small title="Full cost of the whole session"> of <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></small>
+                          <small title="Full cost of the whole session"> of <Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></small>
                         )}
                       </span>
                     ) : (
-                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} /></span>
+                      <span><Usd value={entry.entry.row.cost} tokens={tokensOf(entry.entry.row)} nested /></span>
                     )}
                     <span>{formatCompact(rowTokens(entry.entry.row))}</span>
                   </button>

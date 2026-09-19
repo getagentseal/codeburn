@@ -673,6 +673,7 @@ export function App() {
                       outputTokens={payload.current.outputTokens}
                       cacheHitPercent={payload.current.cacheHitPercent}
                       currency={currency}
+                      unpricedModels={payload.current.unpricedModels}
                     />
                     <PullRequestsSection payload={payload} currency={currency} />
                     <ToolingSection payload={payload} currency={currency} />

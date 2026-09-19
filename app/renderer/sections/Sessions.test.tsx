@@ -212,6 +212,23 @@ describe('Sessions', () => {
     expect(getSessions).toHaveBeenCalledTimes(1)
   })
 
+  it('opens a session row on Enter and keeps its cost breakdown out of the tab order', async () => {
+    const user = userEvent.setup()
+    getSessions.mockResolvedValue(rows)
+    render(<Sessions period="30days" provider="all" />)
+    await screen.findByText('6 sessions · $21.93 · 4.2M tokens')
+
+    const row = screen.getByRole('button', { name: /projects\/codeburn/ })
+    // The cost breakdown inside the row is not its own tab stop.
+    expect(row.querySelector('[data-usd]')).toHaveAttribute('tabindex', '-1')
+
+    // Enter on the focused row opens it — the nested trigger no longer swallows it.
+    row.focus()
+    await user.keyboard('{Enter}')
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('dialog', { name: /session details/i })).toBeInTheDocument()
+  })
+
   it('opens the session in a side drawer, closes on Escape, and returns focus to the row', async () => {
     const user = userEvent.setup()
     getSessions.mockResolvedValue(rows)

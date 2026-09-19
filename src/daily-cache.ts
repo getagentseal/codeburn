@@ -484,7 +484,12 @@ function creditCarriedRemainder(
   for (const key of REMAINDER_KEYS) {
     rest[key] = Math.max(0, num(totals[key]) - rows.reduce((sum, m) => sum + m[key], 0))
   }
-  if (rest.calls <= 0 && rest.cost < CENT && rest.savingsUSD < CENT) return
+  // Token remainders (whole tokens) are part of REMAINDER_KEYS too: a day whose
+  // cost and calls reconcile but whose token totals fall short must still credit
+  // the missing tokens to the carried row, or the model rows sum to fewer tokens
+  // than the day headline.
+  const tokenRemainder = rest.inputTokens + rest.outputTokens + rest.cacheReadTokens + rest.cacheWriteTokens
+  if (rest.calls <= 0 && rest.cost < CENT && rest.savingsUSD < CENT && tokenRemainder < 1) return
   const acc = Object.hasOwn(models, CARRIED_MODEL_NAME) ? models[CARRIED_MODEL_NAME]! : emptyModelStats()
   for (const key of REMAINDER_KEYS) acc[key] += rest[key]
   setOwn(models, CARRIED_MODEL_NAME, acc)

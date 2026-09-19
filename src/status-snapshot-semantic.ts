@@ -34,7 +34,10 @@ import { DAILY_CACHE_VERSION } from './daily-cache.js'
 // v10: current.skills is rebuilt from the newly reparsed Copilot
 // chatSessions/OTel calls; older snapshots can contain stale or empty skill
 // breakdowns for otherwise identical period queries.
-export const STATUS_SNAPSHOT_RENDER_VERSION = 10
+// v11: Copilot OTel trace-level tool/skill/bash metadata is now attributed
+// once per trace, so older snapshots can carry per-span-duplicated skill/tool
+// turns and cost for otherwise identical period queries.
+export const STATUS_SNAPSHOT_RENDER_VERSION = 11
 
 /// The semantic key recorded on every status snapshot. A snapshot whose stored
 /// key differs (an older render revision, or a different daily-cache version)

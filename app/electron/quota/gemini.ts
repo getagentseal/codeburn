@@ -169,7 +169,13 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
     let response = await post(token, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     if (response.status === 401) {
       const reread = await credentialFromFile(deps)
-      if (!reread || reread.access_token === credential.access_token) return { quota: empty('transientFailure') }
+      // Gemini has no keychain and no in-process refresh without the CLI's env
+      // overrides, so a 401 whose re-read token is unchanged is an expired login
+      // only the Gemini CLI can fix — a terminal, actionable state (matching the
+      // menubar's .tokenExpired), never an open-ended "waiting".
+      if (!reread || reread.access_token === credential.access_token) {
+        return { quota: { ...empty('terminalFailure', ['Gemini login expired. Run the Gemini CLI once to refresh, then try again.']), connectable: true } }
+      }
       credential = reread
       response = await post(credential.access_token!, 'loadCodeAssist', { metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }, deps, options.signal)
     }
@@ -183,7 +189,7 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
     const assist = await response.json().catch(() => ({})) as Record<string, any>
     const migration = migrationFooter(assist)
     if (migration.length > 0) return { quota: empty('terminalFailure', migration) }
-    if (!response.ok) return { quota: empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure') }
+    if (!response.ok) return { quota: { ...empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure'), ...(response.status === 401 || response.status === 403 ? { connectable: true } : {}) } }
 
     const project = typeof assist.cloudaicompanionProject === 'string' && assist.cloudaicompanionProject
       ? assist.cloudaicompanionProject : undefined
@@ -194,7 +200,7 @@ export async function fetchGeminiQuota(options: Partial<GeminiDeps> & { signal?:
       return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(seconds) ? Math.ceil(seconds) : 300, 60) }
     }
     if (!quotaResponse.ok) {
-      return { quota: empty(quotaResponse.status >= 400 && quotaResponse.status < 500 ? 'terminalFailure' : 'transientFailure') }
+      return { quota: { ...empty(quotaResponse.status >= 400 && quotaResponse.status < 500 ? 'terminalFailure' : 'transientFailure'), ...(quotaResponse.status === 401 || quotaResponse.status === 403 ? { connectable: true } : {}) } }
     }
     const quota = decodeGeminiUsage(await quotaResponse.json())
     quota.planLabel = tierLabel(assist, credential)

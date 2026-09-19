@@ -112,13 +112,16 @@ enum CapacityDockMetrics {
             ? 0
             : CapacityDockGlance.actionRowHeight
         // Measured rather than reserved at worst case: every block here is a
-        // padded section, and the panel is sized to their sum.
-        height += CapacityDockGlance.connectionBlockHeight(
+        // padded section, and the panel is sized to their sum. The connection
+        // block is measured at the drawn scale and added after the body scales,
+        // so its fixed-size reconnect text keeps its reserve at the 0.9 floor.
+        let connection = CapacityDockGlance.connectionBlockHeight(
             quota.connection,
             provider: provider,
-            width: baseDetailWidth - 2 * CapacityDockGlance.contentInset
+            width: baseDetailWidth - 2 * CapacityDockGlance.contentInset,
+            scale: scale
         )
-        return (height * scale).rounded()
+        return ((height * scale).rounded() + connection).rounded()
     }
 }
 
@@ -228,33 +231,38 @@ enum CapacityDockGlance {
     /// How tall the reconnect or disconnected block actually draws. The panel
     /// frame is computed rather than fitted, so a worst-case reserve does not
     /// shrink the panel — it parks its surplus above the action row as a gap.
+    /// `scale` measures the reconnect block at the font size and content width
+    /// it is actually drawn at, so the reserve tracks the scaled text instead of
+    /// shrinking below a fixed-size draw and clipping at the 0.9 floor. The
+    /// transient notices keep their single-caption reserve.
     static func connectionBlockHeight(
         _ connection: QuotaSummary.Connection,
         provider: CapacityDockProvider,
-        width: CGFloat
+        width: CGFloat,
+        scale: CGFloat = 1
     ) -> CGFloat {
+        let w = width * scale
         switch connection {
         case .connected: return 0
-        case .loading, .stale, .transientFailure: return noticeHeight
+        case .loading, .stale, .transientFailure: return noticeHeight * scale
         case .disconnected:
-            return noticeTopPad
-                + textHeight(L("Not connected"), size: 11, weight: .regular, width: width, maxLines: 1)
-                + noticeBottomPad
+            return (noticeTopPad + noticeBottomPad) * scale
+                + textHeight(L("Not connected"), size: 11 * scale, weight: .regular, width: w, maxLines: 1)
         case .terminalFailure(let reason):
-            var height = noticeTopPad
-                + textHeight(L("Reconnect required"), size: 11, weight: .semibold, width: width, maxLines: 1)
+            var height = noticeTopPad * scale
+                + textHeight(L("Reconnect required"), size: 11 * scale, weight: .semibold, width: w, maxLines: 1)
             if let reason, !reason.isEmpty {
-                height += noticeRowGap
-                    + textHeight(reason, size: 10, weight: .regular, width: width, maxLines: 2)
+                height += noticeRowGap * scale
+                    + textHeight(reason, size: 10 * scale, weight: .regular, width: w, maxLines: 2)
             }
-            height += noticeRowGap + textHeight(
+            height += noticeRowGap * scale + textHeight(
                 ProviderConnectionGuidance.dockInstruction(for: provider),
-                size: 10,
+                size: 10 * scale,
                 weight: .regular,
-                width: width,
+                width: w,
                 maxLines: 3
             )
-            return height + noticeBottomPad
+            return height + noticeBottomPad * scale
         }
     }
 
@@ -1385,6 +1393,10 @@ struct CapacityDockDetailView: View {
         _ connection: QuotaSummary.Connection,
         provider: CapacityDockProvider
     ) -> some View {
+        // The reconnect block's reserve scales with the panel, so its fixed-size
+        // text has to scale too or it clips at the 0.9 floor. The transient
+        // notices are a single caption line whose reserve already covers them.
+        let s = model.detailScale
         switch connection {
         case .connected:
             EmptyView()
@@ -1404,21 +1416,21 @@ struct CapacityDockDetailView: View {
                 .foregroundStyle(.orange.opacity(0.86))
         case .disconnected:
             Text(L("Not connected"))
-                .font(.system(size: 11))
+                .font(.system(size: 11 * s))
                 .foregroundStyle(Color.capacityDockText.opacity(0.6))
         case .terminalFailure(let reason):
-            VStack(alignment: .leading, spacing: CapacityDockGlance.noticeRowGap * model.detailScale) {
+            VStack(alignment: .leading, spacing: CapacityDockGlance.noticeRowGap * s) {
                 Text(L("Reconnect required"))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11 * s, weight: .semibold))
                     .foregroundStyle(.red)
                 if let reason, !reason.isEmpty {
                     Text(reason)
-                        .font(.system(size: 10))
+                        .font(.system(size: 10 * s))
                         .foregroundStyle(Color.capacityDockText.opacity(0.58))
                         .lineLimit(2)
                 }
                 Text(ProviderConnectionGuidance.dockInstruction(for: provider))
-                    .font(.system(size: 10))
+                    .font(.system(size: 10 * s))
                     .foregroundStyle(Color.capacityDockText.opacity(0.72))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)

@@ -270,6 +270,8 @@
 "%@ out" = "输出 %@";
 "%1$@ in · %2$@ out · %3$@ cache read" = "输入 %1$@ · 输出 %2$@ · 缓存读取 %3$@";
 "%@%% cache hit" = "缓存命中 %@%%";
+"1 model unpriced, counted at $0 · %@ tokens" = "1 个模型无定价，按 $0 计入 · %@ Token";
+"%1$lld models unpriced, counted at $0 · %2$@ tokens" = "%1$lld 个模型无定价，按 $0 计入 · %2$@ Token";
 
 /* MARK: Pull requests section */
 "Pull requests" = "拉取请求";

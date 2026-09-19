@@ -108,7 +108,7 @@ export function TeamTabContent({ payload, tab }: { payload: MenubarPayload; tab:
               <div style={{ fontSize: '0.875rem', color: 'var(--mut)', marginBottom: '0.75rem' }}>Top work units</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {tabData.topWorkUnits.slice(0, 3).map((unit: any, i: number) => (
-                  <div key={i} style={{ fontSize: '0.75rem', color: 'var(--ink)' }}>
+                  <div key={i} style={{ fontSize: 'var(--fs-meta)', color: 'var(--ink)' }}>
                     {unit.name}
                   </div>
                 ))}

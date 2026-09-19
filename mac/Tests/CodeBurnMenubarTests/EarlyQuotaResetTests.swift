@@ -934,6 +934,23 @@ struct EarlyQuotaResetCodexWiringTests {
         }
     }
 
+    @Test("A per-model window that reset early to 0% is announced, not dropped for being empty")
+    func additionalLimitResetAtZeroAnnounces() async throws {
+        try await withCodexStore { store, notifier in
+            store.codexQuotaFetcher = { Self.additionalLimitUsage(percent: 80, resetsIn: 18 * 3600) }
+            #expect(await store.refreshCodexReportingSuccess())
+            #expect(notifier.posts.isEmpty)
+
+            // The window reset early and now sits at 0%. On main this reading is
+            // filtered out before the detector sees it, so the reset is missed;
+            // the detector must be handed the empty row so it fires once.
+            store.codexQuotaFetcher = { Self.additionalLimitUsage(percent: 0, resetsIn: week) }
+            #expect(await store.refreshCodexReportingSuccess())
+            #expect(notifier.posts.count == 1)
+            #expect(notifier.posts.first?.title == "Codex quota reset early")
+        }
+    }
+
     private func withCodexStore(
         _ body: @MainActor (AppStore, RecordingEarlyResetNotifier) async throws -> Void
     ) async throws {
@@ -988,6 +1005,36 @@ struct EarlyQuotaResetCodexWiringTests {
                     reached: $0.reached
                 )
             },
+            resetCredits: nil,
+            fetchedAt: Date()
+        )
+    }
+
+    /// A workspace whose only limit is one per-model additional window (e.g.
+    /// "GPT-5.3-Codex-Spark"), with no main rate window.
+    nonisolated private static func additionalLimitUsage(
+        percent: Double,
+        resetsIn: TimeInterval
+    ) -> CodexUsage {
+        CodexUsage(
+            plan: .plus,
+            primary: nil,
+            secondary: nil,
+            additionalLimits: [
+                CodexUsage.AdditionalLimit(
+                    name: "GPT-5.3-Codex-Spark",
+                    primary: CodexUsage.Window(
+                        usedPercent: percent,
+                        resetsAt: Date().addingTimeInterval(resetsIn),
+                        limitWindowSeconds: 7 * 24 * 3600
+                    ),
+                    secondary: nil
+                )
+            ],
+            creditsBalance: nil,
+            hasCredits: false,
+            creditsUnlimited: false,
+            creditLimit: nil,
             resetCredits: nil,
             fetchedAt: Date()
         )

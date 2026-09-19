@@ -797,6 +797,63 @@ describe('Overview', () => {
     expect(within(kpis).getByText(/0 calls · 0 sessions/)).toBeInTheDocument()
   })
 
+  it('keeps the hero and the models table on the generation together when it stands in for this period', async () => {
+    const now = new Date()
+    // A fresh 30days generation: its total and its models come from one pass.
+    const fresh = makePayload(now)
+    fresh.periodTotals = { '30days': { cost: 500, calls: 9000 } }
+    fresh.current = { ...fresh.current, cost: 500, calls: 9000, topModels: [
+      { name: 'gen-opus', cost: 400, savingsUSD: 0, savingsBaselineModel: '', calls: 200 },
+      { name: 'gen-haiku', cost: 100, savingsUSD: 0, savingsBaselineModel: '', calls: 50 },
+    ] }
+    const first = render(<OverviewContent period="30days" provider="all" overview={polled(fresh, 2_000)} />)
+    first.unmount()
+
+    // An older 30days payload with different numbers and models. It is itself
+    // unfiltered (carries periodTotals), so the generation gate stays open.
+    const stale = makePayload(now)
+    stale.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    stale.current = { ...stale.current, cost: 312.4, topModels: [
+      { name: 'stale-sonnet', cost: 312.4, savingsUSD: 0, savingsBaselineModel: '', calls: 90 },
+    ] }
+    const { container } = render(<OverviewContent period="30days" provider="all" overview={polled(stale, 1_000)} />)
+
+    // Hero shows the generation cost, and the table shows the generation's models,
+    // so the two never disagree.
+    expect(within(container.querySelector('.ov-hero-main') as HTMLElement).getByText('$500.00')).toBeInTheDocument()
+    const table = within(container.querySelector('.ov-models') as HTMLElement)
+    expect(table.getByText('gen-opus')).toBeInTheDocument()
+    expect(table.queryByText('stale-sonnet')).not.toBeInTheDocument()
+  })
+
+  it('falls back to this payload for both hero and table when the generation is from another period', async () => {
+    const now = new Date()
+    // A week generation that also carries a 30days total, but whose models are week's.
+    const week = makePayload(now)
+    week.periodTotals = { week: { cost: 90, calls: 800 }, '30days': { cost: 500, calls: 9000 } }
+    week.current = { ...week.current, cost: 90, topModels: [
+      { name: 'week-model', cost: 90, savingsUSD: 0, savingsBaselineModel: '', calls: 40 },
+    ] }
+    const first = render(<OverviewContent period="week" provider="all" overview={polled(week, 2_000)} />)
+    first.unmount()
+
+    // Switch to an older 30days payload. The generation's 30days total exists, but its
+    // models belong to week, so the hero must not show $500 with week's models.
+    const stale30 = makePayload(now)
+    stale30.periodTotals = { '30days': { cost: 312.4, calls: 4200 } }
+    stale30.current = { ...stale30.current, cost: 312.4, topModels: [
+      { name: 'thirtyday-model', cost: 312.4, savingsUSD: 0, savingsBaselineModel: '', calls: 90, inputTokens: 10, outputTokens: 5 },
+    ] }
+    const { container } = render(<OverviewContent period="30days" provider="all" overview={polled(stale30, 1_000)} />)
+
+    const kpis = within(container.querySelector('.ov-hero-main') as HTMLElement)
+    expect(kpis.getByText('$312.40')).toBeInTheDocument()
+    expect(kpis.queryByText('$500.00')).not.toBeInTheDocument()
+    const table = within(container.querySelector('.ov-models') as HTMLElement)
+    expect(table.getByText('thirtyday-model')).toBeInTheDocument()
+    expect(table.queryByText('week-model')).not.toBeInTheDocument()
+  })
+
   it('folds a long series into weekly buckets that keep the total, the peak and their date range', async () => {
     const now = new Date()
     // Past 520 days the chart draws whole weeks. The biggest single day ($500)

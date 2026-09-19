@@ -6,6 +6,7 @@ import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import https from 'https'
 
+import { extractBashCommands } from '../bash-utils.js'
 import { getCodeburnCacheDir, readExistingTextFile } from '../cache-dir.js'
 import { calculateCost } from '../models.js'
 import { isSqliteAvailable, isSqliteBusyError, openDatabase } from '../sqlite.js'
@@ -843,7 +844,7 @@ function extractAntigravityToolFromStep(metadataBytes: Uint8Array, turn: TurnToo
     if (toolName === 'run_command') {
       turn.tools.push(toolName)
       const cmd = typeof args?.['CommandLine'] === 'string' ? args['CommandLine'].trim() : ''
-      if (cmd) turn.bashCommands.push(cmd)
+      if (cmd) turn.bashCommands.push(...extractBashCommands(cmd))
       continue
     }
 

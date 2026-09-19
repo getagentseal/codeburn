@@ -20,16 +20,19 @@ const LOGIN: Record<QuotaProvider['provider'], { command?: string; hint?: string
 /** Inline "Connect" affordance for a disconnected or access-denied provider: a
  * short status line plus a text-button that expands the copy-paste login
  * command, the keychain-Allow note (access-denied), and a forced Refresh. */
-export function ConnectAffordance({ provider, connection, onRefresh }: {
+export function ConnectAffordance({ provider, connection, onRefresh, message: messageOverride }: {
   provider: QuotaProvider['provider']
   connection: 'disconnected' | 'accessDenied'
   onRefresh: () => void
+  /** Replace the default status line, keeping the same Connect/Refresh flow —
+   *  used for a login-expiry error or a capped "waiting" state. */
+  message?: string
 }) {
   const [open, setOpen] = useState(false)
   const name = PROVIDER_NAMES[provider]
-  const message = connection === 'accessDenied'
+  const message = messageOverride ?? (connection === 'accessDenied'
     ? 'Keychain access needed: click Allow when macOS asks, then Refresh.'
-    : `Not connected. Log in with the ${name} CLI.`
+    : `Not connected. Log in with the ${name} CLI.`)
   const login = LOGIN[provider]
 
   return (
