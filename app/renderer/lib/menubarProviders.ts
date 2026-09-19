@@ -18,6 +18,7 @@ export const MENUBAR_QUOTA_PROVIDERS = [
   'Antigravity',
   'Copilot',
   'Z.ai',
+  'ZCode',
   'Kimi Code',
   'Grok',
   'Grok Bot',
