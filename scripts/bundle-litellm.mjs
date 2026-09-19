@@ -112,8 +112,10 @@ for (const [name, entry] of entries) {
 // A tuple's completeness: how many optional rate slots (cache-write,
 // cache-read) carry a published value. A richer upstream row may cite it to
 // FILL a sparser entry's missing slots - never as a license to re-price it
-// (see the fillsOnly guard in Pass 2).
-const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0) + (val[5] != null ? 1 : 0)
+// (see the fillsOnly guard in Pass 2). The tier slot (5) is deliberately not
+// counted: tier presence must never decide which row wins, or a tier-bearing
+// row would outrank the base-richer row main would have picked.
+const completeness = (val) => (val[2] != null ? 1 : 0) + (val[3] != null ? 1 : 0)
 
 // Pass 2: prefixed entries - store full key + stripped (slot-fill-only)
 for (const [name, entry] of entries) {
@@ -132,13 +134,18 @@ for (const [name, entry] of entries) {
   // changes across a refresh; only missing slots fill. The completeness-wins
   // version re-priced 43 input/output and 34 cache rates by swapping in a
   // different upstream row (grok-3 3/15 -> 1.25/2.5, mistral-large-latest
-  // 8/24 -> 0.5/1.5).
+  // 8/24 -> 0.5/1.5). Slot 5 (the tier object) stays out of the guard: it is
+  // built fresh per row, so a reference compare is always false and would
+  // veto fills main performs (it silently dropped the azure cache-read fill
+  // for gpt-5.4-pro-class rows); and since the replacement only fires when
+  // the candidate fills a missing BASE slot, the winning row's tier travels
+  // with its own base rates - splicing the old row's tier onto the new row's
+  // base would mix two different upstream rows.
   const fillsOnly = (cand, prev) =>
     cand[0] === prev[0]
     && cand[1] === prev[1]
     && (prev[2] == null || cand[2] === prev[2])
     && (prev[3] == null || cand[3] === prev[3])
-    && (prev[5] == null || cand[5] === prev[5])
   if (!existing || (completeness(val) > completeness(existing) && fillsOnly(val, existing))) snapshot[stripped] = val
 }
 

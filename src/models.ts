@@ -164,8 +164,8 @@ export const TIERED_PRICING_PROVIDERS: ReadonlySet<string> = new Set(['codex'])
 
 // Swap in the vendor's high tier when a request's prompt crosses the published
 // threshold. A user-set priceOverride wins over any tier: the override row
-// is rebuilt without one, exact or aliased. The
-// generic branch serves the models of TIERED_PRICING_PROVIDERS whose rates
+// is rebuilt without one, exact or aliased. The generic branch serves the
+// models of TIERED_PRICING_PROVIDERS whose rates
 // carry a longContextTier (OpenAI's above-272k family, Anthropic's above-200k);
 // grok-4.6 predates the data plumbing and stays hardcoded. Each tier rate the
 // source published replaces its base rate; omitted slots keep the base.
